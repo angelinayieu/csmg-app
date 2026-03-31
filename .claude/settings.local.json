@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/angelina/Desktop/**)",
+      "Bash(npx create-next-app@latest \"interaxis kg build v1\" --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(npx create-next-app@latest \"csmg-app\" --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(npm install:*)",
+      "Bash(npx next:*)",
+      "Bash(npm run:*)"
+    ]
+  }
+}

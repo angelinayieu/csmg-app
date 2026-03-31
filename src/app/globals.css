@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+:root {
+  --sidebar-width: 260px;
+  --header-height: 56px;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+}
