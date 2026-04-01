@@ -78,6 +78,8 @@ export function useAnalyze() {
             case "phase":
               if (decoded === "structuring") {
                 setPhase("structuring");
+              } else if (decoded === "synthesizing") {
+                setPhase("synthesizing");
               }
               break;
 

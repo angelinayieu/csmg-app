@@ -3,6 +3,7 @@ export type AnalysisPhase =
   | "idle"
   | "streaming"
   | "structuring"
+  | "synthesizing"
   | "complete"
   | "error";
 
@@ -83,6 +84,8 @@ export interface StructuredEntity {
   centrality_rank: number | null;
   is_shared_variable: boolean;
   is_decomposable: boolean;
+  knowledge_layer?: "internal" | "external" | "bridge";
+  authority_level?: "high" | "moderate" | "low" | "unverified";
 }
 
 export interface StructuredEdge {
@@ -108,6 +111,18 @@ export interface StructuredEdge {
   resolved_by_entity_id: string | null;
   is_part_of_cycle: boolean;
   cycle_id: string | null;
+  dynamics?:
+    | "threshold"
+    | "linear"
+    | "compounding"
+    | "exponential"
+    | "logarithmic"
+    | "decay"
+    | "step_function"
+    | "delayed";
+  dynamics_properties?: Record<string, unknown>;
+  knowledge_layer?: "internal" | "external" | "bridge";
+  requires_user_approval?: boolean;
 }
 
 export interface StructuredCycle {
@@ -121,6 +136,9 @@ export interface StructuredCycle {
   intervention_point: string;
   intervention_description: string;
   description: string;
+  growth_type?: "additive" | "multiplicative" | "accelerating" | "decelerating";
+  cycle_time?: string;
+  estimated_multiplier?: number;
 }
 
 export interface StructuredProposition {

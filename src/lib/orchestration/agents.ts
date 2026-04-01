@@ -1,4 +1,4 @@
-import { getAnthropicClient } from "@/lib/anthropic";
+import { llmGenerate, llmJSON } from "@/lib/llm";
 import { DECOMPOSITION_SYSTEM_PROMPT } from "@/lib/prompts/decomposition";
 import { STRUCTURING_SYSTEM_PROMPT } from "@/lib/prompts/structuring";
 import { SCOPE_MAPPER_PROMPT } from "@/lib/prompts/scope-mapper";
@@ -6,33 +6,20 @@ import { CRITIC_SYSTEM_PROMPT } from "@/lib/prompts/critic";
 import { AUGMENTER_SYSTEM_PROMPT } from "@/lib/prompts/augmenter";
 import { WEAVING_SYSTEM_PROMPT } from "@/lib/prompts/weaving";
 import { META_SYNTHESIZER_PROMPT } from "@/lib/prompts/meta-synthesizer";
+import { DOMAIN_EXPERT_PROMPT } from "@/lib/prompts/domain-expert";
+import { BRIDGE_DISCOVERY_PROMPT } from "@/lib/prompts/bridge-discovery";
 import { REASONING_PROMPTS } from "@/lib/prompts/reasoning";
-import type { ScopeResult, CritiqueResult } from "@/types/orchestration";
+import type { ScopeResult, CritiqueResult, DomainExpertResult } from "@/types/orchestration";
 import type { StructuredDecomposition } from "@/types/analysis";
-
-function parseJSON(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const stripped = raw
-      .replace(/^```(?:json)?\s*\n?/i, "")
-      .replace(/\n?```\s*$/i, "")
-      .trim();
-    return JSON.parse(stripped);
-  }
-}
 
 // ─── Agent 1: Scope Mapper ───
 export async function runScopeMapper(input: string): Promise<ScopeResult> {
-  const anthropic = getAnthropicClient();
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 2000,
+  return llmJSON<ScopeResult>({
     system: SCOPE_MAPPER_PROMPT,
-    messages: [{ role: "user", content: input }],
+    user: input,
+    maxTokens: 2000,
+    temperature: 0.3,
   });
-  const text = response.content[0].type === "text" ? response.content[0].text : "";
-  return parseJSON(text) as ScopeResult;
 }
 
 // ─── Agent 2: Decomposer (per space) ───
@@ -41,7 +28,6 @@ export async function runDecomposer(
   spaceScope?: { name: string; description: string; key_concepts: string[] },
   siblingContext?: string
 ): Promise<string> {
-  const anthropic = getAnthropicClient();
   let systemPrompt = DECOMPOSITION_SYSTEM_PROMPT;
 
   if (spaceScope) {
@@ -62,54 +48,30 @@ Target: 15-25 entities, 30-50 edges, at least 3 feedback loops.
     systemPrompt = scopePrefix + systemPrompt;
   }
 
-  let buffer = "";
-  const stream = anthropic.messages.stream({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 8192,
+  return llmGenerate({
     system: systemPrompt,
-    messages: [{ role: "user", content: input }],
+    user: input,
+    maxTokens: 8192,
+    temperature: 0.5,
   });
-
-  for await (const event of stream) {
-    if (
-      event.type === "content_block_delta" &&
-      event.delta.type === "text_delta"
-    ) {
-      buffer += event.delta.text;
-    }
-  }
-
-  return buffer;
 }
 
 // ─── Agent 2b: Structurer ───
 export async function runStructurer(
   rawDecomposition: string
 ): Promise<StructuredDecomposition> {
-  const anthropic = getAnthropicClient();
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 8192,
+  return llmJSON<StructuredDecomposition>({
     system: STRUCTURING_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `Convert this analysis to JSON:\n\n${rawDecomposition}`,
-      },
-    ],
+    user: `Convert this analysis to JSON:\n\n${rawDecomposition}`,
+    maxTokens: 16000,
+    temperature: 0.3,
   });
-  const text = response.content[0].type === "text" ? response.content[0].text : "";
-  return parseJSON(text) as StructuredDecomposition;
 }
 
 // ─── Agent 3: Critic ───
 export async function runCritic(
-  structured: StructuredDecomposition,
-  model = "claude-haiku-3-20250307"
+  structured: StructuredDecomposition
 ): Promise<CritiqueResult> {
-  const anthropic = getAnthropicClient();
-
-  // Format structured data for the critic (no raw text)
   const entitySummary = (structured.entities ?? [])
     .map(
       (e) =>
@@ -151,40 +113,33 @@ Leverage points identified: ${leverageIds}
 Risk points identified: ${riskIds}
 Edge density: ${structured.entities?.length ? ((structured.edges?.length ?? 0) / structured.entities.length).toFixed(2) : "N/A"}x`;
 
-  const response = await anthropic.messages.create({
-    model,
-    max_tokens: 4000,
+  return llmJSON<CritiqueResult>({
     system: CRITIC_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: input }],
+    user: input,
+    maxTokens: 4000,
+    temperature: 0.3,
+    model: "gpt-4o-mini", // cheaper for structural critique
   });
-
-  const text = response.content[0].type === "text" ? response.content[0].text : "";
-  return parseJSON(text) as CritiqueResult;
 }
 
 // ─── Agent 4: Augmenter ───
 export async function runAugmenter(
   original: StructuredDecomposition,
-  critique: CritiqueResult,
-  model = "claude-haiku-3-20250307"
+  critique: CritiqueResult
 ): Promise<StructuredDecomposition> {
-  const anthropic = getAnthropicClient();
-
   const input = `ORIGINAL DECOMPOSITION:
 ${JSON.stringify(original, null, 2)}
 
 STRUCTURAL CRITIQUE:
 ${JSON.stringify(critique, null, 2)}`;
 
-  const response = await anthropic.messages.create({
-    model,
-    max_tokens: 8192,
+  return llmJSON<StructuredDecomposition>({
     system: AUGMENTER_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: input }],
+    user: input,
+    maxTokens: 16000,
+    temperature: 0.4,
+    model: "gpt-4o-mini", // cheaper for augmentation
   });
-
-  const text = response.content[0].type === "text" ? response.content[0].text : "";
-  return parseJSON(text) as StructuredDecomposition;
 }
 
 // ─── Agent 5: Weaver ───
@@ -195,8 +150,6 @@ export async function runWeaver(
     entities: { id: string; name: string; description: string; is_shared_variable: boolean }[];
   }[]
 ): Promise<unknown> {
-  const anthropic = getAnthropicClient();
-
   const input = spaceSummaries
     .map(
       (s) =>
@@ -209,32 +162,87 @@ export async function runWeaver(
     )
     .join("\n\n");
 
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 5000,
+  return llmJSON({
     system: WEAVING_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: input }],
+    user: input,
+    maxTokens: 5000,
+    temperature: 0.3,
   });
-
-  const text = response.content[0].type === "text" ? response.content[0].text : "";
-  return parseJSON(text);
 }
 
 // ─── Agent 6: Meta-Synthesizer ───
 export async function runMetaSynthesizer(
   metaGraphSummary: string
 ): Promise<unknown> {
-  const anthropic = getAnthropicClient();
-
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 10000,
+  return llmJSON({
     system: META_SYNTHESIZER_PROMPT,
-    messages: [{ role: "user", content: metaGraphSummary }],
+    user: metaGraphSummary,
+    maxTokens: 16000,
+    temperature: 0.5,
   });
+}
 
-  const text = response.content[0].type === "text" ? response.content[0].text : "";
-  return parseJSON(text);
+// ─── Agent 7: Domain Expert ───
+export async function runDomainExpert(
+  scopeSummary: string,
+  inputSummary: string,
+  domains: string[]
+): Promise<DomainExpertResult> {
+  const user = `Situation summary: ${inputSummary}
+
+Domains involved: ${domains.join(", ")}
+
+Scope: ${scopeSummary}
+
+Build the external knowledge subgraph for this field.`;
+
+  return llmJSON<DomainExpertResult>({
+    system: DOMAIN_EXPERT_PROMPT,
+    user,
+    maxTokens: 6000,
+    temperature: 0.4,
+    model: "gpt-4o-mini", // Cheaper for external knowledge
+  });
+}
+
+// ─── Bridge Discovery (internal ↔ external) ───
+export interface BridgeDiscoveryResult {
+  bridges: {
+    internal_entity_id: string;
+    internal_entity_name: string;
+    external_entity_id: string;
+    external_entity_name: string;
+    connection_type: "validates" | "challenges" | "extends" | "analogous";
+    reasoning: string;
+    strength: "strong" | "moderate" | "weak";
+    importance: "high" | "moderate" | "low";
+  }[];
+  cross_context_insights: {
+    insight: string;
+    internal_entities: string[];
+    external_entities: string[];
+    confidence: "high" | "moderate" | "low";
+  }[];
+}
+
+export async function runBridgeDiscovery(
+  internalEntities: { entity_id: string; name: string; description: string }[],
+  externalEntities: { entity_id: string; name: string; description: string; category: string }[]
+): Promise<BridgeDiscoveryResult> {
+  const internalSummary = internalEntities
+    .map((e) => `${e.entity_id}: ${e.name} — ${e.description}`)
+    .join("\n");
+  const externalSummary = externalEntities
+    .map((e) => `${e.entity_id}: ${e.name} [${e.category}] — ${e.description}`)
+    .join("\n");
+
+  return llmJSON<BridgeDiscoveryResult>({
+    system: BRIDGE_DISCOVERY_PROMPT,
+    user: `INTERNAL ENTITIES (${internalEntities.length}):\n${internalSummary}\n\nEXTERNAL ENTITIES (${externalEntities.length}):\n${externalSummary}`,
+    maxTokens: 4000,
+    temperature: 0.3,
+    model: "gpt-4o-mini",
+  });
 }
 
 // ─── Auto-Reasoning (for Comprehensive tier) ───
@@ -242,22 +250,18 @@ export async function runAutoReasoning(
   entities: string,
   edges: string
 ): Promise<Record<string, unknown>> {
-  const anthropic = getAnthropicClient();
   const results: Record<string, unknown> = {};
-
   const spaceContext = `Entities:\n${entities}\n\nEdges:\n${edges}`;
 
   for (const op of ["centrality", "cycles", "link_prediction"] as const) {
     const prompt = REASONING_PROMPTS[op] as string;
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      system: prompt,
-      messages: [{ role: "user", content: spaceContext }],
-    });
-    const text = response.content[0].type === "text" ? response.content[0].text : "";
     try {
-      results[op] = parseJSON(text);
+      results[op] = await llmJSON({
+        system: prompt,
+        user: spaceContext,
+        maxTokens: 4096,
+        temperature: 0.3,
+      });
     } catch {
       results[op] = null;
     }

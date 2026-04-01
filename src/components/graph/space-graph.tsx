@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import * as d3 from "d3";
 import { GraphNode } from "./graph-node";
 import { GraphEdge } from "./graph-edge";
+import { EdgeExplanationPopover } from "./edge-explanation-popover";
 import type { Entity, Edge, Cycle } from "@/types";
 
 interface SimNode extends d3.SimulationNodeDatum {
@@ -21,6 +22,7 @@ interface SpaceGraphProps {
   cycles: Cycle[];
   onNodeClick: (entity: Entity) => void;
   visibleDimensions?: Set<string>;
+  spaceDescription?: string;
 }
 
 export function SpaceGraph({
@@ -29,12 +31,14 @@ export function SpaceGraph({
   cycles,
   onNodeClick,
   visibleDimensions,
+  spaceDescription = "",
 }: SpaceGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState<SimNode[]>([]);
   const [links, setLinks] = useState<SimLink[]>([]);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+  const [clickedEdge, setClickedEdge] = useState<{ edge: Edge; position: { x: number; y: number } } | null>(null);
   const [transform, setTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity);
   const simulationRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null);
 
@@ -190,11 +194,24 @@ export function SpaceGraph({
 
   const hasHover = hoveredNodeId !== null;
 
+  const handleExplanationCached = useCallback((edgeId: string, explanation: string) => {
+    // Update the edge in local state so subsequent clicks don't re-fetch
+    setLinks((prev) =>
+      prev.map((l) =>
+        l.edge.id === edgeId
+          ? { ...l, edge: { ...l.edge, conditions: explanation } }
+          : l
+      )
+    );
+  }, []);
+
   return (
+    <div className="relative h-full w-full">
     <svg
       ref={svgRef}
       className="h-full w-full"
       style={{ background: "transparent" }}
+      onClick={() => setClickedEdge(null)}
     >
       <g
         transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}
@@ -219,6 +236,19 @@ export function SpaceGraph({
               isHovered={hoveredEdgeId === edgeId}
               onMouseEnter={() => setHoveredEdgeId(edgeId)}
               onMouseLeave={() => setHoveredEdgeId(null)}
+              onClick={(e: React.MouseEvent) => {
+                e.stopPropagation();
+                const svgRect = svgRef.current?.getBoundingClientRect();
+                if (svgRect) {
+                  setClickedEdge({
+                    edge: link.edge,
+                    position: {
+                      x: e.clientX - svgRect.left,
+                      y: e.clientY - svgRect.top,
+                    },
+                  });
+                }
+              }}
             />
           );
         })}
@@ -247,5 +277,18 @@ export function SpaceGraph({
         })}
       </g>
     </svg>
+
+    {/* Edge explanation popover */}
+    {clickedEdge && (
+      <EdgeExplanationPopover
+        edge={clickedEdge.edge}
+        entities={entities}
+        position={clickedEdge.position}
+        spaceDescription={spaceDescription}
+        onClose={() => setClickedEdge(null)}
+        onExplanationCached={handleExplanationCached}
+      />
+    )}
+    </div>
   );
 }

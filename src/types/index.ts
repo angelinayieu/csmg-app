@@ -18,3 +18,5 @@ export type Contradiction =
   Database["public"]["Tables"]["contradictions"]["Row"];
 export type Scenario = Database["public"]["Tables"]["scenarios"]["Row"];
 export type ActionItem = Database["public"]["Tables"]["action_items"]["Row"];
+export type SpaceChangelog =
+  Database["public"]["Tables"]["space_changelog"]["Row"];

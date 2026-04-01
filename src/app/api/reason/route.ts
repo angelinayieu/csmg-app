@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getAnthropicClient } from "@/lib/anthropic";
+import { llmJSON } from "@/lib/llm";
 import { REASONING_PROMPTS } from "@/lib/prompts/reasoning";
 
 export async function POST(request: Request) {
@@ -91,29 +91,13 @@ export async function POST(request: Request) {
         prompt = REASONING_PROMPTS[operation as keyof typeof REASONING_PROMPTS] as string;
     }
 
-    // Call Claude
-    const anthropic = getAnthropicClient();
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
+    // Call LLM
+    const result = await llmJSON({
       system: prompt,
-      messages: [{ role: "user", content: spaceContext }],
+      user: spaceContext,
+      maxTokens: 4096,
+      temperature: 0.3,
     });
-
-    const rawText =
-      response.content[0].type === "text" ? response.content[0].text : "";
-
-    // Parse JSON
-    let result;
-    try {
-      result = JSON.parse(rawText);
-    } catch {
-      const stripped = rawText
-        .replace(/^```(?:json)?\s*\n?/i, "")
-        .replace(/\n?```\s*$/i, "")
-        .trim();
-      result = JSON.parse(stripped);
-    }
 
     // Cache in reasoning_results
     await db.from("reasoning_results").insert({
@@ -121,7 +105,7 @@ export async function POST(request: Request) {
       reasoning_type: operation,
       input_params: params ?? {},
       result_data: result,
-      result_text: rawText,
+      result_text: JSON.stringify(result),
     });
 
     return NextResponse.json({ result });

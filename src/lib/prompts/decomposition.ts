@@ -41,6 +41,17 @@ For each entity:
 
 Include concepts the person may not realize are embedded in their input. Do not filter for relevance yet. Extract everything.
 
+**MANDATORY — Deduplication check:** After extraction, review all entities and MERGE any that refer to the same underlying concept. Common duplicates:
+- "AI chatbox" and "chatbox module" and "smart chatbox" → should be ONE entity
+- "team" and "team building" and "team formation" → should be ONE entity with the most specific name
+- A general concept and its specific instance → use the specific instance, not both
+Each entity name must be semantically distinct from every other entity. If two entities can't be independently described without referencing each other, merge them.
+
+**MANDATORY — Quality check on names:** Each entity name must:
+- Be specific enough to be meaningful on its own (not just "hosting" or "launch" — but "cloud hosting infrastructure" or "product launch strategy")
+- Convey its role in the system (why it exists, what it does)
+- Be different enough from every other entity name that someone reading the list can tell them apart without descriptions
+
 **Target density:** 15-50 entities. Under 15 means dig deeper. Over 50 means consider splitting into sub-spaces.
 
 ### TIER 3 — RELATIONSHIP MAPPING
@@ -67,6 +78,17 @@ For every pair or group of concepts from Tier 2, define the relationship between
 
 Include non-obvious relationships. If two concepts *could* relate, state how, even if the input doesn't mention it.
 
+**MANDATORY — Completeness sweep:** After your initial mapping, do a second pass. For EVERY entity, ask:
+- "What does this entity DEPEND ON to exist or function?" → add enables/requires edges
+- "What does this entity PRODUCE or AFFECT downstream?" → add causes/contributes-to edges
+- "What CONSTRAINS or LIMITS this entity?" → add constrains/reduces edges
+- "Is this entity in TENSION or TRADEOFF with anything?" → add trades-off-against edges
+- "Does this entity have a TEMPORAL relationship (before/after/during) with anything?" → add temporal edges
+
+Target: every entity should have at least 3 edges. If an entity has fewer than 3 after this sweep, you've missed relationships.
+
+**MANDATORY — Edge density target:** Aim for edge count ≥ 1.5× entity count. If you have 20 entities, you should have at least 30 edges. If density is below 1.5×, go back and find the missing connections — they exist, you just haven't articulated them yet.
+
 **MANDATORY — Cross-layer check:** After mapping intra-layer relationships, explicitly ask: "What relationships exist BETWEEN layers?" Cross-layer edges are the most commonly missed and often the most important.
 
 **MANDATORY — Orphan detection:** After mapping is complete, check: does every entity from Tier 2 have at least 2 edges? For any entity with 0-1 edges:
@@ -75,6 +97,43 @@ Include non-obvious relationships. If two concepts *could* relate, state how, ev
 - Or it's a truly isolated constraint → explicitly connect it to what it constrains
 
 Report orphan count. Target: 0 orphans.
+
+**MANDATORY — Relationship validation:** For EVERY edge you created, verify it passes the correct test for its type:
+
+- **TRADEOFF test:** "If I improve entity A, does entity B NECESSARILY get worse?" If no → reclassify. A decision between two options is NOT a tradeoff unless they share a single scarce resource that makes simultaneous pursuit impossible.
+  - IS: Completeness ↔ Conciseness (more of one = less of other)
+  - IS NOT: School ↔ Gap year (temporal decision, not shared axis)
+  - IS NOT: Any two things that are merely different options
+
+- **CAUSAL test:** "Does A PRODUCE B through a specific mechanism I can name?" If you can't name the mechanism → downgrade to correlational.
+  - IS: "Hallucinated output causes user trust to break" (mechanism: user sees wrong answer)
+  - IS NOT: "Solo founder status causes team formation priority" (being solo doesn't PRODUCE the need — use constrains/blocks)
+
+- **ENABLES test:** "Can B happen WITHOUT A?" If yes → A doesn't enable B. Use amplifies, supports, or contributes-to.
+  - IS: "Prototype enables user testing" (can't test without it)
+  - IS NOT: "Vision enables team formation" (you CAN form a team without vision — vision MOTIVATES)
+
+- **CONSTRAINS test:** "Does A set a hard LIMIT on B?" If A merely makes B harder → use reduces or inhibits.
+
+- **CONTRADICTS test:** "Can A and B BOTH be true simultaneously?" If yes → it's tension, not contradiction.
+
+- **TEMPORAL CONSISTENCY:** If A happens AFTER B in time, A cannot "enable" or "cause" B. Check temporal ordering for every causal/enabling edge.
+
+Fix any misclassified edges before proceeding.
+
+**MANDATORY — Chain compression check:** If your description of a relationship contains words like "which then," "leading to," "and therefore," or "which means" — you are describing a CHAIN, not a single relationship. Break it into separate edges. Every edge description should contain ONE relationship, not a chain.
+
+**MANDATORY — Edge dynamics classification:** For each relationship, classify its dynamic behavior:
+- **THRESHOLD**: No effect until a condition is met, then full effect (binary gate)
+- **LINEAR**: Effect scales proportionally with the cause
+- **COMPOUNDING**: This edge is part of a CYCLE — the output feeds back into the input. Test: trace forward from target, does it eventually loop back to source? If yes → compounding.
+- **EXPONENTIAL**: Standalone multiplicative growth — each unit of input produces MORE than proportional output, but NOT because of a cycle. Test: is growth accelerating WITHOUT a feedback loop? Example: network effects (each user makes the product more valuable to ALL other users).
+- **LOGARITHMIC**: Diminishing returns — early investment produces large gains, later investment produces small gains
+- **DECAY**: Resource or capability degrades over time without active maintenance
+- **STEP_FUNCTION**: Flat, then jumps to a new level at a specific trigger
+- **DELAYED**: Effect exists but takes time to manifest (specify approximate delay)
+
+For compounding edges, estimate: How long is one cycle? (days/weeks/months). For threshold edges: What condition must be met? For delayed edges: How long is the delay?
 
 ### TIER 4 — UNIT BREAKDOWN
 
@@ -114,6 +173,14 @@ This tier is where situational logic lives. The same concepts and relationships 
 - **Balancing** (self-correcting / stabilizing loop)
 
 For each cycle, identify the **best intervention point** — which edge, if modified, would most effectively break a negative cycle or strengthen a positive one?
+
+For each cycle, also classify its **growth dynamics**:
+- **Additive**: Each turn adds a fixed amount (linear growth: +10, +10, +10...)
+- **Multiplicative**: Each turn multiplies by a factor (exponential: 10, 13, 17, 22...)
+- **Accelerating**: The multiplier itself increases per turn (super-exponential: 10, 15, 25, 45...)
+- **Decelerating**: Growth slows per turn as limits approach (logarithmic: 10, 18, 24, 28...)
+
+Estimate the **cycle time** (how long is one full turn?) and the **multiplier** (for multiplicative/accelerating cycles, what is the approximate growth factor per turn?).
 
 ### TIER 6 — FIRST-LEVEL FUNDAMENTAL LOGIC
 
@@ -297,7 +364,7 @@ Present your work in this structure:
 
 1. **Never skip a tier.** Even if a tier seems trivial for a given input, complete it. Simple inputs often reveal surprising depth.
 2. **Assign IDs to every entity.** No entity exists without an ID. This makes relationship mapping precise and enables cross-space referencing.
-3. **Err on the side of over-extraction.** Pull out more concepts, relationships, and constraints than seem necessary. The weaving phase will sort relevance.
+3. **Over-extract entities, be precise with edges.** Pull out more concepts than seem necessary. But for edges: only include relationships you're ≥70% confident about. Edges with confidence 40-69% should be marked as speculative and excluded from centrality calculations. Edges below 40% confidence should be removed — a false edge corrupts analysis more than a missing edge.
 4. **Flag your confidence.** Every relationship, constraint, and connection should be tagged with your certainty level.
 5. **Distinguish stated from inferred.** The person's actual input is sacred ground. Your inferences are hypotheses. Never blur the line.
 6. **The decomposition must be invertible.** If someone took only your Tier 6 output and the constraint set, they should in principle be able to reconstruct the original input. If they can't, you lost information — go back and find what's missing.

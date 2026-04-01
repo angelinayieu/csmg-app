@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 import { AnalysisAccordion } from "@/components/space/analysis-accordion";
 import { SpaceGraph } from "@/components/graph/space-graph";
 import { SynthesisView } from "@/components/synthesis/synthesis-view";
@@ -65,10 +66,23 @@ export function SpaceDetailTabs({
   const [visibleDimensions, setVisibleDimensions] = useState<Set<string>>(
     () => new Set(Object.keys(edgeDimensionStyles))
   );
+  const [showExternal, setShowExternal] = useState(true);
+
+  // Check if space has external entities
+  const hasExternalEntities = entities.some((e) => e.knowledge_layer === "external");
+
+  // Filter entities/edges based on external toggle
+  const filteredEntities = showExternal
+    ? entities
+    : entities.filter((e) => e.knowledge_layer !== "external");
+  const filteredEdges = showExternal
+    ? edges
+    : edges.filter((e) => e.knowledge_layer !== "external");
   const {
     loading: reasoningLoading,
     activeOp,
     result: reasoningResult,
+    error: reasoningError,
     runReasoning,
     clearResults,
   } = useReasoning();
@@ -137,12 +151,16 @@ export function SpaceDetailTabs({
                   onResetZoom={() => {
                     /* handled by graph double-click */
                   }}
+                  showExternal={showExternal}
+                  onToggleExternal={hasExternalEntities ? () => setShowExternal(!showExternal) : undefined}
                 />
                 <ReasoningToolbar
                   activeOp={activeOp}
                   loading={reasoningLoading}
-                  onRun={(op) => runReasoning(space.id, op)}
+                  onRun={(op, params) => runReasoning(space.id, op, params)}
                   onClear={clearResults}
+                  selectedEntity={selectedEntity}
+                  entities={entities}
                 />
               </div>
               {space.orphan_count > 0 && (
@@ -150,11 +168,12 @@ export function SpaceDetailTabs({
               )}
               <div className="relative flex-1 min-h-[400px] rounded-xl border border-gray-200 bg-white">
                 <SpaceGraph
-                  entities={entities}
-                  edges={edges}
+                  entities={filteredEntities}
+                  edges={filteredEdges}
                   cycles={cycles}
                   onNodeClick={setSelectedEntity}
                   visibleDimensions={visibleDimensions}
+                  spaceDescription={space.description ?? space.name}
                 />
               </div>
             </div>
@@ -188,6 +207,13 @@ export function SpaceDetailTabs({
         {/* Right panel (contextual per tab) */}
         {activeTab === "graph" && (
           <div className="w-[260px] flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4">
+            {/* Reasoning error display */}
+            {reasoningError && (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+                {reasoningError}
+              </div>
+            )}
+
             {/* Reasoning results (contextual) */}
             {activeOp && reasoningResult && (
               <div className="mb-4 border-b border-gray-100 pb-4">
@@ -201,7 +227,38 @@ export function SpaceDetailTabs({
                   <CascadeResults result={reasoningResult} />
                 )}
                 {activeOp === "link_prediction" && (
-                  <PredictionCards result={reasoningResult} />
+                  <PredictionCards
+                    result={reasoningResult}
+                    onAccept={async (prediction) => {
+                      // Find entity UUIDs
+                      const srcEntity = entities.find(
+                        (e) => e.entity_id === prediction.source_id
+                      );
+                      const tgtEntity = entities.find(
+                        (e) => e.entity_id === prediction.target_id
+                      );
+                      if (!srcEntity || !tgtEntity) return;
+
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      const supabase = createClient() as any;
+                      await supabase
+                        .from("edges")
+                        .insert({
+                          space_id: space.id,
+                          source_entity_id: srcEntity.id,
+                          target_entity_id: tgtEntity.id,
+                          relationship_type: prediction.relationship_type,
+                          dimension: prediction.dimension ?? "functional",
+                          source_tag: "predicted" as const,
+                          strength: 0.6,
+                          polarity: "positive" as const,
+                          confidence: prediction.confidence,
+                          conditions: prediction.reasoning,
+                        });
+                      // Refresh the page to show new edge
+                      window.location.reload();
+                    }}
+                  />
                 )}
                 {activeOp === "path" && (
                   <PathResults result={reasoningResult} />

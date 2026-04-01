@@ -28,6 +28,12 @@ const phaseConfig: Record<
     color: "text-amber-600",
     bg: "bg-amber-50 border-amber-200",
   },
+  synthesizing: {
+    label: "Generating deep synthesis...",
+    icon: <Loader2 className="h-4 w-4 animate-spin" />,
+    color: "text-purple-600",
+    bg: "bg-purple-50 border-purple-200",
+  },
   complete: {
     label: "Complete",
     icon: <Check className="h-4 w-4" />,
@@ -91,6 +97,11 @@ export function StreamingOutput({
           <div className="flex items-center justify-center py-12 text-sm text-gray-500">
             <Loader2 className="mr-2 h-4 w-4 animate-spin text-amber-500" />
             Parsing entities, relationships, and cycles...
+          </div>
+        ) : phase === "synthesizing" ? (
+          <div className="flex items-center justify-center py-12 text-sm text-gray-500">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin text-purple-500" />
+            Generating deep strategic synthesis...
           </div>
         ) : null}
       </div>

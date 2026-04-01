@@ -1,7 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
-import { getAnthropicClient } from "@/lib/anthropic";
+import { llmStream, llmJSON, llmGenerate } from "@/lib/llm";
 import { DECOMPOSITION_SYSTEM_PROMPT } from "@/lib/prompts/decomposition";
 import { STRUCTURING_SYSTEM_PROMPT } from "@/lib/prompts/structuring";
+import { SYNTHESIS_SYSTEM_PROMPT } from "@/lib/prompts/synthesis";
+import { checkCredits, deductCredits } from "@/lib/credits";
 import type { StructuredDecomposition } from "@/types/analysis";
 
 export const maxDuration = 120; // Allow up to 2 minutes for Vercel
@@ -15,6 +17,18 @@ export async function POST(request: Request) {
 
   if (!user) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any;
+
+  // 1b. Credit check (Quick tier = 1 credit)
+  const creditCheck = await checkCredits(db, user.id, "quick");
+  if (!creditCheck.hasCredits) {
+    return Response.json(
+      { error: `Insufficient credits. Need ${creditCheck.required}, have ${creditCheck.balance}.` },
+      { status: 402 }
+    );
   }
 
   // 2. Validate input
@@ -98,61 +112,32 @@ export async function POST(request: Request) {
 
       try {
         // ── Pass 1: Streaming Decomposition ──
-        const anthropic = getAnthropicClient();
         let rawDecomposition = "";
 
-        const messageStream = anthropic.messages.stream({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 16000,
+        for await (const chunk of llmStream({
           system: DECOMPOSITION_SYSTEM_PROMPT,
-          messages: [{ role: "user", content: text }],
-        });
-
-        for await (const event of messageStream) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            send("delta", event.delta.text);
-            rawDecomposition += event.delta.text;
-          }
+          user: text,
+          maxTokens: 16000,
+        })) {
+          send("delta", chunk);
+          rawDecomposition += chunk;
         }
 
         // ── Signal phase change ──
         send("phase", "structuring");
 
         // ── Pass 2: Structuring ──
-        const structureResponse = await anthropic.messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 16000,
-          system: STRUCTURING_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: `Convert this decomposition to JSON:\n\n${rawDecomposition}`,
-            },
-          ],
-        });
-
-        const rawJson =
-          structureResponse.content[0].type === "text"
-            ? structureResponse.content[0].text
-            : "";
-
-        // Try to parse JSON, handling potential markdown fencing
         let parsed: StructuredDecomposition;
         try {
-          parsed = JSON.parse(rawJson);
-        } catch {
-          // Try stripping markdown code fences
-          const stripped = rawJson
-            .replace(/^```(?:json)?\s*\n?/i, "")
-            .replace(/\n?```\s*$/i, "")
-            .trim();
-          try {
-            parsed = JSON.parse(stripped);
-          } catch {
+          parsed = await llmJSON<StructuredDecomposition>({
+            system: STRUCTURING_SYSTEM_PROMPT,
+            user: `Convert this decomposition to JSON:\n\n${rawDecomposition}`,
+            maxTokens: 16000,
+            temperature: 0.3,
+          });
+        } catch (parseErr) {
             // Pass 2 failed — save raw decomposition only
+            console.error("Structuring failed:", parseErr);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             await (supabase as any)
               .from("spaces")
@@ -172,7 +157,6 @@ export async function POST(request: Request) {
             );
             controller.close();
             return;
-          }
         }
 
         // ── Database Inserts ──
@@ -200,6 +184,11 @@ export async function POST(request: Request) {
             is_decomposable: e.is_decomposable ?? false,
           }));
 
+          // ── Insert entities and build ID map ──
+          const VALID_DIMS = ["structural","functional","temporal","causal","correlational","logical","epistemic","comparative","agentive"];
+          const VALID_POLARITIES = ["positive","negative","neutral","conditional"];
+          const VALID_TAGS = ["stated","inferred","predicted"];
+
           const entityIdMap = new Map<string, string>();
 
           if (entityInserts.length > 0) {
@@ -210,6 +199,17 @@ export async function POST(request: Request) {
 
             if (insertResult.error) {
               console.error("Entity insert error:", insertResult.error);
+              // Attempt individual inserts as fallback
+              for (const ent of entityInserts) {
+                const { data, error } = await db
+                  .from("entities")
+                  .insert(ent)
+                  .select("id, entity_id")
+                  .single();
+                if (data && !error) {
+                  entityIdMap.set(data.entity_id, data.id);
+                }
+              }
             } else if (insertResult.data) {
               for (const entity of insertResult.data as Array<{
                 id: string;
@@ -220,23 +220,36 @@ export async function POST(request: Request) {
             }
           }
 
-          // Insert edges (with v2 tradeoff fields, requires UUID mapping)
-          const edgeInserts = (parsed.edges ?? [])
-            .filter(
-              (e) =>
-                entityIdMap.has(e.source_entity_id) &&
-                entityIdMap.has(e.target_entity_id)
-            )
-            .map((e) => ({
+          console.log(`[Analyze] Entity map built: ${entityIdMap.size} of ${entityInserts.length} entities`);
+
+          // ── Insert edges INDIVIDUALLY (one bad edge won't kill the rest) ──
+          let edgesInserted = 0;
+          let edgesSkipped = 0;
+          let edgesFailed = 0;
+
+          for (const e of parsed.edges ?? []) {
+            // Normalize entity IDs (trim whitespace)
+            const srcId = (e.source_entity_id ?? "").trim();
+            const tgtId = (e.target_entity_id ?? "").trim();
+
+            const srcUuid = entityIdMap.get(srcId);
+            const tgtUuid = entityIdMap.get(tgtId);
+
+            if (!srcUuid || !tgtUuid) {
+              edgesSkipped++;
+              continue;
+            }
+
+            const edgeRow = {
               space_id: spaceId,
-              source_entity_id: entityIdMap.get(e.source_entity_id)!,
-              target_entity_id: entityIdMap.get(e.target_entity_id)!,
-              relationship_type: e.relationship_type,
-              dimension: e.dimension ?? "functional",
-              source_tag: e.source_tag ?? "inferred",
-              strength: e.strength ?? 0.5,
-              polarity: e.polarity ?? "positive",
-              confidence: e.confidence ?? 0.8,
+              source_entity_id: srcUuid,
+              target_entity_id: tgtUuid,
+              relationship_type: e.relationship_type ?? "relates-to",
+              dimension: VALID_DIMS.includes(e.dimension) ? e.dimension : "functional",
+              source_tag: VALID_TAGS.includes(e.source_tag) ? e.source_tag : "inferred",
+              strength: Math.max(0, Math.min(1, e.strength ?? 0.5)),
+              polarity: VALID_POLARITIES.includes(e.polarity) ? e.polarity : "positive",
+              confidence: Math.max(0, Math.min(1, e.confidence ?? 0.8)),
               conditions: e.conditions ?? null,
               is_tradeoff: e.is_tradeoff ?? false,
               resolved_by_entity_id: e.resolved_by_entity_id
@@ -244,14 +257,24 @@ export async function POST(request: Request) {
                 : null,
               is_part_of_cycle: e.is_part_of_cycle ?? false,
               cycle_id: e.cycle_id ?? null,
-            }));
+              dynamics: e.dynamics ?? null,
+              dynamics_properties: e.dynamics_properties ?? null,
+              is_low_confidence: (e.confidence ?? 0.8) < 0.4,
+            };
 
-          if (edgeInserts.length > 0) {
             const { error: edgeError } = await db
               .from("edges")
-              .insert(edgeInserts);
-            if (edgeError) console.error("Edge insert error:", edgeError);
+              .insert(edgeRow);
+
+            if (edgeError) {
+              console.error(`[Analyze] Edge failed: ${srcId}→${tgtId} (${e.relationship_type}):`, edgeError.message);
+              edgesFailed++;
+            } else {
+              edgesInserted++;
+            }
           }
+
+          console.log(`[Analyze] Edges: ${edgesInserted} inserted, ${edgesSkipped} skipped (no entity match), ${edgesFailed} failed`);
 
           // Insert cycles (with v2 intervention_description)
           const cycleInserts = (parsed.cycles ?? []).map((c) => ({
@@ -265,6 +288,9 @@ export async function POST(request: Request) {
               : null,
             intervention_description: c.intervention_description ?? null,
             description: c.description ?? null,
+            growth_type: c.growth_type ?? null,
+            cycle_time: c.cycle_time ?? null,
+            estimated_multiplier: c.estimated_multiplier ?? null,
           }));
 
           if (cycleInserts.length > 0) {
@@ -362,13 +388,8 @@ export async function POST(request: Request) {
             if (actionError) console.error("Action item insert error:", actionError);
           }
 
-          // Update space with metadata + rich synthesis data
+          // Update space with metadata (before synthesis pass)
           const meta = parsed.metadata ?? ({} as Record<string, unknown>);
-          const synthesisData = {
-            leverage_points: parsed.leverage_points ?? [],
-            risk_points: parsed.risk_points ?? [],
-            master_bottleneck: parsed.master_bottleneck ?? null,
-          };
           await db
             .from("spaces")
             .update({
@@ -377,15 +398,101 @@ export async function POST(request: Request) {
               space_prefix: meta.space_prefix || prefix,
               raw_decomposition: rawDecomposition,
               synthesis_text: meta.synthesis_text || null,
-              synthesis_data: synthesisData,
-              entity_count: entityInserts.length,
-              edge_count: edgeInserts.length,
+              entity_count: entityIdMap.size,
+              edge_count: edgesInserted,
               orphan_count: meta.orphan_count ?? 0,
-              cycle_count: cycleInserts.length,
+              cycle_count: (parsed.cycles ?? []).length,
               maturity: meta.maturity ?? "actionable_now",
               updated_at: new Date().toISOString(),
             })
             .eq("id", spaceId);
+
+          // ── Pass 3: Deep Synthesis ──
+          send("phase", "synthesizing");
+
+          try {
+            // Build compact summary for synthesis agent
+            const entitySummary = (parsed.entities ?? []).map((e) => ({
+              id: e.entity_id,
+              name: e.name,
+              description: e.description,
+              category: e.entity_category,
+              importance: e.importance,
+              confidence: e.confidence,
+              is_leverage: e.is_leverage_point,
+              is_risk: e.is_risk_point,
+              is_bottleneck: e.is_master_bottleneck,
+              blast_radius: e.blast_radius,
+              centrality_rank: e.centrality_rank,
+              layer: e.layer,
+              is_shared_variable: e.is_shared_variable,
+              is_decomposable: e.is_decomposable,
+            }));
+
+            const edgeSummary = (parsed.edges ?? []).map((e) => ({
+              from: e.source_entity_id,
+              to: e.target_entity_id,
+              type: e.relationship_type,
+              dimension: e.dimension,
+              strength: e.strength,
+              polarity: e.polarity,
+              is_tradeoff: e.is_tradeoff,
+            }));
+
+            const cycleSummary = (parsed.cycles ?? []).map((c) => ({
+              name: c.name,
+              classification: c.classification,
+              chain: c.entity_ids,
+              intervention_point: c.intervention_point,
+            }));
+
+            const synthInput = `Analyze this structured data and produce a deep strategic synthesis.
+
+ENTITIES (${entitySummary.length}):
+${JSON.stringify(entitySummary, null, 1)}
+
+RELATIONSHIPS (${edgeSummary.length}):
+${JSON.stringify(edgeSummary, null, 1)}
+
+CYCLES (${cycleSummary.length}):
+${JSON.stringify(cycleSummary, null, 1)}
+
+CONTEXT: The user submitted this text for analysis:
+"${text.slice(0, 500)}${text.length > 500 ? "..." : ""}"
+
+Produce the full strategic synthesis JSON.`;
+
+            const synthParsed = await llmJSON({
+              system: SYNTHESIS_SYSTEM_PROMPT,
+              user: synthInput,
+              maxTokens: 16000,
+              temperature: 0.5,
+            });
+
+            // Store rich synthesis data
+            await db
+              .from("spaces")
+              .update({
+                synthesis_data: synthParsed,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", spaceId);
+          } catch (synthError) {
+            console.error("Pass 3 synthesis error:", synthError);
+            // Fallback: store basic synthesis data from Pass 2
+            const fallbackSynthesis = {
+              leverage_points: parsed.leverage_points ?? [],
+              risk_points: parsed.risk_points ?? [],
+              master_bottleneck: parsed.master_bottleneck ?? null,
+            };
+            await db
+              .from("spaces")
+              .update({
+                synthesis_data: fallbackSynthesis,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", spaceId);
+          }
         } catch (dbError) {
           console.error("Database insert error:", dbError);
           // Still save raw decomposition even if structured inserts fail
@@ -399,8 +506,26 @@ export async function POST(request: Request) {
             .eq("id", spaceId);
         }
 
+        // ── Deduct credits ──
+        const { newBalance } = await deductCredits(db, user.id, "quick", spaceId);
+        console.log(`Credits deducted: 1 (quick). New balance: ${newBalance}`);
+
+        // ── Log changelog ──
+        await db.from("space_changelog").insert({
+          space_id: spaceId,
+          version: 1,
+          change_type: "initial_analysis",
+          summary: `Initial analysis: ${parsed.metadata?.entity_count ?? 0} entities, ${parsed.metadata?.edge_count ?? 0} edges, ${parsed.metadata?.cycle_count ?? 0} cycles`,
+          details: {
+            entity_count: parsed.metadata?.entity_count ?? 0,
+            edge_count: parsed.metadata?.edge_count ?? 0,
+            cycle_count: parsed.metadata?.cycle_count ?? 0,
+            tier: "quick",
+          },
+        });
+
         // ── Done ──
-        send("complete", JSON.stringify({ spaceId }));
+        send("complete", JSON.stringify({ spaceId, creditsUsed: 1, newBalance }));
       } catch (err) {
         console.error("Analysis error:", err);
         send(

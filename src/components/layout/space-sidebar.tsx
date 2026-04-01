@@ -16,7 +16,7 @@ const navItems = [
   { href: "/app/meta", label: "Meta-Graph", icon: Network },
 ];
 
-export function SpaceSidebar({ userEmail }: { userEmail: string }) {
+export function SpaceSidebar({ userEmail, creditBalance = 0 }: { userEmail: string; creditBalance?: number }) {
   const pathname = usePathname();
   const spaces = useAppStore((s) => s.spaces);
 
@@ -94,7 +94,16 @@ export function SpaceSidebar({ userEmail }: { userEmail: string }) {
 
       {/* User section */}
       <div className="border-t border-gray-200 px-4 py-3">
-        <p className="mb-2 truncate text-xs text-gray-500">{userEmail}</p>
+        <div className="mb-2 flex items-center justify-between">
+          <p className="truncate text-xs text-gray-500">{userEmail}</p>
+          <div className="flex items-center gap-1 rounded-full bg-interaxis-50 px-2 py-0.5">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-interaxis-600">
+              <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.5" />
+              <circle cx="6" cy="6" r="2" fill="currentColor" />
+            </svg>
+            <span className="text-[10px] font-semibold text-interaxis-700">{creditBalance}</span>
+          </div>
+        </div>
         <LogoutButton />
       </div>
     </aside>

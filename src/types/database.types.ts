@@ -187,6 +187,9 @@ export type Database = {
           sub_space_id: string | null;
           graph_x: number | null;
           graph_y: number | null;
+          knowledge_layer: "internal" | "external" | "bridge";
+          provenance: Json;
+          authority_level: "high" | "moderate" | "low" | "unverified";
         };
         Insert: {
           id?: string;
@@ -221,6 +224,9 @@ export type Database = {
           sub_space_id?: string | null;
           graph_x?: number | null;
           graph_y?: number | null;
+          knowledge_layer?: "internal" | "external" | "bridge";
+          provenance?: Json;
+          authority_level?: "high" | "moderate" | "low" | "unverified";
         };
         Update: {
           id?: string;
@@ -255,6 +261,9 @@ export type Database = {
           sub_space_id?: string | null;
           graph_x?: number | null;
           graph_y?: number | null;
+          knowledge_layer?: "internal" | "external" | "bridge";
+          provenance?: Json;
+          authority_level?: "high" | "moderate" | "low" | "unverified";
         };
       };
       edges: {
@@ -283,6 +292,13 @@ export type Database = {
           resolved_by_entity_id: string | null;
           is_part_of_cycle: boolean;
           cycle_id: string | null;
+          dynamics: string | null;
+          dynamics_properties: Json | null;
+          is_low_confidence: boolean;
+          knowledge_layer: "internal" | "external" | "bridge";
+          provenance: Json;
+          requires_user_approval: boolean;
+          approved_at: string | null;
         };
         Insert: {
           id?: string;
@@ -309,6 +325,13 @@ export type Database = {
           resolved_by_entity_id?: string | null;
           is_part_of_cycle?: boolean;
           cycle_id?: string | null;
+          dynamics?: string | null;
+          dynamics_properties?: Json | null;
+          is_low_confidence?: boolean;
+          knowledge_layer?: "internal" | "external" | "bridge";
+          provenance?: Json;
+          requires_user_approval?: boolean;
+          approved_at?: string | null;
         };
         Update: {
           id?: string;
@@ -335,6 +358,13 @@ export type Database = {
           resolved_by_entity_id?: string | null;
           is_part_of_cycle?: boolean;
           cycle_id?: string | null;
+          dynamics?: string | null;
+          dynamics_properties?: Json | null;
+          is_low_confidence?: boolean;
+          knowledge_layer?: "internal" | "external" | "bridge";
+          provenance?: Json;
+          requires_user_approval?: boolean;
+          approved_at?: string | null;
         };
       };
       cycles: {
@@ -352,6 +382,9 @@ export type Database = {
           intervention_point_entity_id: string | null;
           intervention_description: string | null;
           description: string | null;
+          growth_type: string | null;
+          cycle_time: string | null;
+          estimated_multiplier: number | null;
         };
         Insert: {
           id?: string;
@@ -367,6 +400,9 @@ export type Database = {
           intervention_point_entity_id?: string | null;
           intervention_description?: string | null;
           description?: string | null;
+          growth_type?: string | null;
+          cycle_time?: string | null;
+          estimated_multiplier?: number | null;
         };
         Update: {
           id?: string;
@@ -382,6 +418,9 @@ export type Database = {
           intervention_point_entity_id?: string | null;
           intervention_description?: string | null;
           description?: string | null;
+          growth_type?: string | null;
+          cycle_time?: string | null;
+          estimated_multiplier?: number | null;
         };
       };
       bridges: {
@@ -675,6 +714,50 @@ export type Database = {
           derived_from_entity_id?: string | null;
           tags?: { t: string; c: string }[];
           sort_order?: number;
+        };
+      };
+      space_changelog: {
+        Row: {
+          id: string;
+          space_id: string;
+          version: number;
+          change_type:
+            | "initial_analysis"
+            | "reevaluation"
+            | "manual_edit"
+            | "exploration"
+            | "synthesis_refresh";
+          summary: string;
+          details: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          version?: number;
+          change_type:
+            | "initial_analysis"
+            | "reevaluation"
+            | "manual_edit"
+            | "exploration"
+            | "synthesis_refresh";
+          summary: string;
+          details?: Json;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          version?: number;
+          change_type?:
+            | "initial_analysis"
+            | "reevaluation"
+            | "manual_edit"
+            | "exploration"
+            | "synthesis_refresh";
+          summary?: string;
+          details?: Json;
+          created_at?: string;
         };
       };
     };

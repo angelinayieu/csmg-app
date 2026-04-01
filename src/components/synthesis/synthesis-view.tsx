@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { cn } from "@/lib/utils";
 import { SectionHeader } from "@/components/ui/section-header";
 import { Ring } from "@/components/ui/ring";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -10,6 +11,8 @@ import { IntensityDot } from "@/components/ui/intensity-dot";
 import { LeverageCard } from "./leverage-card";
 import { RiskCard } from "./risk-card";
 import { ConditionalActionPlan } from "./conditional-action-plan";
+import { ExternalContextSection } from "./external-context-section";
+import { CrossContextSection } from "./cross-context-section";
 import type {
   Space,
   Entity,
@@ -20,7 +23,7 @@ import type {
   ActionItem,
   Proposition,
 } from "@/types";
-import type { SynthesisData, RichBottleneck } from "@/types/synthesis";
+import type { SynthesisData, RichBottleneck, RichFeedbackLoop, RichOpenQuestion } from "@/types/synthesis";
 
 interface SynthesisViewProps {
   space: Space;
@@ -93,6 +96,22 @@ export function SynthesisView({
     return map;
   }, [entities]);
 
+  const externalEntities = useMemo(
+    () => entities.filter((e) => e.knowledge_layer === "external"),
+    [entities]
+  );
+
+  const crossContextInsights = useMemo(() => {
+    const sd = synthData as Record<string, unknown> | null;
+    const insights = (sd?.cross_context_insights ?? []) as Array<{
+      insight: string;
+      internal_entities: string[];
+      external_entities: string[];
+      confidence: "high" | "moderate" | "low";
+    }>;
+    return insights;
+  }, [synthData]);
+
   const hasContent =
     bottleneckEntity ||
     leverageEntities.length > 0 ||
@@ -102,7 +121,9 @@ export function SynthesisView({
     novelConnections.length > 0 ||
     contradictions.length > 0 ||
     openQuestions.length > 0 ||
-    actionItems.length > 0;
+    actionItems.length > 0 ||
+    externalEntities.length > 0 ||
+    synthData !== null;
 
   if (!hasContent) {
     return (
@@ -301,52 +322,124 @@ export function SynthesisView({
         </section>
       )}
 
-      {/* Section 4: Feedback Loops */}
-      {cycles.length > 0 && (
+      {/* Section 4: Feedback Loops — prefer rich synthesis data */}
+      {(synthData?.feedback_loops?.length ?? cycles.length) > 0 && (
         <section>
           <SectionHeader label="Feedback loops" color="amber" subtitle="Self-reinforcing dynamics" />
           <div className="mt-3 space-y-2">
-            {cycles.map((cycle, ci) => {
-              const isPositive = cycle.classification === "reinforcing_positive";
-              const isNegative = cycle.classification === "reinforcing_negative";
+            {synthData?.feedback_loops?.length ? (
+              // Rich loops from Pass 3
+              synthData.feedback_loops.map((loop: RichFeedbackLoop, li: number) => {
+                const isPositive = loop.type === "positive";
+                return (
+                  <ExpandableCard
+                    key={li}
+                    variant={isPositive ? "cycle-positive" : "cycle-negative"}
+                    rank={li + 1}
+                    title={loop.name}
+                  >
+                    {/* Chain */}
+                    <div className="mb-3 flex flex-wrap items-center gap-1 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      {loop.steps.map((step, si) => (
+                        <span key={si} className="flex items-center gap-1">
+                          <span
+                            className={cn(
+                              "rounded-md px-2 py-0.5 text-xs font-medium",
+                              si === loop.intervention_at
+                                ? isPositive
+                                  ? "border border-green-300 bg-green-50 text-green-700"
+                                  : "border border-red-300 bg-red-50 text-red-700"
+                                : "text-gray-600"
+                            )}
+                          >
+                            {step}
+                          </span>
+                          {si < loop.steps.length - 1 && (
+                            <span className="text-[11px] text-gray-400">→</span>
+                          )}
+                        </span>
+                      ))}
+                    </div>
 
-              return (
-                <ExpandableCard
-                  key={cycle.id}
-                  variant={
-                    isPositive
-                      ? "cycle-positive"
-                      : isNegative
-                        ? "cycle-negative"
-                        : "cycle-balancing"
-                  }
-                  rank={ci + 1}
-                  title={cycle.name ?? cycle.cycle_id}
-                >
-                  {/* Chain */}
-                  <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-                    <span className="font-mono text-xs text-gray-500">
-                      {cycle.entity_ids.join(" → ")} → {cycle.entity_ids[0]}
-                    </span>
-                  </div>
-
-                  {cycle.description && (
                     <CalloutBox type="insight" label="What drives this loop">
-                      {cycle.description}
+                      {loop.explanation}
                     </CalloutBox>
-                  )}
 
-                  {cycle.intervention_description && (
                     <CalloutBox
                       type="intervention"
-                      label={isNegative ? "How to break this" : "How to strengthen this"}
+                      label={isPositive ? "How to strengthen this" : "How to break this"}
                     >
-                      {cycle.intervention_description}
+                      {loop.how_to}
                     </CalloutBox>
-                  )}
-                </ExpandableCard>
-              );
-            })}
+
+                    {loop.when_active?.length > 0 && (
+                      <div>
+                        <div className="mb-2 text-[11px] font-semibold text-gray-500">
+                          When this loop is active
+                        </div>
+                        <div className="space-y-1">
+                          {loop.when_active.map((w, wi) => (
+                            <div
+                              key={wi}
+                              className="flex gap-2 rounded-lg bg-gray-50 px-3 py-2"
+                            >
+                              <IntensityDot level={w.intensity} />
+                              <div>
+                                <div className="text-xs font-medium text-gray-800">
+                                  {w.situation}
+                                </div>
+                                <div className="mt-0.5 text-xs leading-snug text-gray-500">
+                                  {w.impact}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </ExpandableCard>
+                );
+              })
+            ) : (
+              // Fallback to DB cycles
+              cycles.map((cycle, ci) => {
+                const isPositive = cycle.classification === "reinforcing_positive";
+                const isNegative = cycle.classification === "reinforcing_negative";
+                return (
+                  <ExpandableCard
+                    key={cycle.id}
+                    variant={
+                      isPositive
+                        ? "cycle-positive"
+                        : isNegative
+                          ? "cycle-negative"
+                          : "cycle-balancing"
+                    }
+                    rank={ci + 1}
+                    title={cycle.name ?? cycle.cycle_id}
+                  >
+                    <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      <span className="font-mono text-xs text-gray-500">
+                        {cycle.entity_ids.join(" → ")} → {cycle.entity_ids[0]}
+                      </span>
+                    </div>
+                    {cycle.description && (
+                      <CalloutBox type="insight" label="What drives this loop">
+                        {cycle.description}
+                      </CalloutBox>
+                    )}
+                    {cycle.intervention_description && (
+                      <CalloutBox
+                        type="intervention"
+                        label={isNegative ? "How to break this" : "How to strengthen this"}
+                      >
+                        {cycle.intervention_description}
+                      </CalloutBox>
+                    )}
+                  </ExpandableCard>
+                );
+              })
+            )}
           </div>
         </section>
       )}
@@ -463,27 +556,50 @@ export function SynthesisView({
         </section>
       )}
 
-      {/* Section 8: Open Questions */}
-      {openQuestions.length > 0 && (
+      {/* Section 8: Open Questions — prefer rich synthesis data */}
+      {(synthData?.open_questions?.length ?? openQuestions.length) > 0 && (
         <section>
           <SectionHeader label="Open questions" color="gray" />
           <div className="mt-3 space-y-2">
-            {openQuestions.map((q) => (
-              <div
-                key={q.id}
-                className="rounded-lg border border-gray-200 bg-gray-50/60 p-3"
-              >
-                <p className="text-xs font-medium text-gray-700">
-                  {q.statement}
-                </p>
-              </div>
-            ))}
+            {synthData?.open_questions?.length ? (
+              synthData.open_questions.map((q: RichOpenQuestion & { what_changes?: string }, qi: number) => (
+                <div
+                  key={qi}
+                  className="rounded-lg border border-gray-200 bg-gray-50/60 p-3"
+                >
+                  <p className="text-[13px] font-medium text-gray-700">
+                    {q.question}
+                  </p>
+                  {q.why_it_matters && (
+                    <p className="mt-1.5 text-xs leading-relaxed text-gray-500">
+                      {q.why_it_matters}
+                    </p>
+                  )}
+                  {q.what_changes && (
+                    <div className="mt-2 rounded-md bg-blue-50 px-2.5 py-1.5 text-[11px] text-blue-600">
+                      If resolved: {q.what_changes}
+                    </div>
+                  )}
+                </div>
+              ))
+            ) : (
+              openQuestions.map((q) => (
+                <div
+                  key={q.id}
+                  className="rounded-lg border border-gray-200 bg-gray-50/60 p-3"
+                >
+                  <p className="text-xs font-medium text-gray-700">
+                    {q.statement}
+                  </p>
+                </div>
+              ))
+            )}
           </div>
         </section>
       )}
 
       {/* Section 9: What To Do Next — Conditional Action Plan */}
-      {actionItems.length > 0 && (
+      {(synthData?.action_plan?.paths?.length ?? actionItems.length) > 0 && (
         <section>
           <SectionHeader
             label="What to do next"
@@ -491,9 +607,22 @@ export function SynthesisView({
             subtitle="Choose the path that matches your situation"
           />
           <div className="mt-3">
-            <ConditionalActionPlan actionItems={actionItems} />
+            <ConditionalActionPlan
+              actionItems={actionItems}
+              richActionPlan={synthData?.action_plan}
+            />
           </div>
         </section>
+      )}
+
+      {/* Section 10: External Context */}
+      {externalEntities.length > 0 && (
+        <ExternalContextSection externalEntities={externalEntities} />
+      )}
+
+      {/* Section 11: Cross-Context Insights */}
+      {crossContextInsights.length > 0 && (
+        <CrossContextSection insights={crossContextInsights} />
       )}
     </div>
   );

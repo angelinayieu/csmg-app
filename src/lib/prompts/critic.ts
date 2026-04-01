@@ -19,6 +19,19 @@ For each pair of entities that are NOT directly connected but share a common nei
 5. DENSITY ASSESSMENT
 Current density: edge_count / entity_count. Is this sufficient for reliable analysis? If not, which areas of the graph are most sparse?
 
+6. RELATIONSHIP VALIDATION
+For each edge, check these structural rules:
+- TEMPORAL CONSISTENCY: If entity A happens AFTER entity B in time, A cannot "enable" or "cause" B. Flag any temporally impossible edges.
+- TRADEOFF SYMMETRY: If A —[tradeoff]→ B, then B —[tradeoff]→ A should also be true. Tradeoffs are bidirectional. If the reverse doesn't hold, it's not a tradeoff — reclassify.
+- CAUSAL DIRECTION: If A —[causes]→ B, can B change without A changing? If yes, A doesn't cause B.
+- CHAIN COMPRESSION: If an edge's description contains multi-step reasoning ("which then", "leading to", "therefore"), flag it as a compressed chain that should be split into multiple edges.
+- CONFIDENCE CHECK: Flag any edge with confidence < 0.4 as low-confidence.
+
+7. DYNAMICS-CYCLE CONSISTENCY
+Every edge that is part of a reinforcing cycle (positive or negative) should have dynamics = "compounding" because the cycle structure creates compounding behavior even if the individual edge looks linear in isolation. If you find a cycle member edge classified as "linear," flag it for reclassification to "compounding."
+
+Report all edges that fail these checks with the specific rule violated and a suggested correction.
+
 Return ONLY valid JSON:
 {
   "orphans": [
@@ -50,6 +63,9 @@ Return ONLY valid JSON:
     "estimated_missing_edges": number,
     "sparse_areas": ["string"]
   },
+  "relationship_violations": [
+    {"edge": "source_id → target_id", "rule_violated": "temporal_consistency | tradeoff_symmetry | causal_direction | chain_compression | low_confidence", "explanation": "string", "suggested_correction": "string"}
+  ],
   "overall_quality": {
     "score": "good | adequate | insufficient",
     "summary": "string"

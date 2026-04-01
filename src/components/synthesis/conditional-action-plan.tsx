@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import type { ActionItem } from "@/types";
+import type { RichActionPlan } from "@/types/synthesis";
 
 interface ConditionalActionPlanProps {
   actionItems: ActionItem[];
+  richActionPlan?: RichActionPlan;
 }
 
 const paths = [
@@ -23,7 +25,13 @@ const timeframeLabels: Record<string, { label: string; badge: string }> = {
 
 const timeframeOrder = ["today", "this_week", "this_month", "after_validation"];
 
-export function ConditionalActionPlan({ actionItems }: ConditionalActionPlanProps) {
+export function ConditionalActionPlan({ actionItems, richActionPlan }: ConditionalActionPlanProps) {
+  // If we have rich action plan from Pass 3, render that
+  if (richActionPlan?.paths?.length) {
+    return <RichActionPlanRenderer paths={richActionPlan.paths} />;
+  }
+
+  // Otherwise fall back to DB action items
   // Determine which paths have action items
   const availablePaths = paths.filter(
     (p) => actionItems.some((a) => a.path_label === p.key) || p.key === "builder"
@@ -158,6 +166,112 @@ export function ConditionalActionPlan({ actionItems }: ConditionalActionPlanProp
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// Rich action plan renderer for Pass 3 data
+function RichActionPlanRenderer({ paths: actionPaths }: { paths: RichActionPlan["paths"] }) {
+  const [activePath, setActivePath] = useState(0);
+  const currentPath = actionPaths[activePath];
+
+  if (!currentPath) return null;
+
+  return (
+    <div>
+      {/* Path switcher */}
+      {actionPaths.length > 1 && (
+        <div className="mb-4 flex gap-1.5">
+          {actionPaths.map((p, pi) => (
+            <button
+              key={pi}
+              onClick={() => setActivePath(pi)}
+              className={cn(
+                "flex-1 rounded-xl border p-3 text-left transition-all duration-200",
+                activePath === pi
+                  ? "border-opacity-40 bg-opacity-5"
+                  : "border-gray-200 bg-gray-50/60"
+              )}
+              style={{
+                borderColor:
+                  activePath === pi ? `${p.color}66` : undefined,
+                backgroundColor:
+                  activePath === pi ? `${p.color}08` : undefined,
+              }}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm">{p.icon}</span>
+                <span
+                  className="text-xs font-semibold"
+                  style={{
+                    color: activePath === pi ? p.color : "#86868b",
+                  }}
+                >
+                  {p.label}
+                </span>
+              </div>
+              <div className="mt-1 text-[10px] text-gray-400 leading-snug">
+                {p.description}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Time-sequenced groups */}
+      <div className="space-y-3">
+        {currentPath.timeframes.map((tf, tfi) => (
+          <div
+            key={tfi}
+            className="rounded-xl border border-gray-200 bg-gray-50/60 p-4"
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <div
+                className="flex h-5 w-5 items-center justify-center rounded text-[10px] font-bold"
+                style={{
+                  backgroundColor: `${currentPath.color}15`,
+                  color: currentPath.color,
+                }}
+              >
+                {tf.badge}
+              </div>
+              <span className="text-xs font-semibold text-gray-700">
+                {tf.label}
+              </span>
+            </div>
+            <div className="divide-y divide-gray-200">
+              {tf.actions.map((action, ai) => (
+                <div key={ai} className="py-2.5 first:pt-0 last:pb-0">
+                  <div className="text-[13px] font-medium leading-relaxed text-gray-800">
+                    {action.text}
+                  </div>
+                  {action.why && (
+                    <div className="mt-1 text-xs leading-relaxed text-gray-500">
+                      {action.why}
+                    </div>
+                  )}
+                  {action.tags?.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {action.tags.map((tag, ti) => (
+                        <span
+                          key={ti}
+                          className="rounded px-1.5 py-0.5 text-[9px] font-medium"
+                          style={{
+                            backgroundColor: `${tag.c}12`,
+                            color: tag.c,
+                          }}
+                        >
+                          {tag.t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -14,6 +14,8 @@ interface NodeDetailProps {
   entityMap: Map<string, Entity>;
   onClose: () => void;
   onDecompose?: (entity: Entity) => void;
+  onAcceptExternal?: (entity: Entity) => void;
+  onRemoveExternal?: (entity: Entity) => void;
 }
 
 export function NodeDetail({
@@ -22,7 +24,10 @@ export function NodeDetail({
   entityMap,
   onClose,
   onDecompose,
+  onAcceptExternal,
+  onRemoveExternal,
 }: NodeDetailProps) {
+  const isExternal = entity.knowledge_layer === "external";
   const colors = getNodeColor(entity.entity_category);
 
   // Get edges connected to this entity
@@ -67,6 +72,14 @@ export function NodeDetail({
               {entity.name}
             </h2>
           </div>
+          {/* External indicator */}
+          {isExternal && (
+            <div className="mt-1 flex items-center gap-1.5 text-[10px] text-purple-600">
+              <span className="h-2 w-2 rounded-full border border-current" style={{ borderStyle: "dashed" }} />
+              External knowledge
+            </div>
+          )}
+
           {/* Badges */}
           <div className="mt-2 flex flex-wrap gap-1">
             <StatusBadge variant={entity.entity_category === "concrete" ? "stated" : entity.entity_category === "abstract" ? "theory" : "active"}>
@@ -181,6 +194,70 @@ export function NodeDetail({
         </div>
       </div>
 
+      {/* Provenance (for external entities) */}
+      {isExternal && entity.provenance && (
+        <div className="border-t border-gray-200 px-5 py-3">
+          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+            Source
+          </h3>
+          <div className="space-y-1.5 text-[12px]">
+            <div className="flex justify-between">
+              <span className="text-gray-500">Type</span>
+              <span className="text-gray-700">
+                {(entity.provenance as Record<string, string>)?.source_type ?? "Training knowledge"}
+              </span>
+            </div>
+            {(entity.provenance as Record<string, string>)?.relevance && (
+              <div className="mt-2 rounded-md bg-purple-50 px-2.5 py-2 text-[11px] text-purple-700">
+                {(entity.provenance as Record<string, string>).relevance}
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-gray-500">Authority</span>
+              <span className={cn(
+                "text-gray-700",
+                entity.authority_level === "high" && "text-green-600",
+                entity.authority_level === "moderate" && "text-blue-600",
+                entity.authority_level === "low" && "text-gray-500",
+              )}>
+                {entity.authority_level}
+              </span>
+            </div>
+          </div>
+
+          {/* Bridge connections */}
+          {connectedEdges.filter((e) => e.knowledge_layer === "bridge").length > 0 && (
+            <div className="mt-3">
+              <h4 className="mb-1 text-[10px] font-semibold text-amber-600">
+                Connected to your analysis
+              </h4>
+              {connectedEdges
+                .filter((e) => e.knowledge_layer === "bridge")
+                .map((edge) => {
+                  const otherId =
+                    edge.source_entity_id === entity.id
+                      ? edge.target_entity_id
+                      : edge.source_entity_id;
+                  const other = entityMap.get(otherId);
+                  return (
+                    <div key={edge.id} className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] mb-1">
+                      <span className="font-medium text-amber-700">
+                        {edge.relationship_type}
+                      </span>{" "}
+                      <span className="text-gray-600">
+                        {other?.name ?? otherId}
+                      </span>
+                      {edge.conditions && (
+                        <div className="mt-0.5 text-[10px] text-gray-500">{edge.conditions}</div>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Actions */}
       <div className="border-t border-gray-200 px-5 py-3 space-y-2">
         {entity.is_decomposable && onDecompose && (
@@ -190,6 +267,26 @@ export function NodeDetail({
             size="sm"
           >
             Analyze this entity
+          </Button>
+        )}
+        {isExternal && onAcceptExternal && (
+          <Button
+            onClick={() => onAcceptExternal(entity)}
+            className="w-full"
+            size="sm"
+            variant="secondary"
+          >
+            Accept into analysis
+          </Button>
+        )}
+        {isExternal && onRemoveExternal && (
+          <Button
+            onClick={() => onRemoveExternal(entity)}
+            className="w-full"
+            size="sm"
+            variant="ghost"
+          >
+            Remove from graph
           </Button>
         )}
       </div>

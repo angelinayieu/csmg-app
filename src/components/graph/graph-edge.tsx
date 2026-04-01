@@ -13,6 +13,7 @@ interface GraphEdgeProps {
   isHovered: boolean;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
+  onClick?: (e: React.MouseEvent) => void;
 }
 
 export function GraphEdge({
@@ -25,10 +26,14 @@ export function GraphEdge({
   isHovered,
   onMouseEnter,
   onMouseLeave,
+  onClick,
 }: GraphEdgeProps) {
   const style = getEdgeDimensionStyle(edge.dimension);
   const isTradeoff = edge.is_tradeoff;
-  const dimOpacity = isDimmed ? 0.12 : 1;
+  const isBridge = edge.knowledge_layer === "bridge";
+  const isExternal = edge.knowledge_layer === "external";
+  const isPendingApproval = edge.requires_user_approval && !edge.approved_at;
+  const dimOpacity = isDimmed ? 0.12 : isExternal ? 0.4 : 1;
 
   // Calculate midpoint for labels
   const mx = (x1 + x2) / 2;
@@ -38,11 +43,21 @@ export function GraphEdge({
   const markerId = `arrow-${edge.id}`;
   const edgeColor = isHovered
     ? "#007AFF"
+    : isBridge
+      ? "#EF9F27" // Gold for bridges
+      : isTradeoff
+        ? graphOverlays.tradeoff.color
+        : isExternal
+          ? "#86868B" // Gray for external-only edges
+          : style.color;
+  const edgeWidth = isHovered ? 1.8 : isBridge ? 1.5 : isTradeoff ? graphOverlays.tradeoff.width : isExternal ? 0.5 : style.width;
+  const edgeDash = isBridge
+    ? (isPendingApproval ? "6 3 2 3" : "6 3") // Animated dash for pending, regular dash for approved
     : isTradeoff
-      ? graphOverlays.tradeoff.color
-      : style.color;
-  const edgeWidth = isHovered ? 1.8 : isTradeoff ? graphOverlays.tradeoff.width : style.width;
-  const edgeDash = isTradeoff ? graphOverlays.tradeoff.dash : style.dash;
+      ? graphOverlays.tradeoff.dash
+      : isExternal
+        ? "2 3"
+        : style.dash;
 
   return (
     <g
@@ -52,6 +67,7 @@ export function GraphEdge({
       }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      onClick={onClick}
     >
       {/* Arrow marker definition */}
       <defs>
@@ -94,6 +110,22 @@ export function GraphEdge({
           style={{ pointerEvents: "none" }}
         >
           tradeoff
+        </text>
+      )}
+
+      {/* Bridge label */}
+      {isBridge && (
+        <text
+          x={mx}
+          y={my - 6}
+          textAnchor="middle"
+          fontSize={7}
+          fontWeight={500}
+          fill="#EF9F27"
+          style={{ pointerEvents: "none" }}
+        >
+          {edge.relationship_type}
+          {isPendingApproval ? " ⟡" : " ✓"}
         </text>
       )}
 

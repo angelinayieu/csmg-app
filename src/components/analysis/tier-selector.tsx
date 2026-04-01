@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { TIERS, type AnalysisTier } from "@/lib/tiers";
+import { TierIcons } from "@/components/ui/tier-icons";
 
 interface TierSelectorProps {
   selected: AnalysisTier;
@@ -38,7 +39,10 @@ export function TierSelector({
             )}
           >
             <div className="flex items-center justify-between">
-              <span className="text-base">{tier.icon}</span>
+              {(() => {
+                const IconComponent = TierIcons[tierId];
+                return IconComponent ? <IconComponent size={28} active={isSelected} /> : <span className="text-base">{tier.icon}</span>;
+              })()}
               <span
                 className={cn(
                   "rounded-full px-2 py-0.5 text-[10px] font-semibold",

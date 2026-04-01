@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { getAnthropicClient } from "@/lib/anthropic";
+import { llmJSON } from "@/lib/llm";
 import { WEAVING_SYSTEM_PROMPT } from "@/lib/prompts/weaving";
 import type { WeaveResponse } from "@/types/weave";
 
@@ -101,39 +101,20 @@ export async function POST(request: Request) {
     })),
   };
 
-  // Call Anthropic
-  const anthropic = getAnthropicClient();
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 4000,
-    system: WEAVING_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `Discover shared variables and bridges between these two context spaces.\n\nSpace A (${spaceA.name}):\n${JSON.stringify(spaceAData, null, 2)}\n\nSpace B (${spaceB.name}):\n${JSON.stringify(spaceBData, null, 2)}`,
-      },
-    ],
-  });
-
-  const rawJson =
-    response.content[0].type === "text" ? response.content[0].text : "";
-
+  // Call LLM
   let parsed: WeaveResponse;
   try {
-    parsed = JSON.parse(rawJson);
+    parsed = await llmJSON<WeaveResponse>({
+      system: WEAVING_SYSTEM_PROMPT,
+      user: `Discover shared variables and bridges between these two context spaces.\n\nSpace A (${spaceA.name}):\n${JSON.stringify(spaceAData, null, 2)}\n\nSpace B (${spaceB.name}):\n${JSON.stringify(spaceBData, null, 2)}`,
+      maxTokens: 4000,
+      temperature: 0.3,
+    });
   } catch {
-    const stripped = rawJson
-      .replace(/^```(?:json)?\s*\n?/i, "")
-      .replace(/\n?```\s*$/i, "")
-      .trim();
-    try {
-      parsed = JSON.parse(stripped);
-    } catch {
-      return Response.json(
-        { error: "Failed to parse weaving results" },
-        { status: 500 }
-      );
-    }
+    return Response.json(
+      { error: "Failed to parse weaving results" },
+      { status: 500 }
+    );
   }
 
   // Build entity_id → UUID lookups for bridge storage

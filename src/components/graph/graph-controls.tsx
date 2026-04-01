@@ -8,6 +8,8 @@ interface GraphControlsProps {
   visibleDimensions: Set<string>;
   onToggleDimension: (dim: string) => void;
   onResetZoom: () => void;
+  showExternal?: boolean;
+  onToggleExternal?: () => void;
 }
 
 const dimensionLabels: Record<string, string> = {
@@ -26,6 +28,8 @@ export function GraphControls({
   visibleDimensions,
   onToggleDimension,
   onResetZoom,
+  showExternal = true,
+  onToggleExternal,
 }: GraphControlsProps) {
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 backdrop-blur-sm">
@@ -57,6 +61,28 @@ export function GraphControls({
           </button>
         );
       })}
+      {/* External toggle */}
+      {onToggleExternal && (
+        <>
+          <div className="mx-1 h-4 w-px bg-gray-200" />
+          <button
+            onClick={onToggleExternal}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-medium transition-all",
+              showExternal
+                ? "bg-purple-50 text-purple-600"
+                : "text-gray-400 opacity-50"
+            )}
+          >
+            <span
+              className="h-2 w-2 rounded-full border border-current"
+              style={{ borderStyle: "dashed" }}
+            />
+            External
+          </button>
+        </>
+      )}
+
       <div className="ml-auto flex gap-1">
         <button
           onClick={onResetZoom}

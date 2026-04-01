@@ -103,6 +103,33 @@ export interface CritiqueResult {
   };
 }
 
+// Domain Expert (Agent 7) output
+export interface DomainExpertResult {
+  external_entities: {
+    entity_id: string;
+    name: string;
+    description: string;
+    entity_type: string;
+    entity_category: string;
+    category: "competitor" | "framework" | "pattern" | "data_point" | "analogy" | "risk_pattern" | "resource";
+    confidence: number;
+    authority_level: "high" | "moderate" | "low";
+    relevance_to_situation: string;
+  }[];
+  external_edges: {
+    source: string;
+    target: string;
+    relationship_type: string;
+    dimension: string;
+  }[];
+  potential_bridges: {
+    external_entity_id: string;
+    likely_internal_concept: string;
+    connection_type: "validates" | "challenges" | "extends" | "analogous";
+    reasoning: string;
+  }[];
+}
+
 // Full orchestration state for the frontend
 export interface OrchestrationState {
   tier: AnalysisTier;

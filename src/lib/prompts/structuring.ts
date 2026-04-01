@@ -17,7 +17,7 @@ Schema:
   "entities": [
     {
       "entity_id": "C1",
-      "name": "string",
+      "name": "string — MUST be specific and semantically distinct from every other entity (e.g. 'Product quality flywheel' not just 'Quality'). Merge near-duplicates into one entity.",
       "description": "string — one sentence",
       "source_tag": "explicit | implicit | assumed",
       "entity_type": "string — e.g. capability, constraint, product, person, metric",
@@ -48,9 +48,22 @@ Schema:
       "is_tradeoff": boolean,
       "resolved_by_entity_id": "string or null",
       "is_part_of_cycle": boolean,
-      "cycle_id": "string or null"
+      "cycle_id": "string or null",
+      "dynamics": "threshold | linear | compounding | exponential | logarithmic | decay | step_function | delayed",
+      "dynamics_properties": { "threshold_condition": "string", "delay": "string", "cycle_time": "string" }
     }
   ],
+
+  EDGE DYNAMICS EXAMPLES (follow these patterns):
+  // Threshold: "Prototype enables user testing" — zero testing possible before prototype exists
+  {"dynamics": "threshold", "dynamics_properties": {"threshold_condition": "Working prototype exists", "before_threshold": "Zero user testing possible", "after_threshold": "Full testing pipeline enabled"}}
+  // Compounding: part of a positive cycle
+  {"dynamics": "compounding", "dynamics_properties": {"cycle_name": "Quality flywheel", "compounding_mechanism": "More retained users generate more data, improving quality", "estimated_cycle_time": "~1 week"}}
+  // Delayed: "Publishing research builds credibility" — takes months
+  {"dynamics": "delayed", "dynamics_properties": {"delay": "~3-6 months", "mechanism": "Academic publishing cycle"}}
+  // Linear: "Better formatting improves perception" — proportional, no acceleration
+  {"dynamics": "linear", "dynamics_properties": {}}
+  Do NOT default to "linear" when uncertain — consider whether the relationship has a threshold, compounds, or is delayed.
   "cycles": [
     {
       "cycle_id": "cycle_1",
@@ -60,6 +73,9 @@ Schema:
       "intervention_point": "C5",
       "intervention_description": "string — what to do at the intervention point",
       "description": "string",
+      "growth_type": "additive | multiplicative | accelerating | decelerating",
+      "cycle_time": "string — e.g. '~1 week', '~1 month'",
+      "estimated_multiplier": 1.3,
       "reasoning": "string — what drives this loop and why it matters",
       "when_active": [
         {
@@ -114,6 +130,14 @@ Schema:
       "why_text": "string — reasoning for why this action matters",
       "derived_from_entity_id": "string or null",
       "tags": [{"t": "string — tag label like 'fixes bottleneck' or 'starts flywheel'", "c": "string — hex color like '#FF3B30' or '#34C759'"}]
+    }
+  ],
+  "open_questions": [
+    {
+      "question": "string — a specific unresolved question that could change the analysis",
+      "why_it_matters": "string — what depends on the answer, which entities/edges would change",
+      "what_would_change": "string — if we knew the answer, what connections would be added or removed",
+      "related_entity_ids": ["C5", "C8"]
     }
   ],
   "leverage_points": [
@@ -174,11 +198,19 @@ Schema:
 
 CRITICAL RULES:
 - Return ONLY the JSON object. No markdown code fences, no explanation, no preamble.
-- Every entity referenced in edges must exist in the entities array.
-- Use entity_id values (C1, C2, etc.) consistently across all arrays.
-- Ensure all enum values match exactly (e.g., "concrete" not "Concrete").
+- Every entity referenced in edges MUST exist in the entities array. Edge source_entity_id and target_entity_id MUST exactly match entity_id values.
+- Use entity_id values (C1, C2, etc.) consistently across all arrays. NO typos, NO mismatches.
+- Ensure all enum values match exactly (e.g., "concrete" not "Concrete", "functional" not "Functional").
 - Mark exactly one entity as is_master_bottleneck: true (highest blast_radius + centrality).
 - Mark edges that represent tradeoffs with is_tradeoff: true.
+- MERGE near-duplicate entities. "AI chatbox" and "chatbox module" should be ONE entity, not two. Every entity name must be semantically distinct.
+- Entity descriptions must explain WHY the entity matters to the system dynamics, not just define it. "A chatbox" is useless. "The core product delivering AI-powered analysis to users" is useful.
+
+OPEN QUESTIONS — REQUIREMENTS:
+- Produce 3-5 open questions. These are NOT generic ("what's the market size?"). They are SPECIFIC to THIS analysis.
+- Each question must identify: what entity or edge would change if we knew the answer.
+- Good examples: "Does the team have technical capability to build the AI module? If yes, C8→C1 edge strengthens from 0.5 to 0.9. If no, the entire product strategy depends on hiring."
+- Focus on questions where the answer would ADD or REMOVE connections in the graph, or significantly change confidence levels.
 
 LEVERAGE POINTS / RISK POINTS — DEPTH REQUIREMENTS:
 - Each leverage point MUST have 2-4 "reasoning" paragraphs explaining WHY in depth.

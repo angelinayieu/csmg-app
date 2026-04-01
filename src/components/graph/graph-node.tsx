@@ -29,11 +29,13 @@ export function GraphNode({
   onClick,
 }: GraphNodeProps) {
   const colors = getNodeColor(entity.entity_category);
+  const isExternal = entity.knowledge_layer === "external";
   const confidenceOpacity =
     entity.confidence >= 0.8 ? 1 : entity.confidence >= 0.5 ? 0.6 : 0.4;
-  const displayRadius = isHovered ? radius + 3 : radius;
-  const strokeWidth = isHovered ? 2 : 1.2;
-  const dimOpacity = isDimmed ? 0.2 : 1;
+  const displayRadius = isExternal ? radius - 2 : isHovered ? radius + 3 : radius;
+  const strokeWidth = isExternal ? 1.5 : isHovered ? 2 : 1.2;
+  const dimOpacity = isDimmed ? 0.2 : isExternal ? 0.7 : 1;
+  const fillColor = isExternal ? `${colors.fill}40` : colors.fill; // 25% opacity fill for external
 
   return (
     <g
@@ -83,6 +85,18 @@ export function GraphNode({
       )}
 
       {/* Main node */}
+      {/* External entity indicator — hexagonal outline */}
+      {isExternal && (
+        <circle
+          r={displayRadius + 4}
+          fill="none"
+          stroke="#86868B"
+          strokeWidth={0.5}
+          strokeDasharray="3 2"
+          opacity={0.5}
+        />
+      )}
+
       {entity.entity_category === "relational" ? (
         // Diamond shape for relational entities
         <rect
@@ -91,26 +105,28 @@ export function GraphNode({
           width={displayRadius * 1.4}
           height={displayRadius * 1.4}
           rx={3}
-          fill={colors.fill}
+          fill={fillColor}
           stroke={colors.stroke}
           strokeWidth={strokeWidth}
           strokeOpacity={confidenceOpacity}
-          strokeDasharray={entity.confidence < 0.5 ? "3 2" : ""}
+          strokeDasharray={isExternal ? "4 2" : entity.confidence < 0.5 ? "3 2" : ""}
           transform="rotate(45)"
         />
       ) : (
         <circle
           r={displayRadius}
-          fill={colors.fill}
+          fill={fillColor}
           stroke={colors.stroke}
           strokeWidth={strokeWidth}
           strokeOpacity={confidenceOpacity}
           strokeDasharray={
-            entity.entity_category === "epistemic"
+            isExternal
               ? "4 2"
-              : entity.confidence < 0.5
-                ? "3 2"
-                : ""
+              : entity.entity_category === "epistemic"
+                ? "4 2"
+                : entity.confidence < 0.5
+                  ? "3 2"
+                  : ""
           }
         />
       )}
