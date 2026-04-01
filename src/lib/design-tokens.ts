@@ -178,6 +178,21 @@ export function getEdgeDimensionStyle(
   );
 }
 
+// Domain colors for multi-space unified graph
+export const domainColors: Array<{ fill: string; stroke: string; label: string }> = [
+  { fill: "#E6F1FB", stroke: "#378ADD", label: "blue" },     // Space A
+  { fill: "#EEEDFE", stroke: "#7F77DD", label: "purple" },   // Space B
+  { fill: "#FAECE7", stroke: "#D85A30", label: "coral" },    // Space C
+  { fill: "#E1F5EE", stroke: "#1D9E75", label: "teal" },     // Space D
+  { fill: "#FFF8E6", stroke: "#BA7517", label: "amber" },    // Space E
+  { fill: "#FBEAF0", stroke: "#D4537E", label: "pink" },     // Space F
+  { fill: "#F0FFF4", stroke: "#639922", label: "green" },    // Space G
+];
+
+export function getDomainColor(index: number): { fill: string; stroke: string } {
+  return domainColors[index % domainColors.length];
+}
+
 // Helper: get node fill/stroke for a category
 export function getNodeColor(
   category: string

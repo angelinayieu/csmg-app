@@ -17,7 +17,7 @@ import { PredictionCards } from "@/components/reasoning/prediction-card";
 import { PathResults } from "@/components/reasoning/path-results";
 import { LoopDetailCards } from "@/components/reasoning/loop-detail-card";
 import { useReasoning } from "@/lib/hooks/use-reasoning";
-import { edgeDimensionStyles } from "@/lib/design-tokens";
+import { edgeDimensionStyles, domainColors } from "@/lib/design-tokens";
 import type {
   Space,
   Entity,
@@ -40,6 +40,9 @@ interface SpaceDetailTabsProps {
   contradictions: Contradiction[];
   scenarios: Scenario[];
   actionItems: ActionItem[];
+  siblingEntities?: Entity[];
+  siblingEdges?: Edge[];
+  domainMap?: Record<string, { name: string; index: number }>;
 }
 
 const tabs = [
@@ -60,6 +63,9 @@ export function SpaceDetailTabs({
   contradictions,
   scenarios,
   actionItems,
+  siblingEntities = [],
+  siblingEdges = [],
+  domainMap = {},
 }: SpaceDetailTabsProps) {
   const [activeTab, setActiveTab] = useState<TabId>("graph");
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
@@ -67,17 +73,48 @@ export function SpaceDetailTabs({
     () => new Set(Object.keys(edgeDimensionStyles))
   );
   const [showExternal, setShowExternal] = useState(true);
+  const [showSiblings, setShowSiblings] = useState(false);
+  const [activeDomains, setActiveDomains] = useState<Set<string>>(() => new Set([space.id]));
 
   // Check if space has external entities
   const hasExternalEntities = entities.some((e) => e.knowledge_layer === "external");
+  const hasSiblings = siblingEntities.length > 0;
+
+  // Build unified entity/edge lists when showing siblings
+  const unifiedEntities = useMemo(() => {
+    if (!showSiblings) return entities;
+    return [...entities, ...siblingEntities.filter((e) => activeDomains.has(e.space_id))];
+  }, [entities, siblingEntities, showSiblings, activeDomains]);
+
+  const unifiedEdges = useMemo(() => {
+    if (!showSiblings) return edges;
+    const activeEntityIds = new Set(unifiedEntities.map((e) => e.id));
+    return [...edges, ...siblingEdges.filter((e) =>
+      activeDomains.has(e.space_id) &&
+      activeEntityIds.has(e.source_entity_id) &&
+      activeEntityIds.has(e.target_entity_id)
+    )];
+  }, [edges, siblingEdges, showSiblings, activeDomains, unifiedEntities]);
 
   // Filter entities/edges based on external toggle
   const filteredEntities = showExternal
-    ? entities
-    : entities.filter((e) => e.knowledge_layer !== "external");
+    ? unifiedEntities
+    : unifiedEntities.filter((e) => e.knowledge_layer !== "external");
   const filteredEdges = showExternal
-    ? edges
-    : edges.filter((e) => e.knowledge_layer !== "external");
+    ? unifiedEdges
+    : unifiedEdges.filter((e) => e.knowledge_layer !== "external");
+
+  function toggleDomain(spaceId: string) {
+    setActiveDomains((prev) => {
+      const next = new Set(prev);
+      if (next.has(spaceId)) {
+        if (next.size > 1) next.delete(spaceId); // Don't allow deselecting all
+      } else {
+        next.add(spaceId);
+      }
+      return next;
+    });
+  }
   const {
     loading: reasoningLoading,
     activeOp,
@@ -163,6 +200,42 @@ export function SpaceDetailTabs({
                   entities={entities}
                 />
               </div>
+              {/* Domain filter row */}
+              {hasSiblings && (
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    onClick={() => setShowSiblings(!showSiblings)}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 font-medium transition-colors",
+                      showSiblings
+                        ? "bg-interaxis-100 text-interaxis-700"
+                        : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                    )}
+                  >
+                    {showSiblings ? "Showing all areas" : "Show all areas"}
+                  </button>
+                  {showSiblings && Object.entries(domainMap).map(([spaceId, { name, index }]) => {
+                    const isActive = activeDomains.has(spaceId);
+                    const domainColor = domainColors[index % domainColors.length];
+                    return (
+                      <button
+                        key={spaceId}
+                        onClick={() => toggleDomain(spaceId)}
+                        className={cn(
+                          "flex items-center gap-1 rounded-md px-2 py-1 transition-colors",
+                          isActive ? "bg-white shadow-sm" : "opacity-40 hover:opacity-70"
+                        )}
+                      >
+                        <span
+                          className="inline-block h-2 w-2 rounded-full"
+                          style={{ background: domainColor.stroke }}
+                        />
+                        <span className="truncate max-w-[80px]">{name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {space.orphan_count > 0 && (
                 <OrphanAlert orphanCount={space.orphan_count} />
               )}
@@ -174,6 +247,7 @@ export function SpaceDetailTabs({
                   onNodeClick={setSelectedEntity}
                   visibleDimensions={visibleDimensions}
                   spaceDescription={space.description ?? space.name}
+                  domainMap={showSiblings ? domainMap : undefined}
                 />
               </div>
             </div>

@@ -23,6 +23,7 @@ interface SpaceGraphProps {
   onNodeClick: (entity: Entity) => void;
   visibleDimensions?: Set<string>;
   spaceDescription?: string;
+  domainMap?: Record<string, { name: string; index: number }>;
 }
 
 export function SpaceGraph({
@@ -32,6 +33,7 @@ export function SpaceGraph({
   onNodeClick,
   visibleDimensions,
   spaceDescription = "",
+  domainMap,
 }: SpaceGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState<SimNode[]>([]);
@@ -266,6 +268,7 @@ export function SpaceGraph({
               entity={node.entity}
               x={node.x ?? 0}
               y={node.y ?? 0}
+              domainIndex={domainMap?.[node.entity.space_id]?.index}
               isHovered={hoveredNodeId === node.id}
               isNeighbor={isNeighbor}
               isDimmed={isDimmed}

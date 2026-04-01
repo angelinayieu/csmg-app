@@ -52,6 +52,11 @@ Each entity name must be semantically distinct from every other entity. If two e
 - Convey its role in the system (why it exists, what it does)
 - Be different enough from every other entity name that someone reading the list can tell them apart without descriptions
 
+**MANDATORY — Entity precision check:** For each entity, verify:
+- **SCOPE:** Could this refer to multiple different things? If yes, narrow to the most specific interpretation supported by the user's text. "App prototype" → "Working AI reasoning prototype." "Market" → "US university students."
+- **ABSTRACTION:** Could someone build, measure, or observe this? If not, make it concrete. "Innovation community vision" → "Student innovation community (form TBD)." "Digital ecosystem" → split into specific components.
+- **REFERENCE:** Does this name mean the same thing everywhere in this analysis? If not, qualify it: "output quality" not just "quality." "User retention rate" not just "traction."
+
 **Target density:** 15-50 entities. Under 15 means dig deeper. Over 50 means consider splitting into sub-spaces.
 
 ### TIER 3 — RELATIONSHIP MAPPING
@@ -357,6 +362,26 @@ Present your work in this structure:
 ═══ CONTEXT SPACE OUTPUT ═══
 [Space metadata, leverage/risk points, shared variables, decomposable entities, maturity]
 \`\`\`
+
+---
+
+## DEPTH EXPANSION (mandatory final pass)
+
+After completing all tiers and weaving, review every entity marked as "fundamental" or "critical" importance that has fewer than 4 edges.
+
+For each under-connected important entity:
+
+1. **Internally expand:** List 5-8 sub-aspects or dimensions of this concept. What is it made of? What qualities does it have? What does it interact with?
+
+2. **Map sub-aspects to existing entities:** For each sub-aspect, ask: "Does this sub-aspect connect to any OTHER entity already in the decomposition?" If yes, that's a missing edge.
+
+3. **Add the missing edges:** Create the edge with the sub-aspect as the mechanism in the description. Example: "AI chatbox prototype" has sub-aspect "logic demonstration capability" which connects to "professor partnerships" → add edge: prototype —[enables via logic demonstration]→ professor partnerships.
+
+4. **Enrich the entity description:** Update the entity's description to reflect the richer understanding from the sub-aspects.
+
+**Critical:** Do NOT create new entities for sub-aspects. The goal is richer, more specific edges on EXISTING entities, not more entities. The sub-aspects are reasoning scaffolding — they inform better edges, then disappear.
+
+After this pass, every fundamental/critical entity should have at least 4 edges with specific mechanism descriptions.
 
 ---
 

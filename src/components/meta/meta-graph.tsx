@@ -53,19 +53,25 @@ export function MetaGraph({ spaces, bridges }: MetaGraphProps) {
     if (!svgRef.current || spaces.length === 0) return;
 
     const svg = d3.select(svgRef.current);
-    const width = svgRef.current.clientWidth;
-    const height = svgRef.current.clientHeight;
+    const width = svgRef.current.clientWidth || 800;
+    const height = svgRef.current.clientHeight || 500;
 
     svg.selectAll("*").remove();
 
-    // Build nodes
-    const nodes: SpaceNode[] = spaces.map((s) => ({
-      id: s.id,
-      name: s.name,
-      prefix: s.space_prefix,
-      entityCount: s.entity_count,
-      maturity: s.maturity,
-    }));
+    // Build nodes with initial position spread
+    const nodes: SpaceNode[] = spaces.map((s, i) => {
+      const angle = (2 * Math.PI * i) / spaces.length;
+      const r = Math.min(width, height) * 0.25;
+      return {
+        id: s.id,
+        name: s.name,
+        prefix: s.space_prefix,
+        entityCount: s.entity_count,
+        maturity: s.maturity,
+        x: width / 2 + r * Math.cos(angle),
+        y: height / 2 + r * Math.sin(angle),
+      };
+    });
 
     // Build edges — deduplicate by space pair
     const edgeMap = new Map<string, BridgeEdge>();
@@ -83,12 +89,15 @@ export function MetaGraph({ spaces, bridges }: MetaGraphProps) {
     }
     const edges: BridgeEdge[] = Array.from(edgeMap.values());
 
-    // Simulation
+    // Simulation with boundary clamping
+    const padding = 60;
     const simulation = d3
       .forceSimulation(nodes)
-      .force("charge", d3.forceManyBody().strength(-400))
+      .force("charge", d3.forceManyBody().strength(-250))
       .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collision", d3.forceCollide().radius(60))
+      .force("collision", d3.forceCollide().radius(55))
+      .force("x", d3.forceX(width / 2).strength(0.1))
+      .force("y", d3.forceY(height / 2).strength(0.1))
       .force(
         "link",
         d3.forceLink<SpaceNode, BridgeEdge>(edges).id((d) => d.id).distance(200).strength(0.3)
@@ -196,8 +205,13 @@ export function MetaGraph({ spaces, bridges }: MetaGraphProps) {
         d3.select(this).select("circle").attr("stroke-width", 2);
       });
 
-    // Tick
+    // Tick with boundary clamping
     simulation.on("tick", () => {
+      for (const node of nodes) {
+        node.x = Math.max(padding, Math.min(width - padding, node.x ?? width / 2));
+        node.y = Math.max(padding, Math.min(height - padding, node.y ?? height / 2));
+      }
+
       edgeLines
         .attr("x1", (d) => (d.source as SpaceNode).x ?? 0)
         .attr("y1", (d) => (d.source as SpaceNode).y ?? 0)

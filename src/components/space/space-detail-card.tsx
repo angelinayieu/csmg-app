@@ -106,23 +106,33 @@ export function SpaceDetailCard({
         </div>
       </Link>
 
-      {/* Sub-spaces */}
-      {subSpaces.length > 0 && (
-        <div className="ml-4 border-l border-gray-200 pl-2 mt-0.5">
-          {subSpaces.map((sub) => (
-            <Link
-              key={sub.id}
-              href={`/app/space/${sub.id}`}
-              className="flex items-center gap-1.5 rounded px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-100"
-            >
-              <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded bg-gray-100 text-[8px] font-semibold text-gray-500">
+      {/* Sub-spaces rendered flat with origin indicator */}
+      {subSpaces.length > 0 &&
+        subSpaces.map((sub) => (
+          <Link
+            key={sub.id}
+            href={`/app/space/${sub.id}`}
+            className={cn(
+              "flex flex-col gap-0.5 rounded-lg px-3 py-1.5 text-sm transition-colors",
+              pathname === `/app/space/${sub.id}`
+                ? "bg-interaxis-50 border border-interaxis-100"
+                : "hover:bg-gray-100 border border-transparent"
+            )}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded bg-gray-100 text-[10px] font-semibold text-gray-500">
                 {sub.space_prefix}
               </span>
-              <span className="truncate">{sub.name}</span>
-            </Link>
-          ))}
-        </div>
-      )}
+              <span className="truncate text-xs font-medium">{sub.name}</span>
+            </div>
+            <div className="pl-7 text-[10px] text-gray-400">
+              {sub.entity_count} entities · {sub.edge_count} edges
+              <span className="ml-1 text-gray-300">
+                &larr; {space.name}
+              </span>
+            </div>
+          </Link>
+        ))}
     </div>
   );
 }

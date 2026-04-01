@@ -223,6 +223,8 @@ export async function POST(request: Request) {
           console.log(`[Analyze] Entity map built: ${entityIdMap.size} of ${entityInserts.length} entities`);
 
           // ── Insert edges INDIVIDUALLY (one bad edge won't kill the rest) ──
+          const rawEdgeCount = (parsed.edges ?? []).length;
+          console.log(`[Analyze] LLM produced ${rawEdgeCount} edges. Entity map has ${entityIdMap.size} entries.`);
           let edgesInserted = 0;
           let edgesSkipped = 0;
           let edgesFailed = 0;
@@ -240,7 +242,8 @@ export async function POST(request: Request) {
               continue;
             }
 
-            const edgeRow = {
+            // Core edge fields (always safe to insert)
+            const edgeRow: Record<string, unknown> = {
               space_id: spaceId,
               source_entity_id: srcUuid,
               target_entity_id: tgtUuid,
@@ -257,17 +260,42 @@ export async function POST(request: Request) {
                 : null,
               is_part_of_cycle: e.is_part_of_cycle ?? false,
               cycle_id: e.cycle_id ?? null,
-              dynamics: e.dynamics ?? null,
-              dynamics_properties: e.dynamics_properties ?? null,
-              is_low_confidence: (e.confidence ?? 0.8) < 0.4,
             };
 
-            const { error: edgeError } = await db
+            // Optional columns (added by migrations — safe to include)
+            if (e.dynamics) edgeRow.dynamics = e.dynamics;
+            if (e.dynamics_properties) edgeRow.dynamics_properties = e.dynamics_properties;
+            edgeRow.is_low_confidence = (e.confidence ?? 0.8) < 0.4;
+
+            // First attempt: full insert
+            let { error: edgeError } = await db
               .from("edges")
               .insert(edgeRow);
 
+            // Fallback: if insert fails (e.g. unknown column), retry with core fields only
             if (edgeError) {
-              console.error(`[Analyze] Edge failed: ${srcId}→${tgtId} (${e.relationship_type}):`, edgeError.message);
+              console.warn(`[Analyze] Edge insert failed, retrying core-only: ${srcId}→${tgtId}: ${edgeError.message}`);
+              const coreRow = {
+                space_id: spaceId,
+                source_entity_id: srcUuid,
+                target_entity_id: tgtUuid,
+                relationship_type: edgeRow.relationship_type,
+                dimension: edgeRow.dimension,
+                source_tag: edgeRow.source_tag,
+                strength: edgeRow.strength,
+                polarity: edgeRow.polarity,
+                confidence: edgeRow.confidence,
+                conditions: edgeRow.conditions,
+                is_tradeoff: edgeRow.is_tradeoff,
+                is_part_of_cycle: edgeRow.is_part_of_cycle,
+                cycle_id: edgeRow.cycle_id,
+              };
+              const retry = await db.from("edges").insert(coreRow);
+              edgeError = retry.error;
+            }
+
+            if (edgeError) {
+              console.error(`[Analyze] Edge PERMANENTLY failed: ${srcId}→${tgtId} (${e.relationship_type}):`, edgeError.message);
               edgesFailed++;
             } else {
               edgesInserted++;

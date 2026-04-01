@@ -1,6 +1,6 @@
 "use client";
 
-import { getNodeColor, graphOverlays } from "@/lib/design-tokens";
+import { getNodeColor, getDomainColor, graphOverlays } from "@/lib/design-tokens";
 import type { Entity } from "@/types";
 
 interface GraphNodeProps {
@@ -8,6 +8,7 @@ interface GraphNodeProps {
   x: number;
   y: number;
   radius?: number;
+  domainIndex?: number; // If set, color by domain instead of category
   isHovered: boolean;
   isNeighbor: boolean;
   isDimmed: boolean;
@@ -21,6 +22,7 @@ export function GraphNode({
   x,
   y,
   radius = 20,
+  domainIndex,
   isHovered,
   isNeighbor,
   isDimmed,
@@ -28,7 +30,10 @@ export function GraphNode({
   onMouseLeave,
   onClick,
 }: GraphNodeProps) {
-  const colors = getNodeColor(entity.entity_category);
+  // Use domain color if in unified view, otherwise category color
+  const colors = domainIndex !== undefined
+    ? getDomainColor(domainIndex)
+    : getNodeColor(entity.entity_category);
   const isExternal = entity.knowledge_layer === "external";
   const confidenceOpacity =
     entity.confidence >= 0.8 ? 1 : entity.confidence >= 0.5 ? 0.6 : 0.4;

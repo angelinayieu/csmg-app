@@ -35,7 +35,7 @@ export default async function SpacePage({
 
   const space = spaceData as Space;
 
-  // Fetch all related data in parallel
+  // Fetch all related data for THIS space in parallel
   const [
     entitiesRes,
     edgesRes,
@@ -77,6 +77,45 @@ export default async function SpacePage({
   const scenarios = (scenariosRes.data ?? []) as Scenario[];
   const actionItems = (actionsRes.data ?? []) as ActionItem[];
 
+  // Fetch sibling spaces (same user, for unified graph view)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any;
+  const { data: siblingSpacesData } = await db
+    .from("spaces")
+    .select("id, name, space_prefix, entity_count, edge_count")
+    .eq("user_id", space.user_id)
+    .neq("id", id)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  const siblingSpaces = (siblingSpacesData ?? []) as Array<{
+    id: string;
+    name: string;
+    space_prefix: string;
+    entity_count: number;
+    edge_count: number;
+  }>;
+
+  // Load sibling entities + edges for unified graph (lightweight)
+  const siblingEntities: Entity[] = [];
+  const siblingEdges: Edge[] = [];
+  const domainMap: Record<string, { name: string; index: number }> = {
+    [id]: { name: space.name, index: 0 },
+  };
+
+  for (let i = 0; i < Math.min(siblingSpaces.length, 6); i++) {
+    const sib = siblingSpaces[i];
+    domainMap[sib.id] = { name: sib.name, index: i + 1 };
+
+    const [sibEntRes, sibEdgRes] = await Promise.all([
+      db.from("entities").select("*").eq("space_id", sib.id),
+      db.from("edges").select("*").eq("space_id", sib.id),
+    ]);
+
+    siblingEntities.push(...((sibEntRes.data ?? []) as Entity[]));
+    siblingEdges.push(...((sibEdgRes.data ?? []) as Edge[]));
+  }
+
   return (
     <div className="h-full">
       <SpaceHeader space={space} />
@@ -91,6 +130,9 @@ export default async function SpacePage({
           contradictions={contradictions}
           scenarios={scenarios}
           actionItems={actionItems}
+          siblingEntities={siblingEntities}
+          siblingEdges={siblingEdges}
+          domainMap={domainMap}
         />
       </div>
     </div>
