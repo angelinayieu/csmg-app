@@ -187,7 +187,7 @@ export function SpaceDetailTabs({
 
         {/* Right panel (contextual per tab) */}
         {activeTab === "graph" && (
-          <div className="hidden w-[260px] flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 lg:block">
+          <div className="w-[260px] flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4">
             {/* Reasoning results (contextual) */}
             {activeOp && reasoningResult && (
               <div className="mb-4 border-b border-gray-100 pb-4">

@@ -70,7 +70,7 @@ export function CalloutBox({
   children,
   className,
 }: CalloutBoxProps) {
-  const styles = typeStyles[type];
+  const styles = typeStyles[type] ?? typeStyles.insight;
 
   return (
     <div

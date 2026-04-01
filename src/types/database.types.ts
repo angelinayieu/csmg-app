@@ -16,6 +16,7 @@ export type Database = {
           created_at: string;
           usage_count: number;
           tier: "free" | "pro" | "team";
+          credit_balance: number;
         };
         Insert: {
           id: string;
@@ -23,6 +24,7 @@ export type Database = {
           created_at?: string;
           usage_count?: number;
           tier?: "free" | "pro" | "team";
+          credit_balance?: number;
         };
         Update: {
           id?: string;
@@ -30,6 +32,7 @@ export type Database = {
           created_at?: string;
           usage_count?: number;
           tier?: "free" | "pro" | "team";
+          credit_balance?: number;
         };
       };
       spaces: {
@@ -56,6 +59,9 @@ export type Database = {
             | "blocked";
           activation_dependencies: string[] | null;
           synthesis_data: Json | null;
+          analysis_tier: string;
+          credits_used: number;
+          agent_count: number;
           created_at: string;
           updated_at: string;
         };
@@ -82,6 +88,9 @@ export type Database = {
             | "blocked";
           activation_dependencies?: string[] | null;
           synthesis_data?: Json | null;
+          analysis_tier?: string;
+          credits_used?: number;
+          agent_count?: number;
           created_at?: string;
           updated_at?: string;
         };
@@ -108,8 +117,40 @@ export type Database = {
             | "blocked";
           activation_dependencies?: string[] | null;
           synthesis_data?: Json | null;
+          analysis_tier?: string;
+          credits_used?: number;
+          agent_count?: number;
           created_at?: string;
           updated_at?: string;
+        };
+      };
+      credit_ledger: {
+        Row: {
+          id: string;
+          user_id: string;
+          amount: number;
+          reason: string;
+          space_id: string | null;
+          balance_after: number;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          amount: number;
+          reason: string;
+          space_id?: string | null;
+          balance_after: number;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          amount?: number;
+          reason?: string;
+          space_id?: string | null;
+          balance_after?: number;
+          created_at?: string;
         };
       };
       entities: {
