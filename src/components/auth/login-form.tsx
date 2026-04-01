@@ -61,11 +61,11 @@ export function LoginForm() {
       <Button type="submit" loading={loading} className="w-full">
         Log in
       </Button>
-      <p className="text-center text-sm text-gray-600 dark:text-gray-400">
+      <p className="text-center text-sm text-gray-600">
         Don&apos;t have an account?{" "}
         <Link
           href="/auth/signup"
-          className="font-medium text-blue-600 hover:text-blue-500"
+          className="font-medium text-interaxis-600 hover:text-interaxis-500"
         >
           Sign up
         </Link>

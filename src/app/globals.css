@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+@theme {
+  --color-interaxis-50: #E0F7FA;
+  --color-interaxis-100: #B2EBF2;
+  --color-interaxis-200: #80DEEA;
+  --color-interaxis-300: #4DD0E1;
+  --color-interaxis-400: #26C6DA;
+  --color-interaxis-500: #00BCD4;
+  --color-interaxis-600: #00ACC1;
+  --color-interaxis-700: #0097A7;
+}
+
 :root {
   --sidebar-width: 260px;
   --header-height: 56px;
@@ -7,4 +18,69 @@
 
 body {
   font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Page gradient background */
+.bg-gradient-page {
+  background: linear-gradient(180deg, #E0F7FA 0%, #F0FAFB 40%, #FAFFFE 100%);
+}
+
+/* Glassmorphism card */
+.glass-card {
+  background: rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 8px 32px rgba(0, 188, 212, 0.08);
+}
+
+/* Stronger glass for feature icon tiles */
+.glass-card-icon {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow:
+    0 8px 32px rgba(0, 188, 212, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+/* Gradient outline button */
+.btn-gradient-outline {
+  position: relative;
+  background: transparent;
+  color: #00ACC1;
+  border: none;
+  padding: 12px 36px;
+  border-radius: 9999px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  z-index: 0;
+}
+
+.btn-gradient-outline::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  padding: 2px;
+  background: linear-gradient(135deg, #80DEEA, #00BCD4);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  z-index: -1;
+}
+
+.btn-gradient-outline:hover {
+  color: #0097A7;
+  background: rgba(224, 247, 250, 0.4);
+}
+
+/* Ecosystem diagram connecting lines */
+.eco-line {
+  stroke: #B2EBF2;
+  stroke-width: 1.5;
 }

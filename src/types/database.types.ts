@@ -55,6 +55,7 @@ export type Database = {
             | "theoretical"
             | "blocked";
           activation_dependencies: string[] | null;
+          synthesis_data: Json | null;
           created_at: string;
           updated_at: string;
         };
@@ -80,6 +81,7 @@ export type Database = {
             | "theoretical"
             | "blocked";
           activation_dependencies?: string[] | null;
+          synthesis_data?: Json | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -105,6 +107,7 @@ export type Database = {
             | "theoretical"
             | "blocked";
           activation_dependencies?: string[] | null;
+          synthesis_data?: Json | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -138,6 +141,7 @@ export type Database = {
           centrality_rank: number | null;
           is_shared_variable: boolean;
           is_decomposable: boolean;
+          is_master_bottleneck: boolean;
           has_sub_space: boolean;
           sub_space_id: string | null;
           graph_x: number | null;
@@ -171,6 +175,7 @@ export type Database = {
           centrality_rank?: number | null;
           is_shared_variable?: boolean;
           is_decomposable?: boolean;
+          is_master_bottleneck?: boolean;
           has_sub_space?: boolean;
           sub_space_id?: string | null;
           graph_x?: number | null;
@@ -204,6 +209,7 @@ export type Database = {
           centrality_rank?: number | null;
           is_shared_variable?: boolean;
           is_decomposable?: boolean;
+          is_master_bottleneck?: boolean;
           has_sub_space?: boolean;
           sub_space_id?: string | null;
           graph_x?: number | null;
@@ -232,6 +238,8 @@ export type Database = {
           polarity: "positive" | "negative" | "neutral" | "conditional";
           confidence: number;
           conditions: string | null;
+          is_tradeoff: boolean;
+          resolved_by_entity_id: string | null;
           is_part_of_cycle: boolean;
           cycle_id: string | null;
         };
@@ -256,6 +264,8 @@ export type Database = {
           polarity?: "positive" | "negative" | "neutral" | "conditional";
           confidence?: number;
           conditions?: string | null;
+          is_tradeoff?: boolean;
+          resolved_by_entity_id?: string | null;
           is_part_of_cycle?: boolean;
           cycle_id?: string | null;
         };
@@ -280,6 +290,8 @@ export type Database = {
           polarity?: "positive" | "negative" | "neutral" | "conditional";
           confidence?: number;
           conditions?: string | null;
+          is_tradeoff?: boolean;
+          resolved_by_entity_id?: string | null;
           is_part_of_cycle?: boolean;
           cycle_id?: string | null;
         };
@@ -297,6 +309,7 @@ export type Database = {
           entity_ids: string[];
           edge_ids: string[] | null;
           intervention_point_entity_id: string | null;
+          intervention_description: string | null;
           description: string | null;
         };
         Insert: {
@@ -311,6 +324,7 @@ export type Database = {
           entity_ids: string[];
           edge_ids?: string[] | null;
           intervention_point_entity_id?: string | null;
+          intervention_description?: string | null;
           description?: string | null;
         };
         Update: {
@@ -325,6 +339,7 @@ export type Database = {
           entity_ids?: string[];
           edge_ids?: string[] | null;
           intervention_point_entity_id?: string | null;
+          intervention_description?: string | null;
           description?: string | null;
         };
       };
@@ -482,6 +497,143 @@ export type Database = {
           confidence?: number;
           depends_on?: string[] | null;
           entity_ids?: string[] | null;
+        };
+      };
+      novel_connections: {
+        Row: {
+          id: string;
+          space_id: string;
+          source_entity_id: string;
+          target_entity_id: string;
+          relationship_type: string;
+          strength: "strong" | "moderate" | "speculative";
+          reasoning: string;
+          crosses_spaces: boolean;
+          target_space_id: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          source_entity_id: string;
+          target_entity_id: string;
+          relationship_type: string;
+          strength: "strong" | "moderate" | "speculative";
+          reasoning: string;
+          crosses_spaces?: boolean;
+          target_space_id?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          source_entity_id?: string;
+          target_entity_id?: string;
+          relationship_type?: string;
+          strength?: "strong" | "moderate" | "speculative";
+          reasoning?: string;
+          crosses_spaces?: boolean;
+          target_space_id?: string | null;
+          created_at?: string;
+        };
+      };
+      contradictions: {
+        Row: {
+          id: string;
+          space_a_id: string;
+          space_b_id: string | null;
+          assumption_text: string;
+          conclusion_text: string;
+          severity: "critical" | "moderate" | "minor";
+          description: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_a_id: string;
+          space_b_id?: string | null;
+          assumption_text: string;
+          conclusion_text: string;
+          severity: "critical" | "moderate" | "minor";
+          description?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_a_id?: string;
+          space_b_id?: string | null;
+          assumption_text?: string;
+          conclusion_text?: string;
+          severity?: "critical" | "moderate" | "minor";
+          description?: string | null;
+          created_at?: string;
+        };
+      };
+      scenarios: {
+        Row: {
+          id: string;
+          space_id: string;
+          name: string;
+          conditions: string;
+          outcome_label: string;
+          outcome_value: string;
+          probability: "likely" | "possible" | "unlikely" | null;
+          sort_order: number;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          name: string;
+          conditions: string;
+          outcome_label: string;
+          outcome_value: string;
+          probability?: "likely" | "possible" | "unlikely" | null;
+          sort_order?: number;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          name?: string;
+          conditions?: string;
+          outcome_label?: string;
+          outcome_value?: string;
+          probability?: "likely" | "possible" | "unlikely" | null;
+          sort_order?: number;
+        };
+      };
+      action_items: {
+        Row: {
+          id: string;
+          space_id: string;
+          timeframe: "today" | "this_week" | "this_month" | "after_validation";
+          path_label: string;
+          action_text: string;
+          why_text: string | null;
+          derived_from_entity_id: string | null;
+          tags: { t: string; c: string }[];
+          sort_order: number;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          timeframe: "today" | "this_week" | "this_month" | "after_validation";
+          path_label?: string;
+          action_text: string;
+          why_text?: string | null;
+          derived_from_entity_id?: string | null;
+          tags?: { t: string; c: string }[];
+          sort_order?: number;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          timeframe?: "today" | "this_week" | "this_month" | "after_validation";
+          path_label?: string;
+          action_text?: string;
+          why_text?: string | null;
+          derived_from_entity_id?: string | null;
+          tags?: { t: string; c: string }[];
+          sort_order?: number;
         };
       };
     };

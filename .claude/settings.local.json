@@ -7,7 +7,14 @@
       "Bash(npx create-next-app@latest \"csmg-app\" --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
       "Bash(npm install:*)",
       "Bash(npx next:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(gh repo:*)",
+      "Bash(brew list:*)",
+      "Bash(brew install:*)",
+      "Bash(gh auth:*)",
+      "Bash(lsof -ti:3000)",
+      "Bash(xargs kill:*)",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

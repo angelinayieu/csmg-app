@@ -12,3 +12,9 @@ export type Bridge = Database["public"]["Tables"]["bridges"]["Row"];
 export type ReasoningResult =
   Database["public"]["Tables"]["reasoning_results"]["Row"];
 export type Proposition = Database["public"]["Tables"]["propositions"]["Row"];
+export type NovelConnection =
+  Database["public"]["Tables"]["novel_connections"]["Row"];
+export type Contradiction =
+  Database["public"]["Tables"]["contradictions"]["Row"];
+export type Scenario = Database["public"]["Tables"]["scenarios"]["Row"];
+export type ActionItem = Database["public"]["Tables"]["action_items"]["Row"];

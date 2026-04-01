@@ -7,9 +7,9 @@ const geist = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "CSMG - Context Space Meta-Graph",
+  title: "InterAxis — Your Intelligence System",
   description:
-    "Decompose complex situations into structured, analyzable knowledge graphs",
+    "AI with enhanced real world logic reasoning capabilities. Digital infrastructure for speed, quality, and accuracy.",
 };
 
 export default function RootLayout({
@@ -19,7 +19,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={geist.className}>
-      <body className="min-h-screen bg-white text-gray-900 antialiased dark:bg-gray-950 dark:text-gray-100">
+      <body className="min-h-screen bg-gradient-page text-gray-900 antialiased">
         {children}
       </body>
     </html>

@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 
-type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "outline-gradient";
 type ButtonSize = "sm" | "md" | "lg";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -12,13 +12,15 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantStyles: Record<ButtonVariant, string> = {
   primary:
-    "bg-blue-600 text-white hover:bg-blue-700 focus-visible:ring-blue-500",
+    "bg-interaxis-600 text-white hover:bg-interaxis-700 focus-visible:ring-interaxis-500",
   secondary:
-    "bg-gray-100 text-gray-900 hover:bg-gray-200 focus-visible:ring-gray-500 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700",
+    "bg-gray-100 text-gray-900 hover:bg-gray-200 focus-visible:ring-gray-500",
   ghost:
-    "text-gray-700 hover:bg-gray-100 focus-visible:ring-gray-500 dark:text-gray-300 dark:hover:bg-gray-800",
+    "text-gray-700 hover:bg-gray-100 focus-visible:ring-gray-500",
   danger:
     "bg-red-600 text-white hover:bg-red-700 focus-visible:ring-red-500",
+  "outline-gradient":
+    "btn-gradient-outline rounded-full",
 };
 
 const sizeStyles: Record<ButtonSize, string> = {

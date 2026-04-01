@@ -7,13 +7,13 @@ export function SpaceCard({ space }: { space: Space }) {
     <Link href={`/app/space/${space.id}`}>
       <Card className="transition-shadow hover:shadow-md">
         <div className="flex items-start gap-3">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-sm font-semibold text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-interaxis-100 text-sm font-semibold text-interaxis-700">
             {space.space_prefix}
           </span>
           <div className="min-w-0 flex-1">
             <h3 className="truncate font-medium">{space.name}</h3>
             {space.description && (
-              <p className="mt-1 truncate text-sm text-gray-600 dark:text-gray-400">
+              <p className="mt-1 truncate text-sm text-gray-600">
                 {space.description}
               </p>
             )}

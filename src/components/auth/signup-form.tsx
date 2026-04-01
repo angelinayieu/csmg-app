@@ -54,7 +54,7 @@ export function SignUpForm() {
     return (
       <div className="text-center">
         <h3 className="text-lg font-semibold">Check your email</h3>
-        <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+        <p className="mt-2 text-sm text-gray-600 ">
           We sent a confirmation link to <strong>{email}</strong>. Click the
           link to activate your account.
         </p>
@@ -98,11 +98,11 @@ export function SignUpForm() {
       <Button type="submit" loading={loading} className="w-full">
         Create account
       </Button>
-      <p className="text-center text-sm text-gray-600 dark:text-gray-400">
+      <p className="text-center text-sm text-gray-600 ">
         Already have an account?{" "}
         <Link
           href="/auth/login"
-          className="font-medium text-blue-600 hover:text-blue-500"
+          className="font-medium text-interaxis-600 hover:text-interaxis-500"
         >
           Log in
         </Link>

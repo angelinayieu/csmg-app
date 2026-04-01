@@ -2,34 +2,43 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  LayoutDashboard,
-  Plus,
-  GitBranch,
-  Network,
-  Layers,
-} from "lucide-react";
+import { LayoutDashboard, Plus, GitBranch, Network } from "lucide-react";
 import { LogoutButton } from "@/components/auth/logout-button";
+import { SpaceDetailCard } from "@/components/space/space-detail-card";
 import { useAppStore } from "@/stores/store-provider";
 import { cn } from "@/lib/utils";
+import { useMemo } from "react";
 
 const navItems = [
   { href: "/app", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/app/decompose", label: "New Decomposition", icon: Plus },
-  { href: "/app/weave", label: "Weave", icon: GitBranch, disabled: true },
-  { href: "/app/meta", label: "Meta-Graph", icon: Network, disabled: true },
+  { href: "/app/analyze", label: "New Analysis", icon: Plus },
+  { href: "/app/weave", label: "Weave", icon: GitBranch },
+  { href: "/app/meta", label: "Meta-Graph", icon: Network },
 ];
 
 export function SpaceSidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname();
   const spaces = useAppStore((s) => s.spaces);
 
+  // Group spaces: root spaces and their sub-spaces
+  const { rootSpaces, subSpaceMap } = useMemo(() => {
+    const roots = spaces.filter((s) => !s.parent_space_id);
+    const subs = new Map<string, typeof spaces>();
+    for (const s of spaces) {
+      if (s.parent_space_id) {
+        const list = subs.get(s.parent_space_id) ?? [];
+        list.push(s);
+        subs.set(s.parent_space_id, list);
+      }
+    }
+    return { rootSpaces: roots, subSpaceMap: subs };
+  }, [spaces]);
+
   return (
-    <aside className="flex h-full w-[var(--sidebar-width)] flex-col border-r border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900">
+    <aside className="flex h-full w-[var(--sidebar-width)] flex-col border-r border-gray-200 bg-gray-50">
       {/* Logo */}
-      <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-4 dark:border-gray-800">
-        <Layers className="h-5 w-5 text-blue-600" />
-        <span className="font-semibold">CSMG</span>
+      <div className="flex items-center border-b border-gray-200 px-4 py-4">
+        <span className="text-lg font-bold tracking-tight">InterAxis</span>
       </div>
 
       {/* Navigation */}
@@ -41,19 +50,6 @@ export function SpaceSidebar({ userEmail }: { userEmail: string }) {
               pathname === item.href ||
               (item.href !== "/app" && pathname.startsWith(item.href));
 
-            if (item.disabled) {
-              return (
-                <div
-                  key={item.href}
-                  className="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2 text-sm text-gray-400 dark:text-gray-600"
-                >
-                  <Icon className="h-4 w-4" />
-                  {item.label}
-                  <span className="ml-auto text-xs">Soon</span>
-                </div>
-              );
-            }
-
             return (
               <Link
                 key={item.href}
@@ -61,8 +57,8 @@ export function SpaceSidebar({ userEmail }: { userEmail: string }) {
                 className={cn(
                   "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
                   isActive
-                    ? "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
-                    : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+                    ? "bg-interaxis-50 text-interaxis-700"
+                    : "text-gray-700 hover:bg-gray-100"
                 )}
               >
                 <Icon className="h-4 w-4" />
@@ -78,27 +74,18 @@ export function SpaceSidebar({ userEmail }: { userEmail: string }) {
             Spaces
           </h3>
           {spaces.length === 0 ? (
-            <p className="mt-2 px-3 text-xs text-gray-400 dark:text-gray-500">
-              No spaces yet. Decompose your first concept.
+            <p className="mt-2 px-3 text-xs text-gray-400">
+              No spaces yet. Analyze your first concept.
             </p>
           ) : (
-            <div className="mt-2 space-y-1">
-              {spaces.map((space) => (
-                <Link
+            <div className="mt-2 space-y-0.5">
+              {rootSpaces.map((space) => (
+                <SpaceDetailCard
                   key={space.id}
-                  href={`/app/space/${space.id}`}
-                  className={cn(
-                    "flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors",
-                    pathname === `/app/space/${space.id}`
-                      ? "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
-                      : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
-                  )}
-                >
-                  <span className="flex h-5 w-5 items-center justify-center rounded bg-blue-100 text-xs font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
-                    {space.space_prefix}
-                  </span>
-                  <span className="truncate">{space.name}</span>
-                </Link>
+                  space={space}
+                  isActive={pathname === `/app/space/${space.id}`}
+                  subSpaces={subSpaceMap.get(space.id)}
+                />
               ))}
             </div>
           )}
@@ -106,7 +93,7 @@ export function SpaceSidebar({ userEmail }: { userEmail: string }) {
       </nav>
 
       {/* User section */}
-      <div className="border-t border-gray-200 px-4 py-3 dark:border-gray-800">
+      <div className="border-t border-gray-200 px-4 py-3">
         <p className="mb-2 truncate text-xs text-gray-500">{userEmail}</p>
         <LogoutButton />
       </div>

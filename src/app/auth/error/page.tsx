@@ -14,7 +14,7 @@ export default async function AuthErrorPage({
       <div className="text-center">
         <AlertCircle className="mx-auto h-12 w-12 text-red-500" />
         <h1 className="mt-4 text-xl font-bold">Authentication error</h1>
-        <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+        <p className="mt-2 text-sm text-gray-600">
           {error || "Something went wrong during authentication."}
         </p>
         <div className="mt-6">

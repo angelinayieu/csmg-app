@@ -10,6 +10,7 @@ export interface AppState {
 export interface AppActions {
   setUser: (user: Profile | null) => void;
   setSpaces: (spaces: Space[]) => void;
+  addSpace: (space: Space) => void;
   toggleSidebar: () => void;
 }
 
@@ -26,6 +27,8 @@ export function createAppStore(initState: AppState = defaultInitState) {
     ...initState,
     setUser: (user) => set({ user }),
     setSpaces: (spaces) => set({ spaces }),
+    addSpace: (space) =>
+      set((state) => ({ spaces: [space, ...state.spaces] })),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   }));
 }
