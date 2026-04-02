@@ -1,6 +1,7 @@
 import { llmGenerate, llmJSON } from "@/lib/llm";
 import { DECOMPOSITION_SYSTEM_PROMPT } from "@/lib/prompts/decomposition";
 import { STRUCTURING_SYSTEM_PROMPT } from "@/lib/prompts/structuring";
+import { getDecompositionPrompt, getStructuringPrompt } from "@/lib/prompts/tier-prompts";
 import { SCOPE_MAPPER_PROMPT } from "@/lib/prompts/scope-mapper";
 import { CRITIC_SYSTEM_PROMPT } from "@/lib/prompts/critic";
 import { AUGMENTER_SYSTEM_PROMPT } from "@/lib/prompts/augmenter";
@@ -33,9 +34,10 @@ export async function runScopeMapper(input: string): Promise<ScopeResult> {
 export async function runDecomposer(
   input: string,
   spaceScope?: { name: string; description: string; key_concepts: string[] },
-  siblingContext?: string
+  siblingContext?: string,
+  reasoningDepth: "quick" | "standard" | "deep" = "standard"
 ): Promise<string> {
-  let systemPrompt = DECOMPOSITION_SYSTEM_PROMPT;
+  let systemPrompt = getDecompositionPrompt(reasoningDepth);
 
   if (spaceScope) {
     const scopePrefix = `You are analyzing ONE specific area of a larger situation. Focus ONLY on this area. Go deep, not broad.
@@ -47,8 +49,6 @@ Key concepts to analyze: ${spaceScope.key_concepts.join(", ")}
 ${siblingContext ? `Other areas being analyzed separately (for boundary awareness):\n${siblingContext}\n` : ""}
 IMPORTANT: If you encounter a concept that primarily belongs in another area, flag it as a shared variable candidate but do NOT deeply analyze it.
 
-Target: 15-25 entities, 30-50 edges, at least 3 feedback loops.
-
 ---
 
 `;
@@ -58,17 +58,18 @@ Target: 15-25 entities, 30-50 edges, at least 3 feedback loops.
   return llmGenerate({
     system: systemPrompt,
     user: input,
-    maxTokens: 8192,
+    maxTokens: reasoningDepth === "deep" ? 16000 : 8192,
     temperature: 0.5,
   });
 }
 
 // ─── Agent 2b: Structurer ───
 export async function runStructurer(
-  rawDecomposition: string
+  rawDecomposition: string,
+  reasoningDepth: "quick" | "standard" | "deep" = "standard"
 ): Promise<StructuredDecomposition> {
   const result = await llmJSON<StructuredDecomposition>({
-    system: STRUCTURING_SYSTEM_PROMPT,
+    system: getStructuringPrompt(reasoningDepth),
     user: `Convert this analysis to JSON:\n\n${rawDecomposition}`,
     maxTokens: 16000,
     temperature: 0.3,
@@ -106,14 +107,14 @@ export async function runCritic(
   const edgeSummary = (structured.edges ?? [])
     .map(
       (e) =>
-        `${e.source_entity_id} → ${e.target_entity_id} [${e.dimension}, ${e.relationship_type}, ${e.source_tag}, confidence ${e.confidence}]`
+        `${e.source_entity_id} → ${e.target_entity_id} [${e.dimension}, ${e.relationship_type}, ${e.source_tag}, confidence ${e.confidence}${e.dynamics ? `, dynamics: ${e.dynamics}` : ""}]`
     )
     .join("\n");
 
   const cycleSummary = (structured.cycles ?? [])
     .map(
       (c) =>
-        `${c.cycle_id}: ${c.name} [${c.classification}] — ${c.entity_ids.join(" → ")}`
+        `${c.cycle_id}: ${c.name} [${c.classification}${c.growth_type ? `, growth: ${c.growth_type}` : ""}${c.cycle_time ? `, cycle_time: ${c.cycle_time}` : ""}] — ${c.entity_ids.join(" → ")}`
     )
     .join("\n");
 

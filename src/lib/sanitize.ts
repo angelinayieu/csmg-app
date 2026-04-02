@@ -20,6 +20,13 @@ export const EDGE_POLARITIES = ["positive", "negative", "neutral", "conditional"
 export const CYCLE_CLASSIFICATIONS = ["reinforcing_positive", "reinforcing_negative", "balancing"] as const;
 export const MATURITY_LEVELS = ["actionable_now", "waiting_on_dependency", "theoretical", "blocked"] as const;
 
+export const EDGE_DYNAMICS = [
+  "threshold", "linear", "compounding", "exponential",
+  "logarithmic", "decay", "step_function", "delayed",
+] as const;
+
+export const CYCLE_GROWTH_TYPES = ["additive", "multiplicative", "accelerating", "decelerating"] as const;
+
 // ── Coercion utilities ──
 
 /** Case-insensitive enum coercion with fuzzy matching */
@@ -130,6 +137,8 @@ export interface SanitizedEdge {
   is_tradeoff: boolean;
   is_part_of_cycle: boolean;
   cycle_id: string | null;
+  dynamics: string | null;
+  dynamics_properties: Record<string, unknown> | null;
 }
 
 /**
@@ -160,6 +169,13 @@ export function sanitizeEdge(raw: any, spaceId: string, entityIdMap: Map<string,
     is_tradeoff: bool(raw.is_tradeoff),
     is_part_of_cycle: bool(raw.is_part_of_cycle),
     cycle_id: typeof raw.cycle_id === "string" ? raw.cycle_id : null,
+    dynamics: typeof raw.dynamics === "string"
+      ? coerce(raw.dynamics, EDGE_DYNAMICS, "linear")
+      : null,
+    dynamics_properties:
+      raw.dynamics_properties && typeof raw.dynamics_properties === "object"
+        ? raw.dynamics_properties
+        : null,
   };
 }
 
@@ -173,6 +189,9 @@ export interface SanitizedCycle {
   entity_ids: string[];
   intervention_point_entity_id: string | null;
   description: string | null;
+  growth_type: string | null;
+  cycle_time: string | null;
+  estimated_multiplier: number | null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -198,7 +217,32 @@ export function sanitizeCycle(raw: any, spaceId: string, entityIdMap: Map<string
     entity_ids: entityIds,
     intervention_point_entity_id: interventionId,
     description: typeof raw.description === "string" ? raw.description.trim() : null,
+    growth_type: typeof raw.growth_type === "string"
+      ? coerce(raw.growth_type, CYCLE_GROWTH_TYPES, "multiplicative")
+      : null,
+    cycle_time: typeof raw.cycle_time === "string" ? raw.cycle_time.trim() : null,
+    estimated_multiplier: typeof raw.estimated_multiplier === "number"
+      ? Math.max(0, Math.min(100, raw.estimated_multiplier))
+      : null,
   };
+}
+
+// ── Confidence-based edge filtering ──
+
+/**
+ * Filter out edges below the confidence threshold.
+ * Edges < 0.4 confidence are dropped entirely — a false edge corrupts analysis more than a missing one.
+ */
+export function filterLowConfidenceEdges(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  edges: any[],
+  minConfidence = 0.4
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any[] {
+  return edges.filter((e) => {
+    const conf = typeof e.confidence === "number" ? e.confidence : 0.8;
+    return conf >= minConfidence;
+  });
 }
 
 // ── Entity deduplication ──

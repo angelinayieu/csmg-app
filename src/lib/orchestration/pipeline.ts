@@ -36,9 +36,9 @@ async function runQuick(
   emit: EmitFn
 ): Promise<PipelineResult> {
   emit("phase", JSON.stringify({ phase: "decomposing", status: "running" }));
-  const raw = await runDecomposer(input);
+  const raw = await runDecomposer(input, undefined, undefined, "quick");
   emit("phase", JSON.stringify({ phase: "structuring", status: "running" }));
-  const structured = await runStructurer(raw);
+  const structured = await runStructurer(raw, "quick");
   emit("phase", JSON.stringify({ phase: "structuring", status: "done" }));
 
   return {
@@ -66,11 +66,11 @@ async function runStandard(
 ): Promise<PipelineResult> {
   // Decompose
   emit("phase", JSON.stringify({ phase: "decomposing", status: "running" }));
-  const raw = await runDecomposer(input);
+  const raw = await runDecomposer(input, undefined, undefined, "standard");
 
   // Structure
   emit("phase", JSON.stringify({ phase: "structuring", status: "running" }));
-  const structured = await runStructurer(raw);
+  const structured = await runStructurer(raw, "standard");
   emit(
     "space_progress",
     JSON.stringify({
@@ -264,7 +264,7 @@ async function runDeep(
 
         // Decompose with timeout
         const decomposeResult = await withTimeout(
-          runDecomposer(input, space, siblingContexts[i]),
+          runDecomposer(input, space, siblingContexts[i], "deep"),
           20000, // 20s for decomposition phase
           `Space ${i} decomposition`
         );
@@ -294,7 +294,7 @@ async function runDeep(
 
         // Structure with timeout
         const structureResult = await withTimeout(
-          runStructurer(raw),
+          runStructurer(raw, "deep"),
           10000, // 10s for structuring phase
           `Space ${i} structuring`
         );

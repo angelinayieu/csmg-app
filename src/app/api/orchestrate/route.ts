@@ -208,7 +208,11 @@ export async function POST(request: Request) {
           const VALID_TAGS = ["stated","inferred","predicted"];
 
           // Build array of valid edges (filter during construction, not insertion)
-          const edgesToInsert = (space.structured.edges ?? [])
+          // Drop edges below 0.4 confidence — a false edge corrupts analysis more than a missing edge
+          const filteredEdges = (space.structured.edges ?? []).filter(
+            (e) => (typeof e.confidence === "number" ? e.confidence : 0.8) >= 0.4
+          );
+          const edgesToInsert = filteredEdges
             .map((e) => {
               const srcId = (e.source_entity_id ?? "").trim();
               const tgtId = (e.target_entity_id ?? "").trim();
@@ -236,6 +240,8 @@ export async function POST(request: Request) {
                   : null,
                 is_part_of_cycle: e.is_part_of_cycle ?? false,
                 cycle_id: e.cycle_id ?? null,
+                dynamics: e.dynamics ?? null,
+                dynamics_properties: e.dynamics_properties ?? null,
               };
             })
             .filter(Boolean) as any[];
@@ -265,6 +271,9 @@ export async function POST(request: Request) {
                 : null,
               intervention_description: c.intervention_description ?? null,
               description: c.description ?? null,
+              growth_type: c.growth_type ?? null,
+              cycle_time: c.cycle_time ?? null,
+              estimated_multiplier: typeof c.estimated_multiplier === "number" ? c.estimated_multiplier : null,
             }));
 
             await batchInsert(db, "cycles", cycleInserts, { batchSize: 50 });

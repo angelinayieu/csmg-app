@@ -21,6 +21,8 @@ interface RevalResult {
     strength: number;
     confidence: number;
     reasoning: string;
+    dynamics?: string;
+    dynamics_properties?: Record<string, unknown>;
   }>;
   new_cycles: Array<{
     name: string;
@@ -28,6 +30,9 @@ interface RevalResult {
     entity_ids: string[];
     intervention_point: string;
     description: string;
+    growth_type?: string;
+    cycle_time?: string;
+    estimated_multiplier?: number;
   }>;
   corrected_rankings: Array<{
     entity_id: string;
@@ -146,8 +151,8 @@ Tasks:
 
 Return JSON:
 {
-  "new_edges": [{"source_entity_id": "C1", "target_entity_id": "C5", "relationship_type": "enables", "dimension": "functional", "strength": 0.7, "confidence": 0.8, "reasoning": "why this edge exists"}],
-  "new_cycles": [{"name": "cycle name", "classification": "reinforcing_positive", "entity_ids": ["C1", "C5", "C8"], "intervention_point": "C5", "description": "what this cycle does"}],
+  "new_edges": [{"source_entity_id": "C1", "target_entity_id": "C5", "relationship_type": "enables", "dimension": "functional", "strength": 0.7, "confidence": 0.8, "reasoning": "why this edge exists", "dynamics": "threshold | linear | compounding | exponential | logarithmic | decay | step_function | delayed", "dynamics_properties": {"threshold_condition": "optional detail"}}],
+  "new_cycles": [{"name": "cycle name", "classification": "reinforcing_positive", "entity_ids": ["C1", "C5", "C8"], "intervention_point": "C5", "description": "what this cycle does", "growth_type": "additive | multiplicative | accelerating | decelerating", "cycle_time": "~1 week", "estimated_multiplier": 1.3}],
   "corrected_rankings": []
 }`,
       maxTokens: 4096,
@@ -178,6 +183,9 @@ Return JSON:
         ? edge.dimension
         : "functional";
 
+      // Skip low-confidence edges
+      if ((edge.confidence ?? 0.7) < 0.4) continue;
+
       const { error } = await db.from("edges").insert({
         space_id: spaceId,
         source_entity_id: sourceUuid,
@@ -191,6 +199,8 @@ Return JSON:
         conditions: edge.reasoning ?? null,
         is_tradeoff: false,
         is_part_of_cycle: false,
+        dynamics: edge.dynamics ?? null,
+        dynamics_properties: edge.dynamics_properties ?? null,
       });
       if (!error) addedEdges++;
     }
@@ -215,6 +225,9 @@ Return JSON:
           ? entityIdToUuid.get(cycle.intervention_point) ?? null
           : null,
         description: cycle.description ?? null,
+        growth_type: cycle.growth_type ?? null,
+        cycle_time: cycle.cycle_time ?? null,
+        estimated_multiplier: typeof cycle.estimated_multiplier === "number" ? cycle.estimated_multiplier : null,
       });
       if (!error) addedCycles++;
     }

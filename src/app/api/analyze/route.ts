@@ -9,6 +9,7 @@ import {
   sanitizeCycle,
   deduplicateEntities,
   resilientInsert,
+  filterLowConfidenceEdges,
 } from "@/lib/sanitize";
 import type { StructuredDecomposition } from "@/types/analysis";
 
@@ -163,11 +164,12 @@ export async function POST(request: Request) {
             return;
         }
 
-        // ── Deduplicate entities before insertion ──
+        // ── Filter low-confidence edges + deduplicate entities ──
+        const confFilteredEdges = filterLowConfidenceEdges(parsed.edges ?? []);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { entities: dedupedEntities, edges: dedupedEdges } = deduplicateEntities(
           (parsed.entities ?? []) as any,
-          (parsed.edges ?? []) as any
+          confFilteredEdges as any
         );
 
         // ── Database Inserts ──
