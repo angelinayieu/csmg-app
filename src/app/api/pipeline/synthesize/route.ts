@@ -116,7 +116,7 @@ export async function POST(request: Request) {
 
     const synthesis = await llmJSON<SynthesisData>({
       system: SYNTHESIS_SYSTEM_PROMPT,
-      user: `Generate a strategic synthesis from this complete analysis data:\n\n${contextInput}`,
+      user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${contextInput}`,
       maxTokens: 12000,
       temperature: 0.5,
     });
