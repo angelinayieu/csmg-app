@@ -205,11 +205,14 @@ CRITICAL RULES:
 - Mark edges that represent tradeoffs with is_tradeoff: true.
 - MERGE near-duplicate entities. "AI chatbox" and "chatbox module" should be ONE entity, not two. Every entity name must be semantically distinct.
 - Entity descriptions must explain WHY the entity matters to the system dynamics, not just define it. "A chatbox" is useless. "The core product delivering AI-powered analysis to users" is useful.
+- MINIMUM IMPLICIT ENTITIES: At least 25% of entities must be tagged source_tag: "implicit" — concepts the user DID NOT mention but that domain expertise reveals are critical to the system. If the user describes a SaaS startup, implicit entities might include: churn rate, CAC/LTV ratio, net revenue retention, competitive moat, switching costs, integration burden, compliance timeline. If ALL your entities are just restating what the user wrote, you've failed — the analysis adds zero value.
 
 OPEN QUESTIONS — REQUIREMENTS:
 - Produce 3-5 open questions. These are NOT generic ("what's the market size?"). They are SPECIFIC to THIS analysis.
+- CRITICAL ANTI-REPETITION RULE: NEVER produce an open question that restates a decision or uncertainty the user ALREADY explicitly mentioned in their input. If the user says "I'm deciding between X and Y," the open question CANNOT be "Should you pick X or Y?" — they KNOW that's a question. Open questions must surface UNKNOWNS THE USER HASN'T CONSIDERED. Things that domain expertise reveals are important but the user didn't mention.
+- BAD open questions (parroting): "Should you target small firms or enterprise?" (user already said this), "Is 78% accuracy good enough?" (user already flagged this), "Will you run out of money?" (user already said this is their fear)
+- GOOD open questions (new knowledge): "What's your churn rate after the free trial? B2B legal SaaS averages 5-8% monthly — if you're above that, your C3→C7 growth loop breaks before it starts", "Have you tested with contracts outside your former firm's specialty? Clause extraction accuracy drops 15-30% across practice areas — this could change C1's confidence from 0.78 to 0.5", "Do the pilot firms use a DMS like iManage or NetDocuments? Integration requirements with existing doc management systems could add 2-3 months to your C5 sales cycle estimate"
 - Each question must identify: what entity or edge would change if we knew the answer.
-- Good examples: "Does the team have technical capability to build the AI module? If yes, C8→C1 edge strengthens from 0.5 to 0.9. If no, the entire product strategy depends on hiring."
 - Focus on questions where the answer would ADD or REMOVE connections in the graph, or significantly change confidence levels.
 
 LEVERAGE POINTS / RISK POINTS — DEPTH REQUIREMENTS:

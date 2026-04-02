@@ -141,7 +141,7 @@ Return ONLY valid JSON matching this exact schema. No markdown fencing, no expla
   ],
   "open_questions": [
     {
-      "question": "string — specific unresolved question that could change the strategy",
+      "question": "string — MUST be something the user HASN'T already stated or asked about. NEVER repeat their explicit decisions/concerns back to them. Surface unknowns that only domain expertise would reveal.",
       "why_it_matters": "string — which findings, leverage points, or action items depend on this answer",
       "what_changes": "string — what would change in the analysis if we knew the answer (e.g. 'would add 3 new connections' or 'would remove the primary risk')"
     }
@@ -215,6 +215,7 @@ RULES:
   - At least 1 must be a BLIND SPOT: something the analysis doesn't mention that domain expertise reveals is critical
   - Each must name its source: "from SaaS growth literature," "observed in Slack's early growth," "from Clayton Christensen's disruption theory"
 - ANTI-GENERIC CHECK: Before finalizing, re-read every finding. If any finding could apply to a random business/problem by swapping out entity names, it's too generic. Rewrite with specific details, numbers, frameworks, or domain knowledge.
+- ANTI-PARROTING CHECK (CRITICAL): The user already knows what they wrote. Your job is to tell them what they DON'T know. For every insight, ask: "Could the user have written this themselves without any analysis?" If yes → DELETE IT and replace with something from your domain expertise. Examples of parroting (NEVER DO THIS): "Hallucinations are a risk in legal AI" (user already said this), "You need to decide between small firms and enterprise" (user already said this), "Running out of money is a concern" (user already said this). Examples of ACTUAL insights: "Legal AI accuracy benchmarks show that 78% clause extraction puts you below the 92% threshold where law firms trust AI enough to reduce manual review — you're in the 'interesting demo but not deployable' zone", "Ironclad started with 3 pilot firms doing NDAs only before expanding to complex contracts — narrowing your contract type could get accuracy above 95% on a subset", "SOC 2 Type II takes 6-9 months minimum, but SOC 2 Type I takes ~3 months and many mid-market legal teams accept it for initial pilots."
 
 DYNAMICS-AWARE ACTION SEQUENCING:
 Sequence actions by COMPOUNDING LEVERAGE, not just importance:
