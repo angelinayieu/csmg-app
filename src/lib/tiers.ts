@@ -1,4 +1,12 @@
 export type AnalysisTier = "quick" | "standard" | "deep" | "comprehensive";
+export type ReasoningDepth = "quick" | "standard" | "deep";
+
+export interface TierPromptConfig {
+  entityTarget: { min: number; max: number };
+  edgeDensityMultiplier: number;
+  reasoningDescription: string;
+  synthesis: boolean;
+}
 
 export interface TierConfig {
   credits: number;
@@ -8,15 +16,7 @@ export interface TierConfig {
   description: string;
   agents: string[];
   multiSpace: boolean;
-  model: {
-    decompose: string;
-    structure: string;
-    critique?: string;
-    augment?: string;
-    weave?: string;
-    synthesize?: string;
-    reason?: string;
-  };
+  promptConfig: TierPromptConfig;
 }
 
 export const TIERS: Record<AnalysisTier, TierConfig> = {
@@ -28,9 +28,11 @@ export const TIERS: Record<AnalysisTier, TierConfig> = {
     description: "Fast single-pass analysis. Good for quick explorations.",
     agents: ["decompose", "structure"],
     multiSpace: false,
-    model: {
-      decompose: "claude-sonnet-4-20250514",
-      structure: "claude-sonnet-4-20250514",
+    promptConfig: {
+      entityTarget: { min: 8, max: 15 },
+      edgeDensityMultiplier: 1.2,
+      reasoningDescription: "Basic edge coverage, no synthesis.",
+      synthesis: false,
     },
   },
   standard: {
@@ -42,11 +44,11 @@ export const TIERS: Record<AnalysisTier, TierConfig> = {
       "Structural validation catches gaps. Better density and fewer blind spots.",
     agents: ["decompose", "structure", "critique", "augment"],
     multiSpace: false,
-    model: {
-      decompose: "claude-sonnet-4-20250514",
-      structure: "claude-sonnet-4-20250514",
-      critique: "claude-haiku-3-20250307",
-      augment: "claude-haiku-3-20250307",
+    promptConfig: {
+      entityTarget: { min: 15, max: 25 },
+      edgeDensityMultiplier: 2.0,
+      reasoningDescription: "Dense edge network with critique pass.",
+      synthesis: false,
     },
   },
   deep: {
@@ -66,13 +68,11 @@ export const TIERS: Record<AnalysisTier, TierConfig> = {
       "synthesize",
     ],
     multiSpace: true,
-    model: {
-      decompose: "claude-sonnet-4-20250514",
-      structure: "claude-sonnet-4-20250514",
-      critique: "claude-haiku-3-20250307",
-      augment: "claude-haiku-3-20250307",
-      weave: "claude-sonnet-4-20250514",
-      synthesize: "claude-sonnet-4-20250514",
+    promptConfig: {
+      entityTarget: { min: 20, max: 35 },
+      edgeDensityMultiplier: 2.5,
+      reasoningDescription: "Multi-space with critique, weave, and synthesis.",
+      synthesis: true,
     },
   },
   comprehensive: {
@@ -93,14 +93,12 @@ export const TIERS: Record<AnalysisTier, TierConfig> = {
       "reason_all",
     ],
     multiSpace: true,
-    model: {
-      decompose: "claude-sonnet-4-20250514",
-      structure: "claude-sonnet-4-20250514",
-      critique: "claude-haiku-3-20250307",
-      augment: "claude-haiku-3-20250307",
-      weave: "claude-sonnet-4-20250514",
-      synthesize: "claude-sonnet-4-20250514",
-      reason: "claude-sonnet-4-20250514",
+    promptConfig: {
+      entityTarget: { min: 25, max: 50 },
+      edgeDensityMultiplier: 2.5,
+      reasoningDescription:
+        "Multi-space with critique, weave, synthesis, and reasoning pass on every space.",
+      synthesis: true,
     },
   },
 } as const;

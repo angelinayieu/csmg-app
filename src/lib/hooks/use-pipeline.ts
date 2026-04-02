@@ -26,6 +26,7 @@ export type PipelinePhase =
   | "critiquing"
   | "weaving"
   | "synthesizing"
+  | "reasoning"
   | "complete"
   | "error";
 
@@ -164,6 +165,7 @@ export function usePipeline() {
               spaceConfig: space,
               siblingContext:
                 selectedSpaces.length > 1 ? siblingContexts[i] : null,
+              reasoningDepth: config.reasoningDepth,
             }),
             signal,
           });
@@ -241,7 +243,7 @@ export function usePipeline() {
               const res = await fetch("/api/pipeline/critique", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ spaceId }),
+                body: JSON.stringify({ spaceId, reasoningDepth: config.reasoningDepth }),
                 signal,
               });
 
@@ -320,6 +322,33 @@ export function usePipeline() {
         } catch (err) {
           if (err instanceof Error && err.name === "AbortError") return null;
           console.warn("Synthesis phase had errors:", err);
+        }
+      }
+
+      // Phase 5: Reasoning pass (comprehensive tier only)
+      if (config.tier === "comprehensive" && ids.length > 0) {
+        setPhase("reasoning");
+        try {
+          const reasoningOps = ["centrality", "cycles", "cascade", "link_prediction"] as const;
+          await Promise.allSettled(
+            ids.flatMap((spaceId) =>
+              reasoningOps.map(async (operation) => {
+                const res = await fetch("/api/reason", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ spaceId, operation }),
+                  signal,
+                });
+                if (!res.ok) {
+                  const data = await res.json().catch(() => ({}));
+                  console.warn(`Reasoning ${operation} failed for space ${spaceId}:`, data);
+                }
+              })
+            )
+          );
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return null;
+          console.warn("Reasoning phase had errors:", err);
         }
       }
 

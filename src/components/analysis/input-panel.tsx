@@ -127,6 +127,7 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
     critiquing: { label: "Validating & finding gaps...", icon: "spinner" },
     weaving: { label: "Discovering cross-area connections...", icon: "spinner" },
     synthesizing: { label: "Generating strategic synthesis...", icon: "spinner" },
+    reasoning: { label: "Running deep reasoning passes...", icon: "spinner" },
     complete: { label: "Analysis complete!", icon: "check" },
     error: { label: "Error occurred", icon: "error" },
   };
@@ -227,8 +228,8 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
 
           {/* Pipeline steps progress bar */}
           <div className="flex gap-1 mb-3">
-            {(["scope", "decomposing", "critiquing", "weaving", "synthesizing"] as const).map((step) => {
-              const phases = ["scope", "decomposing", "critiquing", "weaving", "synthesizing", "complete"];
+            {(["scope", "decomposing", "critiquing", "weaving", "synthesizing", "reasoning"] as const).map((step) => {
+              const phases = ["scope", "decomposing", "critiquing", "weaving", "synthesizing", "reasoning", "complete"];
               const currentIdx = phases.indexOf(pipeline.phase);
               const stepIdx = phases.indexOf(step);
               const isDone = currentIdx > stepIdx;
@@ -237,6 +238,8 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
               if (step === "scope" && !isMultiSpace) return null;
               // Skip weave bar if single space
               if (step === "weaving" && pipeline.spaces.length < 2) return null;
+              // Skip reasoning bar if not comprehensive
+              if (step === "reasoning" && tier !== "comprehensive") return null;
               return (
                 <div
                   key={step}

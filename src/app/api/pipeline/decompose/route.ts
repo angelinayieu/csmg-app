@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { llmGenerate, llmJSON } from "@/lib/llm";
-import { DECOMPOSITION_SYSTEM_PROMPT } from "@/lib/prompts/decomposition";
-import { STRUCTURING_SYSTEM_PROMPT } from "@/lib/prompts/structuring";
+import { getDecompositionPrompt, getStructuringPrompt } from "@/lib/prompts/tier-prompts";
 import type { StructuredDecomposition } from "@/types/analysis";
 import {
   sanitizeEntity,
@@ -31,12 +30,16 @@ export async function POST(request: Request) {
   let text: string;
   let spaceConfig: { name?: string; prefix?: string; description?: string; key_concepts?: string[] } | undefined;
   let siblingContext: string | undefined;
+  let reasoningDepth: "quick" | "standard" | "deep" = "standard";
 
   try {
     const body = await request.json();
     text = body.text;
     spaceConfig = body.spaceConfig;
     siblingContext = body.siblingContext;
+    if (body.reasoningDepth === "quick" || body.reasoningDepth === "standard" || body.reasoningDepth === "deep") {
+      reasoningDepth = body.reasoningDepth;
+    }
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -63,7 +66,7 @@ ${text}`;
 
     // Pass 1: Decomposition (free-form reasoning)
     const rawDecomposition = await llmGenerate({
-      system: DECOMPOSITION_SYSTEM_PROMPT,
+      system: getDecompositionPrompt(reasoningDepth),
       user: userPrompt,
       maxTokens: 8192,
       temperature: 0.5,
@@ -71,7 +74,7 @@ ${text}`;
 
     // Pass 2: Structure into JSON (with JSON mode enforcement)
     const parsed = await llmJSON<StructuredDecomposition>({
-      system: STRUCTURING_SYSTEM_PROMPT,
+      system: getStructuringPrompt(reasoningDepth),
       user: `Convert this decomposition to JSON:\n\n${rawDecomposition}`,
       maxTokens: 16000,
       temperature: 0.2,
