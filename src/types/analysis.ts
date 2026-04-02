@@ -39,21 +39,40 @@ export interface StructuredDecomposition {
   contradictions: StructuredContradiction[];
   scenarios: StructuredScenario[];
   action_items: StructuredActionItem[];
+  open_questions: {
+    question: string;
+    why_it_matters: string;
+    what_would_change?: string;
+    related_entity_ids?: string[];
+  }[];
   leverage_points: {
     entity_id: string;
-    reason: string;
-    action: string;
+    summary?: string;
+    reasoning?: string[];
+    how_it_works?: string[];
+    when_matters?: { situation: string; impact: string; intensity: string }[];
+    action?: string | { primary: string; alternatives?: { when: string; approach: string; tradeoff: string }[] };
+    connections?: string[];
+    reason?: string;
   }[];
   risk_points: {
     entity_id: string;
     blast_radius: number;
-    reason: string;
-    mitigation: string;
+    summary?: string;
+    reasoning?: string[];
+    how_it_fails?: string[];
+    when_matters?: { situation: string; impact: string; intensity: string }[];
+    mitigation?: string | { primary: string; alternatives?: { when: string; approach: string; tradeoff: string }[] };
+    connections?: string[];
+    reason?: string;
   }[];
   master_bottleneck: {
     entity_id: string;
     blast_radius: number;
-    reason: string;
+    summary?: string;
+    reasoning?: string[];
+    when_matters?: { situation: string; impact: string; intensity: string }[];
+    reason?: string;
   } | null;
   shared_variables: {
     entity_id: string;

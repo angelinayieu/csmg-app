@@ -38,6 +38,19 @@ export interface SpaceProgress {
   edgeCount?: number;
 }
 
+/** Safely parse a fetch response, handling non-JSON error pages */
+async function safeJson(res: Response, label: string): Promise<any> {
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("application/json")) {
+    const body = await res.text();
+    console.error(`[${label}] Non-JSON response (${res.status}):`, body.slice(0, 300));
+    throw new Error(
+      `${label} returned a non-JSON response (${res.status}). Check the server logs.`
+    );
+  }
+  return res.json();
+}
+
 export function usePipeline() {
   const [phase, setPhase] = useState<PipelinePhase>("idle");
   const [spaces, setSpaces] = useState<SpaceProgress[]>([]);
@@ -112,7 +125,7 @@ export function usePipeline() {
           body: JSON.stringify({ tier: config.tier }),
           signal,
         });
-        const creditData = await creditRes.json();
+        const creditData = await safeJson(creditRes, "Credits");
         if (!creditRes.ok) {
           setError(creditData.error || "Insufficient credits");
           setPhase("error");
@@ -170,7 +183,7 @@ export function usePipeline() {
             signal,
           });
 
-          const data = await res.json();
+          const data = await safeJson(res, `Decompose[${space.name}]`);
           if (!res.ok) throw new Error(data.error || "Decomposition failed");
 
           setSpaces((prev) =>
@@ -247,7 +260,7 @@ export function usePipeline() {
                 signal,
               });
 
-              const data = await res.json();
+              const data = await safeJson(res, `Critique[${spaceId}]`);
               if (res.ok) {
                 setSpaces((prev) =>
                   prev.map((s, j) =>
@@ -313,12 +326,16 @@ export function usePipeline() {
       if (config.crossSpace.synthesis) {
         setPhase("synthesizing");
         try {
-          await fetch("/api/pipeline/synthesize", {
+          const synthRes = await fetch("/api/pipeline/synthesize", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ spaceIds: ids }),
             signal,
           });
+          if (!synthRes.ok) {
+            const synthData = await safeJson(synthRes, "Synthesize").catch(() => ({}));
+            console.warn("Synthesis returned error:", synthData);
+          }
         } catch (err) {
           if (err instanceof Error && err.name === "AbortError") return null;
           console.warn("Synthesis phase had errors:", err);

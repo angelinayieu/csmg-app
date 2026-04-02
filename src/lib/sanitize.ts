@@ -135,6 +135,7 @@ export interface SanitizedEdge {
   confidence: number;
   conditions: string | null;
   is_tradeoff: boolean;
+  resolved_by_entity_id: string | null;
   is_part_of_cycle: boolean;
   cycle_id: string | null;
   dynamics: string | null;
@@ -167,6 +168,9 @@ export function sanitizeEdge(raw: any, spaceId: string, entityIdMap: Map<string,
     confidence: clampNum(raw.confidence, 0, 1, 0.8),
     conditions: typeof raw.conditions === "string" ? raw.conditions.trim() : null,
     is_tradeoff: bool(raw.is_tradeoff),
+    resolved_by_entity_id: typeof raw.resolved_by_entity_id === "string"
+      ? entityIdMap.get(raw.resolved_by_entity_id) ?? null
+      : null,
     is_part_of_cycle: bool(raw.is_part_of_cycle),
     cycle_id: typeof raw.cycle_id === "string" ? raw.cycle_id : null,
     dynamics: typeof raw.dynamics === "string"
@@ -188,6 +192,7 @@ export interface SanitizedCycle {
   classification: string;
   entity_ids: string[];
   intervention_point_entity_id: string | null;
+  intervention_description: string | null;
   description: string | null;
   growth_type: string | null;
   cycle_time: string | null;
@@ -196,8 +201,10 @@ export interface SanitizedCycle {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function sanitizeCycle(raw: any, spaceId: string, entityIdMap: Map<string, string>): SanitizedCycle | null {
+  // entity_ids stores DISPLAY IDs (C1, C5) not UUIDs — keep the original text IDs
+  // Only validate that they exist in the entityIdMap (meaning the entity was inserted)
   const entityIds = Array.isArray(raw.entity_ids)
-    ? raw.entity_ids.map((id: string) => entityIdMap.get(id)).filter(Boolean) as string[]
+    ? raw.entity_ids.filter((id: string) => typeof id === "string" && entityIdMap.has(id)) as string[]
     : [];
 
   // Need at least 2 entities for a cycle
@@ -216,6 +223,7 @@ export function sanitizeCycle(raw: any, spaceId: string, entityIdMap: Map<string
     classification: coerce(raw.classification, CYCLE_CLASSIFICATIONS, "reinforcing_positive"),
     entity_ids: entityIds,
     intervention_point_entity_id: interventionId,
+    intervention_description: typeof raw.intervention_description === "string" ? raw.intervention_description.trim() : null,
     description: typeof raw.description === "string" ? raw.description.trim() : null,
     growth_type: typeof raw.growth_type === "string"
       ? coerce(raw.growth_type, CYCLE_GROWTH_TYPES, "multiplicative")

@@ -597,16 +597,17 @@ export const validateStructuredDecomposition = (
             lpObj.entity_id,
             `root.leverage_points[${i}].entity_id`
           ),
-          reason: validators.string(
-            lpObj.reason,
-            `root.leverage_points[${i}].reason`,
-            500
-          ),
-          action: validators.string(
-            lpObj.action,
-            `root.leverage_points[${i}].action`,
-            500
-          ),
+          reason: typeof lpObj.reason === "string" ? lpObj.reason : (typeof lpObj.summary === "string" ? lpObj.summary : ""),
+          action: typeof lpObj.action === "string"
+            ? lpObj.action
+            : typeof lpObj.action === "object" && lpObj.action !== null
+              ? (lpObj.action as Record<string, unknown>).primary as string ?? ""
+              : "",
+          ...(typeof lpObj.summary === "string" ? { summary: lpObj.summary } : {}),
+          ...(Array.isArray(lpObj.reasoning) ? { reasoning: lpObj.reasoning } : {}),
+          ...(Array.isArray(lpObj.how_it_works) ? { how_it_works: lpObj.how_it_works } : {}),
+          ...(Array.isArray(lpObj.when_matters) ? { when_matters: lpObj.when_matters } : {}),
+          ...(Array.isArray(lpObj.connections) ? { connections: lpObj.connections } : {}),
         };
       },
       "root.leverage_points"
@@ -632,16 +633,17 @@ export const validateStructuredDecomposition = (
             0,
             1
           ),
-          reason: validators.string(
-            rpObj.reason,
-            `root.risk_points[${i}].reason`,
-            500
-          ),
-          mitigation: validators.string(
-            rpObj.mitigation,
-            `root.risk_points[${i}].mitigation`,
-            500
-          ),
+          reason: typeof rpObj.reason === "string" ? rpObj.reason : (typeof rpObj.summary === "string" ? rpObj.summary : ""),
+          mitigation: typeof rpObj.mitigation === "string"
+            ? rpObj.mitigation
+            : typeof rpObj.mitigation === "object" && rpObj.mitigation !== null
+              ? (rpObj.mitigation as Record<string, unknown>).primary as string ?? ""
+              : "",
+          ...(typeof rpObj.summary === "string" ? { summary: rpObj.summary } : {}),
+          ...(Array.isArray(rpObj.reasoning) ? { reasoning: rpObj.reasoning } : {}),
+          ...(Array.isArray(rpObj.how_it_fails) ? { how_it_fails: rpObj.how_it_fails } : {}),
+          ...(Array.isArray(rpObj.when_matters) ? { when_matters: rpObj.when_matters } : {}),
+          ...(Array.isArray(rpObj.connections) ? { connections: rpObj.connections } : {}),
         };
       },
       "root.risk_points"
@@ -672,6 +674,25 @@ export const validateStructuredDecomposition = (
               ),
             };
           })(),
+    open_questions: validators.array(
+      obj.open_questions ?? [],
+      (oq, i) => {
+        if (typeof oq !== "object" || oq === null) {
+          throw new ValidationError(
+            `root.open_questions[${i}]`,
+            "Open question must be an object"
+          );
+        }
+        const oqObj = oq as Record<string, unknown>;
+        return {
+          question: validators.string(oqObj.question, `root.open_questions[${i}].question`, 500),
+          why_it_matters: validators.string(oqObj.why_it_matters, `root.open_questions[${i}].why_it_matters`, 500),
+          ...(typeof oqObj.what_would_change === "string" ? { what_would_change: oqObj.what_would_change } : {}),
+          ...(Array.isArray(oqObj.related_entity_ids) ? { related_entity_ids: oqObj.related_entity_ids } : {}),
+        };
+      },
+      "root.open_questions"
+    ),
     shared_variables: validators.array(
       obj.shared_variables ?? [],
       (sv, i) => {

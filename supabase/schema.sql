@@ -1,5 +1,5 @@
 -- ============================================
--- CSMG Database Schema
+-- CSMG Database Schema (v2 — matches database.types.ts)
 -- Run this in Supabase SQL Editor to set up the database
 -- ============================================
 
@@ -12,7 +12,8 @@ CREATE TABLE public.profiles (
   display_name TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   usage_count INTEGER DEFAULT 0,
-  tier TEXT DEFAULT 'free' CHECK (tier IN ('free', 'pro', 'team'))
+  tier TEXT DEFAULT 'free' CHECK (tier IN ('free', 'pro', 'team')),
+  credit_balance INTEGER DEFAULT 100
 );
 
 -- Auto-create profile on signup
@@ -30,6 +31,20 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- ============================================
+-- CREDIT LEDGER
+-- ============================================
+
+CREATE TABLE public.credit_ledger (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  amount INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  space_id UUID,
+  balance_after INTEGER NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============================================
 -- CONTEXT SPACES
 -- ============================================
 
@@ -45,6 +60,7 @@ CREATE TABLE public.spaces (
   input_text TEXT NOT NULL,
   raw_decomposition TEXT,
   synthesis_text TEXT,
+  synthesis_data JSONB,
   entity_count INTEGER DEFAULT 0,
   edge_count INTEGER DEFAULT 0,
   orphan_count INTEGER DEFAULT 0,
@@ -52,6 +68,9 @@ CREATE TABLE public.spaces (
   maturity TEXT DEFAULT 'actionable_now'
     CHECK (maturity IN ('actionable_now', 'waiting_on_dependency', 'theoretical', 'blocked')),
   activation_dependencies TEXT[],
+  analysis_tier TEXT DEFAULT 'quick',
+  credits_used INTEGER DEFAULT 0,
+  agent_count INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -75,6 +94,7 @@ CREATE TABLE public.entities (
   confidence FLOAT DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
   is_leverage_point BOOLEAN DEFAULT false,
   is_risk_point BOOLEAN DEFAULT false,
+  is_master_bottleneck BOOLEAN DEFAULT false,
   blast_radius INTEGER DEFAULT 0,
   centrality_rank INTEGER,
   is_shared_variable BOOLEAN DEFAULT false,
@@ -83,6 +103,11 @@ CREATE TABLE public.entities (
   sub_space_id UUID REFERENCES public.spaces(id),
   graph_x FLOAT,
   graph_y FLOAT,
+  knowledge_layer TEXT DEFAULT 'internal'
+    CHECK (knowledge_layer IN ('internal', 'external', 'bridge')),
+  provenance JSONB DEFAULT '{}',
+  authority_level TEXT DEFAULT 'moderate'
+    CHECK (authority_level IN ('high', 'moderate', 'low', 'unverified')),
   UNIQUE(space_id, entity_id)
 );
 
@@ -104,8 +129,20 @@ CREATE TABLE public.edges (
   polarity TEXT DEFAULT 'positive' CHECK (polarity IN ('positive', 'negative', 'neutral', 'conditional')),
   confidence FLOAT DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
   conditions TEXT,
+  is_tradeoff BOOLEAN DEFAULT false,
+  resolved_by_entity_id UUID REFERENCES public.entities(id),
   is_part_of_cycle BOOLEAN DEFAULT false,
-  cycle_id TEXT
+  cycle_id TEXT,
+  dynamics TEXT CHECK (dynamics IS NULL OR dynamics IN (
+    'threshold', 'linear', 'compounding', 'exponential',
+    'logarithmic', 'decay', 'step_function', 'delayed')),
+  dynamics_properties JSONB,
+  is_low_confidence BOOLEAN DEFAULT false,
+  knowledge_layer TEXT DEFAULT 'internal'
+    CHECK (knowledge_layer IN ('internal', 'external', 'bridge')),
+  provenance JSONB DEFAULT '{}',
+  requires_user_approval BOOLEAN DEFAULT false,
+  approved_at TIMESTAMPTZ
 );
 
 -- ============================================
@@ -122,7 +159,12 @@ CREATE TABLE public.cycles (
   entity_ids TEXT[] NOT NULL,
   edge_ids UUID[],
   intervention_point_entity_id UUID REFERENCES public.entities(id),
-  description TEXT
+  intervention_description TEXT,
+  description TEXT,
+  growth_type TEXT CHECK (growth_type IS NULL OR growth_type IN (
+    'additive', 'multiplicative', 'accelerating', 'decelerating')),
+  cycle_time TEXT,
+  estimated_multiplier FLOAT
 );
 
 -- ============================================
@@ -169,11 +211,89 @@ CREATE TABLE public.propositions (
   space_id UUID NOT NULL REFERENCES public.spaces(id) ON DELETE CASCADE,
   proposition_id TEXT NOT NULL,
   statement TEXT NOT NULL,
-  proposition_type TEXT DEFAULT 'derived'
+  proposition_type TEXT DEFAULT 'probable'
     CHECK (proposition_type IN ('certain', 'probable', 'possible', 'speculative', 'irreducible')),
   confidence FLOAT DEFAULT 1.0,
   depends_on TEXT[],
   entity_ids TEXT[]
+);
+
+-- ============================================
+-- NOVEL CONNECTIONS
+-- ============================================
+
+CREATE TABLE public.novel_connections (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  space_id UUID NOT NULL REFERENCES public.spaces(id) ON DELETE CASCADE,
+  source_entity_id TEXT NOT NULL,
+  target_entity_id TEXT NOT NULL,
+  relationship_type TEXT NOT NULL,
+  strength TEXT NOT NULL CHECK (strength IN ('strong', 'moderate', 'speculative')),
+  reasoning TEXT NOT NULL,
+  crosses_spaces BOOLEAN DEFAULT false,
+  target_space_id UUID REFERENCES public.spaces(id),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============================================
+-- CONTRADICTIONS
+-- ============================================
+
+CREATE TABLE public.contradictions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  space_a_id UUID NOT NULL REFERENCES public.spaces(id) ON DELETE CASCADE,
+  space_b_id UUID REFERENCES public.spaces(id) ON DELETE SET NULL,
+  assumption_text TEXT NOT NULL,
+  conclusion_text TEXT NOT NULL,
+  severity TEXT NOT NULL CHECK (severity IN ('critical', 'moderate', 'minor')),
+  description TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============================================
+-- SCENARIOS
+-- ============================================
+
+CREATE TABLE public.scenarios (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  space_id UUID NOT NULL REFERENCES public.spaces(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  conditions TEXT NOT NULL,
+  outcome_label TEXT NOT NULL,
+  outcome_value TEXT NOT NULL,
+  probability TEXT CHECK (probability IN ('likely', 'possible', 'unlikely')),
+  sort_order INTEGER DEFAULT 0
+);
+
+-- ============================================
+-- ACTION ITEMS
+-- ============================================
+
+CREATE TABLE public.action_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  space_id UUID NOT NULL REFERENCES public.spaces(id) ON DELETE CASCADE,
+  timeframe TEXT NOT NULL CHECK (timeframe IN ('today', 'this_week', 'this_month', 'after_validation')),
+  path_label TEXT DEFAULT 'builder',
+  action_text TEXT NOT NULL,
+  why_text TEXT,
+  derived_from_entity_id UUID REFERENCES public.entities(id),
+  tags JSONB DEFAULT '[]',
+  sort_order INTEGER DEFAULT 0
+);
+
+-- ============================================
+-- SPACE CHANGELOG
+-- ============================================
+
+CREATE TABLE public.space_changelog (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  space_id UUID NOT NULL REFERENCES public.spaces(id) ON DELETE CASCADE,
+  version INTEGER DEFAULT 1,
+  change_type TEXT NOT NULL
+    CHECK (change_type IN ('initial_analysis', 'reevaluation', 'manual_edit', 'exploration', 'synthesis_refresh')),
+  summary TEXT NOT NULL,
+  details JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- ============================================
@@ -189,6 +309,10 @@ CREATE INDEX idx_edges_space ON public.edges(space_id);
 CREATE INDEX idx_edges_dimension ON public.edges(space_id, dimension);
 CREATE INDEX idx_bridges_source ON public.bridges(source_space_id);
 CREATE INDEX idx_bridges_target ON public.bridges(target_space_id);
+CREATE INDEX idx_action_items_space ON public.action_items(space_id);
+CREATE INDEX idx_scenarios_space ON public.scenarios(space_id);
+CREATE INDEX idx_changelog_space ON public.space_changelog(space_id);
+CREATE INDEX idx_credit_ledger_user ON public.credit_ledger(user_id);
 
 -- ============================================
 -- ROW LEVEL SECURITY
@@ -202,6 +326,12 @@ ALTER TABLE public.cycles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bridges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reasoning_results ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.propositions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.novel_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contradictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.scenarios ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.action_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.space_changelog ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.credit_ledger ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: users can read/update their own
 CREATE POLICY "Users see own profiles" ON public.profiles
@@ -246,3 +376,37 @@ CREATE POLICY "Users see own propositions" ON public.propositions
   FOR ALL USING (
     space_id IN (SELECT id FROM public.spaces WHERE user_id = auth.uid())
   );
+
+-- Novel connections
+CREATE POLICY "Users see own novel_connections" ON public.novel_connections
+  FOR ALL USING (
+    space_id IN (SELECT id FROM public.spaces WHERE user_id = auth.uid())
+  );
+
+-- Contradictions
+CREATE POLICY "Users see own contradictions" ON public.contradictions
+  FOR ALL USING (
+    space_a_id IN (SELECT id FROM public.spaces WHERE user_id = auth.uid())
+  );
+
+-- Scenarios
+CREATE POLICY "Users see own scenarios" ON public.scenarios
+  FOR ALL USING (
+    space_id IN (SELECT id FROM public.spaces WHERE user_id = auth.uid())
+  );
+
+-- Action items
+CREATE POLICY "Users see own action_items" ON public.action_items
+  FOR ALL USING (
+    space_id IN (SELECT id FROM public.spaces WHERE user_id = auth.uid())
+  );
+
+-- Space changelog
+CREATE POLICY "Users see own changelog" ON public.space_changelog
+  FOR ALL USING (
+    space_id IN (SELECT id FROM public.spaces WHERE user_id = auth.uid())
+  );
+
+-- Credit ledger
+CREATE POLICY "Users see own credits" ON public.credit_ledger
+  FOR ALL USING (auth.uid() = user_id);

@@ -1,17 +1,12 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { llmGenerate } from "@/lib/llm";
-import { safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers";
+import { safeAuth, safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers";
+
+export const maxDuration = 30;
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { supabase, user, error: authError } = await safeAuth();
+  if (authError) return authError;
 
   const { data: body, error: parseError } = await safeJsonParse(request);
   if (parseError) return parseError;
@@ -21,7 +16,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
   }
 
-  // Ownership check: use spaceId if provided, otherwise look up edge's space
+  // Ownership check: require either spaceId or edgeId for authorization
   if (spaceId) {
     const isOwner = await verifySpaceOwnership(supabase, spaceId, user.id);
     if (!isOwner) {
@@ -34,25 +29,29 @@ export async function POST(request: Request) {
       .select("space_id")
       .eq("id", edgeId)
       .single();
-    if (edge?.space_id) {
-      const isOwner = await verifySpaceOwnership(supabase, edge.space_id, user.id);
-      if (!isOwner) {
-        return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-      }
+    if (!edge?.space_id) {
+      return NextResponse.json({ error: "Edge not found" }, { status: 404 });
     }
+    const isOwner = await verifySpaceOwnership(supabase, edge.space_id, user.id);
+    if (!isOwner) {
+      return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+    }
+  } else {
+    // Neither spaceId nor edgeId provided — reject
+    return NextResponse.json({ error: "spaceId or edgeId required" }, { status: 400 });
   }
 
   try {
     const explanation = await llmGenerate({
       system: `You explain relationships between concepts in a knowledge graph. Give a clear, specific 1-2 sentence explanation of WHY this relationship exists. Be concrete — reference the actual concepts, not abstract patterns. Write as a knowledgeable analyst, not a system.`,
-      user: `In the context of: "${spaceContext}"
+      user: `In the context of: "${spaceContext ?? "general analysis"}"
 
-Explain why "${sourceName}" ${relationshipType} "${targetName}" (${dimension} relationship).
+Explain why "${sourceName}" ${relationshipType} "${targetName}" (${dimension ?? "structural"} relationship).
 
 Give a 1-2 sentence explanation of the mechanism — HOW and WHY this connection exists.`,
       maxTokens: 200,
       temperature: 0.3,
-      model: "gpt-4o-mini", // cheap for short explanations
+      model: "gpt-4o-mini",
     });
 
     // Cache the explanation on the edge record

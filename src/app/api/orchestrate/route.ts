@@ -1,26 +1,18 @@
-import { createClient } from "@/lib/supabase/server";
 import { checkCredits, reserveCredits, commitReservation, cancelReservation } from "@/lib/credits";
 import { runPipeline } from "@/lib/orchestration/pipeline";
-import type { AnalysisTier } from "@/lib/tiers";
+import { TIERS, type AnalysisTier } from "@/lib/tiers";
 import { batchInsert } from "@/lib/utils";
 import { validatePipelineResult } from "@/lib/validation";
-import { safeJsonParse } from "@/lib/api-helpers";
+import { safeAuth, safeJsonParse } from "@/lib/api-helpers";
 
 export const maxDuration = 120; // 2 minute timeout for Vercel
 
 export async function POST(request: Request) {
   const requestStart = Date.now();
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
 
-  if (!user) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+  // Safe auth — returns JSON error on Supabase failure
+  const { supabase, user, error: authError } = await safeAuth();
+  if (authError) return authError;
 
   const { data: body, error: parseError } = await safeJsonParse(request);
   if (parseError) return parseError;
@@ -47,27 +39,38 @@ export async function POST(request: Request) {
   // Check credits
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
-  const creditCheck = await checkCredits(db, user.id, tier);
-  if (!creditCheck.hasCredits) {
+  try {
+    const creditCheck = await checkCredits(db, user.id, tier);
+    if (!creditCheck.hasCredits) {
+      return new Response(
+        JSON.stringify({
+          error: `Insufficient credits. Need ${TIERS[tier].credits}, have ${creditCheck.balance}.`,
+          required: TIERS[tier].credits,
+          balance: creditCheck.balance,
+        }),
+        { status: 402, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  } catch (err) {
+    console.error("[Orchestrate] Credit check failed:", err);
     return new Response(
-      JSON.stringify({
-        error: `Insufficient credits. Need ${creditCheck.required}, have ${creditCheck.balance}.`,
-        required: creditCheck.required,
-        balance: creditCheck.balance,
-      }),
-      { status: 402, headers: { "Content-Type": "application/json" } }
+      JSON.stringify({ error: "Service temporarily unavailable. Please try again." }),
+      { status: 503, headers: { "Content-Type": "application/json" } }
     );
   }
-
 
   // Set up SSE stream
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       function send(event: string, data: string) {
-        controller.enqueue(
-          encoder.encode(`event: ${event}\ndata: ${data}\n\n`)
-        );
+        try {
+          controller.enqueue(
+            encoder.encode(`event: ${event}\ndata: ${data}\n\n`)
+          );
+        } catch {
+          // Client disconnected — ignore
+        }
       }
 
       let reservation: { reservationId: string; success: boolean; error?: string } | null = null;
@@ -385,7 +388,7 @@ export async function POST(request: Request) {
           } else {
             await db
               .from("spaces")
-              .update({ credits_used: creditCheck.required })
+              .update({ credits_used: TIERS[tier].credits })
               .eq("id", spaceIds[0]);
           }
         } else if (insertionError) {
@@ -518,7 +521,7 @@ export async function POST(request: Request) {
             spaceIds,
             rootSpaceId: spaceIds[0] ?? null,
             tier,
-            creditsUsed: creditCheck.required,
+            creditsUsed: TIERS[tier].credits,
           })
         );
       } catch (err) {

@@ -52,55 +52,50 @@ export async function POST(request: Request) {
     );
   }
 
-  // 3. For short inputs, skip LLM scope mapping
-  if (text.length < 400) {
-    return NextResponse.json({
-      spaces: [
-        {
-          name: "Analysis",
-          prefix: "C",
-          description: "Complete analysis of the input",
-          key_concepts: [],
-          priority: 1,
-        },
-      ],
-      summary: text.slice(0, 200),
-      skipped: true,
-    });
-  }
-
-  // 4. LLM-based scope mapping
+  // 3. LLM-based scope mapping (always run — even short inputs benefit from structured decomposition)
   try {
     // Truncate very long texts to reduce LLM processing time
     const inputForLLM = text.length > 8000 ? text.slice(0, 8000) + "\n[...text truncated...]" : text;
 
     const scope = await llmJSON<ScopeResult>({
-      system: `You are mapping the analytical scope of a complex input. Identify 3-4 distinct analytical areas (not more) that together cover the COMPLETE scope. Each area should be a self-contained domain. PRIORITIZE SPEED — favor broad areas over fine-grained ones.
+      system: `You are a strategic analyst decomposing a situation into distinct analytical spaces. Your job is to carve the input into 3-4 ORTHOGONAL domains that together cover the COMPLETE scope — but each space must be a genuinely different LENS on the situation, not a generic business category.
+
+CRITICAL: Spaces must be SPECIFIC to THIS input, not generic templates.
+
+BAD examples (too generic):
+- "Market Strategy" / "Product Development" / "Team Building" / "Financial Planning"
+- "Technical Analysis" / "Business Analysis" / "Risk Analysis"
+
+GOOD examples (specific to an AI SaaS startup with no customers):
+- "GPT-4 Response Quality vs Integration Speed" (the core product tradeoff)
+- "Enterprise vs SMB Go-to-Market" (the strategic fork)
+- "3-Person Team Capacity & 8-Month Runway" (the constraint landscape)
 
 Rules:
-- Every concept in the input must belong to at least one area
-- Areas should be roughly equal in complexity
-- Name areas by WHAT THEY CONTAIN, not analytical category (e.g., "The product" not "Technical analysis")
-- Return 3-4 areas max to save time
-- Include a priority order
+- Each space name should contain SPECIFIC details from the input (names, numbers, technologies, tradeoffs mentioned)
+- key_concepts must be pulled directly from the input, not invented
+- Spaces should create TENSION between them — analyzing one should raise questions about another
+- Prefer spaces organized around DECISIONS and TRADEOFFS in the input, not functional departments
+- Return 3-4 spaces max
+- Use sequential prefixes: A, B, C, D
 
 Return ONLY valid JSON:
 {
   "spaces": [
     {
-      "name": "string (2-4 words)",
+      "name": "string (3-6 words, SPECIFIC to this input)",
       "prefix": "A",
-      "description": "string (one sentence)",
-      "key_concepts": ["concept1", "concept2"],
+      "description": "string (one sentence explaining what this space analyzes and WHY it matters)",
+      "key_concepts": ["specific concept from input", "another specific concept"],
       "priority": 1
     }
   ],
-  "summary": "One sentence describing the overall situation"
+  "summary": "One sentence capturing the core tension or decision in the input"
 }`,
       user: inputForLLM,
       maxTokens: 1500,
-      temperature: 0.2,
-      model: "gpt-4o-mini",
+      temperature: 0.3,
+      model: "gpt-4o",
     });
 
     // Validate the response has spaces

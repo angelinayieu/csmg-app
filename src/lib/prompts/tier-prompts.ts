@@ -11,8 +11,8 @@ Fast exploration mode. Apply these constraints:
 - Target 8-15 entities. Do NOT exceed 15.
 - Key relationships only — aim for edge count ~1.2x entity count.
 - Brief, one-sentence descriptions for each entity.
-- Skip Tier 4 (Unit Breakdown) entirely.
-- Skip Tier 6 (Fundamental Logic) — go straight to Phase 2 Weave after Tier 5.
+- For Tier 4 (Unit Breakdown): only flag the most obvious 1-2 decomposable entities. Do NOT spend time breaking them down.
+- For Tier 6 (Fundamental Logic): identify the single most important leverage point and risk point only. Skip centrality ranking.
 - Limit cycles to the most obvious 1-2. Do not exhaustively trace.
 - Limit novel connections to 2-3 strongest only.
 - Prioritize speed over completeness.`,

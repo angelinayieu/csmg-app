@@ -1,8 +1,8 @@
-import { createClient } from "@/lib/supabase/server";
 import { llmStream, llmJSON } from "@/lib/llm";
 import { getDecompositionPrompt, getStructuringPrompt } from "@/lib/prompts/tier-prompts";
 import { SYNTHESIS_SYSTEM_PROMPT } from "@/lib/prompts/synthesis";
 import { checkCredits, deductCredits } from "@/lib/credits";
+import { safeAuth } from "@/lib/api-helpers";
 import {
   sanitizeEntity,
   sanitizeEdge,
@@ -16,25 +16,27 @@ import type { StructuredDecomposition } from "@/types/analysis";
 export const maxDuration = 120; // Allow up to 2 minutes for Vercel
 
 export async function POST(request: Request) {
-  // 1. Auth check
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // 1. Auth check (safe — returns JSON on failure)
+  const { supabase, user, error: authError } = await safeAuth();
+  if (authError) return authError;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
   // 1b. Credit check (Quick tier = 1 credit)
-  const creditCheck = await checkCredits(db, user.id, "quick");
-  if (!creditCheck.hasCredits) {
+  try {
+    const creditCheck = await checkCredits(db, user.id, "quick");
+    if (!creditCheck.hasCredits) {
+      return Response.json(
+        { error: `Insufficient credits. Need ${creditCheck.required}, have ${creditCheck.balance}.` },
+        { status: 402 }
+      );
+    }
+  } catch (err) {
+    console.error("[Analyze] Credit check failed:", err);
     return Response.json(
-      { error: `Insufficient credits. Need ${creditCheck.required}, have ${creditCheck.balance}.` },
-      { status: 402 }
+      { error: "Service temporarily unavailable. Please try again." },
+      { status: 503 }
     );
   }
 

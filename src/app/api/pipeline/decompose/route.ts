@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { llmGenerate, llmJSON } from "@/lib/llm";
 import { getDecompositionPrompt, getStructuringPrompt } from "@/lib/prompts/tier-prompts";
+import { safeAuth } from "@/lib/api-helpers";
 import type { StructuredDecomposition } from "@/types/analysis";
 import {
   sanitizeEntity,
@@ -13,17 +13,11 @@ import {
   MATURITY_LEVELS,
 } from "@/lib/sanitize";
 
-export const maxDuration = 60;
+export const maxDuration = 120; // Comprehensive tier: 2 LLM passes, up to 50 entities
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { supabase, user, error: authError } = await safeAuth();
+  if (authError) return authError;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
@@ -155,11 +149,48 @@ ${text}`;
       cyclesInserted = inserted;
     }
 
+    // ── Insert propositions (non-critical) ──
+    const propositions = (parsed.propositions ?? []).filter(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (p: any) => p.statement && typeof p.statement === "string"
+    );
+    if (propositions.length > 0) {
+      const validPropTypes = ["certain", "probable", "possible", "speculative", "irreducible"];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const propRows = propositions.map((p: any) => ({
+        space_id: spaceId,
+        proposition_id: (typeof p.proposition_id === "string" && p.proposition_id)
+          ? p.proposition_id
+          : `P${Math.random().toString(36).slice(2, 6)}`,
+        statement: p.statement,
+        proposition_type: validPropTypes.includes(p.proposition_type) ? p.proposition_type : "probable",
+        confidence: typeof p.confidence === "number" ? Math.max(0, Math.min(1, p.confidence)) : 0.7,
+        depends_on: Array.isArray(p.depends_on) ? p.depends_on : null,
+        entity_ids: Array.isArray(p.entity_ids) ? p.entity_ids : null,
+      }));
+      await resilientInsert(db, "propositions", propRows, "id").catch(() => {});
+    }
+
+    // ── Store rich structuring metadata on space ──
+    // Leverage points, risk points, open questions, etc. go into synthesis_data
+    // so the synthesis step can use them even if it runs later
+    const structuringMeta: Record<string, unknown> = {};
+    if (parsed.leverage_points?.length) structuringMeta.leverage_points = parsed.leverage_points;
+    if (parsed.risk_points?.length) structuringMeta.risk_points = parsed.risk_points;
+    if (parsed.master_bottleneck) structuringMeta.master_bottleneck = parsed.master_bottleneck;
+    if (parsed.open_questions?.length) structuringMeta.open_questions = parsed.open_questions;
+    if (parsed.novel_connections?.length) structuringMeta.novel_connections = parsed.novel_connections;
+    if (parsed.contradictions?.length) structuringMeta.contradictions = parsed.contradictions;
+    if (parsed.scenarios?.length) structuringMeta.scenarios = parsed.scenarios;
+    if (parsed.action_items?.length) structuringMeta.action_items = parsed.action_items;
+    if (parsed.shared_variables?.length) structuringMeta.shared_variables = parsed.shared_variables;
+
     // Update space counts with actual inserted counts
     await db.from("spaces").update({
       entity_count: entityIdMap.size,
       edge_count: edgesInserted,
       cycle_count: cyclesInserted,
+      ...(Object.keys(structuringMeta).length > 0 ? { synthesis_data: structuringMeta } : {}),
     }).eq("id", spaceId);
 
     // Log changelog (non-critical)

@@ -561,7 +561,7 @@ function buildMetaGraphSummary(
       const rp = (s.structured.risk_points ?? []).slice(0, 3);
       const cycles = (s.structured.cycles ?? []).slice(0, 3);
       return `Space ${s.scope.prefix} "${s.scope.name}" (${s.structured.entities?.length ?? 0} entities, ${s.structured.edges?.length ?? 0} edges, ${s.structured.cycles?.length ?? 0} cycles)
-  Top leverage: ${lp.map((l) => `${l.entity_id} ${(l as Record<string, string>).summary ?? (l as Record<string, string>).reason ?? ""}`).join("; ")}
+  Top leverage: ${lp.map((l) => `${l.entity_id} ${(l as any).summary ?? (l as any).reason ?? ""}`).join("; ")}
   Top risk: ${rp.map((r) => `${r.entity_id} blast:${r.blast_radius}`).join("; ")}
   Cycles: ${cycles.map((c) => `${c.name} [${c.classification}]`).join("; ")}
   Maturity: ${s.structured.metadata?.maturity ?? "actionable_now"}`;

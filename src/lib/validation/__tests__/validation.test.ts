@@ -301,6 +301,7 @@ describe("Structured Decomposition Validation", () => {
       contradictions: [],
       scenarios: [],
       action_items: [],
+      open_questions: [],
       leverage_points: [],
       risk_points: [],
       master_bottleneck: null,

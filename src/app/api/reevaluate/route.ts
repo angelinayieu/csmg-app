@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { checkCredits, deductCredits } from "@/lib/credits";
 import { llmJSON } from "@/lib/llm";
-import { safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers";
+import { safeAuth, safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers";
 import type { Entity, Edge, Cycle } from "@/types";
 
-export const maxDuration = 120;
+export const maxDuration = 60;
 
 const VALID_DIMENSIONS = [
   "structural", "functional", "temporal", "causal",
@@ -41,26 +40,11 @@ interface RevalResult {
 }
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { supabase, user, error: authError } = await safeAuth();
+  if (authError) return authError;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
-
-  // Credit check (1 credit for re-evaluation — single fast call)
-  const creditCheck = await checkCredits(db, user.id, "quick");
-  if (!creditCheck.hasCredits) {
-    return NextResponse.json(
-      { error: `Insufficient credits. Need ${creditCheck.required}, have ${creditCheck.balance}.` },
-      { status: 402 }
-    );
-  }
 
   const { data: body, error: parseError } = await safeJsonParse(request);
   if (parseError) return parseError;
@@ -69,12 +53,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "spaceId required" }, { status: 400 });
   }
 
-  const isOwner = await verifySpaceOwnership(supabase, spaceId, user.id);
-  if (!isOwner) {
-    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-  }
-
   try {
+    // Credit check (1 credit for re-evaluation — single fast call)
+    const creditCheck = await checkCredits(db, user.id, "quick");
+    if (!creditCheck.hasCredits) {
+      return NextResponse.json(
+        { error: `Insufficient credits. Need ${creditCheck.required}, have ${creditCheck.balance}.` },
+        { status: 402 }
+      );
+    }
+
+    const isOwner = await verifySpaceOwnership(supabase, spaceId, user.id);
+    if (!isOwner) {
+      return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+    }
     // Fetch current space data
     const [entitiesRes, edgesRes, cyclesRes] = await Promise.all([
       db.from("entities").select("*").eq("space_id", spaceId),

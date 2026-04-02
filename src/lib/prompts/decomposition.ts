@@ -399,4 +399,12 @@ After this pass, every fundamental/critical entity should have at least 4 edges 
 10. **Zero orphans.** Every entity must have at least 2 edges. If you can't find 2 relationships, the entity is either under-analyzed or shouldn't be a standalone entity.
 11. **Trace every cycle.** For every constraining edge, trace forward. If it loops back, document it. Classify it. Identify the intervention point.
 12. **Rank by centrality, not by order of appearance.** The most important entity is the one with the most connections and the highest blast radius, not the one mentioned first.
-13. **Flag decomposable entities.** If an entity could be its own context sub-space, say so. This enables the fractal depth property of the system.`;
+13. **Flag decomposable entities.** If an entity could be its own context sub-space, say so. This enables the fractal depth property of the system.
+14. **Apply domain expertise.** You are not a generic text analyzer — you are an expert analyst. For each domain the input touches (startups, AI/ML, SaaS, healthcare, finance, education, etc.), bring in REAL domain knowledge:
+    - Name specific frameworks, models, or patterns that apply (e.g., "this follows the classic cold-start problem in marketplace businesses")
+    - Identify non-obvious risks that someone without domain expertise would miss (e.g., "GPT-4 API costs at scale can destroy SaaS unit economics if not metered")
+    - Reference real competitive dynamics, market patterns, or historical precedents
+    - Flag where the input's assumptions contradict established domain knowledge
+    - Add IMPLICIT entities that the input doesn't mention but that domain expertise reveals are critical (e.g., for a SaaS startup: churn rate, CAC/LTV ratio, product-market fit signals)
+    Do NOT produce generic business advice. Every insight must be specific enough that it could ONLY apply to THIS input, not to any random business.
+15. **Identify the core tension.** Every complex situation has a central tension or tradeoff that everything else orbits around. Find it. Make it an entity. Connect everything to it. This is often the most valuable insight — surfacing the ONE question the person should be thinking about most.`;

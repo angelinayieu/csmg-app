@@ -69,7 +69,7 @@ export const TIERS: Record<AnalysisTier, TierConfig> = {
     ],
     multiSpace: true,
     promptConfig: {
-      entityTarget: { min: 20, max: 35 },
+      entityTarget: { min: 25, max: 50 },
       edgeDensityMultiplier: 2.5,
       reasoningDescription: "Multi-space with critique, weave, and synthesis.",
       synthesis: true,

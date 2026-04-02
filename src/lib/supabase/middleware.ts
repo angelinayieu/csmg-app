@@ -2,50 +2,57 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function updateSession(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
-    request,
-  });
+  try {
+    let supabaseResponse = NextResponse.next({
+      request,
+    });
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value }) =>
+              request.cookies.set(name, value)
+            );
+            supabaseResponse = NextResponse.next({
+              request,
+            });
+            cookiesToSet.forEach(({ name, value, options }) =>
+              supabaseResponse.cookies.set(name, value, options)
+            );
+          },
         },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          supabaseResponse = NextResponse.next({
-            request,
-          });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          );
-        },
-      },
+      }
+    );
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    // Redirect unauthenticated users away from protected routes
+    if (!user && request.nextUrl.pathname.startsWith("/app")) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/auth/login";
+      return NextResponse.redirect(url);
     }
-  );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    // Redirect authenticated users away from auth pages
+    if (user && request.nextUrl.pathname.startsWith("/auth")) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/app";
+      return NextResponse.redirect(url);
+    }
 
-  // Redirect unauthenticated users away from protected routes
-  if (!user && request.nextUrl.pathname.startsWith("/app")) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/auth/login";
-    return NextResponse.redirect(url);
+    return supabaseResponse;
+  } catch (err) {
+    // If Supabase is down, let the request through rather than crashing
+    // Individual API routes will handle auth failures with proper JSON errors
+    console.error("[Middleware] Session update failed:", err);
+    return NextResponse.next({ request });
   }
-
-  // Redirect authenticated users away from auth pages
-  if (user && request.nextUrl.pathname.startsWith("/auth")) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/app";
-    return NextResponse.redirect(url);
-  }
-
-  return supabaseResponse;
 }

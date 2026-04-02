@@ -1,5 +1,46 @@
 import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createClient } from "@/lib/supabase/server";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnySupabase = SupabaseClient<any>;
+
+/**
+ * Safe auth: creates Supabase client + gets user, wrapped in try-catch.
+ * Returns JSON error responses instead of throwing raw exceptions.
+ */
+export async function safeAuth(): Promise<
+  | { supabase: AnySupabase; user: { id: string; email?: string }; error: null }
+  | { supabase: null; user: null; error: NextResponse }
+> {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+
+    if (error || !user) {
+      return {
+        supabase: null,
+        user: null,
+        error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+      };
+    }
+
+    return { supabase: supabase as AnySupabase, user, error: null };
+  } catch (err) {
+    console.error("[safeAuth] Supabase connection failed:", err);
+    return {
+      supabase: null,
+      user: null,
+      error: NextResponse.json(
+        { error: "Service temporarily unavailable. Please try again." },
+        { status: 503 }
+      ),
+    };
+  }
+}
 
 /**
  * Safely parse request JSON body. Returns parsed data or a 400 error response.

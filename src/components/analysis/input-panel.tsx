@@ -79,8 +79,8 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
       type SpaceConfig = { name: string; prefix: string; description: string; key_concepts: string[]; priority: number };
       let spaces: SpaceConfig[];
 
-      if (isMultiSpace && text.length >= 500) {
-        // Deep/Comprehensive with long text: scope map first
+      if (isMultiSpace) {
+        // Deep/Comprehensive: always scope map to get multi-space analysis
         const scopeData = await pipeline.runScope(text);
         if (!scopeData?.spaces?.length) {
           // runScope sets phase to "error" on failure.

@@ -1,22 +1,15 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { llmJSON } from "@/lib/llm";
-import { safeJsonParse, verifySpaceOwnership, verifyMultiSpaceOwnership } from "@/lib/api-helpers";
+import { safeAuth, safeJsonParse, verifyMultiSpaceOwnership } from "@/lib/api-helpers";
 import { SYNTHESIS_SYSTEM_PROMPT } from "@/lib/prompts/synthesis";
 import type { Entity, Edge, Cycle } from "@/types";
 import type { SynthesisData } from "@/types/synthesis";
 
-export const maxDuration = 60;
+export const maxDuration = 120; // Comprehensive tier needs more time
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { supabase, user, error: authError } = await safeAuth();
+  if (authError) return authError;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
@@ -35,10 +28,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Gather data from all spaces
-    const allEntities: Entity[] = [];
-    const allEdges: Edge[] = [];
-    const allCycles: Cycle[] = [];
+    // Gather FULL data from all spaces — synthesis quality depends on input richness
     const spaceSummaries: string[] = [];
 
     for (const spaceId of spaceIds) {
@@ -46,42 +36,88 @@ export async function POST(request: Request) {
         db.from("entities").select("*").eq("space_id", spaceId),
         db.from("edges").select("*").eq("space_id", spaceId),
         db.from("cycles").select("*").eq("space_id", spaceId),
-        db.from("spaces").select("name, description").eq("id", spaceId).single(),
+        db.from("spaces").select("name, description, synthesis_data").eq("id", spaceId).single(),
       ]);
 
       const entities = (entRes.data ?? []) as Entity[];
       const edges = (edgRes.data ?? []) as Edge[];
       const cycles = (cycRes.data ?? []) as Cycle[];
 
-      allEntities.push(...entities);
-      allEdges.push(...edges);
-      allCycles.push(...cycles);
-
       // Build UUID → entity_id map for this space
       const uuidToId = new Map<string, string>();
       for (const e of entities) uuidToId.set(e.id, e.entity_id);
 
-      const leveragePoints = entities.filter((e) => e.is_leverage_point).slice(0, 3);
-      const riskPoints = entities.filter((e) => e.is_risk_point).slice(0, 3);
-      const bottleneck = entities.find((e) => e.is_master_bottleneck);
+      // ── FULL entity data (not just names) ──
+      const entityLines = entities.map((e) => {
+        const flags: string[] = [];
+        if (e.is_leverage_point) flags.push("LEVERAGE");
+        if (e.is_risk_point) flags.push("RISK");
+        if (e.is_master_bottleneck) flags.push("MASTER_BOTTLENECK");
+        if (e.is_shared_variable) flags.push("SHARED_VAR");
+        const flagStr = flags.length > 0 ? ` [${flags.join(", ")}]` : "";
+        return `  ${e.entity_id}: ${e.name} (${e.entity_category}, ${e.importance ?? "moderate"}, conf=${e.confidence})${flagStr}\n    ${e.description ?? "no description"}`;
+      });
+
+      // ── ALL edges with full attributes ──
+      const edgeLines = edges.map((e) => {
+        const src = uuidToId.get(e.source_entity_id) ?? "?";
+        const tgt = uuidToId.get(e.target_entity_id) ?? "?";
+        const dyn = e.dynamics ? `, dynamics=${e.dynamics}` : "";
+        const cond = e.conditions ? `, when: "${e.conditions}"` : "";
+        const trade = e.is_tradeoff ? ", TRADEOFF" : "";
+        return `  ${src} →[${e.relationship_type}]→ ${tgt} (${e.dimension}, str=${e.strength}, pol=${e.polarity}${dyn}${trade}${cond})`;
+      });
+
+      // ── Full cycle data ──
+      const cycleLines = cycles.map((c) => {
+        const eids = c.entity_ids?.join(" → ") ?? "?";
+        const growth = c.growth_type ? `, growth=${c.growth_type}` : "";
+        const time = c.cycle_time ? `, cycle_time=${c.cycle_time}` : "";
+        const mult = c.estimated_multiplier ? `, multiplier=${c.estimated_multiplier}` : "";
+        return `  ${c.name ?? c.cycle_id} [${c.classification}]: ${eids}${growth}${time}${mult}\n    ${c.description ?? ""}`;
+      });
+
+      // ── Structuring metadata (leverage, risk, open questions) from decompose step ──
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const meta = (spaceRes.data as any)?.synthesis_data as Record<string, unknown> | null;
+      let metaSection = "";
+      if (meta && typeof meta === "object") {
+        const parts: string[] = [];
+        if (Array.isArray(meta.leverage_points) && meta.leverage_points.length > 0) {
+          parts.push(`LEVERAGE POINTS:\n${JSON.stringify(meta.leverage_points, null, 1)}`);
+        }
+        if (Array.isArray(meta.risk_points) && meta.risk_points.length > 0) {
+          parts.push(`RISK POINTS:\n${JSON.stringify(meta.risk_points, null, 1)}`);
+        }
+        if (meta.master_bottleneck) {
+          parts.push(`MASTER BOTTLENECK:\n${JSON.stringify(meta.master_bottleneck, null, 1)}`);
+        }
+        if (Array.isArray(meta.open_questions) && meta.open_questions.length > 0) {
+          parts.push(`OPEN QUESTIONS:\n${JSON.stringify(meta.open_questions, null, 1)}`);
+        }
+        if (Array.isArray(meta.contradictions) && meta.contradictions.length > 0) {
+          parts.push(`CONTRADICTIONS:\n${JSON.stringify(meta.contradictions, null, 1)}`);
+        }
+        if (parts.length > 0) metaSection = "\n\n" + parts.join("\n\n");
+      }
 
       spaceSummaries.push(
-        `Space: ${spaceRes.data?.name ?? "Unknown"}\n` +
-        `Entities: ${entities.length}, Edges: ${edges.length}, Cycles: ${cycles.length}\n` +
-        `Bottleneck: ${bottleneck ? `${bottleneck.entity_id} ${bottleneck.name}` : "none"}\n` +
-        `Leverage: ${leveragePoints.map((e) => `${e.entity_id} ${e.name}`).join(", ") || "none"}\n` +
-        `Risks: ${riskPoints.map((e) => `${e.entity_id} ${e.name}`).join(", ") || "none"}\n` +
-        `Cycles: ${cycles.map((c) => `${c.name} [${c.classification}]`).join(", ") || "none"}\n` +
-        `Edges: ${edges.slice(0, 20).map((e) => `${uuidToId.get(e.source_entity_id) ?? "?"} → ${uuidToId.get(e.target_entity_id) ?? "?"} [${e.relationship_type}]`).join(", ")}`
+        `=== SPACE: ${spaceRes.data?.name ?? "Unknown"} ===\n` +
+        `${spaceRes.data?.description ?? ""}\n` +
+        `Stats: ${entities.length} entities, ${edges.length} edges, ${cycles.length} cycles\n\n` +
+        `ENTITIES (${entities.length}):\n${entityLines.join("\n")}\n\n` +
+        `RELATIONSHIPS (${edges.length}):\n${edgeLines.join("\n")}\n\n` +
+        `FEEDBACK CYCLES (${cycles.length}):\n${cycleLines.join("\n")}` +
+        metaSection
       );
     }
 
-    const contextInput = spaceSummaries.join("\n\n---\n\n");
+    const contextInput = spaceSummaries.join("\n\n" + "─".repeat(60) + "\n\n");
 
     const synthesis = await llmJSON<SynthesisData>({
       system: SYNTHESIS_SYSTEM_PROMPT,
-      user: `Generate a strategic synthesis from this analysis:\n\n${contextInput}`,
-      maxTokens: 10000,
+      user: `Generate a strategic synthesis from this complete analysis data:\n\n${contextInput}`,
+      maxTokens: 12000,
       temperature: 0.5,
     });
 
@@ -92,12 +128,14 @@ export async function POST(request: Request) {
       updated_at: new Date().toISOString(),
     }).eq("id", rootSpaceId);
 
-    // Store action items if present
+    // Store action items if present (batch for speed)
     if (synthesis.action_plan?.paths) {
+      const actionRows: Array<Record<string, unknown>> = [];
+      let sortOrder = 0;
       for (const path of synthesis.action_plan.paths) {
         for (const tf of path.timeframes ?? []) {
           for (const action of tf.actions ?? []) {
-            await db.from("action_items").insert({
+            actionRows.push({
               space_id: rootSpaceId,
               timeframe: tf.label === "Today" ? "today"
                 : tf.label === "This week" ? "this_week"
@@ -107,9 +145,13 @@ export async function POST(request: Request) {
               action_text: action.text,
               why_text: action.why ?? null,
               tags: action.tags ?? [],
-            }).then(() => {}).catch(() => {}); // Non-critical
+              sort_order: sortOrder++,
+            });
           }
         }
+      }
+      if (actionRows.length > 0) {
+        await db.from("action_items").insert(actionRows).then(() => {}, () => {});
       }
     }
 

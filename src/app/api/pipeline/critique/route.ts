@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { llmJSON } from "@/lib/llm";
-import { verifySpaceOwnership } from "@/lib/api-helpers";
+import { safeAuth, verifySpaceOwnership } from "@/lib/api-helpers";
 import { sanitizeEdge, sanitizeCycle, resilientInsert, EDGE_DIMENSIONS } from "@/lib/sanitize";
 import type { Entity, Edge, Cycle } from "@/types";
 
-export const maxDuration = 30;
+export const maxDuration = 90;
 
 interface CritiqueResult {
   new_edges: Array<{
@@ -31,14 +30,8 @@ interface CritiqueResult {
 }
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { supabase, user, error: authError } = await safeAuth();
+  if (authError) return authError;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;

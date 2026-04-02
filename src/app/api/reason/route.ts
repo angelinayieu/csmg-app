@@ -1,22 +1,18 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { llmJSON } from "@/lib/llm";
 import { REASONING_PROMPTS } from "@/lib/prompts/reasoning";
-import { safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers";
+import { safeAuth, safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers";
+
+export const maxDuration = 90;
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { supabase, user, error: authError } = await safeAuth();
+  if (authError) return authError;
 
   const { data: body, error: parseError } = await safeJsonParse(request);
-  if (parseError || !body) {
-    return NextResponse.json({ error: parseError ?? "Invalid JSON" }, { status: 400 });
+  if (parseError) return parseError;
+  if (!body) {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
   const { spaceId, operation, params } = body as {
     spaceId: string;
@@ -84,12 +80,20 @@ export async function POST(request: Request) {
     // Build the prompt
     let prompt: string;
     switch (operation) {
-      case "cascade":
-        if (!params?.entityId) {
-          return NextResponse.json({ error: "entityId required for cascade" }, { status: 400 });
+      case "cascade": {
+        let entityId = params?.entityId;
+        // If no entityId, auto-select the highest-centrality or first leverage point
+        if (!entityId && entities && entities.length > 0) {
+          const sorted = [...entities].sort((a: any, b: any) => (a.centrality_rank ?? 999) - (b.centrality_rank ?? 999));
+          const target = sorted.find((e: any) => e.is_leverage_point) ?? sorted[0];
+          entityId = target?.entity_id;
         }
-        prompt = REASONING_PROMPTS.cascade(params.entityId);
+        if (!entityId) {
+          return NextResponse.json({ error: "No entities found for cascade analysis" }, { status: 400 });
+        }
+        prompt = REASONING_PROMPTS.cascade(entityId);
         break;
+      }
       case "path":
         if (!params?.fromId || !params?.toId) {
           return NextResponse.json({ error: "fromId and toId required for path" }, { status: 400 });
