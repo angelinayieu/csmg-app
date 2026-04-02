@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { llmJSON } from "@/lib/llm";
+import { safeJsonParse } from "@/lib/api-helpers";
 
 export const maxDuration = 30;
 
@@ -16,6 +17,7 @@ interface ScopeResult {
 }
 
 export async function POST(request: Request) {
+  const startTime = Date.now();
   const supabase = await createClient();
   const {
     data: { user },
@@ -25,7 +27,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { text } = await request.json();
+  const { data: body, error: parseError } = await safeJsonParse(request);
+  if (parseError || !body) {
+    return NextResponse.json({ error: parseError ?? "Invalid JSON" }, { status: 400 });
+  }
+  const { text } = body;
   if (!text || text.length < 20) {
     return NextResponse.json({ error: "Text too short" }, { status: 400 });
   }
@@ -48,13 +54,18 @@ export async function POST(request: Request) {
   }
 
   try {
+    
+    // Truncate very long texts to reduce LLM processing time
+    const inputForLLM = text.length > 8000 ? text.slice(0, 8000) + "\n[...text truncated...]" : text;
+    
     const scope = await llmJSON<ScopeResult>({
-      system: `You are mapping the analytical scope of a complex input. Identify 3-6 distinct analytical areas that together cover the COMPLETE scope. Each area should be a self-contained domain.
+      system: `You are mapping the analytical scope of a complex input. Identify 3-4 distinct analytical areas (not more) that together cover the COMPLETE scope. Each area should be a self-contained domain. PRIORITIZE SPEED — favor broad areas over fine-grained ones.
 
 Rules:
 - Every concept in the input must belong to at least one area
 - Areas should be roughly equal in complexity
 - Name areas by WHAT THEY CONTAIN, not analytical category (e.g., "The product" not "Technical analysis")
+- Return 3-4 areas max to save time
 - Include a priority order
 
 Return ONLY valid JSON:
@@ -70,17 +81,23 @@ Return ONLY valid JSON:
   ],
   "summary": "One sentence describing the overall situation"
 }`,
-      user: text,
-      maxTokens: 2000,
-      temperature: 0.3,
+      user: inputForLLM,
+      maxTokens: 1500,
+      temperature: 0.2,
       model: "gpt-4o-mini",
     });
 
-    return NextResponse.json(scope);
+    const elapsed = Date.now() - startTime;
+    
+    return NextResponse.json({
+      ...scope,
+      _timing: { scopeMapMs: elapsed }
+    });
   } catch (err) {
-    console.error("Scope mapping error:", err);
+    const elapsed = Date.now() - startTime;
+    console.error(`[Scope] Failed after ${elapsed}ms:`, err);
     return NextResponse.json(
-      { error: "Scope mapping failed" },
+      { error: "Scope mapping failed", details: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 }
     );
   }

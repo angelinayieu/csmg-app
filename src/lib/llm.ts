@@ -1,4 +1,6 @@
 import OpenAI from "openai";
+import { ValidationError } from "@/lib/validation/llm-validators";
+import { RecoveryStrategy } from "@/lib/validation/error-recovery";
 
 // Active provider — change this to switch between providers
 const PROVIDER = "openai" as const;
@@ -69,6 +71,7 @@ export async function* llmStream(opts: {
 /**
  * Generate JSON from LLM. Attempts to parse the response.
  * Falls back to extracting JSON from markdown fences.
+ * Validates output against schema if provided.
  */
 export async function llmJSON<T = unknown>(opts: {
   system: string;
@@ -76,6 +79,8 @@ export async function llmJSON<T = unknown>(opts: {
   maxTokens?: number;
   temperature?: number;
   model?: string;
+  validator?: (data: unknown) => T;
+  fallback?: T;
 }): Promise<T> {
   const raw = await llmGenerate({
     ...opts,
@@ -83,20 +88,66 @@ export async function llmJSON<T = unknown>(opts: {
   });
 
   // Try direct parse
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as T;
+    parsed = JSON.parse(raw);
   } catch {
     // Try extracting from markdown code fences
     const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (match?.[1]) {
-      return JSON.parse(match[1].trim()) as T;
+      try {
+        parsed = JSON.parse(match[1].trim());
+      } catch {
+        // Try finding JSON object/array boundaries
+        const start = raw.indexOf("{");
+        const end = raw.lastIndexOf("}");
+        if (start !== -1 && end !== -1 && end > start) {
+          try {
+            parsed = JSON.parse(raw.slice(start, end + 1));
+          } catch {
+            throw new Error(
+              `Failed to parse LLM response as JSON. Raw: ${raw.slice(0, 200)}...`
+            );
+          }
+        } else {
+          throw new Error(
+            `Failed to parse LLM response as JSON. Raw: ${raw.slice(0, 200)}...`
+          );
+        }
+      }
+    } else {
+      throw new Error(
+        `Failed to parse LLM response as JSON. Raw: ${raw.slice(0, 200)}...`
+      );
     }
-    // Try finding JSON object/array boundaries
-    const start = raw.indexOf("{");
-    const end = raw.lastIndexOf("}");
-    if (start !== -1 && end !== -1 && end > start) {
-      return JSON.parse(raw.slice(start, end + 1)) as T;
-    }
-    throw new Error(`Failed to parse LLM response as JSON. Raw: ${raw.slice(0, 200)}...`);
   }
+
+  // Validate if schema provided
+  if (opts.validator) {
+    try {
+      return opts.validator(parsed);
+    } catch (validationErr) {
+      if (validationErr instanceof ValidationError) {
+        // Attempt recovery
+        const recovered = RecoveryStrategy.recover(
+          parsed,
+          opts.validator,
+          opts.fallback || ({} as T)
+        );
+
+        if (!recovered.recovered && recovered.errors.length > 0) {
+          console.error("Validation failed, recovery unsuccessful:", {
+            path: (validationErr as ValidationError).path,
+            reason: (validationErr as ValidationError).reason,
+            recoveryErrors: recovered.errors,
+          });
+        }
+
+        return recovered.data;
+      }
+      throw validationErr;
+    }
+  }
+
+  return parsed as T;
 }

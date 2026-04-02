@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 
 export type ReasoningOp =
   | "centrality"
@@ -17,6 +17,7 @@ export function useReasoning() {
   const [error, setError] = useState<string | null>(null);
   const [activeOp, setActiveOp] = useState<ReasoningOp | null>(null);
   const [result, setResult] = useState<ReasoningResult | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const runReasoning = useCallback(
     async (
@@ -29,11 +30,14 @@ export function useReasoning() {
       setActiveOp(operation);
       setResult(null);
 
+      abortRef.current = new AbortController();
+
       try {
         const response = await fetch("/api/reason", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ spaceId, operation, params }),
+          signal: abortRef.current.signal,
         });
 
         if (!response.ok) {
@@ -44,6 +48,7 @@ export function useReasoning() {
         const data = await response.json();
         setResult(data.result);
       } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") return;
         setError(err instanceof Error ? err.message : "Reasoning failed");
       } finally {
         setLoading(false);
@@ -53,6 +58,7 @@ export function useReasoning() {
   );
 
   const clearResults = useCallback(() => {
+    if (abortRef.current) abortRef.current.abort();
     setActiveOp(null);
     setResult(null);
     setError(null);

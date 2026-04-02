@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { llmJSON } from "@/lib/llm";
+import { safeJsonParse, verifySpaceOwnership, verifyMultiSpaceOwnership } from "@/lib/api-helpers";
 import type { Entity, Edge, Cycle } from "@/types";
 
 export const maxDuration = 30;
@@ -45,10 +46,18 @@ export async function POST(request: Request) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
-  const { spaceId } = await request.json();
+  const { data: body, error: parseError } = await safeJsonParse(request);
+  if (parseError) return parseError;
+
+  const { spaceId } = body;
 
   if (!spaceId) {
     return NextResponse.json({ error: "spaceId required" }, { status: 400 });
+  }
+
+  const isOwner = await verifySpaceOwnership(supabase, spaceId, user.id);
+  if (!isOwner) {
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
 
   try {

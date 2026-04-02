@@ -56,6 +56,7 @@ export function StrategicMetaGraph({
   const [transform, setTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity);
   const simulationRef = useRef<d3.Simulation<GraphNode, GraphLink> | null>(null);
   const dragRef = useRef<{ nodeId: string; startX: number; startY: number } | null>(null);
+  const rafRef = useRef<number>(0);
 
   const navigateToSpace = useCallback(
     (spaceId: string) => router.push(`/app/space/${spaceId}`),
@@ -171,12 +172,16 @@ export function StrategicMetaGraph({
         node.x = Math.max(padding, Math.min(width - padding, node.x ?? width / 2));
         node.y = Math.max(padding, Math.min(height - padding, node.y ?? height / 2));
       }
-      setNodes([...simNodes]);
-      setLinks([...simLinks]);
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        setNodes([...simNodes]);
+        setLinks([...simLinks]);
+      });
     });
 
     return () => {
       simulation.stop();
+      cancelAnimationFrame(rafRef.current);
       svg.on(".zoom", null);
     };
   }, [spaceSummaries, autoBridges, manualBridges]);

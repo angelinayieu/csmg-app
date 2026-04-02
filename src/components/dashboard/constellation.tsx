@@ -29,6 +29,7 @@ export function Constellation({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [transform, setTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity);
   const dimsRef = useRef({ width: 600, height: 280 });
+  const rafRef = useRef<number>(0);
 
   const navigateToSpace = useCallback(
     (spaceId: string) => router.push(`/app/space/${spaceId}`),
@@ -100,12 +101,16 @@ export function Constellation({
         node.x = Math.max(padding, Math.min(width - padding, node.x ?? width / 2));
         node.y = Math.max(padding, Math.min(height - padding, node.y ?? height / 2));
       }
-      setNodes([...simNodes]);
-      setLinks([...simLinks]);
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        setNodes([...simNodes]);
+        setLinks([...simLinks]);
+      });
     });
 
     return () => {
       simulation.stop();
+      cancelAnimationFrame(rafRef.current);
       svg.on(".zoom", null);
     };
   }, [spaces, bridges]);

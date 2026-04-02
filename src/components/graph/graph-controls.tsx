@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { edgeDimensionStyles } from "@/lib/design-tokens";
-import { ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
+import { Maximize2 } from "lucide-react";
 
 interface GraphControlsProps {
   visibleDimensions: Set<string>;

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Plus, GitBranch, Network } from "lucide-react";
+import { LayoutDashboard, Plus, GitBranch, Network, Coins } from "lucide-react";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { SpaceDetailCard } from "@/components/space/space-detail-card";
 import { useAppStore } from "@/stores/store-provider";
@@ -96,13 +96,14 @@ export function SpaceSidebar({ userEmail, creditBalance = 0 }: { userEmail: stri
       <div className="border-t border-gray-200 px-4 py-3">
         <div className="mb-2 flex items-center justify-between">
           <p className="truncate text-xs text-gray-500">{userEmail}</p>
-          <div className="flex items-center gap-1 rounded-full bg-interaxis-50 px-2 py-0.5">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-interaxis-600">
-              <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.5" />
-              <circle cx="6" cy="6" r="2" fill="currentColor" />
-            </svg>
-            <span className="text-[10px] font-semibold text-interaxis-700">{creditBalance}</span>
-          </div>
+          <Link
+            href="/app/credits"
+            className="flex items-center gap-1 rounded-full bg-interaxis-50 px-2 py-0.5 transition-colors hover:bg-interaxis-100"
+            title="Buy credits"
+          >
+            <Coins className="h-3 w-3 text-interaxis-600" />
+            <span className="text-[10px] font-semibold text-interaxis-700">{creditBalance} cr</span>
+          </Link>
         </div>
         <LogoutButton />
       </div>

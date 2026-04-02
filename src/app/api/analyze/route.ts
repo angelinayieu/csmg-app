@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { llmStream, llmJSON, llmGenerate } from "@/lib/llm";
+import { llmStream, llmJSON } from "@/lib/llm";
 import { DECOMPOSITION_SYSTEM_PROMPT } from "@/lib/prompts/decomposition";
 import { STRUCTURING_SYSTEM_PROMPT } from "@/lib/prompts/structuring";
 import { SYNTHESIS_SYSTEM_PROMPT } from "@/lib/prompts/synthesis";
@@ -220,11 +220,9 @@ export async function POST(request: Request) {
             }
           }
 
-          console.log(`[Analyze] Entity map built: ${entityIdMap.size} of ${entityInserts.length} entities`);
 
           // ── Insert edges INDIVIDUALLY (one bad edge won't kill the rest) ──
           const rawEdgeCount = (parsed.edges ?? []).length;
-          console.log(`[Analyze] LLM produced ${rawEdgeCount} edges. Entity map has ${entityIdMap.size} entries.`);
           let edgesInserted = 0;
           let edgesSkipped = 0;
           let edgesFailed = 0;
@@ -302,7 +300,6 @@ export async function POST(request: Request) {
             }
           }
 
-          console.log(`[Analyze] Edges: ${edgesInserted} inserted, ${edgesSkipped} skipped (no entity match), ${edgesFailed} failed`);
 
           // Insert cycles (with v2 intervention_description)
           const cycleInserts = (parsed.cycles ?? []).map((c) => ({
@@ -536,7 +533,6 @@ Produce the full strategic synthesis JSON.`;
 
         // ── Deduct credits ──
         const { newBalance } = await deductCredits(db, user.id, "quick", spaceId);
-        console.log(`Credits deducted: 1 (quick). New balance: ${newBalance}`);
 
         // ── Log changelog ──
         await db.from("space_changelog").insert({

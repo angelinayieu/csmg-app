@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import type { WeaveBridge, WeaveContradiction } from "@/types/weave";
 
 interface WeaveState {
@@ -19,6 +19,7 @@ export function useWeave() {
     contradictions: [],
     bridgesSaved: 0,
   });
+  const abortRef = useRef<AbortController | null>(null);
 
   const weave = useCallback(async (spaceAId: string, spaceBId: string) => {
     setState({
@@ -29,11 +30,14 @@ export function useWeave() {
       bridgesSaved: 0,
     });
 
+    abortRef.current = new AbortController();
+
     try {
       const response = await fetch("/api/weave", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ spaceAId, spaceBId }),
+        signal: abortRef.current.signal,
       });
 
       if (!response.ok) {
@@ -50,6 +54,7 @@ export function useWeave() {
         bridgesSaved: data.bridgesSaved ?? 0,
       });
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
       setState((prev) => ({
         ...prev,
         loading: false,
@@ -59,6 +64,7 @@ export function useWeave() {
   }, []);
 
   const reset = useCallback(() => {
+    if (abortRef.current) abortRef.current.abort();
     setState({
       loading: false,
       error: null,

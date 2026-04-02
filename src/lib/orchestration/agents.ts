@@ -9,6 +9,13 @@ import { META_SYNTHESIZER_PROMPT } from "@/lib/prompts/meta-synthesizer";
 import { DOMAIN_EXPERT_PROMPT } from "@/lib/prompts/domain-expert";
 import { BRIDGE_DISCOVERY_PROMPT } from "@/lib/prompts/bridge-discovery";
 import { REASONING_PROMPTS } from "@/lib/prompts/reasoning";
+import { validateStructuredDecomposition } from "@/lib/validation/llm-validators";
+import {
+  validateStructuralIntegrity,
+  autoCorrectStructuralIssues,
+  validateConsistency,
+  createFallbackDecomposition,
+} from "@/lib/validation/error-recovery";
 import type { ScopeResult, CritiqueResult, DomainExpertResult } from "@/types/orchestration";
 import type { StructuredDecomposition } from "@/types/analysis";
 
@@ -60,12 +67,29 @@ Target: 15-25 entities, 30-50 edges, at least 3 feedback loops.
 export async function runStructurer(
   rawDecomposition: string
 ): Promise<StructuredDecomposition> {
-  return llmJSON<StructuredDecomposition>({
+  const result = await llmJSON<StructuredDecomposition>({
     system: STRUCTURING_SYSTEM_PROMPT,
     user: `Convert this analysis to JSON:\n\n${rawDecomposition}`,
     maxTokens: 16000,
     temperature: 0.3,
+    validator: validateStructuredDecomposition,
+    fallback: createFallbackDecomposition("raw", "Raw Analysis", rawDecomposition.slice(0, 200)),
   });
+
+  // Validate structural integrity
+  const integrityCheck = validateStructuralIntegrity(result);
+  if (!integrityCheck.isValid) {
+    console.warn("Structural integrity issues detected:", integrityCheck.issues);
+    autoCorrectStructuralIssues(result);
+  }
+
+  // Validate consistency of counts
+  const consistencyCheck = validateConsistency(result);
+  if (!consistencyCheck.isConsistent) {
+    console.warn("Consistency issues corrected:", consistencyCheck.corrections);
+  }
+
+  return result;
 }
 
 // ─── Agent 3: Critic ───
@@ -133,13 +157,25 @@ ${JSON.stringify(original, null, 2)}
 STRUCTURAL CRITIQUE:
 ${JSON.stringify(critique, null, 2)}`;
 
-  return llmJSON<StructuredDecomposition>({
+  const result = await llmJSON<StructuredDecomposition>({
     system: AUGMENTER_SYSTEM_PROMPT,
     user: input,
     maxTokens: 16000,
     temperature: 0.4,
     model: "gpt-4o-mini", // cheaper for augmentation
+    validator: validateStructuredDecomposition,
+    fallback: original, // Fall back to original if augmentation fails
   });
+
+  // Validate and correct structural issues
+  const integrityCheck = validateStructuralIntegrity(result);
+  if (!integrityCheck.isValid) {
+    console.warn("Augmentation created structural issues:", integrityCheck.issues);
+    autoCorrectStructuralIssues(result);
+  }
+
+  validateConsistency(result);
+  return result;
 }
 
 // ─── Agent 5: Weaver ───

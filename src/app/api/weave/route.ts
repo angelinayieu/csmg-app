@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { llmJSON } from "@/lib/llm";
 import { WEAVING_SYSTEM_PROMPT } from "@/lib/prompts/weaving";
 import type { WeaveResponse } from "@/types/weave";
+import { verifyMultiSpaceOwnership } from "@/lib/api-helpers";
 
 export const maxDuration = 60;
 
@@ -29,6 +30,11 @@ export async function POST(request: Request) {
       { error: "Two different space IDs are required" },
       { status: 400 }
     );
+  }
+
+  const isOwner = await verifyMultiSpaceOwnership(supabase, [spaceAId, spaceBId], user.id);
+  if (!isOwner) {
+    return Response.json({ error: "Not authorized" }, { status: 403 });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

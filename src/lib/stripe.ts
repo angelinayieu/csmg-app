@@ -1,0 +1,42 @@
+import Stripe from "stripe";
+
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error("STRIPE_SECRET_KEY is not set");
+}
+
+export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2026-03-25.dahlia",
+});
+
+export const CREDIT_PACKS = [
+  {
+    id: "pack_10",
+    name: "Starter",
+    credits: 10,
+    price: 500, // cents
+    priceLabel: "$5",
+    popular: false,
+  },
+  {
+    id: "pack_30",
+    name: "Explorer",
+    credits: 30,
+    price: 1200,
+    priceLabel: "$12",
+    popular: true,
+  },
+  {
+    id: "pack_100",
+    name: "Pro",
+    credits: 100,
+    price: 3500,
+    priceLabel: "$35",
+    popular: false,
+  },
+] as const;
+
+export type CreditPackId = (typeof CREDIT_PACKS)[number]["id"];
+
+export function getPackById(id: string) {
+  return CREDIT_PACKS.find((p) => p.id === id);
+}

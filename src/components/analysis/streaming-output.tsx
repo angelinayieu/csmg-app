@@ -16,6 +16,18 @@ const phaseConfig: Record<
   string,
   { label: string; icon: React.ReactNode; color: string; bg: string }
 > = {
+  scope: {
+    label: "Mapping scope...",
+    icon: <Loader2 className="h-4 w-4 animate-spin" />,
+    color: "text-blue-600",
+    bg: "bg-blue-50 border-blue-200",
+  },
+  decomposing: {
+    label: "Decomposing...",
+    icon: <Loader2 className="h-4 w-4 animate-spin" />,
+    color: "text-cyan-600",
+    bg: "bg-cyan-50 border-cyan-200",
+  },
   streaming: {
     label: "Analyzing...",
     icon: <Loader2 className="h-4 w-4 animate-spin" />,

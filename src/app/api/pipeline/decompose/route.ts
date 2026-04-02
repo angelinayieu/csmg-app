@@ -4,6 +4,7 @@ import { llmGenerate, llmJSON } from "@/lib/llm";
 import { DECOMPOSITION_SYSTEM_PROMPT } from "@/lib/prompts/decomposition";
 import { STRUCTURING_SYSTEM_PROMPT } from "@/lib/prompts/structuring";
 import type { StructuredDecomposition } from "@/types/analysis";
+import { safeJsonParse } from "@/lib/api-helpers";
 
 export const maxDuration = 60;
 
@@ -26,7 +27,11 @@ export async function POST(request: Request) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
-  const { text, spaceConfig, siblingContext } = await request.json();
+  const { data: body, error: parseError } = await safeJsonParse(request);
+  if (parseError || !body) {
+    return NextResponse.json({ error: parseError ?? "Invalid JSON" }, { status: 400 });
+  }
+  const { text, spaceConfig, siblingContext } = body;
 
   if (!text) {
     return NextResponse.json({ error: "Text required" }, { status: 400 });
@@ -142,7 +147,6 @@ ${text}`;
       }
     }
 
-    console.log(`[Pipeline/Decompose] Entity map: ${entityIdMap.size}/${entityInserts.length}`);
 
     // Insert edges individually
     let edgesInserted = 0;
@@ -208,7 +212,6 @@ ${text}`;
       details: { entity_count: entityIdMap.size, edge_count: edgesInserted, cycle_count: cyclesInserted },
     }).then(() => {}).catch(() => {}); // Non-critical
 
-    console.log(`[Pipeline/Decompose] Complete: ${entityIdMap.size} entities, ${edgesInserted} edges, ${cyclesInserted} cycles`);
 
     return NextResponse.json({
       spaceId,

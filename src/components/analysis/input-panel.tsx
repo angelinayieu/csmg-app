@@ -101,14 +101,28 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
     }
 
     setScopeLoading(true);
-    const result = await pipeline.runScope(text);
-    if (result?.spaces) {
-      const spaceOptions: SpaceOption[] = result.spaces.map((s: SpaceOption, i: number) => ({
-        ...s,
-        selected: i < 3, // Auto-select top 3 by priority
-      }));
-      setConfig((prev) => ({ ...prev, spaces: spaceOptions }));
-      setScopeReady(true);
+    const startTime = performance.now();
+    
+    try {
+      const result = await Promise.race([
+        pipeline.runScope(text),
+        new Promise<null>((_, reject) => 
+          setTimeout(() => reject(new Error("Scope mapping timeout after 30s")), 30000)
+        ),
+      ]);
+      
+      const elapsed = performance.now() - startTime;
+      
+      if (result?.spaces) {
+        const spaceOptions: SpaceOption[] = result.spaces.map((s: SpaceOption, i: number) => ({
+          ...s,
+          selected: i < 3, // Auto-select top 3 by priority
+        }));
+        setConfig((prev) => ({ ...prev, spaces: spaceOptions }));
+        setScopeReady(true);
+      }
+    } catch (err) {
+      console.error("[Client] Scope mapping failed:", err);
     }
     setScopeLoading(false);
   }, [text, pipeline]);

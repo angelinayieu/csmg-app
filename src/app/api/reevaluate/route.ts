@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { checkCredits, deductCredits } from "@/lib/credits";
 import { llmJSON } from "@/lib/llm";
+import { safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers";
 import type { Entity, Edge, Cycle } from "@/types";
 
 export const maxDuration = 120;
@@ -56,9 +57,16 @@ export async function POST(request: Request) {
     );
   }
 
-  const { spaceId } = await request.json();
+  const { data: body, error: parseError } = await safeJsonParse(request);
+  if (parseError) return parseError;
+  const { spaceId } = body;
   if (!spaceId) {
     return NextResponse.json({ error: "spaceId required" }, { status: 400 });
+  }
+
+  const isOwner = await verifySpaceOwnership(supabase, spaceId, user.id);
+  if (!isOwner) {
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
 
   try {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { llmGenerate } from "@/lib/llm";
+import { safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -12,11 +13,33 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await request.json();
-  const { edgeId, sourceName, targetName, relationshipType, dimension, spaceContext } = body;
+  const { data: body, error: parseError } = await safeJsonParse(request);
+  if (parseError) return parseError;
+  const { edgeId, sourceName, targetName, relationshipType, dimension, spaceContext, spaceId } = body;
 
   if (!sourceName || !targetName || !relationshipType) {
     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
+  }
+
+  // Ownership check: use spaceId if provided, otherwise look up edge's space
+  if (spaceId) {
+    const isOwner = await verifySpaceOwnership(supabase, spaceId, user.id);
+    if (!isOwner) {
+      return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+    }
+  } else if (edgeId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: edge } = await (supabase as any)
+      .from("edges")
+      .select("space_id")
+      .eq("id", edgeId)
+      .single();
+    if (edge?.space_id) {
+      const isOwner = await verifySpaceOwnership(supabase, edge.space_id, user.id);
+      if (!isOwner) {
+        return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+      }
+    }
   }
 
   try {

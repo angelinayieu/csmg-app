@@ -43,6 +43,8 @@ export function SpaceGraph({
   const [clickedEdge, setClickedEdge] = useState<{ edge: Edge; position: { x: number; y: number } } | null>(null);
   const [transform, setTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity);
   const simulationRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null);
+  const rafRef = useRef<number>(0);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
 
   // Build entity UUID → SimNode lookup
   const entityMap = useRef(new Map<string, SimNode>());
@@ -105,8 +107,11 @@ export function SpaceGraph({
       .force("y", d3.forceY(height / 2).strength(0.05));
 
     simulation.on("tick", () => {
-      setNodes([...simNodes]);
-      setLinks([...simLinks]);
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        setNodes([...simNodes]);
+        setLinks([...simLinks]);
+      });
     });
 
     // Run simulation for a bit then slow down
@@ -115,6 +120,7 @@ export function SpaceGraph({
 
     return () => {
       simulation.stop();
+      cancelAnimationFrame(rafRef.current);
     };
   }, [entities, edges, visibleDimensions]);
 
@@ -172,9 +178,21 @@ export function SpaceGraph({
 
       window.addEventListener("mousemove", handleMove);
       window.addEventListener("mouseup", handleUp);
+
+      dragCleanupRef.current = () => {
+        window.removeEventListener("mousemove", handleMove);
+        window.removeEventListener("mouseup", handleUp);
+      };
     },
     [transform.k]
   );
+
+  // Clean up drag listeners on unmount
+  useEffect(() => {
+    return () => {
+      dragCleanupRef.current?.();
+    };
+  }, []);
 
   // Compute neighbor set for hover highlighting
   const neighborIds = new Set<string>();

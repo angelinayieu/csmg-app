@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 
 export interface AnalysisConfig {
   selectedSpaces: Array<{
@@ -46,21 +46,27 @@ export function usePipeline() {
     spaces: AnalysisConfig["selectedSpaces"];
     summary: string;
   } | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const runScope = useCallback(async (text: string) => {
     setPhase("scope");
     setError(null);
+
+    abortRef.current = new AbortController();
+
     try {
       const res = await fetch("/api/pipeline/scope", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
+        signal: abortRef.current.signal,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setScopeResult(data);
       return data;
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return null;
       setError(err instanceof Error ? err.message : "Scope mapping failed");
       setPhase("error");
       return null;
@@ -70,6 +76,8 @@ export function usePipeline() {
   const runPipeline = useCallback(
     async (text: string, config: AnalysisConfig) => {
       setError(null);
+      abortRef.current = new AbortController();
+      const signal = abortRef.current.signal;
       const selectedSpaces = config.selectedSpaces;
 
       // Initialize space progress
@@ -113,6 +121,7 @@ export function usePipeline() {
               siblingContext:
                 selectedSpaces.length > 1 ? siblingContexts[i] : null,
             }),
+            signal,
           });
 
           const data = await res.json();
@@ -138,6 +147,7 @@ export function usePipeline() {
 
         await Promise.all(decompPromises);
       } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") return null;
         setError(
           err instanceof Error ? err.message : "Decomposition failed"
         );
@@ -165,6 +175,7 @@ export function usePipeline() {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ spaceId }),
+                signal,
               });
 
               const data = await res.json();
@@ -184,6 +195,7 @@ export function usePipeline() {
             })
           );
         } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return null;
           console.warn("Critique phase had errors:", err);
           // Non-fatal — continue with what we have
         }
@@ -200,8 +212,10 @@ export function usePipeline() {
               spaceAId: ids[0],
               spaceBId: ids[1],
             }),
+            signal,
           });
         } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return null;
           console.warn("Weave phase had errors:", err);
         }
       }
@@ -214,8 +228,10 @@ export function usePipeline() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ spaceIds: ids }),
+            signal,
           });
         } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return null;
           console.warn("Synthesis phase had errors:", err);
         }
       }
@@ -227,6 +243,7 @@ export function usePipeline() {
   );
 
   const reset = useCallback(() => {
+    if (abortRef.current) abortRef.current.abort();
     setPhase("idle");
     setSpaces([]);
     setSpaceIds([]);

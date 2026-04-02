@@ -13,6 +13,8 @@ import {
   runBridgeDiscovery,
 } from "./agents";
 import type { BridgeDiscoveryResult } from "./agents";
+import { withTimeout, logTimeoutEvent } from "./timeouts";
+import { buildAllCappedSiblingContexts } from "./context-capping";
 
 export type EmitFn = (event: string, data: string) => void;
 
@@ -85,29 +87,51 @@ async function runStandard(
   emit("phase", JSON.stringify({ phase: "critiquing", status: "running" }));
   let finalStructured = structured;
   try {
-    const critique = await runCritic(structured);
-    emit("phase", JSON.stringify({ phase: "augmenting", status: "running" }));
-    // Augment
-    finalStructured = await runAugmenter(structured, critique);
-    emit(
-      "space_progress",
-      JSON.stringify({
-        index: 0,
-        name: structured.metadata?.name ?? "Analysis",
-        phase: "augmenting",
-        status: "done",
-        entityCount: finalStructured.entities?.length ?? 0,
-        edgeCount: finalStructured.edges?.length ?? 0,
-        addedEdges:
-          (finalStructured.edges?.length ?? 0) -
-          (structured.edges?.length ?? 0),
-        addedCycles:
-          (finalStructured.cycles?.length ?? 0) -
-          (structured.cycles?.length ?? 0),
-      })
+    // ✅ PHASE 2.3: Add timeout for critique phase
+    const critiqueResult = await withTimeout(
+      runCritic(structured),
+      20000, // 20s for critique
+      "Critique phase"
     );
+
+    if (critiqueResult.success) {
+      const critique = critiqueResult.data;
+      emit("phase", JSON.stringify({ phase: "augmenting", status: "running" }));
+
+      // ✅ PHASE 2.3: Add timeout for augment phase
+      const augmentResult = await withTimeout(
+        runAugmenter(structured, critique),
+        15000, // 15s for augment
+        "Augment phase"
+      );
+
+      if (augmentResult.success) {
+        finalStructured = augmentResult.data;
+        emit(
+          "space_progress",
+          JSON.stringify({
+            index: 0,
+            name: structured.metadata?.name ?? "Analysis",
+            phase: "augmenting",
+            status: "done",
+            entityCount: finalStructured.entities?.length ?? 0,
+            edgeCount: finalStructured.edges?.length ?? 0,
+            addedEdges:
+              (finalStructured.edges?.length ?? 0) -
+              (structured.edges?.length ?? 0),
+            addedCycles:
+              (finalStructured.cycles?.length ?? 0) -
+              (structured.cycles?.length ?? 0),
+          })
+        );
+      } else {
+        console.warn(`Augment phase timeout/error: ${augmentResult.error}, using original structured`);
+      }
+    } else {
+      console.warn(`Critique phase timeout/error: ${critiqueResult.error}, skipping augment`);
+    }
   } catch (err) {
-    console.error("Critique/augment failed, using original:", err);
+    console.error("Critique/augment exception, using original:", err);
     // Graceful degradation: use original structured data
   }
 
@@ -201,14 +225,11 @@ async function runDeep(
     })
   );
 
-  // Build sibling context for each space
-  const siblingContexts = spaces.map((space, i) => {
-    const others = spaces
-      .filter((_, j) => j !== i)
-      .map((s) => `- Space ${s.prefix} "${s.name}": covers ${s.key_concepts.join(", ")}`)
-      .join("\n");
-    return others;
-  });
+  // ✅ PHASE 2.5: Build sibling context with size capping (max 50KB per space)
+  // Previous: Unbounded concatenation up to 270KB+
+  // Now: Relevance-based filtering + size cap prevents token inflation
+  const siblingContextResults = buildAllCappedSiblingContexts(spaces);
+  const siblingContexts = siblingContextResults.map((r) => r.context);
 
   // Phase 1: Parallel decompose + structure per space + Domain Expert
   emit("phase", JSON.stringify({ phase: "decomposing", status: "running" }));
@@ -237,12 +258,64 @@ async function runDeep(
       );
 
       try {
-        const raw = await runDecomposer(input, space, siblingContexts[i]);
+        // ✅ PHASE 2.3: Add per-space timeout (prevent cascading failure)
+        // Each space gets 25s max (3 spaces × 25s = 75s within 120s Vercel limit)
+        const spaceTimeout = 25000;
+
+        // Decompose with timeout
+        const decomposeResult = await withTimeout(
+          runDecomposer(input, space, siblingContexts[i]),
+          20000, // 20s for decomposition phase
+          `Space ${i} decomposition`
+        );
+
+        if (!decomposeResult.success) {
+          logTimeoutEvent(i, space.name, "decomposition", decomposeResult);
+          emit(
+            "space_progress",
+            JSON.stringify({
+              index: i,
+              name: space.name,
+              prefix: space.prefix,
+              phase: "error",
+              status: "failed",
+              error: decomposeResult.error,
+            })
+          );
+          return null;
+        }
+
+        const raw = decomposeResult.data;
+
         emit(
           "space_progress",
           JSON.stringify({ index: i, name: space.name, prefix: space.prefix, phase: "structuring", status: "running" })
         );
-        const structured = await runStructurer(raw);
+
+        // Structure with timeout
+        const structureResult = await withTimeout(
+          runStructurer(raw),
+          10000, // 10s for structuring phase
+          `Space ${i} structuring`
+        );
+
+        if (!structureResult.success) {
+          logTimeoutEvent(i, space.name, "structuring", structureResult);
+          emit(
+            "space_progress",
+            JSON.stringify({
+              index: i,
+              name: space.name,
+              prefix: space.prefix,
+              phase: "error",
+              status: "failed",
+              error: structureResult.error,
+            })
+          );
+          return null;
+        }
+
+        const structured = structureResult.data;
 
         emit(
           "space_progress",
@@ -276,12 +349,131 @@ async function runDeep(
     throw new Error("All space decompositions failed");
   }
 
-  // Phase 2: Weave (skip critique/augment — that's Comprehensive tier)
+  // ✅ PHASE 2.4: Parallel critique + augment phase (40s sequential → 20s parallel)
+  // Each space runs its critique/augment concurrently with per-space timeouts
+  const critiquedResults = await Promise.all(
+    validResults.map(async (result, i) => {
+      try {
+        emit(
+          "space_progress",
+          JSON.stringify({
+            index: i,
+            name: result.scope.name,
+            prefix: result.scope.prefix,
+            phase: "critiquing",
+            status: "running",
+          })
+        );
+
+        // Critique with timeout (20s per space)
+        const critiqueResult = await withTimeout(
+          runCritic(result.structured),
+          20000,
+          `Space ${i} critique`
+        );
+
+        if (!critiqueResult.success) {
+          console.warn(
+            `Space ${i} (${result.scope.name}) critique timeout/error: ${critiqueResult.error}`
+          );
+          emit(
+            "space_progress",
+            JSON.stringify({
+              index: i,
+              name: result.scope.name,
+              prefix: result.scope.prefix,
+              phase: "critiquing",
+              status: "degraded",
+              error: "Critique timeout - using original",
+            })
+          );
+          // Return original structured data if critique fails
+          return result;
+        }
+
+        const critique = critiqueResult.data;
+
+        emit(
+          "space_progress",
+          JSON.stringify({
+            index: i,
+            name: result.scope.name,
+            prefix: result.scope.prefix,
+            phase: "augmenting",
+            status: "running",
+          })
+        );
+
+        // Augment with timeout (10s per space)
+        const augmentResult = await withTimeout(
+          runAugmenter(result.structured, critique),
+          10000,
+          `Space ${i} augment`
+        );
+
+        if (augmentResult.success) {
+          emit(
+            "space_progress",
+            JSON.stringify({
+              index: i,
+              name: result.scope.name,
+              prefix: result.scope.prefix,
+              phase: "augmenting",
+              status: "done",
+              entityCount: augmentResult.data.entities?.length ?? 0,
+              edgeCount: augmentResult.data.edges?.length ?? 0,
+              addedEdges:
+                (augmentResult.data.edges?.length ?? 0) -
+                (result.structured.edges?.length ?? 0),
+              addedCycles:
+                (augmentResult.data.cycles?.length ?? 0) -
+                (result.structured.cycles?.length ?? 0),
+            })
+          );
+          // Return augmented structure
+          return { ...result, structured: augmentResult.data };
+        } else {
+          console.warn(
+            `Space ${i} (${result.scope.name}) augment timeout/error: ${augmentResult.error}`
+          );
+          emit(
+            "space_progress",
+            JSON.stringify({
+              index: i,
+              name: result.scope.name,
+              prefix: result.scope.prefix,
+              phase: "augmenting",
+              status: "degraded",
+              error: "Augment timeout - using original",
+            })
+          );
+          // Return original if augment fails
+          return result;
+        }
+      } catch (err) {
+        console.error(`Space ${i} (${result.scope.name}) critique/augment exception:`, err);
+        emit(
+          "space_progress",
+          JSON.stringify({
+            index: i,
+            name: result.scope.name,
+            prefix: result.scope.prefix,
+            phase: "error",
+            status: "degraded",
+            error: "Critique/augment exception",
+          })
+        );
+        return result;
+      }
+    })
+  );
+
+  // Phase 2: Weave (connects spaces after critique/augment)
   let weaveResult;
-  if (validResults.length > 1) {
+  if (critiquedResults.length > 1) {
     emit("phase", JSON.stringify({ phase: "weaving", status: "running" }));
     try {
-      const entitySummaries = validResults.map((r) => ({
+      const entitySummaries = critiquedResults.map((r) => ({
         prefix: r.scope.prefix,
         name: r.scope.name,
         entities: (r.structured.entities ?? []).map((e) => ({
@@ -310,7 +502,7 @@ async function runDeep(
   emit("phase", JSON.stringify({ phase: "synthesizing", status: "running" }));
   let synthesisResult;
   try {
-    const metaSummary = buildMetaGraphSummary(validResults, weaveResult);
+    const metaSummary = buildMetaGraphSummary(critiquedResults, weaveResult);
     synthesisResult = await runMetaSynthesizer(metaSummary);
   } catch (err) {
     console.error("Meta-synthesis failed:", err);
@@ -322,10 +514,10 @@ async function runDeep(
 
   // Bridge discovery between internal and external
   let bridgeDiscovery: BridgeDiscoveryResult | undefined;
-  if (externalKnowledge && validResults.length > 0) {
+  if (externalKnowledge && critiquedResults.length > 0) {
     try {
       emit("phase", JSON.stringify({ phase: "bridge_discovery", status: "running" }));
-      const allInternalEntities = validResults.flatMap((r) =>
+      const allInternalEntities = critiquedResults.flatMap((r) =>
         (r.structured.entities ?? []).map((e) => ({
           entity_id: `${r.scope.prefix}:${e.entity_id}`,
           name: e.name,
@@ -350,7 +542,7 @@ async function runDeep(
   }
 
   return {
-    spaceData: validResults,
+    spaceData: critiquedResults,
     weaveResult,
     synthesisResult,
     externalKnowledge,
