@@ -106,8 +106,8 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
         tier: tier as "standard" | "deep" | "comprehensive",
         crossSpace: {
           weave: spaces.length >= 2,
-          synthesis: spaces.length >= 2,
-          externalKnowledge: false,
+          synthesis: true, // Always run synthesis — it works for single and multi-space
+          externalKnowledge: tier === "deep" || tier === "comprehensive",
         },
       });
     }
@@ -124,6 +124,7 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
   const PHASE_DISPLAY: Record<string, { label: string; icon: "spinner" | "check" | "error" }> = {
     scope: { label: "Mapping analytical areas...", icon: "spinner" },
     decomposing: { label: "Building knowledge graphs...", icon: "spinner" },
+    researching: { label: "Gathering domain expertise...", icon: "spinner" },
     critiquing: { label: "Validating & finding gaps...", icon: "spinner" },
     weaving: { label: "Discovering cross-area connections...", icon: "spinner" },
     synthesizing: { label: "Generating strategic synthesis...", icon: "spinner" },
@@ -228,14 +229,16 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
 
           {/* Pipeline steps progress bar */}
           <div className="flex gap-1 mb-3">
-            {(["scope", "decomposing", "critiquing", "weaving", "synthesizing", "reasoning"] as const).map((step) => {
-              const phases = ["scope", "decomposing", "critiquing", "weaving", "synthesizing", "reasoning", "complete"];
+            {(["scope", "decomposing", "researching", "critiquing", "weaving", "synthesizing", "reasoning"] as const).map((step) => {
+              const phases = ["scope", "decomposing", "researching", "critiquing", "weaving", "synthesizing", "reasoning", "complete"];
               const currentIdx = phases.indexOf(pipeline.phase);
               const stepIdx = phases.indexOf(step);
               const isDone = currentIdx > stepIdx;
               const isCurrent = currentIdx === stepIdx;
               // Skip scope bar if not multi-space
               if (step === "scope" && !isMultiSpace) return null;
+              // Skip researching bar if not deep/comprehensive
+              if (step === "researching" && tier !== "deep" && tier !== "comprehensive") return null;
               // Skip weave bar if single space
               if (step === "weaving" && pipeline.spaces.length < 2) return null;
               // Skip reasoning bar if not comprehensive

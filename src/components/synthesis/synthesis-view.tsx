@@ -23,7 +23,7 @@ import type {
   ActionItem,
   Proposition,
 } from "@/types";
-import type { SynthesisData, RichBottleneck, RichFeedbackLoop, RichOpenQuestion } from "@/types/synthesis";
+import type { SynthesisData, RichBottleneck, RichFeedbackLoop, RichOpenQuestion, WorthConsidering } from "@/types/synthesis";
 
 interface SynthesisViewProps {
   space: Space;
@@ -611,6 +611,85 @@ export function SynthesisView({
               actionItems={actionItems}
               richActionPlan={synthData?.action_plan}
             />
+          </div>
+        </section>
+      )}
+
+      {/* Section 9.5: Worth Considering — Domain Expertise */}
+      {synthData?.worth_considering && synthData.worth_considering.length > 0 && (
+        <section>
+          <SectionHeader
+            label="Domain expertise"
+            color="purple"
+            subtitle="Frameworks, precedents, and blind spots from field knowledge"
+          />
+          <div className="mt-3 space-y-2">
+            {synthData.worth_considering.map((item: WorthConsidering, i: number) => {
+              const typeConfig: Record<string, { icon: string; label: string; border: string; bg: string }> = {
+                precedent: { icon: "📋", label: "Real-world precedent", border: "border-amber-200", bg: "bg-amber-50/40" },
+                framework: { icon: "🧩", label: "Analytical framework", border: "border-purple-200", bg: "bg-purple-50/40" },
+                blind_spot: { icon: "⚠️", label: "Blind spot", border: "border-red-200", bg: "bg-red-50/40" },
+                analogy: { icon: "🔗", label: "Cross-domain analogy", border: "border-blue-200", bg: "bg-blue-50/40" },
+                resource: { icon: "📚", label: "Resource", border: "border-teal-200", bg: "bg-teal-50/40" },
+              };
+              const tc = typeConfig[item.type] ?? typeConfig.analogy;
+
+              return (
+                <div
+                  key={i}
+                  className={cn("rounded-lg border p-4", tc.border, tc.bg)}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">{tc.icon}</span>
+                      <div>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                          {tc.label}
+                        </span>
+                        <h4 className="text-sm font-semibold text-gray-900">{item.title}</h4>
+                      </div>
+                    </div>
+                    <StatusBadge
+                      variant={
+                        item.confidence === "high"
+                          ? "active"
+                          : item.confidence === "moderate"
+                            ? "waiting"
+                            : "theory"
+                      }
+                    >
+                      {item.confidence}
+                    </StatusBadge>
+                  </div>
+
+                  <p className="mt-2 text-[13px] leading-relaxed text-gray-700">
+                    {item.description}
+                  </p>
+
+                  {item.source_note && (
+                    <div className="mt-2 text-[11px] text-gray-500 italic">
+                      Source: {item.source_note}
+                    </div>
+                  )}
+
+                  {item.connected_entities?.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {item.connected_entities.map((eid, j) => {
+                        const entity = entityMap.get(eid);
+                        return (
+                          <span
+                            key={j}
+                            className="rounded-full bg-white/80 border border-gray-200 px-2 py-0.5 text-[10px] font-medium text-gray-600"
+                          >
+                            {eid}{entity ? `: ${entity.name}` : ""}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}

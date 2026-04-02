@@ -121,7 +121,7 @@ export interface RichActionPlan {
 }
 
 export interface WorthConsidering {
-  type: "analogy" | "framework" | "blind_spot" | "resource";
+  type: "analogy" | "framework" | "blind_spot" | "resource" | "precedent";
   title: string;
   description: string;
   confidence: "high" | "moderate" | "speculative";

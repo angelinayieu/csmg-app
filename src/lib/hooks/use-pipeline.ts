@@ -23,6 +23,7 @@ export type PipelinePhase =
   | "idle"
   | "scope"
   | "decomposing"
+  | "researching"
   | "critiquing"
   | "weaving"
   | "synthesizing"
@@ -241,6 +242,34 @@ export function usePipeline() {
       setSpaceIds(ids);
       setRootSpaceId(ids[0] ?? null);
 
+      // Phase 1.5: Domain Research (Agent 7) — runs if externalKnowledge enabled
+      // Fires in parallel with critique since they're independent
+      let researchPromise: Promise<void> | null = null;
+      if (config.crossSpace.externalKnowledge && ids.length > 0) {
+        setPhase("researching");
+        researchPromise = (async () => {
+          try {
+            const res = await fetch("/api/pipeline/research", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                spaceIds: ids,
+                inputSummary: text.slice(0, 4000),
+                scopeSpaces: config.selectedSpaces,
+              }),
+              signal,
+            });
+            if (!res.ok) {
+              const data = await safeJson(res, "Research").catch(() => ({}));
+              console.warn("Research (Agent 7) returned error:", data);
+            }
+          } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") return;
+            console.warn("Research phase had errors:", err);
+          }
+        })();
+      }
+
       // Phase 2: Critique + Augment (always run for pipeline tiers)
       if (ids.length > 0) {
         setPhase("critiquing");
@@ -288,6 +317,11 @@ export function usePipeline() {
           if (err instanceof Error && err.name === "AbortError") return null;
           console.warn("Critique phase had errors:", err);
         }
+      }
+
+      // Wait for research to complete before weaving (external entities needed for bridge discovery)
+      if (researchPromise) {
+        await researchPromise;
       }
 
       // Phase 3: Weave ALL space pairs (if 2+ spaces and enabled)
