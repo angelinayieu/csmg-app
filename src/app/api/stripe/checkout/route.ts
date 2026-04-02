@@ -1,9 +1,17 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { stripe, getPackById } from "@/lib/stripe";
+import { getStripe, getPackById } from "@/lib/stripe";
 import { safeJsonParse } from "@/lib/api-helpers";
 
 export async function POST(request: Request) {
+  const s = getStripe();
+  if (!s) {
+    return NextResponse.json(
+      { error: "Stripe is not configured. Set STRIPE_SECRET_KEY in .env.local" },
+      { status: 503 }
+    );
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -24,7 +32,7 @@ export async function POST(request: Request) {
 
   const origin = request.headers.get("origin") ?? "http://localhost:3000";
 
-  const session = await stripe.checkout.sessions.create({
+  const session = await s.checkout.sessions.create({
     mode: "payment",
     payment_method_types: ["card"],
     line_items: [

@@ -1,12 +1,22 @@
 import Stripe from "stripe";
 
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error("STRIPE_SECRET_KEY is not set");
+/**
+ * Stripe client — lazy-initialized so the app doesn't crash at build/startup
+ * if STRIPE_SECRET_KEY isn't set yet. Routes that need Stripe should call
+ * getStripe() and handle the null case.
+ */
+let _stripe: Stripe | null = null;
+
+export function getStripe(): Stripe | null {
+  if (_stripe) return _stripe;
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key || key.startsWith("sk_test_YOUR") || key === "") return null;
+  _stripe = new Stripe(key, { apiVersion: "2026-03-25.dahlia" });
+  return _stripe;
 }
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2026-03-25.dahlia",
-});
+/** @deprecated Use getStripe() instead — this throws if key is missing */
+export const stripe = null as unknown as Stripe;
 
 export const CREDIT_PACKS = [
   {
