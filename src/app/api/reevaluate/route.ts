@@ -191,7 +191,6 @@ Return JSON:
         conditions: edge.reasoning ?? null,
         is_tradeoff: false,
         is_part_of_cycle: false,
-        is_low_confidence: (edge.confidence ?? 0.7) < 0.4,
       });
       if (!error) addedEdges++;
     }

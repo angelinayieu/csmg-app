@@ -230,9 +230,6 @@ export async function POST(request: Request) {
                   : null,
                 is_part_of_cycle: e.is_part_of_cycle ?? false,
                 cycle_id: e.cycle_id ?? null,
-                dynamics: e.dynamics ?? null,
-                dynamics_properties: e.dynamics_properties ?? null,
-                is_low_confidence: (e.confidence ?? 0.8) < 0.4,
               };
             })
             .filter(Boolean) as any[];
@@ -262,9 +259,6 @@ export async function POST(request: Request) {
                 : null,
               intervention_description: c.intervention_description ?? null,
               description: c.description ?? null,
-              growth_type: c.growth_type ?? null,
-              cycle_time: c.cycle_time ?? null,
-              estimated_multiplier: c.estimated_multiplier ?? null,
             }));
 
             await batchInsert(db, "cycles", cycleInserts, { batchSize: 50 });
@@ -414,13 +408,6 @@ export async function POST(request: Request) {
                 layer: ext.category ?? "external",
                 importance: "moderate",
                 confidence: ext.confidence ?? 0.5,
-                knowledge_layer: "external",
-                authority_level: ext.authority_level ?? "low",
-                provenance: {
-                  source_type: "training_knowledge",
-                  relevance: ext.relevance_to_situation ?? "",
-                  category: ext.category,
-                },
               })
               .select("id, entity_id")
               .single();
@@ -446,8 +433,6 @@ export async function POST(request: Request) {
               strength: 0.5,
               polarity: "positive",
               confidence: 0.6,
-              knowledge_layer: "external",
-              provenance: { source_type: "training_knowledge" },
             });
           }
 
@@ -463,8 +448,7 @@ export async function POST(request: Request) {
               const { data: ents } = await db
                 .from("entities")
                 .select("id, entity_id")
-                .eq("space_id", sid)
-                .eq("knowledge_layer", "internal");
+                .eq("space_id", sid);
               for (const e of (ents ?? []) as { id: string; entity_id: string }[]) {
                 allInternalEntityIds.set(e.entity_id, e.id);
               }
@@ -492,12 +476,6 @@ export async function POST(request: Request) {
                 polarity: bridge.connection_type === "challenges" ? "negative" : "positive",
                 confidence: bridge.importance === "high" ? 0.8 : 0.6,
                 conditions: bridge.reasoning,
-                knowledge_layer: "bridge",
-                requires_user_approval: true,
-                provenance: {
-                  source_type: "bridge_discovery",
-                  connection_type: bridge.connection_type,
-                },
               });
               if (!error) bridgesInserted++;
             }

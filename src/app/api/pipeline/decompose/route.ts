@@ -157,7 +157,7 @@ ${text}`;
       const tgtUuid = entityIdMap.get(tgtId);
       if (!srcUuid || !tgtUuid) continue;
 
-      const { error } = await db.from("edges").insert({
+      const edgeRow = {
         space_id: spaceId,
         source_entity_id: srcUuid,
         target_entity_id: tgtUuid,
@@ -171,8 +171,8 @@ ${text}`;
         is_tradeoff: e.is_tradeoff ?? false,
         is_part_of_cycle: e.is_part_of_cycle ?? false,
         cycle_id: e.cycle_id ?? null,
-        is_low_confidence: (e.confidence ?? 0.8) < 0.4,
-      });
+      };
+      const { error } = await db.from("edges").insert(edgeRow);
       if (!error) edgesInserted++;
     }
 

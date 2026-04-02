@@ -11,6 +11,7 @@ export interface AnalysisConfig {
     priority: number;
   }>;
   reasoningDepth: "quick" | "standard" | "deep";
+  tier: "standard" | "deep" | "comprehensive";
   crossSpace: {
     weave: boolean;
     synthesis: boolean;
@@ -53,20 +54,31 @@ export function usePipeline() {
     setError(null);
 
     abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+
+    // Client-side timeout — abort if scope takes too long
+    const timeoutId = setTimeout(() => abortRef.current?.abort(), 45000);
 
     try {
       const res = await fetch("/api/pipeline/scope", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
-        signal: abortRef.current.signal,
+        signal,
       });
+
+      clearTimeout(timeoutId);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setScopeResult(data);
       return data;
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") return null;
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === "AbortError") {
+        setError("Scope mapping timed out. Try a shorter input or Quick/Standard analysis.");
+        setPhase("error");
+        return null;
+      }
       setError(err instanceof Error ? err.message : "Scope mapping failed");
       setPhase("error");
       return null;
@@ -80,6 +92,27 @@ export function usePipeline() {
       const signal = abortRef.current.signal;
       const selectedSpaces = config.selectedSpaces;
 
+      // Step 0: Check and deduct credits BEFORE any work
+      try {
+        const creditRes = await fetch("/api/pipeline/credits", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tier: config.tier }),
+          signal,
+        });
+        const creditData = await creditRes.json();
+        if (!creditRes.ok) {
+          setError(creditData.error || "Insufficient credits");
+          setPhase("error");
+          return null;
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") return null;
+        setError("Failed to verify credits. Please try again.");
+        setPhase("error");
+        return null;
+      }
+
       // Initialize space progress
       setSpaces(
         selectedSpaces.map((s) => ({
@@ -88,7 +121,7 @@ export function usePipeline() {
         }))
       );
 
-      // Phase 1: Decompose all spaces (parallel)
+      // Phase 1: Decompose all spaces (parallel, resilient)
       setPhase("decomposing");
       const decompResults: Array<{
         spaceId: string;
@@ -141,11 +174,34 @@ export function usePipeline() {
             )
           );
 
-          decompResults.push(data);
           return data;
         });
 
-        await Promise.all(decompPromises);
+        // Use allSettled so one space failure doesn't kill the whole pipeline
+        const results = await Promise.allSettled(decompPromises);
+
+        let hasAnySuccess = false;
+        results.forEach((result, i) => {
+          if (result.status === "fulfilled") {
+            decompResults.push(result.value);
+            hasAnySuccess = true;
+          } else {
+            // Mark failed space
+            setSpaces((prev) =>
+              prev.map((s, j) =>
+                j === i ? { ...s, status: "error" } : s
+              )
+            );
+            console.warn(`Space ${i} decomposition failed:`, result.reason);
+          }
+        });
+
+        if (!hasAnySuccess) {
+          const firstError = results.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
+          setError(firstError?.reason?.message || "All decompositions failed");
+          setPhase("error");
+          return null;
+        }
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return null;
         setError(
@@ -159,11 +215,11 @@ export function usePipeline() {
       setSpaceIds(ids);
       setRootSpaceId(ids[0] ?? null);
 
-      // Phase 2: Critique + Augment (if Standard or Deep)
-      if (config.reasoningDepth !== "quick" && ids.length > 0) {
+      // Phase 2: Critique + Augment (always run for pipeline tiers)
+      if (ids.length > 0) {
         setPhase("critiquing");
         try {
-          await Promise.all(
+          const critiqueResults = await Promise.allSettled(
             ids.map(async (spaceId, i) => {
               setSpaces((prev) =>
                 prev.map((s, j) =>
@@ -192,28 +248,48 @@ export function usePipeline() {
                   )
                 );
               }
+              return data;
             })
           );
+
+          // Log any failures but continue
+          critiqueResults.forEach((r, i) => {
+            if (r.status === "rejected") {
+              console.warn(`Critique failed for space ${i}:`, r.reason);
+            }
+          });
         } catch (err) {
           if (err instanceof Error && err.name === "AbortError") return null;
           console.warn("Critique phase had errors:", err);
-          // Non-fatal — continue with what we have
         }
       }
 
-      // Phase 3: Weave (if 2+ spaces and enabled)
+      // Phase 3: Weave ALL space pairs (if 2+ spaces and enabled)
       if (ids.length >= 2 && config.crossSpace.weave) {
         setPhase("weaving");
         try {
-          await fetch("/api/weave", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              spaceAId: ids[0],
-              spaceBId: ids[1],
-            }),
-            signal,
-          });
+          // Build all unique pairs
+          const weavePairs: Array<{ spaceAId: string; spaceBId: string }> = [];
+          for (let a = 0; a < ids.length; a++) {
+            for (let b = a + 1; b < ids.length; b++) {
+              weavePairs.push({ spaceAId: ids[a], spaceBId: ids[b] });
+            }
+          }
+
+          await Promise.allSettled(
+            weavePairs.map(async (pair) => {
+              const res = await fetch("/api/weave", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(pair),
+                signal,
+              });
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                console.warn("Weave failed for pair:", pair, data);
+              }
+            })
+          );
         } catch (err) {
           if (err instanceof Error && err.name === "AbortError") return null;
           console.warn("Weave phase had errors:", err);

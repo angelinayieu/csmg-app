@@ -140,7 +140,6 @@ Return ONLY valid JSON.`,
         polarity: "positive",
         confidence: edge.confidence ?? 0.7,
         conditions: edge.reasoning ?? null,
-        is_low_confidence: (edge.confidence ?? 0.7) < 0.4,
       });
       if (!error) addedEdges++;
     }

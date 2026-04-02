@@ -4,67 +4,46 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Sparkles, ChevronDown, Check, GitBranch, Brain, Search } from "lucide-react";
+import { Sparkles, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
 import { StreamingOutput } from "./streaming-output";
 import { useAnalyze } from "@/lib/hooks/use-analyze";
 import { usePipeline } from "@/lib/hooks/use-pipeline";
+import { TierSelector } from "@/components/analysis/tier-selector";
 import { useAppStore } from "@/stores/store-provider";
 import { createClient } from "@/lib/supabase/client";
-import {
-  calculateCredits,
-  getSmartDefaults,
-  type AnalysisConfig,
-  type ReasoningDepth,
-  type SpaceOption,
-} from "@/lib/analysis-config";
+import { TIERS, type AnalysisTier } from "@/lib/tiers";
 import { cn } from "@/lib/utils";
 import type { Space } from "@/types";
 
 const MAX_LENGTH = 50000;
 
-const DEPTH_OPTIONS: Array<{
-  value: ReasoningDepth;
-  label: string;
-  desc: string;
-  perSpace: number;
-}> = [
-  { value: "quick", label: "Quick", desc: "Fast scan, basic connections", perSpace: 1 },
-  { value: "standard", label: "Standard", desc: "Validated, catches gaps", perSpace: 2 },
-  { value: "deep", label: "Deep", desc: "Precision + decision nodes", perSpace: 3 },
-];
+// Map tier to pipeline reasoningDepth
+const TIER_TO_DEPTH: Record<AnalysisTier, "quick" | "standard" | "deep"> = {
+  quick: "quick",
+  standard: "standard",
+  deep: "deep",
+  comprehensive: "deep",
+};
 
 export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
   const router = useRouter();
   const [text, setText] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [config, setConfig] = useState<AnalysisConfig>(() => getSmartDefaults(0));
-  const [scopeLoading, setScopeLoading] = useState(false);
-  const [scopeReady, setScopeReady] = useState(false);
+  const [tier, setTier] = useState<AnalysisTier>("quick");
   const addSpace = useAppStore((s) => s.addSpace);
 
-  // Quick uses simple analyze hook, Standard+ uses pipeline
+  // Quick uses streaming analyze, everything else uses pipeline
   const quickHook = useAnalyze();
   const pipeline = usePipeline();
 
-  const isQuick = config.reasoningDepth === "quick" && config.spaces.filter((s) => s.selected).length <= 1;
+  const tierConfig = TIERS[tier];
+  const isQuick = tier === "quick";
+  const usePipelinePath = !isQuick; // Standard, Deep, Comprehensive all use pipeline
+  const isMultiSpace = tierConfig.multiSpace; // deep + comprehensive
+
   const activePhase = isQuick ? quickHook.phase : pipeline.phase;
   const isActive = activePhase !== "idle";
   const isProcessing = !["idle", "complete", "error"].includes(activePhase);
   const activeError = isQuick ? quickHook.error : pipeline.error;
-
-  const { breakdown, total, estimatedTime } = calculateCredits(config);
-
-  // Auto-update defaults when text changes
-  useEffect(() => {
-    if (!scopeReady && !isActive) {
-      const defaults = getSmartDefaults(text.length);
-      setConfig((prev) => ({
-        ...prev,
-        reasoningDepth: defaults.reasoningDepth,
-        crossSpace: defaults.crossSpace,
-      }));
-    }
-  }, [text.length, scopeReady, isActive]);
 
   // Navigate on completion
   useEffect(() => {
@@ -88,87 +67,64 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
     }
   }, [activePhase, isQuick, quickHook.spaceId, pipeline.rootSpaceId, pipeline.spaceIds, addSpace, router]);
 
-  // Run scope mapping
-  const runScopeMapping = useCallback(async () => {
-    if (text.length < 200) {
-      // Short text — single space, no scope mapping needed
-      setConfig((prev) => ({
-        ...prev,
-        spaces: [{ name: "Analysis", prefix: "C", description: "Complete analysis", key_concepts: [], priority: 1, selected: true }],
-      }));
-      setScopeReady(true);
-      return;
-    }
+  // Run analysis based on selected tier
+  const handleAnalyze = useCallback(async () => {
+    if (text.trim().length < 20) return;
 
-    setScopeLoading(true);
-    const startTime = performance.now();
-    
-    try {
-      const result = await Promise.race([
-        pipeline.runScope(text),
-        new Promise<null>((_, reject) => 
-          setTimeout(() => reject(new Error("Scope mapping timeout after 30s")), 30000)
-        ),
-      ]);
-      
-      const elapsed = performance.now() - startTime;
-      
-      if (result?.spaces) {
-        const spaceOptions: SpaceOption[] = result.spaces.map((s: SpaceOption, i: number) => ({
-          ...s,
-          selected: i < 3, // Auto-select top 3 by priority
-        }));
-        setConfig((prev) => ({ ...prev, spaces: spaceOptions }));
-        setScopeReady(true);
-      }
-    } catch (err) {
-      console.error("[Client] Scope mapping failed:", err);
-    }
-    setScopeLoading(false);
-  }, [text, pipeline]);
-
-  function handleAnalyze() {
-    if (isQuick && !scopeReady) {
-      // Quick single-space — skip scope mapping
-      quickHook.analyze(text);
-      return;
-    }
-
-    const selectedSpaces = config.spaces.filter((s) => s.selected);
-    if (selectedSpaces.length === 0) return;
-
-    if (selectedSpaces.length === 1 && config.reasoningDepth === "quick") {
-      // Single space quick — use simple hook
+    if (isQuick) {
+      // Quick: single-space streaming via /api/analyze
       quickHook.analyze(text);
     } else {
-      // Multi-space or Standard+ — use pipeline
+      // Standard / Deep / Comprehensive: use pipeline
+      type SpaceConfig = { name: string; prefix: string; description: string; key_concepts: string[]; priority: number };
+      let spaces: SpaceConfig[];
+
+      if (isMultiSpace && text.length >= 500) {
+        // Deep/Comprehensive with long text: scope map first
+        const scopeData = await pipeline.runScope(text);
+        if (!scopeData?.spaces?.length) return;
+        spaces = scopeData.spaces;
+      } else {
+        // Standard or short-text Deep: single space, no scope needed
+        spaces = [{
+          name: "Analysis",
+          prefix: "C",
+          description: "Complete analysis of the input",
+          key_concepts: [],
+          priority: 1,
+        }];
+      }
+
       pipeline.runPipeline(text, {
-        selectedSpaces,
-        reasoningDepth: config.reasoningDepth,
-        crossSpace: config.crossSpace,
+        selectedSpaces: spaces,
+        reasoningDepth: TIER_TO_DEPTH[tier],
+        tier: tier as "standard" | "deep" | "comprehensive",
+        crossSpace: {
+          weave: spaces.length >= 2,
+          synthesis: spaces.length >= 2,
+          externalKnowledge: false,
+        },
       });
     }
-  }
+  }, [text, tier, isQuick, isMultiSpace, quickHook, pipeline]);
 
   function handleReset() {
     quickHook.reset();
     pipeline.reset();
     setText("");
-    setScopeReady(false);
-    setShowAdvanced(false);
-    setConfig(getSmartDefaults(0));
+    setTier("quick");
   }
 
-  function toggleSpace(index: number) {
-    setConfig((prev) => ({
-      ...prev,
-      spaces: prev.spaces.map((s, i) =>
-        i === index ? { ...s, selected: !s.selected } : s
-      ),
-    }));
-  }
-
-  const selectedCount = config.spaces.filter((s) => s.selected).length;
+  // Phase display config
+  const PHASE_DISPLAY: Record<string, { label: string; icon: "spinner" | "check" | "error" }> = {
+    scope: { label: "Mapping analytical areas...", icon: "spinner" },
+    decomposing: { label: "Building knowledge graphs...", icon: "spinner" },
+    critiquing: { label: "Validating & finding gaps...", icon: "spinner" },
+    weaving: { label: "Discovering cross-area connections...", icon: "spinner" },
+    synthesizing: { label: "Generating strategic synthesis...", icon: "spinner" },
+    complete: { label: "Analysis complete!", icon: "check" },
+    error: { label: "Error occurred", icon: "error" },
+  };
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -193,199 +149,52 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
         </div>
       </div>
 
-      {/* Config section (hidden during processing) */}
+      {/* Tier selector + analyze button (hidden during processing) */}
       {!isActive && text.length >= 20 && (
-        <div className="mt-4 space-y-3">
-
-          {/* Scope mapping — show for longer inputs */}
-          {text.length >= 200 && !scopeReady && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={runScopeMapping}
-              loading={scopeLoading}
-              className="w-full"
-            >
-              <Search className="mr-2 h-3.5 w-3.5" />
-              {scopeLoading ? "Identifying areas..." : "Identify analytical areas"}
-            </Button>
-          )}
-
-          {/* Space selection (after scope mapping) */}
-          {scopeReady && config.spaces.length > 1 && (
-            <div className="rounded-lg border border-gray-200 bg-white p-3">
-              <div className="mb-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Areas to analyze ({selectedCount} selected)
-              </div>
-              <div className="space-y-1">
-                {config.spaces.map((space, i) => (
-                  <button
-                    key={i}
-                    onClick={() => toggleSpace(i)}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
-                      space.selected
-                        ? "bg-interaxis-50 text-interaxis-700"
-                        : "text-gray-500 hover:bg-gray-50"
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "flex h-4 w-4 items-center justify-center rounded border transition-colors",
-                        space.selected
-                          ? "border-interaxis-500 bg-interaxis-500"
-                          : "border-gray-300"
-                      )}
-                    >
-                      {space.selected && <Check className="h-3 w-3 text-white" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium">{space.name}</div>
-                      {space.description && (
-                        <div className="text-xs text-gray-400 truncate">{space.description}</div>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
+        <div className="mt-4 space-y-4">
+          <div>
+            <div className="mb-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Analysis depth
             </div>
-          )}
+            <TierSelector
+              selected={tier}
+              onSelect={setTier}
+              creditBalance={creditBalance}
+            />
+          </div>
 
-          {/* Advanced config toggle */}
-          <button
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
-          >
-            <ChevronDown className={cn("h-3 w-3 transition-transform", showAdvanced && "rotate-180")} />
-            {showAdvanced ? "Hide options" : "Customize analysis"}
-          </button>
-
-          {showAdvanced && (
-            <div className="space-y-3">
-              {/* Depth selector */}
-              <div className="rounded-lg border border-gray-200 bg-white p-3">
-                <div className="mb-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Analysis depth
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {DEPTH_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => setConfig((prev) => ({ ...prev, reasoningDepth: opt.value }))}
-                      className={cn(
-                        "rounded-lg border p-2.5 text-left transition-all text-sm",
-                        config.reasoningDepth === opt.value
-                          ? "border-interaxis-400 bg-interaxis-50"
-                          : "border-gray-200 hover:border-gray-300"
-                      )}
-                    >
-                      <div className="font-medium">{opt.label}</div>
-                      <div className="mt-0.5 text-[10px] text-gray-400">{opt.desc}</div>
-                      <div className="mt-1 text-[10px] text-gray-500">{opt.perSpace} cr/area</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Cross-space toggles */}
-              {selectedCount >= 2 && (
-                <div className="rounded-lg border border-gray-200 bg-white p-3">
-                  <div className="mb-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Connections
-                  </div>
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={config.crossSpace.weave}
-                        onChange={(e) =>
-                          setConfig((prev) => ({
-                            ...prev,
-                            crossSpace: { ...prev.crossSpace, weave: e.target.checked },
-                          }))
-                        }
-                        className="rounded border-gray-300 text-interaxis-600"
-                      />
-                      <GitBranch className="h-3.5 w-3.5 text-gray-400" />
-                      <span className="text-sm">Discover cross-area connections</span>
-                      <span className="ml-auto text-[10px] text-gray-400">2 cr</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={config.crossSpace.synthesis}
-                        onChange={(e) =>
-                          setConfig((prev) => ({
-                            ...prev,
-                            crossSpace: { ...prev.crossSpace, synthesis: e.target.checked },
-                          }))
-                        }
-                        className="rounded border-gray-300 text-interaxis-600"
-                      />
-                      <Brain className="h-3.5 w-3.5 text-gray-400" />
-                      <span className="text-sm">Strategic synthesis</span>
-                      <span className="ml-auto text-[10px] text-gray-400">2 cr</span>
-                    </label>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Credit summary + Analyze button */}
-          <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3">
-            <div>
-              {breakdown.length > 0 ? (
-                <div className="space-y-0.5">
-                  {breakdown.map((b, i) => (
-                    <div key={i} className="flex items-center gap-2 text-[11px] text-gray-500">
-                      <span>{b.label}</span>
-                      <span className="text-gray-400">{b.credits} cr</span>
-                    </div>
-                  ))}
-                  <div className="border-t border-gray-100 pt-1 mt-1 flex items-center gap-2 text-xs font-medium">
-                    <span>Total: {total} credits</span>
-                    <span className="text-gray-400">~{estimatedTime}s</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-xs text-gray-400">
-                  {total} credits · ~{estimatedTime}s
-                </div>
-              )}
-              {total > creditBalance && (
-                <div className="mt-1 text-[10px] text-red-500">
-                  Insufficient credits ({creditBalance} available)
-                </div>
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-gray-500">
+              <span className="font-medium">{tierConfig.credits} credit{tierConfig.credits > 1 ? "s" : ""}</span>
+              <span className="mx-1.5 text-gray-300">·</span>
+              <span>{tierConfig.time}</span>
+              {isMultiSpace && (
+                <>
+                  <span className="mx-1.5 text-gray-300">·</span>
+                  <span className="text-interaxis-600">Multi-space</span>
+                </>
               )}
             </div>
             <Button
               onClick={handleAnalyze}
-              disabled={text.trim().length < 20 || total > creditBalance}
+              disabled={text.trim().length < 20 || tierConfig.credits > creditBalance}
               size="lg"
             >
               <Sparkles className="mr-2 h-4 w-4" />
-              Analyze ({total} cr)
+              Analyze
             </Button>
           </div>
+
+          {tierConfig.credits > creditBalance && (
+            <div className="text-xs text-red-500">
+              Insufficient credits — you have {creditBalance}, need {tierConfig.credits}.{" "}
+              <a href="/app/credits" className="underline hover:text-red-600">Buy more</a>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Simple analyze button for short inputs */}
-      {!isActive && text.length >= 20 && text.length < 200 && !showAdvanced && (
-        <div className="mt-3 flex justify-end">
-          <Button
-            onClick={handleAnalyze}
-            disabled={text.trim().length < 20}
-            size="lg"
-          >
-            <Sparkles className="mr-2 h-4 w-4" />
-            Analyze (1 cr)
-          </Button>
-        </div>
-      )}
-
-      {/* Progress display */}
+      {/* Progress: Quick (streaming) */}
       {isActive && isQuick && (
         <StreamingOutput
           phase={quickHook.phase}
@@ -394,33 +203,77 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
         />
       )}
 
-      {isActive && !isQuick && (
+      {/* Progress: Standard/Deep/Comprehensive (pipeline) */}
+      {isActive && usePipelinePath && (
         <div className="mt-4 rounded-lg border border-gray-200 bg-white p-4">
-          <div className="text-sm font-medium mb-3">
-            {pipeline.phase === "scope" && "Mapping scope..."}
-            {pipeline.phase === "decomposing" && "Analyzing areas..."}
-            {pipeline.phase === "critiquing" && "Validating connections..."}
-            {pipeline.phase === "weaving" && "Discovering cross-area links..."}
-            {pipeline.phase === "synthesizing" && "Generating strategy..."}
-            {pipeline.phase === "complete" && "Complete!"}
-            {pipeline.phase === "error" && "Error occurred"}
+          {/* Phase indicator */}
+          <div className="flex items-center gap-2 text-sm font-medium mb-3">
+            {PHASE_DISPLAY[pipeline.phase]?.icon === "spinner" && (
+              <Loader2 className="h-4 w-4 text-interaxis-500 animate-spin" />
+            )}
+            {PHASE_DISPLAY[pipeline.phase]?.icon === "check" && (
+              <CheckCircle className="h-4 w-4 text-green-500" />
+            )}
+            {PHASE_DISPLAY[pipeline.phase]?.icon === "error" && (
+              <AlertCircle className="h-4 w-4 text-red-500" />
+            )}
+            <span>{PHASE_DISPLAY[pipeline.phase]?.label ?? "Processing..."}</span>
           </div>
+
+          {/* Pipeline steps progress bar */}
+          <div className="flex gap-1 mb-3">
+            {(["scope", "decomposing", "critiquing", "weaving", "synthesizing"] as const).map((step) => {
+              const phases = ["scope", "decomposing", "critiquing", "weaving", "synthesizing", "complete"];
+              const currentIdx = phases.indexOf(pipeline.phase);
+              const stepIdx = phases.indexOf(step);
+              const isDone = currentIdx > stepIdx;
+              const isCurrent = currentIdx === stepIdx;
+              // Skip scope bar if not multi-space
+              if (step === "scope" && !isMultiSpace) return null;
+              // Skip weave bar if single space
+              if (step === "weaving" && pipeline.spaces.length < 2) return null;
+              return (
+                <div
+                  key={step}
+                  className={cn(
+                    "h-1.5 flex-1 rounded-full transition-all duration-500",
+                    isDone ? "bg-green-400" :
+                    isCurrent ? "bg-interaxis-400 animate-pulse" :
+                    "bg-gray-200"
+                  )}
+                />
+              );
+            })}
+          </div>
+
+          {/* Per-space progress */}
           {pipeline.spaces.length > 0 && (
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               {pipeline.spaces.map((s, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
-                  <div className={cn(
-                    "h-1.5 w-1.5 rounded-full",
-                    s.status === "done" ? "bg-green-500" :
-                    s.status === "error" ? "bg-red-500" :
-                    s.status === "pending" ? "bg-gray-300" :
-                    "bg-interaxis-500 animate-pulse"
-                  )} />
-                  <span className="text-gray-600">{s.name}</span>
+                  <div
+                    className={cn(
+                      "h-2 w-2 rounded-full flex-shrink-0",
+                      s.status === "done"
+                        ? "bg-green-500"
+                        : s.status === "error"
+                          ? "bg-red-500"
+                          : s.status === "pending"
+                            ? "bg-gray-300"
+                            : "bg-interaxis-500 animate-pulse"
+                    )}
+                  />
+                  <span className="text-gray-700 font-medium">{s.name}</span>
                   {s.entityCount !== undefined && (
-                    <span className="text-gray-400">
-                      {s.entityCount} entities · {s.edgeCount} edges
+                    <span className="text-gray-400 ml-auto">
+                      {s.entityCount} entities · {s.edgeCount ?? 0} edges
                     </span>
+                  )}
+                  {s.status === "decomposing" && (
+                    <span className="text-interaxis-500 ml-auto text-[10px]">analyzing...</span>
+                  )}
+                  {s.status === "critiquing" && (
+                    <span className="text-amber-500 ml-auto text-[10px]">validating...</span>
                   )}
                 </div>
               ))}
