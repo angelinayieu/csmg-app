@@ -13,7 +13,16 @@ const VALID_DIMS = [
   "correlational", "logical", "epistemic", "comparative", "agentive",
 ];
 const VALID_POLARITIES = ["positive", "negative", "neutral", "conditional"];
-const VALID_TAGS = ["stated", "inferred", "predicted"];
+const VALID_EDGE_TAGS = ["stated", "inferred", "predicted"];
+const VALID_ENTITY_TAGS = ["explicit", "implicit", "assumed"];
+const VALID_ENTITY_CATS = ["concrete", "abstract", "process", "relational", "epistemic"];
+const VALID_IMPORTANCE = ["fundamental", "critical", "important", "moderate"];
+
+/** Coerce a value to one of the valid options, or return fallback */
+function coerce<T extends string>(val: unknown, valid: T[], fallback: T): T {
+  if (typeof val === "string" && valid.includes(val as T)) return val as T;
+  return fallback;
+}
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -106,12 +115,12 @@ ${text}`;
       entity_id: (e.entity_id ?? "").trim(),
       name: e.name ?? "Unknown",
       description: e.description ?? null,
-      source_tag: e.source_tag ?? "inferred",
+      source_tag: coerce(e.source_tag, VALID_ENTITY_TAGS, "implicit"),
       entity_type: e.entity_type ?? "concept",
-      entity_category: e.entity_category ?? "abstract",
+      entity_category: coerce(e.entity_category, VALID_ENTITY_CATS, "abstract"),
       layer: e.layer ?? null,
-      importance: e.importance ?? "moderate",
-      confidence: e.confidence ?? 0.8,
+      importance: coerce(e.importance, VALID_IMPORTANCE, "moderate"),
+      confidence: Math.max(0, Math.min(1, typeof e.confidence === "number" ? e.confidence : 0.8)),
       is_leverage_point: e.is_leverage_point ?? false,
       is_risk_point: e.is_risk_point ?? false,
       is_master_bottleneck: e.is_master_bottleneck ?? false,
@@ -163,7 +172,7 @@ ${text}`;
         target_entity_id: tgtUuid,
         relationship_type: e.relationship_type ?? "relates-to",
         dimension: VALID_DIMS.includes(e.dimension) ? e.dimension : "functional",
-        source_tag: VALID_TAGS.includes(e.source_tag) ? e.source_tag : "inferred",
+        source_tag: VALID_EDGE_TAGS.includes(e.source_tag) ? e.source_tag : "inferred",
         strength: Math.max(0, Math.min(1, e.strength ?? 0.5)),
         polarity: VALID_POLARITIES.includes(e.polarity) ? e.polarity : "positive",
         confidence: Math.max(0, Math.min(1, e.confidence ?? 0.8)),

@@ -68,8 +68,17 @@ export function usePipeline() {
       });
 
       clearTimeout(timeoutId);
+
+      // Handle non-JSON responses (e.g. Next.js error pages)
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) {
+        const body = await res.text();
+        console.error("[Scope] Non-JSON response:", res.status, body.slice(0, 300));
+        throw new Error(`Server error (${res.status}). Check the console for details.`);
+      }
+
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error || `Scope failed with status ${res.status}`);
       setScopeResult(data);
       return data;
     } catch (err) {
@@ -79,7 +88,9 @@ export function usePipeline() {
         setPhase("error");
         return null;
       }
-      setError(err instanceof Error ? err.message : "Scope mapping failed");
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Scope] Error:", msg);
+      setError(msg || "Scope mapping failed unexpectedly");
       setPhase("error");
       return null;
     }

@@ -164,17 +164,23 @@ export async function POST(request: Request) {
         const db = supabase as any;
         try {
           // Insert entities (with v2 fields)
+          const VALID_E_CATS = ["concrete", "abstract", "process", "relational", "epistemic"] as const;
+          const VALID_E_TAGS = ["explicit", "implicit", "assumed"] as const;
+          const VALID_E_IMP = ["fundamental", "critical", "important", "moderate"] as const;
+          const coerceVal = <T extends string>(v: unknown, valid: readonly T[], fb: T): T =>
+            typeof v === "string" && (valid as readonly string[]).includes(v) ? v as T : fb;
+
           const entityInserts = (parsed.entities ?? []).map((e) => ({
             space_id: spaceId,
             entity_id: e.entity_id,
             name: e.name,
             description: e.description ?? null,
-            source_tag: e.source_tag ?? "explicit",
+            source_tag: coerceVal(e.source_tag, VALID_E_TAGS, "implicit"),
             entity_type: e.entity_type ?? "unknown",
-            entity_category: e.entity_category ?? "concrete",
+            entity_category: coerceVal(e.entity_category, VALID_E_CATS, "abstract"),
             layer: e.layer ?? null,
-            importance: e.importance ?? null,
-            confidence: e.confidence ?? 0.8,
+            importance: coerceVal(e.importance, VALID_E_IMP, "moderate"),
+            confidence: Math.max(0, Math.min(1, typeof e.confidence === "number" ? e.confidence : 0.8)),
             is_leverage_point: e.is_leverage_point ?? false,
             is_risk_point: e.is_risk_point ?? false,
             is_master_bottleneck: e.is_master_bottleneck ?? false,

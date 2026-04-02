@@ -82,7 +82,12 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
       if (isMultiSpace && text.length >= 500) {
         // Deep/Comprehensive with long text: scope map first
         const scopeData = await pipeline.runScope(text);
-        if (!scopeData?.spaces?.length) return;
+        if (!scopeData?.spaces?.length) {
+          // runScope sets phase to "error" on failure.
+          // If it somehow returned empty spaces without error, reset.
+          if (scopeData !== null) pipeline.reset();
+          return;
+        }
         spaces = scopeData.spaces;
       } else {
         // Standard or short-text Deep: single space, no scope needed

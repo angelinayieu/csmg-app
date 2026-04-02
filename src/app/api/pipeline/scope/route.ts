@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { llmJSON } from "@/lib/llm";
-import { safeJsonParse } from "@/lib/api-helpers";
 
 export const maxDuration = 30;
 
@@ -18,25 +17,42 @@ interface ScopeResult {
 
 export async function POST(request: Request) {
   const startTime = Date.now();
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+
+  // 1. Auth check
+  let user;
+  try {
+    const supabase = await createClient();
+    const { data } = await supabase.auth.getUser();
+    user = data.user;
+  } catch (authErr) {
+    console.error("[Scope] Auth error:", authErr);
+    return NextResponse.json(
+      { error: "Authentication failed", details: String(authErr) },
+      { status: 500 }
+    );
+  }
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data: body, error: parseError } = await safeJsonParse(request);
-  if (parseError || !body) {
-    return NextResponse.json({ error: parseError ?? "Invalid JSON" }, { status: 400 });
-  }
-  const { text } = body;
-  if (!text || text.length < 20) {
-    return NextResponse.json({ error: "Text too short" }, { status: 400 });
+  // 2. Parse body
+  let text: string;
+  try {
+    const body = await request.json();
+    text = body?.text;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
   }
 
-  // For short inputs, skip scope mapping
+  if (!text || typeof text !== "string" || text.length < 20) {
+    return NextResponse.json(
+      { error: "Text too short (minimum 20 characters)" },
+      { status: 400 }
+    );
+  }
+
+  // 3. For short inputs, skip LLM scope mapping
   if (text.length < 400) {
     return NextResponse.json({
       spaces: [
@@ -53,11 +69,11 @@ export async function POST(request: Request) {
     });
   }
 
+  // 4. LLM-based scope mapping
   try {
-    
     // Truncate very long texts to reduce LLM processing time
     const inputForLLM = text.length > 8000 ? text.slice(0, 8000) + "\n[...text truncated...]" : text;
-    
+
     const scope = await llmJSON<ScopeResult>({
       system: `You are mapping the analytical scope of a complex input. Identify 3-4 distinct analytical areas (not more) that together cover the COMPLETE scope. Each area should be a self-contained domain. PRIORITIZE SPEED — favor broad areas over fine-grained ones.
 
@@ -87,17 +103,26 @@ Return ONLY valid JSON:
       model: "gpt-4o-mini",
     });
 
+    // Validate the response has spaces
+    if (!scope?.spaces?.length) {
+      console.error("[Scope] LLM returned no spaces:", scope);
+      return NextResponse.json(
+        { error: "Scope mapping returned empty result. Try again or use Standard analysis." },
+        { status: 500 }
+      );
+    }
+
     const elapsed = Date.now() - startTime;
-    
     return NextResponse.json({
       ...scope,
-      _timing: { scopeMapMs: elapsed }
+      _timing: { scopeMapMs: elapsed },
     });
   } catch (err) {
     const elapsed = Date.now() - startTime;
-    console.error(`[Scope] Failed after ${elapsed}ms:`, err);
+    const details = err instanceof Error ? err.message : String(err);
+    console.error(`[Scope] Failed after ${elapsed}ms:`, details);
     return NextResponse.json(
-      { error: "Scope mapping failed", details: err instanceof Error ? err.message : "Unknown error" },
+      { error: `Scope mapping failed: ${details}` },
       { status: 500 }
     );
   }

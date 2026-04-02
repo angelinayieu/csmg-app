@@ -158,17 +158,23 @@ export async function POST(request: Request) {
           // Insert entities
           const entityMap = new Map<string, string>();
           if (space.structured.entities?.length) {
+            const VALID_E_CATS = ["concrete", "abstract", "process", "relational", "epistemic"];
+            const VALID_E_TAGS = ["explicit", "implicit", "assumed"];
+            const VALID_E_IMP = ["fundamental", "critical", "important", "moderate"];
+            const coerceVal = (v: unknown, valid: string[], fb: string): string =>
+              typeof v === "string" && valid.includes(v) ? v : fb;
+
             const entityInserts = space.structured.entities.map((e) => ({
               space_id: spaceId,
               entity_id: e.entity_id,
               name: e.name,
               description: e.description ?? null,
-              source_tag: e.source_tag ?? "explicit",
+              source_tag: coerceVal(e.source_tag, VALID_E_TAGS, "implicit"),
               entity_type: e.entity_type ?? "unknown",
-              entity_category: e.entity_category ?? "concrete",
+              entity_category: coerceVal(e.entity_category, VALID_E_CATS, "abstract"),
               layer: e.layer ?? null,
-              importance: e.importance ?? null,
-              confidence: e.confidence ?? 0.8,
+              importance: coerceVal(e.importance, VALID_E_IMP, "moderate"),
+              confidence: Math.max(0, Math.min(1, typeof e.confidence === "number" ? e.confidence : 0.8)),
               is_leverage_point: e.is_leverage_point ?? false,
               is_risk_point: e.is_risk_point ?? false,
               is_master_bottleneck: e.is_master_bottleneck ?? false,
