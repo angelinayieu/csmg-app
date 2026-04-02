@@ -1,15 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { llmJSON } from "@/lib/llm";
-import { safeJsonParse, verifySpaceOwnership, verifyMultiSpaceOwnership } from "@/lib/api-helpers";
+import { verifySpaceOwnership } from "@/lib/api-helpers";
+import { sanitizeEdge, sanitizeCycle, resilientInsert, EDGE_DIMENSIONS } from "@/lib/sanitize";
 import type { Entity, Edge, Cycle } from "@/types";
 
 export const maxDuration = 30;
-
-const VALID_DIMS = [
-  "structural", "functional", "temporal", "causal",
-  "correlational", "logical", "epistemic", "comparative", "agentive",
-];
 
 interface CritiqueResult {
   new_edges: Array<{
@@ -46,10 +42,13 @@ export async function POST(request: Request) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
-  const { data: body, error: parseError } = await safeJsonParse(request);
-  if (parseError) return parseError;
-
-  const { spaceId } = body;
+  let spaceId: string;
+  try {
+    const body = await request.json();
+    spaceId = body.spaceId;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
 
   if (!spaceId) {
     return NextResponse.json({ error: "spaceId required" }, { status: 400 });
@@ -120,46 +119,42 @@ Return ONLY valid JSON.`,
       edges.map((e) => `${uuidToId.get(e.source_entity_id)}→${uuidToId.get(e.target_entity_id)}→${e.relationship_type}`)
     );
 
+    // Sanitize and insert new edges
+    const newEdgeRows = (result.new_edges ?? [])
+      .filter((edge) => {
+        const key = `${edge.source_entity_id}→${edge.target_entity_id}→${edge.relationship_type}`;
+        return !existingKeys.has(key);
+      })
+      .map((edge) =>
+        sanitizeEdge(
+          { ...edge, source_tag: "predicted", polarity: "positive", conditions: edge.reasoning ?? null },
+          spaceId,
+          entityIdToUuid
+        )
+      )
+      .filter((e): e is NonNullable<typeof e> => e !== null);
+
     let addedEdges = 0;
-    for (const edge of result.new_edges ?? []) {
-      const key = `${edge.source_entity_id}→${edge.target_entity_id}→${edge.relationship_type}`;
-      if (existingKeys.has(key)) continue;
-
-      const srcUuid = entityIdToUuid.get(edge.source_entity_id);
-      const tgtUuid = entityIdToUuid.get(edge.target_entity_id);
-      if (!srcUuid || !tgtUuid) continue;
-
-      const { error } = await db.from("edges").insert({
-        space_id: spaceId,
-        source_entity_id: srcUuid,
-        target_entity_id: tgtUuid,
-        relationship_type: edge.relationship_type,
-        dimension: VALID_DIMS.includes(edge.dimension) ? edge.dimension : "functional",
-        source_tag: "predicted",
-        strength: edge.strength ?? 0.6,
-        polarity: "positive",
-        confidence: edge.confidence ?? 0.7,
-        conditions: edge.reasoning ?? null,
-      });
-      if (!error) addedEdges++;
+    if (newEdgeRows.length > 0) {
+      const { inserted } = await resilientInsert(db, "edges", newEdgeRows, "id");
+      addedEdges = inserted;
     }
 
-    // Insert new cycles
+    // Sanitize and insert new cycles
+    const newCycleRows = (result.new_cycles ?? [])
+      .map((cycle, i) =>
+        sanitizeCycle(
+          { ...cycle, cycle_id: `cycle_critique_${i + 1}`, intervention_point_entity_id: cycle.intervention_point },
+          spaceId,
+          entityIdToUuid
+        )
+      )
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+
     let addedCycles = 0;
-    for (const cycle of result.new_cycles ?? []) {
-      const classification = ["reinforcing_positive", "reinforcing_negative", "balancing"].includes(cycle.classification)
-        ? cycle.classification : "reinforcing_positive";
-      const { error } = await db.from("cycles").insert({
-        space_id: spaceId,
-        cycle_id: `cycle_critique_${addedCycles + 1}`,
-        name: cycle.name,
-        classification,
-        entity_ids: cycle.entity_ids,
-        intervention_point_entity_id: cycle.intervention_point
-          ? entityIdToUuid.get(cycle.intervention_point) ?? null : null,
-        description: cycle.description ?? null,
-      });
-      if (!error) addedCycles++;
+    if (newCycleRows.length > 0) {
+      const { inserted } = await resilientInsert(db, "cycles", newCycleRows, "id");
+      addedCycles = inserted;
     }
 
     // Update rankings
