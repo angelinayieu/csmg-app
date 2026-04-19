@@ -247,6 +247,16 @@ interface UseIntelligenceRadarReturn {
   epistemicTypeMap: Map<string, EpistemicNodeType>;
   credibilityMap: Map<string, SourceCredibility>;
   graphClusters: LandscapeCluster[];
+
+  // Synthesis data + derived fields — exposed so consumers (e.g.
+  // intelligence-radar-module) can resolve axiom backlinks, render
+  // insight convergences, and render expansion axioms without
+  // re-parsing synthesis_data themselves.
+  synthesisData: SynthesisData | null;
+  axioms: SynthesisData["axioms"];
+  insightConvergences: SynthesisData["insight_convergences"];
+  assumptionInversions: SynthesisData["assumption_inversions"];
+  expansionAxioms: SynthesisData["expansion_axioms"];
 }
 
 /** Result returned after a strategy refresh triggered from intelligence signals */
