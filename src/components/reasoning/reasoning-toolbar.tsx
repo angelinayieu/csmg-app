@@ -15,6 +15,7 @@ interface ReasoningToolbarProps {
   onClear: () => void;
   selectedEntity?: Entity | null;
   entities?: Entity[];
+  disabled?: boolean;
 }
 
 const operations: {
@@ -29,6 +30,7 @@ const operations: {
   { op: "cascade", label: "Risks", color: "#FF3B30", needsEntity: true },
   { op: "path", label: "Paths", color: "#34C759", needsTwoEntities: true },
   { op: "link_prediction", label: "Predict", color: "#AF52DE" },
+  { op: "comprehensive", label: "System", color: "#5E5CE6" },
 ];
 
 export function ReasoningToolbar({
@@ -38,6 +40,7 @@ export function ReasoningToolbar({
   onClear,
   selectedEntity,
   entities = [],
+  disabled = false,
 }: ReasoningToolbarProps) {
   function handleRun(op: ReasoningOp) {
     const opDef = operations.find((o) => o.op === op);
@@ -112,13 +115,13 @@ export function ReasoningToolbar({
             <button
               key={op}
               onClick={() => (isActive ? onClear() : handleRun(op))}
-              disabled={loading && !isActive}
+              disabled={disabled || (loading && !isActive)}
               className={cn(
                 "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-200",
                 isActive
                   ? "text-white shadow-sm"
                   : "border border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50",
-                loading && !isActive && "cursor-not-allowed opacity-40"
+                (disabled || (loading && !isActive)) && "cursor-not-allowed opacity-40"
               )}
               style={{
                 backgroundColor: isActive ? color : undefined,

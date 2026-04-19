@@ -57,11 +57,24 @@ export function TierSelector({
             <div className="mt-1.5">
               <div
                 className={cn(
-                  "text-sm font-semibold",
+                  "text-sm font-semibold flex items-center gap-1",
                   isSelected ? "text-interaxis-700" : "text-gray-800"
                 )}
               >
                 {tier.label}
+                {tierId === "comprehensive" && (
+                  <span
+                    className={cn(
+                      "rounded-full px-1.5 py-[1px] text-[8px] font-bold uppercase tracking-wider",
+                      isSelected
+                        ? "bg-gradient-to-r from-violet-500 to-indigo-500 text-white"
+                        : "bg-violet-50 text-violet-600 ring-1 ring-violet-200",
+                    )}
+                    title="Strictest mode — forces HIDDEN-axiom extraction, all auto-bridges, fresh research, maximum retry budget"
+                  >
+                    max
+                  </span>
+                )}
               </div>
               <div className="mt-0.5 text-[11px] leading-snug text-gray-500">
                 {tier.time}

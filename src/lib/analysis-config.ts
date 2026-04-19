@@ -13,6 +13,7 @@ export interface CrossSpaceConfig {
   weave: boolean;
   synthesis: boolean;
   externalKnowledge: boolean;
+  researchDepth?: "training" | "light" | "standard" | "deep";
 }
 
 export interface AnalysisConfig {

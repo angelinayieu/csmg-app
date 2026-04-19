@@ -1,8 +1,11 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { MessageCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { SpaceChat } from "@/components/chat/space-chat";
 import { AnalysisAccordion } from "@/components/space/analysis-accordion";
 import { SpaceGraph } from "@/components/graph/space-graph";
 import { SynthesisView } from "@/components/synthesis/synthesis-view";
@@ -17,7 +20,16 @@ import { PredictionCards } from "@/components/reasoning/prediction-card";
 import { PathResults } from "@/components/reasoning/path-results";
 import { LoopDetailCards } from "@/components/reasoning/loop-detail-card";
 import { useReasoning } from "@/lib/hooks/use-reasoning";
+import { useIterativeReasoning } from "@/lib/hooks/use-iterative-reasoning";
+import { DeepenButton } from "@/components/reasoning/deepen-button";
+import { IterationResultsCard } from "@/components/reasoning/iteration-results-card";
 import { edgeDimensionStyles, domainColors } from "@/lib/design-tokens";
+import { FindingsTab } from "@/components/workspace/findings-tab";
+import { FindingDetailPanel } from "@/components/workspace/finding-detail-panel";
+import { ConvergenceExpanded } from "@/components/workspace/convergence-expanded";
+import { GoalStrip } from "@/components/workspace/goal-strip";
+import { rankFindings } from "@/lib/findings/rank-findings";
+import type { LayoutType } from "@/lib/graph/layout-engine";
 import type {
   Space,
   Entity,
@@ -28,7 +40,12 @@ import type {
   Contradiction,
   Scenario,
   ActionItem,
+  Bridge,
 } from "@/types";
+import type { InteractionField, InteractionMetadata } from "@/types/interactions";
+import type { SynthesisData } from "@/types/synthesis";
+import type { Finding } from "@/types/finding";
+import type { ImprovementGoal } from "@/types/goals";
 
 interface SpaceDetailTabsProps {
   space: Space;
@@ -43,9 +60,12 @@ interface SpaceDetailTabsProps {
   siblingEntities?: Entity[];
   siblingEdges?: Edge[];
   domainMap?: Record<string, { name: string; index: number }>;
+  bridges?: Bridge[];
+  activeGoal?: ImprovementGoal | null;
 }
 
 const tabs = [
+  { id: "convergence", label: "Convergence" },
   { id: "graph", label: "Graph View" },
   { id: "analysis", label: "Analysis View" },
   { id: "synthesis", label: "Synthesis View" },
@@ -66,19 +86,82 @@ export function SpaceDetailTabs({
   siblingEntities = [],
   siblingEdges = [],
   domainMap = {},
+  bridges = [],
+  activeGoal,
 }: SpaceDetailTabsProps) {
-  const [activeTab, setActiveTab] = useState<TabId>("graph");
+  const router = useRouter();
+  const [activeTab, setActiveTab] = useState<TabId>("convergence");
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
+  const [showChat, setShowChat] = useState(false);
+  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+  const [expandedFinding, setExpandedFinding] = useState<Finding | null>(null);
+
+  // Compute findings from synthesis data
+  const findings = useMemo(() => {
+    const synthRaw = space.synthesis_data;
+    if (!synthRaw) return [];
+    const synthData = (typeof synthRaw === "string" ? JSON.parse(synthRaw) : synthRaw) as SynthesisData;
+    const interactionMeta = (synthData as unknown as Record<string, unknown>).interaction_metadata as InteractionMetadata | undefined;
+    return rankFindings({
+      synthesisData: synthData,
+      entities,
+      interactionMetadata: interactionMeta ?? null,
+      activeGoal: activeGoal ?? null,
+    });
+  }, [space.synthesis_data, entities, activeGoal]);
+
+  // Called after chat changes are accepted + incremental analysis completes
+  const handleGraphChanged = useCallback(() => {
+    router.refresh();
+  }, [router]);
   const [visibleDimensions, setVisibleDimensions] = useState<Set<string>>(
     () => new Set(Object.keys(edgeDimensionStyles))
   );
-  const [showExternal, setShowExternal] = useState(true);
+  const [showExternal, setShowExternal] = useState(
+    () => !entities.some((e) => e.knowledge_layer !== "external")
+  );
   const [showSiblings, setShowSiblings] = useState(false);
   const [activeDomains, setActiveDomains] = useState<Set<string>>(() => new Set([space.id]));
+  const [layoutType, setLayoutType] = useState<LayoutType>("force");
 
   // Check if space has external entities
   const hasExternalEntities = entities.some((e) => e.knowledge_layer === "external");
   const hasSiblings = siblingEntities.length > 0;
+  const hasBridges = bridges.length > 0;
+
+  // Convert bridges to synthetic Edge objects for graph rendering
+  // These appear as gold dashed lines when sibling mode is active
+  const bridgeEdges = useMemo<Edge[]>(() => {
+    if (!showSiblings || bridges.length === 0) return [];
+    return bridges.map((b) => ({
+      id: `bridge-${b.id}`,
+      space_id: b.source_space_id,
+      source_entity_id: b.source_entity_id,
+      target_entity_id: b.target_entity_id,
+      relationship_type: b.shared_variable_name,
+      dimension: "comparative",
+      source_tag: "predicted",
+      strength: b.coupling_strength === "strong" ? 0.9 : b.coupling_strength === "moderate" ? 0.7 : 0.5,
+      polarity: "positive",
+      confidence: b.confidence ?? 0.8,
+      knowledge_layer: "bridge",
+      description: b.description,
+      conditions: null,
+      dynamics: null,
+      is_tradeoff: false,
+      is_low_confidence: false,
+      requires_user_approval: false,
+      approved_at: null,
+      utility: null,
+      provenance: null,
+      resolved_by_entity_id: null,
+      is_part_of_cycle: false,
+      cycle_id: null,
+      dynamics_properties: null,
+      created_at: "",
+      updated_at: "",
+    } as unknown as Edge));
+  }, [bridges, showSiblings]);
 
   // Build unified entity/edge lists when showing siblings
   const unifiedEntities = useMemo(() => {
@@ -89,12 +172,18 @@ export function SpaceDetailTabs({
   const unifiedEdges = useMemo(() => {
     if (!showSiblings) return edges;
     const activeEntityIds = new Set(unifiedEntities.map((e) => e.id));
-    return [...edges, ...siblingEdges.filter((e) =>
+    const sibEdges = siblingEdges.filter((e) =>
       activeDomains.has(e.space_id) &&
       activeEntityIds.has(e.source_entity_id) &&
       activeEntityIds.has(e.target_entity_id)
-    )];
-  }, [edges, siblingEdges, showSiblings, activeDomains, unifiedEntities]);
+    );
+    // Include bridge edges — cross-space connections rendered as gold dashed lines
+    const validBridgeEdges = bridgeEdges.filter((e) =>
+      activeEntityIds.has(e.source_entity_id) &&
+      activeEntityIds.has(e.target_entity_id)
+    );
+    return [...edges, ...sibEdges, ...validBridgeEdges];
+  }, [edges, siblingEdges, showSiblings, activeDomains, unifiedEntities, bridgeEdges]);
 
   // Filter entities/edges based on external toggle
   const filteredEntities = showExternal
@@ -123,6 +212,8 @@ export function SpaceDetailTabs({
     runReasoning,
     clearResults,
   } = useReasoning();
+
+  const iterativeReasoning = useIterativeReasoning(space.id);
 
   // Build entity UUID → Entity lookup for NodeDetail
   const entityMap = useMemo(() => {
@@ -154,30 +245,71 @@ export function SpaceDetailTabs({
   return (
     <div className="flex h-full flex-col">
       {/* Tab navigation */}
-      <div className="flex gap-1 rounded-lg bg-gray-100 p-1">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => {
-              setActiveTab(tab.id);
-              setSelectedEntity(null);
-            }}
-            className={cn(
-              "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
-              activeTab === tab.id
-                ? "bg-white text-gray-900 shadow-sm"
-                : "text-gray-600 hover:text-gray-900"
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div className="flex items-center gap-2">
+        <div className="flex flex-1 gap-1 rounded-lg bg-gray-100 p-1">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => {
+                setActiveTab(tab.id);
+                setSelectedEntity(null);
+              }}
+              className={cn(
+                "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+                activeTab === tab.id
+                  ? "bg-white text-gray-900 shadow-sm"
+                  : "text-gray-600 hover:text-gray-900"
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => setShowChat(!showChat)}
+          className={cn(
+            "flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+            showChat
+              ? "border-interaxis-300 bg-interaxis-50 text-interaxis-700"
+              : "border-gray-200 bg-white text-gray-600 hover:text-gray-900 hover:border-gray-300"
+          )}
+        >
+          <MessageCircle className="h-4 w-4" />
+          Chat
+        </button>
       </div>
+
+      {/* Goal strip (visible on convergence tab) */}
+      {activeTab === "convergence" && activeGoal && (
+        <div className="mt-3">
+          <GoalStrip goal={activeGoal} />
+        </div>
+      )}
 
       {/* Tab content with optional right panel */}
       <div className="mt-4 flex flex-1 gap-4 overflow-hidden">
         {/* Main content area */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-hidden flex flex-col">
+          {/* Convergence View */}
+          {activeTab === "convergence" && (
+            expandedFinding ? (
+              <ConvergenceExpanded
+                finding={expandedFinding}
+                entities={entities}
+                onBack={() => setExpandedFinding(null)}
+              />
+            ) : (
+              <FindingsTab
+                findings={findings}
+                selectedFindingId={selectedFinding?.id ?? null}
+                onSelectFinding={(f) => {
+                  setSelectedFinding(f);
+                  // If convergence type, double-click could expand
+                }}
+              />
+            )
+          )}
+
           {/* Graph View */}
           {activeTab === "graph" && (
             <div className="flex h-full flex-col gap-3">
@@ -190,6 +322,8 @@ export function SpaceDetailTabs({
                   }}
                   showExternal={showExternal}
                   onToggleExternal={hasExternalEntities ? () => setShowExternal(!showExternal) : undefined}
+                  layoutType={layoutType}
+                  onLayoutChange={setLayoutType}
                 />
                 <ReasoningToolbar
                   activeOp={activeOp}
@@ -198,6 +332,15 @@ export function SpaceDetailTabs({
                   onClear={clearResults}
                   selectedEntity={selectedEntity}
                   entities={entities}
+                  disabled={iterativeReasoning.isRunning}
+                />
+                <DeepenButton
+                  stage={iterativeReasoning.stage}
+                  currentIteration={iterativeReasoning.currentIteration}
+                  maxIterations={iterativeReasoning.maxIterations}
+                  isRunning={iterativeReasoning.isRunning}
+                  onRun={(n) => iterativeReasoning.run(n)}
+                  onStop={iterativeReasoning.stop}
                 />
               </div>
               {/* Domain filter row */}
@@ -213,6 +356,11 @@ export function SpaceDetailTabs({
                     )}
                   >
                     {showSiblings ? "Showing all areas" : "Show all areas"}
+                    {hasBridges && !showSiblings && (
+                      <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                        {bridges.length} bridge{bridges.length !== 1 ? "s" : ""}
+                      </span>
+                    )}
                   </button>
                   {showSiblings && Object.entries(domainMap).map(([spaceId, { name, index }]) => {
                     const isActive = activeDomains.has(spaceId);
@@ -245,9 +393,13 @@ export function SpaceDetailTabs({
                   edges={filteredEdges}
                   cycles={cycles}
                   onNodeClick={setSelectedEntity}
+                  onNodeDoubleClick={(entity) => {
+                    router.push(`/app/space/${space.id}/entity/${entity.id}`);
+                  }}
                   visibleDimensions={visibleDimensions}
                   spaceDescription={space.description ?? space.name}
                   domainMap={showSiblings ? domainMap : undefined}
+                  layoutType={layoutType}
                 />
               </div>
             </div>
@@ -274,13 +426,45 @@ export function SpaceDetailTabs({
               scenarios={scenarios}
               actionItems={actionItems}
               propositions={propositions}
+              bridges={bridges}
+              domainMap={domainMap}
+              onToggleActionDone={(actionId, done) => {
+                fetch(`/api/action-items/${actionId}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ status: done ? "completed" : "pending" }),
+                }).catch(() => {});
+              }}
             />
           )}
         </div>
 
         {/* Right panel (contextual per tab) */}
+        {activeTab === "convergence" && selectedFinding && !expandedFinding && (
+          <FindingDetailPanel
+            finding={selectedFinding}
+            entities={entities}
+            edges={edges}
+            onClose={() => setSelectedFinding(null)}
+          />
+        )}
         {activeTab === "graph" && (
           <div className="w-[260px] flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4">
+            {/* Iterative reasoning results */}
+            {(iterativeReasoning.deltas.length > 0 || iterativeReasoning.isRunning) && (
+              <div className="mb-4 border-b border-gray-100 pb-4">
+                <IterationResultsCard
+                  deltas={iterativeReasoning.deltas}
+                  isRunning={iterativeReasoning.isRunning}
+                  stage={iterativeReasoning.stage}
+                  currentIteration={iterativeReasoning.currentIteration}
+                  totalAddedEdges={iterativeReasoning.totalAddedEdges}
+                  totalAddedCycles={iterativeReasoning.totalAddedCycles}
+                  onReset={iterativeReasoning.reset}
+                />
+              </div>
+            )}
+
             {/* Reasoning error display */}
             {reasoningError && (
               <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
@@ -343,6 +527,10 @@ export function SpaceDetailTabs({
               leveragePoints={leveragePoints}
               cycles={cycles}
               entityMap={entityMap}
+              bridges={bridges}
+              showBridges={showSiblings && bridges.length > 0}
+              spaceNames={new Map(Object.entries(domainMap).map(([id, d]) => [id, d.name]))}
+              currentSpaceId={space.id}
             />
           </div>
         )}
@@ -354,7 +542,25 @@ export function SpaceDetailTabs({
           entity={selectedEntity}
           edges={edges}
           entityMap={entityMap}
+          spaceId={space.id}
+          interactionField={(() => {
+            const meta = (space.synthesis_data as Record<string, any>)?.interaction_metadata;
+            if (!meta?.fields) return null;
+            return (meta.fields as InteractionField[]).find(
+              (f) => f.entity_id === selectedEntity.entity_id
+            ) ?? null;
+          })()}
           onClose={() => setSelectedEntity(null)}
+        />
+      )}
+
+      {/* Chat panel */}
+      {showChat && (
+        <SpaceChat
+          spaceId={space.id}
+          entities={entities}
+          onClose={() => setShowChat(false)}
+          onGraphChanged={handleGraphChanged}
         />
       )}
     </div>

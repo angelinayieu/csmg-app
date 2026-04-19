@@ -1,6 +1,8 @@
 import { llmStream, llmJSON } from "@/lib/llm";
 import { getDecompositionPrompt, getStructuringPrompt } from "@/lib/prompts/tier-prompts";
-import { SYNTHESIS_SYSTEM_PROMPT } from "@/lib/prompts/synthesis";
+import { getSynthesisPrompt } from "@/lib/prompts/synthesis";
+import { buildDecompIntentBlock } from "@/lib/prompts/intent-context";
+import type { UserIntent } from "@/types/analysis";
 import { checkCredits, deductCredits } from "@/lib/credits";
 import { safeAuth } from "@/lib/api-helpers";
 import {
@@ -10,6 +12,7 @@ import {
   deduplicateEntities,
   resilientInsert,
   filterLowConfidenceEdges,
+  extractEvidenceBasis,
 } from "@/lib/sanitize";
 import type { StructuredDecomposition } from "@/types/analysis";
 
@@ -42,9 +45,11 @@ export async function POST(request: Request) {
 
   // 2. Validate input
   let text: string;
+  let intent: UserIntent | undefined;
   try {
     const body = await request.json();
     text = body.text;
+    intent = body.intent;
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
@@ -85,6 +90,9 @@ export async function POST(request: Request) {
       space_prefix: prefix || "A",
       input_text: text,
       maturity: "theoretical",
+      user_role: intent?.user_role ?? null,
+      primary_goal: intent?.primary_goal ?? null,
+      context_type: intent?.context_type ?? null,
     })
     .select()
     .single();
@@ -101,6 +109,16 @@ export async function POST(request: Request) {
   }
 
   const spaceId = spaceData.id as string;
+
+  // Agent run tracking — start a decomposer run that spans the SSE stream lifetime
+  const { beginRouteAgent } = await import("@/lib/agents/instrument-route");
+  const agent = await beginRouteAgent(db, {
+    spaceId,
+    userId: user.id,
+    kind: "decomposer",
+    triggerEvent: "analyze.requested",
+    triggerData: { tier: "quick" },
+  });
 
   // 4. Create SSE stream
   const encoder = new TextEncoder();
@@ -121,10 +139,12 @@ export async function POST(request: Request) {
       try {
         // ── Pass 1: Streaming Decomposition (Quick tier prompts) ──
         let rawDecomposition = "";
+        const intentPrefix = buildDecompIntentBlock(intent);
+        const enrichedText = intentPrefix ? intentPrefix + "\n\n" + text : text;
 
         for await (const chunk of llmStream({
           system: getDecompositionPrompt("quick"),
-          user: text,
+          user: enrichedText,
           maxTokens: 16000,
         })) {
           send("delta", chunk);
@@ -167,12 +187,19 @@ export async function POST(request: Request) {
         }
 
         // ── Filter low-confidence edges + deduplicate entities ──
-        const confFilteredEdges = filterLowConfidenceEdges(parsed.edges ?? []);
+        const rawEntityCount = (parsed.entities ?? []).length;
+        const rawEdgeCount = (parsed.edges ?? []).length;
+        const confFilteredEdges = filterLowConfidenceEdges(parsed.edges ?? [], 0.2, (parsed.entities ?? []).length);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { entities: dedupedEntities, edges: dedupedEdges } = deduplicateEntities(
           (parsed.entities ?? []) as any,
           confFilteredEdges as any
         );
+
+        console.log(`[analyze] Pipeline: ${rawEntityCount} raw entities → ${dedupedEntities.length} after dedup, ${rawEdgeCount} raw edges → ${confFilteredEdges.length} after confidence → ${dedupedEdges.length} after dedup`);
+        if (dedupedEntities.length === 0) {
+          console.error(`[analyze] WARNING: 0 entities after sanitization! Raw entity count was ${rawEntityCount}. Input text length: ${text.length} chars`);
+        }
 
         // ── Database Inserts ──
         try {
@@ -185,6 +212,44 @@ export async function POST(request: Request) {
             for (const row of entityData) {
               entityIdMap.set(row.entity_id, row.id);
             }
+          }
+
+          // ── Persist evidence_basis as claims (non-critical) ──
+          // Mirrors orchestrate route pattern. Closes the "evidence discard" bug
+          // where LLM-generated evidence was extracted but never stored.
+          try {
+            const claimInserts: Array<{
+              space_id: string;
+              claim_text: string;
+              claim_type: string;
+              status: string;
+              confidence: number;
+              source_entity_id: string;
+              source_type: string;
+              source_quote: string | null;
+            }> = [];
+            for (const rawEntity of dedupedEntities) {
+              const entityUuid = entityIdMap.get(rawEntity.entity_id);
+              if (!entityUuid) continue;
+              const evidence = extractEvidenceBasis(rawEntity);
+              for (const ev of evidence) {
+                claimInserts.push({
+                  space_id: spaceId,
+                  claim_text: ev.claim,
+                  claim_type: ev.claim_type,
+                  status: "proposed",
+                  confidence: ev.confidence,
+                  source_entity_id: entityUuid,
+                  source_type: "synthesis",
+                  source_quote: ev.source_quote,
+                });
+              }
+            }
+            if (claimInserts.length > 0) {
+              await resilientInsert(db, "claims", claimInserts, "id");
+            }
+          } catch (claimErr) {
+            console.warn("[analyze] Claim persistence failed (non-critical):", claimErr);
           }
 
           // ── Insert edges (sanitized, skip invalid refs) ──
@@ -358,10 +423,10 @@ CONTEXT: The user submitted this text for analysis:
 Produce the full strategic synthesis JSON.`;
 
             const synthParsed = await llmJSON({
-              system: SYNTHESIS_SYSTEM_PROMPT,
+              system: getSynthesisPrompt(intent),
               user: synthInput,
-              maxTokens: 16000,
-              temperature: 0.5,
+              maxTokens: 16384,
+              temperature: 0.3,
             });
 
             // Store rich synthesis data
@@ -418,9 +483,17 @@ Produce the full strategic synthesis JSON.`;
         });
 
         // ── Done ──
+        await agent.complete({
+          findingsCount:
+            (parsed.metadata?.entity_count ?? 0) +
+            (parsed.metadata?.edge_count ?? 0) +
+            (parsed.metadata?.cycle_count ?? 0),
+          artifacts: ["entities", "edges", "cycles"],
+        });
         send("complete", JSON.stringify({ spaceId, creditsUsed: 1, newBalance }));
       } catch (err) {
         console.error("Analysis error:", err);
+        await agent.fail(err instanceof Error ? err.message : String(err));
         send(
           "error",
           JSON.stringify({

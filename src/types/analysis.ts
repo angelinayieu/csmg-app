@@ -1,3 +1,23 @@
+// ── Intent capture types ──
+
+export type UserRole =
+  | "solo_founder" | "founding_team" | "investor" | "advisor"
+  | "researcher" | "student" | "operator" | "executive";
+
+export type PrimaryGoal =
+  | "make_decision" | "understand_system" | "build_plan"
+  | "evaluate_risk" | "explore_options" | "validate_assumptions";
+
+export type ContextType =
+  | "startup" | "research" | "career" | "strategy"
+  | "operations" | "investment" | "education";
+
+export interface UserIntent {
+  user_role?: UserRole | null;
+  primary_goal?: PrimaryGoal | null;
+  context_type?: ContextType | null;
+}
+
 // Analysis phases for the state machine
 export type AnalysisPhase =
   | "idle"
@@ -92,7 +112,8 @@ export interface StructuredEntity {
     | "abstract"
     | "process"
     | "relational"
-    | "epistemic";
+    | "epistemic"
+    | "fault";
   layer: string | null;
   importance: "fundamental" | "critical" | "important" | "moderate";
   confidence: number;
@@ -103,8 +124,44 @@ export interface StructuredEntity {
   centrality_rank: number | null;
   is_shared_variable: boolean;
   is_decomposable: boolean;
-  knowledge_layer?: "internal" | "external" | "bridge";
+  knowledge_layer?: "internal" | "conceptual" | "external" | "bridge";
   authority_level?: "high" | "moderate" | "low" | "unverified";
+  ambiguity_type?: "harmful" | "premature" | "strategic" | null;
+  // Phase 8: Epistemic routing framework extensions
+  epistemic_status?: import("./epistemic").EpistemicStatus;
+  toulmin_role?: "claim" | "ground" | "warrant" | "backing" | "qualifier" | "rebuttal";
+  marr_level?: import("./epistemic").MarrLevel;
+  temporal_validity?: {
+    valid_from?: string | null;
+    valid_until?: string | null;
+    decay_rate?: "none" | "slow" | "moderate" | "fast" | "immediate";
+    temporal_scope?: string | null;
+  } | null;
+  manifold?: {
+    strategic?: {
+      alignment_to_goal?: "high" | "moderate" | "low" | "unknown";
+      optionality_value?: "high" | "moderate" | "low";
+      reversibility?: "easily_reversible" | "costly_to_reverse" | "irreversible";
+    };
+    operational?: {
+      maturity?: "proven" | "experimental" | "theoretical" | "unknown";
+      resource_intensity?: "high" | "moderate" | "low";
+      dependency_count?: number;
+    };
+    epistemic?: {
+      evidence_strength?: "empirical" | "theoretical" | "anecdotal" | "assumed";
+      consensus_level?: "established" | "emerging" | "contested" | "unknown";
+      falsifiability?: "testable" | "partially_testable" | "unfalsifiable";
+    };
+  } | null;
+  // Phase 9: Entity enrichment — evidence chains + causal roles
+  causal_role?: "truth" | "evidence" | "deliverable" | "application" | "outcome" | "goal";
+  evidence_basis?: Array<{
+    claim: string;
+    claim_type: "mechanism" | "assertion" | "prediction" | "assumption" | "finding";
+    confidence: number;
+    reasoning: string;
+  }> | null;
 }
 
 export interface StructuredEdge {
@@ -130,6 +187,8 @@ export interface StructuredEdge {
   resolved_by_entity_id: string | null;
   is_part_of_cycle: boolean;
   cycle_id: string | null;
+  // Phase 8: Pearl's causal hierarchy classification
+  pearl_level?: import("./epistemic").CausalDepth;
   dynamics?:
     | "threshold"
     | "linear"
@@ -140,8 +199,33 @@ export interface StructuredEdge {
     | "step_function"
     | "delayed";
   dynamics_properties?: Record<string, unknown>;
-  knowledge_layer?: "internal" | "external" | "bridge";
+  utility?: {
+    failure_consequence?: "catastrophic" | "degrading" | "recoverable" | "negligible";
+    propagation_speed?: "immediate" | "days" | "weeks" | "months" | "years";
+    actionability?: "directly_controllable" | "indirectly_influenceable" | "observable_only" | "fixed_constraint";
+    information_value?: "decision_critical" | "high" | "moderate" | "low";
+    decision_question?: string;
+  };
+  knowledge_layer?: "internal" | "conceptual" | "external" | "bridge";
   requires_user_approval?: boolean;
+  temporal_validity?: {
+    valid_from?: string | null;
+    valid_until?: string | null;
+    decay_rate?: "none" | "slow" | "moderate" | "fast" | "immediate";
+    temporal_scope?: string | null;
+  } | null;
+  // Set-theoretic topology — orthogonal to semantic relationship_type.
+  // Optional; filled in by the LLM when obvious, otherwise derived from
+  // relationship_type server-side. Enables cheap logical consistency checks.
+  topology?:
+    | "inside"
+    | "overlap"
+    | "meets"
+    | "disjoint"
+    | "composes"
+    | "cover"
+    | "equal"
+    | null;
 }
 
 export interface StructuredCycle {
@@ -187,6 +271,10 @@ export interface StructuredContradiction {
   conclusion_text: string;
   severity: "critical" | "moderate" | "minor";
   description: string;
+  // Optional: IDs of entities the contradiction implicates. When present, the
+  // decompose route materializes the contradiction as a "fault" entity with
+  // edges (relationship_type=contradicts, topology=disjoint) to these entities.
+  involved_entity_ids?: string[];
 }
 
 export interface StructuredScenario {

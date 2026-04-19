@@ -9,6 +9,65 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      reactions: {
+        Row: {
+          id: string;
+          space_id: string;
+          name: string;
+          reaction_type: "emergent" | "reinforcing" | "tension" | "trivial";
+          entity_ids: string[];
+          canonical_key: string;
+          probability: number;
+          ci_low: number | null;
+          ci_high: number | null;
+          mechanism: string | null;
+          implication: string | null;
+          probes: Json | null;
+          source_tag: "user" | "llm" | "inferred";
+          provenance: Json | null;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          name: string;
+          reaction_type: "emergent" | "reinforcing" | "tension" | "trivial";
+          entity_ids: string[];
+          canonical_key?: string;
+          probability: number;
+          ci_low?: number | null;
+          ci_high?: number | null;
+          mechanism?: string | null;
+          implication?: string | null;
+          probes?: Json | null;
+          source_tag?: "user" | "llm" | "inferred";
+          provenance?: Json | null;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          name?: string;
+          reaction_type?: "emergent" | "reinforcing" | "tension" | "trivial";
+          entity_ids?: string[];
+          canonical_key?: string;
+          probability?: number;
+          ci_low?: number | null;
+          ci_high?: number | null;
+          mechanism?: string | null;
+          implication?: string | null;
+          probes?: Json | null;
+          source_tag?: "user" | "llm" | "inferred";
+          provenance?: Json | null;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
       profiles: {
         Row: {
           id: string;
@@ -60,8 +119,14 @@ export type Database = {
           activation_dependencies: string[] | null;
           synthesis_data: Json | null;
           analysis_tier: string;
+          user_role: string | null;
+          primary_goal: string | null;
+          context_type: string | null;
           credits_used: number;
           agent_count: number;
+          strategy_committed_at: string | null;
+          digital_twin_state: "not_started" | "ready" | "active" | "retired";
+          twin_initialized_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -89,8 +154,14 @@ export type Database = {
           activation_dependencies?: string[] | null;
           synthesis_data?: Json | null;
           analysis_tier?: string;
+          user_role?: string | null;
+          primary_goal?: string | null;
+          context_type?: string | null;
           credits_used?: number;
           agent_count?: number;
+          strategy_committed_at?: string | null;
+          digital_twin_state?: "not_started" | "ready" | "active" | "retired";
+          twin_initialized_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -118,10 +189,190 @@ export type Database = {
           activation_dependencies?: string[] | null;
           synthesis_data?: Json | null;
           analysis_tier?: string;
+          user_role?: string | null;
+          primary_goal?: string | null;
+          context_type?: string | null;
           credits_used?: number;
           agent_count?: number;
+          strategy_committed_at?: string | null;
+          digital_twin_state?: "not_started" | "ready" | "active" | "retired";
+          twin_initialized_at?: string | null;
           created_at?: string;
           updated_at?: string;
+        };
+      };
+      metric_trackers: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          source_kind:
+            | "goal"
+            | "target_objective"
+            | "perspective_key_metric"
+            | "micro_tactic_metric"
+            | "leading_indicator"
+            | "lagging_indicator";
+          source_key: string;
+          source_id: string | null;
+          label: string;
+          measurement_method: string | null;
+          unit: string | null;
+          cadence: "daily" | "weekly" | "biweekly" | "monthly" | "adhoc";
+          baseline_value: number | null;
+          current_value: number | null;
+          target_value: number | null;
+          baseline_text: string | null;
+          current_text: string | null;
+          target_text: string | null;
+          green_reading: string | null;
+          yellow_reading: string | null;
+          red_reading: string | null;
+          user_confirmed: boolean;
+          measurability: "easy" | "medium" | "hard" | "impossible" | null;
+          strategy_generated_at: string | null;
+          supersedes_tracker_id: string | null;
+          status: "active" | "superseded" | "archived";
+          metric_definition: Json | null;
+          depth_tier: "light" | "mid" | "heavy" | null;
+          friction_cost: number | null;
+          data_category: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          source_kind:
+            | "goal"
+            | "target_objective"
+            | "perspective_key_metric"
+            | "micro_tactic_metric"
+            | "leading_indicator"
+            | "lagging_indicator";
+          source_key: string;
+          source_id?: string | null;
+          label: string;
+          measurement_method?: string | null;
+          unit?: string | null;
+          cadence?: "daily" | "weekly" | "biweekly" | "monthly" | "adhoc";
+          baseline_value?: number | null;
+          current_value?: number | null;
+          target_value?: number | null;
+          baseline_text?: string | null;
+          current_text?: string | null;
+          target_text?: string | null;
+          green_reading?: string | null;
+          yellow_reading?: string | null;
+          red_reading?: string | null;
+          user_confirmed?: boolean;
+          measurability?: "easy" | "medium" | "hard" | "impossible" | null;
+          strategy_generated_at?: string | null;
+          supersedes_tracker_id?: string | null;
+          status?: "active" | "superseded" | "archived";
+          metric_definition?: Json | null;
+          depth_tier?: "light" | "mid" | "heavy" | null;
+          friction_cost?: number | null;
+          data_category?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          user_id?: string;
+          source_kind?:
+            | "goal"
+            | "target_objective"
+            | "perspective_key_metric"
+            | "micro_tactic_metric"
+            | "leading_indicator"
+            | "lagging_indicator";
+          source_key?: string;
+          source_id?: string | null;
+          label?: string;
+          measurement_method?: string | null;
+          unit?: string | null;
+          cadence?: "daily" | "weekly" | "biweekly" | "monthly" | "adhoc";
+          baseline_value?: number | null;
+          current_value?: number | null;
+          target_value?: number | null;
+          baseline_text?: string | null;
+          current_text?: string | null;
+          target_text?: string | null;
+          green_reading?: string | null;
+          yellow_reading?: string | null;
+          red_reading?: string | null;
+          user_confirmed?: boolean;
+          measurability?: "easy" | "medium" | "hard" | "impossible" | null;
+          strategy_generated_at?: string | null;
+          supersedes_tracker_id?: string | null;
+          status?: "active" | "superseded" | "archived";
+          metric_definition?: Json | null;
+          depth_tier?: "light" | "mid" | "heavy" | null;
+          friction_cost?: number | null;
+          data_category?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      user_consent_manifest: {
+        Row: {
+          user_id: string;
+          consent_map: Json;
+          friction_budget: number;
+          escalation_policy: "ask_each_time" | "auto_if_value_above_x" | "never_escalate";
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          consent_map?: Json;
+          friction_budget?: number;
+          escalation_policy?: "ask_each_time" | "auto_if_value_above_x" | "never_escalate";
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          user_id?: string;
+          consent_map?: Json;
+          friction_budget?: number;
+          escalation_policy?: "ask_each_time" | "auto_if_value_above_x" | "never_escalate";
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      metric_observations: {
+        Row: {
+          id: string;
+          tracker_id: string;
+          recorded_at: string;
+          value: number | null;
+          value_text: string | null;
+          note: string | null;
+          source: "manual" | "ai_estimated" | "integration" | "seed";
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          tracker_id: string;
+          recorded_at?: string;
+          value?: number | null;
+          value_text?: string | null;
+          note?: string | null;
+          source?: "manual" | "ai_estimated" | "integration" | "seed";
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          tracker_id?: string;
+          recorded_at?: string;
+          value?: number | null;
+          value_text?: string | null;
+          note?: string | null;
+          source?: "manual" | "ai_estimated" | "integration" | "seed";
+          created_at?: string;
         };
       };
       credit_ledger: {
@@ -169,6 +420,8 @@ export type Database = {
             | "relational"
             | "epistemic";
           layer: string | null;
+          depth: number;
+          parameters: Json | null;
           importance:
             | "fundamental"
             | "critical"
@@ -187,9 +440,23 @@ export type Database = {
           sub_space_id: string | null;
           graph_x: number | null;
           graph_y: number | null;
-          knowledge_layer: "internal" | "external" | "bridge";
+          knowledge_layer: "internal" | "conceptual" | "external" | "bridge";
           provenance: Json;
           authority_level: "high" | "moderate" | "low" | "unverified";
+          ambiguity_type: "harmful" | "premature" | "strategic" | null;
+          temporal_validity: Json | null;
+          manifold: Json | null;
+          expansion_id: string | null;
+          is_expanded: boolean;
+          causal_role: string | null;
+          theory_type: string | null;
+          falsifiability_score: number | null;
+          evidence_strength: number | null;
+          analysis_count: number;
+          last_analyzed_at: string | null;
+          connection_search_count: number;
+          last_connection_search_at: string | null;
+          decomposition_probed_at: string | null;
         };
         Insert: {
           id?: string;
@@ -206,6 +473,8 @@ export type Database = {
             | "relational"
             | "epistemic";
           layer?: string | null;
+          depth?: number;
+          parameters?: Json | null;
           importance?:
             | "fundamental"
             | "critical"
@@ -224,9 +493,23 @@ export type Database = {
           sub_space_id?: string | null;
           graph_x?: number | null;
           graph_y?: number | null;
-          knowledge_layer?: "internal" | "external" | "bridge";
+          knowledge_layer?: "internal" | "conceptual" | "external" | "bridge";
           provenance?: Json;
           authority_level?: "high" | "moderate" | "low" | "unverified";
+          ambiguity_type?: "harmful" | "premature" | "strategic" | null;
+          temporal_validity?: Json | null;
+          manifold?: Json | null;
+          expansion_id?: string | null;
+          is_expanded?: boolean;
+          causal_role?: string | null;
+          theory_type?: string | null;
+          falsifiability_score?: number | null;
+          evidence_strength?: number | null;
+          analysis_count?: number;
+          last_analyzed_at?: string | null;
+          connection_search_count?: number;
+          last_connection_search_at?: string | null;
+          decomposition_probed_at?: string | null;
         };
         Update: {
           id?: string;
@@ -243,6 +526,8 @@ export type Database = {
             | "relational"
             | "epistemic";
           layer?: string | null;
+          depth?: number;
+          parameters?: Json | null;
           importance?:
             | "fundamental"
             | "critical"
@@ -261,9 +546,70 @@ export type Database = {
           sub_space_id?: string | null;
           graph_x?: number | null;
           graph_y?: number | null;
-          knowledge_layer?: "internal" | "external" | "bridge";
+          knowledge_layer?: "internal" | "conceptual" | "external" | "bridge";
           provenance?: Json;
           authority_level?: "high" | "moderate" | "low" | "unverified";
+          ambiguity_type?: "harmful" | "premature" | "strategic" | null;
+          temporal_validity?: Json | null;
+          manifold?: Json | null;
+          expansion_id?: string | null;
+          is_expanded?: boolean;
+          causal_role?: string | null;
+          theory_type?: string | null;
+          falsifiability_score?: number | null;
+          evidence_strength?: number | null;
+          analysis_count?: number;
+          last_analyzed_at?: string | null;
+          connection_search_count?: number;
+          last_connection_search_at?: string | null;
+          decomposition_probed_at?: string | null;
+        };
+      };
+      expansions: {
+        Row: {
+          id: string;
+          space_id: string;
+          entity_id: string;
+          parent_expansion_id: string | null;
+          depth_level: number;
+          summary: string | null;
+          sub_components: Json;
+          internal_pathways: Json;
+          internal_dynamics: Json | null;
+          llm_model: string | null;
+          token_cost: number;
+          computed_at: string;
+          stale: boolean;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          entity_id: string;
+          parent_expansion_id?: string | null;
+          depth_level?: number;
+          summary?: string | null;
+          sub_components?: Json;
+          internal_pathways?: Json;
+          internal_dynamics?: Json | null;
+          llm_model?: string | null;
+          token_cost?: number;
+          computed_at?: string;
+          stale?: boolean;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          entity_id?: string;
+          parent_expansion_id?: string | null;
+          depth_level?: number;
+          summary?: string | null;
+          sub_components?: Json;
+          internal_pathways?: Json;
+          internal_dynamics?: Json | null;
+          llm_model?: string | null;
+          token_cost?: number;
+          computed_at?: string;
+          stale?: boolean;
         };
       };
       edges: {
@@ -294,11 +640,15 @@ export type Database = {
           cycle_id: string | null;
           dynamics: string | null;
           dynamics_properties: Json | null;
+          utility: Json | null;
           is_low_confidence: boolean;
-          knowledge_layer: "internal" | "external" | "bridge";
+          knowledge_layer: "internal" | "conceptual" | "external" | "bridge";
           provenance: Json;
           requires_user_approval: boolean;
           approved_at: string | null;
+          temporal_validity: Json | null;
+          analysis_count: number;
+          last_analyzed_at: string | null;
         };
         Insert: {
           id?: string;
@@ -327,11 +677,15 @@ export type Database = {
           cycle_id?: string | null;
           dynamics?: string | null;
           dynamics_properties?: Json | null;
+          utility?: Json | null;
           is_low_confidence?: boolean;
-          knowledge_layer?: "internal" | "external" | "bridge";
+          knowledge_layer?: "internal" | "conceptual" | "external" | "bridge";
           provenance?: Json;
           requires_user_approval?: boolean;
           approved_at?: string | null;
+          temporal_validity?: Json | null;
+          analysis_count?: number;
+          last_analyzed_at?: string | null;
         };
         Update: {
           id?: string;
@@ -360,11 +714,15 @@ export type Database = {
           cycle_id?: string | null;
           dynamics?: string | null;
           dynamics_properties?: Json | null;
+          utility?: Json | null;
           is_low_confidence?: boolean;
-          knowledge_layer?: "internal" | "external" | "bridge";
+          knowledge_layer?: "internal" | "conceptual" | "external" | "bridge";
           provenance?: Json;
           requires_user_approval?: boolean;
           approved_at?: string | null;
+          temporal_validity?: Json | null;
+          analysis_count?: number;
+          last_analyzed_at?: string | null;
         };
       };
       cycles: {
@@ -692,6 +1050,8 @@ export type Database = {
           derived_from_entity_id: string | null;
           tags: { t: string; c: string }[];
           sort_order: number;
+          status: "pending" | "in_progress" | "completed" | "skipped";
+          completed_at: string | null;
         };
         Insert: {
           id?: string;
@@ -703,6 +1063,8 @@ export type Database = {
           derived_from_entity_id?: string | null;
           tags?: { t: string; c: string }[];
           sort_order?: number;
+          status?: "pending" | "in_progress" | "completed" | "skipped";
+          completed_at?: string | null;
         };
         Update: {
           id?: string;
@@ -714,6 +1076,8 @@ export type Database = {
           derived_from_entity_id?: string | null;
           tags?: { t: string; c: string }[];
           sort_order?: number;
+          status?: "pending" | "in_progress" | "completed" | "skipped";
+          completed_at?: string | null;
         };
       };
       space_changelog: {
@@ -758,6 +1122,884 @@ export type Database = {
           summary?: string;
           details?: Json;
           created_at?: string;
+        };
+      };
+      strategy_snapshots: {
+        Row: {
+          id: string;
+          space_id: string;
+          version: number;
+          recommendation: Json;
+          ranked_strategies: Json | null;
+          status: "generated" | "reviewing" | "confirmed" | "superseded";
+          trigger: "manual" | "auto_chain" | "resynthesize";
+          quality_score: number | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          version?: number;
+          recommendation: Json;
+          ranked_strategies?: Json;
+          status?: "generated" | "reviewing" | "confirmed" | "superseded";
+          trigger?: "manual" | "auto_chain" | "resynthesize";
+          quality_score?: number | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          version?: number;
+          recommendation?: Json;
+          ranked_strategies?: Json;
+          status?: "generated" | "reviewing" | "confirmed" | "superseded";
+          trigger?: "manual" | "auto_chain" | "resynthesize";
+          quality_score?: number | null;
+          created_at?: string;
+        };
+      };
+      // ── Item 2: baseline + prediction ledger ─────────────────────────
+      // Migration: 20260508_baseline_prediction_ledger.sql
+      // Domain types: src/types/prediction.ts
+      strategy_baselines: {
+        Row: {
+          id: string;
+          strategy_snapshot_id: string;
+          space_id: string;
+          user_id: string;
+          snapshot_at: string;
+          kg_snapshot: Json;
+          twin_state: Json;
+          metric_baselines: Json;
+          predicted_outcomes: Json;
+          created_by: string;
+          capture_notes: string | null;
+        };
+        Insert: {
+          id?: string;
+          strategy_snapshot_id: string;
+          space_id: string;
+          user_id: string;
+          snapshot_at?: string;
+          kg_snapshot: Json;
+          twin_state: Json;
+          metric_baselines: Json;
+          predicted_outcomes: Json;
+          created_by: string;
+          capture_notes?: string | null;
+        };
+        Update: {
+          id?: string;
+          strategy_snapshot_id?: string;
+          space_id?: string;
+          user_id?: string;
+          snapshot_at?: string;
+          kg_snapshot?: Json;
+          twin_state?: Json;
+          metric_baselines?: Json;
+          predicted_outcomes?: Json;
+          created_by?: string;
+          capture_notes?: string | null;
+        };
+      };
+      prediction_ledger: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          strategy_snapshot_id: string | null;
+          app_id: string | null;
+          agent_id: string | null;
+          tracker_id: string | null;
+          metric_label: string;
+          metric_unit: string | null;
+          predicted_at: string;
+          horizon_at: string;
+          predicted_value: number | null;
+          predicted_value_text: string | null;
+          predicted_distribution: Json | null;
+          rationale: string | null;
+          confidence: number | null;
+          status: "open" | "resolved" | "abandoned";
+          resolved_actual: number | null;
+          resolved_actual_text: string | null;
+          resolved_at: string | null;
+          deviation: number | null;
+          deviation_tag: "expected" | "regime_shift" | "surprise" | "qualitative" | null;
+          resolution_notes: string | null;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          strategy_snapshot_id?: string | null;
+          app_id?: string | null;
+          agent_id?: string | null;
+          tracker_id?: string | null;
+          metric_label: string;
+          metric_unit?: string | null;
+          predicted_at?: string;
+          horizon_at: string;
+          predicted_value?: number | null;
+          predicted_value_text?: string | null;
+          predicted_distribution?: Json | null;
+          rationale?: string | null;
+          confidence?: number | null;
+          status?: "open" | "resolved" | "abandoned";
+          resolved_actual?: number | null;
+          resolved_actual_text?: string | null;
+          resolved_at?: string | null;
+          deviation?: number | null;
+          deviation_tag?: "expected" | "regime_shift" | "surprise" | "qualitative" | null;
+          resolution_notes?: string | null;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          user_id?: string;
+          strategy_snapshot_id?: string | null;
+          app_id?: string | null;
+          agent_id?: string | null;
+          tracker_id?: string | null;
+          metric_label?: string;
+          metric_unit?: string | null;
+          predicted_at?: string;
+          horizon_at?: string;
+          predicted_value?: number | null;
+          predicted_value_text?: string | null;
+          predicted_distribution?: Json | null;
+          rationale?: string | null;
+          confidence?: number | null;
+          status?: "open" | "resolved" | "abandoned";
+          resolved_actual?: number | null;
+          resolved_actual_text?: string | null;
+          resolved_at?: string | null;
+          deviation?: number | null;
+          deviation_tag?: "expected" | "regime_shift" | "surprise" | "qualitative" | null;
+          resolution_notes?: string | null;
+        };
+      };
+      improvement_goals: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          title: string;
+          description: string | null;
+          metric_name: string;
+          metric_unit: string | null;
+          target_value: number;
+          baseline_value: number;
+          current_value: number;
+          deadline: string | null;
+          status: "active" | "achieved" | "abandoned" | "paused";
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          title: string;
+          description?: string | null;
+          metric_name: string;
+          metric_unit?: string | null;
+          target_value: number;
+          baseline_value?: number;
+          current_value?: number;
+          deadline?: string | null;
+          status?: "active" | "achieved" | "abandoned" | "paused";
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          user_id?: string;
+          title?: string;
+          description?: string | null;
+          metric_name?: string;
+          metric_unit?: string | null;
+          target_value?: number;
+          baseline_value?: number;
+          current_value?: number;
+          deadline?: string | null;
+          status?: "active" | "achieved" | "abandoned" | "paused";
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      goal_progress: {
+        Row: {
+          id: string;
+          goal_id: string;
+          recorded_at: string;
+          value: number;
+          note: string | null;
+          source: "manual" | "ai_estimated" | "integration";
+        };
+        Insert: {
+          id?: string;
+          goal_id: string;
+          recorded_at?: string;
+          value: number;
+          note?: string | null;
+          source?: "manual" | "ai_estimated" | "integration";
+        };
+        Update: {
+          id?: string;
+          goal_id?: string;
+          recorded_at?: string;
+          value?: number;
+          note?: string | null;
+          source?: "manual" | "ai_estimated" | "integration";
+        };
+      };
+      goal_recommendations: {
+        Row: {
+          id: string;
+          goal_id: string;
+          rank: number;
+          title: string;
+          reasoning: string;
+          source_type: string;
+          source_entity_id: string | null;
+          impact_estimate: "high" | "medium" | "low" | null;
+          status: "pending" | "in_progress" | "completed" | "dismissed";
+          outcome: "effective" | "ineffective" | "partial" | "not_tested" | null;
+          outcome_notes: string | null;
+          outcome_recorded_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          goal_id: string;
+          rank: number;
+          title: string;
+          reasoning: string;
+          source_type: string;
+          source_entity_id?: string | null;
+          impact_estimate?: "high" | "medium" | "low" | null;
+          status?: "pending" | "in_progress" | "completed" | "dismissed";
+          outcome?: "effective" | "ineffective" | "partial" | "not_tested" | null;
+          outcome_notes?: string | null;
+          outcome_recorded_at?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          goal_id?: string;
+          rank?: number;
+          title?: string;
+          reasoning?: string;
+          source_type?: string;
+          source_entity_id?: string | null;
+          impact_estimate?: "high" | "medium" | "low" | null;
+          status?: "pending" | "in_progress" | "completed" | "dismissed";
+          outcome?: "effective" | "ineffective" | "partial" | "not_tested" | null;
+          outcome_notes?: string | null;
+          outcome_recorded_at?: string | null;
+          created_at?: string;
+        };
+      };
+      analysis_jobs: {
+        Row: {
+          id: string;
+          user_id: string;
+          space_id: string | null;
+          tier: string;
+          status: "queued" | "running" | "completed" | "failed" | "cancelled";
+          current_phase: string | null;
+          input_text: string | null;
+          intent: Json | null;
+          reservation_id: string | null;
+          inngest_run_id: string | null;
+          error_message: string | null;
+          artifacts_ready: string[];
+          created_at: string;
+          updated_at: string;
+          completed_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          space_id?: string | null;
+          tier: string;
+          status?: "queued" | "running" | "completed" | "failed" | "cancelled";
+          current_phase?: string | null;
+          input_text?: string | null;
+          intent?: Json | null;
+          reservation_id?: string | null;
+          inngest_run_id?: string | null;
+          error_message?: string | null;
+          artifacts_ready?: string[];
+          created_at?: string;
+          updated_at?: string;
+          completed_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          space_id?: string | null;
+          tier?: string;
+          status?: "queued" | "running" | "completed" | "failed" | "cancelled";
+          current_phase?: string | null;
+          input_text?: string | null;
+          intent?: Json | null;
+          reservation_id?: string | null;
+          inngest_run_id?: string | null;
+          error_message?: string | null;
+          artifacts_ready?: string[];
+          created_at?: string;
+          updated_at?: string;
+          completed_at?: string | null;
+        };
+      };
+      job_events: {
+        Row: {
+          id: string;
+          job_id: string;
+          event_type: string;
+          artifact_kind: string | null;
+          payload: Json | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          job_id: string;
+          event_type: string;
+          artifact_kind?: string | null;
+          payload?: Json | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          job_id?: string;
+          event_type?: string;
+          artifact_kind?: string | null;
+          payload?: Json | null;
+          created_at?: string;
+        };
+      };
+      agents: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          kind:
+            | "decomposer"
+            | "critic"
+            | "augmenter"
+            | "researcher"
+            | "synthesizer"
+            | "strategist"
+            | "twin"
+            | "bridge"
+            | "expansion"
+            | "coordinator"
+            | "reasoner"
+            | "reevaluator"
+            | "incremental_analyzer"
+            | "chat";
+          name: string;
+          callsign: string | null;
+          specialty: string | null;
+          focus_areas: string[];
+          status: "idle" | "queued" | "running" | "paused" | "error" | "retired";
+          last_run_at: string | null;
+          next_run_at: string | null;
+          source_objective_id: string | null;
+          source_goal_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          kind:
+            | "decomposer"
+            | "critic"
+            | "augmenter"
+            | "researcher"
+            | "synthesizer"
+            | "strategist"
+            | "twin"
+            | "bridge"
+            | "expansion"
+            | "coordinator"
+            | "reasoner"
+            | "reevaluator"
+            | "incremental_analyzer"
+            | "chat";
+          name: string;
+          callsign?: string | null;
+          specialty?: string | null;
+          focus_areas?: string[];
+          status?: "idle" | "queued" | "running" | "paused" | "error" | "retired";
+          last_run_at?: string | null;
+          next_run_at?: string | null;
+          source_objective_id?: string | null;
+          source_goal_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          user_id?: string;
+          kind?:
+            | "decomposer"
+            | "critic"
+            | "augmenter"
+            | "researcher"
+            | "synthesizer"
+            | "strategist"
+            | "twin"
+            | "bridge"
+            | "expansion"
+            | "coordinator"
+            | "reasoner"
+            | "reevaluator"
+            | "incremental_analyzer"
+            | "chat";
+          name?: string;
+          callsign?: string | null;
+          specialty?: string | null;
+          focus_areas?: string[];
+          status?: "idle" | "queued" | "running" | "paused" | "error" | "retired";
+          last_run_at?: string | null;
+          next_run_at?: string | null;
+          source_objective_id?: string | null;
+          source_goal_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      agent_runs: {
+        Row: {
+          id: string;
+          agent_id: string;
+          space_id: string;
+          job_id: string | null;
+          inngest_run_id: string | null;
+          step_id: string | null;
+          trigger_event: string | null;
+          trigger_data: Json | null;
+          status: "running" | "completed" | "failed" | "cancelled";
+          findings_count: number;
+          artifacts_produced: string[];
+          entity_ids_discovered: string[];
+          cost_credits: number;
+          heartbeat_at: string;
+          started_at: string;
+          completed_at: string | null;
+          error_message: string | null;
+        };
+        Insert: {
+          id?: string;
+          agent_id: string;
+          space_id: string;
+          job_id?: string | null;
+          inngest_run_id?: string | null;
+          step_id?: string | null;
+          trigger_event?: string | null;
+          trigger_data?: Json | null;
+          status?: "running" | "completed" | "failed" | "cancelled";
+          findings_count?: number;
+          artifacts_produced?: string[];
+          entity_ids_discovered?: string[];
+          cost_credits?: number;
+          heartbeat_at?: string;
+          started_at?: string;
+          completed_at?: string | null;
+          error_message?: string | null;
+        };
+        Update: {
+          id?: string;
+          agent_id?: string;
+          space_id?: string;
+          job_id?: string | null;
+          inngest_run_id?: string | null;
+          step_id?: string | null;
+          trigger_event?: string | null;
+          trigger_data?: Json | null;
+          status?: "running" | "completed" | "failed" | "cancelled";
+          findings_count?: number;
+          artifacts_produced?: string[];
+          entity_ids_discovered?: string[];
+          cost_credits?: number;
+          heartbeat_at?: string;
+          started_at?: string;
+          completed_at?: string | null;
+          error_message?: string | null;
+        };
+      };
+      interventions: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          source_tactic_id: string | null;
+          source_strategy_version: number | null;
+          title: string;
+          description: string | null;
+          target_entity_id: string | null;
+          target_entity_code: string | null;
+          macro_link: string | null;
+          infrastructure_action: "build" | "strengthen" | "connect" | "monitor" | "configure" | null;
+          priority: number;
+          effort: "low" | "medium" | "high" | null;
+          impact: "low" | "medium" | "high" | null;
+          timeframe: "now" | "short_term" | "medium_term" | "long_term" | null;
+          metric_name: string | null;
+          metric_target: string | null;
+          metric_unit: string | null;
+          status: "proposed" | "active" | "completed" | "superseded" | "abandoned";
+          app_id: string | null;
+          depends_on_intervention_ids: string[];
+          implementation_trigger: string | null;
+          implementation_action: string | null;
+          implementation_category: "proactive" | "reactive" | "course_correction" | null;
+          created_at: string;
+          updated_at: string;
+          completed_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          source_tactic_id?: string | null;
+          source_strategy_version?: number | null;
+          title: string;
+          description?: string | null;
+          target_entity_id?: string | null;
+          target_entity_code?: string | null;
+          macro_link?: string | null;
+          infrastructure_action?: "build" | "strengthen" | "connect" | "monitor" | "configure" | null;
+          priority?: number;
+          effort?: "low" | "medium" | "high" | null;
+          impact?: "low" | "medium" | "high" | null;
+          timeframe?: "now" | "short_term" | "medium_term" | "long_term" | null;
+          metric_name?: string | null;
+          metric_target?: string | null;
+          metric_unit?: string | null;
+          status?: "proposed" | "active" | "completed" | "superseded" | "abandoned";
+          app_id?: string | null;
+          depends_on_intervention_ids?: string[];
+          implementation_trigger?: string | null;
+          implementation_action?: string | null;
+          implementation_category?: "proactive" | "reactive" | "course_correction" | null;
+          created_at?: string;
+          updated_at?: string;
+          completed_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          user_id?: string;
+          source_tactic_id?: string | null;
+          source_strategy_version?: number | null;
+          title?: string;
+          description?: string | null;
+          target_entity_id?: string | null;
+          target_entity_code?: string | null;
+          macro_link?: string | null;
+          infrastructure_action?: "build" | "strengthen" | "connect" | "monitor" | "configure" | null;
+          priority?: number;
+          effort?: "low" | "medium" | "high" | null;
+          impact?: "low" | "medium" | "high" | null;
+          timeframe?: "now" | "short_term" | "medium_term" | "long_term" | null;
+          metric_name?: string | null;
+          metric_target?: string | null;
+          metric_unit?: string | null;
+          status?: "proposed" | "active" | "completed" | "superseded" | "abandoned";
+          app_id?: string | null;
+          depends_on_intervention_ids?: string[];
+          implementation_trigger?: string | null;
+          implementation_action?: string | null;
+          implementation_category?: "proactive" | "reactive" | "course_correction" | null;
+          created_at?: string;
+          updated_at?: string;
+          completed_at?: string | null;
+        };
+      };
+      apps: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          name: string;
+          description: string | null;
+          app_type: "dashboard" | "workflow" | "tool" | "monitor" | "integration";
+          source_strategy_version: number | null;
+          source_perspective: string | null;
+          source_infrastructure_proposal_id: string | null;
+          dominant_entity_ids: string[];
+          dominant_entity_codes: string[];
+          sub_space_id: string | null;
+          serves_goal_id: string | null;
+          serves_sub_objective_ids: string[];
+          tracked_metric_tracker_ids: string[];
+          config: Json;
+          state: Json;
+          status: "proposed" | "approved" | "active" | "paused" | "retired";
+          health_score: number | null;
+          stale_reason:
+            | "kg_changed"
+            | "new_research"
+            | "user_feedback"
+            | "strategy_regen"
+            | "whiteboard_edit"
+            | null;
+          stale_since: string | null;
+          last_refreshed_at: string | null;
+          last_updated_by: string | null;
+          priority: number;
+          complexity: "low" | "medium" | "high" | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          name: string;
+          description?: string | null;
+          app_type?: "dashboard" | "workflow" | "tool" | "monitor" | "integration";
+          source_strategy_version?: number | null;
+          source_perspective?: string | null;
+          source_infrastructure_proposal_id?: string | null;
+          dominant_entity_ids?: string[];
+          dominant_entity_codes?: string[];
+          sub_space_id?: string | null;
+          serves_goal_id?: string | null;
+          serves_sub_objective_ids?: string[];
+          tracked_metric_tracker_ids?: string[];
+          config?: Json;
+          state?: Json;
+          status?: "proposed" | "approved" | "active" | "paused" | "retired";
+          health_score?: number | null;
+          stale_reason?:
+            | "kg_changed"
+            | "new_research"
+            | "user_feedback"
+            | "strategy_regen"
+            | "whiteboard_edit"
+            | null;
+          stale_since?: string | null;
+          last_refreshed_at?: string | null;
+          last_updated_by?: string | null;
+          priority?: number;
+          complexity?: "low" | "medium" | "high" | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          user_id?: string;
+          name?: string;
+          description?: string | null;
+          app_type?: "dashboard" | "workflow" | "tool" | "monitor" | "integration";
+          source_strategy_version?: number | null;
+          source_perspective?: string | null;
+          source_infrastructure_proposal_id?: string | null;
+          dominant_entity_ids?: string[];
+          dominant_entity_codes?: string[];
+          sub_space_id?: string | null;
+          serves_goal_id?: string | null;
+          serves_sub_objective_ids?: string[];
+          tracked_metric_tracker_ids?: string[];
+          config?: Json;
+          state?: Json;
+          status?: "proposed" | "approved" | "active" | "paused" | "retired";
+          health_score?: number | null;
+          stale_reason?:
+            | "kg_changed"
+            | "new_research"
+            | "user_feedback"
+            | "strategy_regen"
+            | "whiteboard_edit"
+            | null;
+          stale_since?: string | null;
+          last_refreshed_at?: string | null;
+          last_updated_by?: string | null;
+          priority?: number;
+          complexity?: "low" | "medium" | "high" | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      app_versions: {
+        Row: {
+          id: string;
+          app_id: string;
+          version: number;
+          config_snapshot: Json;
+          state_snapshot: Json;
+          change_summary: string | null;
+          change_type: "generated" | "user_edit" | "agent_update" | "pipeline_regen" | "staleness_refresh";
+          changed_by: string;
+          change_payload: Json | null;
+          changed_at: string;
+        };
+        Insert: {
+          id?: string;
+          app_id: string;
+          version: number;
+          config_snapshot?: Json;
+          state_snapshot?: Json;
+          change_summary?: string | null;
+          change_type: "generated" | "user_edit" | "agent_update" | "pipeline_regen" | "staleness_refresh";
+          changed_by: string;
+          change_payload?: Json | null;
+          changed_at?: string;
+        };
+        Update: {
+          id?: string;
+          app_id?: string;
+          version?: number;
+          config_snapshot?: Json;
+          state_snapshot?: Json;
+          change_summary?: string | null;
+          change_type?: "generated" | "user_edit" | "agent_update" | "pipeline_regen" | "staleness_refresh";
+          changed_by?: string;
+          change_payload?: Json | null;
+          changed_at?: string;
+        };
+      };
+      user_app_preferences: {
+        Row: {
+          id: string;
+          user_id: string;
+          app_id: string | null;
+          app_type: "dashboard" | "workflow" | "tool" | "monitor" | "integration" | null;
+          preferences: Json;
+          interaction_counts: Json;
+          last_interaction_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          app_id?: string | null;
+          app_type?: "dashboard" | "workflow" | "tool" | "monitor" | "integration" | null;
+          preferences?: Json;
+          interaction_counts?: Json;
+          last_interaction_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          app_id?: string | null;
+          app_type?: "dashboard" | "workflow" | "tool" | "monitor" | "integration" | null;
+          preferences?: Json;
+          interaction_counts?: Json;
+          last_interaction_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      entity_questions: {
+        Row: {
+          id: string;
+          space_id: string;
+          entity_id: string;
+          question_text: string;
+          status: "open" | "researching" | "answered" | "dismissed";
+          answer_text: string | null;
+          result_refs: Json;
+          created_at: string;
+          updated_at: string;
+          answered_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          entity_id: string;
+          question_text: string;
+          status?: "open" | "researching" | "answered" | "dismissed";
+          answer_text?: string | null;
+          result_refs?: Json;
+          created_at?: string;
+          updated_at?: string;
+          answered_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          entity_id?: string;
+          question_text?: string;
+          status?: "open" | "researching" | "answered" | "dismissed";
+          answer_text?: string | null;
+          result_refs?: Json;
+          created_at?: string;
+          updated_at?: string;
+          answered_at?: string | null;
+        };
+      };
+      pairwise_connection_checks: {
+        Row: {
+          id: string;
+          space_id: string;
+          entity_a_id: string;
+          entity_b_id: string;
+          checked_at: string;
+          edge_proposed: boolean;
+          resulting_edge_id: string | null;
+          pair_key: string;
+          /** Depth at which this check was performed: 0-4 (see migration 20260418) */
+          examination_level: number;
+          /** When edge_proposed=false, confidence that there truly is no edge (0-1) */
+          negative_confidence: number | null;
+          /** Which of the 9 edge dimensions were explicitly considered */
+          dimensions_examined: string[];
+          /** Free-form text describing what would flip this verdict */
+          revisit_trigger: string | null;
+          /** LLM reasoning snippet for this verdict */
+          reasoning: string | null;
+          /** User review state — for calibration tracking */
+          user_verdict: "accepted" | "rejected" | "uncertain" | null;
+          user_verdict_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          entity_a_id: string;
+          entity_b_id: string;
+          checked_at?: string;
+          edge_proposed?: boolean;
+          resulting_edge_id?: string | null;
+          pair_key: string;
+          examination_level?: number;
+          negative_confidence?: number | null;
+          dimensions_examined?: string[];
+          revisit_trigger?: string | null;
+          reasoning?: string | null;
+          user_verdict?: "accepted" | "rejected" | "uncertain" | null;
+          user_verdict_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          entity_a_id?: string;
+          entity_b_id?: string;
+          checked_at?: string;
+          edge_proposed?: boolean;
+          resulting_edge_id?: string | null;
+          pair_key?: string;
+          examination_level?: number;
+          negative_confidence?: number | null;
+          dimensions_examined?: string[];
+          revisit_trigger?: string | null;
+          reasoning?: string | null;
+          user_verdict?: "accepted" | "rejected" | "uncertain" | null;
+          user_verdict_at?: string | null;
         };
       };
     };

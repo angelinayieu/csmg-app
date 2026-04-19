@@ -9,6 +9,7 @@ export function getAnthropicClient(): Anthropic {
     }
     client = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
+      timeout: 10 * 60 * 1000, // 10 minutes — web_search calls can be slow
     });
   }
   return client;

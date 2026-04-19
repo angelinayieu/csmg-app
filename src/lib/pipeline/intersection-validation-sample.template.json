@@ -1,0 +1,14 @@
+{
+  "labels": [
+    {
+      "space_a_id": "pspace_edge_A",
+      "space_b_id": "pspace_edge_B",
+      "is_true_match": true
+    },
+    {
+      "space_a_id": "pspace_edge_C",
+      "space_b_id": "pspace_edge_D",
+      "is_true_match": false
+    }
+  ]
+}

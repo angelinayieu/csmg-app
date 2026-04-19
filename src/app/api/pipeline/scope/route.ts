@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { llmJSON } from "@/lib/llm";
+import { sanitizeErrorMessage } from "@/lib/api-helpers";
+import { buildScopeIntentBlock, buildDomainScopingBlock } from "@/lib/prompts/intent-context";
+import type { UserIntent } from "@/types/analysis";
 
 export const maxDuration = 30;
 
@@ -13,6 +16,7 @@ interface ScopeResult {
     priority: number;
   }>;
   summary: string;
+  detected_context?: string;
 }
 
 export async function POST(request: Request) {
@@ -38,9 +42,11 @@ export async function POST(request: Request) {
 
   // 2. Parse body
   let text: string;
+  let intent: UserIntent | undefined;
   try {
     const body = await request.json();
     text = body?.text;
+    intent = body?.intent;
   } catch {
     return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
   }
@@ -56,6 +62,14 @@ export async function POST(request: Request) {
   try {
     // Truncate very long texts to reduce LLM processing time
     const inputForLLM = text.length > 8000 ? text.slice(0, 8000) + "\n[...text truncated...]" : text;
+
+    // Build domain detection instruction if user hasn't specified context_type
+    const needsDetection = !intent?.context_type;
+    const detectionInstruction = needsDetection
+      ? `\n\nCONTEXT DETECTION: The user has not specified their domain. Analyze the input and detect the context_type from: startup, research, career, strategy, operations, investment, education. Add "detected_context": "<type>" to your JSON output. Choose the SINGLE most fitting type based on the input's core subject matter.`
+      : "";
+
+    const domainLens = buildDomainScopingBlock(intent?.context_type ?? null);
 
     const scope = await llmJSON<ScopeResult>({
       system: `You are a strategic analyst decomposing a situation into distinct analytical spaces. Your job is to carve the input into 3-4 ORTHOGONAL domains that together cover the COMPLETE scope — but each space must be a genuinely different LENS on the situation, not a generic business category.
@@ -78,7 +92,7 @@ Rules:
 - Prefer spaces organized around DECISIONS and TRADEOFFS in the input, not functional departments
 - Return 3-4 spaces max
 - Use sequential prefixes: A, B, C, D
-
+${domainLens}${detectionInstruction}
 Return ONLY valid JSON:
 {
   "spaces": [
@@ -90,8 +104,8 @@ Return ONLY valid JSON:
       "priority": 1
     }
   ],
-  "summary": "One sentence capturing the core tension or decision in the input"
-}`,
+  "summary": "One sentence capturing the core tension or decision in the input"${needsDetection ? ',\n  "detected_context": "startup | research | career | strategy | operations | investment | education"' : ""}
+}${buildScopeIntentBlock(intent)}`,
       user: inputForLLM,
       maxTokens: 1500,
       temperature: 0.3,
@@ -114,10 +128,10 @@ Return ONLY valid JSON:
     });
   } catch (err) {
     const elapsed = Date.now() - startTime;
-    const details = err instanceof Error ? err.message : String(err);
-    console.error(`[Scope] Failed after ${elapsed}ms:`, details);
+    const raw = err instanceof Error ? err.message : String(err);
+    console.error(`[Scope] Failed after ${elapsed}ms:`, raw);
     return NextResponse.json(
-      { error: `Scope mapping failed: ${details}` },
+      { error: `Scope mapping failed: ${sanitizeErrorMessage(err)}` },
       { status: 500 }
     );
   }

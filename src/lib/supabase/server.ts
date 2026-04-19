@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import type { Database } from "@/types/database.types";
 
 export async function createClient() {
@@ -27,3 +28,19 @@ export async function createClient() {
     }
   );
 }
+
+/**
+ * Get the current authenticated user — deduplicated per request.
+ * Uses React cache() so that multiple Server Components calling this
+ * in the same render tree only make ONE getUser() call to Supabase.
+ *
+ * This eliminates the triple-auth-call problem:
+ *   layout.tsx + page.tsx + any server component = 1 call total.
+ */
+export const getAuthUser = cache(async () => {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return user;
+});

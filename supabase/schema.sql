@@ -69,6 +69,9 @@ CREATE TABLE public.spaces (
     CHECK (maturity IN ('actionable_now', 'waiting_on_dependency', 'theoretical', 'blocked')),
   activation_dependencies TEXT[],
   analysis_tier TEXT DEFAULT 'quick',
+  user_role TEXT,
+  primary_goal TEXT,
+  context_type TEXT,
   credits_used INTEGER DEFAULT 0,
   agent_count INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT now(),
@@ -104,10 +107,13 @@ CREATE TABLE public.entities (
   graph_x FLOAT,
   graph_y FLOAT,
   knowledge_layer TEXT DEFAULT 'internal'
-    CHECK (knowledge_layer IN ('internal', 'external', 'bridge')),
+    CHECK (knowledge_layer IN ('internal', 'conceptual', 'external', 'bridge')),
   provenance JSONB DEFAULT '{}',
   authority_level TEXT DEFAULT 'moderate'
     CHECK (authority_level IN ('high', 'moderate', 'low', 'unverified')),
+  ambiguity_type TEXT CHECK (ambiguity_type IS NULL OR ambiguity_type IN ('harmful', 'premature', 'strategic')),
+  temporal_validity JSONB,
+  manifold JSONB,
   UNIQUE(space_id, entity_id)
 );
 
@@ -137,12 +143,14 @@ CREATE TABLE public.edges (
     'threshold', 'linear', 'compounding', 'exponential',
     'logarithmic', 'decay', 'step_function', 'delayed')),
   dynamics_properties JSONB,
+  utility JSONB,  -- {failure_consequence, propagation_speed, actionability, information_value}
   is_low_confidence BOOLEAN DEFAULT false,
   knowledge_layer TEXT DEFAULT 'internal'
-    CHECK (knowledge_layer IN ('internal', 'external', 'bridge')),
+    CHECK (knowledge_layer IN ('internal', 'conceptual', 'external', 'bridge')),
   provenance JSONB DEFAULT '{}',
   requires_user_approval BOOLEAN DEFAULT false,
-  approved_at TIMESTAMPTZ
+  approved_at TIMESTAMPTZ,
+  temporal_validity JSONB
 );
 
 -- ============================================
@@ -278,7 +286,9 @@ CREATE TABLE public.action_items (
   why_text TEXT,
   derived_from_entity_id UUID REFERENCES public.entities(id),
   tags JSONB DEFAULT '[]',
-  sort_order INTEGER DEFAULT 0
+  sort_order INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'skipped')),
+  completed_at TIMESTAMPTZ
 );
 
 -- ============================================
@@ -293,6 +303,86 @@ CREATE TABLE public.space_changelog (
     CHECK (change_type IN ('initial_analysis', 'reevaluation', 'manual_edit', 'exploration', 'synthesis_refresh')),
   summary TEXT NOT NULL,
   details JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============================================
+-- STRATEGY SNAPSHOTS (audit trail for strategy versions)
+-- ============================================
+
+CREATE TABLE public.strategy_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  space_id UUID NOT NULL REFERENCES public.spaces(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL DEFAULT 1,
+  recommendation JSONB NOT NULL,
+  ranked_strategies JSONB,
+  status TEXT DEFAULT 'generated'
+    CHECK (status IN ('generated', 'reviewing', 'confirmed', 'superseded')),
+  trigger TEXT DEFAULT 'manual'
+    CHECK (trigger IN ('manual', 'auto_chain', 'resynthesize')),
+  quality_score NUMERIC,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(space_id, version)
+);
+
+CREATE INDEX idx_strategy_snapshots_space ON public.strategy_snapshots(space_id);
+
+-- ============================================
+-- IMPROVEMENT GOALS
+-- ============================================
+
+CREATE TABLE public.improvement_goals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  space_id UUID NOT NULL REFERENCES public.spaces(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  parent_goal_id UUID REFERENCES public.improvement_goals(id) ON DELETE SET NULL,
+  objective_type TEXT DEFAULT 'maximize'
+    CHECK (objective_type IN ('maximize', 'minimize', 'maintain', 'explore', 'avoid')),
+  source TEXT DEFAULT 'manual'
+    CHECK (source IN ('manual', 'auto_detected')),
+  title TEXT NOT NULL,
+  description TEXT,
+  metric_name TEXT NOT NULL,
+  metric_unit TEXT,
+  target_value NUMERIC NOT NULL,
+  baseline_value NUMERIC DEFAULT 0,
+  current_value NUMERIC DEFAULT 0,
+  deadline TIMESTAMPTZ,
+  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'achieved', 'abandoned', 'paused')),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============================================
+-- GOAL PROGRESS (time-series)
+-- ============================================
+
+CREATE TABLE public.goal_progress (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  goal_id UUID NOT NULL REFERENCES public.improvement_goals(id) ON DELETE CASCADE,
+  recorded_at TIMESTAMPTZ DEFAULT now(),
+  value NUMERIC NOT NULL,
+  note TEXT,
+  source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'ai_estimated', 'integration'))
+);
+
+-- ============================================
+-- GOAL RECOMMENDATIONS (ranked, from synthesis)
+-- ============================================
+
+CREATE TABLE public.goal_recommendations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  goal_id UUID NOT NULL REFERENCES public.improvement_goals(id) ON DELETE CASCADE,
+  rank INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  reasoning TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_entity_id TEXT,
+  impact_estimate TEXT CHECK (impact_estimate IN ('high', 'medium', 'low')),
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'dismissed')),
+  outcome TEXT CHECK (outcome IS NULL OR outcome IN ('effective', 'ineffective', 'partial', 'not_tested')),
+  outcome_notes TEXT,
+  outcome_recorded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -313,6 +403,14 @@ CREATE INDEX idx_action_items_space ON public.action_items(space_id);
 CREATE INDEX idx_scenarios_space ON public.scenarios(space_id);
 CREATE INDEX idx_changelog_space ON public.space_changelog(space_id);
 CREATE INDEX idx_credit_ledger_user ON public.credit_ledger(user_id);
+CREATE INDEX idx_goals_space ON public.improvement_goals(space_id);
+CREATE INDEX idx_goals_user ON public.improvement_goals(user_id);
+CREATE INDEX idx_goals_active ON public.improvement_goals(space_id) WHERE status = 'active';
+CREATE INDEX idx_goals_parent ON public.improvement_goals(parent_goal_id) WHERE parent_goal_id IS NOT NULL;
+CREATE INDEX idx_goal_progress_goal ON public.goal_progress(goal_id);
+CREATE INDEX idx_goal_progress_time ON public.goal_progress(goal_id, recorded_at);
+CREATE INDEX idx_goal_recommendations_goal ON public.goal_recommendations(goal_id);
+CREATE INDEX idx_goal_recommendations_rank ON public.goal_recommendations(goal_id, rank);
 
 -- ============================================
 -- ROW LEVEL SECURITY
@@ -331,6 +429,7 @@ ALTER TABLE public.contradictions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scenarios ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.action_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.space_changelog ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.strategy_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.credit_ledger ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: users can read/update their own
@@ -407,6 +506,31 @@ CREATE POLICY "Users see own changelog" ON public.space_changelog
     space_id IN (SELECT id FROM public.spaces WHERE user_id = auth.uid())
   );
 
+-- Strategy snapshots
+CREATE POLICY "Users see own strategy_snapshots" ON public.strategy_snapshots
+  FOR ALL USING (
+    space_id IN (SELECT id FROM public.spaces WHERE user_id = auth.uid())
+  );
+
 -- Credit ledger
 CREATE POLICY "Users see own credits" ON public.credit_ledger
   FOR ALL USING (auth.uid() = user_id);
+
+-- Improvement goals
+ALTER TABLE public.improvement_goals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users see own goals" ON public.improvement_goals
+  FOR ALL USING (auth.uid() = user_id);
+
+-- Goal progress
+ALTER TABLE public.goal_progress ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users see own goal_progress" ON public.goal_progress
+  FOR ALL USING (
+    goal_id IN (SELECT id FROM public.improvement_goals WHERE user_id = auth.uid())
+  );
+
+-- Goal recommendations
+ALTER TABLE public.goal_recommendations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users see own goal_recommendations" ON public.goal_recommendations
+  FOR ALL USING (
+    goal_id IN (SELECT id FROM public.improvement_goals WHERE user_id = auth.uid())
+  );

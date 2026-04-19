@@ -7,7 +7,8 @@ export type ReasoningOp =
   | "cycles"
   | "cascade"
   | "link_prediction"
-  | "path";
+  | "path"
+  | "comprehensive";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ReasoningResult = any;

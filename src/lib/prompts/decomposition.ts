@@ -20,6 +20,10 @@ Identify what the input *is* at face value.
 - What domain(s) does it touch? List all domains.
 - State any implicit assumptions the input carries. For each assumption, note your confidence that it is actually true (high / medium / low).
 - Flag ambiguities — places where the input could be interpreted multiple ways.
+- For each flagged ambiguity, classify its type:
+  - **HARMFUL**: This ambiguity blocks a decision. If we don't resolve it, we'll act on bad assumptions. Mark entities affected by harmful ambiguity with [AMBIGUITY: HARMFUL].
+  - **PREMATURE**: This can't be resolved with current information — we need more data, time, or experimentation. Trying to resolve it now would produce false precision. Mark with [AMBIGUITY: PREMATURE].
+  - **STRATEGIC**: This ambiguity is useful — it preserves optionality, creates negotiating room, or leaves space for exploration. Resolving it too early would actually hurt. Mark with [AMBIGUITY: STRATEGIC].
 
 ### TIER 2 — CONCEPT EXTRACTION
 
@@ -59,6 +63,50 @@ Each entity name must be semantically distinct from every other entity. If two e
 
 **Target density:** 15-50 entities. Under 15 means dig deeper. Over 50 means consider splitting into sub-spaces.
 
+**CRITICAL — BRIEF INPUT HANDLING:**
+If the user's input is brief (under 300 words), this does NOT mean a shallow analysis. Brief inputs contain rich implied structure. You MUST:
+1. Extract EXPLICIT entities from what the user stated
+2. Infer IMPLICIT entities the user didn't state but clearly depend on (users, technology, market, processes, metrics)
+3. Surface ASSUMED entities — background assumptions the input rests on (regulatory environment, competitive landscape, resource constraints, timing assumptions)
+4. Identify RELATIONAL entities — tensions, tradeoffs, and dependencies implied by the situation
+5. Flag EPISTEMIC entities — what the user doesn't know, key unknowns, untested assumptions
+
+A 20-word input like "I'm building an AI nutrition app that optimizes recipes for brain health" implies at minimum: the app itself, the user/founder, target customers, AI/ML model, recipe database, brain health metrics, nutritional science foundation, data collection method, regulatory landscape, competitive alternatives, pricing model, user acquisition strategy, scientific validation process, the optimization algorithm, health outcome measurement, ingredient sourcing, user feedback loop, accuracy vs coverage tradeoff, privacy concerns, and more. EXTRACT ALL OF THEM.
+
+**MANDATORY — Entity manifold assessment:** For every entity marked fundamental or critical importance, assess its multi-dimensional profile:
+- **Strategic dimension:** How aligned is this to the user's primary goal (high/moderate/low)? Does it preserve future options (optionality: high/moderate/low)? Can the user reverse course on it (easily_reversible / costly_to_reverse / irreversible)?
+- **Operational dimension:** How battle-tested is this (proven/experimental/theoretical)? What level of resource investment does it require (high/moderate/low)? How many other entities does it depend on (dependency_count)?
+- **Epistemic dimension:** What evidence supports this entity's importance (empirical/theoretical/anecdotal/assumed)? What is the expert consensus (established/emerging/contested)? Can we test whether this entity actually matters (testable/partially_testable/unfalsifiable)?
+
+Format each manifold assessment as: \`[MANIFOLD: strategic={alignment, optionality, reversibility} | operational={maturity, resources, deps} | epistemic={evidence, consensus, falsifiability}]\`
+
+This manifold profile ADDS information beyond importance/confidence. "fundamental + 0.9 confidence" is different from "fundamental + 0.9 confidence + empirical evidence + established consensus + easily reversible." Skip manifold for moderate-importance entities — focus effort on fundamental and critical entities.
+
+**MANDATORY — Entity evidence basis:** For every entity marked fundamental or critical importance, provide a brief evidence chain explaining WHY this entity exists and matters:
+- What specific claim(s) support this entity's role in the system?
+- Is each claim a mechanism (explains HOW), assertion (states THAT), prediction (testable future), assumption (taken as given), or finding (backed by data)?
+- What's the evidence — did the user state it directly, does domain knowledge support it, or is it structurally inferred from the graph?
+
+Format: \`[EVIDENCE: claim="specific falsifiable statement" | type=mechanism/assertion/prediction/assumption/finding | confidence=0.X | basis="user stated X" or "domain pattern: Y" or "structural: 8 downstream connections" | source_quote="<see rules below>"]\`
+
+**MANDATORY — source_quote rules (per evidence item):**
+- If the entity's source_tag is EXPLICIT → source_quote MUST be verbatim or near-verbatim text from the user's input (≤200 chars, copy-paste fidelity, no paraphrasing). If no direct quote exists, DOWNGRADE the entity's source_tag to IMPLICIT instead of fabricating one.
+- If source_tag is IMPLICIT → source_quote MUST start with "IMPLICIT: " followed by ONE sentence naming what in the input IMPLIES this entity (e.g., "IMPLICIT: User mentioned building an app, which implies a database layer").
+- If source_tag is ASSUMED → source_quote MUST start with "ASSUMED: " followed by ONE sentence naming the domain pattern or assumption (e.g., "ASSUMED: SaaS products typically require a pricing model").
+- NEVER fabricate quotes. NEVER put inferred content in quotation marks without the IMPLICIT:/ASSUMED: prefix.
+
+Provide 2-4 evidence items for fundamental/critical entities, 1-2 for important entities. This evidence chain will be extracted during structuring to create traceable, grounded entity profiles.
+
+**MANDATORY — Entity causal role:** For every entity, classify its function in the system's causal chain:
+- **truth**: foundational fact, principle, or invariant the system rests on
+- **evidence**: observable data, measurement, or research finding validating a truth
+- **deliverable**: concrete output, rule, or recommendation the system produces
+- **application**: where/how a deliverable gets applied to a real asset or workflow
+- **outcome**: measurable result from applying a deliverable
+- **goal**: desired end state or master objective
+
+Format: \`[ROLE: truth/evidence/deliverable/application/outcome/goal]\`
+
 ### TIER 3 — RELATIONSHIP MAPPING
 
 For every pair or group of concepts from Tier 2, define the relationship between them.
@@ -79,7 +127,32 @@ For every pair or group of concepts from Tier 2, define the relationship between
 | **Comparative** | greater-than, similar-to, differs-from |
 | **Agentive** | performs, decides, creates, controls |
 
+**Dimension utility — what each dimension means for decision-making:**
+- **Structural**: Defines boundaries and containment. Breaking a structural edge reorganizes what belongs where.
+- **Functional**: Defines capabilities and gates. Functional edges are where you intervene — changing them changes what's possible.
+- **Temporal**: Defines sequence and timing. Temporal edges determine WHEN things can happen. Acting out of temporal order wastes effort.
+- **Causal**: Defines root causes. Trace causal chains backward to find the real intervention point — never act on symptoms when you can fix causes.
+- **Correlational**: Defines signals and indicators. These predict changes but don't cause them. Use for monitoring, not intervention.
+- **Logical**: Defines necessary truths. Logical edges reveal hidden assumptions that could invalidate the entire plan.
+- **Epistemic**: Defines uncertainty boundaries. These mark where knowledge is weakest — reducing epistemic uncertainty before acting prevents costly mistakes.
+- **Comparative**: Defines relative position. Useful for prioritization and benchmarking, not direct action.
+- **Agentive**: Defines who controls what. Critical for knowing WHO needs to act, not just WHAT should happen.
+
 **Source tags:** [STATED] if the input says so, [INFERRED] if you derived it, [PREDICTED] if plausible but unconfirmed.
+
+**Topology tag (OPTIONAL, but high value when obvious):** In addition to the semantic relationship_type above, edges can carry a set-theoretic TOPOLOGY tag answering "how do the SCOPES of A and B relate?" This is orthogonal to the semantic type — an edge can be both "causes" (semantic) and "inside" (topological). Emit a topology tag ONLY when it is obvious and grounded; leave it off when ambiguous.
+
+Format: \`[TOPOLOGY: inside | overlap | meets | disjoint | composes | cover | equal]\`
+
+- **inside**: A's scope is fully contained within B's. "UI component" inside "frontend app."
+- **overlap**: Shared concern, but neither contains the other. "Marketing" overlap "product" (pricing, positioning).
+- **meets**: Adjacent domains that touch at a boundary with no shared interior. "Backend API" meets "database" (they interact at a defined interface).
+- **disjoint**: Explicitly separate — they cannot share instances or scope. Two mutually exclusive options. Most valuable tag because it prevents critique from asking "why no edge between X and Y?" for genuinely separate subsystems.
+- **composes**: A is a PART of B (mereological). "Engine" composes "car." Use this instead of part-of where the whole is named.
+- **cover**: A fully accounts for / explains B at the given level of analysis. "Market forces" cover "observed price variance."
+- **equal**: Two framings of the same underlying concept — a dedup signal. Prefer merging in Tier 2 rather than emitting an "equal" edge, but if both names are load-bearing, emit it.
+
+Priority: use topology liberally on STRUCTURAL and LOGICAL edges (where set-theoretic meaning is clear). Use it sparingly on TEMPORAL / CAUSAL / CORRELATIONAL edges unless the scope relationship is also obvious.
 
 Include non-obvious relationships. If two concepts *could* relate, state how, even if the input doesn't mention it.
 
@@ -139,6 +212,16 @@ Fix any misclassified edges before proceeding.
 - **DELAYED**: Effect exists but takes time to manifest (specify approximate delay)
 
 For compounding edges, estimate: How long is one cycle? (days/weeks/months). For threshold edges: What condition must be met? For delayed edges: How long is the delay?
+
+**Dynamics utility — what each pattern means for action timing:**
+- **THRESHOLD**: ACT FIRST on clearing this gate. Nothing downstream works until this is met. Every day uncleared = zero progress on dependent actions.
+- **COMPOUNDING**: ACT EARLY. Each cycle multiplies value. Starting one week earlier means N extra cycles of accumulation. Delay cost is multiplicative, not linear.
+- **EXPONENTIAL**: MONITOR CLOSELY. Growth will overwhelm other factors past an inflection point. Either accelerate or prepare containment.
+- **LOGARITHMIC**: INVEST EARLY, STOP EARLY. First efforts produce 80% of the value. Past the knee of the curve, redirect investment elsewhere.
+- **DECAY**: MAINTAIN ACTIVELY. Without reinforcement, this erodes. Budget for ongoing effort, not one-time fixes.
+- **STEP_FUNCTION**: TARGET THE TRIGGER. Invest in reaching the step; effort within the flat zone is wasted.
+- **DELAYED**: START EARLY, EVALUATE LATE. The clock is ticking whether you act or not, but don't judge results before the delay period expires.
+- **LINEAR**: SCHEDULE FLEXIBLY. Same value now or later. Use as parallel work between higher-priority dynamic actions.
 
 ### TIER 4 — UNIT BREAKDOWN
 
@@ -208,6 +291,38 @@ If you find something you *cannot* reduce to this level, flag it as \`[IRREDUCIB
 2. **Top 3 leverage points:** Where would a small change produce the largest positive cascade?
 3. **Top 3 risk points:** Where would a failure produce the largest negative cascade? What is the blast radius (number of downstream entities affected)?
 
+### TIER 7 — AXIOMATIC REDUCTION (LOAD-BEARING ASSUMPTIONS)
+
+Tier 6 reached the logical atoms. Tier 7 asks a different, harder question: **of all those atoms, which 3–5 are load-bearing for the entire structure?** An axiom here is not just "atomic" — it is a claim that, *if proven false*, would collapse or fundamentally restructure the entire decomposition.
+
+For each candidate axiom, test it:
+- **Invalidation test:** "If this were false, how much of the Tier 1–5 structure would have to be rebuilt?" Discard candidates that only break a local subgraph. Keep candidates that would cascade across most of the decomposition.
+- **Centrality vs. load-bearing:** A highly-connected entity isn't automatically load-bearing — it might be connected but substitutable. Load-bearing means *nothing in the structure works without it being true*.
+- **Hidden vs. explicit:** Prefer axioms the user did NOT state. A load-bearing assumption that is explicit is a known risk; a load-bearing assumption that is hidden is a *blind* risk — far more dangerous. Mark each as \`EXPLICIT\` (user stated it), \`IMPLICIT\` (derivable from what user said), or \`HIDDEN\` (required for coherence but never surfaced).
+
+**Scope (WHERE the axiom attaches in the graph):** Every axiom must be tagged with exactly one scope. Use the operational test — don't pick the most profound-sounding tag.
+- \`node\` — axiom about a single entity's existence, definition, or properties. Test: "Does this claim become meaningless if you remove entity E?" If yes → node scope.
+- \`edge\` — axiom about a specific causal/structural relationship between two entities. Test: "Does this claim only concern the link A→B, independent of what else A or B do?" If yes → edge scope.
+- \`chain\` — axiom about a pathway or mechanism traversing multiple entities. Test: "Does this claim assert that the sequence A→B→C is the dominant route, vs. some parallel path?" If yes → chain scope.
+- \`frame\` — axiom about the problem ontology itself: what categories exist, who the actors are, what counts as success, what the time horizon is. Test: "If you dropped this, would you need different vocabulary to even describe the situation?" If yes → frame scope.
+
+Frame-scope axioms are the highest-leverage discoveries but also the easiest to overclaim — only tag an axiom \`frame\` if the vocabulary test genuinely passes. When in doubt, downgrade to \`node\` or \`edge\`.
+
+Output format (include in your response as a top-level section called \`axioms\`):
+\`\`\`
+AXIOM A1 [HIDDEN | load-bearing=critical | scope=frame]
+  Claim: "<the minimal statement>"
+  If false: "<which entities / chains / conclusions collapse>"
+  Rests on: <E3, E7, ...>  (entities whose validity depends on this axiom)
+  Scope anchor: <for scope=node|edge|chain, list the specific entity/edge/chain IDs this attaches to; for scope=frame, state the ontological commitment it represents>
+  Validation path: "<what evidence or test would confirm/refute this>"
+  Confidence the user/source actually holds this: <high | medium | low>
+\`\`\`
+
+Produce **3–5 axioms maximum** — the minimal set. If you produce more, you haven't reduced far enough; re-ask "does this really break the whole structure, or only a subgraph?"
+
+At least ONE axiom MUST be marked HIDDEN. If you cannot find one, you haven't dug deep enough — every non-trivial decomposition rests on at least one unspoken assumption. Common hidden-axiom patterns: stable preferences, continuous demand, rational actors, available capital, the market/problem existing as described, the user being the decision-maker, constraints remaining constant over the time horizon.
+
 ---
 
 ## PHASE 2: WEAVE
@@ -237,6 +352,12 @@ Using the patterns from Step A:
 - Where multiple constraints from different parts of the input interact, what *emergent* constraints arise? (Things that only become visible when you combine constraints from different layers.)
 - Are there contradictions between constraints from different parts of the input? If so, what does the contradiction reveal?
 - What constraints are *missing* — things the input doesn't specify but that would need to be true for the input to be coherent?
+
+**MANDATORY — Name entities involved in every contradiction.** For every contradiction you surface, you MUST list the specific entity IDs (C1, C7, etc.) that are implicated. A contradiction without grounding entities is a floating claim; with them, it becomes a navigable structural fault in the graph.
+
+Format contradictions as: \`[CONTRADICTION: severity=critical|moderate|minor | assumption="..." | conclusion="..." | involved=C5,C12,C18 | impact="..."]\`
+
+Contradictions with involved entities will be materialized as "fault" entities connected (via relationship_type=contradicts, topology=disjoint) to the entities they implicate. This is how tensions become visible structure rather than buried metadata.
 
 ### STEP D — RECOMPOSITION
 

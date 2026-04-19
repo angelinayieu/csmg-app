@@ -30,6 +30,68 @@ export function useOrchestrate() {
 
       abortRef.current = new AbortController();
 
+      // ── Inngest path (feature-flagged) ──
+      // When NEXT_PUBLIC_USE_INNGEST=true, submit to the durable job queue and
+      // poll the job status. Legacy SSE path preserved below for rollback.
+      const useInngest = process.env.NEXT_PUBLIC_USE_INNGEST === "true";
+      if (useInngest) {
+        try {
+          const res = await fetch("/api/orchestrate/enqueue", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text, tier }),
+            signal: abortRef.current.signal,
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: "Enqueue failed" }));
+            throw new Error(err.error || `HTTP ${res.status}`);
+          }
+          const { jobId } = (await res.json()) as { jobId: string };
+
+          // Poll job status until terminal.
+          // 1s cadence; 15 min ceiling (covers comprehensive tier).
+          const deadline = Date.now() + 15 * 60 * 1000;
+          while (Date.now() < deadline) {
+            if (abortRef.current?.signal.aborted) return;
+            await new Promise((r) => setTimeout(r, 1000));
+
+            const statusRes = await fetch(`/api/job/${jobId}`, { cache: "no-store" });
+            if (!statusRes.ok) continue;
+            const { job } = (await statusRes.json()) as {
+              job: {
+                status: "queued" | "running" | "completed" | "failed" | "cancelled";
+                current_phase: string | null;
+                space_id: string | null;
+                error_message: string | null;
+              };
+            };
+
+            if (job.current_phase) setPhase(job.current_phase as PipelinePhase);
+
+            if (job.status === "completed") {
+              setRootSpaceId(job.space_id ?? null);
+              setSpaceIds(job.space_id ? [job.space_id] : []);
+              setPhase("complete");
+              return;
+            }
+            if (job.status === "failed" || job.status === "cancelled") {
+              setError(job.error_message || `Job ${job.status}`);
+              setPhase("error");
+              return;
+            }
+          }
+          setError("Analysis timed out");
+          setPhase("error");
+          return;
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return;
+          setError(err instanceof Error ? err.message : "Analysis failed");
+          setPhase("error");
+          return;
+        }
+      }
+
+      // ── Legacy SSE path (default) ──
       try {
         const response = await fetch("/api/orchestrate", {
           method: "POST",

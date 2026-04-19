@@ -30,19 +30,34 @@ export async function updateSession(request: NextRequest) {
       }
     );
 
+    // ── Rate-limit protection ──
+    // Only call getUser() for protected routes (/app/*) and auth routes.
+    // Skip for API routes (they handle auth themselves via safeAuth),
+    // public pages, and other non-critical paths.
+    const pathname = request.nextUrl.pathname;
+    const needsAuthCheck =
+      pathname.startsWith("/app") || pathname.startsWith("/auth");
+
+    if (!needsAuthCheck) {
+      // For non-protected routes, just refresh the session cookie
+      // without making a full getUser() API call
+      await supabase.auth.getSession();
+      return supabaseResponse;
+    }
+
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     // Redirect unauthenticated users away from protected routes
-    if (!user && request.nextUrl.pathname.startsWith("/app")) {
+    if (!user && pathname.startsWith("/app")) {
       const url = request.nextUrl.clone();
       url.pathname = "/auth/login";
       return NextResponse.redirect(url);
     }
 
     // Redirect authenticated users away from auth pages
-    if (user && request.nextUrl.pathname.startsWith("/auth")) {
+    if (user && pathname.startsWith("/auth")) {
       const url = request.nextUrl.clone();
       url.pathname = "/app";
       return NextResponse.redirect(url);

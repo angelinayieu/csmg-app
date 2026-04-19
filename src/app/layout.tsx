@@ -18,8 +18,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={geist.className}>
-      <body className="min-h-screen bg-gradient-page text-gray-900 antialiased">
+    <html lang="en" className={geist.className} suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var t=localStorage.getItem("interaxis-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}`,
+          }}
+        />
+      </head>
+      <body className="min-h-screen bg-gradient-page text-gray-900 antialiased" suppressHydrationWarning>
         {children}
       </body>
     </html>

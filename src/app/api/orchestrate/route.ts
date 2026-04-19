@@ -4,8 +4,9 @@ import { TIERS, type AnalysisTier } from "@/lib/tiers";
 import { batchInsert } from "@/lib/utils";
 import { validatePipelineResult } from "@/lib/validation";
 import { safeAuth, safeJsonParse } from "@/lib/api-helpers";
+import { sanitizeEntity, extractEvidenceBasis, resilientInsert } from "@/lib/sanitize";
 
-export const maxDuration = 120; // 2 minute timeout for Vercel
+export const maxDuration = 600; // 10 minute timeout — web_search research calls are slow
 
 export async function POST(request: Request) {
   const requestStart = Date.now();
@@ -16,7 +17,102 @@ export async function POST(request: Request) {
 
   const { data: body, error: parseError } = await safeJsonParse(request);
   if (parseError) return parseError;
-  const { text, tier = "quick" } = body as {
+
+  // ── Phase 3.1: researchOnly mode ──────────────────────────────────
+  // Lightweight path that skips decomposition/synthesis and only runs
+  // the research pipeline (Agent 7 + bridge discovery).  Called by the
+  // Intelligence Radar to refresh external knowledge without burning a
+  // full analysis credit.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bodyAny = body as Record<string, any>;
+  if (bodyAny.researchOnly === true) {
+    const spaceId = bodyAny.spaceId as string | undefined;
+    if (!spaceId) {
+      return new Response(
+        JSON.stringify({ error: "spaceId is required for researchOnly mode" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabase as any;
+
+    // Verify ownership + fetch space data
+    const { data: space, error: spaceErr } = await db
+      .from("spaces")
+      .select("id, input_text, user_id, space_prefix")
+      .eq("id", spaceId)
+      .single();
+
+    if (spaceErr || !space) {
+      return new Response(
+        JSON.stringify({ error: "Space not found" }),
+        { status: 404, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    if ((space as { user_id: string }).user_id !== user.id) {
+      return new Response(
+        JSON.stringify({ error: "Not authorized" }),
+        { status: 403, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Build the payload expected by /api/pipeline/research
+    const researchBody: Record<string, unknown> = {
+      spaceIds: [spaceId],
+      inputSummary: (space as { input_text: string }).input_text,
+      researchDepth: bodyAny.researchDepth ?? "standard",
+    };
+    if (Array.isArray(bodyAny.focus_areas)) {
+      researchBody.focus_areas = bodyAny.focus_areas;
+    }
+    if (Array.isArray(bodyAny.skip_categories)) {
+      researchBody.skip_categories = bodyAny.skip_categories;
+    }
+
+    // Call the research route handler directly — avoids HTTP layer timeout limits
+    // (Node's undici fetch has a 300s headersTimeout that can't be overridden)
+    const { POST: researchPOST } = await import("@/app/api/pipeline/research/route");
+    const cookie = request.headers.get("cookie") ?? "";
+    const authorization = request.headers.get("authorization") ?? "";
+    const researchUrl = new URL("/api/pipeline/research", request.url);
+
+    try {
+      const researchReq = new Request(researchUrl.toString(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(cookie ? { cookie } : {}),
+          ...(authorization ? { authorization } : {}),
+        },
+        body: JSON.stringify(researchBody),
+      });
+
+      const researchRes = await researchPOST(researchReq);
+      const researchResult = await researchRes.json();
+
+      if (!researchRes.ok) {
+        return new Response(
+          JSON.stringify({ error: researchResult.error ?? "Research pipeline failed" }),
+          { status: researchRes.status, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, researchOnly: true, ...researchResult }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    } catch (err) {
+      console.error("[Orchestrate] researchOnly error:", err);
+      return new Response(
+        JSON.stringify({ error: err instanceof Error ? err.message : "Research failed" }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }
+
+  // ── Standard analysis pipeline ────────────────────────────────────
+  const { text, tier = "quick" } = bodyAny as {
     text: string;
     tier?: AnalysisTier;
   };
@@ -135,6 +231,8 @@ export async function POST(request: Request) {
                 leverage_points: space.structured.leverage_points ?? [],
                 risk_points: space.structured.risk_points ?? [],
                 master_bottleneck: space.structured.master_bottleneck ?? null,
+                suggested_objectives: validatedResult.earlyObjectives ?? [],
+                objectives_pending_review: (validatedResult.earlyObjectives?.length ?? 0) > 0,
               },
               entity_count: space.structured.entities?.length ?? 0,
               edge_count: space.structured.edges?.length ?? 0,
@@ -158,34 +256,10 @@ export async function POST(request: Request) {
           const spaceId = (spaceRow as { id: string }).id;
           spaceIds.push(spaceId);
 
-          // Insert entities
+          // Insert entities (using shared sanitizeEntity for full field coverage)
           const entityMap = new Map<string, string>();
           if (space.structured.entities?.length) {
-            const VALID_E_CATS = ["concrete", "abstract", "process", "relational", "epistemic"];
-            const VALID_E_TAGS = ["explicit", "implicit", "assumed"];
-            const VALID_E_IMP = ["fundamental", "critical", "important", "moderate"];
-            const coerceVal = (v: unknown, valid: string[], fb: string): string =>
-              typeof v === "string" && valid.includes(v) ? v : fb;
-
-            const entityInserts = space.structured.entities.map((e) => ({
-              space_id: spaceId,
-              entity_id: e.entity_id,
-              name: e.name,
-              description: e.description ?? null,
-              source_tag: coerceVal(e.source_tag, VALID_E_TAGS, "implicit"),
-              entity_type: e.entity_type ?? "unknown",
-              entity_category: coerceVal(e.entity_category, VALID_E_CATS, "abstract"),
-              layer: e.layer ?? null,
-              importance: coerceVal(e.importance, VALID_E_IMP, "moderate"),
-              confidence: Math.max(0, Math.min(1, typeof e.confidence === "number" ? e.confidence : 0.8)),
-              is_leverage_point: e.is_leverage_point ?? false,
-              is_risk_point: e.is_risk_point ?? false,
-              is_master_bottleneck: e.is_master_bottleneck ?? false,
-              blast_radius: e.blast_radius ?? 0,
-              centrality_rank: e.centrality_rank ?? null,
-              is_shared_variable: e.is_shared_variable ?? false,
-              is_decomposable: e.is_decomposable ?? false,
-            }));
+            const entityInserts = space.structured.entities.map((e) => sanitizeEntity(e, spaceId));
 
             const { data: insertedEntities, error: entityErr } = await db
               .from("entities")
@@ -202,6 +276,42 @@ export async function POST(request: Request) {
                 entityMap.set(e.entity_id, e.id);
               }
             }
+
+            // Persist evidence_basis as claims (non-critical)
+            try {
+              const claimInserts: Array<{
+                space_id: string;
+                claim_text: string;
+                claim_type: string;
+                status: string;
+                confidence: number;
+                source_entity_id: string;
+                source_type: string;
+                source_quote: string | null;
+              }> = [];
+              for (const rawEntity of space.structured.entities) {
+                const entityUuid = entityMap.get(rawEntity.entity_id);
+                if (!entityUuid) continue;
+                const evidence = extractEvidenceBasis(rawEntity);
+                for (const ev of evidence) {
+                  claimInserts.push({
+                    space_id: spaceId,
+                    claim_text: ev.claim,
+                    claim_type: ev.claim_type,
+                    status: "proposed",
+                    confidence: ev.confidence,
+                    source_entity_id: entityUuid,
+                    source_type: "synthesis",
+                    source_quote: ev.source_quote,
+                  });
+                }
+              }
+              if (claimInserts.length > 0) {
+                await resilientInsert(db, "claims", claimInserts, "id");
+              }
+            } catch (claimErr) {
+              console.warn("[Orchestrate] Claim persistence failed (non-critical):", claimErr);
+            }
           }
 
           // Insert edges INDIVIDUALLY (one bad edge won't kill the rest)
@@ -211,9 +321,12 @@ export async function POST(request: Request) {
           const VALID_TAGS = ["stated","inferred","predicted"];
 
           // Build array of valid edges (filter during construction, not insertion)
-          // Drop edges below 0.4 confidence — a false edge corrupts analysis more than a missing edge
+          // Drop edges below 0.2 confidence — lowered from 0.4 which was too aggressive
+          // and silently removed 25-40% of edges, creating disconnected graphs.
+          // Low-confidence edges are still valuable for graph connectivity; they render
+          // with dashed lines in the UI to indicate uncertainty.
           const filteredEdges = (space.structured.edges ?? []).filter(
-            (e) => (typeof e.confidence === "number" ? e.confidence : 0.8) >= 0.4
+            (e) => (typeof e.confidence === "number" ? e.confidence : 0.8) >= 0.2
           );
           const edgesToInsert = filteredEdges
             .map((e) => {
@@ -410,9 +523,22 @@ export async function POST(request: Request) {
           const VALID_DIMS = ["structural","functional","temporal","causal","correlational","logical","epistemic","comparative","agentive"];
           const VALID_CATS = ["concrete","abstract","process","relational","epistemic"];
 
-          // Insert external entities
+          // Insert external entities with full source metadata
           const extEntityMap = new Map<string, string>();
+          const citations = result.externalKnowledge.citations ?? [];
+          const isWebMode = result.externalKnowledge.research_mode === "web_search";
+
           for (const ext of result.externalKnowledge.external_entities ?? []) {
+            // Match citations to this entity by keyword overlap
+            const entityNameWords = ext.name.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3);
+            const matchingCitations = citations.filter((c: { url: string; title: string; citedText: string }) =>
+              entityNameWords.some(
+                (w: string) => c.citedText.toLowerCase().includes(w) || c.title.toLowerCase().includes(w)
+              )
+            );
+            const isWebSourced = (ext as Record<string, unknown>).source_type === "web_search" || matchingCitations.length > 0;
+            const sourceUrl = (ext as Record<string, unknown>).source_url as string | undefined ?? matchingCitations[0]?.url ?? null;
+
             const { data, error } = await db
               .from("entities")
               .insert({
@@ -420,12 +546,26 @@ export async function POST(request: Request) {
                 entity_id: ext.entity_id,
                 name: ext.name,
                 description: ext.description ?? null,
-                source_tag: "predicted",
+                source_tag: "assumed",
                 entity_type: ext.entity_type ?? ext.category ?? "concept",
                 entity_category: VALID_CATS.includes(ext.entity_category) ? ext.entity_category : "abstract",
-                layer: ext.category ?? "external",
                 importance: "moderate",
                 confidence: ext.confidence ?? 0.5,
+                knowledge_layer: "external",
+                authority_level: isWebSourced
+                  ? (["high", "moderate"].includes(ext.authority_level) ? ext.authority_level : "moderate")
+                  : (ext.authority_level === "high" ? "moderate" : ext.authority_level ?? "low"),
+                provenance: {
+                  source_type: isWebSourced ? "web_search" : "training_knowledge",
+                  source_url: sourceUrl,
+                  category: ext.category,
+                  relevance: ext.relevance_to_situation,
+                  confidence_basis: isWebSourced
+                    ? `Web-verified${sourceUrl ? `: ${sourceUrl}` : ""}`
+                    : `Agent 7 domain expert, confidence ${ext.confidence}`,
+                  citation_urls: matchingCitations.map((c: { url: string }) => c.url).slice(0, 3),
+                  verified_by_user: false,
+                },
               })
               .select("id, entity_id")
               .single();
@@ -435,7 +575,7 @@ export async function POST(request: Request) {
             }
           }
 
-          // Insert external edges
+          // Insert external edges with provenance
           for (const edge of result.externalKnowledge.external_edges ?? []) {
             const srcUuid = extEntityMap.get(edge.source);
             const tgtUuid = extEntityMap.get(edge.target);
@@ -451,6 +591,10 @@ export async function POST(request: Request) {
               strength: 0.5,
               polarity: "positive",
               confidence: 0.6,
+              knowledge_layer: "external",
+              provenance: {
+                source_type: isWebMode ? "web_search_enhanced" : "training_knowledge",
+              },
             });
           }
 

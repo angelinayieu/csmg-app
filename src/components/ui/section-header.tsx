@@ -35,11 +35,11 @@ export function SectionHeader({
       <span
         className={cn("h-1.5 w-1.5 rounded-full", dotColors[color])}
       />
-      <span className="text-[11px] font-semibold uppercase tracking-[0.04em] text-gray-500">
+      <span className="text-[13px] font-semibold text-gray-500">
         {label}
       </span>
       {subtitle && (
-        <span className="ml-auto text-[11px] text-gray-400">
+        <span className="ml-auto text-[13px] text-gray-400">
           {subtitle}
         </span>
       )}

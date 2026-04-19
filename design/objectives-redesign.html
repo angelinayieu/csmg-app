@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>InterAxis — Detected Objectives (Redesign)</title>
+<style>
+  /* =========================================================
+     DESIGN SYSTEM TOKENS (from design-tokens.ts)
+  ========================================================= */
+  :root {
+    --sf: -apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+    --mono: "SF Mono", "Fira Code", ui-monospace, monospace;
+
+    --ink:   #1D1D1F;
+    --ink-2: #48484A;
+    --ink-3: #86868B;
+    --ink-4: #AEAEB2;
+    --ink-5: #D1D1D6;
+
+    --bg:      #F2F2F7;
+    --card:    #FFFFFF;
+    --card-h:  #F9F9FB;
+    --inset:   #F5F5F7;
+
+    --blue:    #007AFF;
+    --blue-bg: #EFF6FF;
+    --blue-bd: #D1E3FF;
+
+    --green:   #34C759;
+    --green-bg:#F0FFF4;
+    --green-bd:#D1F0D9;
+
+    --amber:   #FF9500;
+    --amber-bg:#FFF8F0;
+    --amber-bd:#F0E0C0;
+
+    --red:     #FF3B30;
+    --red-bg:  #FFF0F0;
+    --red-bd:  #FCEAEA;
+
+    --purple:  #AF52DE;
+    --purple-bg:#F8F0FF;
+    --purple-bd:#E8D8F8;
+
+    --border: rgba(0,0,0,0.08);
+    --border-h: rgba(0,0,0,0.12);
+
+    --shadow-card: 0 1px 3px rgba(0,0,0,0.04), 0 0 0 0.5px rgba(0,0,0,0.03);
+    --shadow-active: 0 1px 3px rgba(0,0,0,0.06), 0 0 0 0.5px rgba(0,0,0,0.04);
+    --shadow-hover: 0 4px 12px rgba(0,0,0,0.06), 0 0 0 0.5px rgba(0,0,0,0.04);
+
+    --radius-xl: 16px;
+    --radius-lg: 14px;
+    --radius-md: 10px;
+    --radius-sm: 8px;
+    --radius-xs: 6px;
+    --radius-pill: 100px;
+
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    min-height: 100vh;
+    font-family: var(--sf);
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "ss01", "tnum";
+  }
+
+  /* =========================================================
+     LAYOUT
+  ========================================================= */
+  .canvas {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  /* =========================================================
+     MODULE SHELL
+  ========================================================= */
+  .obj-module {
+    background: var(--card);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+    opacity: 0; transform: translateY(12px);
+    animation: rise 0.5s 0.1s forwards var(--ease);
+  }
+
+  /* =========================================================
+     HEADER
+  ========================================================= */
+  .mod-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 24px;
+    cursor: pointer;
+    transition: background 0.2s;
+    user-select: none;
+  }
+  .mod-header:hover { background: var(--card-h); }
+
+  .header-icon {
+    width: 44px; height: 44px;
+    border-radius: 12px;
+    background: var(--ink);
+    display: grid; place-items: center;
+    flex-shrink: 0;
+  }
+  .header-icon svg {
+    width: 20px; height: 20px;
+    color: white;
+  }
+
+  .header-text { flex: 1; min-width: 0; }
+  .header-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-3);
+    letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+  .header-label .dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--green);
+  }
+  .header-title {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    line-height: 1.3;
+  }
+  .header-title .num {
+    font-weight: 700;
+    font-feature-settings: "tnum";
+  }
+
+  .header-pills {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .h-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: var(--radius-pill);
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid;
+  }
+  .h-pill .pip {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+  }
+  .h-pill.fund  { background: var(--blue-bg);   border-color: var(--blue-bd);  color: #1E40AF; }
+  .h-pill.fund .pip { background: var(--blue); }
+  .h-pill.struc { background: var(--purple-bg); border-color: var(--purple-bd); color: #5B21B6; }
+  .h-pill.struc .pip { background: var(--purple); }
+  .h-pill.surf  { background: var(--amber-bg);  border-color: var(--amber-bd); color: #92400E; }
+  .h-pill.surf .pip { background: var(--amber); }
+
+  .header-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    flex-shrink: 0;
+    padding-left: 16px;
+    border-left: 1px solid var(--border);
+    margin-left: 8px;
+  }
+  .header-stat-val {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    font-feature-settings: "tnum";
+    line-height: 1;
+  }
+  .header-stat-val .unit {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-3);
+  }
+  .header-stat-lbl {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ink-4);
+    margin-top: 3px;
+  }
+
+  .expand-chevron {
+    width: 32px; height: 32px;
+    border-radius: var(--radius-sm);
+    background: var(--inset);
+    border: 0.5px solid var(--border);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    transition: all 0.3s var(--ease);
+  }
+  .expand-chevron svg {
+    width: 14px; height: 14px;
+    color: var(--ink-3);
+    transition: transform 0.35s var(--ease-spring);
+  }
+  .obj-module.open .expand-chevron svg { transform: rotate(180deg); }
+
+  /* Progress strip */
+  .progress-strip {
+    height: 3px;
+    background: var(--inset);
+  }
+  .progress-fill {
+    height: 100%;
+    width: 28%;
+    background: linear-gradient(90deg, var(--blue), var(--purple));
+    border-radius: 0 2px 2px 0;
+    transition: width 0.6s var(--ease);
+  }
+
+  /* =========================================================
+     BODY (collapsible)
+  ========================================================= */
+  .mod-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.5s var(--ease);
+  }
+  .obj-module.open .mod-body { max-height: 5000px; }
+
+  .body-content {
+    padding: 0 24px 28px;
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity 0.35s 0.1s var(--ease), transform 0.35s 0.1s var(--ease);
+  }
+  .obj-module.open .body-content {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* Toolbar */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 0 16px;
+    border-top: 0.5px solid var(--border);
+  }
+  .toolbar-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-3);
+    letter-spacing: -0.01em;
+  }
+  .tab-bar {
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--inset);
+    border-radius: var(--radius-sm);
+    border: 0.5px solid var(--border);
+  }
+  .tab-btn {
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-3);
+    background: none;
+    border: none;
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s var(--ease);
+  }
+  .tab-btn:hover { color: var(--ink-2); }
+  .tab-btn.on {
+    background: var(--card);
+    color: var(--ink);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+
+  /* =========================================================
+     TREE STRUCTURE
+  ========================================================= */
+  .tree {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* Spine connector (vertical line on the left) */
+  .branch {
+    position: relative;
+    padding-left: 28px;
+  }
+  .branch::before {
+    content: '';
+    position: absolute;
+    left: 11px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--ink-5);
+  }
+  .branch:last-child::before {
+    bottom: calc(100% - 28px);
+  }
+
+  /* Horizontal connector stub */
+  .branch::after {
+    content: '';
+    position: absolute;
+    left: 11px;
+    top: 28px;
+    width: 17px;
+    height: 1px;
+    background: var(--ink-5);
+  }
+
+  /* Depth marker (circle on the spine) */
+  .spine-dot {
+    position: absolute;
+    left: 5px;
+    top: 22px;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: var(--card);
+    border: 1.5px solid var(--ink-5);
+    z-index: 2;
+    display: grid;
+    place-items: center;
+  }
+  .spine-dot.active {
+    border-color: var(--blue);
+    background: var(--blue);
+  }
+  .spine-dot.active svg { color: white; }
+  .spine-dot svg {
+    width: 7px; height: 7px;
+    color: var(--ink-4);
+  }
+
+  /* Nested children */
+  .children {
+    margin-top: 2px;
+    padding-bottom: 2px;
+  }
+
+  /* Root node (no spine connector) */
+  .root-node {
+    margin-bottom: 4px;
+  }
+
+  /* =========================================================
+     OBJECTIVE CARDS
+  ========================================================= */
+  .obj-card {
+    background: var(--card);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    box-shadow: var(--shadow-card);
+    transition: all 0.25s var(--ease);
+    margin-bottom: 6px;
+  }
+  .obj-card:hover {
+    border-color: var(--border-h);
+    box-shadow: var(--shadow-hover);
+    transform: translateY(-1px);
+  }
+  .obj-card.root-card {
+    border-left: 3px solid var(--blue);
+    background: #FAFCFF;
+  }
+
+  /* Card top row */
+  .card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .depth-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--radius-xs);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid;
+  }
+  .depth-badge.fundamental {
+    background: var(--blue-bg);
+    border-color: var(--blue-bd);
+    color: #1E40AF;
+  }
+  .depth-badge.structural {
+    background: var(--purple-bg);
+    border-color: var(--purple-bd);
+    color: #5B21B6;
+  }
+  .depth-badge.surface {
+    background: var(--amber-bg);
+    border-color: var(--amber-bd);
+    color: #92400E;
+  }
+
+  .type-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    background: var(--inset);
+    color: var(--ink-3);
+    border: 0.5px solid var(--border);
+  }
+  .type-pill svg { width: 10px; height: 10px; }
+  .type-pill.maximize { color: #166534; background: var(--green-bg); border-color: var(--green-bd); }
+  .type-pill.minimize { color: #991B1B; background: var(--red-bg); border-color: var(--red-bd); }
+  .type-pill.explore  { color: #5B21B6; background: var(--purple-bg); border-color: var(--purple-bd); }
+  .type-pill.avoid    { color: #92400E; background: var(--amber-bg); border-color: var(--amber-bd); }
+
+  .card-spacer { flex: 1; }
+
+  /* Confidence */
+  .conf {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-3);
+  }
+  .conf-track {
+    width: 32px; height: 3px;
+    border-radius: 2px;
+    background: var(--inset);
+    overflow: hidden;
+  }
+  .conf-bar {
+    height: 100%;
+    border-radius: 2px;
+  }
+  .conf-bar.high   { background: var(--green); }
+  .conf-bar.med    { background: var(--amber); }
+  .conf-bar.low    { background: var(--red); }
+
+  /* Title + description */
+  .card-title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    line-height: 1.35;
+    margin-bottom: 4px;
+  }
+  .obj-card.compact .card-title { font-size: 13px; }
+
+  .card-desc {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--ink-2);
+  }
+  .obj-card.compact .card-desc { font-size: 12px; }
+
+  /* Metric row */
+  .metric-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: var(--inset);
+    border-radius: var(--radius-md);
+    border: 0.5px solid var(--border);
+  }
+  .metric-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .metric-cell .m-val {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ink);
+    font-feature-settings: "tnum";
+    line-height: 1;
+  }
+  .metric-cell .m-val .m-unit {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ink-3);
+    margin-left: 1px;
+  }
+  .metric-cell .m-lbl {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ink-4);
+  }
+  .metric-sep {
+    width: 1px;
+    height: 28px;
+    background: var(--border);
+  }
+
+  .metric-progress {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .metric-progress .m-lbl {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ink-4);
+    display: flex;
+    justify-content: space-between;
+  }
+  .metric-progress .m-lbl span { color: var(--ink-3); font-weight: 700; }
+  .mp-track {
+    width: 100%; height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .mp-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--blue), var(--purple));
+    transition: width 0.5s var(--ease);
+  }
+
+  /* Propellant / key action */
+  .propellant {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    background: var(--amber-bg);
+    border: 1px solid var(--amber-bd);
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .prop-icon {
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    background: var(--amber);
+    color: white;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+  .prop-icon svg { width: 12px; height: 12px; }
+  .prop-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #92400E;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+  .prop-text {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.4;
+  }
+  .prop-mechanism {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #92400E;
+    padding: 2px 7px;
+    background: rgba(255,149,0,0.12);
+    border-radius: 4px;
+  }
+
+  /* Card footer */
+  .card-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 0.5px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .source-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: var(--radius-xs);
+    font-size: 10px;
+    font-weight: 600;
+    border: 0.5px solid;
+  }
+  .source-chip svg { width: 10px; height: 10px; }
+  .source-chip.user   { background: var(--green-bg); border-color: var(--green-bd); color: #166534; }
+  .source-chip.graph  { background: var(--blue-bg);  border-color: var(--blue-bd);  color: #1E40AF; }
+  .source-chip.research { background: var(--purple-bg); border-color: var(--purple-bd); color: #5B21B6; }
+
+  .conv-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ink-4);
+  }
+  .conv-pips { display: flex; gap: 2px; }
+  .conv-pip {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--ink-5);
+  }
+  .conv-pip.on {
+    background: var(--blue);
+  }
+
+  .foot-space { flex: 1; }
+
+  .btn-track {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--blue);
+    background: var(--blue-bg);
+    border: 1px solid var(--blue-bd);
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s var(--ease);
+  }
+  .btn-track:hover {
+    background: #E0EDFF;
+    border-color: var(--blue);
+  }
+  .btn-track svg { width: 11px; height: 11px; }
+  .btn-track.tracked {
+    background: var(--green-bg);
+    border-color: var(--green-bd);
+    color: #166534;
+  }
+  .btn-track.tracked:hover {
+    background: #E0F5E8;
+  }
+
+  /* =========================================================
+     SIDE BENEFITS (compact list)
+  ========================================================= */
+  .side-benefits {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--green-bg);
+    border: 0.5px solid var(--green-bd);
+    border-radius: var(--radius-md);
+  }
+  .sb-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #166534;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .sb-item {
+    font-size: 12px;
+    color: #166534;
+    line-height: 1.5;
+    padding-left: 12px;
+    position: relative;
+  }
+  .sb-item::before {
+    content: '+';
+    position: absolute;
+    left: 0;
+    font-weight: 700;
+    color: var(--green);
+  }
+
+  /* =========================================================
+     KEYFRAMES
+  ========================================================= */
+  @keyframes rise {
+    to { opacity: 1; transform: none; }
+  }
+
+  /* =========================================================
+     RESPONSIVE
+  ========================================================= */
+  @media (max-width: 640px) {
+    .canvas { padding: 16px 12px 40px; }
+    .mod-header { flex-wrap: wrap; gap: 10px; padding: 14px 16px; }
+    .header-pills { width: 100%; order: 10; }
+    .header-stat { display: none; }
+    .body-content { padding: 0 16px 20px; }
+    .obj-card { padding: 12px 14px; }
+    .metric-row { flex-wrap: wrap; gap: 8px; }
+    .metric-sep { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="canvas">
+
+<!-- ================================================================
+     MODULE
+================================================================= -->
+<div class="obj-module open" id="mod">
+
+  <!-- HEADER -->
+  <div class="mod-header" onclick="toggle()">
+    <div class="header-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <circle cx="12" cy="12" r="5"/>
+        <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>
+      </svg>
+    </div>
+    <div class="header-text">
+      <div class="header-label">
+        <span class="dot"></span>
+        7 objectives detected
+        <span style="color:var(--ink-5)">|</span>
+        <span style="color:var(--blue); font-weight:700;">2 tracked</span>
+      </div>
+      <div class="header-title">
+        Acquire <span class="num">1,000,000</span> users in 2 months
+      </div>
+    </div>
+    <div class="header-pills">
+      <span class="h-pill fund"><span class="pip"></span>Fundamental 1</span>
+      <span class="h-pill struc"><span class="pip"></span>Structural 3</span>
+      <span class="h-pill surf"><span class="pip"></span>Surface 3</span>
+    </div>
+    <div class="header-stat">
+      <div class="header-stat-val">62<span class="unit">d</span></div>
+      <div class="header-stat-lbl">Remaining</div>
+    </div>
+    <div class="expand-chevron">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+  </div>
+  <div class="progress-strip"><div class="progress-fill"></div></div>
+
+  <!-- BODY -->
+  <div class="mod-body">
+    <div class="body-content">
+      <div class="toolbar">
+        <div class="toolbar-label">Decomposition tree &middot; 7 nodes</div>
+        <div class="tab-bar">
+          <button class="tab-btn on">All</button>
+          <button class="tab-btn">Tracked</button>
+          <button class="tab-btn">Surface</button>
+        </div>
+      </div>
+
+      <div class="tree">
+
+        <!-- ======== ROOT (L1 Fundamental) ======== -->
+        <div class="root-node">
+          <div class="obj-card root-card">
+            <div class="card-top">
+              <span class="depth-badge fundamental">Fundamental</span>
+              <span class="type-pill maximize">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 17l5-5 5 5M7 7l5 5 5-5"/></svg>
+                Maximize
+              </span>
+              <span class="card-spacer"></span>
+              <span class="conf">
+                <span class="conf-track"><span class="conf-bar high" style="width:94%"></span></span>
+                94%
+              </span>
+            </div>
+            <div class="card-title">Build a scalable user-acquisition engine</div>
+            <div class="card-desc">Establish the foundational systems, team capacity, and channels required to support sustained 10x user growth over the 2-month window without compromising platform reliability.</div>
+
+            <!-- Metric row -->
+            <div class="metric-row">
+              <div class="metric-cell">
+                <div class="m-val">0<span class="m-unit">users</span></div>
+                <div class="m-lbl">Baseline</div>
+              </div>
+              <div class="metric-sep"></div>
+              <div class="metric-cell">
+                <div class="m-val">1M<span class="m-unit">users</span></div>
+                <div class="m-lbl">Target</div>
+              </div>
+              <div class="metric-sep"></div>
+              <div class="metric-progress">
+                <div class="m-lbl">Progress <span>28%</span></div>
+                <div class="mp-track"><div class="mp-fill" style="width:28%"></div></div>
+              </div>
+            </div>
+
+            <!-- Propellant -->
+            <div class="propellant">
+              <div class="prop-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              </div>
+              <div>
+                <div class="prop-label">Propellant</div>
+                <div class="prop-text">Define core acquisition channels and weekly conversion targets</div>
+                <span class="prop-mechanism">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="10" height="10"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                  clears_bottleneck
+                </span>
+              </div>
+            </div>
+
+            <!-- Side benefits -->
+            <div class="side-benefits">
+              <div class="sb-label">Side benefits</div>
+              <div class="sb-item">Forces channel cost analysis, preventing overspend on low-ROI sources</div>
+              <div class="sb-item">Creates a shared team cadence around weekly metrics reviews</div>
+            </div>
+
+            <div class="card-foot">
+              <span class="source-chip user">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="8" r="3"/><path d="M5 20v-1a7 7 0 0114 0v1"/></svg>
+                User input
+              </span>
+              <span class="conv-badge">
+                <span class="conv-pips"><span class="conv-pip on"></span><span class="conv-pip on"></span><span class="conv-pip on"></span><span class="conv-pip on"></span></span>
+                4 chains
+              </span>
+              <span class="foot-space"></span>
+              <button class="btn-track tracked" onclick="event.stopPropagation()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg>
+                Tracked
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ======== CHILDREN (L2 Structural) ======== -->
+        <div class="children">
+
+          <!-- L2 Node: Platform foundation -->
+          <div class="branch">
+            <div class="spine-dot"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/></svg></div>
+            <div class="obj-card">
+              <div class="card-top">
+                <span class="depth-badge structural">Structural</span>
+                <span class="type-pill maximize">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 17l5-5 5 5M7 7l5 5 5-5"/></svg>
+                  Maximize
+                </span>
+                <span class="card-spacer"></span>
+                <span class="conf">
+                  <span class="conf-track"><span class="conf-bar high" style="width:87%"></span></span>
+                  87%
+                </span>
+              </div>
+              <div class="card-title">Establish high-quality platform foundation</div>
+              <div class="card-desc">A secure, performant, professional web platform is a precondition for retention at scale.</div>
+              <div class="card-foot">
+                <span class="source-chip graph">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7l3 9M16 7l-3 9"/></svg>
+                  Graph derived
+                </span>
+                <span class="conv-badge">
+                  <span class="conv-pips"><span class="conv-pip on"></span><span class="conv-pip on"></span><span class="conv-pip on"></span></span>
+                  3 chains
+                </span>
+                <span class="foot-space"></span>
+                <button class="btn-track" onclick="event.stopPropagation(); trackBtn(this)">+ Track</button>
+              </div>
+            </div>
+
+            <!-- L3 Surface children -->
+            <div class="children">
+              <div class="branch">
+                <div class="spine-dot"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="3"/></svg></div>
+                <div class="obj-card compact">
+                  <div class="card-top">
+                    <span class="depth-badge surface">Surface</span>
+                    <span class="type-pill explore">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg>
+                      Explore
+                    </span>
+                    <span class="card-spacer"></span>
+                    <span class="conf">
+                      <span class="conf-track"><span class="conf-bar med" style="width:79%"></span></span>
+                      79%
+                    </span>
+                  </div>
+                  <div class="card-title">Audit current platform weaknesses</div>
+                  <div class="card-desc">Run security and performance audits to surface blockers before scaling.</div>
+                  <div class="card-foot">
+                    <span class="source-chip user">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="8" r="3"/><path d="M5 20v-1a7 7 0 0114 0v1"/></svg>
+                      GitHub repo
+                    </span>
+                    <span class="source-chip research">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg>
+                      OWASP benchmarks
+                    </span>
+                    <span class="foot-space"></span>
+                    <button class="btn-track" onclick="event.stopPropagation(); trackBtn(this)">+ Track</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="branch">
+                <div class="spine-dot"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="3"/></svg></div>
+                <div class="obj-card compact">
+                  <div class="card-top">
+                    <span class="depth-badge surface">Surface</span>
+                    <span class="type-pill maximize">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 17l5-5 5 5M7 7l5 5 5-5"/></svg>
+                      Maximize
+                    </span>
+                    <span class="card-spacer"></span>
+                    <span class="conf">
+                      <span class="conf-track"><span class="conf-bar med" style="width:81%"></span></span>
+                      81%
+                    </span>
+                  </div>
+                  <div class="card-title">Establish performance baselines</div>
+                  <div class="card-desc">Set p95 latency and uptime SLOs; instrument before traffic ramps.</div>
+                  <div class="card-foot">
+                    <span class="source-chip research">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg>
+                      Web vitals research
+                    </span>
+                    <span class="foot-space"></span>
+                    <button class="btn-track" onclick="event.stopPropagation(); trackBtn(this)">+ Track</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- L2 Node: Team capacity -->
+          <div class="branch">
+            <div class="spine-dot active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" width="7" height="7"><path d="M5 12l5 5L20 7"/></svg>
+            </div>
+            <div class="obj-card">
+              <div class="card-top">
+                <span class="depth-badge structural">Structural</span>
+                <span class="type-pill maximize">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 17l5-5 5 5M7 7l5 5 5-5"/></svg>
+                  Maximize
+                </span>
+                <span class="card-spacer"></span>
+                <span class="conf">
+                  <span class="conf-track"><span class="conf-bar high" style="width:83%"></span></span>
+                  83%
+                </span>
+              </div>
+              <div class="card-title">Scale engineering team capacity</div>
+              <div class="card-desc">Replicate a 10-engineer team to support development velocity and ongoing maintenance once user load increases.</div>
+              <div class="card-foot">
+                <span class="source-chip graph">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7l3 9M16 7l-3 9"/></svg>
+                  Graph derived
+                </span>
+                <span class="conv-badge">
+                  <span class="conv-pips"><span class="conv-pip on"></span><span class="conv-pip on"></span><span class="conv-pip on"></span></span>
+                  3 chains
+                </span>
+                <span class="foot-space"></span>
+                <button class="btn-track tracked" onclick="event.stopPropagation()">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg>
+                  Tracked
+                </button>
+              </div>
+            </div>
+
+            <!-- L3 child -->
+            <div class="children">
+              <div class="branch">
+                <div class="spine-dot"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="3"/></svg></div>
+                <div class="obj-card compact">
+                  <div class="card-top">
+                    <span class="depth-badge surface">Surface</span>
+                    <span class="type-pill explore">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg>
+                      Explore
+                    </span>
+                    <span class="card-spacer"></span>
+                    <span class="conf">
+                      <span class="conf-track"><span class="conf-bar med" style="width:76%"></span></span>
+                      76%
+                    </span>
+                  </div>
+                  <div class="card-title">Define 10-engineer team structure</div>
+                  <div class="card-desc">Split into 2 squads (platform, growth); define on-call, code review, and PR throughput norms.</div>
+                  <div class="card-foot">
+                    <span class="source-chip research">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg>
+                      Org-design research
+                    </span>
+                    <span class="foot-space"></span>
+                    <button class="btn-track" onclick="event.stopPropagation(); trackBtn(this)">+ Track</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- L2 Node: Execution friction (Risk) -->
+          <div class="branch">
+            <div class="spine-dot"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/></svg></div>
+            <div class="obj-card">
+              <div class="card-top">
+                <span class="depth-badge structural">Structural</span>
+                <span class="type-pill minimize">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                  Minimize
+                </span>
+                <span class="card-spacer"></span>
+                <span class="conf">
+                  <span class="conf-track"><span class="conf-bar med" style="width:71%"></span></span>
+                  71%
+                </span>
+              </div>
+              <div class="card-title">Reduce execution friction across teams</div>
+              <div class="card-desc">Eliminate process bottlenecks (handoffs, ambiguous ownership, dependency chains) that compound under aggressive timelines.</div>
+              <div class="card-foot">
+                <span class="source-chip research">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg>
+                  Cross-research
+                </span>
+                <span class="conv-badge">
+                  <span class="conv-pips"><span class="conv-pip on"></span><span class="conv-pip on"></span></span>
+                  2 chains
+                </span>
+                <span class="foot-space"></span>
+                <button class="btn-track" onclick="event.stopPropagation(); trackBtn(this)">+ Track</button>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /children -->
+
+      </div><!-- /tree -->
+
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+function toggle() {
+  document.getElementById('mod').classList.toggle('open');
+}
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    btn.closest('.tab-bar').querySelectorAll('.tab-btn').forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+  });
+});
+function trackBtn(el) {
+  if (el.classList.contains('tracked')) return;
+  el.classList.add('tracked');
+  el.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg> Tracked';
+}
+</script>
+
+</body>
+</html>

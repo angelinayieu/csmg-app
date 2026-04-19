@@ -225,10 +225,10 @@ export const validateEntity = (
     ),
     entity_type: validators.string(obj.entity_type, `${path}.entity_type`, 100),
     entity_category: validators.enum<
-      "concrete" | "abstract" | "process" | "relational" | "epistemic"
+      "concrete" | "abstract" | "process" | "relational" | "epistemic" | "fault"
     >(
       obj.entity_category,
-      ["concrete", "abstract", "process", "relational", "epistemic"],
+      ["concrete", "abstract", "process", "relational", "epistemic", "fault"],
       `${path}.entity_category`,
       "abstract"
     ),
@@ -262,7 +262,7 @@ export const validateEntity = (
       obj.blast_radius ?? 0,
       `${path}.blast_radius`,
       0,
-      1
+      100
     ),
     centrality_rank: validators.optional(
       obj.centrality_rank,
@@ -280,9 +280,9 @@ export const validateEntity = (
     knowledge_layer: validators.optional(
       obj.knowledge_layer,
       (v) =>
-        validators.enum<"internal" | "external" | "bridge">(
+        validators.enum<"internal" | "conceptual" | "external" | "bridge">(
           v,
-          ["internal", "external", "bridge"],
+          ["internal", "conceptual", "external", "bridge"],
           `${path}.knowledge_layer`
         ),
       undefined
@@ -420,9 +420,9 @@ export const validateEdge = (edge: unknown, path: string): StructuredEdge => {
     knowledge_layer: validators.optional(
       obj.knowledge_layer,
       (v) =>
-        validators.enum<"internal" | "external" | "bridge">(
+        validators.enum<"internal" | "conceptual" | "external" | "bridge">(
           v,
-          ["internal", "external", "bridge"],
+          ["internal", "conceptual", "external", "bridge"],
           `${path}.knowledge_layer`
         ),
       undefined
@@ -430,6 +430,32 @@ export const validateEdge = (edge: unknown, path: string): StructuredEdge => {
     requires_user_approval: validators.boolean(
       obj.requires_user_approval ?? false,
       `${path}.requires_user_approval`
+    ),
+    topology: validators.optional(
+      obj.topology,
+      (v) =>
+        validators.enum<
+          | "inside"
+          | "overlap"
+          | "meets"
+          | "disjoint"
+          | "composes"
+          | "cover"
+          | "equal"
+        >(
+          v,
+          [
+            "inside",
+            "overlap",
+            "meets",
+            "disjoint",
+            "composes",
+            "cover",
+            "equal",
+          ],
+          `${path}.topology`
+        ),
+      null
     ),
   };
 };
@@ -628,10 +654,10 @@ export const validateStructuredDecomposition = (
             `root.risk_points[${i}].entity_id`
           ),
           blast_radius: validators.number(
-            rpObj.blast_radius ?? 0.5,
+            rpObj.blast_radius ?? 50,
             `root.risk_points[${i}].blast_radius`,
             0,
-            1
+            100
           ),
           reason: typeof rpObj.reason === "string" ? rpObj.reason : (typeof rpObj.summary === "string" ? rpObj.summary : ""),
           mitigation: typeof rpObj.mitigation === "string"
@@ -662,10 +688,10 @@ export const validateStructuredDecomposition = (
                 `root.master_bottleneck.entity_id`
               ),
               blast_radius: validators.number(
-                mb.blast_radius ?? 1,
+                mb.blast_radius ?? 75,
                 `root.master_bottleneck.blast_radius`,
                 0,
-                1
+                100
               ),
               reason: validators.string(
                 mb.reason,

@@ -1,61 +1,59 @@
-import { createClient } from "@/lib/supabase/server";
-import { EmptyState } from "@/components/dashboard/empty-state";
-import { SpaceCard } from "@/components/dashboard/space-card";
-import { Constellation } from "@/components/dashboard/constellation";
-import type { Space, Bridge } from "@/types";
+import { createClient, getAuthUser } from "@/lib/supabase/server";
+import { StudioShell } from "@/components/studio/studio-shell";
+import type { Space } from "@/types";
+import type { Reaction } from "@/types/reactions";
 
-export default async function DashboardPage() {
+/**
+ * /app — Studio landing.
+ *
+ * Post-auth home surface. Replaces the previous WelcomeHero/EcosystemSection/
+ * GlobalQueryBox stack with the minimal Studio shell: a single "What are you
+ * thinking about?" dropzone, a quiet row of model pulse tiles, a ⌘K command
+ * palette, and the full model index below the fold.
+ *
+ * The server delivers the initial space list; the shell enriches it with
+ * activity pulse via `/api/spaces/pulse` after hydration. This keeps first
+ * paint fast while still giving returning users a lived-in feel.
+ */
+export default async function StudioPage() {
+  const user = await getAuthUser();
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { data } = await supabase
-    .from("spaces")
-    .select("*")
-    .order("updated_at", { ascending: false })
-    .limit(20);
-
-  const spaces = (data ?? []) as Space[];
-
-  if (spaces.length === 0) {
-    return <EmptyState />;
-  }
-
-  // Fetch bridges for constellation view
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
-  const spaceIds = spaces.map((s) => s.id);
-  let bridges: Bridge[] = [];
-  if (spaceIds.length > 1 && user) {
-    const { data: bridgesData } = await db
-      .from("bridges")
+
+  // Phase 42 — Continue row: fetch the N most-recent reactions across
+  // every space the user can see. RLS enforces ownership so we don't
+  // need an explicit filter beyond the order/limit. Join-less query
+  // (we resolve space names client-side from the already-loaded spaces
+  // list) to keep server work minimal.
+  const [spacesRes, profileRes, recentReactionsRes] = await Promise.all([
+    db
+      .from("spaces")
       .select("*")
-      .in("source_space_id", spaceIds);
-    bridges = (bridgesData ?? []) as Bridge[];
-  }
+      .order("updated_at", { ascending: false })
+      .limit(40),
+    user
+      ? db.from("profiles").select("display_name").eq("id", user.id).single()
+      : null,
+    db
+      .from("reactions")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(6),
+  ]);
+
+  const spaces = (spacesRes.data ?? []) as Space[];
+  const displayName: string | null = profileRes?.data?.display_name ?? null;
+  const recentReactions = (recentReactionsRes.data ?? []) as Reaction[];
+
+  // Greeting: display_name > email local-part > "there"
+  const greetingName = displayName || user?.email?.split("@")[0] || "there";
 
   return (
-    <div>
-      <h1 className="text-2xl font-bold">Your Analysis Landscape</h1>
-      <p className="mt-1 text-sm text-gray-500">
-        {spaces.length} space{spaces.length > 1 ? "s" : ""}
-        {bridges.length > 0 && ` · ${bridges.length} bridge${bridges.length > 1 ? "s" : ""}`}
-      </p>
-
-      {/* Constellation view for 2+ spaces */}
-      {spaces.length >= 2 && (
-        <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4" style={{ height: 300 }}>
-          <Constellation spaces={spaces} bridges={bridges} />
-        </div>
-      )}
-
-      {/* Space cards grid */}
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        {spaces.map((space) => (
-          <SpaceCard key={space.id} space={space} />
-        ))}
-      </div>
-    </div>
+    <StudioShell
+      greetingName={greetingName}
+      spaces={spaces}
+      recentReactions={recentReactions}
+    />
   );
 }

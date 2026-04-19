@@ -23,7 +23,7 @@ export const TIERS: Record<AnalysisTier, TierConfig> = {
   quick: {
     credits: 1,
     label: "Quick",
-    icon: "⚡",
+    icon: "Q",
     time: "~10s",
     description: "Fast single-pass analysis. Good for quick explorations.",
     agents: ["decompose", "structure"],
@@ -38,7 +38,7 @@ export const TIERS: Record<AnalysisTier, TierConfig> = {
   standard: {
     credits: 3,
     label: "Standard",
-    icon: "🔍",
+    icon: "S",
     time: "~25s",
     description:
       "Structural validation catches gaps. Better density and fewer blind spots.",
@@ -54,7 +54,7 @@ export const TIERS: Record<AnalysisTier, TierConfig> = {
   deep: {
     credits: 8,
     label: "Deep",
-    icon: "🧠",
+    icon: "D",
     time: "~45s",
     description:
       "Multi-space analysis with cross-domain connections and strategic synthesis.",
@@ -78,7 +78,7 @@ export const TIERS: Record<AnalysisTier, TierConfig> = {
   comprehensive: {
     credits: 15,
     label: "Comprehensive",
-    icon: "💎",
+    icon: "C",
     time: "~90s",
     description:
       "Exhaustive analysis with automatic reasoning on every space. For high-stakes decisions.",

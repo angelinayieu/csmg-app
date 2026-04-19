@@ -69,6 +69,7 @@ export function PipelineProgress({
     "critiquing",
     "augmenting",
     "weaving",
+    "interweaving",
     "synthesizing",
   ];
   const currentIdx = phaseOrder.indexOf(phase);
@@ -150,6 +151,11 @@ export function PipelineProgress({
             ? `${bridgeCount} bridges · ${contradictionCount} contradictions`
             : undefined
         }
+      />
+
+      <PhaseRow
+        label="Interweaving connections..."
+        status={getStatus("interweaving")}
       />
 
       <PhaseRow

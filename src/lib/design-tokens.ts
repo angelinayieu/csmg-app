@@ -48,11 +48,11 @@ export const colors = {
 
   // Entity category colors (for graph nodes and badges)
   entity: {
-    concrete: { bg: "#EFF6FF", text: "#1D4ED8", stroke: "#3B82F6" },
-    abstract: { bg: "#F5F3FF", text: "#6D28D9", stroke: "#8B5CF6" },
-    process: { bg: "#ECFDF5", text: "#047857", stroke: "#10B981" },
-    relational: { bg: "#FFF7ED", text: "#C2410C", stroke: "#F97316" },
-    epistemic: { bg: "#FDF2F8", text: "#BE185D", stroke: "#EC4899" },
+    concrete: { bg: "#DBEAFE", text: "#1E40AF", stroke: "#3B82F6" },
+    abstract: { bg: "#EDE9FE", text: "#5B21B6", stroke: "#8B5CF6" },
+    process: { bg: "#D1FAE5", text: "#065F46", stroke: "#10B981" },
+    relational: { bg: "#FFEDD5", text: "#9A3412", stroke: "#F97316" },
+    epistemic: { bg: "#FCE7F3", text: "#9D174D", stroke: "#EC4899" },
   },
 } as const;
 
@@ -62,30 +62,29 @@ export const typography = {
   monoFamily:
     '"SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, monospace',
 
-  h1: { size: 20, weight: 600, tracking: "-0.02em" },
-  h2: { size: 15, weight: 600, tracking: "-0.01em" },
+  hero: { size: 32, weight: 700, tracking: "-0.03em", lineHeight: 1.2 },
+  h1: { size: 28, weight: 600, tracking: "-0.02em" },
+  h2: { size: 20, weight: 600, tracking: "-0.01em" },
   section: {
+    size: 12,
+    weight: 600,
+    tracking: "-0.01em",
+  },
+  body: { size: 15, weight: 400, lineHeight: 1.65 },
+  caption: { size: 13, weight: 400, lineHeight: 1.4 },
+  label: {
     size: 11,
     weight: 600,
-    tracking: "0.04em",
-    transform: "uppercase" as const,
+    tracking: "0.02em",
   },
-  body: { size: 13.5, weight: 400, lineHeight: 1.65 },
-  caption: { size: 11, weight: 400, lineHeight: 1.4 },
-  label: {
-    size: 10,
-    weight: 600,
-    tracking: "0.05em",
-    transform: "uppercase" as const,
-  },
-  mono: { size: 10, weight: 400, lineHeight: 1.6 },
-  entityId: { size: 11, weight: 600, tracking: "0.03em" },
-  value: { size: 20, weight: 700, lineHeight: 1 },
+  mono: { size: 12, weight: 400, lineHeight: 1.6 },
+  entityId: { size: 13, weight: 600, tracking: "0.02em" },
+  value: { size: 22, weight: 700, lineHeight: 1 },
 } as const;
 
 export const spacing = {
-  card: { padding: "22px 24px", radius: 14, gap: 16 },
-  insetCard: { padding: "20px 22px", radius: 12 },
+  card: { padding: "24px 28px", radius: 14, gap: 16 },
+  insetCard: { padding: "22px 24px", radius: 12 },
   callout: { padding: "11px 14px", radius: 9, borderLeft: 2.5 },
   metricCell: { padding: "13px 14px", radius: 10 },
   listItem: { padding: "10px 12px", radius: 10 },
@@ -93,8 +92,8 @@ export const spacing = {
   button: { padding: "9px 0", radius: 8 },
   sidebar: { width: 272 },
   rightPanel: { width: 288 },
-  sectionGap: 16,
-  cardGap: 6,
+  sectionGap: 24,
+  cardGap: 12,
 } as const;
 
 export const shadows = {
@@ -126,29 +125,56 @@ export const animation = {
   },
 } as const;
 
-// Graph: node fill/stroke colors by entity category (for D3 SVG rendering)
-export const nodeColors = {
-  concrete: { fill: "#E6F1FB", stroke: "#378ADD" },
-  abstract: { fill: "#EEEDFE", stroke: "#7F77DD" },
-  process: { fill: "#E1F5EE", stroke: "#1D9E75" },
-  relational: { fill: "#FAECE7", stroke: "#D85A30" },
-  epistemic: { fill: "#FBEAF0", stroke: "#D4537E" },
+// Strategy layer colors (L1-L4 visual ladder)
+export const layerColors = {
+  l1: "#22C55E",
+  l2: "#3B82F6",
+  l3: "#F59E0B",
+  l4: "#A855F7",
 } as const;
+
+// Graph: node fill/stroke colors by entity category (for D3 SVG rendering)
+// Solid, saturated fills — text inside nodes should be white
+export const nodeColors = {
+  concrete: { fill: "#3B82F6", stroke: "#2563EB" },
+  abstract: { fill: "#8B5CF6", stroke: "#7C3AED" },
+  process: { fill: "#10B981", stroke: "#059669" },
+  relational: { fill: "#F97316", stroke: "#EA580C" },
+  epistemic: { fill: "#EC4899", stroke: "#DB2777" },
+} as const;
+
+// Connectivity tier visual config — drives node size/opacity by degree
+export const connectivityTiers = {
+  hub:    { opacityMult: 1.0,  radiusMult: 1.7,  strokeWidth: 2.5 },
+  bridge: { opacityMult: 0.95, radiusMult: 1.25, strokeWidth: 2.0 },
+  leaf:   { opacityMult: 0.8,  radiusMult: 0.85, strokeWidth: 1.4 },
+  orphan: { opacityMult: 0.6,  radiusMult: 0.65, strokeWidth: 1.0 },
+} as const;
+
+export type ConnectivityTier = keyof typeof connectivityTiers;
+
+export function getConnectivityTier(degree: number, maxDegree: number): ConnectivityTier {
+  if (degree === 0) return "orphan";
+  const ratio = degree / Math.max(maxDegree, 1);
+  if (ratio >= 0.6 || degree >= 5) return "hub";
+  if (ratio >= 0.3 || degree >= 3) return "bridge";
+  return "leaf";
+}
 
 // Graph: edge dimension styles (color, dash pattern, width)
 export const edgeDimensionStyles: Record<
   string,
   { color: string; dash: string; width: number }
 > = {
-  structural: { color: "#888780", dash: "", width: 0.5 },
-  functional: { color: "#1D9E75", dash: "", width: 1 },
-  temporal: { color: "#BA7517", dash: "4 3", width: 0.5 },
-  causal: { color: "#D85A30", dash: "", width: 1.5 },
-  correlational: { color: "#888780", dash: "2 2", width: 0.5 },
-  logical: { color: "#7F77DD", dash: "", width: 1 },
-  epistemic: { color: "#D4537E", dash: "4 3", width: 0.5 },
-  comparative: { color: "#378ADD", dash: "2 2", width: 0.5 },
-  agentive: { color: "#639922", dash: "", width: 1 },
+  structural: { color: "#6B7280", dash: "", width: 0.8 },
+  functional: { color: "#059669", dash: "", width: 1.2 },
+  temporal: { color: "#D97706", dash: "4 3", width: 0.8 },
+  causal: { color: "#DC2626", dash: "", width: 1.8 },
+  correlational: { color: "#6B7280", dash: "2 2", width: 0.8 },
+  logical: { color: "#7C3AED", dash: "", width: 1.2 },
+  epistemic: { color: "#DB2777", dash: "4 3", width: 0.8 },
+  comparative: { color: "#2563EB", dash: "2 2", width: 0.8 },
+  agentive: { color: "#16A34A", dash: "", width: 1.2 },
 } as const;
 
 // Graph: special overlay colors
@@ -163,6 +189,48 @@ export const graphOverlays = {
   cyclePositive: "#34C759",
   cycleNegative: "#FF3B30",
   cycleBalancing: "#FF9500",
+  cycleIntervention: { ring: "#7C3AED", dash: "2 2 6 2", width: 2.5 },
+  // Interaction field overlays
+  fieldStrength: { color: "#6366F1", maxOpacity: 0.18 },
+  tensionZone: { ring: "#DC2626", dash: "1 2", width: 1.5, opacity: 0.5 },
+  corridor: { color: "#059669", width: 2.5, dash: "", opacity: 0.6 },
+} as const;
+
+// Graph: edge dynamics visual encoding
+// Each dynamics type gets a distinctive glow color and icon indicator
+export const edgeDynamicsStyles: Record<
+  string,
+  { color: string; glowOpacity: number; label: string; symbol: string }
+> = {
+  threshold:     { color: "#F59E0B", glowOpacity: 0.35, label: "Threshold",     symbol: "⊥" },
+  compounding:   { color: "#10B981", glowOpacity: 0.30, label: "Compounding",   symbol: "∞" },
+  exponential:   { color: "#EF4444", glowOpacity: 0.40, label: "Exponential",   symbol: "⤴" },
+  logarithmic:   { color: "#8B5CF6", glowOpacity: 0.25, label: "Logarithmic",   symbol: "∿" },
+  decay:         { color: "#F97316", glowOpacity: 0.30, label: "Decay",          symbol: "↘" },
+  step_function: { color: "#06B6D4", glowOpacity: 0.30, label: "Step Function",  symbol: "⌐" },
+  delayed:       { color: "#3B82F6", glowOpacity: 0.25, label: "Delayed",        symbol: "◷" },
+  linear:        { color: "#6B7280", glowOpacity: 0.15, label: "Linear",         symbol: "→" },
+} as const;
+
+// View-specific styling tokens
+export const mapViewTokens = {
+  territoryFillOpacity: 0.08,
+  territoryStrokeOpacity: 0.2,
+  territoryStrokeWidth: 1.5,
+  territoryStrokeDash: "8 4",
+} as const;
+
+export const layeredViewTokens = {
+  laneFillOpacity: 0.02,
+  laneDividerColor: "#E5E7EB",
+  laneLabelColor: "#9CA3AF",
+  columnFillOpacity: 0.04,
+} as const;
+
+export const forceViewTokens = {
+  clusterBubbleFillOpacity: 0.06,
+  clusterBubbleStrokeOpacity: 0.12,
+  clusterBubblePadding: 50,
 } as const;
 
 // Helper: get edge dimension style
@@ -178,15 +246,15 @@ export function getEdgeDimensionStyle(
   );
 }
 
-// Domain colors for multi-space unified graph
+// Domain colors for multi-space unified graph (solid fills for graph nodes)
 export const domainColors: Array<{ fill: string; stroke: string; label: string }> = [
-  { fill: "#E6F1FB", stroke: "#378ADD", label: "blue" },     // Space A
-  { fill: "#EEEDFE", stroke: "#7F77DD", label: "purple" },   // Space B
-  { fill: "#FAECE7", stroke: "#D85A30", label: "coral" },    // Space C
-  { fill: "#E1F5EE", stroke: "#1D9E75", label: "teal" },     // Space D
-  { fill: "#FFF8E6", stroke: "#BA7517", label: "amber" },    // Space E
-  { fill: "#FBEAF0", stroke: "#D4537E", label: "pink" },     // Space F
-  { fill: "#F0FFF4", stroke: "#639922", label: "green" },    // Space G
+  { fill: "#3B82F6", stroke: "#2563EB", label: "blue" },     // Space A
+  { fill: "#8B5CF6", stroke: "#7C3AED", label: "purple" },   // Space B
+  { fill: "#F97316", stroke: "#EA580C", label: "coral" },    // Space C
+  { fill: "#10B981", stroke: "#059669", label: "teal" },     // Space D
+  { fill: "#F59E0B", stroke: "#D97706", label: "amber" },    // Space E
+  { fill: "#EC4899", stroke: "#DB2777", label: "pink" },     // Space F
+  { fill: "#22C55E", stroke: "#16A34A", label: "green" },    // Space G
 ];
 
 export function getDomainColor(index: number): { fill: string; stroke: string } {
@@ -225,3 +293,91 @@ export function getEntityColor(
     }
   );
 }
+
+// ── Canvas scope colors (Sprint 1) ──
+//
+// One shared visual language for canvas scope — used in library cards,
+// scope dots, proposal rail, inline span underlines (Sprint 3), universal
+// canvas frame chrome (Sprint 4), and synthesis cross-area headers.
+//
+//   universal = teal (InterAxis primary, spans everything)
+//   project   = purple (one level down from universal)
+//   objective = blue (sub-objective layer)
+//   app       = amber (leaf, most concrete)
+
+export type CanvasScopeToken = "universal" | "project" | "objective" | "app";
+
+export const canvasScopeColors: Record<
+  CanvasScopeToken,
+  { dot: string; tintBg: string; tintBorder: string; text: string; label: string }
+> = {
+  universal: {
+    dot: "#00ACC1",      // InterAxis teal
+    tintBg: "#E0F7FA",
+    tintBorder: "#B2EBF2",
+    text: "#00838F",
+    label: "Universal",
+  },
+  project: {
+    dot: colors.theory.light,                  // #AF52DE
+    tintBg: colors.tint.purple.light,
+    tintBorder: colors.tintBorder.purple.light,
+    text: "#5B21B6",
+    label: "Project",
+  },
+  objective: {
+    dot: colors.leverage.light,                // #007AFF
+    tintBg: colors.tint.blue.light,
+    tintBorder: colors.tintBorder.blue.light,
+    text: "#1E40AF",
+    label: "Objective",
+  },
+  app: {
+    dot: colors.warning.light,                 // #FF9500
+    tintBg: colors.tint.amber.light,
+    tintBorder: colors.tintBorder.amber.light,
+    text: "#9A3412",
+    label: "App",
+  },
+};
+
+export function getCanvasScopeColor(scope: CanvasScopeToken) {
+  return canvasScopeColors[scope];
+}
+
+// ── Convergence Workspace tokens ──
+
+export const workspaceTokens = {
+  detailsPanel: { width: 340 },
+  goalStrip: { height: 56 },
+  findingRow: { height: 56 },
+} as const;
+
+export const findingTypeColors = {
+  leverage: {
+    bg: colors.tint.blue.light,
+    border: colors.tintBorder.blue.light,
+    accent: colors.leverage.light,
+    text: "#1E40AF",
+  },
+  risk: {
+    bg: colors.tint.red.light,
+    border: colors.tintBorder.red.light,
+    accent: colors.risk.light,
+    text: "#991B1B",
+  },
+  convergence: {
+    bg: colors.tint.purple.light,
+    border: colors.tintBorder.purple.light,
+    accent: colors.theory.light,
+    text: "#5B21B6",
+  },
+  bottleneck: {
+    bg: colors.tint.amber.light,
+    border: colors.tintBorder.amber.light,
+    accent: colors.warning.light,
+    text: "#92400E",
+  },
+} as const;
+
+export type FindingColorKey = keyof typeof findingTypeColors;

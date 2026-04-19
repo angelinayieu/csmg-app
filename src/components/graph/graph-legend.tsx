@@ -1,4 +1,4 @@
-import { nodeColors, edgeDimensionStyles, graphOverlays } from "@/lib/design-tokens";
+import { nodeColors, edgeDimensionStyles, edgeDynamicsStyles, graphOverlays, connectivityTiers } from "@/lib/design-tokens";
 
 const categoryLabels: Record<string, string> = {
   concrete: "Concrete",
@@ -19,6 +19,16 @@ const dimensionLabels: Record<string, string> = {
   comparative: "Comparative",
   agentive: "Agentive",
 };
+
+// Only show the most impactful dynamics types in legend (not linear)
+const dynamicsLegendKeys = [
+  "threshold",
+  "compounding",
+  "exponential",
+  "decay",
+  "delayed",
+  "step_function",
+] as const;
 
 export function GraphLegend() {
   return (
@@ -41,6 +51,37 @@ export function GraphLegend() {
                     fill={color?.fill ?? "#F9F9FB"}
                     stroke={color?.stroke ?? "#86868B"}
                     strokeWidth={1}
+                  />
+                </svg>
+                <span className="text-gray-600">{label}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Connectivity tiers */}
+      <div>
+        <p className="mb-1.5 font-semibold uppercase tracking-wider text-gray-400">
+          Connectivity
+        </p>
+        <div className="space-y-1">
+          {(["hub", "bridge", "leaf", "orphan"] as const).map((tier) => {
+            const config = connectivityTiers[tier];
+            const r = Math.round(6 * config.radiusMult);
+            const label = tier === "hub" ? "Hub (5+ connections)"
+              : tier === "bridge" ? "Bridge (3-4)"
+              : tier === "leaf" ? "Leaf (1-2)"
+              : "Orphan (0)";
+            return (
+              <div key={tier} className="flex items-center gap-2">
+                <svg width={16} height={16}>
+                  <circle
+                    cx={8}
+                    cy={8}
+                    r={Math.max(r, 2)}
+                    fill="#3B82F6"
+                    opacity={config.opacityMult}
                   />
                 </svg>
                 <span className="text-gray-600">{label}</span>
@@ -97,6 +138,60 @@ export function GraphLegend() {
             </svg>
             <span className="text-gray-600">Master bottleneck</span>
           </div>
+          <div className="flex items-center gap-2">
+            <svg width={12} height={12}>
+              <circle
+                cx={6}
+                cy={6}
+                r={5}
+                fill="none"
+                stroke={graphOverlays.cycleIntervention.ring}
+                strokeWidth={1.5}
+                strokeDasharray="1 1 3 1"
+              />
+            </svg>
+            <span className="text-gray-600">Cycle intervention</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <svg width={12} height={12}>
+              <circle
+                cx={6}
+                cy={6}
+                r={5}
+                fill={graphOverlays.fieldStrength.color}
+                opacity={0.3}
+              />
+            </svg>
+            <span className="text-gray-600">Field strength</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <svg width={12} height={12}>
+              <circle
+                cx={6}
+                cy={6}
+                r={5}
+                fill="none"
+                stroke={graphOverlays.tensionZone.ring}
+                strokeWidth={1.5}
+                strokeDasharray="1 2"
+              />
+            </svg>
+            <span className="text-gray-600">Tension zone</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <svg width={16} height={6}>
+              <line
+                x1={0}
+                y1={3}
+                x2={16}
+                y2={3}
+                stroke={graphOverlays.corridor.color}
+                strokeWidth={3}
+                opacity={0.5}
+              />
+            </svg>
+            <span className="text-gray-600">Strategic corridor</span>
+          </div>
         </div>
       </div>
 
@@ -122,6 +217,49 @@ export function GraphLegend() {
                   />
                 </svg>
                 <span className="text-gray-600">{label}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Edge dynamics */}
+      <div>
+        <p className="mb-1.5 font-semibold uppercase tracking-wider text-gray-400">
+          Dynamics
+        </p>
+        <div className="space-y-1">
+          {dynamicsLegendKeys.map((key) => {
+            const ds = edgeDynamicsStyles[key];
+            if (!ds) return null;
+            return (
+              <div key={key} className="flex items-center gap-2">
+                <svg width={16} height={12}>
+                  {/* Glow line */}
+                  <line
+                    x1={0}
+                    y1={6}
+                    x2={16}
+                    y2={6}
+                    stroke={ds.color}
+                    strokeWidth={3}
+                    opacity={ds.glowOpacity}
+                  />
+                  {/* Symbol dot */}
+                  <circle cx={8} cy={6} r={4} fill={ds.color} opacity={0.9} />
+                  <text
+                    x={8}
+                    y={6}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fontSize={5}
+                    fontWeight={700}
+                    fill="white"
+                  >
+                    {ds.symbol}
+                  </text>
+                </svg>
+                <span className="text-gray-600">{ds.label}</span>
               </div>
             );
           })}

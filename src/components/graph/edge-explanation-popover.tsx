@@ -189,6 +189,136 @@ export function EdgeExplanationPopover({
         )}
       </div>
 
+      {/* Dynamics */}
+      {edge.dynamics && (
+        <div className="mt-2">
+          <span
+            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              edge.dynamics === "threshold"
+                ? "bg-amber-50 text-amber-600"
+                : edge.dynamics === "compounding"
+                  ? "bg-green-50 text-green-600"
+                  : edge.dynamics === "exponential"
+                    ? "bg-red-50 text-red-600"
+                    : edge.dynamics === "delayed"
+                      ? "bg-blue-50 text-blue-600"
+                      : edge.dynamics === "decay"
+                        ? "bg-orange-50 text-orange-600"
+                        : "bg-gray-100 text-gray-500"
+            }`}
+          >
+            {edge.dynamics}
+          </span>
+          {edge.dynamics_properties &&
+            typeof edge.dynamics_properties === "object" &&
+            !Array.isArray(edge.dynamics_properties) && (() => {
+              const dp = edge.dynamics_properties as Record<string, unknown>;
+              const parts: { label: string; value: string }[] = [];
+              if (dp.threshold_condition) parts.push({ label: "Gate", value: String(dp.threshold_condition) });
+              if (dp.delay) parts.push({ label: "Delay", value: String(dp.delay) });
+              if (dp.cycle_time) parts.push({ label: "Cycle", value: String(dp.cycle_time) });
+              else if (dp.estimated_cycle_time) parts.push({ label: "Cycle", value: String(dp.estimated_cycle_time) });
+              if (dp.before_threshold && dp.after_threshold) {
+                parts.push({ label: "Before", value: `${String(dp.before_threshold)} \u2192 After: ${String(dp.after_threshold)}` });
+              }
+              return (
+                <div className="mt-1 space-y-0.5">
+                  {parts.map((p, i) => (
+                    <div key={i} className="text-[11px] text-gray-500">
+                      <span className="font-medium">{p.label}:</span> {p.value}
+                    </div>
+                  ))}
+                  {dp.compounding_mechanism ? (
+                    <div className="text-[11px] italic text-gray-400">
+                      {String(dp.compounding_mechanism)}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
+        </div>
+      )}
+
+      {/* Utility context */}
+      {edge.utility && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {(edge.utility as any)?.actionability && (
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              (edge.utility as any).actionability === "directly_controllable"
+                ? "bg-green-50 text-green-600"
+                : (edge.utility as any).actionability === "fixed_constraint"
+                  ? "bg-gray-100 text-gray-500"
+                  : (edge.utility as any).actionability === "observable_only"
+                    ? "bg-purple-50 text-purple-600"
+                    : "bg-amber-50 text-amber-600"
+            }`}>
+              {((edge.utility as any).actionability as string)?.replace(/_/g, " ")}
+            </span>
+          )}
+          {(edge.utility as any)?.failure_consequence === "catastrophic" && (
+            <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-600">
+              catastrophic if broken
+            </span>
+          )}
+          {(edge.utility as any)?.failure_consequence === "degrading" && (
+            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
+              degrades target
+            </span>
+          )}
+          {(edge.utility as any)?.information_value === "decision_critical" && (
+            <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">
+              decision critical
+            </span>
+          )}
+          {(edge.utility as any)?.propagation_speed && (edge.utility as any).propagation_speed !== "immediate" && (
+            <span className="text-[10px] text-gray-400">
+              propagates: {(edge.utility as any).propagation_speed}
+            </span>
+          )}
+          {(edge.utility as any)?.decision_question && (
+            <div className="mt-1.5 w-full rounded-md bg-blue-50 px-2 py-1.5 text-[11px] text-blue-700">
+              <span className="font-medium">Key decision:</span>{" "}
+              {(edge.utility as any).decision_question}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Temporal validity */}
+      {edge.temporal_validity && (
+        <div className="mt-2 space-y-1">
+          {(edge.temporal_validity as any)?.temporal_scope && (
+            <div className="text-[11px] text-gray-500">
+              <span className="font-medium">Time scope:</span>{" "}
+              {(edge.temporal_validity as any).temporal_scope}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {(edge.temporal_validity as any)?.valid_from && (
+              <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
+                from: {(edge.temporal_validity as any).valid_from}
+              </span>
+            )}
+            {(edge.temporal_validity as any)?.valid_until && (
+              <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
+                until: {(edge.temporal_validity as any).valid_until}
+              </span>
+            )}
+            {(edge.temporal_validity as any)?.decay_rate && (edge.temporal_validity as any).decay_rate !== "none" && (
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                (edge.temporal_validity as any).decay_rate === "immediate"
+                  ? "bg-red-50 text-red-600"
+                  : (edge.temporal_validity as any).decay_rate === "fast"
+                    ? "bg-amber-50 text-amber-600"
+                    : "bg-gray-100 text-gray-500"
+              }`}>
+                {(edge.temporal_validity as any).decay_rate} decay
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Arrow pointer */}
       <div
         className="absolute left-1/2 -translate-x-1/2"

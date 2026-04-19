@@ -31,7 +31,44 @@ Schema:
       "blast_radius": number,
       "centrality_rank": number or null,
       "is_shared_variable": boolean,
-      "is_decomposable": boolean
+      "is_decomposable": boolean,
+      "ambiguity_type": "harmful | premature | strategic | null — classify any uncertain entity. harmful = must resolve before acting (blocking decision). premature = can't resolve yet, need more data (park it). strategic = keep ambiguous on purpose (optionality, negotiation leverage, exploration space). null = entity is well-understood, not ambiguous.",
+      "epistemic_status": "observed | inferred | theorized | speculated | contested (optional — if epistemic classification is active, assign formal status to every entity based on evidence quality)",
+      "toulmin_role": "claim | ground | warrant | backing | qualifier | rebuttal (optional — only if input has argument structure, tag entities by their role in the argument)",
+      "marr_level": "computational | algorithmic | implementational (optional — only for system/product inputs, tag entities by their level of analysis)",
+      "temporal_validity": {
+        "valid_from": "string or null — when this entity becomes relevant (e.g. 'after Series A', 'Q3 2026', 'when prototype ships'). null if always relevant.",
+        "valid_until": "string or null — when this entity expires or becomes irrelevant (e.g. 'until runway exhausted', '2027', 'until competitor launches'). null if indefinitely valid.",
+        "decay_rate": "none | slow | moderate | fast | immediate — how quickly this entity's relevance degrades. 'none' = stable indefinitely. 'slow' = years. 'moderate' = months. 'fast' = weeks. 'immediate' = days.",
+        "temporal_scope": "string or null — brief description of the time context (e.g. 'pre-product-market-fit window', 'current regulatory regime', 'while team is <5 people')"
+      },
+      "manifold": {
+        "strategic": {
+          "alignment_to_goal": "high | moderate | low | unknown — how directly this entity serves the user's primary objective",
+          "optionality_value": "high | moderate | low — does this entity preserve future options (high) or lock in a path (low)?",
+          "reversibility": "easily_reversible | costly_to_reverse | irreversible — can the user undo or change course on this?"
+        },
+        "operational": {
+          "maturity": "proven | experimental | theoretical | unknown — how battle-tested is this?",
+          "resource_intensity": "high | moderate | low — how much effort/money/time does this require?",
+          "dependency_count": number
+        },
+        "epistemic": {
+          "evidence_strength": "empirical | theoretical | anecdotal | assumed — what supports this entity's existence/importance?",
+          "consensus_level": "established | emerging | contested | unknown — do experts agree on this?",
+          "falsifiability": "testable | partially_testable | unfalsifiable — can we verify if this entity matters?"
+        }
+      },
+      "causal_role": "truth | evidence | deliverable | application | outcome | goal — what role does this entity play in the system's causal chain? truth = foundational fact, principle, or invariant (e.g. 'working memory ≈ 4 chunks'). evidence = observable data, measurement, or research finding that validates a truth (e.g. 'Cowan 2001, 47 replications'). deliverable = concrete output, rule, or recommendation the system produces (e.g. 'max 4 items per slide'). application = where/how a deliverable gets applied to a real asset (e.g. 'lecture template redesigned'). outcome = measurable result from applying a deliverable (e.g. 'comprehension ↑ 23%'). goal = desired end state or master objective (e.g. 'reduce error rate by 40%').",
+      "evidence_basis": [
+        {
+          "claim": "string — one specific, falsifiable statement supporting this entity's existence, importance, or role in the system. NOT a restatement of the entity description. Must be a distinct logical assertion.",
+          "claim_type": "mechanism | assertion | prediction | assumption | finding — mechanism = explains HOW something works. assertion = states THAT something is true. prediction = testable future outcome. assumption = taken as given without proof. finding = backed by data or observation.",
+          "confidence": 0.0-1.0,
+          "reasoning": "string — 1-2 sentences tracing the logic chain. MUST reference either (a) specific text from the user input, (b) named domain frameworks/patterns, or (c) structural reasoning from the graph topology.",
+          "source_quote": "string — MANDATORY. If the parent entity's source_tag is EXPLICIT, this MUST be a verbatim or near-verbatim quote from the user's input (≤200 chars, no paraphrasing). If IMPLICIT, MUST start with 'IMPLICIT: ' followed by a one-sentence reason (what in the input implies this). If ASSUMED, MUST start with 'ASSUMED: ' followed by a one-sentence reason (the domain pattern invoked). NEVER fabricate quotes — downgrade source_tag to IMPLICIT instead."
+        }
+      ]
     }
   ],
   "edges": [
@@ -49,8 +86,23 @@ Schema:
       "resolved_by_entity_id": "string or null",
       "is_part_of_cycle": boolean,
       "cycle_id": "string or null",
+      "pearl_level": "association | intervention | counterfactual (optional — if causal classification is active, classify causal edges by Pearl's ladder of causation)",
       "dynamics": "threshold | linear | compounding | exponential | logarithmic | decay | step_function | delayed",
-      "dynamics_properties": { "threshold_condition": "string", "delay": "string", "cycle_time": "string" }
+      "dynamics_properties": { "threshold_condition": "string", "delay": "string", "cycle_time": "string" },
+      "utility": {
+        "failure_consequence": "catastrophic | degrading | recoverable | negligible",
+        "propagation_speed": "immediate | days | weeks | months | years",
+        "actionability": "directly_controllable | indirectly_influenceable | observable_only | fixed_constraint",
+        "information_value": "decision_critical | high | moderate | low",
+        "decision_question": "string or null — the specific decision this edge informs. ONLY populate when information_value is 'decision_critical'. Example: 'Should we build in-house or license the NLP engine?' NOT a generic restatement of the edge."
+      },
+      "temporal_validity": {
+        "valid_from": "string or null — when this relationship activates",
+        "valid_until": "string or null — when this relationship expires",
+        "decay_rate": "none | slow | moderate | fast | immediate",
+        "temporal_scope": "string or null"
+      },
+      "topology": "inside | overlap | meets | disjoint | composes | cover | equal (OPTIONAL — set-theoretic scope relationship, orthogonal to relationship_type. Only set when obvious from the decomposition; leave null for ambiguous cases. Preserve [TOPOLOGY: ...] tags from Tier 3.)"
     }
   ],
 
@@ -64,6 +116,51 @@ Schema:
   // Linear: "Better formatting improves perception" — proportional, no acceleration
   {"dynamics": "linear", "dynamics_properties": {}}
   Do NOT default to "linear" when uncertain — consider whether the relationship has a threshold, compounds, or is delayed.
+
+  EDGE UTILITY RULES:
+  - failure_consequence: "catastrophic" = target entity cannot function. "degrading" = target loses effectiveness over time. "recoverable" = temporary disruption, system adapts. "negligible" = minimal downstream impact.
+  - propagation_speed: How quickly a change in the source reaches the target. Combine with dynamics — "compounding + immediate" is far more urgent than "linear + months."
+  - actionability: "directly_controllable" = the user can change this today with a decision or action. "indirectly_influenceable" = requires changing something else first. "observable_only" = can monitor but cannot change. "fixed_constraint" = laws, physics, market structure — cannot be changed.
+  - information_value: "decision_critical" = misunderstanding this edge leads to a wrong decision. ONLY use this for edges where multiple distinct mechanisms could explain the relationship, where the relationship could reverse under specific conditions, or where understanding HOW it works (not just THAT it works) would change strategy. "high" = changes which option is best. "moderate" = affects timeline but not direction. "low" = background context.
+  - decision_question: ONLY set when information_value is "decision_critical". Must be a specific, answerable question that the user faces — not a restatement of the edge's existence. Must start with a question word (Should, What, When, How, Whether). If the edge doesn't carry a clear decision, leave null.
+  - Focus annotation effort on edges connecting fundamental/critical entities. For moderate-to-moderate entity edges, utility defaults are acceptable.
+
+  TEMPORAL VALIDITY RULES:
+  - NOT every entity/edge needs temporal_validity. Only annotate when there's a meaningful time dimension — the concept has a shelf life, activates at a specific point, or decays predictably.
+  - valid_from/valid_until should be human-readable descriptions, not raw dates. Use relative terms: "after MVP launch", "until runway < 3 months", "during beta period".
+  - decay_rate reflects how quickly the entity's truth/relevance degrades: "none" for laws of physics or structural facts, "slow" for market trends, "moderate" for competitive positions, "fast" for tactical opportunities, "immediate" for time-sensitive decisions.
+  - temporal_scope is a brief label describing the time window (e.g. "pre-PMF", "current market cycle", "Series A timeline").
+  - Entities with source_tag="assumed" and high importance should ALWAYS have temporal_validity — assumptions have shelf lives.
+  - Edges with dynamics="delayed" or dynamics="decay" should ALWAYS have temporal_validity — these are inherently time-bound.
+
+  MANIFOLD RULES:
+  - NOT every entity needs a full manifold. Focus annotation effort on fundamental/critical entities. For moderate entities, manifold can be null.
+  - Only populate dimensions where you have genuine signal. An empty sub-dimension is better than a guessed one.
+  - strategic manifold: Most useful for entities the user can ACT on. Skip for pure constraints or epistemic entities.
+  - operational manifold: Most useful for process and concrete entities. dependency_count = number of other entities this depends on.
+  - epistemic manifold: Most useful for assumed/implicit entities. Tells the user how much to TRUST this entity's role in the analysis.
+  - The manifold should ADD information beyond what importance/confidence already capture. "fundamental + 0.9 confidence" is different from "fundamental + 0.9 confidence + empirical evidence + established consensus + easily reversible."
+
+  CAUSAL ROLE RULES:
+  - Every entity MUST have a causal_role. Choose the role that best describes the entity's function in the system's causal chain.
+  - "truth" entities are foundational principles, scientific invariants, or domain facts that the system's logic rests on. They are discovered, not created.
+  - "evidence" entities are data points, measurements, research findings, or observations that VALIDATE truths. They have sources and can be verified.
+  - "deliverable" entities are the concrete outputs the system produces — rules, recommendations, protocols, templates. They are CREATED from truths + evidence.
+  - "application" entities describe WHERE and HOW deliverables are deployed — specific assets, workflows, or contexts that get modified.
+  - "outcome" entities are measurable results from applying deliverables — metrics that change, behaviors that shift, errors that reduce.
+  - "goal" entities are the master objectives that outcomes contribute to — the end states the user is trying to achieve.
+  - Most entities in a typical analysis will be "truth" or "deliverable". Use the full spectrum when the input describes a complete system from principles to results.
+
+  EVIDENCE BASIS RULES:
+  - Every entity with importance "fundamental" or "critical" MUST have 2-4 evidence_basis items.
+  - Every entity with importance "important" MUST have 1-2 evidence_basis items.
+  - "moderate" entities can have 0 evidence_basis items (empty array []).
+  - Each claim must be a DISTINCT statement, not a rephrasing of the entity description.
+  - claim_type "mechanism" = explains HOW something works causally. "assertion" = states THAT something is true without mechanism. "prediction" = testable future outcome. "assumption" = taken as given without proof. "finding" = backed by observable data.
+  - confidence reflects evidence quality: 0.9+ = directly stated by user or empirical data. 0.7-0.89 = strongly inferred from domain knowledge. 0.5-0.69 = reasonable inference. Below 0.5 = speculative.
+  - reasoning MUST reference either (a) specific text from the user input, (b) named domain frameworks/patterns justifying the claim, or (c) structural reasoning from the graph topology (e.g. "this entity has 8 downstream connections, making it a structural hub").
+  - DO NOT pad with low-value claims. One strong, well-reasoned claim is better than four weak ones.
+
   "cycles": [
     {
       "cycle_id": "cycle_1",
@@ -105,14 +202,29 @@ Schema:
       "reasoning": "string — why this connection exists"
     }
   ],
+
+NOVEL CONNECTIONS — CRITERIA:
+A connection is ONLY novel if ALL of:
+1. NOT stated by the user (source_tag of involved entities ≠ "explicit" for at least one)
+2. CROSSES boundaries — connects entities from different entity_categories, different layers, or different analytical domains
+3. Has a NON-OBVIOUS mechanism — the reasoning must explain a causal chain of ≥2 intermediate steps that aren't visible by looking at adjacent entities alone
+4. SUPPORTED by domain knowledge or structural analogy — not just "these seem related"
+5. DECISION-CHANGING — if this connection is true, it changes what the user should do (not just "interesting to note")
+If a potential novel connection fails ANY of these criteria, it's not novel — it's just an edge you missed in Tier 3. Go back and add it as a regular edge instead.
+
   "contradictions": [
     {
       "assumption_text": "string",
       "conclusion_text": "string",
       "severity": "critical | moderate | minor",
-      "description": "string — impact and implication"
+      "description": "string — impact and implication",
+      "involved_entity_ids": ["C5", "C12"]
     }
   ],
+  CONTRADICTION RULES:
+  - involved_entity_ids MUST list the specific entity IDs the contradiction implicates, drawn from the "entities" array above. Preserve [CONTRADICTION: ... involved=C5,C12] tags from the decomposition.
+  - Contradictions WITH involved_entity_ids will be materialized as first-class "fault" entities in the graph with edges (relationship_type=contradicts, topology=disjoint) to those entities. This makes tensions navigable structure rather than buried metadata.
+  - Contradictions without involved entities still get materialized as fault entities but without edges — less useful, so try to always name the involved entities.
   "scenarios": [
     {
       "name": "string",

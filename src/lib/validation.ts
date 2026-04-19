@@ -13,6 +13,7 @@
  */
 
 import { z, ZodError } from "zod";
+export { createFallbackDecomposition } from "@/lib/validation/error-recovery";
 
 // ─── Utility Schemas ───
 
@@ -63,7 +64,7 @@ export const StructuredEntitySchema = z.object({
   centrality_rank: z.number().int().optional().nullable(),
   is_shared_variable: z.boolean().optional().default(false),
   is_decomposable: z.boolean().optional().default(false),
-  knowledge_layer: z.enum(["internal", "external", "bridge"]).optional(),
+  knowledge_layer: z.enum(["internal", "conceptual", "external", "bridge"]).optional(),
   authority_level: z.enum(["high", "moderate", "low", "unverified"]).optional(),
 });
 
@@ -85,7 +86,7 @@ export const StructuredEdgeSchema = z.object({
   cycle_id: optionalString,
   dynamics: dynamicsEnum.optional(),
   dynamics_properties: z.record(z.string(), z.unknown()).optional(),
-  knowledge_layer: z.enum(["internal", "external", "bridge"]).optional(),
+  knowledge_layer: z.enum(["internal", "conceptual", "external", "bridge"]).optional(),
   requires_user_approval: z.boolean().optional().default(false),
 });
 
@@ -250,6 +251,7 @@ export const PipelineResultSchema = z.object({
     bridges: z.array(z.unknown()).optional(),
     cross_context_insights: z.array(z.unknown()).optional(),
   }).optional(),
+  earlyObjectives: z.array(z.unknown()).optional(),
 });
 
 // ─── Validation Helper Functions ───

@@ -46,6 +46,12 @@ const phaseConfig: Record<
     color: "text-purple-600",
     bg: "bg-purple-50 border-purple-200",
   },
+  strategizing: {
+    label: "Generating strategy (diagnose → synthesize → verify)...",
+    icon: <Loader2 className="h-4 w-4 animate-spin" />,
+    color: "text-emerald-600",
+    bg: "bg-emerald-50 border-emerald-200",
+  },
   complete: {
     label: "Complete",
     icon: <Check className="h-4 w-4" />,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
-import type { AnalysisPhase } from "@/types/analysis";
+import type { AnalysisPhase, UserIntent } from "@/types/analysis";
 
 export function useAnalyze() {
   const [phase, setPhase] = useState<AnalysisPhase>("idle");
@@ -10,7 +10,7 @@ export function useAnalyze() {
   const [spaceId, setSpaceId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const analyze = useCallback(async (text: string) => {
+  const analyze = useCallback(async (text: string, intent?: UserIntent) => {
     setPhase("streaming");
     setStreamedText("");
     setError(null);
@@ -22,7 +22,7 @@ export function useAnalyze() {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, intent }),
         signal: abortRef.current.signal,
       });
 

@@ -12,9 +12,11 @@ import {
   runDomainExpert,
   runBridgeDiscovery,
 } from "./agents";
-import type { BridgeDiscoveryResult } from "./agents";
+import type { BridgeDiscoveryResult, DomainExpertResultWithCitations } from "./agents";
 import { withTimeout, logTimeoutEvent } from "./timeouts";
 import { buildAllCappedSiblingContexts } from "./context-capping";
+import { detectEarlyObjectives } from "./early-objectives";
+import type { SuggestedObjective } from "@/types/goals";
 
 export type EmitFn = (event: string, data: string) => void;
 
@@ -26,8 +28,9 @@ interface PipelineResult {
   }[];
   weaveResult?: unknown;
   synthesisResult?: unknown;
-  externalKnowledge?: DomainExpertResult;
+  externalKnowledge?: DomainExpertResult & { citations?: Array<{ url: string; title: string; citedText: string }>; research_mode?: string };
   bridgeDiscovery?: BridgeDiscoveryResult;
+  earlyObjectives?: SuggestedObjective[];
 }
 
 // ─── Quick Tier: same as current single-pass ───
@@ -40,6 +43,23 @@ async function runQuick(
   emit("phase", JSON.stringify({ phase: "structuring", status: "running" }));
   const structured = await runStructurer(raw, "quick");
   emit("phase", JSON.stringify({ phase: "structuring", status: "done" }));
+
+  // Early objective detection (non-blocking, 10s timeout)
+  let earlyObjectives: SuggestedObjective[] = [];
+  try {
+    emit("phase", JSON.stringify({ phase: "detecting_objectives", status: "running" }));
+    const objResult = await withTimeout(
+      detectEarlyObjectives(structured, input),
+      10000,
+      "Early objective detection"
+    );
+    if (objResult.success) {
+      earlyObjectives = objResult.data;
+    }
+    emit("phase", JSON.stringify({ phase: "detecting_objectives", status: "done", count: earlyObjectives.length }));
+  } catch (err) {
+    console.warn("Early objective detection failed (non-critical):", err);
+  }
 
   return {
     spaceData: [
@@ -56,6 +76,7 @@ async function runQuick(
         structured,
       },
     ],
+    earlyObjectives,
   };
 }
 
@@ -135,8 +156,25 @@ async function runStandard(
     // Graceful degradation: use original structured data
   }
 
-  // Run Domain Expert in parallel (non-blocking — if it fails, we still return)
-  let externalKnowledge: DomainExpertResult | undefined;
+  // Early objective detection (non-blocking, 10s timeout)
+  let earlyObjectives: SuggestedObjective[] = [];
+  try {
+    emit("phase", JSON.stringify({ phase: "detecting_objectives", status: "running" }));
+    const objResult = await withTimeout(
+      detectEarlyObjectives(finalStructured, input),
+      10000,
+      "Early objective detection"
+    );
+    if (objResult.success) {
+      earlyObjectives = objResult.data;
+    }
+    emit("phase", JSON.stringify({ phase: "detecting_objectives", status: "done", count: earlyObjectives.length }));
+  } catch (err) {
+    console.warn("Early objective detection failed (non-critical):", err);
+  }
+
+  // Run Domain Expert with web search (non-blocking — if it fails, we still return)
+  let externalKnowledge: DomainExpertResultWithCitations | undefined;
   try {
     emit("phase", JSON.stringify({ phase: "external_context", status: "running" }));
     const inputSummary = input.slice(0, 500);
@@ -147,9 +185,15 @@ async function runStandard(
     externalKnowledge = await runDomainExpert(
       `Single space: ${finalStructured.metadata?.name ?? "Analysis"}`,
       inputSummary,
-      domains.length > 0 ? domains : ["general"]
+      domains.length > 0 ? domains : ["general"],
+      { depth: "standard" }
     );
-    emit("phase", JSON.stringify({ phase: "external_context", status: "done" }));
+    emit("phase", JSON.stringify({
+      phase: "external_context",
+      status: "done",
+      research_mode: externalKnowledge.research_mode,
+      searches: externalKnowledge.searches_performed,
+    }));
   } catch (err) {
     console.error("Domain Expert failed (non-critical):", err);
   }
@@ -198,6 +242,7 @@ async function runStandard(
     ],
     externalKnowledge,
     bridgeDiscovery,
+    earlyObjectives,
   };
 }
 
@@ -234,15 +279,20 @@ async function runDeep(
   // Phase 1: Parallel decompose + structure per space + Domain Expert
   emit("phase", JSON.stringify({ phase: "decomposing", status: "running" }));
 
-  // Agent 7 runs in parallel with decomposition
-  const domainExpertPromise = (async (): Promise<DomainExpertResult | undefined> => {
+  // Agent 7 runs in parallel with decomposition — with web search
+  const domainExpertPromise = (async (): Promise<DomainExpertResultWithCitations | undefined> => {
     try {
       emit("phase", JSON.stringify({ phase: "external_context", status: "running" }));
       const inputSummary = input.slice(0, 500);
       const domains = spaces.flatMap((s) => s.key_concepts).slice(0, 8);
       const scopeSummary = spaces.map((s) => `${s.prefix} "${s.name}": ${s.description}`).join("; ");
-      const result = await runDomainExpert(scopeSummary, inputSummary, domains);
-      emit("phase", JSON.stringify({ phase: "external_context", status: "done" }));
+      const result = await runDomainExpert(scopeSummary, inputSummary, domains, { depth: "deep" });
+      emit("phase", JSON.stringify({
+        phase: "external_context",
+        status: "done",
+        research_mode: result.research_mode,
+        searches: result.searches_performed,
+      }));
       return result;
     } catch (err) {
       console.error("Domain Expert failed (non-critical):", err);
@@ -468,6 +518,26 @@ async function runDeep(
     })
   );
 
+  // Early objective detection from first (root) space (non-blocking, 10s timeout)
+  let earlyObjectives: SuggestedObjective[] = [];
+  if (critiquedResults.length > 0) {
+    try {
+      emit("phase", JSON.stringify({ phase: "detecting_objectives", status: "running" }));
+      const rootStructured = critiquedResults[0].structured;
+      const objResult = await withTimeout(
+        detectEarlyObjectives(rootStructured, input),
+        10000,
+        "Early objective detection"
+      );
+      if (objResult.success) {
+        earlyObjectives = objResult.data;
+      }
+      emit("phase", JSON.stringify({ phase: "detecting_objectives", status: "done", count: earlyObjectives.length }));
+    } catch (err) {
+      console.warn("Early objective detection failed (non-critical):", err);
+    }
+  }
+
   // Phase 2: Weave (connects spaces after critique/augment)
   let weaveResult;
   if (critiquedResults.length > 1) {
@@ -547,6 +617,7 @@ async function runDeep(
     synthesisResult,
     externalKnowledge,
     bridgeDiscovery,
+    earlyObjectives,
   };
 }
 

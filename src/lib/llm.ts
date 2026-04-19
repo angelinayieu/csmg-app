@@ -20,8 +20,8 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
 async function withRetry<T>(
   fn: () => Promise<T>,
-  maxRetries = 3,
-  baseDelayMs = 1000
+  maxRetries = 4,
+  baseDelayMs = 1500
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -32,16 +32,37 @@ async function withRetry<T>(
 
       // Don't retry on non-retryable errors
       const status = (err as { status?: number })?.status;
+      const code = (err as { code?: string })?.code;
+
+      // Quota/billing errors are permanent — don't waste time retrying
+      if (code === "insufficient_quota" || code === "billing_hard_limit_reached") {
+        const quotaErr = new Error("OpenAI API quota exhausted — please add credits at platform.openai.com/account/billing");
+        (quotaErr as unknown as Record<string, unknown>).status = 429;
+        (quotaErr as unknown as Record<string, unknown>).code = code;
+        throw quotaErr;
+      }
+
       if (status && !RETRYABLE_STATUS.has(status)) throw err;
 
       // Don't retry on the last attempt
       if (attempt === maxRetries) break;
 
-      // Exponential backoff with jitter
-      const delay = baseDelayMs * Math.pow(2, attempt) + Math.random() * 500;
-      console.warn(`[LLM] Attempt ${attempt + 1} failed (${status ?? "network"}), retrying in ${Math.round(delay)}ms...`);
+      // Rate limit (429): use longer backoff to let TPM window reset
+      const isRateLimit = status === 429;
+      const delay = isRateLimit
+        ? 3000 * Math.pow(2, attempt) + Math.random() * 2000
+        : baseDelayMs * Math.pow(2, attempt) + Math.random() * 500;
+      console.warn(`[LLM] Attempt ${attempt + 1} failed (${status ?? "network"}${isRateLimit ? " rate-limit" : ""}), retrying in ${Math.round(delay)}ms...`);
       await new Promise((r) => setTimeout(r, delay));
     }
+  }
+
+  // Wrap rate-limit errors with a user-friendly message
+  const finalStatus = (lastError as { status?: number })?.status;
+  if (finalStatus === 429) {
+    const friendly = new Error("Rate limit reached — too many requests. Please wait a moment and try again.");
+    (friendly as unknown as Record<string, unknown>).status = 429;
+    throw friendly;
   }
   throw lastError;
 }

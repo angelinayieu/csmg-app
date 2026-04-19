@@ -13,6 +13,8 @@ export interface ActionAlternative {
   tradeoff: string;
 }
 
+export type InsightStatus = "accepted" | "investigating" | "dismissed" | null;
+
 export interface RichLeveragePoint {
   entity_id: string;
   entity_name?: string;
@@ -25,6 +27,7 @@ export interface RichLeveragePoint {
     alternatives: ActionAlternative[];
   };
   connections: string[];
+  insight_status?: InsightStatus;
 }
 
 export interface RichRiskPoint {
@@ -40,6 +43,7 @@ export interface RichRiskPoint {
     alternatives: ActionAlternative[];
   };
   connections: string[];
+  insight_status?: InsightStatus;
 }
 
 export interface RichBottleneck {
@@ -47,6 +51,14 @@ export interface RichBottleneck {
   blast_radius: number;
   summary: string;
   reasoning: string[];
+  /** Enhancement 1: What opens up if this bottleneck is resolved */
+  counterfactual_unlock?: string;
+  /** Enhancement 1: Alternative constraints considered and why they were rejected */
+  candidates_considered?: Array<{
+    candidate: string;
+    entity_id: string;
+    why_not: string;
+  }>;
   when_matters: WhenMatters[];
 }
 
@@ -87,11 +99,32 @@ export interface RichOpenQuestion {
   why_it_matters: string;
   what_changes?: string;
   related_entity_ids?: string[];
+
+  // Phase 4b: answers + ranking
+  /** User-supplied answer to the question (free text). */
+  user_answer?: string;
+  /** ISO timestamp when the user submitted the answer. */
+  answered_at?: string;
+  /** LLM-assigned priority — used for sort order in the UI. */
+  priority?: "critical" | "high" | "medium";
+  /** One-sentence rationale from the LLM explaining the priority. */
+  ranking_reason?: string;
 }
 
 export interface ActionTag {
   t: string;
   c: string;
+}
+
+export interface ActionSupportingChain {
+  axiom_ids?: string[];
+  leverage_entity_ids?: string[];
+  risk_entity_ids?: string[];
+  bottleneck_entity_id?: string | null;
+  hidden_signal_refs?: string[];
+  cycle_refs?: string[];
+  insight_convergence_ids?: string[];
+  rationale?: string;
 }
 
 export interface ActionItemRich {
@@ -100,6 +133,8 @@ export interface ActionItemRich {
   tags: ActionTag[];
   dynamic_role?: "clears_threshold" | "starts_loop" | "accelerates_loop" | "linear_improvement" | "can_defer";
   cost_of_delay?: string;
+  /** Provenance: upstream insight IDs that motivate this action */
+  supporting_chain?: ActionSupportingChain;
 }
 
 export interface ActionTimeframe {
@@ -127,6 +162,185 @@ export interface WorthConsidering {
   confidence: "high" | "moderate" | "speculative";
   connected_entities: string[];
   source_note: string;
+  relevance_score?: number; // 1-10, how directly applicable
+  ranking_reason?: string; // why this ranks where it does
+  source_origin?: "external_research" | "llm_synthesis" | "bridge_analysis"; // Phase 6 Gap 6: where this item came from
+}
+
+export type AxiomVisibility = "EXPLICIT" | "IMPLICIT" | "HIDDEN";
+export type AxiomLoadBearing = "critical" | "important" | "moderate";
+export type AxiomScope = "node" | "edge" | "chain" | "frame";
+export type AxiomConfidence = "high" | "medium" | "low";
+
+export interface Axiom {
+  axiom_id: string;
+  visibility: AxiomVisibility;
+  load_bearing: AxiomLoadBearing;
+  scope: AxiomScope;
+  claim: string;
+  if_false: string;
+  rests_on: string[];
+  scope_anchor: string;
+  validation_path: string;
+  confidence: AxiomConfidence;
+}
+
+export interface AssumptionInversion {
+  /**
+   * What the inversion targets:
+   * - "axiom"          — the inversion inverts a load-bearing axiom (highest leverage: if the axiom fails, the whole analysis shifts)
+   * - "leverage_point" — the inversion challenges a leverage point's implicit causal assumption
+   * - "risk_point"     — the inversion challenges whether a risk is actually the risk (vs. a symptom)
+   * - "master_bottleneck" — the inversion challenges whether the named bottleneck is the real binding constraint
+   */
+  target_type: "axiom" | "leverage_point" | "risk_point" | "master_bottleneck";
+  /** For entity-targeted inversions: the entity_id. For axiom-targeted: the axiom_id (e.g. A2). */
+  target_entity_id: string;
+  original_assumption: string;
+  inverted_claim: string;
+  case_for_inversion: string;
+  what_would_change: string;
+  test: string;
+  plausibility: "unlikely_but_consequential" | "coin_flip" | "more_likely_than_stated";
+  /**
+   * Provenance: where this inversion came from.
+   * - "llm_synthesis"      — produced by the full synthesis LLM pass (highest quality, domain-grounded)
+   * - "auto_from_research" — heuristic stub generated at research time from a high-impact signal
+   * - "auto_from_axiom"    — heuristic stub generated from a HIDDEN or critical axiom
+   * Undefined = legacy / unknown, treat as llm_synthesis for display.
+   */
+  source?: "llm_synthesis" | "auto_from_research" | "auto_from_axiom";
+}
+
+export type ConvergenceSignalType =
+  | "axiom"
+  | "bottleneck"
+  | "leverage"
+  | "risk"
+  | "signal"
+  | "inversion"
+  | "blind_spot"
+  | "open_question";
+
+export interface ConvergenceSignal {
+  type: ConvergenceSignalType;
+  id: string;
+  summary: string;
+  entity_ids: string[];
+}
+
+export interface StrategyCoverageGap {
+  kind: "critical_axiom" | "hidden_axiom" | "critical_risk" | "high_impact_signal";
+  id: string;
+  label: string;
+  why_important: string;
+}
+
+export interface StrategyCoverageAudit {
+  overall_coverage: number; // 0-100
+  addressed_ids: string[];
+  gaps: StrategyCoverageGap[];
+  totals: {
+    critical_axioms: number;
+    hidden_axioms: number;
+    critical_risks: number;
+    high_impact_signals: number;
+  };
+  addressed_counts: {
+    critical_axioms: number;
+    hidden_axioms: number;
+    critical_risks: number;
+    high_impact_signals: number;
+  };
+}
+
+export interface InsightConvergence {
+  cluster_id: string;
+  concern_label: string;
+  shared_entity_ids: string[];
+  signal_count: number;
+  distinct_type_count: number;
+  strength: "strong" | "moderate" | "weak";
+  signals: ConvergenceSignal[];
+  has_hidden_axiom: boolean;
+}
+
+export interface SignalToAction {
+  signal: string;
+  source: "hidden_signal" | "discovered_connection" | "domain_inference";
+  connected_entities: string[];
+  why_it_matters: string;
+  linked_action: string;
+  if_ignored: string;
+}
+
+export interface CrossContextInsight {
+  insight: string;
+  internal_entities: string[];
+  external_entities: string[];
+  confidence: "high" | "moderate" | "low";
+  authority_level?: "high" | "moderate" | "low" | "unverified"; // Phase 6 Gap 5: strongest authority backing this insight
+}
+
+// Phase 6 Gap 4: Research provenance surfaced to UI
+export interface ResearchProvenance {
+  searches_performed: number;
+  entities_from_search: number;
+  entities_from_training: number;
+  research_depth: string;
+  top_sources: Array<{ domain: string; count: number }>;
+  authority_distribution: { high: number; moderate: number; low: number; unverified: number };
+  /** Whether findings are web-verified, training-only (fallback), or mixed */
+  research_mode?: "web_verified" | "training_only" | "mixed";
+}
+
+export interface GoalTrajectoryEstimate {
+  estimated_weeks: number;
+  confidence: "high" | "moderate" | "low";
+  critical_path: string[];
+}
+
+// ── Post-synthesis validation types (Gaps 1, 5) ──
+
+export interface GoalFitnessIssue {
+  type: "off_path_leverage" | "bottleneck_not_blocking_goal" | "no_goal_actions" | "off_path_risk";
+  severity: "error" | "warning";
+  message: string;
+  entity_id?: string;
+}
+
+export interface GoalFitnessResult {
+  score: number; // 0-100
+  on_critical_path: string[];
+  off_critical_path: string[];
+  bottleneck_blocks_goal: boolean;
+  action_plan_addresses_goal: boolean;
+  issues: GoalFitnessIssue[];
+}
+
+export type QualityFlag =
+  | "shallow_leverage"
+  | "generic_actions"
+  | "overconfident"
+  | "ungrounded_risk"
+  | "missing_dynamics"
+  | "stale_evidence"
+  | "weak_external_coverage"
+  | "unexpanded_critical"
+  | "missing_epistemic_framework"
+  | "causal_level_mismatch";
+
+export interface SynthesisQualityScore {
+  overall: number; // 0-100
+  dimensions: {
+    depth: number;
+    specificity: number;
+    utility_grounding: number;
+    evidence_quality: number;
+    actionability: number;
+    external_coverage: number;
+  };
+  flags: QualityFlag[];
 }
 
 export interface SynthesisData {
@@ -148,7 +362,166 @@ export interface SynthesisData {
 
   // Action
   action_plan?: RichActionPlan;
+  sequencing_rationale?: string;
 
   // External knowledge
   worth_considering?: WorthConsidering[];
+  cross_context_insights?: CrossContextInsight[];
+
+  // Novelty mechanisms (contrarian inversions + hidden-signal linking)
+  assumption_inversions?: AssumptionInversion[];
+  signal_to_action?: SignalToAction[];
+
+  // Tier 7: load-bearing axioms extracted from decomposition
+  axioms?: Axiom[];
+
+  // Tier 3 cross-reference: compounding/exponential edges that don't belong to any
+  // traced cycle — likely missed feedback loops worth investigating.
+  candidate_cycles?: Array<{
+    edge: { source: string; target: string; dynamics: string };
+    reason: string;
+  }>;
+
+  // Mini-axioms emitted during /expand — 1-3 per expanded entity, grouped here
+  // for cross-entity visibility. Each references its parent_entity_id.
+  expansion_axioms?: Array<{
+    claim: string;
+    visibility: "EXPLICIT" | "IMPLICIT" | "HIDDEN";
+    load_bearing: "critical" | "important" | "moderate";
+    rests_on_components: string[];
+    if_false: string;
+    validation_path: string;
+    parent_entity_id: string;
+  }>;
+
+  // Post-synthesis cross-mechanism clustering (insights from different mechanisms pointing at the same concern).
+  // Named `insight_convergences` to disambiguate from `interaction_metadata.convergences` (graph-category level).
+  insight_convergences?: InsightConvergence[];
+
+  // Strategy coverage audit: post-synthesis gap check — do actions address every critical axiom / hidden axiom / critical risk / high-impact signal?
+  strategy_coverage?: StrategyCoverageAudit;
+
+  // Pipeline audit trail — append-only log of what ran, was cached, was skipped
+  analysis_runs?: import("./analysis-runs").AnalysisRun[];
+
+  // Decomposition fingerprint at last synthesis — used to short-circuit re-synth when graph hasn't changed
+  decomp_fingerprint?: string;
+
+  // Research cache keyed by (depth + space fingerprint) — avoids redundant web-research on iteration
+  research_cache?: import("../lib/pipeline/cache").ResearchCache;
+
+  // Goal-aware (populated when an improvement goal exists)
+  goal_trajectory_estimate?: GoalTrajectoryEstimate;
+
+  // Auto-detected objectives (populated after synthesis when no active goal)
+  suggested_objectives?: import("./goals").SuggestedObjective[];
+
+  /**
+   * Phase B: per-goal research log. Keyed by improvement_goals.id. Updated by
+   * `execute-goal-research` Inngest handler whenever a bound researcher runs.
+   * Used by the Coordinator's recency suppression term and by the UI to show
+   * "last researched N minutes ago" per goal.
+   */
+  goal_research_history?: Record<string, {
+    last_research_at: string;   // ISO
+    last_run_id: string | null; // agent_runs.id
+    total_runs: number;
+    cumulative_findings: number;
+    last_priority_score?: number | null;
+    last_reason?: string | null;
+  }>;
+
+  // Phase 8: Epistemic routing layer classification
+  epistemic_classification?: import("./epistemic").EpistemicClassification;
+  preliminary_objectives?: import("./epistemic").PreliminaryObjective[];
+
+  // Change detection (populated after re-synthesis, comparing old vs new)
+  last_change?: import("./twin").ChangeDetection;
+
+  // Phase 6: Research provenance for UI display
+  research_provenance?: ResearchProvenance;
+
+  // Phase 7B: Strategic recommendation (macro strategy + micro tactics)
+  strategic_recommendation?: import("./strategy").StrategicRecommendationData;
+
+  // Stale synthesis detection (populated by critique cascade check)
+  stale_report?: import("../lib/twin/cascade-propagation").StaleReport;
+  is_stale?: boolean;
+  /** Phase 4b: human-readable reason for why the strategy is stale (e.g. "User answered a critical question"). */
+  strategy_stale_reason?: string;
+
+  /**
+   * Phase 4c-final: per-construct posterior beliefs that UPF's selector
+   * uses to attenuate expected info-bits. Updated inline whenever the user
+   * makes an observation (answers a question, records a metric, …). Keyed
+   * by ProxyDescriptor.construct_id. Zero-migration: lives in the same
+   * JSONB column as the rest of synthesis.
+   */
+  construct_posteriors?: Record<string, import("../lib/upf/posterior").ConstructPosterior>;
+
+  // Post-synthesis validation scores
+  quality_score?: SynthesisQualityScore;
+  goal_fitness?: GoalFitnessResult;
+
+  // Gap-driven regeneration metadata (tracks if synthesis was re-run to fix quality issues)
+  regen_metadata?: {
+    attempted: boolean;
+    original_score: number;
+    regen_score: number | null;
+    flags_addressed: string[];
+    kept: "original" | "regen";
+    regen_at: string;
+  };
+
+  // Multi-perspective analysis: quick vs deep delta
+  quick_synthesis_snapshot?: import("./execution-brief").QuickSynthesisSnapshot;
+  perspective_delta?: import("./execution-brief").PerspectiveDelta;
+
+  // Signal intelligence (trajectory-influencing signal detection)
+  signal_extraction?: import("../lib/intelligence/signal-extraction").SignalExtractionResult;
+  research_triggers?: import("../lib/intelligence/research-triggers").ResearchTriggerResult;
+
+  // Research intelligence (from domain-expert / research pipeline)
+  hidden_signals?: HiddenSignalData[];
+  continuation_signals?: ContinuationSignalData[];
+
+  // Lazy-loaded execution briefs (keyed by recommendation ID)
+  execution_briefs?: Record<string, import("./execution-brief").ExecutionBrief>;
+
+  // Convergence workspace: pre-ranked findings list
+  findings?: import("./finding").Finding[];
+
+  // Causal Chains (L4 invariant → goal contribution trajectories)
+  causal_chains?: import("./causal-chains").CausalChain[];
+  // Calculation traces keyed by chain id
+  calculation_traces?: Record<string, import("./causal-chains").CalculationTrace>;
+  // Baseline questions (when Effect Propagator needs user input), keyed by chain id
+  baseline_questions?: Record<string, import("./causal-chains").BaselineQuestion[]>;
+
+  // Per-agent user overrides (keyed by agent ID)
+  agent_overrides?: Record<string, import("./intelligence").AgentOverrides>;
+}
+
+// ── Research intelligence types surfaced from synthesis_data JSONB ──
+
+export interface HiddenSignalData {
+  signal_name: string;
+  signal_type:
+    | "mediating_variable"
+    | "analogous_dynamic"
+    | "structural_risk"
+    | "missing_metric";
+  description: string;
+  trajectory_impact: number;
+  related_internal_entities?: string[];
+  detection_method: string;
+  analogous_precedent?: string | null;
+  discovered_at?: string;
+}
+
+export interface ContinuationSignalData {
+  type: "critical_bridge_found" | "contradiction_detected" | "high_impact_gap" | "validation_needed";
+  description: string;
+  follow_up_queries?: string[];
+  priority: "critical" | "high" | "medium";
 }

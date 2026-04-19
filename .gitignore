@@ -38,3 +38,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Claude Code agent worktrees — full repo copies created by background agents,
+# typically hundreds of MB. Never commit these to source control.
+.claude/worktrees/

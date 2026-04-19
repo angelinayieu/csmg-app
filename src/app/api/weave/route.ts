@@ -2,6 +2,10 @@ import { llmJSON } from "@/lib/llm";
 import { WEAVING_SYSTEM_PROMPT } from "@/lib/prompts/weaving";
 import type { WeaveResponse } from "@/types/weave";
 import { safeAuth, verifyMultiSpaceOwnership } from "@/lib/api-helpers";
+import {
+  buildBridgeInput,
+  upsertMemoryItemsBatch,
+} from "@/lib/memory/writer";
 
 export const maxDuration = 90;
 
@@ -136,10 +140,64 @@ export async function POST(request: Request) {
       }));
 
     if (bridgeInserts.length > 0) {
-      const { error: bridgeError } = await db
+      const { data: insertedBridges, error: bridgeError } = await db
         .from("bridges")
-        .insert(bridgeInserts);
+        .insert(bridgeInserts)
+        .select(
+          "id, source_entity_id, target_entity_id, bridge_type, shared_variable_name, description",
+        );
       if (bridgeError) console.error("Bridge insert error:", bridgeError);
+
+      // Memory-index the new bridges so ambient retrieval + proposals can
+      // surface them without waiting for the backfill endpoint.
+      if (insertedBridges && insertedBridges.length > 0) {
+        try {
+          const bridgeRows = insertedBridges as Array<{
+            id: string;
+            source_entity_id: string;
+            target_entity_id: string;
+            bridge_type: string;
+            shared_variable_name: string;
+            description: string | null;
+          }>;
+          // Collect entity names for readable memory text
+          const entityIds = Array.from(
+            new Set(
+              bridgeRows.flatMap((b) => [b.source_entity_id, b.target_entity_id]),
+            ),
+          );
+          const { data: entityNames } = await db
+            .from("entities")
+            .select("id, name")
+            .in("id", entityIds);
+          const nameById = new Map(
+            ((entityNames ?? []) as Array<{ id: string; name: string }>).map((e) => [
+              e.id,
+              e.name,
+            ]),
+          );
+          await upsertMemoryItemsBatch(
+            db,
+            bridgeRows.map((b) =>
+              buildBridgeInput(
+                user.id,
+                {
+                  id: b.id,
+                  source_entity_id: b.source_entity_id,
+                  target_entity_id: b.target_entity_id,
+                  shared_variable_name: b.shared_variable_name,
+                  description: b.description,
+                  bridge_type: b.bridge_type,
+                },
+                nameById.get(b.source_entity_id),
+                nameById.get(b.target_entity_id),
+              ),
+            ),
+          );
+        } catch (memErr) {
+          console.warn("[weave] memory index failed (non-fatal):", memErr);
+        }
+      }
     }
 
     // Insert contradictions

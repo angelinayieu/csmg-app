@@ -4,11 +4,13 @@ import type { AnalysisTier } from "@/lib/tiers";
 export type PipelinePhase =
   | "idle"
   | "scope"
+  | "classifying"
   | "decomposing"
   | "structuring"
   | "critiquing"
   | "augmenting"
   | "weaving"
+  | "interweaving"
   | "synthesizing"
   | "reasoning"
   | "complete"
@@ -115,6 +117,11 @@ export interface DomainExpertResult {
     confidence: number;
     authority_level: "high" | "moderate" | "low";
     relevance_to_situation: string;
+    // Phase 3.4: Domain expert enrichment fields
+    relevance_score?: number;
+    temporal_freshness?: "current" | "recent" | "dated" | "unknown";
+    connection_hints?: string[];
+    risk_signal_flags?: string[];
   }[];
   external_edges: {
     source: string;

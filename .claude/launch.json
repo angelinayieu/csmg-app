@@ -3,9 +3,12 @@
   "configurations": [
     {
       "name": "next-dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 3000
+      "runtimeExecutable": "/usr/local/bin/node",
+      "runtimeArgs": ["node_modules/.bin/next", "dev"],
+      "cwd": "/Users/angelina/Desktop/interaxis kg build v1",
+      "env": { "PATH": "/usr/local/bin:/usr/bin:/bin" },
+      "port": 3000,
+      "autoPort": false
     }
   ]
 }

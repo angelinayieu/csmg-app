@@ -7,7 +7,15 @@ import { CRITIC_SYSTEM_PROMPT } from "@/lib/prompts/critic";
 import { AUGMENTER_SYSTEM_PROMPT } from "@/lib/prompts/augmenter";
 import { WEAVING_SYSTEM_PROMPT } from "@/lib/prompts/weaving";
 import { META_SYNTHESIZER_PROMPT } from "@/lib/prompts/meta-synthesizer";
-import { DOMAIN_EXPERT_PROMPT } from "@/lib/prompts/domain-expert";
+import { DOMAIN_EXPERT_PROMPT, getDomainExpertPrompt } from "@/lib/prompts/domain-expert";
+import { getAnthropicClient } from "@/lib/anthropic";
+import {
+  getResearchTools,
+  parseResearchResponse,
+  extractJSON,
+  type ResearchDepth,
+  type Citation,
+} from "@/lib/web-search";
 import { BRIDGE_DISCOVERY_PROMPT } from "@/lib/prompts/bridge-discovery";
 import { REASONING_PROMPTS } from "@/lib/prompts/reasoning";
 import { validateStructuredDecomposition } from "@/lib/validation/llm-validators";
@@ -58,8 +66,8 @@ IMPORTANT: If you encounter a concept that primarily belongs in another area, fl
   return llmGenerate({
     system: systemPrompt,
     user: input,
-    maxTokens: reasoningDepth === "deep" ? 16000 : 8192,
-    temperature: 0.5,
+    maxTokens: 16384,
+    temperature: 0.3,
   });
 }
 
@@ -219,13 +227,28 @@ export async function runMetaSynthesizer(
   });
 }
 
-// ─── Agent 7: Domain Expert ───
+// ─── Agent 7: Domain Expert (with web search when available) ───
+
+export interface DomainExpertOptions {
+  depth?: ResearchDepth;
+  focus_areas?: string[];
+}
+
+export interface DomainExpertResultWithCitations extends DomainExpertResult {
+  citations?: Citation[];
+  research_mode?: "web_search" | "training_only";
+  searches_performed?: number;
+}
+
 export async function runDomainExpert(
   scopeSummary: string,
   inputSummary: string,
-  domains: string[]
-): Promise<DomainExpertResult> {
-  const user = `Situation summary: ${inputSummary}
+  domains: string[],
+  options?: DomainExpertOptions
+): Promise<DomainExpertResultWithCitations> {
+  const depth = options?.depth ?? "standard";
+
+  const userMessage = `Situation summary: ${inputSummary}
 
 Domains involved: ${domains.join(", ")}
 
@@ -233,13 +256,61 @@ Scope: ${scopeSummary}
 
 Build the external knowledge subgraph for this field.`;
 
-  return llmJSON<DomainExpertResult>({
+  // Try Anthropic with web_search when API key is available and depth allows it
+  const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
+  const useWebSearch = depth !== "training" && hasAnthropicKey;
+
+  if (useWebSearch) {
+    try {
+      const anthropic = getAnthropicClient();
+      const tools = getResearchTools(depth);
+      const promptOptions = options?.focus_areas?.length
+        ? { focus_areas: options.focus_areas }
+        : undefined;
+
+      const stream = anthropic.messages.stream(
+        {
+          model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
+          max_tokens: 16000,
+          tools,
+          system: getDomainExpertPrompt(depth, promptOptions),
+          messages: [{ role: "user", content: userMessage }],
+        },
+        { timeout: 10 * 60 * 1000 },
+      );
+      const response = await stream.finalMessage();
+
+      const parsed = parseResearchResponse(response.content);
+      const result = extractJSON<DomainExpertResult>(parsed.jsonOutput);
+
+      return {
+        ...result,
+        citations: parsed.citations,
+        research_mode: "web_search",
+        searches_performed: parsed.searchesPerformed,
+      };
+    } catch (err) {
+      console.warn(
+        `[Agent 7] Anthropic web search failed, falling back to OpenAI: ${(err as Error).message}`
+      );
+      // Fall through to OpenAI fallback
+    }
+  }
+
+  // Fallback: OpenAI without web search (training knowledge only)
+  const result = await llmJSON<DomainExpertResult>({
     system: DOMAIN_EXPERT_PROMPT,
-    user,
-    maxTokens: 6000,
-    temperature: 0.4,
-    model: "gpt-4o-mini", // Cheaper for external knowledge
+    user: userMessage,
+    maxTokens: 12000,
+    temperature: 0.3,
   });
+
+  return {
+    ...result,
+    citations: [],
+    research_mode: "training_only",
+    searches_performed: 0,
+  };
 }
 
 // ─── Bridge Discovery (internal ↔ external) ───

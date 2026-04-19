@@ -193,6 +193,59 @@ export function ChangelogPanel({
                             {String(details.edge_count)} edges
                           </span>
                         )}
+                        {/* Synthesis-level change details */}
+                        {details.health_delta !== undefined &&
+                          (details.health_delta as number) !== 0 && (
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                (details.health_delta as number) > 0
+                                  ? "bg-green-50 text-green-600"
+                                  : "bg-red-50 text-red-600"
+                              }`}
+                            >
+                              {(details.health_delta as number) > 0 ? "+" : ""}
+                              {String(details.health_delta)} health
+                            </span>
+                          )}
+                        {details.leverage_added !== undefined &&
+                          (details.leverage_added as number) > 0 && (
+                            <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] font-medium text-green-600">
+                              +{String(details.leverage_added)} leverage
+                            </span>
+                          )}
+                        {details.leverage_removed !== undefined &&
+                          (details.leverage_removed as number) > 0 && (
+                            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
+                              -{String(details.leverage_removed)} leverage
+                            </span>
+                          )}
+                        {details.risk_added !== undefined &&
+                          (details.risk_added as number) > 0 && (
+                            <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-600">
+                              +{String(details.risk_added)} risks
+                            </span>
+                          )}
+                        {details.risk_removed !== undefined &&
+                          (details.risk_removed as number) > 0 && (
+                            <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] font-medium text-green-600">
+                              -{String(details.risk_removed)} risks
+                            </span>
+                          )}
+                        {details.bottleneck_changed === true && (
+                          <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-600">
+                            bottleneck shifted
+                          </span>
+                        )}
+                        {details.objectives_stale === true && (
+                          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
+                            objectives stale
+                          </span>
+                        )}
+                        {details.magnitude !== undefined && (
+                          <span className="rounded bg-gray-50 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
+                            {String(details.magnitude)}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>

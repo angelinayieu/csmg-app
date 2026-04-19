@@ -6,9 +6,41 @@
 
 // ── Canonical enum values (match Postgres CHECK constraints exactly) ──
 
-export const ENTITY_CATEGORIES = ["concrete", "abstract", "process", "relational", "epistemic"] as const;
+export const ENTITY_CATEGORIES = ["concrete", "abstract", "process", "relational", "epistemic", "fault"] as const;
 export const ENTITY_SOURCE_TAGS = ["explicit", "implicit", "assumed"] as const;
 export const IMPORTANCE_LEVELS = ["fundamental", "critical", "important", "moderate"] as const;
+export const AMBIGUITY_TYPES = ["harmful", "premature", "strategic"] as const;
+export const CAUSAL_ROLES = ["truth", "evidence", "deliverable", "application", "outcome", "goal"] as const;
+export const CLAIM_TYPES = ["mechanism", "assertion", "prediction", "assumption", "finding"] as const;
+
+// ── Phase 10: canonical depth + layer ──
+// Inlined (don't import from @/lib/whiteboard/layer-config to keep this
+// file server-safe and dependency-free).
+const LAYER_NAMES = ["system", "domain", "thread", "claim", "atom"] as const;
+const LEGACY_LAYER_TO_DEPTH: Record<string, number> = {
+  system: 0,
+  domain: 1,
+  thread: 2,
+  claim: 3,
+  property: 3,
+  atom: 4,
+  atomic: 4,
+};
+function normalizeLayerString(
+  rawLayer: string | null,
+  rawKnowledgeLayer: string | null,
+): { layer: string; depth: number } {
+  const l = (rawLayer ?? "").toLowerCase().trim();
+  if (l in LEGACY_LAYER_TO_DEPTH) {
+    const d = LEGACY_LAYER_TO_DEPTH[l];
+    return { layer: LAYER_NAMES[d], depth: d };
+  }
+  const kl = (rawKnowledgeLayer ?? "").toLowerCase().trim();
+  if (kl === "conceptual") return { layer: "domain", depth: 1 };
+  if (kl === "external") return { layer: "claim", depth: 3 };
+  if (kl === "bridge") return { layer: "thread", depth: 2 };
+  return { layer: "thread", depth: 2 };
+}
 
 export const EDGE_DIMENSIONS = [
   "structural", "functional", "temporal", "causal",
@@ -23,6 +55,20 @@ export const MATURITY_LEVELS = ["actionable_now", "waiting_on_dependency", "theo
 export const EDGE_DYNAMICS = [
   "threshold", "linear", "compounding", "exponential",
   "logarithmic", "decay", "step_function", "delayed",
+] as const;
+
+// Set-theoretic topology — orthogonal to semantic relationship_type.
+// A single edge can assert both "causes" (semantic) and "inside" (topological);
+// they answer different questions. At scale, topology enables cheap logical
+// consistency checks (A inside B AND A disjoint B → contradiction) without an LLM.
+export const EDGE_TOPOLOGIES = [
+  "inside",     // source's scope is fully contained within target's
+  "overlap",    // shared concern, neither contains the other
+  "meets",      // boundary contact with no shared interior (adjacent domains)
+  "disjoint",   // explicitly separate — nothing in common
+  "composes",   // source is a part making up target (mereological)
+  "cover",      // source fully accounts for / explains target
+  "equal",      // two framings of the same underlying concept — a dedup signal
 ] as const;
 
 export const CYCLE_GROWTH_TYPES = ["additive", "multiplicative", "accelerating", "decelerating"] as const;
@@ -76,6 +122,83 @@ function bool(val: unknown, fallback = false): boolean {
   return fallback;
 }
 
+// ── Category inference from entity_type ──
+
+/**
+ * Infer entity_category from entity_type when category is missing or invalid.
+ * This prevents the mass-defaulting to "abstract" that makes graphs visually homogeneous.
+ */
+function inferCategoryFromType(entityType: string | undefined, rawCategory: unknown): string {
+  // If the LLM provided a valid category, use it
+  if (typeof rawCategory === "string" && rawCategory.trim()) {
+    const lower = rawCategory.toLowerCase().trim().replace(/[\s-]+/g, "_");
+    const match = ENTITY_CATEGORIES.find(c => c === lower);
+    if (match) return match;
+    // Fuzzy match — but refuse to land on "fault" via fuzzy matching.
+    // Faults are only legitimate when the pipeline explicitly materializes
+    // them from contradictions; inferring them from free text would produce
+    // false positives.
+    const candidates = ENTITY_CATEGORIES.filter(c => c !== "fault");
+    const prefix = candidates.find(c => c.startsWith(lower) || lower.startsWith(c));
+    if (prefix) return prefix;
+  }
+
+  // Infer from entity_type
+  if (!entityType) return "abstract";
+  const t = entityType.toLowerCase().trim();
+
+  // Concrete types
+  if (["person", "organization", "product", "asset", "artifact", "company", "tool", "platform", "technology", "team", "user", "customer", "market", "competitor", "resource", "infrastructure", "system"].some(w => t.includes(w))) {
+    return "concrete";
+  }
+  // Process types
+  if (["activity", "mechanism", "decision", "event", "process", "workflow", "strategy", "action", "operation", "procedure", "method", "practice", "cycle", "loop", "pipeline", "flow"].some(w => t.includes(w))) {
+    return "process";
+  }
+  // Relational types
+  if (["tradeoff", "trade-off", "dependency", "tension", "alignment", "relationship", "interaction", "connection", "bridge", "conflict", "balance"].some(w => t.includes(w))) {
+    return "relational";
+  }
+  // Epistemic types
+  if (["assumption", "claim", "unknown", "irreducible", "hypothesis", "question", "belief", "theory", "risk", "uncertainty"].some(w => t.includes(w))) {
+    return "epistemic";
+  }
+  // Default to abstract for concepts, capabilities, qualities, metrics, constraints
+  return "abstract";
+}
+
+// ── Sanitization stats tracking ──
+
+export interface SanitizationStats {
+  entities_before_dedup: number;
+  entities_after_dedup: number;
+  entities_removed_by_dedup: number;
+  edges_before_filter: number;
+  edges_after_confidence_filter: number;
+  edges_after_sanitize: number;
+  edges_removed_by_confidence: number;
+  edges_removed_by_missing_ref: number;
+  edges_removed_self_loops: number;
+  category_distribution: Record<string, number>;
+  importance_distribution: Record<string, number>;
+}
+
+export function createSanitizationStats(): SanitizationStats {
+  return {
+    entities_before_dedup: 0,
+    entities_after_dedup: 0,
+    entities_removed_by_dedup: 0,
+    edges_before_filter: 0,
+    edges_after_confidence_filter: 0,
+    edges_after_sanitize: 0,
+    edges_removed_by_confidence: 0,
+    edges_removed_by_missing_ref: 0,
+    edges_removed_self_loops: 0,
+    category_distribution: {},
+    importance_distribution: {},
+  };
+}
+
 // ── Entity sanitization ──
 
 export interface SanitizedEntity {
@@ -87,6 +210,7 @@ export interface SanitizedEntity {
   entity_type: string;
   entity_category: string;
   layer: string | null;
+  depth: number;
   importance: string;
   confidence: number;
   is_leverage_point: boolean;
@@ -96,10 +220,32 @@ export interface SanitizedEntity {
   centrality_rank: number | null;
   is_shared_variable: boolean;
   is_decomposable: boolean;
+  ambiguity_type: string | null;
+  temporal_validity: Record<string, unknown> | null;
+  manifold: Record<string, unknown> | null;
+  provenance: Record<string, unknown> | null;
+  authority_level: string | null;
+  knowledge_layer: string | null;
+  causal_role: string | null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function sanitizeEntity(raw: any, spaceId: string): SanitizedEntity {
+  // ── Phase 10: canonical depth + layer ──
+  // Callers may pass any of: (a) explicit integer `depth` (0..4 — authoritative),
+  // (b) legacy `layer` string, or (c) nothing. We always derive a canonical
+  // (layer, depth) pair so downstream consumers can trust the integer axis.
+  const rawDepthNum = typeof raw.depth === "number" ? raw.depth : null;
+  const canonical = (() => {
+    if (rawDepthNum !== null && Number.isFinite(rawDepthNum)) {
+      const d = Math.max(0, Math.min(4, Math.round(rawDepthNum)));
+      return { layer: LAYER_NAMES[d], depth: d };
+    }
+    const layerStr = typeof raw.layer === "string" ? raw.layer : null;
+    const klStr = typeof raw.knowledge_layer === "string" ? raw.knowledge_layer : null;
+    return normalizeLayerString(layerStr, klStr);
+  })();
+
   return {
     space_id: spaceId,
     entity_id: str(raw.entity_id, `e_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`),
@@ -107,8 +253,9 @@ export function sanitizeEntity(raw: any, spaceId: string): SanitizedEntity {
     description: typeof raw.description === "string" ? raw.description.trim() : null,
     source_tag: coerce(raw.source_tag, ENTITY_SOURCE_TAGS, "implicit"),
     entity_type: str(raw.entity_type, "concept"),
-    entity_category: coerce(raw.entity_category, ENTITY_CATEGORIES, "abstract"),
-    layer: typeof raw.layer === "string" ? raw.layer.trim() : null,
+    entity_category: inferCategoryFromType(raw.entity_type, raw.entity_category),
+    layer: canonical.layer,
+    depth: canonical.depth,
     importance: coerce(raw.importance, IMPORTANCE_LEVELS, "moderate"),
     confidence: clampNum(raw.confidence, 0, 1, 0.8),
     is_leverage_point: bool(raw.is_leverage_point),
@@ -118,7 +265,87 @@ export function sanitizeEntity(raw: any, spaceId: string): SanitizedEntity {
     centrality_rank: typeof raw.centrality_rank === "number" ? raw.centrality_rank : null,
     is_shared_variable: bool(raw.is_shared_variable),
     is_decomposable: bool(raw.is_decomposable),
+    ambiguity_type: typeof raw.ambiguity_type === "string"
+      ? coerce(raw.ambiguity_type, AMBIGUITY_TYPES, "premature")
+      : null,
+    temporal_validity: typeof raw.temporal_validity === "object" && raw.temporal_validity !== null
+      ? raw.temporal_validity as Record<string, unknown>
+      : null,
+    manifold: (() => {
+      const base = typeof raw.manifold === "object" && raw.manifold !== null
+        ? raw.manifold as Record<string, unknown>
+        : {} as Record<string, unknown>;
+      // Phase 8: Pack epistemic framework fields into manifold JSONB
+      const VALID_EPISTEMIC_STATUS = ["observed", "inferred", "theorized", "speculated", "contested"];
+      const VALID_TOULMIN_ROLE = ["claim", "ground", "warrant", "backing", "qualifier", "rebuttal"];
+      const VALID_MARR_LEVEL = ["computational", "algorithmic", "implementational"];
+      if (typeof raw.epistemic_status === "string" && VALID_EPISTEMIC_STATUS.includes(raw.epistemic_status)) {
+        base.epistemic_status = raw.epistemic_status;
+      }
+      if (typeof raw.toulmin_role === "string" && VALID_TOULMIN_ROLE.includes(raw.toulmin_role)) {
+        base.toulmin_role = raw.toulmin_role;
+      }
+      if (typeof raw.marr_level === "string" && VALID_MARR_LEVEL.includes(raw.marr_level)) {
+        base.marr_level = raw.marr_level;
+      }
+      return Object.keys(base).length > 0 ? base : null;
+    })(),
+    provenance: typeof raw.provenance === "object" && raw.provenance !== null
+      ? raw.provenance as Record<string, unknown>
+      : null,
+    authority_level: typeof raw.authority_level === "string" ? raw.authority_level.trim() : null,
+    knowledge_layer: typeof raw.knowledge_layer === "string" ? raw.knowledge_layer.trim() : null,
+    causal_role: typeof raw.causal_role === "string"
+      ? coerce(raw.causal_role, CAUSAL_ROLES, "truth")
+      : null,
   };
+}
+
+// ── Evidence basis extraction (for claim persistence) ──
+
+export interface ExtractedEvidence {
+  claim: string;
+  claim_type: string;
+  confidence: number;
+  reasoning: string;
+  /**
+   * Verbatim quote from user input, OR "IMPLICIT: <reason>" / "ASSUMED: <reason>".
+   * null when the LLM did not provide one.
+   */
+  source_quote: string | null;
+}
+
+/**
+ * Extracts and validates evidence_basis items from a raw entity.
+ * Returns validated array ready for insertion into the claims table.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function extractEvidenceBasis(raw: any): ExtractedEvidence[] {
+  if (!Array.isArray(raw?.evidence_basis)) return [];
+
+  return raw.evidence_basis
+    .filter(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (item: any) =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof item.claim === "string" &&
+        item.claim.trim().length > 0
+    )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((item: any) => {
+      const rawQuote = typeof item.source_quote === "string" ? item.source_quote.trim() : "";
+      return {
+        claim: String(item.claim).trim().slice(0, 2000),
+        claim_type: CLAIM_TYPES.includes(item.claim_type) ? item.claim_type : "assertion",
+        confidence: clampNum(item.confidence, 0, 1, 0.5),
+        reasoning: typeof item.reasoning === "string" ? item.reasoning.trim().slice(0, 2000) : "",
+        // Keep IMPLICIT:/ASSUMED: prefixes intact so the UI can distinguish modes.
+        // Cap at 500 chars for explicit quotes (plenty for a meaningful excerpt).
+        source_quote: rawQuote.length > 0 ? rawQuote.slice(0, 500) : null,
+      };
+    })
+    .slice(0, 6); // Max 6 claims per entity
 }
 
 // ── Edge sanitization ──
@@ -140,6 +367,38 @@ export interface SanitizedEdge {
   cycle_id: string | null;
   dynamics: string | null;
   dynamics_properties: Record<string, unknown> | null;
+  utility: Record<string, unknown> | null;
+  temporal_validity: Record<string, unknown> | null;
+  topology: string | null;
+}
+
+/**
+ * Derive a topology value from the semantic relationship_type when the LLM
+ * did not provide one explicitly. Conservative — returns null for types that
+ * don't imply a clear set-theoretic relationship. Only the obvious mappings
+ * are encoded here; ambiguous types stay null rather than guess.
+ */
+function deriveTopologyFromRelationshipType(rt: string | undefined): string | null {
+  if (!rt || typeof rt !== "string") return null;
+  const t = rt.toLowerCase().trim().replace(/[\s-]+/g, "_");
+
+  // Mereological / structural → composes
+  if (t === "part_of" || t === "partof" || t === "has_part" || t === "contains" || t === "composed_of" || t === "part_of_whole") {
+    return "composes";
+  }
+  // Identity / equivalence → equal (strong dedup signal)
+  if (t === "is_equivalent_to" || t === "same_as" || t === "synonymous_with" || t === "equals" || t === "equivalent") {
+    return "equal";
+  }
+  // Containment → inside
+  if (t === "is_a" || t === "instance_of" || t === "subset_of" || t === "within" || t === "inside_of") {
+    return "inside";
+  }
+  // Explicit separation → disjoint
+  if (t === "contradicts" || t === "mutually_exclusive" || t === "excludes" || t === "incompatible_with") {
+    return "disjoint";
+  }
+  return null;
 }
 
 /**
@@ -180,6 +439,29 @@ export function sanitizeEdge(raw: any, spaceId: string, entityIdMap: Map<string,
       raw.dynamics_properties && typeof raw.dynamics_properties === "object"
         ? raw.dynamics_properties
         : null,
+    utility: (() => {
+      const base = typeof raw.utility === "object" && raw.utility !== null
+        ? raw.utility as Record<string, unknown>
+        : {} as Record<string, unknown>;
+      // Phase 8: Pack Pearl's causal level into utility JSONB
+      const VALID_PEARL_LEVEL = ["association", "intervention", "counterfactual"];
+      if (typeof raw.pearl_level === "string" && VALID_PEARL_LEVEL.includes(raw.pearl_level)) {
+        base.pearl_level = raw.pearl_level;
+      }
+      return Object.keys(base).length > 0 ? base : null;
+    })(),
+    temporal_validity: typeof raw.temporal_validity === "object" && raw.temporal_validity !== null
+      ? raw.temporal_validity as Record<string, unknown>
+      : null,
+    topology: (() => {
+      // Prefer LLM-provided value if valid; otherwise derive from relationship_type.
+      if (typeof raw.topology === "string" && raw.topology.trim()) {
+        const normalized = raw.topology.toLowerCase().trim().replace(/[\s-]+/g, "_");
+        const match = EDGE_TOPOLOGIES.find((t) => t === normalized);
+        if (match) return match;
+      }
+      return deriveTopologyFromRelationshipType(raw.relationship_type);
+    })(),
   };
 }
 
@@ -235,22 +517,346 @@ export function sanitizeCycle(raw: any, spaceId: string, entityIdMap: Map<string
   };
 }
 
+// ── Fault materialization ──
+// Contradictions surfaced during decomposition used to live as loose JSON on
+// the space. Promoting them to first-class entities makes them navigable and
+// lets critique/synthesis reference them via edges. These helpers build the
+// entity + edge shape before sanitize/insert.
+
+export interface ContradictionInput {
+  assumption_text?: string;
+  conclusion_text?: string;
+  severity?: "critical" | "moderate" | "minor" | string;
+  description?: string;
+  // Optional: entity IDs the LLM flagged as participants in the contradiction.
+  involved_entity_ids?: string[];
+}
+
+export interface MaterializedFault {
+  entity: {
+    entity_id: string;
+    name: string;
+    description: string;
+    entity_category: "fault";
+    entity_type: string;
+    source_tag: "implicit";
+    importance: string;
+    confidence: number;
+    knowledge_layer: string;
+    provenance: Record<string, unknown>;
+  };
+  // Edges connecting the fault to entities it implicates. Topology = "disjoint"
+  // because a fault explicitly names entities that cannot simultaneously hold.
+  edges: Array<{
+    source_entity_id: string;
+    target_entity_id: string;
+    relationship_type: string;
+    dimension: "logical";
+    source_tag: "inferred";
+    strength: number;
+    polarity: "negative";
+    confidence: number;
+    conditions: string;
+    topology: "disjoint";
+  }>;
+}
+
+/**
+ * Turn a contradiction record into a fault entity plus edges to the entities
+ * it implicates. Returns null for contradictions too thin to be useful
+ * (missing text or no involved entities).
+ */
+export function materializeFault(
+  raw: ContradictionInput,
+  index: number,
+  existingEntityIds: Set<string>,
+): MaterializedFault | null {
+  const assumption = typeof raw.assumption_text === "string" ? raw.assumption_text.trim() : "";
+  const conclusion = typeof raw.conclusion_text === "string" ? raw.conclusion_text.trim() : "";
+  const description = typeof raw.description === "string" ? raw.description.trim() : "";
+
+  if (!assumption && !conclusion && !description) return null;
+
+  // Filter involved IDs to those that actually exist in the graph.
+  const involved = Array.isArray(raw.involved_entity_ids)
+    ? raw.involved_entity_ids.filter((id) => typeof id === "string" && existingEntityIds.has(id))
+    : [];
+
+  // Faults with no grounding entities are less valuable but still worth
+  // surfacing; we create the entity but no edges.
+  const severity = ["critical", "moderate", "minor"].includes(String(raw.severity))
+    ? (raw.severity as "critical" | "moderate" | "minor")
+    : "moderate";
+
+  const importance = severity === "critical" ? "critical" : severity === "moderate" ? "important" : "moderate";
+
+  const name = assumption && conclusion
+    ? `Fault: ${assumption.slice(0, 60)} vs ${conclusion.slice(0, 60)}`
+    : `Fault: ${(assumption || conclusion || description).slice(0, 100)}`;
+
+  const fullDescription = [
+    assumption ? `Assumption: ${assumption}` : "",
+    conclusion ? `Conclusion: ${conclusion}` : "",
+    description ? `Impact: ${description}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const entityId = `fault_${index + 1}`;
+
+  const edges: MaterializedFault["edges"] = involved.map((targetId) => ({
+    source_entity_id: entityId,
+    target_entity_id: targetId,
+    relationship_type: "contradicts",
+    dimension: "logical",
+    source_tag: "inferred",
+    strength: 0.7,
+    polarity: "negative",
+    confidence: severity === "critical" ? 0.85 : 0.7,
+    conditions: description || assumption || conclusion || "",
+    topology: "disjoint",
+  }));
+
+  return {
+    entity: {
+      entity_id: entityId,
+      name,
+      description: fullDescription,
+      entity_category: "fault",
+      entity_type: "contradiction",
+      source_tag: "implicit",
+      importance,
+      confidence: severity === "critical" ? 0.85 : 0.7,
+      knowledge_layer: "conceptual",
+      provenance: {
+        source_type: "fault_materialization",
+        severity,
+        assumption_text: assumption || null,
+        conclusion_text: conclusion || null,
+        involved_entity_ids: involved,
+      },
+    },
+    edges,
+  };
+}
+
 // ── Confidence-based edge filtering ──
 
 /**
- * Filter out edges below the confidence threshold.
- * Edges < 0.4 confidence are dropped entirely — a false edge corrupts analysis more than a missing one.
+ * Filter out edges below the confidence threshold, with a post-filter
+ * density guard to prevent over-aggressive filtering from creating
+ * disconnected sparse graphs.
+ *
+ * Lowered from 0.4 → 0.2: aggressive thresholds silently dropped 30-60%
+ * of edges. Now uses a density floor: if filtering would drop edge density
+ * below minDensity (edges/entityCount), the threshold is automatically
+ * lowered until density is met.
+ *
+ * Edges below the final threshold are dropped; edges in the 0.2-0.5 range
+ * are kept but will render with dashed lines to indicate lower confidence.
  */
 export function filterLowConfidenceEdges(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   edges: any[],
-  minConfidence = 0.4
+  minConfidence = 0.2,
+  entityCount?: number,
+  minDensity = 2.0
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any[] {
-  return edges.filter((e) => {
+  const before = edges.length;
+
+  // Sort by confidence descending for density-aware fallback
+  const sorted = [...edges].sort((a, b) => {
+    const confA = typeof a.confidence === "number" ? a.confidence : 0.8;
+    const confB = typeof b.confidence === "number" ? b.confidence : 0.8;
+    return confB - confA;
+  });
+
+  let filtered = sorted.filter((e) => {
     const conf = typeof e.confidence === "number" ? e.confidence : 0.8;
     return conf >= minConfidence;
   });
+
+  // Density guard: if we know entity count, ensure filtering doesn't break the graph
+  if (entityCount && entityCount > 0 && filtered.length < entityCount * minDensity) {
+    const needed = Math.ceil(entityCount * minDensity);
+    if (sorted.length >= needed) {
+      // Take enough edges to meet density floor, even if below minConfidence
+      filtered = sorted.slice(0, Math.min(needed, sorted.length));
+      const lowestConf = typeof filtered[filtered.length - 1]?.confidence === "number"
+        ? filtered[filtered.length - 1].confidence
+        : minConfidence;
+      console.log(`[sanitize] Density guard: relaxed threshold from ${minConfidence} → ${(lowestConf as number).toFixed(2)} to maintain density ${minDensity} (needed ${needed} edges for ${entityCount} entities)`);
+    } else {
+      // Not enough edges even with zero threshold — keep all
+      filtered = sorted;
+      console.log(`[sanitize] Density guard: keeping ALL ${sorted.length} edges (not enough to meet density ${minDensity} for ${entityCount} entities)`);
+    }
+  }
+
+  if (before !== filtered.length) {
+    console.log(`[sanitize] Confidence filter: ${before} → ${filtered.length} edges (removed ${before - filtered.length})`);
+  }
+  return filtered;
+}
+
+// ── Topology-equal deduplication ──
+// At scale, duplicates are the #1 noise source. The LLM sometimes recognizes
+// that two differently-named entities are the same concept and emits an edge
+// with topology=equal instead of merging them in Tier 2. This pass collapses
+// those pairs post-hoc using union-find so transitive equalities (A=B, B=C)
+// collapse all three to one canonical.
+
+interface RawEntityForMerge {
+  entity_id: string;
+  name: string;
+  description?: unknown;
+  importance?: unknown;
+  confidence?: unknown;
+  [key: string]: unknown;
+}
+
+interface RawEdgeForMerge {
+  source_entity_id: string;
+  target_entity_id: string;
+  topology?: unknown;
+  relationship_type?: unknown;
+  [key: string]: unknown;
+}
+
+// Importance used as a tiebreaker when picking the canonical entity.
+const IMPORTANCE_RANK: Record<string, number> = {
+  fundamental: 4,
+  critical: 3,
+  important: 2,
+  moderate: 1,
+};
+
+function pickCanonical<T extends RawEntityForMerge>(a: T, b: T): T {
+  // Prefer higher importance
+  const impA = IMPORTANCE_RANK[String(a.importance ?? "")] ?? 0;
+  const impB = IMPORTANCE_RANK[String(b.importance ?? "")] ?? 0;
+  if (impA !== impB) return impA > impB ? a : b;
+
+  // Then prefer richer description
+  const descA = typeof a.description === "string" ? a.description.length : 0;
+  const descB = typeof b.description === "string" ? b.description.length : 0;
+  if (descA !== descB) return descA > descB ? a : b;
+
+  // Then higher confidence
+  const confA = typeof a.confidence === "number" ? a.confidence : 0;
+  const confB = typeof b.confidence === "number" ? b.confidence : 0;
+  if (confA !== confB) return confA > confB ? a : b;
+
+  // Finally, stable by entity_id
+  return a.entity_id < b.entity_id ? a : b;
+}
+
+/**
+ * Collapse entities connected by topology=equal edges. Uses union-find so that
+ * transitive equalities (A equal B, B equal C) correctly merge all three. The
+ * equal-edges themselves are removed (they become self-loops after merge).
+ *
+ * Returns the reduced entity set plus edges with source/target remapped to
+ * canonical IDs. Safe to call on any entity+edge pair — if no equal edges
+ * exist, returns inputs unchanged.
+ */
+export function mergeByTopologyEqual<E extends RawEntityForMerge, D extends RawEdgeForMerge>(
+  entities: E[],
+  edges: D[],
+): { entities: E[]; edges: D[]; mergesApplied: number } {
+  if (entities.length === 0) return { entities, edges, mergesApplied: 0 };
+
+  const equalEdges = edges.filter((e) => e.topology === "equal");
+  if (equalEdges.length === 0) return { entities, edges, mergesApplied: 0 };
+
+  // Union-find over entity_ids
+  const parent = new Map<string, string>();
+  for (const e of entities) parent.set(e.entity_id, e.entity_id);
+
+  const find = (id: string): string => {
+    let cur = id;
+    while (parent.get(cur) !== cur) {
+      const p = parent.get(cur) ?? cur;
+      parent.set(cur, parent.get(p) ?? p); // path compression
+      cur = parent.get(cur) ?? cur;
+    }
+    return cur;
+  };
+
+  const byId = new Map<string, E>();
+  for (const e of entities) byId.set(e.entity_id, e);
+
+  const union = (a: string, b: string): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra === rb) return;
+    const entA = byId.get(ra);
+    const entB = byId.get(rb);
+    if (!entA || !entB) {
+      // One side isn't in the entity list — just link without canonical choice
+      parent.set(rb, ra);
+      return;
+    }
+    const canonical = pickCanonical(entA, entB);
+    const loser = canonical.entity_id === entA.entity_id ? rb : ra;
+    const winner = canonical.entity_id === entA.entity_id ? ra : rb;
+    parent.set(loser, winner);
+  };
+
+  let validEqualEdges = 0;
+  for (const e of equalEdges) {
+    if (!byId.has(e.source_entity_id) || !byId.has(e.target_entity_id)) continue;
+    if (e.source_entity_id === e.target_entity_id) continue;
+    union(e.source_entity_id, e.target_entity_id);
+    validEqualEdges++;
+  }
+
+  if (validEqualEdges === 0) return { entities, edges, mergesApplied: 0 };
+
+  // Build canonical-only entity list
+  const canonicalEntities: E[] = [];
+  const seen = new Set<string>();
+  for (const e of entities) {
+    const root = find(e.entity_id);
+    if (seen.has(root)) continue;
+    seen.add(root);
+    // Push the entity whose id IS the root — that's the canonical one picked by union()
+    const canon = byId.get(root);
+    if (canon) canonicalEntities.push(canon);
+  }
+
+  // Remap edges: source/target → canonical; drop self-loops; drop the equal-edges
+  // themselves since the entities they related are now the same node.
+  const remappedEdges: D[] = [];
+  let droppedEqual = 0;
+  let droppedSelfLoop = 0;
+  for (const edge of edges) {
+    if (edge.topology === "equal") {
+      droppedEqual++;
+      continue;
+    }
+    const src = find(edge.source_entity_id);
+    const tgt = find(edge.target_entity_id);
+    if (src === tgt) {
+      droppedSelfLoop++;
+      continue;
+    }
+    remappedEdges.push({
+      ...edge,
+      source_entity_id: src,
+      target_entity_id: tgt,
+    });
+  }
+
+  const mergesApplied = entities.length - canonicalEntities.length;
+  if (mergesApplied > 0) {
+    console.log(
+      `[sanitize] Topology-equal merge: ${entities.length} → ${canonicalEntities.length} entities (${mergesApplied} merged via ${validEqualEdges} equal-edges; dropped ${droppedEqual} equal-edges and ${droppedSelfLoop} self-loops post-merge)`
+    );
+  }
+
+  return { entities: canonicalEntities, edges: remappedEdges, mergesApplied };
 }
 
 // ── Entity deduplication ──
@@ -324,6 +930,19 @@ export function deduplicateEntities(
   const filteredEdges = remappedEdges.filter(
     (e) => e.source_entity_id !== e.target_entity_id
   );
+
+  if (entities.length !== deduped.length) {
+    console.log(`[sanitize] Dedup: ${entities.length} → ${deduped.length} entities (merged ${entities.length - deduped.length})`);
+    // Log merged entities for debugging
+    for (const [key, group] of groups.entries()) {
+      if (group.length > 1) {
+        console.log(`[sanitize]   Merged "${key}": ${group.map(e => e.entity_id).join(", ")} → ${group[0].entity_id}`);
+      }
+    }
+  }
+  if (edges.length !== filteredEdges.length) {
+    console.log(`[sanitize] Dedup edge remap: ${edges.length} → ${filteredEdges.length} edges (${edges.length - filteredEdges.length} became self-loops)`);
+  }
 
   return { entities: deduped, edges: filteredEdges };
 }
