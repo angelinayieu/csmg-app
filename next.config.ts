@@ -1,6 +1,15 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // ── Mermaid + Turbopack module resolution ────────────────────────────
+  // Mermaid lazily imports cytoscape + cytoscape-cose-bilkent inside its
+  // architecture diagram + cose-bilkent layout chunks. Turbopack's strict
+  // resolution stops at those chunk boundaries unless we transpile mermaid
+  // as if it were first-party code. Without this, `next build` fails with
+  // "Module not found: Can't resolve 'cytoscape'" even though the package
+  // is installed and resolvable at runtime.
+  transpilePackages: ["mermaid"],
+
   // ── Route consolidation redirects ─────────────────────────────────────
   // Preserve existing bookmarks and any stale internal links pointing at
   // routes that have been deleted or renamed. Each entry is a permanent
