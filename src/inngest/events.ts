@@ -84,4 +84,17 @@ export type Events = {
       goalTitle?: string;
     };
   };
+  /**
+   * Cross-whiteboard Ask — user asks a question on the homescreen in "Ask" mode.
+   * POST /api/ask/start creates the ask space + analysis_jobs row, then fires this.
+   * Consumed by ask-cross-space.ts: retrieval → synthesis → ghost-clone cited entities.
+   */
+  "ask/cross-space.requested": {
+    data: {
+      jobId: string;
+      userId: string;
+      spaceId: string;
+      query: string;
+    };
+  };
 };

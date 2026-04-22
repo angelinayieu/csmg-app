@@ -1,0 +1,931 @@
+"use client";
+
+// ── Immersive Home (Phase 2B → 2C) ──
+//
+// The Apple-Vision-Pro-adjacent welcome surface — now the canonical
+// home for every user, not just new ones. Returning users still
+// reach their existing spaces via the sidebar (we fill only the
+// main content area, never the whole viewport).
+//
+// Phase 2C adds real physics:
+//   - Cursor parallax: all cards shift subtly as the cursor moves,
+//     front cards more than back. Spring-smoothed via rAF.
+//   - Per-card lean-tilt: hovered card rotates in 3D toward the
+//     cursor within its bounds. Cards read as spatially alive.
+//   - Bloom-expansion: hovered card scales up + reveals starter
+//     questions / seed entity counts / destination surface so the
+//     user can evaluate before clicking.
+//   - Drift pause on hover: only the hovered card pauses; others
+//     keep drifting so the composition stays organic.
+//
+// Ambient motion (drift + background pulse) continues from Phase 2B.
+// Everything respects `prefers-reduced-motion` via CSS + a runtime
+// check that disables cursor effects entirely.
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useRouter } from "next/navigation";
+import {
+  ArrowRight,
+  Command,
+  Loader2,
+  MessageCircleQuestion,
+  Sparkles,
+  Wand2,
+  X,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { AccentChip } from "@/components/ui/accent-chip";
+import type { UseCaseTemplate } from "@/types/use-case";
+import * as LucideIcons from "lucide-react";
+
+export type ImmersiveMode = "canvas" | "gradient";
+type PromptMode = "ask" | "create";
+
+export interface ImmersiveHomeProps {
+  greetingName: string;
+  mode?: ImmersiveMode;
+  templates: ReadonlyArray<
+    Pick<
+      UseCaseTemplate,
+      | "id"
+      | "name"
+      | "tagline"
+      | "description"
+      | "icon"
+      | "accent_color"
+      | "category"
+      | "default_surface"
+    > & {
+      seed_entity_count: number;
+      question_count: number;
+    }
+  >;
+  /**
+   * Count of existing whiteboards — used to label the library-nav pill.
+   * When undefined or 0 the pill still renders but with plural-safe
+   * copy so first-time users don't see "0 whiteboards".
+   */
+  whiteboardCount?: number;
+  /**
+   * Fires when the user wants to flip to the whiteboards library.
+   * Shell component consumes this to crossfade to the library view.
+   */
+  onViewLibrary?: () => void;
+}
+
+// Fixed layout positions for up to 7 cards — calculated by hand so
+// the composition reads as balanced, not random. Percentages are
+// relative to the surface; cards are absolutely positioned and
+// animate drift from these anchors.
+const CARD_POSITIONS: Array<{
+  top: string;
+  left: string;
+  z: 0 | 1 | 2;
+  driftClass: string;
+}> = [
+  { top: "14%", left: "9%", z: 1, driftClass: "immersive-card-drift-1" },
+  { top: "22%", left: "78%", z: 0, driftClass: "immersive-card-drift-2" },
+  { top: "62%", left: "6%", z: 2, driftClass: "immersive-card-drift-3" },
+  { top: "74%", left: "82%", z: 1, driftClass: "immersive-card-drift-4" },
+  { top: "40%", left: "84%", z: 2, driftClass: "immersive-card-drift-5" },
+  { top: "52%", left: "16%", z: 0, driftClass: "immersive-card-drift-6" },
+  { top: "82%", left: "46%", z: 1, driftClass: "immersive-card-drift-7" },
+];
+
+const CARD_DEPTH: Record<
+  number,
+  { scale: number; opacity: number; blur: number; width: number }
+> = {
+  0: { scale: 0.72, opacity: 0.55, blur: 1.5, width: 200 },
+  1: { scale: 0.88, opacity: 0.82, blur: 0, width: 230 },
+  2: { scale: 1, opacity: 0.98, blur: 0, width: 260 },
+};
+
+// Max parallax shift in px. Scales with depth so front cards move
+// more. Tuned low — the motion should feel present but never draw
+// attention to itself.
+const PARALLAX_STRENGTH_X = 14;
+const PARALLAX_STRENGTH_Y = 10;
+// Spring coefficient for cursor follow. Higher = snappier, lower =
+// heavier/liquidy. 0.08 feels calm without lagging.
+const CURSOR_SPRING = 0.08;
+
+// Max tilt rotation in degrees when cursor-leaning on a hovered card.
+const TILT_MAX_DEG = 7;
+
+interface CursorState {
+  x: number; // viewport-normalized [-1, 1]
+  y: number;
+}
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+export function ImmersiveHome({
+  greetingName,
+  templates,
+  mode = "canvas",
+  whiteboardCount,
+  onViewLibrary,
+}: ImmersiveHomeProps) {
+  const router = useRouter();
+  const [prompt, setPrompt] = useState("");
+  const [promptMode, setPromptMode] = useState<PromptMode>("ask");
+  const [askSubmitting, setAskSubmitting] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(
+    null,
+  );
+  const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Persist mode across sessions so returning users pick up where they left
+  // off. Mounted in an effect so SSR doesn't break.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.sessionStorage.getItem("immersiveHome.mode");
+    if (saved === "ask" || saved === "create") setPromptMode(saved);
+  }, []);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.sessionStorage.setItem("immersiveHome.mode", promptMode);
+    setAskError(null);
+  }, [promptMode]);
+
+  // ── Global cursor state (spring-smoothed) ────────────────────────
+  const [cursor, setCursor] = useState<CursorState>({ x: 0, y: 0 });
+  const cursorTargetRef = useRef<CursorState>({ x: 0, y: 0 });
+  const cursorCurrentRef = useRef<CursorState>({ x: 0, y: 0 });
+  const reducedMotionRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    reducedMotionRef.current = prefersReducedMotion();
+    if (reducedMotionRef.current) return;
+
+    let rafId = 0;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Normalize to [-1, 1] centered on the viewport — keeps math
+      // cheap downstream (parallax = cursor × strength × depth).
+      cursorTargetRef.current = {
+        x: (e.clientX / window.innerWidth - 0.5) * 2,
+        y: (e.clientY / window.innerHeight - 0.5) * 2,
+      };
+    };
+
+    const tick = () => {
+      const target = cursorTargetRef.current;
+      const current = cursorCurrentRef.current;
+      current.x += (target.x - current.x) * CURSOR_SPRING;
+      current.y += (target.y - current.y) * CURSOR_SPRING;
+      // Only trigger a React update when the change matters. The rAF
+      // keeps spring interpolation smooth regardless of React's
+      // render cadence.
+      setCursor({ x: current.x, y: current.y });
+      rafId = requestAnimationFrame(tick);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove, { passive: true });
+    rafId = requestAnimationFrame(tick);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  // Pick up to 7 templates; extra positions skip silently.
+  const cards = useMemo(() => templates.slice(0, 7), [templates]);
+
+  const submitPrompt = useCallback(
+    (mode: "sketch" | "analyze") => {
+      const trimmed = prompt.trim();
+      const params = new URLSearchParams();
+      if (mode === "sketch") params.set("mode", "sketch");
+      if (trimmed) params.set("seed", trimmed);
+      const qs = params.toString();
+      router.push(`/app/new${qs ? `?${qs}` : ""}`);
+    },
+    [prompt, router],
+  );
+
+  // Ask mode: create an ask-kind whiteboard, trigger the cross-whiteboard
+  // synthesis inngest job, navigate to the new space.
+  const submitAsk = useCallback(async () => {
+    const query = prompt.trim();
+    if (!query || askSubmitting) return;
+    setAskSubmitting(true);
+    setAskError(null);
+    try {
+      const res = await fetch("/api/ask/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? `Ask failed (${res.status})`);
+      }
+      const { spaceId } = (await res.json()) as { spaceId: string };
+      router.push(`/app/space/${spaceId}`);
+    } catch (err) {
+      console.error("[ImmersiveHome] submitAsk failed:", err);
+      setAskError(err instanceof Error ? err.message : "Ask failed");
+      setAskSubmitting(false);
+    }
+  }, [prompt, askSubmitting, router]);
+
+  const handlePromptKey = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        if (promptMode === "ask") {
+          void submitAsk();
+        } else {
+          submitPrompt(e.metaKey || e.ctrlKey ? "analyze" : "sketch");
+        }
+      }
+    },
+    [promptMode, submitPrompt, submitAsk],
+  );
+
+  const createFromTemplate = useCallback(
+    async (templateId: string) => {
+      if (pendingTemplateId) return;
+      setPendingTemplateId(templateId);
+      try {
+        const res = await fetch("/api/use-cases/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ template_id: templateId }),
+        });
+        if (!res.ok) throw new Error(`create ${res.status}`);
+        const json = (await res.json()) as {
+          space: { id: string };
+          default_surface?: string;
+        };
+        const spaceId = json.space.id;
+        const surfacePath = mapSurfacePath(json.default_surface);
+        router.push(`/app/space/${spaceId}${surfacePath}`);
+      } catch (err) {
+        console.error("[ImmersiveHome] createFromTemplate failed:", err);
+        setPendingTemplateId(null);
+      }
+    },
+    [pendingTemplateId, router],
+  );
+
+  return (
+    <div
+      className={cn(
+        "immersive-home-surface absolute inset-0 overflow-hidden",
+        mode === "gradient" && "mode-gradient",
+      )}
+    >
+      {/* Ambient background — dotted canvas (default) or radial gradients (mode=gradient) */}
+      <div className="immersive-home-bg pointer-events-none absolute inset-0" />
+
+      {/* Floating card swarm — absolutely positioned, drifting */}
+      <div className="pointer-events-none absolute inset-0">
+        {cards.map((template, idx) => {
+          const pos = CARD_POSITIONS[idx];
+          if (!pos) return null;
+          return (
+            <FloatingCard
+              key={template.id}
+              template={template}
+              position={pos}
+              depth={CARD_DEPTH[pos.z]}
+              pending={pendingTemplateId === template.id}
+              othersPending={
+                pendingTemplateId !== null && pendingTemplateId !== template.id
+              }
+              hovered={hoveredCardId === template.id}
+              anyHovered={hoveredCardId !== null}
+              cursor={cursor}
+              onHover={(on) => setHoveredCardId(on ? template.id : null)}
+              onSelect={() => createFromTemplate(template.id)}
+            />
+          );
+        })}
+      </div>
+
+      {/* Corner chrome — top-right: whiteboards library pill + ⌘K. */}
+      <div className="pointer-events-auto absolute right-6 top-6 z-10 flex items-center gap-2">
+        {onViewLibrary && (
+          <button
+            onClick={onViewLibrary}
+            className="group flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-semibold backdrop-blur-sm transition-all"
+            style={{
+              border: "1px solid var(--home-chrome-stroke)",
+              background: "var(--home-chrome-fill)",
+              color: "var(--home-chrome-text)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background =
+                "var(--home-chrome-fill-hover)";
+              e.currentTarget.style.color = "var(--home-chrome-text-hover)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "var(--home-chrome-fill)";
+              e.currentTarget.style.color = "var(--home-chrome-text)";
+            }}
+            title="View your whiteboards library"
+          >
+            <LucideIcons.LayoutGrid className="h-3 w-3" strokeWidth={1.75} />
+            <span>
+              {whiteboardCount && whiteboardCount > 0
+                ? `${whiteboardCount} whiteboard${whiteboardCount === 1 ? "" : "s"}`
+                : "Whiteboards"}
+            </span>
+            <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+          </button>
+        )}
+        <button
+          className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-medium backdrop-blur-sm transition-colors"
+          style={{
+            border: "1px solid var(--home-chrome-stroke)",
+            background: "var(--home-chrome-fill)",
+            color: "var(--home-chrome-text)",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background =
+              "var(--home-chrome-fill-hover)";
+            e.currentTarget.style.color = "var(--home-chrome-text-hover)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "var(--home-chrome-fill)";
+            e.currentTarget.style.color = "var(--home-chrome-text)";
+          }}
+          title="Command palette"
+          onClick={() => {
+            const evt = new KeyboardEvent("keydown", {
+              key: "k",
+              metaKey: true,
+              bubbles: true,
+            });
+            document.dispatchEvent(evt);
+          }}
+        >
+          <Command className="h-3 w-3" />
+          <span>K</span>
+        </button>
+      </div>
+
+      {/* Center stage — greeting + glass prompt.
+          IMPORTANT: `pointer-events-none` on the wrapper so it
+          doesn't steal hover events from the floating cards behind
+          it. The prompt block below re-enables `pointer-events-auto`
+          so users can still type + click Begin. Without this the
+          full-viewport flex wrapper sits at z-5 above the cards
+          (z-1…3) and silently swallows every hover. */}
+      <div
+        className="immersive-home-enter pointer-events-none relative z-[5] flex min-h-screen flex-col items-center justify-center px-6"
+        style={{
+          // Counter-parallax the center so it feels anchored while
+          // the cards drift around it. Subtle, half the front-card
+          // shift in the OPPOSITE direction.
+          transform: `translate3d(${-cursor.x * 6}px, ${-cursor.y * 4}px, 0)`,
+          transition: "transform 60ms linear",
+        }}
+      >
+        <div className="pointer-events-auto w-full max-w-[640px]">
+          <div className="mb-5 text-center">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--home-text-faint)]">
+              InterAxis
+            </div>
+            <h1 className="text-[32px] font-light leading-tight text-[color:var(--home-text)]">
+              Welcome, {greetingName}.
+            </h1>
+            <p className="mt-2 text-[14px] font-light text-[color:var(--home-text-mid)]">
+              {promptMode === "ask"
+                ? "Ask anything — I'll answer using every whiteboard you've built."
+                : "What do you want to think about?"}
+            </p>
+          </div>
+
+          {/* Ask | Create segmented toggle. Ask = cross-whiteboard synthesis
+              (new). Create = existing /app/new template + pipeline flow. */}
+          <div className="mb-4 flex justify-center">
+            <div
+              role="tablist"
+              aria-label="Prompt mode"
+              className="inline-flex items-center rounded-full p-1 backdrop-blur-sm"
+              style={{
+                border: "1px solid var(--home-chrome-stroke)",
+                background: "var(--home-chrome-fill)",
+              }}
+            >
+              <ModeTab
+                active={promptMode === "ask"}
+                onClick={() => setPromptMode("ask")}
+                icon={<MessageCircleQuestion className="h-3.5 w-3.5" />}
+                label="Ask"
+                sublabel="across whiteboards"
+              />
+              <ModeTab
+                active={promptMode === "create"}
+                onClick={() => setPromptMode("create")}
+                icon={<Wand2 className="h-3.5 w-3.5" />}
+                label="Create"
+                sublabel="new analysis"
+              />
+            </div>
+          </div>
+
+          <GlassPanel
+            tier="modal"
+            radius={20}
+            className="relative overflow-hidden"
+          >
+            <div className="relative">
+              <textarea
+                ref={inputRef}
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={handlePromptKey}
+                rows={3}
+                placeholder={
+                  promptMode === "ask"
+                    ? "Ask anything that touches your whiteboards — I'll stitch an answer from them."
+                    : "Drop a thought, paste a URL, describe a tension — or pick a starting point."
+                }
+                className={cn(
+                  "w-full resize-none bg-transparent px-5 py-4 text-[15px] font-light leading-relaxed text-[color:var(--home-text)] placeholder:text-[color:var(--home-text-faint)]",
+                  "focus:outline-none",
+                )}
+                style={{ minHeight: 96 }}
+                autoFocus
+              />
+              {prompt && (
+                <button
+                  onClick={() => setPrompt("")}
+                  className="absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full transition-colors"
+                  style={{ color: "var(--home-text-faint)" }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background =
+                      "var(--home-chrome-fill-hover)";
+                    e.currentTarget.style.color = "var(--home-text-mid)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = "var(--home-text-faint)";
+                  }}
+                  title="Clear"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+
+            <div
+              className="flex items-center justify-between px-4 py-2.5"
+              style={{ borderTop: "1px solid var(--glass-hairline)" }}
+            >
+              <div className="flex items-center gap-3 text-[10.5px] font-medium text-[color:var(--home-text-faint)]">
+                {promptMode === "ask" ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <MessageCircleQuestion className="h-3 w-3" />
+                    Searches across every whiteboard you own.
+                  </span>
+                ) : (
+                  <>
+                    <span>
+                      <kbd
+                        className="rounded px-1 py-0.5 font-mono text-[9.5px]"
+                        style={{
+                          border: "1px solid var(--home-chrome-stroke)",
+                          background: "var(--home-chrome-fill)",
+                        }}
+                      >
+                        Enter
+                      </kbd>{" "}
+                      sketch
+                    </span>
+                    <span>
+                      <kbd
+                        className="rounded px-1 py-0.5 font-mono text-[9.5px]"
+                        style={{
+                          border: "1px solid var(--home-chrome-stroke)",
+                          background: "var(--home-chrome-fill)",
+                        }}
+                      >
+                        ⌘↵
+                      </kbd>{" "}
+                      analyze
+                    </span>
+                  </>
+                )}
+              </div>
+              <button
+                onClick={() => {
+                  if (promptMode === "ask") void submitAsk();
+                  else submitPrompt("sketch");
+                }}
+                disabled={!prompt.trim() || askSubmitting}
+                className="flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold transition-all"
+                style={
+                  prompt.trim() && !askSubmitting
+                    ? {
+                        background: "var(--home-cta-bg)",
+                        color: "var(--home-cta-fg)",
+                      }
+                    : {
+                        background: "var(--home-chrome-fill)",
+                        color: "var(--home-text-faint)",
+                      }
+                }
+                onMouseEnter={(e) => {
+                  if (prompt.trim() && !askSubmitting) {
+                    e.currentTarget.style.background =
+                      "var(--home-cta-bg-hover)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (prompt.trim() && !askSubmitting) {
+                    e.currentTarget.style.background = "var(--home-cta-bg)";
+                  }
+                }}
+              >
+                {askSubmitting ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : null}
+                <span>{promptMode === "ask" ? "Ask" : "Begin"}</span>
+                <ArrowRight className="h-3 w-3" />
+              </button>
+            </div>
+          </GlassPanel>
+          {askError && (
+            <div className="mt-2 text-center text-[10.5px] text-red-500">
+              {askError}
+            </div>
+          )}
+
+          <div className="mt-4 text-center text-[11px] font-medium text-[color:var(--home-text-faint)]">
+            <span className="inline-flex items-center gap-1">
+              <Sparkles className="h-3 w-3" />
+              Hover a floating card to peek inside. Click to open the space.
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// FloatingCard — one possibility card, parallax + tilt + bloom details
+// ─────────────────────────────────────────────────────────────────────
+
+type TemplateForCard = ImmersiveHomeProps["templates"][number];
+
+interface FloatingCardProps {
+  template: TemplateForCard;
+  position: { top: string; left: string; z: 0 | 1 | 2; driftClass: string };
+  depth: { scale: number; opacity: number; blur: number; width: number };
+  pending: boolean;
+  othersPending: boolean;
+  hovered: boolean;
+  anyHovered: boolean;
+  cursor: CursorState;
+  onHover: (on: boolean) => void;
+  onSelect: () => void;
+}
+
+function FloatingCard({
+  template,
+  position,
+  depth,
+  pending,
+  othersPending,
+  hovered,
+  anyHovered,
+  cursor,
+  onHover,
+  onSelect,
+}: FloatingCardProps) {
+  const cardEl = useRef<HTMLButtonElement>(null);
+  const [tilt, setTilt] = useState<{ rx: number; ry: number }>({
+    rx: 0,
+    ry: 0,
+  });
+
+  // Parallax offset — front cards shift more than back.
+  const depthFactor = position.z + 1;
+  const parallaxX = cursor.x * depthFactor * PARALLAX_STRENGTH_X;
+  const parallaxY = cursor.y * depthFactor * PARALLAX_STRENGTH_Y;
+
+  // Hover interaction: scale up + tilt toward cursor + pause drift.
+  const isForeground = hovered;
+  const isBackground = anyHovered && !hovered;
+  const pendingOthers = othersPending;
+
+  const effectiveScale = isForeground
+    ? 1.14
+    : isBackground
+      ? depth.scale * 0.94
+      : depth.scale;
+  const effectiveOpacity =
+    isBackground || pendingOthers ? 0.28 : depth.opacity;
+  const effectiveBlur =
+    isBackground || pendingOthers ? depth.blur + 2 : depth.blur;
+
+  // Cursor-lean tilt: when hovered, compute pointer position inside
+  // the card bounds and rotate the card toward it. Resets smoothly
+  // on mouse leave.
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      if (!hovered || !cardEl.current) return;
+      const rect = cardEl.current.getBoundingClientRect();
+      const px = (e.clientX - rect.left) / rect.width - 0.5; // [-0.5, 0.5]
+      const py = (e.clientY - rect.top) / rect.height - 0.5;
+      // rotateX is inverse Y (pulling the top edge toward you feels
+      // right when cursor is above center).
+      setTilt({
+        rx: -py * TILT_MAX_DEG * 2,
+        ry: px * TILT_MAX_DEG * 2,
+      });
+    },
+    [hovered],
+  );
+
+  // When hover ends, spring tilt back to 0 (single-frame reset is
+  // jarring; let CSS transition handle it via `transform` below).
+  useEffect(() => {
+    if (!hovered) setTilt({ rx: 0, ry: 0 });
+  }, [hovered]);
+
+  // Resolve the lucide icon by string name with a Sparkles fallback.
+  const IconCandidate =
+    (LucideIcons as unknown as Record<string, unknown>)[template.icon] ??
+    LucideIcons.Sparkles;
+  const IconComponent = IconCandidate as React.ComponentType<{
+    className?: string;
+    strokeWidth?: number;
+    style?: React.CSSProperties;
+  }>;
+
+  const surfaceLabel = surfaceLabelFor(template.default_surface);
+
+  return (
+    <div
+      className={cn("absolute pointer-events-auto", position.driftClass)}
+      style={{
+        top: position.top,
+        left: position.left,
+        width: depth.width,
+        zIndex: hovered ? 20 : position.z + 1,
+        // Pause drift ONLY for the hovered card; others keep moving.
+        animationPlayState: hovered ? "paused" : "running",
+      }}
+    >
+      {/* Inner wrapper handles parallax. Keeping drift + parallax on
+          separate wrappers lets each animate independently. */}
+      <div
+        style={{
+          transform: `translate3d(${parallaxX}px, ${parallaxY}px, 0)`,
+          transition: "transform 80ms linear",
+          transformStyle: "preserve-3d",
+          perspective: "800px",
+        }}
+      >
+        <button
+          ref={cardEl}
+          onClick={onSelect}
+          onMouseEnter={() => onHover(true)}
+          onMouseLeave={() => onHover(false)}
+          onMouseMove={handleMouseMove}
+          disabled={pending || pendingOthers}
+          className="block w-full cursor-pointer text-left disabled:cursor-wait"
+          style={{
+            transform: `
+              scale(${effectiveScale})
+              rotateX(${tilt.rx}deg)
+              rotateY(${tilt.ry}deg)
+            `,
+            opacity: effectiveOpacity,
+            filter: effectiveBlur ? `blur(${effectiveBlur}px)` : undefined,
+            transition:
+              "transform 420ms cubic-bezier(0.25, 0.8, 0.25, 1), opacity 320ms ease, filter 320ms ease",
+            transformStyle: "preserve-3d",
+          }}
+        >
+          <GlassPanel
+            tier={
+              position.z === 2 ? "float" : position.z === 1 ? "card" : "plate"
+            }
+            radius={18}
+            accent={template.accent_color}
+            className="overflow-hidden p-4"
+          >
+            {/* Card header — icon + name + tagline */}
+            <div className="flex items-start gap-3">
+              <div
+                className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg"
+                style={{
+                  background: `color-mix(in srgb, ${template.accent_color} calc(var(--accent-fill-medium) * 100%), transparent)`,
+                }}
+              >
+                {pending ? (
+                  <Loader2
+                    className="h-4 w-4 animate-spin"
+                    style={{ color: template.accent_color }}
+                  />
+                ) : (
+                  <IconComponent
+                    className="h-4 w-4"
+                    strokeWidth={1.5}
+                    style={{ color: template.accent_color }}
+                  />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-semibold text-[color:var(--home-text)]">
+                  {template.name}
+                </div>
+                <div
+                  className="mt-0.5 line-clamp-2 text-[11px] font-light text-[color:var(--home-text-mid)]"
+                  title={template.tagline}
+                >
+                  {template.tagline}
+                </div>
+                <div className="mt-2">
+                  <AccentChip
+                    accent={template.accent_color}
+                    size="xs"
+                    variant="ghost"
+                  >
+                    {template.category}
+                  </AccentChip>
+                </div>
+              </div>
+            </div>
+
+            {/* Bloom details — slides in on hover. Kept max-height
+                animated so it expands the card rather than overlapping
+                other content. */}
+            <div
+              style={{
+                maxHeight: hovered ? 160 : 0,
+                opacity: hovered ? 1 : 0,
+                overflow: "hidden",
+                transition:
+                  "max-height 400ms cubic-bezier(0.25, 0.8, 0.25, 1), opacity 220ms ease",
+              }}
+            >
+              <div
+                className="mt-3 space-y-1.5 pt-3 text-[11px] font-light text-[color:var(--home-text-mid)]"
+                style={{ borderTop: "1px solid var(--glass-hairline)" }}
+              >
+                {template.description && (
+                  <div className="line-clamp-3 text-[11px] leading-relaxed text-[color:var(--home-text-mid)]">
+                    {template.description}
+                  </div>
+                )}
+                <div className="flex items-center gap-3 pt-1 text-[10.5px] font-medium text-[color:var(--home-text-faint)]">
+                  <span>
+                    <span
+                      className="font-semibold"
+                      style={{ color: template.accent_color }}
+                    >
+                      {template.seed_entity_count}
+                    </span>{" "}
+                    seed nodes
+                  </span>
+                  <span>
+                    <span
+                      className="font-semibold"
+                      style={{ color: template.accent_color }}
+                    >
+                      {template.question_count}
+                    </span>{" "}
+                    starter questions
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-2">
+                  <span className="text-[10px] text-[color:var(--home-text-faint)]">
+                    Opens in{" "}
+                    <span
+                      className="font-semibold"
+                      style={{ color: template.accent_color }}
+                    >
+                      {surfaceLabel}
+                    </span>
+                  </span>
+                  <span
+                    className="flex items-center gap-1 text-[10.5px] font-semibold"
+                    style={{ color: template.accent_color }}
+                  >
+                    Open
+                    <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                </div>
+              </div>
+            </div>
+          </GlassPanel>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Surface routing ──
+//
+// Template `default_surface` → relative path inside the created
+// space. Whiteboard is canonical per the transformation plan; other
+// surfaces preserve their existing routes.
+
+function mapSurfacePath(surface: string | undefined): string {
+  switch (surface) {
+    case "journal":
+      return "/journal";
+    case "whiteboard_playground":
+      return "/whiteboard/brainstorm";
+    case "whiteboard_overview":
+      return "/whiteboard/overview";
+    case "reading_import":
+      return "/intake-review";
+    case "structured_form":
+    case undefined:
+      return "/whiteboard";
+    default:
+      return "/whiteboard";
+  }
+}
+
+function ModeTab({
+  active,
+  onClick,
+  icon,
+  label,
+  sublabel,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  sublabel: string;
+}) {
+  return (
+    <button
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-[12px] font-semibold transition-all",
+        active ? "shadow-[0_4px_10px_-4px_rgba(0,60,200,0.35)]" : "",
+      )}
+      style={
+        active
+          ? {
+              background: "var(--home-cta-bg)",
+              color: "var(--home-cta-fg)",
+            }
+          : {
+              color: "var(--home-text-mid)",
+            }
+      }
+    >
+      {icon}
+      <span className="leading-none">
+        {label}
+        <span
+          className="ml-1.5 text-[10px] font-medium"
+          style={{
+            color: active
+              ? "color-mix(in srgb, var(--home-cta-fg) 75%, transparent)"
+              : "var(--home-text-faint)",
+          }}
+        >
+          {sublabel}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function surfaceLabelFor(surface: string): string {
+  switch (surface) {
+    case "journal":
+      return "Journal";
+    case "whiteboard_playground":
+      return "Brainstorm";
+    case "whiteboard_overview":
+      return "Overview";
+    case "reading_import":
+      return "Reading view";
+    case "structured_form":
+      return "Form";
+    default:
+      return "Whiteboard";
+  }
+}

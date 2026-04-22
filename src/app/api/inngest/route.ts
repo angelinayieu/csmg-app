@@ -5,6 +5,7 @@ import {
   onGoalCreated,
   coordinatorTick,
   executeGoalResearch,
+  askCrossSpace,
 } from "@/inngest/functions";
 
 // Inngest functions can run for a long time. Vercel Pro caps a single
@@ -25,5 +26,6 @@ export const { GET, POST, PUT } = serve({
     onGoalCreated,
     coordinatorTick,
     executeGoalResearch,
+    askCrossSpace,
   ],
 });
