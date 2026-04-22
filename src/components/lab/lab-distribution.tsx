@@ -50,19 +50,19 @@ export function LabDistribution({ parameters, samples = 200 }: LabDistributionPr
   const bw = iw / dist.binCount;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-[#10161f] px-3.5 py-2.5">
+    <div className="flex h-full flex-col overflow-hidden bg-[var(--lab-panel-bg)] px-3.5 py-2.5">
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">
+        <span className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
           ◢ Outcome Distribution
         </span>
-        <span className="text-[9px] text-[#475569]">
+        <span className="text-[9px] text-[var(--lab-text-faint)]">
           MONTE CARLO · n={samples}
         </span>
       </div>
 
       <div
         ref={hostRef}
-        className="flex-1 rounded-[2px] border border-[#94a3b8]/[0.08] bg-[#141b26]"
+        className="flex-1 rounded-[2px] border border-[var(--lab-border)] bg-[var(--lab-panel-raised)]"
       >
         <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
           {/* Vertical grid */}
@@ -187,11 +187,11 @@ function Stat({
   accent?: string;
 }) {
   return (
-    <div className="rounded-[1px] border border-[#94a3b8]/[0.08] bg-[#141b26] px-1.5 py-1 text-center">
-      <div className="text-[8px] uppercase tracking-widest text-[#64748b]">{k}</div>
-      <div className="text-[12px] font-semibold tabular-nums" style={{ color: accent ?? "#e8edf4" }}>
+    <div className="rounded-[1px] border border-[var(--lab-border)] bg-[var(--lab-panel-raised)] px-1.5 py-1 text-center">
+      <div className="text-[8px] uppercase tracking-widest text-[var(--lab-text-dim)]">{k}</div>
+      <div className="text-[12px] font-semibold tabular-nums" style={{ color: accent ?? "var(--lab-text)" }}>
         {v}
-        <span className="ml-0.5 text-[8px] text-[#64748b]">{u}</span>
+        <span className="ml-0.5 text-[8px] text-[var(--lab-text-dim)]">{u}</span>
       </div>
     </div>
   );

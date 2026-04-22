@@ -39,16 +39,22 @@ export function WhiteboardOverview() {
   const { positions, setPosition, setManyPositions, resetAll } = useWhiteboardPositions(ctx.space.id);
 
   // ── Decompose hook — owns the expand → materialize → refresh → position chain ──
+  //
+  // Previously this called `ctx.refresh()` + `setTimeout(1200)` + returned
+  // `ctx.entities`. That was a closure over stale SSR state: by the time
+  // decompose read `ctx.entities`, router.refresh() had not yet propagated
+  // new data into this component's ctx reference, so "No new children
+  // produced" fired even when the DB had already materialized them.
+  //
+  // Now we use ctx.refreshEntities() — a direct GET against
+  // /api/spaces/[id]/entities that updates context state synchronously and
+  // returns the fresh { entities, edges } list. No race, no stale closure.
   const { decompose, loading: decomposing, error: decomposeError, spawningIds, clearError } = useWhiteboardDecompose({
     spaceId: ctx.space.id,
     refreshData: async () => {
-      // Trigger router refresh + wait for it to complete. The context will
-      // re-hydrate entities/edges on the next render.
-      ctx.refresh();
-      // Wait one microtask for the context to update. In practice the user
-      // may need to manually refresh if the router refresh isn't immediate.
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      return { entities: ctx.entities };
+      const fresh = await ctx.refreshEntities();
+      if (!fresh) return null;
+      return { entities: fresh.entities };
     },
     applyPositions: setManyPositions,
   });

@@ -86,5 +86,26 @@ export async function POST(request: Request, ctx: Ctx) {
     );
   }
 
+  // Wave C — log user event for digest agent.
+  try {
+    const { recordUserEvent } = await import("@/lib/user-events/record");
+    await recordUserEvent(db, {
+      user_id: user.id,
+      event_type:
+        parsed.data.action === "confirm"
+          ? "bridge.confirmed"
+          : "bridge.rejected",
+      source: `user:${parsed.data.action}:${user.id}`,
+      ref_kind: "bridge",
+      ref_id: bridgeId,
+      space_id: bridge.source_space_id,
+      payload: {
+        target_space_id: bridge.target_space_id,
+      },
+    });
+  } catch {
+    /* non-fatal */
+  }
+
   return NextResponse.json({ bridge: updated });
 }

@@ -1,8 +1,12 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSpaceData } from "@/contexts/space-data-context";
-import { computeTwinState, computeEntityHealthContributions } from "@/lib/twin/compute-twin-state";
+import {
+  computeTwinState,
+  computeEntityHealthContributions,
+  type RecentPredictionSignal,
+} from "@/lib/twin/compute-twin-state";
 import type { SynthesisData } from "@/types/synthesis";
 import type {
   OperatingTwinModel,
@@ -75,10 +79,81 @@ function sizeFromContribution(absContribution: number): "xl" | "l" | "m" | "s" {
 export function useOperatingTwinData(): OperatingTwinModel {
   const ctx = useSpaceData();
 
+  // Tier 6: pull recent resolved predictions for this space so
+  // computeTwinState can factor surprise density into risk_exposure +
+  // health_score. Fetch is lightweight — RLS scoped, filtered to
+  // status=resolved, ordered by resolved_at, limited to 200. Populates
+  // async after mount; twin re-computes via the useMemo dependency
+  // once predictions arrive.
+  //
+  // Why this hook and not the space context: keeping predictions here
+  // avoids broadening space-data-context's API surface for a twin-only
+  // signal. Other consumers (dashboard modules, goal-progress-center)
+  // don't need predictions and shouldn't pay for the fetch.
+  const [recentPredictions, setRecentPredictions] = useState<RecentPredictionSignal[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      try {
+        const res = await fetch(
+          `/api/spaces/${ctx.space.id}/rollup`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          objectives?: Array<{
+            predictions_resolved?: number;
+            deviation_by_tag?: {
+              expected?: number;
+              regime_shift?: number;
+              surprise?: number;
+              qualitative?: number;
+            };
+          }>;
+        };
+        // The rollup is already aggregated — derive the signal directly.
+        // Each rollup entry becomes one synthetic prediction signal
+        // multiplied by its count, expanding back to the raw shape
+        // computeTwinState expects. Cheap: ≤50 entries × ≤4 buckets.
+        const synthetic: RecentPredictionSignal[] = [];
+        const now = new Date().toISOString();
+        for (const o of json.objectives ?? []) {
+          const dev = o.deviation_by_tag ?? {};
+          const expand = (
+            tag: "expected" | "regime_shift" | "surprise" | "qualitative",
+            count: number,
+          ) => {
+            for (let i = 0; i < count; i++) {
+              synthetic.push({
+                status: "resolved",
+                deviation_tag: tag,
+                resolved_at: now,
+              });
+            }
+          };
+          expand("expected", dev.expected ?? 0);
+          expand("regime_shift", dev.regime_shift ?? 0);
+          expand("surprise", dev.surprise ?? 0);
+          expand("qualitative", dev.qualitative ?? 0);
+        }
+        if (!cancelled) setRecentPredictions(synthetic);
+      } catch {
+        /* twin falls back to old behavior when rollup unavailable */
+      }
+    }
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx.space.id]);
+
   return useMemo(() => {
     const synthData = parseSynthesisData(ctx.space.synthesis_data);
 
-    // Compute twin state (reuse existing logic)
+    // Compute twin state (reuse existing logic) — Tier 6 passes the
+    // synthesized recent-prediction signal so risk_exposure carries
+    // surprise density and health_score reflects live reality.
     const twinState = computeTwinState(
       ctx.space,
       ctx.entities,
@@ -87,6 +162,7 @@ export function useOperatingTwinData(): OperatingTwinModel {
       synthData,
       ctx.activeGoal ?? null,
       [], // recommendations not needed here
+      recentPredictions,
     );
 
     const contributions = computeEntityHealthContributions(ctx.entities, ctx.cycles);
@@ -512,5 +588,8 @@ export function useOperatingTwinData(): OperatingTwinModel {
     ctx.activeGoal,
     ctx.childGoals,
     ctx.pendingObjectives,
+    // Tier 6: re-compute twin when new prediction data lands so the
+    // surprise-rate penalty is reflected in health_score + risk_exposure.
+    recentPredictions,
   ]);
 }

@@ -12,6 +12,7 @@ import {
   XCircle,
   Loader2,
   Trash2,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -63,6 +64,14 @@ const OPERATIONS: {
     description: "Add new concepts",
     color: "text-green-600",
     bg: "bg-green-50 border-green-200 hover:bg-green-100",
+  },
+  {
+    id: "strategy_iterate",
+    label: "Strategize",
+    icon: Sparkles,
+    description: "Iterate on the strategy with a constraint",
+    color: "text-indigo-600",
+    bg: "bg-indigo-50 border-indigo-200 hover:bg-indigo-100",
   },
 ];
 

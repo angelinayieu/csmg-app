@@ -224,7 +224,7 @@ export function PlaygroundSidePanel({
                   key={i}
                   onClick={() => onAddQuestion?.(q)}
                   className="w-full text-left rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-[12px] text-amber-900 hover:bg-amber-100 transition-colors group"
-                  title="Add as a sticky note to the canvas"
+                  title="Add as a sticky note to the whiteboard"
                 >
                   <div className="flex items-start gap-2">
                     <HelpCircle className="h-3 w-3 mt-0.5 text-amber-600 flex-shrink-0" />
@@ -293,7 +293,7 @@ function EntityMatchRow({
     <button
       onClick={onAdd}
       className="w-full text-left rounded-lg border border-gray-200 bg-white px-3 py-2 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors group"
-      title="Add to playground canvas"
+      title="Add to playground whiteboard"
     >
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">

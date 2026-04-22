@@ -52,6 +52,31 @@ export interface GapAnalyzerInput {
   bridgeCoverage: number;
   inputText: string;
   depth: string;
+  // ── Tier 6: deviation-driven gap signal ─────────────────────────
+  // Recent `space_changelog` entries of type `research_escalation`
+  // (Item 4 writes these; prior research-loop passes ignored them).
+  // Each escalation represents a user's explicit "the model is wrong
+  // about this metric" signal — exactly the kind of gap research
+  // should prioritize over generic KG coverage gaps.
+  researchEscalations?: Array<{
+    prediction_id: string;
+    metric_label: string;
+    deviation_tag: string | null;
+    source_app_id: string | null;
+    escalated_at: string;
+  }>;
+  /**
+   * Active sub-strategy prediction specs — metrics the apps are
+   * actively trying to forecast. Research targeted at these metrics
+   * is higher-value than research targeted at orphan entities, since
+   * these metrics already have downstream consumers (predictor agents,
+   * dashboard widgets).
+   */
+  activeSubstrategyMetrics?: Array<{
+    app_id: string;
+    metric_label: string;
+    rationale?: string;
+  }>;
 }
 
 // ── Core function ──
@@ -204,6 +229,46 @@ function buildGapContext(
     sections.push(
       `LOW-COVERAGE CLUSTERS (${gaps.lowCoverageClusters.length}):\n` +
         gaps.lowCoverageClusters.join(", ")
+    );
+  }
+
+  // Tier 6: deviation-driven research focus. Research escalations are
+  // the highest-priority gap signal — they're the user's explicit
+  // "the model is wrong about this specific metric" notification.
+  // Treated as multiple gaps since each escalation is a distinct
+  // deficit the research should investigate.
+  if (input.researchEscalations && input.researchEscalations.length > 0) {
+    const escalations = input.researchEscalations.slice(0, 6);
+    totalGaps += escalations.length;
+    sections.push(
+      `DEVIATION ESCALATIONS (${input.researchEscalations.length} — HIGH PRIORITY):\n` +
+      `Users flagged these as unexpected. Prioritize research that explains why the model missed:\n` +
+        escalations
+          .map(
+            (e, i) =>
+              `${i + 1}. [${e.deviation_tag ?? "unknown"}] "${e.metric_label}" (escalated ${e.escalated_at})`,
+          )
+          .join("\n"),
+    );
+  }
+
+  // Tier 6: active sub-strategy metrics — metrics that apps are
+  // actively trying to predict. Research about these has downstream
+  // consumers (predictor agents read the observations), so it's
+  // strictly higher-leverage than research about orphan entities.
+  // Not counted as gaps (they're opportunities, not deficits) but
+  // surfaced as focus hints.
+  if (input.activeSubstrategyMetrics && input.activeSubstrategyMetrics.length > 0) {
+    const metrics = input.activeSubstrategyMetrics.slice(0, 8);
+    sections.push(
+      `ACTIVE SUB-STRATEGY METRICS (${input.activeSubstrategyMetrics.length} — RESEARCH FOCUS):\n` +
+      `These metrics drive live predictor agents. Research that improves their measurability or reveals drivers is high-leverage:\n` +
+        metrics
+          .map(
+            (m, i) =>
+              `${i + 1}. ${m.metric_label}${m.rationale ? ` — ${m.rationale.slice(0, 80)}` : ""}`,
+          )
+          .join("\n"),
     );
   }
 

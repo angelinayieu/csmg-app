@@ -105,7 +105,7 @@ export default async function SynthesisFeedPage({
   }
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-[#02050a] text-[#e8edf4]">
+    <div className="fixed inset-0 z-50 overflow-hidden bg-[var(--lab-bg)] text-[var(--lab-text)]">
       <SynthesisFeed
         space={space}
         reactions={reactions}

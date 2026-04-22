@@ -51,6 +51,60 @@ export interface MultiStepStrategyParams {
   benchmark?: ObjectiveBenchmark | null;
   /** Pre-fetched expansion data keyed by entity_id */
   expansionsMap?: Map<string, { sub_components: unknown; internal_pathways: unknown; internal_dynamics: unknown }>;
+  /** Wave D L0.2 — pre-formatted user baseline block (persona_tags +
+   *  behavior_summary + goal_preferences) to prepend to the final
+   *  strategy LLM call. Caller builds this via
+   *  `formatBaselineForPrompt(loadUserBaselineForPrompt(db, userId))`.
+   *  Empty string when user has no digest yet. */
+  userBaselineBlock?: string;
+  /**
+   * Prior-run context block (Phase 1 Step 8 extension). Rendered from
+   * `formatPriorContextPrompt(readRunContext(...))`, it inlines the
+   * stage digests, entities/edges/proposals already produced upstream
+   * so the strategy LLM treats them as ground truth instead of
+   * re-deriving them. Empty string when this is the first pipeline
+   * stage in a run or no run context exists.
+   */
+  priorRunContextBlock?: string;
+  /**
+   * Disciplined KG richness block (Phase 1 Step 9). Replaces the
+   * legacy name+id+centrality-only view with ranked top entities
+   * carrying causal_role, manifold dimensions, temporal decay,
+   * high-confidence edges with dynamics/polarity/conditions, and
+   * top evidence claims. Hard-capped + default-suppressed so it adds
+   * signal without bloating the prompt. Empty string when the KG
+   * has nothing worth grounding against.
+   */
+  richKgContextBlock?: string;
+  /**
+   * Cross-space similar-patterns block (Phase 1 Step 10). Retrieved
+   * via pgvector from the user's broader `memory_items` store,
+   * filtered to exclude the current space so it truly reflects prior
+   * work. Empty string for first-time users or when no hits clear
+   * the similarity floor — the prompt stays clean in both cases.
+   */
+  similarPatternsBlock?: string;
+  /**
+   * Phase 2I — domain proficiency preface. Rendered from
+   * `formatLearningContext(db, userId, domain)`, tells the LLM how
+   * deep the user already is in this domain (coverage, calibration,
+   * novelty, citation density + trend). Empty string on first visit
+   * to a domain. Lets the model skip re-explaining basics when the
+   * user is already fluent.
+   */
+  learningContextBlock?: string;
+  /** Wave D L0.3 — Wave A entity_objectives junction for activeGoal.
+   *  The caller resolves via active-objectives.ts and passes the top-N
+   *  entities (by LLM-tagger confidence) that serve this goal. The
+   *  strategy engine injects them into the final recommendation prompt
+   *  so the LLM can name actual KG entities in its output. */
+  activeGoalServedByEntities?: Array<{
+    entity_id: string;
+    name: string;
+    entity_category: string | null;
+    confidence: number;
+    rationale: string | null;
+  }>;
 }
 
 // ── Output ──
@@ -511,7 +565,15 @@ export async function generateMultiStepStrategy(
     params.benchmark ?? null
   );
 
-  const stratResponse = await llmJSON<{
+  // The final 16k-token LLM call is the highest-risk step in the engine:
+  // rate-limits, JSON-parse failures, or credit-exhaustion previously
+  // propagated as an unhandled throw → per-objective Promise.allSettled
+  // demoted it → if it was the primary objective, the whole route returned
+  // 500. Wrap in try/catch so empty ranked_strategies falls through to the
+  // existing fallback assembly below, which constructs a minimal
+  // StrategicRecommendation from the diagnosis + synthesis + verification
+  // steps that already succeeded. Degraded output is better than a 500.
+  type StratResponseShape = {
     ranked_strategies: Array<{
       rank: number;
       recommendation: StrategicRecommendation;
@@ -520,16 +582,89 @@ export async function generateMultiStepStrategy(
       tradeoff_vs_top: string | null;
     }>;
     change_proposals?: StrategyChangeProposal[];
-  }>({
-    system: stratPrompt.system,
-    user: stratPrompt.user,
-    maxTokens: 16384,
-    temperature: 0.3,
-  });
+  };
+
+  // Wave D L0.2 — prepend user baseline (persona_tags +
+  // behavior_summary + goal_preferences) when supplied by the caller,
+  // so strategy recommendations respect the user's lean.
+  // Wave D L0.3 — also prepend the active goal's served_by_entities so
+  // the LLM can name actual KG entities in its recommendation.
+  const servedByBlock =
+    params.activeGoalServedByEntities && params.activeGoalServedByEntities.length > 0
+      ? `## Entities this goal is served by (from your KG, ranked by confidence)\n${params.activeGoalServedByEntities
+          .map(
+            (e) =>
+              `- **${e.name}**${e.entity_category ? ` (${e.entity_category})` : ""} — confidence ${Math.round(e.confidence * 100)}%${e.rationale ? `. ${e.rationale}` : ""}`,
+          )
+          .join("\n")}\n\nReference these entities by name in your recommendation where relevant. They are the concrete KG objects the goal depends on — grounding recommendations in them makes the output actionable.\n\n`
+      : "";
+
+  const priorCtxBlock = params.priorRunContextBlock
+    ? `${params.priorRunContextBlock}\n\n`
+    : "";
+
+  // Phase 1 Step 9 — rich KG block prepended *after* user baseline but
+  // *before* the core strategy prompt so the LLM reads:
+  //   1. who the user is + prior-run context (framing)
+  //   2. similar-pattern hits from the user's past spaces (analogy)
+  //   3. the actual KG facts for the current space (grounding)
+  //   4. the strategy instructions (task)
+  //
+  // The leading directive pins the LLM on USING the facts rather than
+  // restating them back — this is the anti-noise discipline lever.
+  const richKgBlock = params.richKgContextBlock
+    ? `${params.richKgContextBlock}\n\nUse the entities, relationships, and evidence above to justify tradeoffs and name specific levers. Do not echo field names back in your output — readers see the strategy, not the prompt.\n\n`
+    : "";
+
+  // Phase 1 Step 10 — cross-space pattern analogies. Sits between
+  // prior-run context and the current-space KG block so the LLM
+  // reads "here's what you've seen before" right before "here's
+  // what's in front of you." If empty it collapses out cleanly.
+  const patternsBlock = params.similarPatternsBlock
+    ? `${params.similarPatternsBlock}\n\n`
+    : "";
+
+  // Phase 2I — domain proficiency preface. Sits right after the
+  // user baseline (persona/goal prefs) so it reads as "this is you,
+  // and this is what you already know" before the analogy + KG
+  // grounding blocks land.
+  const learningBlock = params.learningContextBlock
+    ? `${params.learningContextBlock}\n\n`
+    : "";
+
+  const stratUserWithBaseline = [
+    priorCtxBlock,
+    params.userBaselineBlock ?? "",
+    learningBlock,
+    patternsBlock,
+    richKgBlock,
+    servedByBlock,
+    stratPrompt.user,
+  ].join("");
+
+  let stratResponse: StratResponseShape;
+  let finalCallFailed = false;
+  try {
+    stratResponse = await llmJSON<StratResponseShape>({
+      system: stratPrompt.system,
+      user: stratUserWithBaseline,
+      maxTokens: 16384,
+      temperature: 0.3,
+    });
+  } catch (err) {
+    finalCallFailed = true;
+    console.warn(
+      "[strategy-engine] Final strategy LLM call failed — using degraded fallback from prior steps:",
+      err instanceof Error ? err.message : err,
+    );
+    stratResponse = { ranked_strategies: [] };
+  }
 
   stepTimings.final_ms = Date.now() - finalStart;
   const totalDuration = Date.now() - startTime;
-  console.log(`[strategy-engine] Step 5 complete (${stepTimings.final_ms}ms). Total: ${totalDuration}ms`);
+  console.log(
+    `[strategy-engine] Step 5 ${finalCallFailed ? "FELL BACK" : "complete"} (${stepTimings.final_ms}ms). Total: ${totalDuration}ms`,
+  );
 
   // ── Assemble output ──
   let recommendation: StrategicRecommendation;

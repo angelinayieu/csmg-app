@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from "react";
 
-export type ChatOperation = "question" | "explore" | "update" | "extend";
+export type ChatOperation = "question" | "explore" | "update" | "extend" | "strategy_iterate";
 
 // ── Shell Navigation ──
 
@@ -139,6 +139,42 @@ export function useSpaceChat(spaceId: string, onGraphChanged?: () => void) {
         : messages;
 
       try {
+        // ── Strategy iteration: bypass chat LLM, route to strategy-refresh ──
+        // The user's message is treated as a userConstraint. The endpoint
+        // re-runs the multi-step strategy engine with the constraint on top of
+        // all existing grounding. Apps are NOT materialized (deferApps=true);
+        // user reviews the new ranked strategies + approves separately.
+        if (operation === "strategy_iterate") {
+          const sRes = await fetch("/api/pipeline/strategy-refresh", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              spaceId,
+              userConstraint: content,
+              deferApps: true,
+            }),
+            signal,
+          });
+          if (!sRes.ok) {
+            const errData = await sRes.json().catch(() => ({}));
+            throw new Error(errData.error ?? `Strategy refresh failed (HTTP ${sRes.status})`);
+          }
+          const sData = await sRes.json().catch(() => null) as {
+            recommendation?: { title?: string; summary?: string; confidence?: number };
+            rankedStrategies?: Array<{ rank: number; recommendation: { title?: string; strategic_posture?: string } }>;
+          } | null;
+          const topTitle = sData?.recommendation?.title ?? sData?.rankedStrategies?.[0]?.recommendation?.title ?? "(untitled)";
+          const summaryLine = sData?.recommendation?.summary ? ` ${sData.recommendation.summary}` : "";
+          const altsLine = sData?.rankedStrategies && sData.rankedStrategies.length > 1
+            ? `\n\nAlternatives: ${sData.rankedStrategies.slice(1, 3).map((r) => `rank ${r.rank}: "${r.recommendation.title ?? ""}"`).join(" · ")}`
+            : "";
+          const reply = `Regenerated strategy with your constraint: "${content}".\n\nTop recommendation — "${topTitle}" (confidence ${sData?.recommendation?.confidence ?? "?"}%).${summaryLine}${altsLine}\n\nOpen the strategy review to approve or iterate further.`;
+          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: reply } : m)));
+          setStreaming(false);
+          onGraphChanged?.(); // triggers dashboard/strategy panel refresh
+          return;
+        }
+
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

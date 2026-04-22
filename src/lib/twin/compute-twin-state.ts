@@ -51,7 +51,14 @@ function computeCoverage(
 
 function computeRiskExposure(
   entities: Entity[],
-  synthesisData: SynthesisData | null
+  synthesisData: SynthesisData | null,
+  // Tier 6: optional recent-prediction slice for live surprise density.
+  // When omitted, risk_exposure is computed exactly as before.
+  recentPredictions?: Array<{
+    status: string;
+    deviation_tag: string | null;
+    resolved_at: string | null;
+  }>,
 ): TwinRiskExposure {
   const riskEntities = entities.filter((e) => e.is_risk_point);
   const bottleneck = entities.find((e) => e.is_master_bottleneck);
@@ -64,6 +71,30 @@ function computeRiskExposure(
   const bottleneckBlast = bottleneck?.blast_radius ?? 0;
   const bottleneckShare = entities.length > 0 ? Math.round((bottleneckBlast / entities.length) * 100) : 0;
 
+  // Tier 6: aggregate recent resolved predictions in the last 30 days
+  // to derive a surprise rate. Surprises (tag=surprise|regime_shift)
+  // are the signal that says "model is wrong about something." A run
+  // of them should visibly move risk_exposure — that's the whole
+  // point of the twin not being frozen.
+  let recentResolvedCount: number | undefined;
+  let recentSurpriseCount: number | undefined;
+  let surpriseRate: number | undefined;
+  if (Array.isArray(recentPredictions) && recentPredictions.length > 0) {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const recent = recentPredictions.filter((p) => {
+      if (p.status !== "resolved") return false;
+      if (!p.resolved_at) return false;
+      return new Date(p.resolved_at).getTime() >= cutoff;
+    });
+    const surprises = recent.filter(
+      (p) => p.deviation_tag === "surprise" || p.deviation_tag === "regime_shift",
+    );
+    recentResolvedCount = recent.length;
+    recentSurpriseCount = surprises.length;
+    surpriseRate =
+      recent.length > 0 ? Number((surprises.length / recent.length).toFixed(3)) : 0;
+  }
+
   return {
     total_risk_points: riskEntities.length,
     aggregate_blast_radius: aggregateBlast,
@@ -72,6 +103,15 @@ function computeRiskExposure(
     bottleneck_name: bottleneck?.name ?? synthesisData?.master_bottleneck?.entity_id ?? null,
     bottleneck_blast_radius: bottleneckBlast,
     bottleneck_system_share: bottleneckShare,
+    // Only attach the deviation fields when we actually received predictions.
+    // Keeps the Twin shape non-surprising for pre-Tier-6 callers.
+    ...(recentResolvedCount !== undefined
+      ? {
+          recent_predictions_resolved: recentResolvedCount,
+          recent_surprises: recentSurpriseCount,
+          surprise_rate: surpriseRate,
+        }
+      : {}),
   };
 }
 
@@ -149,6 +189,26 @@ function computeHealthScore(
   if (riskExposure.critical_risks > 0) score -= riskExposure.critical_risks * 5;
   if (riskExposure.bottleneck_system_share > 50) score -= 5;
   if (riskExposure.bottleneck_system_share > 75) score -= 5;
+
+  // ── Tier 6: live deviation penalty ────────────────────────────────
+  // When the caller passed recent predictions, their surprise rate is
+  // the clearest "model is wrong" signal we have. Damp the health
+  // score by up to -12 when the surprise rate is high across a
+  // meaningful resolved-count sample. The twin is no longer frozen at
+  // synthesis time — it breathes with reality.
+  //
+  // Scale carefully:
+  //   - Need ≥5 resolved predictions to trust the rate (avoids one
+  //     surprise dropping a fresh space)
+  //   - surprise_rate ∈ [0, 1]; -12 × rate gives linear penalty
+  //   - When recent_predictions is absent, skip entirely (no-op)
+  if (
+    typeof riskExposure.recent_predictions_resolved === "number" &&
+    riskExposure.recent_predictions_resolved >= 5 &&
+    typeof riskExposure.surprise_rate === "number"
+  ) {
+    score -= Math.round(riskExposure.surprise_rate * 12);
+  }
 
   // Dynamics bonus (up to +10 points)
   if (dynamics.leverage_points >= 1) score += 3;
@@ -349,6 +409,22 @@ export function computeEntityHealthContributions(
 
 // ── Main export: compute full TwinState ──
 
+/**
+ * Tier 6: shape of the optional deviation-signal input. When the caller
+ * passes recent resolved predictions, the twin augments risk_exposure
+ * with live surprise density — so a run of unexpected outcomes bumps
+ * risk visibly, instead of the twin sitting frozen at synthesis time.
+ *
+ * The shape is deliberately narrow — only the fields needed for
+ * aggregation. Callers pass a filtered slice of prediction_ledger
+ * (status='resolved', resolved_at within the observation window).
+ */
+export interface RecentPredictionSignal {
+  status: "open" | "resolved" | "abandoned";
+  deviation_tag: "expected" | "regime_shift" | "surprise" | "qualitative" | null;
+  resolved_at: string | null;
+}
+
 export function computeTwinState(
   space: Space,
   entities: Entity[],
@@ -356,10 +432,14 @@ export function computeTwinState(
   cycles: Cycle[],
   synthesisData: SynthesisData | null,
   activeGoal?: ImprovementGoal | null,
-  recommendations?: GoalRecommendation[]
+  recommendations?: GoalRecommendation[],
+  // Tier 6 optional: recent resolved predictions for live risk signal.
+  // When omitted, twin computes exactly as before (unchanged behavior
+  // for synthesis-time / dashboard callers that don't have predictions).
+  recentPredictions?: RecentPredictionSignal[],
 ): TwinState {
   const coverage = computeCoverage(entities, edges, cycles, space, synthesisData);
-  const riskExposure = computeRiskExposure(entities, synthesisData);
+  const riskExposure = computeRiskExposure(entities, synthesisData, recentPredictions);
   const dynamics = computeDynamics(entities, cycles, synthesisData);
 
   const externalEntities = entities.filter((e) => e.knowledge_layer === "external").length;

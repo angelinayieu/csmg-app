@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { llmGenerate, llmJSON } from "@/lib/llm";
+import { NextResponse, after } from "next/server";
+import { llmGenerate, llmJSON, llmStream } from "@/lib/llm";
 import { getDecompositionPrompt, getStructuringPrompt } from "@/lib/prompts/tier-prompts";
 import { safeAuth, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { buildDecompIntentBlock, buildDomainDecompBlock } from "@/lib/prompts/intent-context";
@@ -26,12 +26,24 @@ import { parseAxioms } from "@/lib/decomposition/parse-axioms";
 import { verifyCyclesAgainstEdges } from "@/lib/decomposition/verify-cycles";
 import { enrichCyclesWithTier3 } from "@/lib/decomposition/enrich-cycles";
 import { extractTier3Annotations, formatAnnotationsForStructuring } from "@/lib/decomposition/extract-annotations";
+import {
+  extractCandidateEntityNames,
+  extractCandidateEdges,
+} from "@/lib/decomposition/extract-candidate-names";
+import { randomUUID } from "crypto";
 import { computeDecompFingerprint } from "@/lib/pipeline/cache";
 import { appendRun, makeRunId } from "@/lib/pipeline/analysis-runs";
 import type { AnalysisRun } from "@/types/analysis-runs";
 import type { DecompositionQualityReport } from "@/lib/decomposition-quality";
 import { validateStructuredDecomposition } from "@/lib/validation/llm-validators";
 import { createFallbackDecomposition } from "@/lib/validation/error-recovery";
+import {
+  startPipelineRun,
+  emitStructuralEvent,
+  emitBatchEvents,
+  completePipelineRun,
+} from "@/lib/events/structural-event-bus";
+import type { StructuralEvent } from "@/types/pipeline-events";
 
 export const maxDuration = 300; // Deep tier: 2 large LLM passes, up to 50 entities + full manifold
 
@@ -74,14 +86,29 @@ async function structureDecompositionJSON(opts: {
     });
   } catch (firstErr) {
     console.warn("[decompose] Structuring JSON parse failed, retrying with strict formatting guidance:", firstErr);
-    return llmJSON<StructuredDecomposition>({
-      system: getStructuringPrompt(opts.reasoningDepth),
-      user: `${userPrompt}\n\nIMPORTANT: Return strictly valid JSON only. No trailing commas, no comments, no markdown fences, no explanatory prose.`,
-      maxTokens: opts.maxTokens,
-      temperature: 0.0,
-      validator: validateStructuredDecomposition,
-      fallback,
-    });
+    try {
+      return await llmJSON<StructuredDecomposition>({
+        system: getStructuringPrompt(opts.reasoningDepth),
+        user: `${userPrompt}\n\nIMPORTANT: Return strictly valid JSON only. No trailing commas, no comments, no markdown fences, no explanatory prose.`,
+        maxTokens: opts.maxTokens,
+        temperature: 0.0,
+        validator: validateStructuredDecomposition,
+        fallback,
+      });
+    } catch (strictErr) {
+      // Both attempts exhausted (network + parse + validator retries).
+      // `llmJSON`'s `fallback` is only consulted on validator failures,
+      // not parse/network exhaustion — so without this catch, the
+      // whole decompose run dies when the LLM provider is flaky.
+      // Return the pre-built fallback decomposition: an empty-shell
+      // graph that lets the pipeline close cleanly, the canvas
+      // render an intelligible "empty run" state, and the user retry.
+      console.error(
+        "[decompose] Structuring exhausted both retries; using fallback decomposition:",
+        strictErr,
+      );
+      return fallback;
+    }
   }
 }
 
@@ -91,6 +118,11 @@ export async function POST(request: Request) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
+
+  // Structural event bus — runId scoped outside the main try so the
+  // catch block can complete the run as failed on throw. Initialized
+  // after space creation (runs are space-scoped).
+  let runId: string | null = null;
 
   let text: string;
   let spaceConfig: {
@@ -107,6 +139,25 @@ export async function POST(request: Request) {
   let intent: UserIntent | undefined;
   let epistemicClassification: EpistemicClassification | null = null;
   let comprehensiveMode = false;
+  // Phase 1 Step 4 — when /api/intake/bootstrap has already created a
+  // placeholder space + pipeline_run row, it forwards both IDs here so
+  // decompose rehydrates onto them instead of creating duplicates. All
+  // emissions (entity_added, edge_added, cycle_detected) land on the
+  // existing run, which the client's SSE stream is already subscribed
+  // to — that's what turns "wait 60s then land" into "land instantly,
+  // watch it unfurl".
+  let existingSpaceId: string | undefined;
+  let existingRunId: string | undefined;
+  // Auto-advance opt-in (Phase 1 Step 13): when bootstrap forwards
+  // autoAdvance=true we continue the chain to research on completion.
+  // Manual callers (button clicks from the dashboard) omit this and
+  // stay unchained.
+  let autoAdvance = false;
+  // Credit reservation id threaded from bootstrap. Chain commits on
+  // terminal success (strategy-refresh), any mid-chain catch cancels
+  // and refunds. Undefined = manual caller that bypassed bootstrap
+  // (e.g., dashboard retry button) — no reservation to manage.
+  let reservationId: string | undefined;
 
   try {
     const body = await request.json();
@@ -122,6 +173,10 @@ export async function POST(request: Request) {
     // Comprehensive mode always uses deep depth so the LLM has the full context
     // window + retry budget for maximum rigor.
     if (comprehensiveMode) reasoningDepth = "deep";
+    if (typeof body.existingSpaceId === "string") existingSpaceId = body.existingSpaceId;
+    if (typeof body.existingRunId === "string") existingRunId = body.existingRunId;
+    if (body.autoAdvance === true) autoAdvance = true;
+    if (typeof body.reservationId === "string") reservationId = body.reservationId;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -164,30 +219,212 @@ ${text}`;
     // Audit-trail timestamps (run_id assigned at completion after we know final metrics)
     const decomposeStartedAt = new Date().toISOString();
 
-    // Pass 1: Decomposition (free-form reasoning)
-    const rawDecomposition = await llmGenerate({
-      system: getDecompositionPrompt(reasoningDepth),
-      user: enrichedPrompt,
-      maxTokens: decompTokens,
-      temperature: 0.3,
-    });
+    // Phase 1 Step 17 — progress heartbeat. Decompose's two LLM passes
+    // can take 30-120s combined; the user stares at "Intake…" with
+    // no visible activity. Emit lightweight stage_boundary messages
+    // at each checkpoint so the HUD can surface the current phase.
+    // Same stage id ("intake") + phase "enter" so downstream digest
+    // logic doesn't double-count, but message updates let the UI
+    // render "Decomposing prompt…" → "Extracting entities…" → etc.
+    if (existingRunId) {
+      await emitStructuralEvent(db, existingRunId, {
+        type: "stage_boundary",
+        stage: "intake",
+        phase: "enter",
+        message: `Decomposing prompt (${reasoningDepth} reasoning)…`,
+      });
+    }
 
-    console.log(`[decompose] Pass 1 complete: ${rawDecomposition.length} chars, depth=${reasoningDepth}, budget=${decompTokens} tokens`);
+    // Pass 1: Decomposition (free-form reasoning). STREAMED so the
+    // user sees the AI's reasoning as it arrives instead of a 45-90s
+    // silent spinner. We accumulate tokens and emit `reasoning_chunk`
+    // events at ~1s cadence — not per-token (too chatty, DB spam) and
+    // not just at the end (defeats the purpose). The reasoning-trace
+    // panel on the canvas renders these with a typewriter feel plus a
+    // token progress bar driven by charsSoFar / (tokenBudget * 4).
+    //
+    // Wrapped so LLM provider outages (ConnectTimeout, 429 exhaustion,
+    // etc.) don't hard-fail the whole run. On exhaustion we fall
+    // through to an empty-shell StructuredDecomposition — the user
+    // lands on a valid (if minimal) space with a retry-ready state
+    // and a visible "⚠ LLM unreachable" heartbeat in the HUD subtitle.
+    let rawDecomposition: string;
+    let pass1Failed = false;
+    try {
+      let accumulated = "";
+      let lastEmitMs = 0;
+      let lastPreviewScanMs = 0;
+      const EMIT_EVERY_MS = 1000;
+      // Preview-entity extraction scan cadence. 1500ms is frequent
+      // enough that the canvas paints entities live as the LLM writes
+      // them, but not so frequent that we re-regex a huge buffer every
+      // token.
+      const PREVIEW_SCAN_EVERY_MS = 1500;
+      // Preview entities let the main canvas populate DURING Pass 1
+      // instead of waiting for Pass 2's batch. We regex candidate names
+      // out of the accumulated markdown and emit synthetic entity_added
+      // events with a `preview-` UUID prefix so the painter can sweep
+      // them when Pass 2's authoritative rows land (see pipeline-event
+      // -painter's previewsByName map). Names seen is a Set so we never
+      // double-emit the same name.
+      const previewNamesSeen = new Set<string>();
+      // Entity code (C1/C2/…) → preview UUID. Built as we emit preview
+      // entities so the edge extractor can resolve arrow patterns like
+      // "C1 → C3" to real preview UUIDs the painter already has ghosts
+      // for. Edges referencing unknown codes are silently dropped.
+      const previewCodeToUuid = new Map<string, string>();
+      const previewEdgePairsSeen = new Set<string>();
+      for await (const tokenChunk of llmStream({
+        system: getDecompositionPrompt(reasoningDepth),
+        user: enrichedPrompt,
+        maxTokens: decompTokens,
+        temperature: 0.3,
+      })) {
+        accumulated += tokenChunk;
+        const now = Date.now();
+        if (runId && now - lastEmitMs >= EMIT_EVERY_MS) {
+          lastEmitMs = now;
+          await emitStructuralEvent(db, runId, {
+            type: "reasoning_chunk",
+            stage: "intake",
+            textSoFar: accumulated,
+            tokenBudget: decompTokens,
+            charsSoFar: accumulated.length,
+            phase: "thinking",
+          });
+        }
+        if (runId && now - lastPreviewScanMs >= PREVIEW_SCAN_EVERY_MS) {
+          lastPreviewScanMs = now;
+          const newEntities = extractCandidateEntityNames(accumulated, previewNamesSeen);
+          const previewEvents: StructuralEvent[] = [];
+          for (const ent of newEntities) {
+            const previewUuid = `preview-${randomUUID()}`;
+            if (ent.code) previewCodeToUuid.set(ent.code, previewUuid);
+            previewEvents.push({
+              type: "entity_added",
+              entityId: previewUuid,
+              entityCode: ent.code,
+              name: ent.name,
+              entityCategory: null,
+              importance: "moderate",
+              parentEntityId: null,
+            });
+          }
+          // Preview edges: resolve code-pair arrows (C1 → C3) to preview
+          // UUIDs we've already emitted. Painter binds arrows to shape
+          // ids, so when the Pass 2 rebind swaps a preview entity's
+          // entityId to its real UUID, the arrow stays visually attached.
+          const newEdges = extractCandidateEdges(
+            accumulated,
+            previewCodeToUuid,
+            previewEdgePairsSeen,
+          );
+          for (const e of newEdges) {
+            previewEvents.push({
+              type: "edge_added",
+              edgeId: `preview-${randomUUID()}`,
+              sourceEntityId: e.sourcePreviewId,
+              targetEntityId: e.targetPreviewId,
+              relationshipType: "influences",
+              dimension: "causal",
+              polarity: null,
+              confidence: 0.5,
+            });
+          }
+          if (previewEvents.length > 0) {
+            await emitBatchEvents(db, runId, previewEvents);
+          }
+        }
+      }
+      // Final emit marks the stream complete so the panel knows to
+      // stop its pulsing cursor.
+      if (runId) {
+        await emitStructuralEvent(db, runId, {
+          type: "reasoning_chunk",
+          stage: "intake",
+          textSoFar: accumulated,
+          tokenBudget: decompTokens,
+          charsSoFar: accumulated.length,
+          phase: "complete",
+        });
+      }
+      rawDecomposition = accumulated;
+      console.log(`[decompose] Pass 1 complete: ${rawDecomposition.length} chars, depth=${reasoningDepth}, budget=${decompTokens} tokens`);
+    } catch (pass1Err) {
+      pass1Failed = true;
+      rawDecomposition = "";
+      console.error(
+        "[decompose] Pass 1 LLM exhausted — falling through to empty-shell decomposition:",
+        pass1Err,
+      );
+      if (runId) {
+        await emitStructuralEvent(db, runId, {
+          type: "stage_boundary",
+          stage: "intake",
+          phase: "enter",
+          message:
+            "⚠ LLM unreachable — showing empty analysis. Retry when the provider recovers.",
+        });
+      }
+    }
+
+    if (runId && !pass1Failed) {
+      await emitStructuralEvent(db, runId, {
+        type: "stage_boundary",
+        stage: "intake",
+        phase: "enter",
+        message: "Extracting entities and relationships…",
+      });
+    }
 
     // ── Quality-aware structuring + retry ──
-    // Score Pass 1 output to detect deficiencies, enrich Pass 2 with guidance,
-    // and retry if quality is below threshold.
+    // Pass 2 is a non-streaming LLM call that can take 45-90s on
+    // standard tier (longer on deep). Without heartbeats the HUD
+    // subtitle freezes on "Extracting entities…" for a minute with
+    // no visible progress — the single biggest dead zone in the
+    // pipeline per the UX movie. We kick a 5s-cadence heartbeat
+    // timer that updates the subtitle with elapsed time vs. the
+    // tier's typical range, then cancel it the moment Pass 2
+    // returns (or throws). The heartbeats DON'T advance the stage
+    // strip; they only update the subtitle so the user knows the
+    // pipeline is alive and roughly how much longer to expect.
+    const pass2TypicalSec = reasoningDepth === "deep" ? 75 : reasoningDepth === "standard" ? 55 : 30;
+    const pass2StartMs = Date.now();
+    let pass2HeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    if (runId && !pass1Failed) {
+      pass2HeartbeatTimer = setInterval(() => {
+        const elapsedSec = Math.round((Date.now() - pass2StartMs) / 1000);
+        // Soft-fail on emit — never throw out of a heartbeat into
+        // the main pipeline. The emit itself is soft-fail by design.
+        void emitStructuralEvent(db, runId, {
+          type: "stage_boundary",
+          stage: "intake",
+          phase: "enter",
+          message: `Structuring into entities + relationships… ${elapsedSec}s elapsed (typical ~${pass2TypicalSec}s)`,
+        });
+      }, 5000);
+    }
 
-    // Pre-score: quick parse of raw decomposition to estimate entity/edge quality
-    // (the structuring pass will produce the real JSON, but we can guide it)
-    const parsed = await structureDecompositionJSON({
-      decompositionText: rawDecomposition,
-      reasoningDepth,
-      maxTokens: structTokens,
-      fallbackPrefix: spaceConfig?.prefix,
-      fallbackName: spaceConfig?.name,
-      fallbackDescription: spaceConfig?.description,
-    });
+    let parsed: StructuredDecomposition;
+    try {
+      parsed = pass1Failed
+        ? createFallbackDecomposition(
+            spaceConfig?.prefix ?? "space",
+            spaceConfig?.name ?? "Analysis",
+            spaceConfig?.description ??
+              "LLM provider was unreachable during decomposition. Retry to populate.",
+          )
+        : await structureDecompositionJSON({
+            decompositionText: rawDecomposition,
+            reasoningDepth,
+            maxTokens: structTokens,
+            fallbackPrefix: spaceConfig?.prefix,
+            fallbackName: spaceConfig?.name,
+            fallbackDescription: spaceConfig?.description,
+          });
+    } finally {
+      if (pass2HeartbeatTimer) clearInterval(pass2HeartbeatTimer);
+    }
 
     // Filter low-confidence edges + deduplicate entities
     const rawEntityCount = (parsed.entities ?? []).length;
@@ -209,6 +446,19 @@ ${text}`;
 
     console.log(`[decompose] Pipeline: ${rawEntityCount} raw → ${nameDeduped.entities.length} after name-dedup → ${dedupedEntities.length} after topology-merge (${topoMerged.mergesApplied} topo merges), ${rawEdgeCount} raw edges → ${confFilteredEdges.length} after confidence → ${dedupedEdges.length} final`);
 
+    // ── Pass 3 substage: cycle verification ──
+    // Previously silent — user saw no activity for ~3–8s of post-
+    // structuring work. Emit stage_boundary so the HUD can say
+    // "Verifying feedback loops…" instead of going quiet.
+    if (runId) {
+      await emitStructuralEvent(db, runId, {
+        type: "stage_boundary",
+        stage: "intake",
+        phase: "enter",
+        message: "Verifying feedback loops against edge set…",
+      });
+    }
+
     // ── Cycle re-verification against filtered edge set ──
     // Cycles are LLM-traced prose, materialized before edge filtering. Any edge that
     // was below confidence threshold (filterLowConfidenceEdges) or merged away
@@ -227,6 +477,16 @@ ${text}`;
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       parsed.cycles = verification.verified as any;
+    }
+
+    // ── Pass 3 substage: Tier 3 enrichment ──
+    if (runId) {
+      await emitStructuralEvent(db, runId, {
+        type: "stage_boundary",
+        stage: "intake",
+        phase: "enter",
+        message: "Enriching cycles with compounding dynamics…",
+      });
     }
 
     // ── Tier 3 → cycle enrichment ──
@@ -249,6 +509,16 @@ ${text}`;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (parsed as any).candidate_cycles = cycleEnrichment.candidateCycles;
       }
+    }
+
+    // ── Pass 3 substage: quality scoring ──
+    if (runId) {
+      await emitStructuralEvent(db, runId, {
+        type: "stage_boundary",
+        stage: "intake",
+        phase: "enter",
+        message: "Scoring decomposition quality…",
+      });
     }
 
     // ── Quality scoring + quality-driven retry ──
@@ -277,9 +547,29 @@ ${text}`;
       console.log(`[decompose] Comprehensive mode: no HIDDEN axiom extracted — forcing retry with stricter Tier 7 demand`);
     }
 
-    if ((qualityReport.retryRecommended || comprehensiveDemandsRetry) && dedupedEntities.length > 0) {
+    // Earlier gate required `dedupedEntities.length > 0` for retry —
+    // that excluded the worst case (Pass 2 returned 0 entities from a
+    // 15K-char Pass 1) and silently persisted an empty graph. The new
+    // condition ALSO retries when we got zero entities but Pass 1
+    // produced real text (i.e., the LLM managed freeform reasoning but
+    // the structuring step yielded nothing useful). Pass1Failed path
+    // skips retry because the LLM was unreachable — retrying would
+    // just hit the same outage.
+    const zeroEntityFromValidPass1 = !pass1Failed && dedupedEntities.length === 0 && rawDecomposition.length > 200;
+    if (
+      (qualityReport.retryRecommended || comprehensiveDemandsRetry || zeroEntityFromValidPass1) &&
+      !pass1Failed
+    ) {
       didRetry = true;
-      console.warn(`[decompose] Quality ${qualityReport.overall.toFixed(2)} below threshold. Retrying with targeted guidance...`);
+      if (zeroEntityFromValidPass1) {
+        console.warn(
+          `[decompose] Pass 2 returned 0 entities from ${rawDecomposition.length}-char Pass 1. Retrying with targeted guidance…`,
+        );
+      } else {
+        console.warn(
+          `[decompose] Quality ${qualityReport.overall.toFixed(2)} below threshold. Retrying with targeted guidance...`,
+        );
+      }
       try {
         const comprehensiveDirective = comprehensiveMode
           ? `\n\nCOMPREHENSIVE MODE — stricter requirements:
@@ -335,8 +625,21 @@ ${enrichedPrompt}`;
 
         console.log(`[decompose] Retry quality: ${retryQuality.overall.toFixed(2)} (was ${qualityReport.overall.toFixed(2)}), entities: ${retryDeduped.entities.length} (was ${dedupedEntities.length})`);
 
-        // Use retry result if it has higher quality score
-        if (retryQuality.overall > qualityReport.overall) {
+        // Use retry result if EITHER it scored higher OR the original
+        // had zero entities (the retry literally can't be worse than
+        // nothing). Previous bug: quality scoring is statistical (entity
+        // count × density × diversity) — a 0-entity decomposition can
+        // score 0.54 because the formula penalizes missing targets but
+        // rewards correctness-of-emptiness, while a 25-entity decomposition
+        // scores 0.41 because it's "too dense" or misses distribution
+        // targets. The retry-keep logic then kept 0 entities over 25.
+        // The zero-original fallback override fixes the pathological case.
+        const originalHadEntities = dedupedEntities.length > 0;
+        const retryHasEntities = retryDeduped.entities.length > 0;
+        const shouldUseRetry =
+          retryQuality.overall > qualityReport.overall ||
+          (!originalHadEntities && retryHasEntities);
+        if (shouldUseRetry) {
           retryImproved = true;
           qualityReport = retryQuality;
           dedupedEntities.length = 0;
@@ -363,44 +666,94 @@ ${enrichedPrompt}`;
       }
     }
 
-    // Create space
+    // Create (or hydrate) space. When bootstrap pre-created a placeholder,
+    // UPDATE it in place so the client's already-open whiteboard keeps its
+    // URL + the pipeline_run row stays attached to the same space.
     const prefix = spaceConfig?.prefix ?? text.trim().split(/\s/)[0].slice(0, 2).toUpperCase().replace(/[^A-Z]/g, "C");
     const spaceName = parsed.metadata?.name ?? spaceConfig?.name ?? text.trim().slice(0, 60);
     const maturity = MATURITY_LEVELS.includes(parsed.metadata?.maturity as typeof MATURITY_LEVELS[number])
       ? parsed.metadata?.maturity
       : "actionable_now";
 
-    const { data: spaceData, error: spaceError } = await db
-      .from("spaces")
-      .insert({
-        user_id: user.id,
-        name: spaceName,
-        description: parsed.metadata?.description ?? spaceConfig?.description ?? null,
-        space_prefix: prefix,
-        input_text: text,
-        raw_decomposition: rawDecomposition,
-        synthesis_text: parsed.metadata?.synthesis_text ?? null,
-        entity_count: dedupedEntities.length,
-        edge_count: dedupedEdges.length,
-        orphan_count: parsed.metadata?.orphan_count ?? 0,
-        cycle_count: parsed.cycles?.length ?? 0,
-        maturity,
-        user_role: intent?.user_role ?? null,
-        primary_goal: intent?.primary_goal ?? null,
-        context_type: intent?.context_type ?? null,
-        parent_space_id: spaceConfig?.parent_space_id ?? null,
-        originated_from_entity_id: spaceConfig?.originated_from_entity_id ?? null,
-        depth_level: spaceConfig?.depth_level ?? 0,
-      })
-      .select("id")
-      .single();
+    let spaceId: string;
+    if (existingSpaceId) {
+      // Bootstrap path — refresh the placeholder's computed fields.
+      const { error: updateError } = await db
+        .from("spaces")
+        .update({
+          name: spaceName,
+          description: parsed.metadata?.description ?? spaceConfig?.description ?? null,
+          space_prefix: prefix,
+          raw_decomposition: rawDecomposition,
+          synthesis_text: parsed.metadata?.synthesis_text ?? null,
+          entity_count: dedupedEntities.length,
+          edge_count: dedupedEdges.length,
+          orphan_count: parsed.metadata?.orphan_count ?? 0,
+          cycle_count: parsed.cycles?.length ?? 0,
+          maturity,
+          user_role: intent?.user_role ?? null,
+          primary_goal: intent?.primary_goal ?? null,
+          context_type: intent?.context_type ?? null,
+        })
+        .eq("id", existingSpaceId)
+        .eq("user_id", user.id);
+      if (updateError) {
+        console.error("[Decompose] Space hydrate failed:", updateError);
+        return NextResponse.json({ error: "Space hydration failed" }, { status: 500 });
+      }
+      spaceId = existingSpaceId;
+    } else {
+      const { data: spaceData, error: spaceError } = await db
+        .from("spaces")
+        .insert({
+          user_id: user.id,
+          name: spaceName,
+          description: parsed.metadata?.description ?? spaceConfig?.description ?? null,
+          space_prefix: prefix,
+          input_text: text,
+          raw_decomposition: rawDecomposition,
+          synthesis_text: parsed.metadata?.synthesis_text ?? null,
+          entity_count: dedupedEntities.length,
+          edge_count: dedupedEdges.length,
+          orphan_count: parsed.metadata?.orphan_count ?? 0,
+          cycle_count: parsed.cycles?.length ?? 0,
+          maturity,
+          user_role: intent?.user_role ?? null,
+          primary_goal: intent?.primary_goal ?? null,
+          context_type: intent?.context_type ?? null,
+          parent_space_id: spaceConfig?.parent_space_id ?? null,
+          originated_from_entity_id: spaceConfig?.originated_from_entity_id ?? null,
+          depth_level: spaceConfig?.depth_level ?? 0,
+        })
+        .select("id")
+        .single();
 
-    if (spaceError || !spaceData) {
-      console.error("[Decompose] Space creation failed:", spaceError);
-      return NextResponse.json({ error: "Space creation failed" }, { status: 500 });
+      if (spaceError || !spaceData) {
+        console.error("[Decompose] Space creation failed:", spaceError);
+        return NextResponse.json({ error: "Space creation failed" }, { status: 500 });
+      }
+      spaceId = spaceData.id;
     }
 
-    const spaceId = spaceData.id;
+    // ── Structural event bus: start run + announce intake stage ──
+    // When bootstrap already started the run, reuse it so the SSE stream
+    // the client is watching keeps receiving events on the same run_id.
+    if (existingRunId) {
+      runId = existingRunId;
+    } else {
+      runId = await startPipelineRun(db, {
+        spaceId,
+        userId: user.id,
+        pipeline: "decompose",
+        initialPrompt: text.slice(0, 2000),
+      });
+    }
+    await emitStructuralEvent(db, runId, {
+      type: "stage_boundary",
+      stage: "intake",
+      phase: "enter",
+      message: `Decomposing: ${spaceName.slice(0, 80)}`,
+    });
 
     // ── Link parent entity to newly created sub-space ──
     const originEntityId = spaceConfig?.originated_from_entity_id;
@@ -412,14 +765,62 @@ ${enrichedPrompt}`;
     }
 
     // ── Insert entities (sanitized + resilient) ──
+    // Heartbeat: tell the canvas we're about to start persisting entities
+    // so the HUD subtitle doesn't stall on "Extracting…" for minutes.
+    if (runId) {
+      await emitStructuralEvent(db, runId, {
+        type: "stage_boundary",
+        stage: "kg",
+        phase: "enter",
+        message: `Persisting ${dedupedEntities.length} entities…`,
+      });
+    }
+
     const entityIdMap = new Map<string, string>();
     const sanitizedEntities = dedupedEntities.map((e) => sanitizeEntity(e, spaceId));
 
     if (sanitizedEntities.length > 0) {
       const { data: entityData } = await resilientInsert(db, "entities", sanitizedEntities, "id, entity_id");
+      // Phase 1 Step 18 — partial-insert warning. resilientInsert
+      // silently drops rows that violate RLS or constraints; the
+      // graph then has orphan edges the downstream filter quietly
+      // skips. Emit a visible warning heartbeat when we lose >10%
+      // of entities so the user isn't surprised by a sparse graph.
+      if (runId && entityData.length < sanitizedEntities.length) {
+        const dropped = sanitizedEntities.length - entityData.length;
+        const pctDropped = Math.round((dropped / sanitizedEntities.length) * 100);
+        if (pctDropped >= 10) {
+          await emitStructuralEvent(db, runId, {
+            type: "stage_boundary",
+            stage: "kg",
+            phase: "enter",
+            message: `⚠ ${dropped} of ${sanitizedEntities.length} entities couldn't persist (${pctDropped}%). Graph may be sparse.`,
+          });
+        }
+      }
       for (const row of entityData) {
         entityIdMap.set(row.entity_id, row.id);
       }
+
+      // Emit entity_added events — one per persisted entity. Canvas
+      // HUD + future ghost painter react live to these.
+      const entityEvents: StructuralEvent[] = [];
+      for (const e of dedupedEntities) {
+        const uuid = entityIdMap.get(e.entity_id);
+        if (!uuid) continue;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anyE = e as any;
+        entityEvents.push({
+          type: "entity_added",
+          entityId: uuid,
+          entityCode: e.entity_id,
+          name: e.name,
+          entityCategory: anyE.entity_category ?? null,
+          importance: anyE.importance ?? null,
+          parentEntityId: null,
+        });
+      }
+      await emitBatchEvents(db, runId, entityEvents);
 
       // Sprint 2 follow-up — memory-index new entities inline so ambient
       // retrieval surfaces them immediately. Previously this relied on the
@@ -572,6 +973,20 @@ ${enrichedPrompt}`;
     if (sanitizedEdges.length > 0) {
       const { inserted } = await resilientInsert(db, "edges", sanitizedEdges, "id");
       edgesInserted = inserted;
+
+      // Emit edge_added events for each sanitized edge (no per-edge
+      // UUID from resilientInsert; we use the edge data we just wrote).
+      const edgeEvents: StructuralEvent[] = sanitizedEdges.map((e, i) => ({
+        type: "edge_added",
+        edgeId: `batch-${Date.now()}-${i}`,
+        sourceEntityId: e.source_entity_id,
+        targetEntityId: e.target_entity_id,
+        relationshipType: e.relationship_type,
+        dimension: e.dimension,
+        polarity: e.polarity ?? null,
+        confidence: e.confidence ?? 0.7,
+      }));
+      await emitBatchEvents(db, runId, edgeEvents);
     }
 
     // ── Compute degree-based centrality_rank ──
@@ -678,6 +1093,16 @@ ${enrichedPrompt}`;
     if (sanitizedCycles.length > 0) {
       const { inserted } = await resilientInsert(db, "cycles", sanitizedCycles, "id");
       cyclesInserted = inserted;
+
+      // Emit cycle_detected events — classification drives the canvas
+      // ring color (reinforcing_positive / balancing / etc.).
+      const cycleEvents: StructuralEvent[] = sanitizedCycles.map((c, i) => ({
+        type: "cycle_detected",
+        cycleId: c.cycle_id ?? `cycle-${i}`,
+        classification: c.classification ?? "balancing",
+        entityIds: Array.isArray(c.entity_ids) ? c.entity_ids : [],
+      }));
+      await emitBatchEvents(db, runId, cycleEvents);
     }
 
     // ── Insert propositions (non-critical) ──
@@ -699,7 +1124,9 @@ ${enrichedPrompt}`;
         depends_on: Array.isArray(p.depends_on) ? p.depends_on : null,
         entity_ids: Array.isArray(p.entity_ids) ? p.entity_ids : null,
       }));
-      await resilientInsert(db, "propositions", propRows, "id").catch(() => {});
+      await resilientInsert(db, "propositions", propRows, "id").catch((err) => {
+        console.warn("[decompose] proposition persist failed (non-fatal):", err);
+      });
     }
 
     // ── Store rich structuring metadata on space ──
@@ -792,6 +1219,98 @@ ${enrichedPrompt}`;
       cycle_count: cyclesInserted,
       ...(Object.keys(structuringMeta).length > 0 ? { synthesis_data: structuringMeta } : {}),
     }).eq("id", spaceId);
+
+    // ──────────────────────────────────────────────────────────────────
+    // Wave A — ground the decomposed KG in detected objectives.
+    //
+    // If the epistemic classification detected preliminary_objectives,
+    // materialize them as improvement_goals rows (status='proposed',
+    // source='auto_detected'), then run an LLM tagger to populate
+    // entity_objectives so downstream surfaces (Lab, Apps, Synthesis)
+    // can ground reasoning in what the user wants to achieve.
+    //
+    // Non-fatal: any failure in this block logs + continues. Decompose
+    // still succeeds end-to-end.
+    // ──────────────────────────────────────────────────────────────────
+    const prelimObjectives = Array.isArray(
+      structuringMeta.preliminary_objectives,
+    )
+      ? (structuringMeta.preliminary_objectives as Array<{
+          title: string;
+          objective_type: string;
+          rationale: string;
+          confidence: "high" | "moderate" | "low";
+          input_type_basis: string;
+        }>)
+      : [];
+
+    if (prelimObjectives.length > 0 && entityIdMap.size > 0) {
+      try {
+        const { groundObjectives } = await import(
+          "@/lib/pipeline/ground-objectives"
+        );
+        // Re-fetch inserted entities so the tagger has the sanitized
+        // DB-side fields (name/description/category/importance) rather
+        // than depending on decompose's in-flight structure.
+        const insertedEntityIds = Array.from(entityIdMap.values());
+        const { data: entityRows } = (await db
+          .from("entities")
+          .select("id, name, description, entity_category, importance")
+          .in("id", insertedEntityIds)) as {
+          data: Array<{
+            id: string;
+            name: string;
+            description: string | null;
+            entity_category: string | null;
+            importance: string | null;
+          }> | null;
+        };
+        const groundingRes = await groundObjectives({
+          db,
+          spaceId,
+          userId: user.id,
+          preliminaryObjectives: prelimObjectives,
+          entities: entityRows ?? [],
+        });
+        console.log(
+          `[decompose/wave-a] goals=${groundingRes.goals_created} links=${groundingRes.links_created} memory=${groundingRes.memory_indexed}${groundingRes.errors.length ? ` errors=${groundingRes.errors.join("|")}` : ""}`,
+        );
+      } catch (groundErr) {
+        console.warn(
+          "[decompose/wave-a] ground-objectives failed (non-fatal):",
+          groundErr,
+        );
+      }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Wave B — propagate "KG changed" to apps. Any app whose
+    // dominant_entity_ids overlaps the newly-inserted entities (direct)
+    // or whose served-goal's entities overlap (via Wave A junction) gets
+    // flagged stale_reason='kg_changed'. Non-fatal.
+    // ──────────────────────────────────────────────────────────────────
+    if (entityIdMap.size > 0) {
+      try {
+        const { notifyEntitiesChanged } = await import("@/lib/apps/notify");
+        const insertedEntityIds = Array.from(entityIdMap.values());
+        const flagged = await notifyEntitiesChanged(
+          db,
+          spaceId,
+          insertedEntityIds,
+          "pipeline:decompose",
+        );
+        if (flagged.direct + flagged.via_objectives > 0) {
+          console.log(
+            `[decompose/wave-b] flagged apps: direct=${flagged.direct} via_objectives=${flagged.via_objectives}`,
+          );
+        }
+      } catch (notifyErr) {
+        console.warn(
+          "[decompose/wave-b] app staleness notify failed (non-fatal):",
+          notifyErr,
+        );
+      }
+    }
 
     // Log changelog (non-critical)
     await db.from("space_changelog").insert({
@@ -1026,8 +1545,128 @@ ${enrichedPrompt}`;
       }
     }
 
+    // ── Structural event bus: close the stage ──
+    // Emit stage_boundary exit always, but DEFER `completePipelineRun`
+    // when we're about to auto-advance to the next stage on the same
+    // run. Otherwise the client's SSE would see `completed` status
+    // mid-chain and tear down the stream before research/synthesize
+    // events arrive. Chain-terminal stage (strategy-refresh) is the
+    // one that finally closes the run.
+    await emitStructuralEvent(db, runId, {
+      type: "stage_boundary",
+      stage: "kg",
+      phase: "exit",
+    });
+    const isChainHop = autoAdvance && existingRunId;
+    if (!isChainHop) {
+      await completePipelineRun(db, runId, "completed");
+    }
+
+    // Phase 1 Step 13/16 — auto-advance to research via short-abort
+    // handoff. Cookies forwarded so research's safeAuth re-
+    // authenticates; existingRunId forwarded so events land on the
+    // same SSE subscription. AbortError is expected — we hang up the
+    // client side of the fetch once research's Lambda has the
+    // request, so this Lambda can terminate without holding for
+    // research's 60-120s work. DO NOT mark the shared run failed on
+    // abort; research is still running on its own Lambda.
+    if (autoAdvance) {
+      const cookieHeader = request.headers.get("cookie") ?? "";
+      const origin = new URL(request.url).origin;
+      const chainedText = text;
+      const chainedSpaceId = spaceId;
+      const chainedRunId = runId;
+
+      // Phase 52 — "KG continuously builds in real time": auto-trigger
+      // recursive-decompose on the top fundamental/critical entities
+      // AFTER Pass 2 inserts land but BEFORE research completes. Each
+      // call adds 2-3 proxy-indicator ghost children below its parent
+      // so the canvas keeps developing while research runs in parallel.
+      // Fire-and-forget: failures are non-fatal (we want the main
+      // pipeline to continue regardless).
+      const importanceRankRD: Record<string, number> = {
+        fundamental: 4,
+        critical: 3,
+        important: 2,
+        moderate: 1,
+      };
+      const recursiveCandidates = (
+        dedupedEntities as Array<{ entity_id: string; importance?: string }>
+      )
+        .filter((e) => {
+          const imp = e.importance ?? "moderate";
+          return imp === "fundamental" || imp === "critical";
+        })
+        .sort(
+          (a, b) =>
+            (importanceRankRD[(b.importance ?? "moderate") as string] ?? 0) -
+            (importanceRankRD[(a.importance ?? "moderate") as string] ?? 0),
+        )
+        .slice(0, 3)
+        .map((e) => entityIdMap.get(e.entity_id))
+        .filter((id): id is string => typeof id === "string");
+
+      if (recursiveCandidates.length > 0) {
+        after(async () => {
+          await Promise.allSettled(
+            recursiveCandidates.map((entityId) =>
+              fetch(`${origin}/api/canvas/recursive-decompose`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Cookie: cookieHeader,
+                },
+                body: JSON.stringify({
+                  spaceId: chainedSpaceId,
+                  entityId,
+                  existingRunId: chainedRunId,
+                }),
+              }),
+            ),
+          );
+        });
+      }
+
+      after(async () => {
+        const ctrl = new AbortController();
+        const handoffTimeout = setTimeout(() => ctrl.abort(), 10000);
+        try {
+          await fetch(`${origin}/api/pipeline/research`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              spaceIds: [chainedSpaceId],
+              inputSummary: chainedText.slice(0, 2000),
+              researchDepth: "standard",
+              triggeredBy: "auto_advance",
+              autoAdvance: true,
+              existingRunId: chainedRunId,
+              reservationId,
+            }),
+            signal: ctrl.signal,
+          });
+          clearTimeout(handoffTimeout);
+        } catch (advanceErr) {
+          clearTimeout(handoffTimeout);
+          const name = (advanceErr as { name?: string })?.name;
+          if (name === "AbortError") return;
+          console.warn("[decompose] research handoff threw:", advanceErr);
+          await completePipelineRun(
+            db,
+            chainedRunId,
+            "failed",
+            `handoff failed: ${advanceErr instanceof Error ? advanceErr.message : String(advanceErr)}`,
+          ).catch(() => {});
+        }
+      });
+    }
+
     return NextResponse.json({
       spaceId,
+      runId,
       entityCount: entityIdMap.size + materializedEntityCount,
       edgeCount: edgesInserted,
       cycleCount: cyclesInserted,
@@ -1042,6 +1681,24 @@ ${enrichedPrompt}`;
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
     console.error("[Decompose] Error:", raw);
+    // Mark the run as failed so SSE consumers get a terminal `done`.
+    // Soft-fail: never let the failure-handler itself throw — but log
+    // it so we don't silently leave a client stuck waiting.
+    await completePipelineRun(db, runId, "failed", raw).catch((completeErr) => {
+      console.error("[decompose] completePipelineRun(failed) itself threw — client may hang:", completeErr);
+    });
+    // Refund the pre-flight reservation — decompose didn't complete,
+    // so the user doesn't pay. Log failures: a stuck reservation
+    // charges a user for work that never happened.
+    if (reservationId) {
+      const { cancelReservation } = await import("@/lib/credits");
+      await cancelReservation(db, reservationId).catch((refundErr) => {
+        console.error(
+          `[decompose] credit refund failed for reservation ${reservationId} — user may be charged for failed run:`,
+          refundErr,
+        );
+      });
+    }
     return NextResponse.json({ error: `Decomposition failed: ${sanitizeErrorMessage(err)}` }, { status: 500 });
   }
 }

@@ -173,6 +173,25 @@ export interface SuggestedObjective {
 
 export type GoalSource = "manual" | "auto_detected";
 
+/**
+ * Ultimate goal proposal — the single umbrella outcome that rolls up all
+ * approved sub-objectives. Produced by `/api/goals/synthesize-ultimate` and
+ * then shown to the user for review/edit before being persisted as the
+ * parent `ImprovementGoal`.
+ */
+export interface UltimateGoalProposal {
+  title: string;
+  description: string;
+  objective_type: ObjectiveType;
+  metric_name: string;
+  metric_unit: string | null;
+  baseline_value: number;
+  target_value: number;
+  rationale: string;
+  /** Keys of approved sub-objectives that become children of this ultimate goal. */
+  child_keys: string[];
+}
+
 export interface ImprovementGoal {
   id: string;
   space_id: string;

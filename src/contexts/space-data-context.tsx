@@ -100,6 +100,13 @@ export interface SpaceUIState {
   refreshBridges: () => Promise<void>;
   bridgesRefreshing: boolean;
 
+  // Entities/edges live-refresh — lets subscribers (whiteboard, KG) pull
+  // fresh graph data after mutations like expansion/decompose without
+  // waiting for router.refresh() to propagate. Resolves with the fresh
+  // lists so callers can act immediately (no closure-over-stale-state race).
+  refreshEntities: () => Promise<{ entities: Entity[]; edges: Edge[] } | null>;
+  entitiesRefreshing: boolean;
+
   // Derived
   hasSynthesis: boolean;
   stage: number;
@@ -286,6 +293,45 @@ export function SpaceDataProvider({
     }
   }, [bridgesRefreshing, data.space.id]);
 
+  // ── Entities/edges live state ──
+  // Seeded from SSR; refreshEntities() bypasses router.refresh() and does a
+  // direct GET so client callers (whiteboard decompose) never race on a
+  // stale-closure ctx.entities. Fixes the "No new children produced" symptom
+  // users saw after a decompose action despite materialization succeeding.
+  const [liveEntities, setLiveEntities] = useState<Entity[]>(data.entities);
+  const [liveEdges, setLiveEdges] = useState<Edge[]>(data.edges);
+  useEffect(() => {
+    setLiveEntities(data.entities);
+  }, [data.entities]);
+  useEffect(() => {
+    setLiveEdges(data.edges);
+  }, [data.edges]);
+  const [entitiesRefreshing, setEntitiesRefreshing] = useState(false);
+  const refreshEntities = useCallback(async () => {
+    if (entitiesRefreshing) return null;
+    setEntitiesRefreshing(true);
+    try {
+      const res = await fetch(`/api/spaces/${data.space.id}/entities`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return null;
+      const body = (await res.json()) as { entities: Entity[]; edges: Edge[] };
+      const freshEntities = body.entities ?? [];
+      const freshEdges = body.edges ?? [];
+      setLiveEntities(freshEntities);
+      setLiveEdges(freshEdges);
+      // Kick router.refresh so other RSC surfaces (synthesis view, counts,
+      // provenance chips) eventually re-hydrate from the same DB state.
+      router.refresh();
+      return { entities: freshEntities, edges: freshEdges };
+    } catch (err) {
+      console.warn("[refreshEntities] failed:", err);
+      return null;
+    } finally {
+      setEntitiesRefreshing(false);
+    }
+  }, [entitiesRefreshing, data.space.id, router]);
+
   // ── Build context value ──
   const value = useMemo<SpaceContextValue>(
     () => ({
@@ -293,6 +339,11 @@ export function SpaceDataProvider({
       // Shadow the SSR prop with the live bridges state so subscribers
       // always see the most recently refetched list.
       bridges,
+      // Shadow entities/edges with live state — refreshEntities() updates
+      // these in-place after mutations, so consumers get fresh data without
+      // waiting for the next SSR round-trip.
+      entities: liveEntities,
+      edges: liveEdges,
       activeGoal,
       setActiveGoal,
       goalList,
@@ -320,11 +371,15 @@ export function SpaceDataProvider({
       refresh,
       refreshBridges,
       bridgesRefreshing,
+      refreshEntities,
+      entitiesRefreshing,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       data,
       bridges,
+      liveEntities,
+      liveEdges,
       activeGoal,
       goalList,
       childGoals,
@@ -340,6 +395,8 @@ export function SpaceDataProvider({
       stage,
       refreshBridges,
       bridgesRefreshing,
+      refreshEntities,
+      entitiesRefreshing,
     ]
   );
 

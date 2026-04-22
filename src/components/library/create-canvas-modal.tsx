@@ -139,8 +139,9 @@ export function CreateCanvasModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/30 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm"
       onClick={submitting ? undefined : onClose}
+      style={{ pointerEvents: submitting ? "auto" : "auto" }}
     >
       <div
         className="mx-4 w-full max-w-lg overflow-hidden rounded-xl bg-white shadow-2xl"
@@ -238,7 +239,7 @@ export function CreateCanvasModal({
                   You don&apos;t have any{" "}
                   {meta.refFieldLabel?.toLowerCase()}s yet. Create one first
                   before making a{" "}
-                  {canvasScopeColors[scope].label.toLowerCase()} canvas.
+                  {canvasScopeColors[scope].label.toLowerCase()} whiteboard.
                 </div>
               ) : (
                 <select
@@ -289,7 +290,7 @@ export function CreateCanvasModal({
               onChange={(e) => setDescription(e.target.value)}
               maxLength={2000}
               rows={2}
-              placeholder="What is this canvas for?"
+              placeholder="What is this whiteboard for?"
               className="w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-[13px] text-gray-900 placeholder-gray-400 focus:border-interaxis-600 focus:outline-none focus:ring-1 focus:ring-interaxis-600"
             />
           </div>

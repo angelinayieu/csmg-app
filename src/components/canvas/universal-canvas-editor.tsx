@@ -17,6 +17,7 @@ import {
   GitBranch,
   Loader2,
   Search,
+  FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -534,6 +535,14 @@ export function UniversalCanvasEditor({
             <Search className="h-3 w-3" />
             Deep weave
           </Link>
+          <Link
+            href="/app/lab"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            title="Open the Universal Lab to simulate what-if scenarios across your universe"
+          >
+            <FlaskConical className="h-3 w-3" />
+            Lab
+          </Link>
           <button
             onClick={runWeave}
             disabled={weaveState === "running" || data.frames.length < 2}
@@ -691,7 +700,7 @@ function AddFrameDropdown({
           autoFocus
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Search your canvases…"
+          placeholder="Search your whiteboards…"
           className="flex-1 border-0 bg-transparent text-[13px] placeholder-gray-400 focus:outline-none focus:ring-0"
         />
         <button

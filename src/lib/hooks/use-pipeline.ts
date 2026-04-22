@@ -138,7 +138,25 @@ export function usePipeline() {
   const [spaces, setSpaces] = useState<SpaceProgress[]>([]);
   const [spaceIds, setSpaceIds] = useState<string[]>([]);
   const [rootSpaceId, setRootSpaceId] = useState<string | null>(null);
+  /**
+   * Structural event bus — the most-recent `runId` any of the pipeline
+   * routes in this orchestration returned. Callers can append
+   * `?run=<latestRunId>` to the whiteboard redirect so the canvas's
+   * CanvasEventHud picks up the live SSE stream.
+   */
+  const [latestRunId, setLatestRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Surfaced when a pipeline route returns HTTP 402 (credits_exhausted).
+   * Separate from `error` so the UI can render a specific "add credits"
+   * banner (with provider link) without blocking the rest of the pipeline
+   * from continuing — research is fire-and-forget, other stages may still
+   * complete on other providers or without research enrichment.
+   */
+  const [creditError, setCreditError] = useState<{
+    provider: "openai" | "anthropic" | "unknown";
+    message: string;
+  } | null>(null);
   const [scopeResult, setScopeResult] = useState<{
     spaces: AnalysisConfig["selectedSpaces"];
     summary: string;
@@ -344,6 +362,12 @@ export function usePipeline() {
           const data = await safeJson(res, `Decompose[${space.name}]`);
           if (!res.ok) throw new Error(data.error || "Decomposition failed");
 
+          // Track event-bus runId for canvas HUD — first decompose's
+          // runId is usually enough since subsequent pipelines update it.
+          if (data.runId && typeof data.runId === "string") {
+            setLatestRunId(data.runId);
+          }
+
           setSpaces((prev) =>
             prev.map((s, j) =>
               j === i
@@ -409,6 +433,35 @@ export function usePipeline() {
       setSpaceIds(ids);
       setRootSpaceId(ids[0] ?? null);
 
+      // Phase 1.25: Rigor intake (deep/comprehensive tiers)
+      // Best-effort and non-blocking: persists a `synthesis_data.rigor_intake`
+      // snapshot on the root space for downstream strategy/synthesis readers.
+      // If it fails, the pipeline continues unchanged.
+      if ((config.tier === "deep" || config.tier === "comprehensive") && ids.length > 0) {
+        try {
+          const rigorRes = await fetch("/api/pipeline/rigor-intake", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              spaceId: ids[0],
+              text,
+              objective: config.intent?.primary_goal ?? undefined,
+              tier: config.tier === "comprehensive" ? "comprehensive" : "deep",
+              persistProposals: true,
+            }),
+            signal,
+          });
+
+          if (!rigorRes.ok) {
+            const rigorErr = await safeJson(rigorRes, "RigorIntake").catch(() => ({}));
+            console.warn("[rigor-intake] route returned non-OK status:", rigorRes.status, rigorErr);
+          }
+        } catch (rigorErr) {
+          if (rigorErr instanceof Error && rigorErr.name === "AbortError") return null;
+          console.warn("[rigor-intake] failed (non-fatal):", rigorErr);
+        }
+      }
+
       // Telemetry: record decomposition metrics
       stageEnd("decomposing");
       {
@@ -444,6 +497,9 @@ export function usePipeline() {
             if (res.ok) {
               const data = await safeJson(res, "Research").catch(() => ({}));
               stageEnd("researching");
+              if (data.runId && typeof data.runId === "string") {
+                setLatestRunId(data.runId);
+              }
               setTelemetry((prev) => ({
                 ...prev,
                 externalEntities: prev.externalEntities + (data.entitiesCreated ?? 0),
@@ -454,7 +510,18 @@ export function usePipeline() {
             } else {
               stageEnd("researching");
               const data = await safeJson(res, "Research").catch(() => ({}));
-              console.warn("Research (Agent 7) returned error:", data);
+              // Credit-exhaustion surfaces as 402 with a structured payload.
+              // We promote it into `creditError` state so the UI can render a
+              // dedicated "add credits" banner instead of silently continuing.
+              if (res.status === 402 && data?.error === "credits_exhausted") {
+                setCreditError({
+                  provider: (data.provider as "openai" | "anthropic" | "unknown") ?? "unknown",
+                  message: data.message ?? "Provider credits exhausted",
+                });
+                console.warn(`[Research] credits_exhausted (${data.provider}):`, data.message);
+              } else {
+                console.warn("Research (Agent 7) returned error:", data);
+              }
             }
           } catch (err) {
             stageEnd("researching");
@@ -593,6 +660,14 @@ export function usePipeline() {
           if (startRes.ok) {
             const startData = await safeJson(startRes, "DeepResearch-Start");
             const responseId = startData.responseId as string;
+            // Event-bus runId — research-deep emits entity/source events
+            // when polling detects completion. Capturing runId here lets
+            // the canvas HUD start showing "Deep research running…"
+            // immediately, even though the structural events arrive in
+            // a burst later.
+            if (startData.runId && typeof startData.runId === "string") {
+              setLatestRunId(startData.runId);
+            }
 
             if (responseId) {
               // Poll until complete (max ~8 minutes with 10s intervals)
@@ -623,6 +698,9 @@ export function usePipeline() {
                     const pollData = await safeJson(pollRes, "DeepResearch-Poll");
                     if (pollData.completed) {
                       deepResearchComplete = true;
+                      if (pollData.runId && typeof pollData.runId === "string") {
+                        setLatestRunId(pollData.runId);
+                      }
                       console.log(
                         `[deep-research] Complete after ${pollCount} polls. ` +
                         `Claims: ${pollData.claimsExtracted ?? 0}, Evidence: ${pollData.evidenceItems ?? 0}, ` +
@@ -727,6 +805,9 @@ export function usePipeline() {
 
               if (targetedRes.ok) {
                 const targetedData = await safeJson(targetedRes, `TargetedResearch[${interweaveIteration}]`);
+                if (targetedData.runId && typeof targetedData.runId === "string") {
+                  setLatestRunId(targetedData.runId);
+                }
                 setTelemetry((prev) => ({
                   ...prev,
                   externalEntities: prev.externalEntities + (targetedData.entitiesCreated ?? 0),
@@ -797,6 +878,11 @@ export function usePipeline() {
           if (synthRes.ok) {
             const synthData = await safeJson(synthRes, "Synthesize").catch(() => ({}));
             stageEnd("synthesizing");
+
+            // Event-bus runId — synthesize emits proposal_ready events.
+            if (synthData.runId && typeof synthData.runId === "string") {
+              setLatestRunId(synthData.runId);
+            }
 
             // Extract quality and regen metrics for telemetry
             setTelemetry((prev) => ({
@@ -922,6 +1008,9 @@ export function usePipeline() {
                   });
                   if (stratRes.ok) {
                     const stratData = await safeJson(stratRes, "AutoStrategy").catch(() => ({}));
+                    if (stratData.runId && typeof stratData.runId === "string") {
+                      setLatestRunId(stratData.runId);
+                    }
                     setTelemetry((prev) => ({
                       ...prev,
                       autoStrategyTriggered: true,
@@ -995,6 +1084,9 @@ export function usePipeline() {
           });
           if (stratRes.ok) {
             const stratData = await safeJson(stratRes, "AutoStrategy").catch(() => ({}));
+            if (stratData.runId && typeof stratData.runId === "string") {
+              setLatestRunId(stratData.runId);
+            }
             setTelemetry((prev) => ({
               ...prev,
               autoStrategyTriggered: true,
@@ -1020,19 +1112,27 @@ export function usePipeline() {
     setSpaces([]);
     setSpaceIds([]);
     setRootSpaceId(null);
+    setLatestRunId(null);
     setError(null);
+    setCreditError(null);
     setScopeResult(null);
     setAutoResearchInfo(null);
     setIsAutoResearch(false);
     setTelemetry(emptyTelemetry());
   }, []);
 
+  /** Dismiss the credits_exhausted banner without resetting the pipeline. */
+  const dismissCreditError = useCallback(() => setCreditError(null), []);
+
   return {
     phase,
     spaces,
     spaceIds,
     rootSpaceId,
+    latestRunId,
     error,
+    creditError,
+    dismissCreditError,
     scopeResult,
     telemetry,
     autoResearchInfo,

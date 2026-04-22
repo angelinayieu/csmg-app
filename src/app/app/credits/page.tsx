@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Check, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -41,8 +42,28 @@ const PACKS = [
   },
 ];
 
+interface BalanceResponse {
+  balance: number;
+  tiers: {
+    quick: number;
+    standard: number;
+    deep: number;
+    comprehensive: number;
+  };
+}
+
 export default function CreditsPage() {
   const [loading, setLoading] = useState<string | null>(null);
+  const [balanceData, setBalanceData] = useState<BalanceResponse | null>(null);
+  const searchParams = useSearchParams();
+  const justPurchased = searchParams.get("success") === "1";
+
+  useEffect(() => {
+    fetch("/api/credits/balance", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setBalanceData(data))
+      .catch(() => {});
+  }, []);
 
   async function handleBuy(packId: string) {
     setLoading(packId);
@@ -65,6 +86,8 @@ export default function CreditsPage() {
     }
   }
 
+  const tiers = balanceData?.tiers;
+
   return (
     <div className="mx-auto max-w-3xl">
       <h1 className="text-2xl font-bold">Buy Credits</h1>
@@ -72,31 +95,94 @@ export default function CreditsPage() {
         Credits are used to run analyses. Choose a pack that fits your needs.
       </p>
 
-      {/* Credit usage reference */}
+      {/* Post-purchase success confirmation. The Stripe webhook has
+          already added the credits server-side by the time the user
+          lands here with ?success=1; we just surface the fact. */}
+      {justPurchased && (
+        <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] text-emerald-800">
+          <span className="font-semibold">Purchase complete.</span> Your
+          balance has been updated. Head back to a whiteboard to run your
+          analysis.
+        </div>
+      )}
+
+      {/* Current balance card — drives urgency + confirms state after
+          a purchase. Shows ~runs-remaining at each tier so the user
+          can immediately see what they can afford. */}
+      {balanceData !== null && (
+        <div className="mt-4 rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-purple-50 p-4">
+          <div className="flex items-baseline gap-2">
+            <Zap className="h-4 w-4 text-indigo-600" />
+            <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-indigo-700">
+              Current balance
+            </span>
+          </div>
+          <div className="mt-1 flex items-baseline gap-3">
+            <span className="font-mono text-3xl font-bold tabular-nums text-indigo-900">
+              {balanceData.balance}
+            </span>
+            <span className="text-[12px] text-indigo-700">
+              {balanceData.balance === 1 ? "credit" : "credits"}
+            </span>
+          </div>
+          {tiers && (
+            <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-indigo-700/80">
+              <span>
+                ≈{" "}
+                <span className="font-mono font-semibold tabular-nums">
+                  {Math.floor(balanceData.balance / tiers.quick)}
+                </span>{" "}
+                quick
+              </span>
+              <span>
+                ·{" "}
+                <span className="font-mono font-semibold tabular-nums">
+                  {Math.floor(balanceData.balance / tiers.standard)}
+                </span>{" "}
+                standard
+              </span>
+              <span>
+                ·{" "}
+                <span className="font-mono font-semibold tabular-nums">
+                  {Math.floor(balanceData.balance / tiers.deep)}
+                </span>{" "}
+                deep
+              </span>
+              <span>
+                ·{" "}
+                <span className="font-mono font-semibold tabular-nums">
+                  {Math.floor(balanceData.balance / tiers.comprehensive)}
+                </span>{" "}
+                comprehensive
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Credit usage reference. Reads tier costs from the actual
+          TIERS config (via /api/credits/balance) so numbers always
+          match what pre-flight reservation requires. */}
       <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
         <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
-          Credit usage
+          Cost per analysis
         </div>
-        <div className="grid grid-cols-3 gap-3 text-xs text-gray-600">
+        <div className="grid grid-cols-4 gap-3 text-xs text-gray-600">
           <div>
             <span className="font-medium">Quick</span>
-            <span className="text-gray-400 ml-1">1 cr/area</span>
+            <span className="text-gray-400 ml-1">{tiers?.quick ?? "?"} cr</span>
           </div>
           <div>
             <span className="font-medium">Standard</span>
-            <span className="text-gray-400 ml-1">2 cr/area</span>
+            <span className="text-gray-400 ml-1">{tiers?.standard ?? "?"} cr</span>
           </div>
           <div>
             <span className="font-medium">Deep</span>
-            <span className="text-gray-400 ml-1">3 cr/area</span>
+            <span className="text-gray-400 ml-1">{tiers?.deep ?? "?"} cr</span>
           </div>
           <div>
-            <span className="font-medium">Weaving</span>
-            <span className="text-gray-400 ml-1">+2 cr</span>
-          </div>
-          <div>
-            <span className="font-medium">Synthesis</span>
-            <span className="text-gray-400 ml-1">+2 cr</span>
+            <span className="font-medium">Comprehensive</span>
+            <span className="text-gray-400 ml-1">{tiers?.comprehensive ?? "?"} cr</span>
           </div>
         </div>
       </div>

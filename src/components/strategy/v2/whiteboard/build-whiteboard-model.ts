@@ -71,12 +71,23 @@ export function buildWhiteboardModel({
   // LAYER 2 · SCOPE (top 4 abstract/process entities by importance)
   // Edge: inputs → each scope node (provenance)
   // ─────────────────────────────────────────────
+  // importance is a string enum, not a number — map to numeric rank for sort.
+  const importanceRank: Record<string, number> = {
+    fundamental: 4,
+    critical: 3,
+    important: 2,
+    moderate: 1,
+  };
   const scopeEntities = entities
     .filter(
       (e) =>
         e.entity_category === "abstract" || e.entity_category === "process"
     )
-    .sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0))
+    .sort(
+      (a, b) =>
+        (importanceRank[b.importance ?? ""] ?? 0) -
+        (importanceRank[a.importance ?? ""] ?? 0)
+    )
     .slice(0, 4);
 
   const scopeIds: string[] = [];

@@ -20,6 +20,7 @@ import type {
   AppVersionChangeType,
 } from "@/types/app";
 import { asAppConfig, asAppState } from "@/types/app";
+import { computeHealthScore } from "./health-score";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DB = SupabaseClient<Database> | any;
@@ -454,6 +455,81 @@ export async function reconcileAppWithKG(
     "Reconciled with current KG"
   );
 
+  // ── Wave B — aggregate the breakdown into the apps.health_score scalar.
+  //
+  // Pull the signals the aggregator wants: goal status, intervention
+  // completion ratio, recent surprise predictions. All reads are soft —
+  // any missing column degrades gracefully to 0 adjustment.
+  let goalStatus: string | null = null;
+  if (app.serves_goal_id) {
+    const { data: goal } = await db
+      .from("improvement_goals")
+      .select("status")
+      .eq("id", app.serves_goal_id)
+      .maybeSingle();
+    goalStatus = (goal as { status: string } | null)?.status ?? null;
+  }
+
+  const { data: ivRows } = await db
+    .from("interventions")
+    .select("status")
+    .eq("app_id", app.id);
+  const interventionsRows = (ivRows ?? []) as Array<{ status: string }>;
+  const interventionsCompleted = interventionsRows.filter(
+    (r) => r.status === "completed",
+  ).length;
+  const interventionsTotal = interventionsRows.length;
+
+  // Recent surprises: last 30 days of prediction_ledger rows for this app
+  // tagged with deviation_tag='surprise'.
+  const thirtyDaysAgo = new Date(
+    Date.now() - 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const { count: surpriseCount } = await db
+    .from("prediction_ledger")
+    .select("id", { count: "exact", head: true })
+    .eq("app_id", app.id)
+    .eq("deviation_tag", "surprise")
+    .gte("resolved_at", thirtyDaysAgo);
+
+  const healthResult = computeHealthScore(
+    {
+      coverage,
+      momentum,
+      risk: riskPct,
+    },
+    {
+      goal_status: goalStatus,
+      interventions_completed: interventionsCompleted,
+      interventions_total: interventionsTotal,
+      surprise_predictions: surpriseCount ?? 0,
+    },
+  );
+
+  // Persist the scalar. Columns on `apps`: health_score numeric.
+  // Do this BEFORE clearAppStaleness so the version row recorded by
+  // clearAppStaleness captures the new score alongside the staleness flip.
+  await db
+    .from("apps")
+    .update({
+      health_score: healthResult.score,
+      last_updated_by: changedBy,
+    })
+    .eq("id", app.id);
+
+  // Also stash the factor breakdown into state for debugging / UI tooltips.
+  await patchAppState(
+    db,
+    app.id,
+    {
+      health_score: healthResult.score,
+      health_score_factors: healthResult.factors,
+      health_score_rationale: healthResult.rationale,
+    },
+    changedBy,
+    "Rolled breakdown into health_score",
+  );
+
   // Clear staleness + bump last_refreshed_at + record version row.
   return clearAppStaleness(
     db,
@@ -463,6 +539,110 @@ export async function reconcileAppWithKG(
       ? `Reconciled: was stale (${app.stale_reason})`
       : "Manual reconcile"
   );
+}
+
+/**
+ * Wave B — pure health-score recompute. Does NOT clear staleness and
+ * does NOT recompute the coverage/momentum/risk breakdown — it just
+ * re-reads the existing state.health_breakdown, pulls fresh goal /
+ * intervention / prediction context, and writes apps.health_score.
+ *
+ * Used by the /api/cron/recompute-app-health pass: we want the number
+ * to freshen (e.g. because interventions completed or predictions
+ * resolved since last reconcile) WITHOUT hiding the staleness badge
+ * that the user needs to see.
+ *
+ * If the app has no breakdown yet (never reconciled), fall back to
+ * a full reconcileAppWithKG so something lands.
+ */
+export async function recomputeAppHealth(
+  db: DB,
+  app: AppRow,
+  changedBy: string,
+): Promise<AppRow | null> {
+  const state = asAppState(app.state);
+  const breakdown = state.health_breakdown;
+  if (!breakdown) {
+    // No prior reconcile — do a full one (which WILL clear staleness).
+    // For new apps that's fine; for everyone else reconcileAppWithKG
+    // ran before this cron path ever runs.
+    return reconcileAppWithKG(db, app, changedBy);
+  }
+
+  // Pull fresh context.
+  let goalStatus: string | null = null;
+  if (app.serves_goal_id) {
+    const { data: goal } = await db
+      .from("improvement_goals")
+      .select("status")
+      .eq("id", app.serves_goal_id)
+      .maybeSingle();
+    goalStatus = (goal as { status: string } | null)?.status ?? null;
+  }
+
+  const { data: ivRows } = await db
+    .from("interventions")
+    .select("status")
+    .eq("app_id", app.id);
+  const interventionsRows = (ivRows ?? []) as Array<{ status: string }>;
+  const interventionsCompleted = interventionsRows.filter(
+    (r) => r.status === "completed",
+  ).length;
+  const interventionsTotal = interventionsRows.length;
+
+  const thirtyDaysAgo = new Date(
+    Date.now() - 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const { count: surpriseCount } = await db
+    .from("prediction_ledger")
+    .select("id", { count: "exact", head: true })
+    .eq("app_id", app.id)
+    .eq("deviation_tag", "surprise")
+    .gte("resolved_at", thirtyDaysAgo);
+
+  const healthResult = computeHealthScore(
+    {
+      coverage: breakdown.coverage ?? null,
+      momentum: breakdown.momentum ?? 50,
+      risk: breakdown.risk ?? 0,
+    },
+    {
+      goal_status: goalStatus,
+      interventions_completed: interventionsCompleted,
+      interventions_total: interventionsTotal,
+      surprise_predictions: surpriseCount ?? 0,
+    },
+  );
+
+  const { data: updated, error } = await db
+    .from("apps")
+    .update({
+      health_score: healthResult.score,
+      last_updated_by: changedBy,
+    })
+    .eq("id", app.id)
+    .select("*")
+    .single();
+
+  if (error) {
+    console.warn("[app-updates] recomputeAppHealth failed:", error);
+    return null;
+  }
+
+  // Side-stash the factor breakdown + rationale for UI tooltips.
+  await patchAppState(
+    db,
+    app.id,
+    {
+      health_score: healthResult.score,
+      health_score_factors: healthResult.factors,
+      health_score_rationale: healthResult.rationale,
+    },
+    changedBy,
+    "Health score recomputed (no staleness change)",
+  );
+
+  return updated as AppRow;
 }
 
 function describeStaleReason(reason: string): string {

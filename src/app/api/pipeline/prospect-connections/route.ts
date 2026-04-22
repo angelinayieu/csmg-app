@@ -96,16 +96,40 @@ export async function POST(req: Request) {
   }
 
   // ── Fetch recent pairwise checks within cooling-off window ──
+  // We also read `revisit_required` so the selection logic can split
+  // recent checks into two groups:
+  //   (a) cooling-off pairs — suppressed from this run's candidates
+  //   (b) revisit-flagged pairs — promoted to the head of the queue
+  //       (the invalidate-coverage helper raises this flag whenever
+  //        new neighborhood topology lands that could flip the verdict)
   const cutoff = new Date(Date.now() - coolingOffHours * 60 * 60 * 1000).toISOString();
   const { data: recentChecks } = await supabase
     .from("pairwise_connection_checks")
-    .select("pair_key")
+    .select("pair_key, revisit_required, entity_a_id, entity_b_id")
     .eq("space_id", spaceId)
     .gte("checked_at", cutoff);
 
-  const recentlyCheckedPairKeys = new Set<string>(
-    (recentChecks ?? []).map((r: { pair_key: string }) => r.pair_key),
-  );
+  type RecentCheckRow = {
+    pair_key: string;
+    revisit_required: boolean | null;
+    entity_a_id: string;
+    entity_b_id: string;
+  };
+  const recentRows: RecentCheckRow[] = (recentChecks ?? []) as RecentCheckRow[];
+
+  const recentlyCheckedPairKeys = new Set<string>();
+  const revisitPairs: Array<{ entity_a_id: string; entity_b_id: string }> = [];
+  for (const r of recentRows) {
+    if (r.revisit_required === true) {
+      // Revisit-flagged pairs bypass cooling-off and get prioritized.
+      revisitPairs.push({
+        entity_a_id: r.entity_a_id,
+        entity_b_id: r.entity_b_id,
+      });
+    } else {
+      recentlyCheckedPairKeys.add(r.pair_key);
+    }
+  }
 
   // ── Entities with open user questions jump to front of prospector queue ──
   // Connects user intent directly to machine effort. A pair involving an
@@ -135,6 +159,7 @@ export async function POST(req: Request) {
     entitiesToExamine,
     pairsPerRun: pairsPerRun * 3,
     questionedEntityIds,
+    revisitPairs,
   });
 
   if (oversampledCandidates.length === 0) {
@@ -281,13 +306,44 @@ export async function POST(req: Request) {
     });
   }
 
-  // Batch insert pair checks (ignore unique-violation conflicts — race-safe)
+  // Batch insert pair checks (ignore unique-violation conflicts — race-safe).
+  // Note: ignoreDuplicates protects prior verdicts (incl. user_verdict) but
+  // does mean re-examinations don't update the stored reasoning. Revisit
+  // flags get cleared below regardless.
   if (pairCheckRows.length > 0) {
     const { error: checkErr } = await supabase
       .from("pairwise_connection_checks")
       .upsert(pairCheckRows, { onConflict: "space_id,pair_key", ignoreDuplicates: true });
     if (checkErr) {
       console.warn("[prospect-connections] pair check insert failed:", checkErr.message);
+    }
+  }
+
+  // Clear revisit flags for pairs we just re-examined. Without this, the
+  // pair stays flagged after re-examination and the prospector would
+  // re-pick it on every subsequent run (infinite loop). Scoped to pairs
+  // present in both revisitPairs (was flagged) AND pairCheckRows (was
+  // actually examined this run) so we never clear flags we didn't honor.
+  if (revisitPairs.length > 0 && pairCheckRows.length > 0) {
+    const examinedPairKeys = new Set(pairCheckRows.map((r) => r.pair_key));
+    const revisitedKeysThisRun: string[] = [];
+    for (const rp of revisitPairs) {
+      const key = canonicalPairKey(rp.entity_a_id, rp.entity_b_id);
+      if (examinedPairKeys.has(key)) revisitedKeysThisRun.push(key);
+    }
+    if (revisitedKeysThisRun.length > 0) {
+      const { error: clearErr } = await supabase
+        .from("pairwise_connection_checks")
+        .update({
+          revisit_required: false,
+          revisit_reason: null,
+          revisit_flagged_at: null,
+        })
+        .eq("space_id", spaceId)
+        .in("pair_key", revisitedKeysThisRun);
+      if (clearErr) {
+        console.warn("[prospect-connections] revisit flag clear failed:", clearErr.message);
+      }
     }
   }
 

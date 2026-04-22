@@ -34,6 +34,18 @@ export interface TwinRiskExposure {
   bottleneck_name: string | null;
   bottleneck_blast_radius: number;
   bottleneck_system_share: number; // blast_radius / entity_count as percentage
+
+  // ── Tier 6: live deviation signal ───────────────────────────────
+  // Computed from recent resolved predictions (optional param to
+  // computeTwinState). Absent when the caller didn't pass predictions.
+  // When present, the health-score computation bakes this in so the
+  // twin breathes with reality instead of sitting frozen at synthesis time.
+  /** Count of predictions resolved in the observation window. */
+  recent_predictions_resolved?: number;
+  /** Count tagged "surprise" or "regime_shift" in the same window. */
+  recent_surprises?: number;
+  /** Ratio = recent_surprises / recent_predictions_resolved, 0..1. */
+  surprise_rate?: number;
 }
 
 export interface TwinDynamics {

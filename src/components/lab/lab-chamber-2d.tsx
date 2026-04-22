@@ -148,31 +148,31 @@ export function LabChamber2D({
       <CornerBrackets />
 
       {/* HUD readouts */}
-      <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[#4ade80]/75">
+      <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[var(--lab-accent)]/75">
         <div className="mb-1 flex gap-2.5">
           <span>CHAMBER</span>
-          <b className="font-medium text-[#e8edf4]">REACTOR-01</b>
+          <b className="font-medium text-[var(--lab-text)]">REACTOR-01</b>
         </div>
         <div className="mb-1 flex gap-2.5">
           <span>FIELD</span>
-          <b className="font-medium text-[#e8edf4]">STRUCTURE</b>
+          <b className="font-medium text-[var(--lab-text)]">STRUCTURE</b>
         </div>
         <div className="flex gap-2.5">
           <span>SUBUNITS</span>
-          <b className="font-medium text-[#e8edf4]">{subunits.length}</b>
+          <b className="font-medium text-[var(--lab-text)]">{subunits.length}</b>
         </div>
       </div>
 
-      <div className="pointer-events-none absolute right-5 top-5 text-right text-[9px] font-mono uppercase tracking-widest text-[#4ade80]/75">
+      <div className="pointer-events-none absolute right-5 top-5 text-right text-[9px] font-mono uppercase tracking-widest text-[var(--lab-accent)]/75">
         <div className="mb-1 flex justify-end gap-2.5">
           <span>BONDS</span>
-          <b className="font-medium text-[#e8edf4]">
+          <b className="font-medium text-[var(--lab-text)]">
             {upstreamPartners.length + downstreamPartners.length}
           </b>
         </div>
         <div className="mb-1 flex justify-end gap-2.5">
           <span>STATE</span>
-          <b className="font-medium text-[#e8edf4]">
+          <b className="font-medium text-[var(--lab-text)]">
             {subunits.length === 0 ? "UNDER-DECOMPOSED" : "STABLE"}
           </b>
         </div>

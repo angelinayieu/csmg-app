@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { llmJSON } from "@/lib/llm";
 import { safeAuth, safeJsonParse, verifyMultiSpaceOwnership, refreshSpaceCounts } from "@/lib/api-helpers";
 import { getSynthesisPrompt, buildDecompReconciliationContext } from "@/lib/prompts/synthesis";
@@ -36,10 +36,20 @@ import type { StrategyReasoningTrace, ProbabilitySpaceSummary } from "@/types/st
 import { validateInteractionMetadata } from "@/lib/validation/interaction-validation";
 import { detectInsightConvergences } from "@/lib/synthesis/detect-convergences";
 import { computeStrategyCoverage, gapsToOpenQuestions } from "@/lib/synthesis/strategy-coverage";
+import { detectStrategyStaleness } from "@/lib/pipeline/detect-strategy-staleness";
 import { computeDecompFingerprint } from "@/lib/pipeline/cache";
+import {
+  loadRunAxisIndex,
+  runLevelAxes,
+} from "@/lib/pipeline/axes-used-resolver";
 import { appendRun, completeRun, makeRunId } from "@/lib/pipeline/analysis-runs";
 import type { AnalysisRun } from "@/types/analysis-runs";
 import { startAgentRun, completeAgentRun, failAgentRun } from "@/lib/agents/run-tracker";
+import {
+  startPipelineRun,
+  emitStructuralEvent,
+  completePipelineRun,
+} from "@/lib/events/structural-event-bus";
 
 export const maxDuration = 300; // Multi-step strategy needs more time
 
@@ -66,6 +76,20 @@ export async function POST(request: Request) {
     tier,
   } = body;
 
+  // Phase 1 Step 13 — auto-advance chain flag. When true, the
+  // completion path kicks /api/pipeline/strategy-refresh via after().
+  const autoAdvance = body.autoAdvance === true;
+  // Phase 1 Step 14 — reuse the chain's run_id so synthesize events
+  // land on the same subscription the client opened when bootstrap
+  // created the run.
+  const existingRunId: string | undefined =
+    typeof body.existingRunId === "string" ? body.existingRunId : undefined;
+  // Credit reservation id threaded from research. Synthesize never
+  // commits — only strategy-refresh (chain terminal) does. Cancels on
+  // its own catch so a synthesize failure refunds the user cleanly.
+  const reservationId: string | undefined =
+    typeof body.reservationId === "string" ? body.reservationId : undefined;
+
   if (!spaceIds || spaceIds.length === 0) {
     return NextResponse.json({ error: "spaceIds required" }, { status: 400 });
   }
@@ -82,6 +106,25 @@ export async function POST(request: Request) {
     kind: "synthesizer",
     triggerEvent: "synthesize.requested",
     triggerData: { spaceIds, goalId: goalId ?? null },
+  });
+
+  // Structural event bus — separate from agent_runs. Tracks the canvas-
+  // visible lifecycle of this synthesis for the live HUD. Chain hops
+  // (autoAdvance with a forwarded existingRunId) reuse the bootstrap-
+  // created run so the SSE stream stays attached end-to-end.
+  const pipelineRunId = existingRunId
+    ? existingRunId
+    : await startPipelineRun(db, {
+        spaceId: spaceIds[0],
+        userId: user.id,
+        pipeline: "synthesize",
+        initialPrompt: null,
+      });
+  await emitStructuralEvent(db, pipelineRunId, {
+    type: "stage_boundary",
+    stage: "proposal",
+    phase: "enter",
+    message: "Synthesizing strategy…",
   });
   const agentComplete = async (findingsCount: number, artifacts: string[]) => {
     await completeAgentRun(db, agentRunId, {
@@ -293,13 +336,22 @@ export async function POST(request: Request) {
     const runId = makeRunId();
     const runStartedAt = new Date().toISOString();
 
+    // Fetch the root space's synthesis_data ONCE, up-front. Previously this
+    // function re-fetched the same row ~9 times during a single synthesize
+    // pass (lazy-guard, signals, bridges, reasoning, research, goal-fitness,
+    // provenance, strategy, benchmark, and final merge). Since nothing
+    // mutates synthesis_data between those reads (the only in-function write
+    // is at the very end), a single fetch returns the exact same data to
+    // every consumer — one round-trip instead of nine.
+    const { data: rootSynthRow } = await db
+      .from("spaces")
+      .select("synthesis_data")
+      .eq("id", rootSpaceId)
+      .single();
+    const cachedRootSynthData = (rootSynthRow?.synthesis_data ?? {}) as Record<string, unknown>;
+
     if (useLazyGuard && !force) {
-      const { data: preflightSpace } = await db
-        .from("spaces")
-        .select("synthesis_data")
-        .eq("id", rootSpaceId)
-        .single();
-      const preflightData = (preflightSpace?.synthesis_data as Record<string, unknown>) ?? {};
+      const preflightData = cachedRootSynthData;
       const priorFingerprint = preflightData.decomp_fingerprint as string | undefined;
       const hasPriorSynthesis = !!(preflightData.master_bottleneck || (Array.isArray(preflightData.leverage_points) && (preflightData.leverage_points as unknown[]).length > 0));
 
@@ -536,9 +588,7 @@ export async function POST(request: Request) {
     let qualityFeedback = "";
     try {
       const rootSpaceMeta = spaceContexts.find((s) => s.spaceId === rootSpaceId);
-      const prevSynthData = rootSpaceMeta
-        ? ((await db.from("spaces").select("synthesis_data").eq("id", rootSpaceId).single()).data as any)?.synthesis_data as Record<string, unknown> | null
-        : null;
+      const prevSynthData = rootSpaceMeta ? cachedRootSynthData : null;
       if (prevSynthData?.quality_score && typeof prevSynthData.quality_score === "object") {
         const qs = prevSynthData.quality_score as { flags?: string[]; overall?: number; dimensions?: Record<string, number> };
         if (qs.flags && qs.flags.length > 0) {
@@ -567,9 +617,7 @@ export async function POST(request: Request) {
     let preRunStaleReport: StaleReport | null = null;
     try {
       const rootSpaceMeta = spaceContexts.find((s) => s.spaceId === rootSpaceId);
-      const existingSynthForStale = rootSpaceMeta
-        ? ((await db.from("spaces").select("synthesis_data").eq("id", rootSpaceId).single()).data as any)?.synthesis_data as Record<string, unknown> | null
-        : null;
+      const existingSynthForStale = rootSpaceMeta ? cachedRootSynthData : null;
 
       if (existingSynthForStale && (existingSynthForStale.leverage_points || existingSynthForStale.risk_points)) {
         const synthTimestamp = (existingSynthForStale.last_updated ?? existingSynthForStale.computed_at ?? "") as string;
@@ -607,9 +655,7 @@ export async function POST(request: Request) {
     let hiddenSignalsSection = "";
     try {
       // Use the early space metadata read (already fetched above) for hidden signals from prior research
-      const priorSynthMeta = spaceContexts.length > 0
-        ? ((await db.from("spaces").select("synthesis_data").eq("id", rootSpaceId).single()).data as Record<string, unknown> | null)?.synthesis_data as Record<string, unknown> | null
-        : null;
+      const priorSynthMeta = spaceContexts.length > 0 ? cachedRootSynthData : null;
       const existingHiddenSignals = priorSynthMeta?.hidden_signals as
         Array<{ signal_name: string; signal_type: string; description: string; trajectory_impact: number; related_internal_entities?: string[]; detection_method?: string }> | undefined;
 
@@ -648,9 +694,7 @@ export async function POST(request: Request) {
     // Injects web-verified evidence and claims into synthesis context
     let deepResearchSection = "";
     try {
-      const rootSynthData = spaceContexts.length > 0
-        ? ((await db.from("spaces").select("synthesis_data").eq("id", rootSpaceId).single()).data as Record<string, unknown> | null)?.synthesis_data as Record<string, unknown> | null
-        : null;
+      const rootSynthData = spaceContexts.length > 0 ? cachedRootSynthData : null;
 
       const drEvidence = rootSynthData?.deep_research_evidence as
         Array<{ url: string; title: string; source_type: string; reliability: number; quote?: string }> | undefined;
@@ -734,12 +778,43 @@ YOU MUST address each signal in your synthesis:
       console.warn("Pre-synthesis signal extraction failed (non-critical):", preSigErr);
     }
 
-    const synthesis = await llmJSON<SynthesisData>({
-      system: getSynthesisPrompt(intent, activeGoal, epistemicClassification),
-      user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}`,
-      maxTokens: 16384,
-      temperature: 0.3,
-    });
+    // Wave D L0.2 — inject the user baseline (persona_tags +
+    // behavior_summary + goal_preferences) so synthesis respects the
+    // user's lean. Non-fatal — empty baseline collapses to empty string.
+    const { loadUserBaselineForPrompt, formatBaselineForPrompt } =
+      await import("@/lib/user-baseline/prompt-context");
+    const baseline = await loadUserBaselineForPrompt(db, user.id);
+    const baselineBlock = formatBaselineForPrompt(baseline);
+
+    // Synthesis silent-zone heartbeat. This LLM call typically runs
+    // 45-90s and emits nothing during — the user sees "Synthesizing
+    // strategy…" frozen for a minute. Kick an elapsed-time timer on
+    // stage_boundary so the HUD subtitle updates every 5s. Cancels
+    // in finally regardless of success/fail.
+    const synthStartMs = Date.now();
+    const synthHeartbeat = pipelineRunId
+      ? setInterval(() => {
+          const elapsed = Math.round((Date.now() - synthStartMs) / 1000);
+          void emitStructuralEvent(db, pipelineRunId, {
+            type: "stage_boundary",
+            stage: "proposal",
+            phase: "enter",
+            message: `Synthesizing strategic insights… ${elapsed}s elapsed (typical ~55s)`,
+          });
+        }, 5000)
+      : null;
+
+    let synthesis: SynthesisData;
+    try {
+      synthesis = await llmJSON<SynthesisData>({
+        system: getSynthesisPrompt(intent, activeGoal, epistemicClassification),
+        user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${baselineBlock}${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}`,
+        maxTokens: 16384,
+        temperature: 0.3,
+      });
+    } finally {
+      if (synthHeartbeat) clearInterval(synthHeartbeat);
+    }
 
     // ── Post-synthesis coherence check ──
     // Validate synthesis claims against entity-level evidence (programmatic, ~10ms)
@@ -907,9 +982,7 @@ REQUIREMENTS FOR THIS PASS:
         // Extract benchmark for fitness check from space's existing synthesis_data
         let fitnessBenchmark: import("@/types/goals").ObjectiveBenchmark | null = null;
         try {
-          const { data: bmSpace } = await db.from("spaces").select("synthesis_data").eq("id", rootSpaceId).single();
-          const bmSynthData = (bmSpace?.synthesis_data ?? {}) as Record<string, unknown>;
-          const gb = (bmSynthData.goal_benchmarks ?? {}) as Record<string, unknown>;
+          const gb = (cachedRootSynthData.goal_benchmarks ?? {}) as Record<string, unknown>;
           fitnessBenchmark = (gb[activeGoal.id] as import("@/types/goals").ObjectiveBenchmark) ?? null;
         } catch { /* non-critical */ }
         goalFitness = checkGoalFitness(synthesis, activeGoal, allEntities, allEdges, fitnessBenchmark);
@@ -957,9 +1030,7 @@ REQUIREMENTS FOR THIS PASS:
         }
         // Get research summary from synthesis_data
         const rootMeta = spaceContexts.find((s) => s.spaceId === rootSpaceId);
-        const existingMeta = rootMeta
-          ? ((await db.from("spaces").select("synthesis_data").eq("id", rootSpaceId).single()).data as any)?.synthesis_data as Record<string, unknown> | null
-          : null;
+        const existingMeta = rootMeta ? cachedRootSynthData : null;
         const rs = existingMeta?.research_summary as Record<string, unknown> | null;
 
         const topSources = Array.from(domainCounts.entries())
@@ -1007,9 +1078,7 @@ REQUIREMENTS FOR THIS PASS:
 
         // Gather suggested objectives (for auto-detected objective targeting)
         const rootSpaceMetaForStrat = spaceContexts.find((s) => s.spaceId === rootSpaceId);
-        const existingMetaForStrat = rootSpaceMetaForStrat
-          ? ((await db.from("spaces").select("synthesis_data").eq("id", rootSpaceId).single()).data as any)?.synthesis_data as Record<string, unknown> | null
-          : null;
+        const existingMetaForStrat = rootSpaceMetaForStrat ? cachedRootSynthData : null;
         const suggestedObjs = Array.isArray(existingMetaForStrat?.suggested_objectives)
           ? existingMetaForStrat!.suggested_objectives as import("@/types/goals").SuggestedObjective[]
           : undefined;
@@ -1106,9 +1175,7 @@ REQUIREMENTS FOR THIS PASS:
         let stratBenchmark: import("@/types/goals").ObjectiveBenchmark | null = null;
         if (activeGoal) {
           try {
-            const { data: bmSpace2 } = await db.from("spaces").select("synthesis_data").eq("id", rootSpaceId).single();
-            const bmSd2 = (bmSpace2?.synthesis_data ?? {}) as Record<string, unknown>;
-            const gb2 = (bmSd2.goal_benchmarks ?? {}) as Record<string, unknown>;
+            const gb2 = (cachedRootSynthData.goal_benchmarks ?? {}) as Record<string, unknown>;
             stratBenchmark = (gb2[activeGoal.id] as import("@/types/goals").ObjectiveBenchmark) ?? null;
           } catch { /* non-critical */ }
         } else if (suggestedObjs?.[0]?.benchmark) {
@@ -1165,13 +1232,9 @@ REQUIREMENTS FOR THIS PASS:
     // Store synthesis on the first (or root) space
     // MERGE: preserve decompose metadata (shared_variables, open_questions, etc.)
     // and research metadata (potential_bridges) instead of overwriting
-    const { data: existingSpace } = await db
-      .from("spaces")
-      .select("synthesis_data")
-      .eq("id", rootSpaceId)
-      .single();
-
-    const existingData = (existingSpace?.synthesis_data as Record<string, unknown>) ?? {};
+    // Note: using the cached fetch from the top of the function — nothing has
+    // mutated synthesis_data in this request since then.
+    const existingData = cachedRootSynthData;
 
     // ── Capture quick synthesis snapshot before deep pipeline overwrites ──
     // Only capture if existing data has leverage_points but no snapshot yet
@@ -1416,6 +1479,41 @@ REQUIREMENTS FOR THIS PASS:
     };
     const updatedAnalysisRuns = appendRun(priorRunsForMerge, completedRun);
 
+    // ── Strategy staleness detection (Phase 7 of strategy rework) ──
+    // Compare the new synthesis against the prior one. If critical/HIDDEN
+    // axioms changed, strong convergences shifted, or coverage dropped, mark
+    // any existing strategic_recommendation as stale so the UI can surface it
+    // and trigger the user to regenerate.
+    let strategyStaleness: ReturnType<typeof detectStrategyStaleness> | null = null;
+    try {
+      const existingStratBlob = existingData.strategic_recommendation as Record<string, unknown> | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const existingStratRec = (existingStratBlob?.recommendation ?? null) as any;
+      if (existingStratRec) {
+        // Build the "new" synthesis snapshot that the strategy should be
+        // compared against — use synthesis (LLM output) + what we just
+        // computed in this run (convergences, coverage).
+        const newSnapshotForStaleness = {
+          ...existingData,
+          ...synthesis,
+          ...(insightConvergences.length > 0 ? { insight_convergences: insightConvergences } : {}),
+          ...(strategyCoverage ? { strategy_coverage: strategyCoverage } : {}),
+        };
+        strategyStaleness = detectStrategyStaleness(
+          existingData,
+          newSnapshotForStaleness,
+          existingStratRec,
+        );
+        if (strategyStaleness.stale) {
+          console.warn(
+            `[strategy-staleness] Existing strategy flagged stale: ${strategyStaleness.primary_reason}. ${strategyStaleness.summary}`,
+          );
+        }
+      }
+    } catch (stErr) {
+      console.warn("[strategy-staleness] Detection failed (non-critical):", stErr);
+    }
+
     const finalSynthData: Record<string, unknown> = {
       ...existingData,
       ...synthesis,
@@ -1451,6 +1549,7 @@ REQUIREMENTS FOR THIS PASS:
         generated_at: new Date().toISOString(),
         pipeline_version: 9,
       } } : {}),
+      ...(strategyStaleness?.stale ? { strategy_staleness: strategyStaleness } : {}),
     };
 
     // Log to changelog if changes detected
@@ -1500,6 +1599,41 @@ REQUIREMENTS FOR THIS PASS:
           trigger: "auto_chain",
           quality_score: strategyValidationScore,
         });
+
+        // Canvas HUD: one proposal_ready event per ranked strategy.
+        const ranked = (rankedStrategies ?? []) as Array<{
+          rank?: number;
+          recommendation?: { title?: string; headline?: string };
+        }>;
+
+        // PR 5 — attach run-level axis provenance to each event.
+        // Synthesize's emission is the "quick" variant (no
+        // distribution, no per-strategy entity mapping built here),
+        // so per-strategy precision isn't available. Using run-level
+        // axes is still honest: "this run considered these lenses,"
+        // and strategy-refresh will later override with a finer
+        // per-strategy breakdown when the distribution pass fires.
+        // Null-guard pipelineRunId: if the bus run never started, we
+        // can't scope axes to this run — emit without provenance.
+        const axisIndex = pipelineRunId
+          ? await loadRunAxisIndex(db, pipelineRunId)
+          : new Map();
+        const axesUsed = runLevelAxes(axisIndex);
+
+        for (let i = 0; i < Math.min(ranked.length, 10); i++) {
+          const r = ranked[i];
+          const title =
+            r.recommendation?.title ??
+            r.recommendation?.headline ??
+            `Strategy rank ${r.rank ?? i + 1}`;
+          await emitStructuralEvent(db, pipelineRunId, {
+            type: "proposal_ready",
+            proposalId: `${rootSpaceId}-v${nextVersion}-r${r.rank ?? i + 1}`,
+            kind: "strategy",
+            title: String(title).slice(0, 200),
+            ...(axesUsed.length > 0 ? { axes_used: axesUsed } : {}),
+          });
+        }
       } catch {
         console.warn("[synthesize] Strategy snapshot write failed (non-critical)");
       }
@@ -2036,9 +2170,92 @@ REQUIREMENTS FOR THIS PASS:
       ["synthesis", "quality_score"]
     );
 
+    // Canvas HUD: mark synthesis stage complete. Only close the
+    // shared run if this is the terminal hop.
+    await emitStructuralEvent(db, pipelineRunId, {
+      type: "stage_boundary",
+      stage: "proposal",
+      phase: "exit",
+    });
+    const isChainHop = autoAdvance && existingRunId;
+    if (!isChainHop) {
+      // Phase 2H + 2I quality lane — synthesize is the terminal hop
+      // when auto-advance is disabled. Fire cross-domain analog
+      // discovery + learning-curve measurement before the run
+      // closes so their events reach the live canvas. When the run
+      // DOES chain to strategy-refresh, the identical block there
+      // handles this instead.
+      try {
+        const { runComputeAnalogs } = await import("@/lib/analogy/run-compute-analogs");
+        const { runLearningMeasure } = await import("@/lib/learning/run-measure");
+        await Promise.allSettled([
+          runComputeAnalogs(db, {
+            spaceId: rootSpaceId,
+            userId: user.id,
+            runId: pipelineRunId,
+          }),
+          runLearningMeasure(db, {
+            spaceId: rootSpaceId,
+            userId: user.id,
+            domain: "generic",
+          }),
+        ]);
+      } catch (qualityErr) {
+        console.warn("[synthesize] quality-lane soft-fail:", qualityErr);
+      }
+      await completePipelineRun(db, pipelineRunId, "completed");
+    }
+
+    // Phase 1 Step 13/16 — short-abort handoff to strategy-refresh.
+    // Terminal hop: strategy-refresh runs with deferApps=true so the
+    // user still confirms before apps/interventions materialize.
+    if (autoAdvance && rootSpaceId) {
+      const cookieHeader = request.headers.get("cookie") ?? "";
+      const origin = new URL(request.url).origin;
+      const chainedSpaceId = rootSpaceId;
+      const chainedRunId = pipelineRunId;
+      after(async () => {
+        const ctrl = new AbortController();
+        const handoffTimeout = setTimeout(() => ctrl.abort(), 10000);
+        try {
+          await fetch(`${origin}/api/pipeline/strategy-refresh`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              spaceId: chainedSpaceId,
+              deferApps: true,
+              existingRunId: chainedRunId,
+              reservationId,
+            }),
+            signal: ctrl.signal,
+          });
+          clearTimeout(handoffTimeout);
+        } catch (advanceErr) {
+          clearTimeout(handoffTimeout);
+          const name = (advanceErr as { name?: string })?.name;
+          if (name === "AbortError") return;
+          console.warn("[synthesize] strategy-refresh handoff threw:", advanceErr);
+          if (chainedRunId) {
+            await completePipelineRun(
+              db,
+              chainedRunId,
+              "failed",
+              `handoff failed: ${advanceErr instanceof Error ? advanceErr.message : String(advanceErr)}`,
+            ).catch((finalizeErr) => {
+              console.warn("[synthesize] completePipelineRun(failed) after handoff threw:", finalizeErr);
+            });
+          }
+        }
+      });
+    }
+
     return NextResponse.json({
       success: true,
       rootSpaceId,
+      runId: pipelineRunId,
       ...(totalFilterReport ? { filterReport: totalFilterReport } : {}),
       ...(qualityScore ? { qualityScore: qualityScore.overall } : {}),
       ...(goalFitness ? { goalFitness: goalFitness.score } : {}),
@@ -2058,6 +2275,22 @@ REQUIREMENTS FOR THIS PASS:
   } catch (err) {
     console.error("Synthesis error:", err);
     await agentFail(err instanceof Error ? err.message : String(err));
+    await completePipelineRun(
+      db,
+      pipelineRunId,
+      "failed",
+      err instanceof Error ? err.message : String(err),
+    ).catch((finalizeErr) => {
+      console.warn("[synthesize] completePipelineRun(failed) threw:", finalizeErr);
+    });
+    // Refund the chain-wide reservation — synthesize failed, user
+    // doesn't pay for the incomplete chain.
+    if (reservationId) {
+      const { cancelReservation } = await import("@/lib/credits");
+      await cancelReservation(db, reservationId).catch((refundErr) => {
+        console.warn("[synthesize] cancelReservation threw:", refundErr);
+      });
+    }
     return NextResponse.json({ error: "Synthesis failed" }, { status: 500 });
   }
 }

@@ -65,6 +65,16 @@ registerActionHandler("log_prediction", async (ctx) => {
       ? Math.max(0, Math.min(1, p.confidence))
       : null;
 
+  // Tier 6: inherit entity_ids from the app. User-logged predictions
+  // carry the same KG lineage as agent-emitted ones so cascade staleness
+  // + aggregate queries treat them uniformly. Callers can override via
+  // explicit p.entity_ids[] — matches the pattern of agent_id override.
+  const entityIds: string[] = Array.isArray(p.entity_ids)
+    ? (p.entity_ids as unknown[]).filter((v): v is string => typeof v === "string")
+    : Array.isArray(ctx.app.dominant_entity_ids)
+      ? ctx.app.dominant_entity_ids
+      : [];
+
   const { error } = await ctx.db.from("prediction_ledger").insert({
     space_id: ctx.app.space_id,
     user_id: ctx.userId,
@@ -80,6 +90,7 @@ registerActionHandler("log_prediction", async (ctx) => {
     rationale: typeof p.rationale === "string" ? p.rationale : null,
     confidence,
     status: "open",
+    entity_ids: entityIds,
   });
 
   if (error) return { ok: false, reason: error.message };
@@ -112,6 +123,13 @@ registerActionHandler("start_experiment", async (ctx) => {
   const days = Math.max(1, Math.min(365, Number(p.horizon_days ?? 14)));
   const horizonAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 
+  // Tier 6: inherit entity_ids from the app — same pattern as log_prediction.
+  const expEntityIds: string[] = Array.isArray(p.entity_ids)
+    ? (p.entity_ids as unknown[]).filter((v): v is string => typeof v === "string")
+    : Array.isArray(ctx.app.dominant_entity_ids)
+      ? ctx.app.dominant_entity_ids
+      : [];
+
   const { data: inserted, error } = await ctx.db
     .from("prediction_ledger")
     .insert({
@@ -130,6 +148,7 @@ registerActionHandler("start_experiment", async (ctx) => {
       rationale: `[experiment] ${hypothesis}`,
       confidence: typeof p.confidence === "number" ? p.confidence : 0.5,
       status: "open",
+      entity_ids: expEntityIds,
     })
     .select("id")
     .single();
@@ -384,11 +403,61 @@ registerActionHandler("escalate_to_research", async (ctx) => {
     })
     .eq("id", predictionId);
 
+  // Tier 3: also trigger a per-app sub-strategy regeneration. The
+  // surprise deviation is exactly the signal that says "this app's
+  // model of reality is wrong" — the sub-strategy needs to incorporate
+  // the new pattern. Wrapped in a try/catch so a generation failure
+  // doesn't block the escalation itself (the changelog entry above is
+  // the durable record; sub-strategy regen is best-effort).
+  //
+  // Skipped when:
+  //   - The deviation tag is "expected" or "qualitative" (not actually
+  //     surprising; sub-strategy doesn't need updating)
+  //   - The reason starts with "[skip-substrategy]" (caller can opt out)
+  let substrategyTriggered = false;
+  let substrategyId: string | null = null;
+  const shouldRegenerate =
+    pred.deviation_tag === "surprise" || pred.deviation_tag === "regime_shift";
+  const optOut = (reason ?? "").startsWith("[skip-substrategy]");
+  if (shouldRegenerate && !optOut) {
+    try {
+      const { generateAppStrategy } = await import("@/lib/pipeline/app-strategy-generator");
+      const focusHint =
+        `Recent surprise on metric "${pred.metric_label}": ` +
+        `predicted ${pred.predicted_value ?? "?"}, actual ${pred.resolved_actual ?? "?"} ` +
+        `(tag: ${pred.deviation_tag}). ` +
+        (reason ? `User context: ${reason}.` : "") +
+        " Consider: (a) tightening or loosening prediction confidence baseline, " +
+        "(b) adding a hypothesis to the validation bank that tests the new pattern, " +
+        "(c) narrowing focused_objective scope if the surprise reveals the prior scope was wrong.";
+      const result = await generateAppStrategy({
+        db: ctx.db,
+        appId: ctx.app.id,
+        triggeredBy: `user:${ctx.userId}:escalation`,
+        triggerReason: `Deviation escalation: ${pred.metric_label} (${pred.deviation_tag})`,
+        deviationFocusHint: focusHint,
+        isDeviationDriven: true,
+      });
+      substrategyTriggered = true;
+      substrategyId = result.app_strategy.id;
+    } catch (regenErr) {
+      console.warn(
+        "[action:escalate_to_research] sub-strategy regen failed (non-critical):",
+        regenErr,
+      );
+    }
+  }
+
   return {
     ok: true,
     updated_app: ctx.app,
     change_type: "user_edit",
     change_summary: summary.slice(0, 100),
+    extra: {
+      changelog_summary: summary,
+      substrategy_triggered: substrategyTriggered,
+      substrategy_id: substrategyId,
+    },
   };
 });
 

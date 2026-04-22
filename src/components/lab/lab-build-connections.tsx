@@ -63,7 +63,7 @@ export function LabBuildConnections({
         type="button"
         onClick={onClick}
         disabled={status === "loading"}
-        className="flex items-center gap-1 rounded-[2px] border border-[#4ade80]/30 bg-[#4ade80]/5 px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.14em] text-[#4ade80] transition-colors hover:border-[#4ade80]/60 hover:bg-[#4ade80]/10 disabled:cursor-wait disabled:opacity-60"
+        className="flex items-center gap-1 rounded-[2px] border border-[var(--lab-accent)] bg-[var(--lab-accent-tint)] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.14em] text-[var(--lab-accent)] transition-colors hover:border-[var(--lab-accent)] hover:bg-[var(--lab-accent-tint)] disabled:cursor-wait disabled:opacity-60"
         title="Probe for more subunits + bonds"
       >
         {status === "loading" ? (
@@ -77,11 +77,11 @@ export function LabBuildConnections({
   }
 
   return (
-    <div className="flex flex-col items-center gap-2 rounded-[3px] border border-dashed border-[#4ade80]/25 bg-[#4ade80]/[0.03] px-3 py-4">
-      <div className="text-center text-[10px] leading-relaxed text-[#94a3b8]">
+    <div className="flex flex-col items-center gap-2 rounded-[3px] border border-dashed border-[var(--lab-accent)] bg-[var(--lab-accent-tint)] px-3 py-4">
+      <div className="text-center text-[10px] leading-relaxed text-[var(--lab-text-mid)]">
         No decomposed subunits yet.
         <br />
-        <span className="text-[9px] text-[#64748b]">
+        <span className="text-[9px] text-[var(--lab-text-dim)]">
           Build connections and subcomponents from this specimen.
         </span>
       </div>
@@ -89,7 +89,7 @@ export function LabBuildConnections({
         type="button"
         onClick={onClick}
         disabled={status === "loading"}
-        className="flex items-center gap-1.5 rounded-[3px] border border-[#4ade80]/50 bg-[#4ade80]/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#4ade80] transition-colors hover:border-[#4ade80]/80 hover:bg-[#4ade80]/20 disabled:cursor-wait disabled:opacity-60"
+        className="flex items-center gap-1.5 rounded-[3px] border border-[var(--lab-accent)] bg-[var(--lab-accent-tint)] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--lab-accent)] transition-colors hover:border-[var(--lab-accent)] hover:bg-[var(--lab-accent-tint)] disabled:cursor-wait disabled:opacity-60"
       >
         {status === "loading" ? (
           <Loader2 className="h-3 w-3 animate-spin" />
@@ -101,12 +101,12 @@ export function LabBuildConnections({
         </span>
       </button>
       {status === "error" && (
-        <div className="text-[9px] text-[#f472b6]">
+        <div className="text-[9px] text-[var(--lab-danger)]">
           Couldn't decompose — try again.
         </div>
       )}
       {count !== null && count === 0 && (
-        <div className="text-[9px] text-[#fbbf24]">
+        <div className="text-[9px] text-[var(--lab-warn)]">
           No new subunits found.
         </div>
       )}

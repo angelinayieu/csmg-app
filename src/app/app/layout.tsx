@@ -5,6 +5,7 @@ import { SidebarShell } from "@/components/layout/sidebar-shell";
 import { AppStoreProvider } from "@/stores/store-provider";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { GlobalToolbox } from "@/components/layout/global-toolbox";
+import { PulseStrip } from "@/components/pulse";
 import type { Space } from "@/types";
 
 export default async function AppLayout({
@@ -44,9 +45,15 @@ export default async function AppLayout({
       <ThemeProvider>
         <div className="flex h-screen overflow-hidden">
           <SidebarShell>
-            <SpaceSidebar userEmail={user.email ?? ""} creditBalance={creditBalance} />
+            <SpaceSidebar userEmail={user.email ?? ""} userId={user.id} creditBalance={creditBalance} />
           </SidebarShell>
           <main className="flex-1 overflow-y-auto bg-gradient-page">
+            {/* Tier 8: persistent Pulse strip — sticky at the top of
+                the main scroll container so it stays visible across
+                every authenticated page. The bar itself renders an
+                "empty/Quiet" state when not inside a space route, so
+                it's safe to mount at the layout level. */}
+            <PulseStrip />
             <div className="min-h-full px-6 py-6">{children}</div>
           </main>
         </div>

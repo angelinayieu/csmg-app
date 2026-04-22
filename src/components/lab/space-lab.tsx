@@ -24,8 +24,8 @@ import type { LabMode } from "./lab-mode-switcher";
 const LabChamber3D = dynamic(() => import("./lab-chamber-3d"), {
   ssr: false,
   loading: () => (
-    <div className="flex h-full items-center justify-center bg-[#02050a]">
-      <div className="flex items-center gap-2 text-[11px] text-[#4ade80]/80">
+    <div className="flex h-full items-center justify-center bg-[var(--lab-bg)]">
+      <div className="flex items-center gap-2 text-[11px] text-[var(--lab-accent)]/80">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
         Initializing reactor chamber…
       </div>
@@ -353,8 +353,8 @@ export function SpaceLab({
         breadcrumb={breadcrumb}
         closeHref={
           selectedSubunitId
-            ? `/app/space/${space.id}?focus=${selectedSubunitId}&rings=1`
-            : `/app/space/${space.id}`
+            ? `/app/space/${space.id}/whiteboard?focus=${selectedSubunitId}&rings=1`
+            : `/app/space/${space.id}/whiteboard`
         }
       />
 
@@ -414,7 +414,7 @@ export function SpaceLab({
       </div>
 
       <div
-        className="grid border-t border-[#94a3b8]/[0.08]"
+        className="grid border-t border-[var(--lab-border)]"
         style={{
           height: 220,
           gridTemplateColumns: "1fr 340px 280px",

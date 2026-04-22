@@ -97,6 +97,9 @@ export interface VariantVM {
   crown: boolean;
   recommendation: StrategicRecommendation;
   rankingRationale: string;
+  /** Infrastructure proposals that will be materialized as apps on approval.
+      Used by the pre-approval app preview to show exactly what gets created. */
+  infrastructureProposals: InfrastructureProposal[];
 }
 
 // ── Flowchart (variant detail) ──
@@ -448,6 +451,7 @@ export function buildVariantVM(rs: RankedStrategy, isTop: boolean): VariantVM {
     crown: isTop,
     recommendation: rec,
     rankingRationale: rs.ranking_rationale,
+    infrastructureProposals: rs.infrastructure_proposals ?? [],
   };
 }
 

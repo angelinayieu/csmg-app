@@ -76,10 +76,12 @@ export async function resolvePredictions(
 
   // Pull open predictions past horizon. Order by horizon_at so the oldest
   // ones get resolved first — important when batchSize clips the set.
+  // Wave D — also select user_id, space_id, app_id so we can cascade
+  // surprise deviations into agent_findings + stale flags.
   const { data: openRows, error } = await db
     .from("prediction_ledger")
     .select(
-      "id, tracker_id, metric_label, predicted_value, predicted_value_text, horizon_at, predicted_at",
+      "id, user_id, space_id, app_id, tracker_id, metric_label, predicted_value, predicted_value_text, horizon_at, predicted_at",
     )
     .eq("status", "open")
     .lte("horizon_at", nowIso)
@@ -233,6 +235,120 @@ export async function resolvePredictions(
 
     result.resolved++;
     result.by_tag[tag] = (result.by_tag[tag] ?? 0) + 1;
+
+    // Phase 1 Step 12 — outcome → confidence feedback loop.
+    // Apply a small Bayesian-ish nudge to strategy-relevant entities
+    // and the edges between them: positive reinforcement when the
+    // prediction held, de-rating on regime_shift / surprise. Closes
+    // the learning loop the KG has been missing: today the ledger
+    // writes observations, nothing updates the graph — so after 10
+    // resolved predictions the system's confidence numbers still
+    // reflect the LLM's initial guesses, not reality. Non-fatal.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const spaceIdForFeedback = (row as any).space_id as string | null;
+    if (spaceIdForFeedback) {
+      try {
+        const { applyConfidenceFromDeviation } = await import(
+          "@/lib/kg/apply-confidence-from-deviation"
+        );
+        const fb = await applyConfidenceFromDeviation(db, {
+          spaceId: spaceIdForFeedback,
+          deviationTag: tag,
+        });
+        if (fb.delta !== 0 && (fb.entitiesUpdated > 0 || fb.edgesUpdated > 0)) {
+          console.log(
+            `[resolve-predictions] ${row.id} ${tag} → confidence ` +
+              `delta ${fb.delta.toFixed(3)} applied to ` +
+              `${fb.entitiesUpdated} entities, ${fb.edgesUpdated} edges`,
+          );
+        }
+      } catch (fbErr) {
+        console.warn(
+          `[resolve-predictions] ${row.id} confidence feedback failed (non-fatal):`,
+          fbErr,
+        );
+      }
+    }
+
+    // Wave D — surprise cascade. When the resolved prediction deviated
+    // far enough to be tagged 'surprise', fan out to stale flags +
+    // urgent agent_finding + user_event. Non-fatal.
+    if (tag === "surprise") {
+      try {
+        const { handleSurpriseDeviation } = await import(
+          "@/lib/agents/surprise-cascade"
+        );
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const r = row as any;
+        await handleSurpriseDeviation(db, {
+          id: row.id,
+          user_id: r.user_id,
+          space_id: r.space_id ?? null,
+          app_id: r.app_id ?? null,
+          tracker_id: row.tracker_id,
+          metric_label: row.metric_label,
+          predicted_value: predicted,
+          resolved_actual: actual,
+          deviation,
+          deviation_tag: tag,
+          horizon_at: row.horizon_at,
+          resolved_at: nowIso,
+        });
+      } catch (cascadeErr) {
+        console.warn(
+          `[resolve-predictions] ${row.id} surprise cascade failed (non-fatal):`,
+          cascadeErr,
+        );
+      }
+
+      // Phase 1 Step 6 — coverage invalidation on deviation_detected.
+      // Closes the rigor loop: a surprise tells us that the
+      // causal model the prediction relied on was wrong. Flag
+      // pair-checks near strategy-relevant entities so the
+      // prospector re-examines them with fresh understanding.
+      //
+      // Targeting heuristic (v1): invalidate 1-hop neighborhood of
+      // entities flagged is_leverage_point / is_risk_point /
+      // is_master_bottleneck in the prediction's space. These are the
+      // strategy-relevant nodes most likely implicated in the
+      // surprise. Future refinement: resolve tracker.source_key →
+      // specific entity for narrower targeting.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const spaceIdForInval = (row as any).space_id as string | null;
+      if (spaceIdForInval) {
+        try {
+          const { data: strategicEntities } = await db
+            .from("entities")
+            .select("id")
+            .eq("space_id", spaceIdForInval)
+            .or("is_leverage_point.eq.true,is_risk_point.eq.true,is_master_bottleneck.eq.true");
+          const strategicIds = (
+            (strategicEntities ?? []) as Array<{ id: string }>
+          ).map((e) => e.id);
+          if (strategicIds.length > 0) {
+            const { invalidateCoverageForNewEntities } = await import(
+              "@/lib/kg/invalidate-coverage"
+            );
+            const inv = await invalidateCoverageForNewEntities(db, {
+              spaceId: spaceIdForInval,
+              newEntityIds: strategicIds,
+              reason: "deviation_detected",
+            });
+            if (inv.flagged > 0) {
+              console.log(
+                `[resolve-predictions] ${row.id} surprise → invalidated ${inv.flagged} pair checks ` +
+                `across ${inv.neighborCount} strategy-relevant entities (deviation_detected)`,
+              );
+            }
+          }
+        } catch (invErr) {
+          console.warn(
+            `[resolve-predictions] ${row.id} coverage invalidation failed (non-fatal):`,
+            invErr,
+          );
+        }
+      }
+    }
   }
 
   console.log(

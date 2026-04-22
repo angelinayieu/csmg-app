@@ -34,6 +34,7 @@ import type { SynthesisData, SynthesisQualityScore, GoalFitnessResult, RichBottl
 import type { AnalysisRun } from "@/types/analysis-runs";
 import { humanAge } from "@/lib/pipeline/cache";
 import { AnalysisTrailPanel } from "./analysis-trail-panel";
+import { StaleAppsChip } from "./stale-apps-chip";
 // Phase 4c: UPF — info-gain/friction-based "recommended next question" selector
 import { questionToDescriptor } from "@/lib/upf/score-questions";
 import { selectNextProxy } from "@/lib/upf/select-next";
@@ -558,6 +559,11 @@ export function SynthesisView({
 
   return (
     <div className="space-y-6 pb-8">
+      {/* Wave D L4.2 — stale apps chip. Ambient, auto-hides when no
+          apps are flagged. Lives first so it's the top-most signal
+          when the plan's assumptions have drifted under the user. */}
+      <StaleAppsChip spaceId={space.id} />
+
       {/* Quality Score & Goal Fitness indicators */}
       {(qualityScore || goalFitness) && (
         <section className="rounded-xl border border-gray-200 bg-white p-4">

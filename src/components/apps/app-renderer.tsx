@@ -226,6 +226,18 @@ export function AppRenderer({
           liveAppRef.current = json.app;
           onAppUpdated?.(json.app);
         }
+        // Tier 8 real-data wiring: nudge the PulseBar to refetch
+        // immediately. Widget actions frequently produce events that
+        // belong in the activity feed (log_prediction → agent_run,
+        // escalate_to_research → research_finding, end_experiment →
+        // prediction_resolved, run_simulation → scenario saved). Rather
+        // than opt-in per action, we dispatch on any successful widget
+        // action — it's cheap (one fetch) and keeps the bar feeling
+        // alive. Import is dynamic to avoid a circular dep through the
+        // pulse barrel.
+        import("@/components/pulse").then((m) => m.dispatchPulseRefresh?.()).catch(() => {
+          /* pulse refresh is non-critical */
+        });
         return { ok: true, payload: json.extra };
       } catch (e) {
         return { ok: false, reason: e instanceof Error ? e.message : String(e) };

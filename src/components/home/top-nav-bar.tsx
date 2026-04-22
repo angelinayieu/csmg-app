@@ -29,7 +29,7 @@ export function TopNavBar({ spaces }: TopNavBarProps) {
       </Link>
 
       {/* Create pill */}
-      <Link href="/app/analyze" className="glass-nav-pill">
+      <Link href="/app/new" className="glass-nav-pill">
         <div className="flex min-w-0 flex-col leading-tight">
           <span className="text-[9px] font-medium uppercase tracking-[0.14em] text-gray-400">
             Create

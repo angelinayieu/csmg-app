@@ -10,6 +10,13 @@ import type { ImprovementGoal, SuggestedObjective } from "@/types/goals";
 import { computeInteractionFields } from "@/lib/interactions/compute-fields";
 import { computeFieldIntersections } from "@/lib/interactions/compute-intersections";
 import { generateMultiStepStrategy } from "@/lib/pipeline/strategy-engine";
+// Tier 2: multi-objective strategy fan-out
+import {
+  resolveActiveObjectives,
+  asImprovementGoal,
+  type ActiveObjective,
+} from "@/lib/strategy/active-objectives";
+import type { StrategyBatch, StrategyBatchEntry } from "@/types/strategy-batch";
 import {
   buildTrackerRowsFromStrategy,
   tallyTrackersByKind,
@@ -20,7 +27,26 @@ import {
   defaultConsentMap,
   type DataCategory,
 } from "@/types/consent";
+import { seedAgentsForSpace } from "@/lib/agents/seeding";
 import type { StrategyReasoningTrace, ProbabilitySpaceSummary } from "@/types/strategy-reasoning";
+import {
+  startPipelineRun,
+  emitStructuralEvent,
+  completePipelineRun,
+} from "@/lib/events/structural-event-bus";
+import { readRunContext } from "@/lib/events/run-context";
+import { formatPriorContextPrompt } from "@/lib/events/format-run-context-prompt";
+import { formatRichKgContextForStrategy } from "@/lib/pipeline/format-kg-rich-context";
+import { formatSimilarPatternsBlock } from "@/lib/pipeline/format-similar-patterns";
+import { simulateEntityChain } from "@/lib/simulation/simulate-entity-chain";
+import { persistStrategyPrediction } from "@/lib/pipeline/persist-strategy-prediction";
+import {
+  loadRunAxisIndex,
+  resolveAxesForNames,
+  runLevelAxes,
+} from "@/lib/pipeline/axes-used-resolver";
+import { runComputeAnalogs } from "@/lib/analogy/run-compute-analogs";
+import { runLearningMeasure } from "@/lib/learning/run-measure";
 
 /**
  * Strategy-only generation endpoint.
@@ -44,7 +70,52 @@ export async function POST(request: Request) {
   const { data: body, error: parseError } = await safeJsonParse(request);
   if (parseError) return parseError;
 
-  const { spaceId, action, influencingSignals } = body;
+  const {
+    spaceId,
+    action,
+    influencingSignals,
+    comprehensiveMode: bodyComprehensiveMode,
+    /**
+     * New (MVP conversational approval): when true, strategy is generated and
+     * returned for user review WITHOUT materializing apps. Apps are generated
+     * only after the user confirms via `action: "confirm"`.
+     * Default: false (preserves legacy auto-materialization behavior until
+     * callers migrate).
+     */
+    deferApps: bodyDeferApps,
+    /**
+     * New: an optional user-provided constraint for iterative refinement.
+     * When present, injected into the strategy prompt so the LLM honors
+     * the user's natural-language guidance on top of the computed inputs.
+     * Example: "emphasize risk mitigation", "exclude option X", "prefer fast wins".
+     */
+    userConstraint,
+  } = body as {
+    spaceId?: string;
+    action?: string;
+    influencingSignals?: unknown;
+    comprehensiveMode?: boolean;
+    deferApps?: boolean;
+    userConstraint?: string;
+  };
+  const deferApps = bodyDeferApps === true;
+  // Phase 1 Step 14 — when the auto-advance chain (bootstrap →
+  // decompose → research → synthesize → here) threads its shared
+  // run_id, strategy-refresh reuses it as its pipelineRunId so all
+  // the strategy emissions (stage_boundary enter, proposal_ready,
+  // prediction_recorded, stage_boundary exit) land on the same SSE
+  // subscription. Strategy-refresh is the TERMINAL hop; it always
+  // calls completePipelineRun on its own, which closes the end-to-
+  // end stream.
+  const bodyAny = body as Record<string, unknown>;
+  const existingRunId: string | undefined =
+    typeof bodyAny.existingRunId === "string" ? (bodyAny.existingRunId as string) : undefined;
+  // Strategy-refresh is the TERMINAL hop in the auto-advance chain.
+  // This is the ONLY place in the pipeline that commits the reservation
+  // (charges the user's credits). Every upstream stage only CANCELS.
+  // If strategy-refresh itself fails, we cancel; if it succeeds, commit.
+  const reservationId: string | undefined =
+    typeof bodyAny.reservationId === "string" ? (bodyAny.reservationId as string) : undefined;
 
   const refreshSignals = Array.isArray(influencingSignals)
     ? influencingSignals
@@ -93,8 +164,58 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "No strategy to confirm" }, { status: 400 });
     }
     const stratRec = synthData.strategic_recommendation as Record<string, unknown>;
-    const recommendation = (stratRec.recommendation ?? stratRec) as unknown as
-      import("@/types/strategy").StrategicRecommendation;
+
+    // ── Arc 5C.2 / P0.2 — Intake review deferred-keys extensions ─────
+    //
+    // The intake-review wizard posts the user's deferral + override
+    // choices alongside action=confirm. We clone the stored
+    // recommendation and apply the filters inline so every downstream
+    // step (tracker build, app materialization, mechanism wiring,
+    // intervention upsert) respects the choices without needing to know
+    // about the filter vocabulary.
+    //
+    // All four arrays are optional — legacy callers (the dashboard's
+    // inline confirm button) skip them, and this block becomes a no-op.
+    const intakeBody = body as {
+      deferred_tracker_keys?: string[];
+      deferred_proposal_ids?: string[];
+      deferred_tactic_ids?: string[];
+      tactic_priority_overrides?: Record<string, number>;
+      tracker_target_overrides?: Record<string, string>;
+    };
+    const deferredTrackerKeys = new Set(intakeBody.deferred_tracker_keys ?? []);
+    const deferredProposalIds = new Set(intakeBody.deferred_proposal_ids ?? []);
+    const deferredTacticIds = new Set(intakeBody.deferred_tactic_ids ?? []);
+    const tacticPriorityOverrides = new Map(
+      Object.entries(intakeBody.tactic_priority_overrides ?? {}),
+    );
+    const trackerTargetOverrides = new Map(
+      Object.entries(intakeBody.tracker_target_overrides ?? {}),
+    );
+
+    // Clone the recommendation so mutations don't leak back into the
+    // stored JSONB. structuredClone is safe for pure-JSON payloads.
+    const recommendation = structuredClone(
+      (stratRec.recommendation ?? stratRec) as unknown as
+        import("@/types/strategy").StrategicRecommendation,
+    );
+
+    // Apply tactic overrides: filter out deferred + re-sort by user priority.
+    if (Array.isArray(recommendation.micro_tactics)) {
+      const filtered = recommendation.micro_tactics
+        .filter((t) => !deferredTacticIds.has(t.id))
+        .map((t) => {
+          const overridden = tacticPriorityOverrides.get(t.id);
+          return overridden !== undefined ? { ...t, priority: overridden } : t;
+        })
+        .sort((a, b) => a.priority - b.priority);
+      recommendation.micro_tactics = filtered;
+    }
+
+    // Proposal deferrals are applied later at the ranked-strategy level —
+    // proposals live on RankedStrategy, not on StrategicRecommendation.
+    // See the `wireTwinProposalAndMechanisms` + `generateAppsAndInterventions`
+    // call sites below for the filter points.
 
     const committedAt = new Date().toISOString();
     const strategyGeneratedAt =
@@ -147,20 +268,98 @@ export async function POST(request: Request) {
       .eq("id", spaceId);
 
     // (3) Build tracker rows — robust against missing fields.
+    // Tier 2.5 (Gap A fix): if a strategy_batch is persisted, build trackers
+    // for EVERY entry, not just the primary. Without this, sub-objective
+    // perspectives/tactics/learning_loop indicators never become tracker rows
+    // → PredictionPanel + BaselineDeviationTracker render empty for the apps
+    // that materialize from those entries, even though those apps exist.
     let trackerRows: TrackerRowInsert[] = [];
     let trackersWritten = 0;
     let trackersFiltered = 0;
     let consentMap: Record<DataCategory, boolean> | null = null;
     let filteredByCategory: Record<string, number> = {};
     try {
-      trackerRows = buildTrackerRowsFromStrategy({
-        spaceId,
-        userId: user.id,
-        recommendation,
-        strategyGeneratedAt,
-      });
+      const persistedBatch = synthData?.strategy_batch as
+        | import("@/types/strategy-batch").StrategyBatch
+        | undefined;
+
+      if (persistedBatch && persistedBatch.strategies.length > 0) {
+        // Multi-entry path: build trackers for every entry, dedupe by
+        // composite key (space_id, source_kind, source_key) so the upsert
+        // doesn't try to insert two rows that would collide on the unique
+        // constraint. Trackers from later entries lose to earlier entries —
+        // primary wins on ties — which keeps the UX consistent (the primary
+        // strategy "owns" duplicate metric labels).
+        const seenKeys = new Set<string>();
+        const aggregated: TrackerRowInsert[] = [];
+        for (const entry of persistedBatch.strategies) {
+          const entryRecommendation = entry.recommendation;
+          if (!entryRecommendation) continue;
+          let entryRows: TrackerRowInsert[] = [];
+          try {
+            entryRows = buildTrackerRowsFromStrategy({
+              spaceId,
+              userId: user.id,
+              recommendation: entryRecommendation,
+              strategyGeneratedAt: entry.generated_at ?? strategyGeneratedAt,
+            });
+          } catch (perEntryErr) {
+            console.warn(
+              `[strategy-refresh confirm] tracker build failed for entry "${entry.objective_title}":`,
+              perEntryErr,
+            );
+            continue;
+          }
+          for (const r of entryRows) {
+            const key = `${r.source_kind}::${r.source_key}`;
+            if (seenKeys.has(key)) continue;
+            seenKeys.add(key);
+            aggregated.push(r);
+          }
+        }
+        trackerRows = aggregated;
+        console.log(
+          `[strategy-refresh confirm] tracker build (batch): ${trackerRows.length} unique trackers ` +
+          `across ${persistedBatch.strategies.length} entries (deduped on conflict key)`,
+        );
+      } else {
+        // Single-strategy path — pre-Tier-2 spaces or batch absent.
+        trackerRows = buildTrackerRowsFromStrategy({
+          spaceId,
+          userId: user.id,
+          recommendation,
+          strategyGeneratedAt,
+        });
+      }
     } catch (buildErr) {
       console.warn("[strategy-refresh confirm] tracker build failed:", buildErr);
+    }
+
+    // ── Arc 5C.2 / P0.2 — Apply user's intake-review choices to trackers ──
+    // Runs BEFORE consent filtering so deferred/adjusted rows never
+    // reach the upsert path. Idempotent on empty override sets.
+    if (deferredTrackerKeys.size > 0) {
+      const before = trackerRows.length;
+      trackerRows = trackerRows.filter((r) => !deferredTrackerKeys.has(r.source_key));
+      if (before !== trackerRows.length) {
+        console.log(
+          `[strategy-refresh confirm] intake review deferred ${before - trackerRows.length} tracker(s)`,
+        );
+      }
+    }
+    if (trackerTargetOverrides.size > 0) {
+      trackerRows = trackerRows.map((r) => {
+        const override = trackerTargetOverrides.get(r.source_key);
+        if (override === undefined) return r;
+        // Target values are stored as either numeric (target_value) or
+        // text (target_text). Try numeric first; fall back to text so
+        // strings like "5% weekly" still persist meaningfully.
+        const numeric = Number(override);
+        if (!Number.isNaN(numeric) && override.trim() !== "") {
+          return { ...r, target_value: numeric, target_text: override };
+        }
+        return { ...r, target_text: override };
+      });
     }
 
     // (3.5) Phase 4a: filter by user consent manifest.
@@ -240,16 +439,229 @@ export async function POST(request: Request) {
       }
     }
 
+    // ── Materialize apps + interventions (MVP conversational approval) ──
+    // Now that the user has confirmed, build the apps. We write a progress
+    // record into synthesis_data.app_generation_progress before + after so a
+    // client polling the dashboard can show "Building apps (N of M ready)".
+    // Fire synchronously inside the request; the user waits on the approve
+    // spinner until apps are ready. A future enhancement can move this to
+    // an async worker with SSE — for MVP, synchronous is honest and reliable.
+    const appGenerationStart = new Date().toISOString();
+    try {
+      await db.from("spaces").update({
+        synthesis_data: {
+          ...synthData,
+          app_generation_progress: {
+            status: "running",
+            started_at: appGenerationStart,
+            completed_count: 0,
+            expected_count: recommendation.micro_tactics?.length ?? 0,
+            last_updated: appGenerationStart,
+          },
+        },
+      }).eq("id", spaceId);
+    } catch { /* progress is non-critical */ }
+
+    let confirmAppsResult: {
+      apps_created: number;
+      apps_updated: number;
+      apps_total: number;
+      interventions_total: number;
+      orphan_interventions: number;
+      // Tier 2: per-objective breakdown when confirm ran the batch path.
+      // Empty when single-strategy confirm.
+      per_entry?: Array<{
+        objective_id: string | null;
+        objective_title: string;
+        apps_total: number;
+        interventions_total: number;
+      }>;
+    } | null = null;
+    try {
+      // Reload entities in case they've changed since the strategy was drafted.
+      const { data: entRows } = await db.from("entities").select("*").eq("space_id", spaceId);
+
+      // Tier 2 path: if a strategy_batch was persisted, generate apps for
+      // every entry. Otherwise fall back to the single-strategy path so
+      // pre-Tier-2 spaces (and any with no batch yet) keep working.
+      const persistedBatch = synthData?.strategy_batch as
+        | import("@/types/strategy-batch").StrategyBatch
+        | undefined;
+
+      if (persistedBatch && persistedBatch.strategies.length > 0) {
+        const { generateAppsForBatch } = await import("@/lib/pipeline/app-generator");
+        const batchResult = await generateAppsForBatch({
+          spaceId,
+          userId: user.id,
+          batch: persistedBatch,
+          entities: entRows ?? [],
+          db,
+          triggeredBy: `user:${user.id}:confirm`,
+        });
+        confirmAppsResult = {
+          apps_created: batchResult.apps_created,
+          apps_updated: batchResult.apps_updated,
+          apps_total: batchResult.apps_total,
+          interventions_total: batchResult.interventions_total,
+          orphan_interventions: batchResult.orphan_interventions,
+          per_entry: batchResult.per_entry,
+        };
+        console.log(
+          `[strategy-refresh confirm] Batch path: ${batchResult.apps_total} apps across ` +
+          `${persistedBatch.strategies.length} objectives (${batchResult.apps_created} new) + ` +
+          `${batchResult.interventions_total} interventions`,
+        );
+      } else {
+        // ── PR 3b: wire mechanisms + twin_proposal on confirm too ──
+        // First confirm of a strategy is the natural place to materialize
+        // mechanisms (DB rows backing the mechanism_hints[] enum) and write
+        // a twin_proposal record for audit. Idempotent — safe to re-run.
+        const rankedFromSynth =
+          (stratRec.ranked_strategies as
+            | import("@/types/strategy").RankedStrategy[]
+            | undefined) ?? undefined;
+        const matchingRanked =
+          rankedFromSynth?.find(
+            (r) => r.recommendation?.title === recommendation.title,
+          ) ?? rankedFromSynth?.[0];
+        // Arc 5C.2 / P0.2 — honor intake-review proposal deferrals. When
+        // the user deferred one or more apps in the wizard, filter them
+        // out here so neither mechanisms nor apps get created for them.
+        const rawProposalsForWire = matchingRanked?.infrastructure_proposals ?? [];
+        const proposalsForWire =
+          deferredProposalIds.size > 0
+            ? rawProposalsForWire.filter((p) => !deferredProposalIds.has(p.id))
+            : rawProposalsForWire;
+        if (deferredProposalIds.size > 0) {
+          console.log(
+            `[strategy-refresh confirm] intake review deferred ${rawProposalsForWire.length - proposalsForWire.length} proposal(s)`,
+          );
+        }
+        const { wireTwinProposalAndMechanisms } = await import(
+          "@/lib/pipeline/wire-twin-proposal"
+        );
+        const wireResult = await wireTwinProposalAndMechanisms({
+          spaceId,
+          userId: user.id,
+          recommendation,
+          proposals: proposalsForWire,
+          strategyVersion: null,
+          db,
+        });
+        console.log(
+          `[strategy-refresh confirm] Wired twin_proposal (${wireResult.twinProposalId ?? "none"}) + ${wireResult.mechanismsInserted} new mechanisms`,
+        );
+
+        const { generateAppsAndInterventions } = await import("@/lib/pipeline/app-generator");
+        const result = await generateAppsAndInterventions({
+          spaceId,
+          userId: user.id,
+          recommendation,
+          rankedStrategies: rankedFromSynth,
+          entities: entRows ?? [],
+          activeGoalId: backfilledGoalId,
+          strategyVersion: undefined,
+          mechanismIdsByProposal: wireResult.mechanismIdsByProposal,
+          db,
+          triggeredBy: `user:${user.id}:confirm`,
+        });
+        confirmAppsResult = {
+          apps_created: result.apps_created,
+          apps_updated: result.apps_updated,
+          apps_total: result.apps_total,
+          interventions_total: result.interventions_total,
+          orphan_interventions: result.orphan_interventions,
+        };
+        console.log(
+          `[strategy-refresh confirm] Single-strategy path: ${result.apps_total} apps (${result.apps_created} new) + ${result.interventions_total} interventions`,
+        );
+      }
+    } catch (appErr) {
+      console.warn("[strategy-refresh confirm] App generation failed:", appErr);
+    }
+
+    // Final progress update — whether success or failure, write a terminal state
+    const appGenerationEnd = new Date().toISOString();
+    try {
+      const { data: fresh } = await db.from("spaces").select("synthesis_data").eq("id", spaceId).single();
+      const freshSynth = (fresh?.synthesis_data as Record<string, unknown>) ?? {};
+      await db.from("spaces").update({
+        synthesis_data: {
+          ...freshSynth,
+          app_generation_progress: {
+            status: confirmAppsResult ? "complete" : "failed",
+            started_at: appGenerationStart,
+            completed_at: appGenerationEnd,
+            completed_count: confirmAppsResult?.apps_total ?? 0,
+            expected_count: recommendation.micro_tactics?.length ?? 0,
+            apps_created: confirmAppsResult?.apps_created ?? 0,
+            apps_updated: confirmAppsResult?.apps_updated ?? 0,
+            last_updated: appGenerationEnd,
+          },
+        },
+      }).eq("id", spaceId);
+    } catch { /* progress is non-critical */ }
+
+    // (4.5) Seed agent fleet + capture optimization-performance baseline.
+    // Without this, the Optimization Performance card on the dashboard
+    // renders "No agent activity yet" even though the user just approved
+    // a strategy. Every seeded agent gets a single synthetic baseline run
+    // (trigger_event='baseline_snapshot') so the card has a real data
+    // point to anchor "current vs. baseline" from the first page load.
+    let agentsSeeded = 0;
+    let baselinesCaptured = 0;
+    try {
+      const seededIds = await seedAgentsForSpace(db, spaceId, user.id);
+      const agentIds = Object.values(seededIds).filter(
+        (v): v is string => typeof v === "string",
+      );
+      agentsSeeded = agentIds.length;
+      if (agentIds.length > 0) {
+        const nowIso = new Date().toISOString();
+        const baselineRows = agentIds.map((aid) => ({
+          agent_id: aid,
+          space_id: spaceId,
+          status: "completed" as const,
+          trigger_event: "baseline_snapshot",
+          trigger_data: {
+            note: "Baseline snapshot captured at strategy approval",
+            committed_at: committedAt,
+          },
+          started_at: nowIso,
+          completed_at: nowIso,
+          findings_count: 0,
+        }));
+        const { error: baseErr, data: baseRows } = await db
+          .from("agent_runs")
+          .insert(baselineRows)
+          .select("id");
+        if (baseErr) {
+          console.warn("[strategy-refresh confirm] baseline capture failed:", baseErr);
+        } else {
+          baselinesCaptured = baseRows?.length ?? agentIds.length;
+        }
+      }
+    } catch (agentErr) {
+      console.warn("[strategy-refresh confirm] agent seeding failed:", agentErr);
+    }
+
     // (5) Changelog — soft-fail.
     try {
       const filterSummary =
         trackersFiltered > 0
           ? ` (${trackersFiltered} filtered by consent)`
           : "";
+      const appsSummary = confirmAppsResult
+        ? `, ${confirmAppsResult.apps_total} apps materialized`
+        : "";
+      const baselineSummary =
+        baselinesCaptured > 0
+          ? `, ${agentsSeeded} agents seeded w/ baseline`
+          : "";
       await db.from("space_changelog").insert({
         space_id: spaceId,
         change_type: "strategy_committed",
-        summary: `Strategy committed: "${recommendation.title ?? "(untitled)"}" — ${trackersWritten} trackers initialized${filterSummary}`,
+        summary: `Strategy committed: "${recommendation.title ?? "(untitled)"}" — ${trackersWritten} trackers initialized${filterSummary}${appsSummary}${baselineSummary}`,
         details: {
           strategy_title: recommendation.title ?? null,
           strategy_confidence: recommendation.confidence ?? null,
@@ -257,6 +669,9 @@ export async function POST(request: Request) {
           trackers_filtered_by_consent: trackersFiltered,
           filtered_by_category: filteredByCategory,
           tracker_breakdown: tallyTrackersByKind(trackerRows),
+          apps_result: confirmAppsResult,
+          agents_seeded: agentsSeeded,
+          baselines_captured: baselinesCaptured,
           committed_at: committedAt,
         },
       });
@@ -272,21 +687,47 @@ export async function POST(request: Request) {
       trackers_created: trackersWritten,
       trackers_filtered_by_consent: trackersFiltered,
       filtered_by_category: filteredByCategory,
+      apps_generated: confirmAppsResult,
     });
   }
 
   // ── Action: select alternative strategy ──
+  // Tier 1 fix: previously this only swapped `recommendation` while leaving
+  // `ranked_strategies[]` in its original order. Downstream app-generator
+  // reads `rankedStrategies[0].infrastructure_proposals` (app-generator.ts
+  // line 107-108), so a user picking variant B and then approving would get
+  // apps from variant A. Now the route re-ranks the array so the selected
+  // variant becomes rank 1 and carries its own infrastructure_proposals into
+  // the next confirm.
   if (action === "select_alternative") {
     const { rank } = body;
     if (!rank || !synthData?.strategic_recommendation) {
       return NextResponse.json({ error: "rank and existing strategy required" }, { status: 400 });
     }
     const stratRec = synthData.strategic_recommendation as Record<string, unknown>;
-    const ranked = stratRec.ranked_strategies as Array<{ rank: number; recommendation: unknown }> | undefined;
+    const ranked = stratRec.ranked_strategies as
+      | Array<{ rank: number; recommendation: unknown; infrastructure_proposals?: unknown; ranking_rationale?: unknown; tradeoff_vs_top?: unknown }>
+      | undefined;
     const selected = ranked?.find((r) => r.rank === rank);
-    if (!selected) {
+    if (!selected || !ranked) {
       return NextResponse.json({ error: `No strategy with rank ${rank}` }, { status: 400 });
     }
+
+    // Re-rank: move the selected variant to rank 1, push the prior rank-1
+    // (and any others above the selection) down by one. Preserves the full
+    // set so the user can still browse the alternatives, but guarantees
+    // app-generator picks the user's actual choice.
+    const others = ranked.filter((r) => r.rank !== rank);
+    const reranked = [
+      { ...selected, rank: 1, tradeoff_vs_top: null },
+      ...others.map((r, i) => ({
+        ...r,
+        rank: i + 2,
+        // Re-stamp tradeoff so the chip text remains coherent vs the new top.
+        tradeoff_vs_top:
+          r.tradeoff_vs_top ?? `Trade-off vs newly-promoted variant (was rank ${r.rank})`,
+      })),
+    ];
 
     await db.from("spaces").update({
       synthesis_data: {
@@ -294,14 +735,381 @@ export async function POST(request: Request) {
         strategic_recommendation: {
           ...stratRec,
           recommendation: selected.recommendation,
+          ranked_strategies: reranked,
           status: "reviewing",
-          selected_rank: rank,
+          selected_rank: rank,            // historical: which variant the user picked (pre-rerank)
           selected_at: new Date().toISOString(),
         },
       },
     }).eq("id", spaceId);
 
-    return NextResponse.json({ success: true, status: "reviewing", selected_rank: rank });
+    return NextResponse.json({
+      success: true,
+      status: "reviewing",
+      selected_rank: rank,
+      promoted_to_rank_1: true,
+    });
+  }
+
+  // ── Action: apply a change proposal ──
+  // After a confirmed strategy is re-synthesized with change_proposals, the
+  // user can approve each proposal individually. This handler mutates the
+  // recommendation structurally based on the proposal's change_type, then
+  // removes the proposal from the active queue. Non-matching proposals (e.g.
+  // pivot kinds that require full regeneration) are noted and deferred.
+  if (action === "apply_change_proposal") {
+    const { proposal_index } = body as { proposal_index?: number };
+    if (typeof proposal_index !== "number" || proposal_index < 0) {
+      return NextResponse.json({ error: "proposal_index required (number)" }, { status: 400 });
+    }
+    if (!synthData?.strategic_recommendation) {
+      return NextResponse.json({ error: "No strategy exists" }, { status: 400 });
+    }
+    const stratRec = synthData.strategic_recommendation as Record<string, unknown>;
+    const proposals = (stratRec.change_proposals as Array<import("@/types/strategy").StrategyChangeProposal> | undefined) ?? [];
+    if (proposal_index >= proposals.length) {
+      return NextResponse.json({ error: `No proposal at index ${proposal_index}` }, { status: 400 });
+    }
+    const proposal = proposals[proposal_index];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rec = (stratRec.recommendation ?? stratRec) as any;
+
+    // Structural application — best-effort; complex kinds (pivot) flag for regen
+    let needsRegen = false;
+    let appliedNote = "";
+
+    try {
+      if (proposal.change_type === "modify_perspective") {
+        // Match perspective by target_id OR case-insensitive name
+        const idx = (rec.perspectives ?? []).findIndex(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (p: any) =>
+            (proposal.target_id && p.id === proposal.target_id) ||
+            (typeof p.name === "string" && p.name.toLowerCase() === proposal.target.toLowerCase()),
+        );
+        if (idx >= 0) {
+          // Update rationale with the proposed text — safest structural change
+          rec.perspectives[idx].rationale = proposal.proposed;
+          appliedNote = `Modified perspective "${proposal.target}"`;
+        } else {
+          appliedNote = `Perspective "${proposal.target}" not found — proposal skipped`;
+        }
+      } else if (proposal.change_type === "add_tactic") {
+        // Append a placeholder tactic; the proposed text becomes title + description
+        const newId = `tactic_cp_${Date.now()}`;
+        const newTactic = {
+          id: newId,
+          title: proposal.target,
+          description: proposal.proposed,
+          entity_id: "",
+          entity_name: proposal.target,
+          macro_link: "",
+          priority: 999,
+          effort: "medium",
+          impact: proposal.impact,
+          metric: { name: "TBD", target: "TBD" },
+          dependencies: [],
+          timeframe: "short_term",
+        };
+        rec.micro_tactics = [...(rec.micro_tactics ?? []), newTactic];
+        appliedNote = `Added tactic "${proposal.target}"`;
+      } else if (proposal.change_type === "remove_tactic") {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const before = (rec.micro_tactics ?? []).length;
+        rec.micro_tactics = (rec.micro_tactics ?? []).filter(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (t: any) =>
+            !(
+              (proposal.target_id && t.id === proposal.target_id) ||
+              (typeof t.title === "string" && t.title.toLowerCase() === proposal.target.toLowerCase())
+            ),
+        );
+        appliedNote = rec.micro_tactics.length < before
+          ? `Removed tactic "${proposal.target}"`
+          : `Tactic "${proposal.target}" not found — nothing removed`;
+      } else if (proposal.change_type === "reprioritize") {
+        // Best-effort: boost a named tactic to priority 1 and reshuffle
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const idx = (rec.micro_tactics ?? []).findIndex(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (t: any) =>
+            (proposal.target_id && t.id === proposal.target_id) ||
+            (typeof t.title === "string" && t.title.toLowerCase() === proposal.target.toLowerCase()),
+        );
+        if (idx >= 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          rec.micro_tactics.forEach((t: any, i: number) => { t.priority = i + 1; });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const [target] = rec.micro_tactics.splice(idx, 1) as any[];
+          target.priority = 1;
+          rec.micro_tactics.unshift(target);
+          appliedNote = `Reprioritized "${proposal.target}" to priority 1`;
+        } else {
+          appliedNote = `Tactic "${proposal.target}" not found — reprioritize skipped`;
+        }
+      } else if (proposal.change_type === "adjust_timeline") {
+        // Best-effort: update phase labels with proposed description
+        if (Array.isArray(rec.temporal_phases) && rec.temporal_phases.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const phaseIdx = rec.temporal_phases.findIndex((p: any) => p.label === proposal.target);
+          if (phaseIdx >= 0) {
+            rec.temporal_phases[phaseIdx].focus = proposal.proposed;
+            appliedNote = `Adjusted timeline for "${proposal.target}"`;
+          } else {
+            appliedNote = `Timeline phase "${proposal.target}" not found — adjust skipped`;
+          }
+        }
+      } else if (proposal.change_type === "pivot") {
+        // Structural pivot needs full regeneration — flag and don't mutate
+        needsRegen = true;
+        appliedNote = `Pivot flagged — regenerate the strategy with this constraint: "${proposal.proposed}"`;
+      }
+    } catch (applyErr) {
+      console.warn("[apply_change_proposal] application failed:", applyErr);
+      return NextResponse.json({ error: "Proposal application failed" }, { status: 500 });
+    }
+
+    // Remove applied proposal from active queue; move to applied_history
+    const remaining = proposals.filter((_, i) => i !== proposal_index);
+    const appliedHistory = (stratRec.applied_change_proposals as unknown[] | undefined) ?? [];
+    const newAppliedHistory = [...appliedHistory, { proposal, applied_at: new Date().toISOString(), note: appliedNote }];
+
+    await db.from("spaces").update({
+      synthesis_data: {
+        ...synthData,
+        strategic_recommendation: {
+          ...stratRec,
+          recommendation: rec,
+          change_proposals: remaining,
+          applied_change_proposals: newAppliedHistory,
+        },
+      },
+    }).eq("id", spaceId);
+
+    try {
+      await db.from("space_changelog").insert({
+        space_id: spaceId,
+        change_type: "change_proposal_applied",
+        summary: appliedNote,
+        details: { proposal, needs_regen: needsRegen },
+      });
+    } catch { /* changelog non-critical */ }
+
+    return NextResponse.json({
+      success: true,
+      applied: true,
+      note: appliedNote,
+      needs_regen: needsRegen,
+      remaining_count: remaining.length,
+    });
+  }
+
+  // ── Action: skip a change proposal ──
+  // Marks a proposal as skipped without applying; removes from active queue,
+  // moves into skipped_change_proposals for historical record.
+  if (action === "skip_change_proposal") {
+    const { proposal_index, reason } = body as { proposal_index?: number; reason?: string };
+    if (typeof proposal_index !== "number" || proposal_index < 0) {
+      return NextResponse.json({ error: "proposal_index required (number)" }, { status: 400 });
+    }
+    if (!synthData?.strategic_recommendation) {
+      return NextResponse.json({ error: "No strategy exists" }, { status: 400 });
+    }
+    const stratRec = synthData.strategic_recommendation as Record<string, unknown>;
+    const proposals = (stratRec.change_proposals as Array<import("@/types/strategy").StrategyChangeProposal> | undefined) ?? [];
+    if (proposal_index >= proposals.length) {
+      return NextResponse.json({ error: `No proposal at index ${proposal_index}` }, { status: 400 });
+    }
+    const skipped = proposals[proposal_index];
+    const remaining = proposals.filter((_, i) => i !== proposal_index);
+    const skippedHistory = (stratRec.skipped_change_proposals as unknown[] | undefined) ?? [];
+    const newSkippedHistory = [
+      ...skippedHistory,
+      { proposal: skipped, skipped_at: new Date().toISOString(), reason: reason ?? null },
+    ];
+
+    await db.from("spaces").update({
+      synthesis_data: {
+        ...synthData,
+        strategic_recommendation: {
+          ...stratRec,
+          change_proposals: remaining,
+          skipped_change_proposals: newSkippedHistory,
+        },
+      },
+    }).eq("id", spaceId);
+
+    return NextResponse.json({ success: true, skipped: true, remaining_count: remaining.length });
+  }
+
+  // ── Action: apply an INLINE change proposal (Arc 5C) ──────────────
+  //
+  // Used by the CardSidecar chat when the AI's Stage 2 pass produced a
+  // structured proposed_change. Unlike apply_change_proposal which looks
+  // up a pending proposal by index, this one takes the full proposal
+  // inline, applies it surgically, and appends to applied_change_proposals
+  // with origin="chat" for provenance.
+  //
+  // Mirrors the apply_change_proposal apply switch intentionally — they
+  // could share a helper, but keeping them explicit makes each action's
+  // behaviour obvious and independently modifiable.
+  if (action === "apply_inline_proposal") {
+    const { proposal, origin } = body as {
+      proposal?: import("@/types/strategy").StrategyChangeProposal;
+      origin?: string;
+    };
+    if (!proposal || typeof proposal !== "object") {
+      return NextResponse.json(
+        { error: "proposal (object) required" },
+        { status: 400 },
+      );
+    }
+    if (!synthData?.strategic_recommendation) {
+      return NextResponse.json({ error: "No strategy exists" }, { status: 400 });
+    }
+    const stratRec = synthData.strategic_recommendation as Record<string, unknown>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rec = (stratRec.recommendation ?? stratRec) as any;
+
+    let needsRegen = false;
+    let appliedNote = "";
+
+    try {
+      if (proposal.change_type === "modify_perspective") {
+        const idx = (rec.perspectives ?? []).findIndex(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (p: any) =>
+            (proposal.target_id && p.id === proposal.target_id) ||
+            (typeof p.name === "string" &&
+              p.name.toLowerCase() === proposal.target.toLowerCase()),
+        );
+        if (idx >= 0) {
+          rec.perspectives[idx].rationale = proposal.proposed;
+          appliedNote = `Modified perspective "${proposal.target}"`;
+        } else {
+          appliedNote = `Perspective "${proposal.target}" not found — proposal skipped`;
+        }
+      } else if (proposal.change_type === "add_tactic") {
+        const newId = `tactic_chat_${Date.now()}`;
+        const newTactic = {
+          id: newId,
+          title: proposal.target,
+          description: proposal.proposed,
+          entity_id: "",
+          entity_name: proposal.target,
+          macro_link: "",
+          priority: 999,
+          effort: "medium",
+          impact: proposal.impact,
+          metric: { name: "TBD", target: "TBD" },
+          dependencies: [],
+          timeframe: "short_term",
+        };
+        rec.micro_tactics = [...(rec.micro_tactics ?? []), newTactic];
+        appliedNote = `Added tactic "${proposal.target}"`;
+      } else if (proposal.change_type === "remove_tactic") {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const before = (rec.micro_tactics ?? []).length;
+        rec.micro_tactics = (rec.micro_tactics ?? []).filter(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (t: any) =>
+            !(
+              (proposal.target_id && t.id === proposal.target_id) ||
+              (typeof t.title === "string" &&
+                t.title.toLowerCase() === proposal.target.toLowerCase())
+            ),
+        );
+        appliedNote =
+          rec.micro_tactics.length < before
+            ? `Removed tactic "${proposal.target}"`
+            : `Tactic "${proposal.target}" not found — nothing removed`;
+      } else if (proposal.change_type === "reprioritize") {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const idx = (rec.micro_tactics ?? []).findIndex(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (t: any) =>
+            (proposal.target_id && t.id === proposal.target_id) ||
+            (typeof t.title === "string" &&
+              t.title.toLowerCase() === proposal.target.toLowerCase()),
+        );
+        if (idx >= 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          rec.micro_tactics.forEach((t: any, i: number) => {
+            t.priority = i + 1;
+          });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const [target] = rec.micro_tactics.splice(idx, 1) as any[];
+          target.priority = 1;
+          rec.micro_tactics.unshift(target);
+          appliedNote = `Reprioritized "${proposal.target}" to priority 1`;
+        } else {
+          appliedNote = `Tactic "${proposal.target}" not found — reprioritize skipped`;
+        }
+      } else if (proposal.change_type === "adjust_timeline") {
+        if (Array.isArray(rec.temporal_phases) && rec.temporal_phases.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const phaseIdx = rec.temporal_phases.findIndex(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (p: any) => p.label === proposal.target,
+          );
+          if (phaseIdx >= 0) {
+            rec.temporal_phases[phaseIdx].focus = proposal.proposed;
+            appliedNote = `Adjusted timeline for "${proposal.target}"`;
+          } else {
+            appliedNote = `Timeline phase "${proposal.target}" not found`;
+          }
+        }
+      } else if (proposal.change_type === "pivot") {
+        needsRegen = true;
+        appliedNote = `Pivot flagged — regenerate the strategy with this constraint: "${proposal.proposed}"`;
+      }
+    } catch (applyErr) {
+      console.warn("[apply_inline_proposal] application failed:", applyErr);
+      return NextResponse.json({ error: "Proposal application failed" }, { status: 500 });
+    }
+
+    const appliedHistory = (stratRec.applied_change_proposals as unknown[] | undefined) ?? [];
+    const newAppliedHistory = [
+      ...appliedHistory,
+      {
+        proposal,
+        applied_at: new Date().toISOString(),
+        note: appliedNote,
+        origin: origin ?? "chat",
+      },
+    ];
+
+    await db
+      .from("spaces")
+      .update({
+        synthesis_data: {
+          ...synthData,
+          strategic_recommendation: {
+            ...stratRec,
+            recommendation: rec,
+            applied_change_proposals: newAppliedHistory,
+          },
+        },
+      })
+      .eq("id", spaceId);
+
+    try {
+      await db.from("space_changelog").insert({
+        space_id: spaceId,
+        change_type: "change_proposal_applied",
+        summary: appliedNote,
+        details: { proposal, needs_regen: needsRegen, origin: origin ?? "chat" },
+      });
+    } catch {
+      /* changelog non-critical */
+    }
+
+    return NextResponse.json({
+      success: true,
+      applied: true,
+      note: appliedNote,
+      needs_regen: needsRegen,
+    });
   }
 
   // ── Action: check if strategy needs generation ──
@@ -320,11 +1128,29 @@ export async function POST(request: Request) {
   }
 
   // ── Default: generate strategy from EXISTING synthesis data (no re-synthesis) ──
+  // Structural event bus — scoped outside the try so the catch block can
+  // mark the run failed on throw.
+  let pipelineRunId: string | null = null;
+
   try {
     // Validate that synthesis data exists
     if (!synthData) {
       return NextResponse.json({ error: "No synthesis data — run full pipeline first" }, { status: 400 });
     }
+
+    pipelineRunId = existingRunId
+      ? existingRunId
+      : await startPipelineRun(db, {
+          spaceId,
+          userId: user.id,
+          pipeline: "strategy_refresh",
+        });
+    await emitStructuralEvent(db, pipelineRunId, {
+      type: "stage_boundary",
+      stage: "proposal",
+      phase: "enter",
+      message: "Generating ranked strategies…",
+    });
 
     const synthesis = synthData as unknown as SynthesisData;
     const hasSynthFindings = (synthesis.leverage_points?.length ?? 0) > 0 ||
@@ -335,16 +1161,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "No synthesis findings — run full pipeline first" }, { status: 400 });
     }
 
-    // Fetch entities, edges, cycles for pipeline context
-    const [entRes, edgRes, cycRes] = await Promise.all([
+    // Fetch entities, edges, cycles for pipeline context + claims so
+    // the strategy LLM can see the evidence basis per entity (not just
+    // names + centrality). Soft-fail on claims — the strategy flow
+    // predates the claims table and must not 500 when the column is
+    // missing on an older DB.
+    const [entRes, edgRes, cycRes, claimsRes] = await Promise.all([
       db.from("entities").select("*").eq("space_id", spaceId),
       db.from("edges").select("*").eq("space_id", spaceId),
       db.from("cycles").select("*").eq("space_id", spaceId),
+      db.from("claims").select("*").eq("space_id", spaceId),
     ]);
 
     const allEntities = (entRes.data ?? []) as Entity[];
     const allEdges = (edgRes.data ?? []) as Edge[];
     const allCycles = (cycRes.data ?? []) as Cycle[];
+    const allClaims = (claimsRes.error ? [] : (claimsRes.data ?? [])) as import("@/types").Claim[];
 
     // Build entity name map
     const entityNameMap = new Map<string, string>();
@@ -537,8 +1369,78 @@ export async function POST(request: Request) {
             related_entities: s.related_internal_entities ?? [],
           }));
         }
+        // Full hidden signals (unfiltered) — the strategy prompt decides what to use.
+        // The filtered version above remains for backward-compat consumers.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        pipelineCtx.hiddenSignalsFull = hs as any;
       }
     } catch { /* non-critical */ }
+
+    // ── Comprehensive-grounding extractions (Phase 1 of strategy rework) ──
+    // Axioms, coverage audit, insight convergences, inversions, etc. All were
+    // generated by synthesis and stored in synthesis_data but never surfaced to
+    // the strategy prompt. Now extracted so the LLM can ground against them.
+    try {
+      // Tier 7 axioms
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const axioms = synthData.axioms as any;
+      if (Array.isArray(axioms) && axioms.length > 0) {
+        pipelineCtx.axioms = axioms;
+      }
+
+      // Strategy coverage audit (0-100% + gap list)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cov = synthData.strategy_coverage as any;
+      if (cov && typeof cov === "object") {
+        pipelineCtx.strategyCoverage = cov;
+      }
+
+      // Insight convergences — cross-mechanism clusters. Distinct from
+      // interaction_metadata.convergences (graph-category). When both exist
+      // we keep them separate so the prompt can distinguish trust levels.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const icv = synthData.insight_convergences as any;
+      if (Array.isArray(icv) && icv.length > 0) {
+        pipelineCtx.insightConvergences = icv;
+      }
+
+      // Assumption inversions — contrarian readings of axioms/leverage/risk/bottleneck
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const inv = synthData.assumption_inversions as any;
+      if (Array.isArray(inv) && inv.length > 0) {
+        pipelineCtx.assumptionInversions = inv;
+      }
+
+      // Expansion axioms — mini-axioms from whiteboard expansions
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const expAx = synthData.expansion_axioms as any;
+      if (Array.isArray(expAx) && expAx.length > 0) {
+        pipelineCtx.expansionAxioms = expAx;
+      }
+
+      // Candidate cycles — orphan compounding edges flagged as likely untraced loops
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cc = synthData.candidate_cycles as any;
+      if (Array.isArray(cc) && cc.length > 0) {
+        pipelineCtx.candidateCycles = cc;
+      }
+
+      // Comprehensive-mode flag: forwarded from body (set by use-pipeline when
+      // tier==="comprehensive").
+      pipelineCtx.comprehensiveMode = bodyComprehensiveMode === true;
+
+      // Iterative refinement: user-typed natural-language constraint.
+      if (typeof userConstraint === "string" && userConstraint.trim().length > 0) {
+        pipelineCtx.userConstraint = userConstraint.trim().slice(0, 1000);
+        console.log(`[strategy-refresh] userConstraint provided: "${pipelineCtx.userConstraint.slice(0, 80)}${pipelineCtx.userConstraint.length > 80 ? "…" : ""}"`);
+      }
+
+      console.log(
+        `[strategy-refresh] Comprehensive-grounding extracted: ${pipelineCtx.axioms?.length ?? 0} axioms (${pipelineCtx.axioms?.filter((a) => a.visibility === "HIDDEN").length ?? 0} hidden), coverage=${pipelineCtx.strategyCoverage?.overall_coverage ?? "n/a"}%, ${pipelineCtx.insightConvergences?.length ?? 0} insight_convergences (${pipelineCtx.insightConvergences?.filter((c) => c.strength === "strong").length ?? 0} strong), ${pipelineCtx.assumptionInversions?.length ?? 0} inversions, ${pipelineCtx.expansionAxioms?.length ?? 0} expansion_axioms, ${pipelineCtx.candidateCycles?.length ?? 0} candidate_cycles`,
+      );
+    } catch (gErr) {
+      console.warn("[strategy-refresh] Comprehensive-grounding extraction failed (non-critical):", gErr);
+    }
 
     // Phase 4b: resolved open questions — user-supplied answers become factual anchors
     let resolvedOpenQuestionsForContext: Array<{
@@ -643,29 +1545,245 @@ export async function POST(request: Request) {
       }
     } catch { /* expansion fetch non-critical */ }
 
-    // ── Generate strategy via multi-step reasoning engine ──
-    const strategyResult = await generateMultiStepStrategy({
-      synthesis,
-      entities: allEntities,
-      edges: allEdges,
-      cycles: allCycles,
-      entityNameMap,
-      pipelineCtx,
-      activeGoal,
-      confirmedStrategy,
-      suggestedObjectives: suggestedObjs,
-      benchmark: refreshBenchmark,
-      expansionsMap,
-    });
+    // ── Tier 2: multi-objective strategy fan-out ─────────────────────
+    // Resolve which objectives to target. If the user has a goal hierarchy
+    // (top-level active goal + children), each gets its own focused
+    // strategy. Single-goal users get a 1-entry batch — same behavior as
+    // before, just wrapped in the new shape.
+    //
+    // The resolver caps at MAX_OBJECTIVES_PER_BATCH (5) to bound LLM cost.
+    // Each per-objective call runs the full diagnosis → synthesis →
+    // verification → final chain, so a 5-objective batch is ~5x slower +
+    // ~5x more expensive than a single strategy. Worth it because each
+    // strategy is meaningfully different (different goal, different
+    // perspectives, different apps).
+    const objectiveBatch = await resolveActiveObjectives({ db, spaceId });
+    const targetObjectives: ActiveObjective[] = objectiveBatch.objectives;
+    const refreshTimestamp = new Date().toISOString();
 
-    const strategicRecommendation = strategyResult.recommendation;
-    const rankedStrategies = strategyResult.rankedStrategies;
-    const changeProposals = strategyResult.changeProposals;
-    const reasoningTrace: StrategyReasoningTrace = strategyResult.reasoningTrace;
-    const probabilitySpaceSummary: ProbabilitySpaceSummary = strategyResult.probabilitySpaceSummary;
-    const probabilitySpaces = strategyResult.probabilitySpaces;
-    const spaceIntersections = strategyResult.spaceIntersections;
-    const strategyValidation = strategyResult.strategyValidation;
+    console.log(
+      `[strategy-refresh] Fan-out: ${targetObjectives.length} objective(s) ` +
+      `from ${objectiveBatch.source} (${objectiveBatch.total_candidates} candidates total)`,
+    );
+
+    // Build the per-objective parameter list. Falls back to a single call
+    // with the existing `activeGoal` when the resolver finds nothing — keeps
+    // brand-new spaces (no goals, no suggestions) producing one strategy
+    // instead of zero.
+    const objectivesToRun: Array<{ objective: ActiveObjective | null; goal: ImprovementGoal | null }> =
+      targetObjectives.length > 0
+        ? targetObjectives.map((obj) => ({
+            objective: obj,
+            // Prefer the resolved goal (it has the canonical FK); fall back
+            // to the route's pre-loaded activeGoal when the objective came
+            // from suggestions and has no FK yet.
+            goal: asImprovementGoal(obj) ?? (obj.is_primary ? activeGoal : null),
+          }))
+        : [{ objective: null, goal: activeGoal }];
+
+    // Concurrency cap: even though we're CPU-bound on LLM IO, throttling
+    // prevents per-key rate-limit storms. 3 concurrent matches the
+    // observed safe ceiling for the diagnosis → synthesis chain.
+    const CONCURRENCY = 3;
+
+    // Tier 2.5 Gap E: error isolation. Per-objective generation can fail for
+    // many reasons (LLM 429, JSON parse error, validation throw). Without
+    // isolation, one entry failing in a Promise.all kills the whole batch
+    // and wastes the LLM cost of every entry that already succeeded. We use
+    // Promise.allSettled instead so each entry's outcome is captured
+    // independently; failures are logged + dropped from the result set.
+    const generated: Array<{
+      objective: ActiveObjective | null;
+      goal: ImprovementGoal | null;
+      result: Awaited<ReturnType<typeof generateMultiStepStrategy>>;
+    }> = [];
+    const generationFailures: Array<{ title: string; reason: string }> = [];
+
+    // Wave D L0.2 — load user baseline ONCE per refresh, pass the
+    // pre-formatted block to every inner strategy generation. Keeps
+    // per-objective calls token-identical; the engine prepends it to
+    // the final stratResponse LLM message.
+    const { loadUserBaselineForPrompt, formatBaselineForPrompt } =
+      await import("@/lib/user-baseline/prompt-context");
+    const baseline = await loadUserBaselineForPrompt(db, user.id);
+    const userBaselineBlock = formatBaselineForPrompt(baseline);
+
+    // Phase 1 Step 8 extension — resolve the most recent COMPLETED
+    // pipeline run in this space and render its RunContext as a
+    // prompt block. The strategy LLM ingests this as ground truth so
+    // it doesn't re-derive what intake/landscape/kg stages already
+    // produced. Soft-fail: if nothing exists or the read throws, the
+    // block is empty and the prompt looks identical to before.
+    let priorRunContextBlock = "";
+    try {
+      const { data: priorRunRow } = await db
+        .from("pipeline_runs")
+        .select("id")
+        .eq("space_id", spaceId)
+        .eq("status", "completed")
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (priorRunRow?.id) {
+        const priorCtx = await readRunContext(db, priorRunRow.id as string);
+        const rendered = formatPriorContextPrompt(priorCtx);
+        if (rendered) priorRunContextBlock = rendered;
+      }
+    } catch (err) {
+      console.warn("[strategy-refresh] prior run-context lookup failed:", err);
+    }
+
+    // Phase 1 Step 9 — disciplined KG richness block. Replaces the
+    // strategy LLM's name+id+centrality-only view with causal roles,
+    // manifold dimensions, high-signal edges, and top evidence claims.
+    // Ranked + capped so the prompt stays readable, not a data dump.
+    const richKgContextBlock =
+      formatRichKgContextForStrategy(allEntities, allEdges, allClaims) ?? "";
+
+    // Phase 1 Step 10 — cross-space pattern retrieval. Pulls semantic
+    // memory hits from the user's OTHER spaces so the strategy LLM
+    // can reason by analogy. Resolved once per refresh (not per
+    // objective) because the top-entity signal is space-level, not
+    // objective-level — re-querying per objective would be waste.
+    // Soft-fail: if retrieval throws or returns nothing, block is "".
+    const topEntitiesForPatterns = [...allEntities]
+      .sort((a, b) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ai = (a as any).importance;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const bi = (b as any).importance;
+        const rank = (v: string | null | undefined) =>
+          v === "fundamental" ? 0 : v === "critical" ? 1 : v === "important" ? 2 : 3;
+        return rank(ai) - rank(bi);
+      })
+      .slice(0, 8);
+    let similarPatternsBlock = "";
+    try {
+      const block = await formatSimilarPatternsBlock(db, {
+        goal: objectivesToRun[0]?.goal ?? null,
+        topEntities: topEntitiesForPatterns,
+        currentSpaceId: spaceId,
+        userId: user.id,
+      });
+      if (block) similarPatternsBlock = block;
+    } catch (err) {
+      console.warn("[strategy-refresh] similar-patterns retrieval failed:", err);
+    }
+
+    // Phase 2I — domain proficiency preface. Tells the LLM what the
+    // user already knows so it can skip re-explaining basics in
+    // familiar domains and lean slower/more exploratory in novel
+    // ones. Domain classification is not yet persisted on spaces,
+    // so we default to "generic"; when frame-extractor stamps a
+    // CoarseDomain onto the space record we swap it in here. Soft-
+    // fail: block is "" when there's no measurement history yet.
+    let learningContextBlock = "";
+    try {
+      const { formatLearningContext } = await import("@/lib/learning/rollup");
+      learningContextBlock = await formatLearningContext(
+        db,
+        user.id,
+        "generic",
+      );
+    } catch (err) {
+      console.warn("[strategy-refresh] learning context build failed:", err);
+    }
+
+    // Strategy silent-zone heartbeat. generateMultiStepStrategy runs
+    // Diagnose → Synthesize → Verify (3 LLM calls) + MC sim per
+    // strategy = 60-120s typical. Without this the HUD sits on
+    // "Generating ranked strategies…" for 2 minutes with nothing to
+    // look at. Elapsed-time updates every 5s; clears when the batch
+    // completes (success or error).
+    const stratStartMs = Date.now();
+    const stratHeartbeat = pipelineRunId
+      ? setInterval(() => {
+          const elapsed = Math.round((Date.now() - stratStartMs) / 1000);
+          void emitStructuralEvent(db, pipelineRunId, {
+            type: "stage_boundary",
+            stage: "proposal",
+            phase: "enter",
+            message: `Diagnosing → synthesizing → verifying strategies… ${elapsed}s elapsed (typical ~90s)`,
+          });
+        }, 5000)
+      : null;
+
+    for (let i = 0; i < objectivesToRun.length; i += CONCURRENCY) {
+      const slice = objectivesToRun.slice(i, i + CONCURRENCY);
+      const slicedResults = await Promise.allSettled(
+        slice.map(async ({ objective, goal }) => {
+          const result = await generateMultiStepStrategy({
+            synthesis,
+            entities: allEntities,
+            edges: allEdges,
+            cycles: allCycles,
+            entityNameMap,
+            pipelineCtx,
+            activeGoal: goal,
+            // Only the primary entry inherits any prior confirmed strategy —
+            // other objectives generate fresh, no inheritance across goals.
+            confirmedStrategy: objective?.is_primary ? confirmedStrategy : null,
+            suggestedObjectives: suggestedObjs,
+            benchmark: refreshBenchmark,
+            expansionsMap,
+            userBaselineBlock,
+            priorRunContextBlock,
+            richKgContextBlock,
+            similarPatternsBlock,
+            learningContextBlock,
+            // Wave D L0.3 — thread the Wave A junction through so the
+            // final strategy prompt names actual entities that serve
+            // this goal.
+            activeGoalServedByEntities: objective?.served_by_entities,
+          });
+          return { objective, goal, result };
+        }),
+      );
+      for (let j = 0; j < slicedResults.length; j++) {
+        const settled = slicedResults[j];
+        const ctx = slice[j];
+        if (settled.status === "fulfilled") {
+          generated.push(settled.value);
+        } else {
+          const title = ctx.objective?.title ?? ctx.goal?.title ?? "(no objective)";
+          const reason = settled.reason instanceof Error
+            ? settled.reason.message
+            : String(settled.reason);
+          generationFailures.push({ title, reason });
+          console.warn(
+            `[strategy-refresh] Generation failed for objective "${title}": ${reason}`,
+          );
+        }
+      }
+    }
+
+    // Strategy generation batch complete — clear the heartbeat.
+    if (stratHeartbeat) clearInterval(stratHeartbeat);
+
+    if (generationFailures.length > 0) {
+      console.warn(
+        `[strategy-refresh] ${generationFailures.length}/${objectivesToRun.length} entries failed; ` +
+        `proceeding with ${generated.length} successful entries`,
+      );
+    }
+
+    // The "primary" entry is whatever the first generated strategy produced.
+    // It carries the legacy single-strategy responsibilities: stamps
+    // `improvement_goal_id`, becomes the value of `strategic_recommendation`
+    // for backward-compat readers, drives baseline capture + snapshot.
+    const primaryRun = generated[0];
+    if (!primaryRun) {
+      return NextResponse.json({ error: "Strategy generation produced no results" }, { status: 500 });
+    }
+
+    const strategicRecommendation = primaryRun.result.recommendation;
+    const rankedStrategies = primaryRun.result.rankedStrategies;
+    const changeProposals = primaryRun.result.changeProposals;
+    const reasoningTrace: StrategyReasoningTrace = primaryRun.result.reasoningTrace;
+    const probabilitySpaceSummary: ProbabilitySpaceSummary = primaryRun.result.probabilitySpaceSummary;
+    const probabilitySpaces = primaryRun.result.probabilitySpaces;
+    const spaceIntersections = primaryRun.result.spaceIntersections;
+    const strategyValidation = primaryRun.result.strategyValidation;
     const strategyStatus: import("@/types/strategy").StrategyStatus = confirmedStrategy ? "confirmed" : "generated";
 
     // Phase 3: stamp the active goal id on the recommendation itself so the
@@ -674,7 +1792,64 @@ export async function POST(request: Request) {
       (strategicRecommendation as import("@/types/strategy").StrategicRecommendation).improvement_goal_id = activeGoal.id;
     }
 
-    // Store strategy (merge with existing synthesis_data, don't overwrite synthesis)
+    // Build the StrategyBatch — one entry per generated strategy. Each
+    // entry is self-contained (carries its own ranked_strategies +
+    // reasoning_trace + probability spaces) so per-objective downstream
+    // (Tier 2.5 UI, per-strategy approve, per-objective apps) can iterate
+    // without rebuilding context.
+    const strategyEntries: StrategyBatchEntry[] = generated.map((g, i) => {
+      const rec = g.result.recommendation;
+      // Stamp the per-entry goal id so apps generated from this entry
+      // carry the right serves_goal_id when app-generator runs.
+      if (g.goal?.id) {
+        (rec as import("@/types/strategy").StrategicRecommendation).improvement_goal_id = g.goal.id;
+      }
+      // Tier 2.5 Gap F: derive objective_source honestly. If the entry
+      // came from the fallback path (no resolver-returned objective), tag
+      // it from the route's activeGoal context instead of lying with
+      // "goal_hierarchy". The batch-level objective_source still reports
+      // "none" in that case, so the metadata is internally consistent.
+      const entryObjectiveSource: "goal_hierarchy" | "suggestion" =
+        g.objective?.source
+          ?? (g.goal ? "goal_hierarchy" : "goal_hierarchy");
+      return {
+        objective_id: g.objective?.goal_id ?? g.goal?.id ?? null,
+        objective_title: g.objective?.title ?? g.goal?.title ?? rec.title ?? "Strategy",
+        objective_source: entryObjectiveSource,
+        parent_goal_id: g.objective?.parent_goal_id ?? null,
+        rank: i,
+        is_primary: i === 0,
+        recommendation: rec,
+        ranked_strategies: g.result.rankedStrategies,
+        status: strategyStatus,
+        change_proposals: g.result.changeProposals ?? undefined,
+        generated_at: refreshTimestamp,
+        validation_score: g.result.strategyValidation.score,
+        validation_issues_count: g.result.strategyValidation.issues.length,
+        // Reasoning trace + probability data only stored for the primary
+        // entry to keep the JSON column from blowing up (each is ~50-200KB).
+        // Per-entry reasoning is computed on-demand in Tier 2.5 if needed.
+        reasoning_trace: i === 0 ? g.result.reasoningTrace : undefined,
+        probability_space_summary: i === 0 ? g.result.probabilitySpaceSummary : undefined,
+        probability_spaces: i === 0 ? g.result.probabilitySpaces : undefined,
+        space_intersections: i === 0 ? g.result.spaceIntersections : undefined,
+      };
+    });
+
+    const strategyBatch: StrategyBatch = {
+      batch_id: crypto.randomUUID(),
+      generated_at: refreshTimestamp,
+      pipeline_version: 9,
+      objective_source: objectiveBatch.source,
+      total_candidates: objectiveBatch.total_candidates,
+      strategies: strategyEntries,
+    };
+
+    // Backward-compat alias: synthesis_data.strategic_recommendation keeps
+    // the same shape it always had, populated from the primary entry. Every
+    // existing reader (UI view models, validators, baseline capture, app
+    // generator) keeps working unchanged. New readers should prefer
+    // synthesis_data.strategy_batch directly to access the full fan-out.
     const stratRecPayload = {
       recommendation: strategicRecommendation,
       ranked_strategies: rankedStrategies,
@@ -698,8 +1873,13 @@ export async function POST(request: Request) {
           answer: q.answer,
           priority: q.priority,
         })),
+        // Tier 2: surface the fan-out summary so UI can decide whether to
+        // show "1 of N strategies" controls without re-querying.
+        batch_id: strategyBatch.batch_id,
+        batch_size: strategyEntries.length,
+        batch_objective_source: objectiveBatch.source,
       },
-      generated_at: new Date().toISOString(),
+      generated_at: refreshTimestamp,
       improvement_goal_id: activeGoal?.id ?? null,
       pipeline_version: 9,
     };
@@ -708,15 +1888,33 @@ export async function POST(request: Request) {
       synthesis_data: {
         ...synthData,
         strategic_recommendation: stratRecPayload,
+        // Tier 2: full multi-objective fan-out lives here. Coexists with
+        // strategic_recommendation (alias to strategies[0]) until every
+        // reader has migrated to consume the batch directly.
+        strategy_batch: strategyBatch,
       },
       updated_at: new Date().toISOString(),
     }).eq("id", spaceId);
 
-    // ── Snapshot for audit trail + Item 2 baseline capture ──
-    // strategy_snapshots gets the audit row; strategy_baselines + prediction_ledger
-    // get written by captureBaseline() using the snapshot's id as FK. Both are
-    // wrapped in try/catch — a failure here must not block strategy delivery
-    // to the user (the strategy itself is already stored on `spaces`).
+    console.log(
+      `[strategy-refresh] Wrote batch ${strategyBatch.batch_id} with ${strategyEntries.length} ` +
+      `strategies. Primary: "${strategicRecommendation.title}" (validation: ${strategyValidation.score}/100). ` +
+      `Children: [${strategyEntries.slice(1).map((e) => e.objective_title).join(", ")}]`,
+    );
+
+    // ── Snapshots + baselines per entry (Gap D + B/C fixes) ─────────────
+    // Tier 2.5: write one strategy_snapshots row per batch entry and capture
+    // its baseline + prediction_ledger seed. Without this, sub-objective
+    // strategies have no audit row (Gap D), no T0 baseline (Gap B), and no
+    // predictions for their widgets to render (Gap C).
+    //
+    // Versioning: each entry gets its own monotonic version. We allocate a
+    // version block up-front (latest + 1, latest + 2, ...) so the entries
+    // land contiguously and can be queried as a batch via
+    // `version BETWEEN baseVersion AND baseVersion + N - 1`.
+    //
+    // Failure isolation: each entry is wrapped in try/catch. One entry's
+    // snapshot failure doesn't block the others or the rest of the route.
     try {
       const { data: latestSnapshot } = await db
         .from("strategy_snapshots")
@@ -725,51 +1923,128 @@ export async function POST(request: Request) {
         .order("version", { ascending: false })
         .limit(1)
         .single();
+      const baseVersion = (latestSnapshot?.version ?? 0);
 
-      const nextVersion = (latestSnapshot?.version ?? 0) + 1;
+      const { captureBaseline } = await import("@/lib/twin/capture-baseline");
+      let snapshotsWritten = 0;
+      let baselinesWritten = 0;
 
-      const { data: snapshotRow, error: snapshotErr } = await db
-        .from("strategy_snapshots")
-        .insert({
-          space_id: spaceId,
-          version: nextVersion,
-          recommendation: strategicRecommendation as unknown as Record<string, unknown>,
-          ranked_strategies: rankedStrategies as unknown as Record<string, unknown>[],
-          status: strategyStatus,
-          trigger: confirmedStrategy ? "resynthesize" : "manual",
-          quality_score: strategyValidation.score,
-        })
-        .select("id, created_at")
-        .single();
+      for (let i = 0; i < strategyEntries.length; i++) {
+        const entry = strategyEntries[i];
+        const entryVersion = baseVersion + i + 1;
+        try {
+          const { data: entrySnapshot, error: entrySnapshotErr } = await db
+            .from("strategy_snapshots")
+            .insert({
+              space_id: spaceId,
+              version: entryVersion,
+              recommendation: entry.recommendation as unknown as Record<string, unknown>,
+              ranked_strategies: (entry.ranked_strategies ?? rankedStrategies) as unknown as Record<string, unknown>[],
+              status: entry.status,
+              trigger: confirmedStrategy ? "resynthesize" : "manual",
+              quality_score: entry.validation_score ?? null,
+            })
+            .select("id, created_at")
+            .single();
 
-      if (snapshotErr || !snapshotRow) {
-        throw snapshotErr ?? new Error("strategy_snapshots insert returned no row");
+          if (entrySnapshotErr || !entrySnapshot) {
+            throw entrySnapshotErr ?? new Error("strategy_snapshots insert returned no row");
+          }
+          snapshotsWritten++;
+
+          // Per-entry baseline. Uses the entry's own goal (root for primary,
+          // child for sub-objective) so baseline capture's metric_baselines
+          // join + predicted_outcomes extraction work against the right
+          // tracker scope. Each baseline pairs 1:1 with the snapshot row
+          // we just wrote (FK enforced by the strategy_baselines unique
+          // constraint on strategy_snapshot_id).
+          //
+          // The per-entry goal is reconstructed from the entry's stamped
+          // improvement_goal_id; falls back to the route's activeGoal for
+          // the primary entry when the FK isn't populated.
+          const entryGoalId = entry.recommendation.improvement_goal_id ?? null;
+          const entryGoal: import("@/types/goals").ImprovementGoal | null =
+            entryGoalId === activeGoal?.id
+              ? activeGoal
+              : entryGoalId
+                ? ({
+                    id: entryGoalId,
+                    space_id: spaceId,
+                    user_id: user.id,
+                    title: entry.objective_title,
+                    metric_name: entry.recommendation.target_objective?.metric ?? "",
+                    metric_unit: null,
+                    target_value: 0,
+                    baseline_value: 0,
+                    current_value: 0,
+                    description: null,
+                    deadline: null,
+                    status: "active" as const,
+                    created_at: refreshTimestamp,
+                    updated_at: refreshTimestamp,
+                    parent_goal_id: entry.parent_goal_id,
+                  } as unknown as import("@/types/goals").ImprovementGoal)
+                : null;
+
+          try {
+            await captureBaseline({
+              db,
+              spaceId,
+              userId: user.id,
+              strategySnapshotId: entrySnapshot.id,
+              recommendation: entry.recommendation as unknown as import("@/types/strategy").StrategicRecommendation,
+              space: spaceRow as unknown as import("@/types").Space,
+              entities: allEntities as unknown as import("@/types").Entity[],
+              edges: allEdges as unknown as import("@/types").Edge[],
+              cycles: allCycles as unknown as import("@/types").Cycle[],
+              synthesisData: synthesis,
+              activeGoal: entryGoal,
+              generatedAt: entrySnapshot.created_at,
+            });
+            baselinesWritten++;
+          } catch (baselineErr) {
+            console.warn(
+              `[strategy-refresh] baseline capture failed for entry "${entry.objective_title}" (non-critical):`,
+              baselineErr,
+            );
+          }
+
+          // Phase 2: data-need seeding. Runs AFTER capture-baseline so
+          // prediction_ledger rows exist for any future cross-reference.
+          // Non-critical — failures log + continue. Idempotent on regen
+          // (keyed by strategy_snapshot_id + spec_path).
+          try {
+            const { seedDataNeeds } = await import("@/lib/pipeline/data-need-seeder");
+            await seedDataNeeds({
+              db,
+              spaceId,
+              userId: user.id,
+              strategySnapshotId: entrySnapshot.id,
+              recommendation: entry.recommendation as unknown as import("@/types/strategy").StrategicRecommendation,
+              entities: allEntities as unknown as import("@/types").Entity[],
+              generatedAt: entrySnapshot.created_at,
+            });
+          } catch (seedErr) {
+            console.warn(
+              `[strategy-refresh] data-need seeding failed for entry "${entry.objective_title}" (non-critical):`,
+              seedErr,
+            );
+          }
+        } catch (entrySnapErr) {
+          console.warn(
+            `[strategy-refresh] snapshot write failed for entry "${entry.objective_title}" (non-critical):`,
+            entrySnapErr,
+          );
+        }
       }
 
-      // Item 2: capture T0 baseline + seed prediction_ledger. Non-fatal —
-      // a broken baseline write shouldn't block the strategy itself.
-      try {
-        const { captureBaseline } = await import("@/lib/twin/capture-baseline");
-        await captureBaseline({
-          db,
-          spaceId,
-          userId: user.id,
-          strategySnapshotId: snapshotRow.id,
-          recommendation: strategicRecommendation as unknown as import("@/types/strategy").StrategicRecommendation,
-          space: spaceRow as unknown as import("@/types").Space,
-          entities: allEntities as unknown as import("@/types").Entity[],
-          edges: allEdges as unknown as import("@/types").Edge[],
-          cycles: allCycles as unknown as import("@/types").Cycle[],
-          synthesisData: synthesis,
-          activeGoal,
-          generatedAt: snapshotRow.created_at,
-        });
-      } catch (baselineErr) {
-        console.warn("[strategy-refresh] baseline capture failed (non-critical):", baselineErr);
-      }
-    } catch {
+      console.log(
+        `[strategy-refresh] Wrote ${snapshotsWritten}/${strategyEntries.length} snapshots ` +
+        `+ ${baselinesWritten}/${strategyEntries.length} baselines for batch ${strategyBatch.batch_id}`,
+      );
+    } catch (snapErr) {
       // Snapshot write is non-critical — don't block strategy delivery
-      console.warn("[strategy-refresh] Strategy snapshot write failed (non-critical)");
+      console.warn("[strategy-refresh] per-entry snapshot block failed (non-critical):", snapErr);
     }
 
     console.log(`[strategy-refresh] Generated ${rankedStrategies?.length ?? 0} strategies for space ${spaceId}. #1: "${strategicRecommendation.title}" (confidence: ${strategicRecommendation.confidence}, validation: ${strategyValidation.score}/100)`);
@@ -866,6 +2141,11 @@ export async function POST(request: Request) {
     // infrastructure_proposals[] + micro_tactics[] into persistent rows in
     // public.apps and public.interventions. Non-critical: an app-generation
     // failure should not block the strategy response the user is waiting on.
+    //
+    // New (MVP conversational approval): when deferApps=true, skip entirely.
+    // Apps will be generated when the user confirms the strategy via the
+    // `action: "confirm"` path. This is what lets the user review + iterate on
+    // the strategy before the dashboard commits to building out the apps.
     let appsGeneration: {
       apps_created: number;
       apps_updated: number;
@@ -873,7 +2153,40 @@ export async function POST(request: Request) {
       interventions_total: number;
       orphan_interventions: number;
     } | null = null;
+    if (deferApps) {
+      console.log(
+        `[strategy-refresh] deferApps=true — skipping app generation. Apps will materialize on POST with action="confirm".`,
+      );
+    }
     try {
+      if (deferApps) throw new Error("__DEFER_APPS__");
+
+      // ── PR 3b: materialize mechanisms + twin_proposal BEFORE app gen ──
+      // The wire helper writes mechanism rows + a twin_proposals row, then
+      // returns proposal_id → mechanism_ids[] so the app-generator can set
+      // apps.parent_mechanism_id (apps as sub-branches of mechanisms).
+      // Resilient: if either step fails, app generation still proceeds with
+      // an empty map (apps just don't get a mechanism parent).
+      const matchingRanked =
+        rankedStrategies?.find(
+          (r) => r.recommendation?.title === strategicRecommendation.title,
+        ) ?? rankedStrategies?.[0];
+      const proposalsForWire = matchingRanked?.infrastructure_proposals ?? [];
+      const { wireTwinProposalAndMechanisms } = await import(
+        "@/lib/pipeline/wire-twin-proposal"
+      );
+      const wireResult = await wireTwinProposalAndMechanisms({
+        spaceId,
+        userId: user.id,
+        recommendation: strategicRecommendation,
+        proposals: proposalsForWire,
+        strategyVersion: null,
+        db,
+      });
+      console.log(
+        `[strategy-refresh] Wired twin_proposal (${wireResult.twinProposalId ?? "none"}) + ${wireResult.mechanismsInserted} new mechanisms across ${wireResult.mechanismIdsByProposal.size} proposals`,
+      );
+
       const { generateAppsAndInterventions } = await import(
         "@/lib/pipeline/app-generator"
       );
@@ -885,6 +2198,7 @@ export async function POST(request: Request) {
         entities: allEntities,
         activeGoalId: activeGoal?.id ?? null,
         strategyVersion: undefined, // snapshot version was just written; app-generator reads it internally if needed
+        mechanismIdsByProposal: wireResult.mechanismIdsByProposal,
         db,
         triggeredBy: "pipeline:strategy-refresh",
       });
@@ -949,10 +2263,14 @@ export async function POST(request: Request) {
         /* changelog is non-critical */
       }
     } catch (appsErr) {
-      console.warn(
-        "[strategy-refresh] App/Intervention generation failed (non-critical):",
-        appsErr
-      );
+      if ((appsErr as Error | undefined)?.message === "__DEFER_APPS__") {
+        // Intentional skip — not an error. Strategy is ready for user review.
+      } else {
+        console.warn(
+          "[strategy-refresh] App/Intervention generation failed (non-critical):",
+          appsErr,
+        );
+      }
     }
 
     // ── Sprint 5F: compute + persist twin quality report ──────────────
@@ -1047,8 +2365,350 @@ export async function POST(request: Request) {
       );
     }
 
+    // Canvas HUD: one proposal_ready event per ranked strategy (cap 10).
+    // Each carries a Monte-Carlo-derived distribution on the strategy's
+    // primary target entity so the proposal card can render a real
+    // probability ring instead of the LLM's self-reported confidence.
+    const rankedForHud = (rankedStrategies ?? []) as Array<{
+      rank?: number;
+      recommendation?: {
+        title?: string;
+        headline?: string;
+        reasoning_chain?: string;
+        entity_references?: string[];
+        key_decision?: { supporting_entities?: string[] };
+      };
+    }>;
+
+    // PR 5 — preload the axis index ONCE per run so each strategy
+    // emission below is a cheap in-memory lookup. Single query
+    // against pipeline_run_events; empty map on run without axis
+    // coverage (legacy run or generators all failed). The fallback
+    // `runAxes` is the set of every axis that produced at least one
+    // entity — used for strategies whose `supporting_entities` list
+    // comes back empty (a generic strategy still benefits from
+    // knowing which lenses were active).
+    // Null-guard: if the pipeline run failed to start, skip axis
+    // resolution entirely — we'll emit proposals without provenance
+    // rather than crash. Empty map = UI renders no badges.
+    const axisIndex = pipelineRunId
+      ? await loadRunAxisIndex(db, pipelineRunId)
+      : new Map();
+    const runAxes = runLevelAxes(axisIndex);
+
+    // Build entity code → UUID map once. allEntities was fetched
+    // earlier in this handler for the strategy-engine context.
+    const codeToUuid = new Map<string, string>();
+    const uuidToName = new Map<string, string>();
+    for (const e of allEntities) {
+      if (e.entity_id && e.id) codeToUuid.set(e.entity_id, e.id);
+      if (e.id && e.name) uuidToName.set(e.id, e.name);
+    }
+
+    // Phase 1 Step 11 extension — collect distributions as they're
+    // computed so we can persist them onto synthesis_data.
+    // ranked_strategies[*].recommendation.predicted_distribution. SSE
+    // carries them live; this write makes them survive page reload so
+    // the proposal rings + any downstream reader see real sim output
+    // instead of LLM-reported confidence.
+    const distributionByRank = new Map<
+      number,
+      { p10: number; p50: number; p90: number; mean?: number; stddev?: number }
+    >();
+
+    for (let i = 0; i < Math.min(rankedForHud.length, 10); i++) {
+      const r = rankedForHud[i];
+
+      // Pick a target entity for the simulation. Prefer
+      // entity_references[0] (strategy-level), fall back to
+      // key_decision.supporting_entities[0]. Both are semantic codes
+      // (C1, X2, …) so we resolve via codeToUuid. If nothing resolves,
+      // we emit the event without a distribution — canvas falls back
+      // to the LLM confidence score for that card.
+      const preferredCode =
+        r.recommendation?.entity_references?.[0] ??
+        r.recommendation?.key_decision?.supporting_entities?.[0] ??
+        null;
+      const targetUuid = preferredCode ? codeToUuid.get(preferredCode) : undefined;
+
+      let distribution:
+        | { p10: number; p50: number; p90: number; mean?: number; stddev?: number }
+        | undefined;
+
+      // Phase 2G · research-first priors check. Before Monte Carlo,
+      // look for evidence_items already linked to claims on the
+      // target entity — if we have ≥3 high-reliability citations,
+      // the distribution upgrades from "estimated" (MC-only) to
+      // "measured" (MC + grounded evidence). The MC still runs
+      // because text quotes aren't numeric distributions, but the
+      // grounding badge the user sees now reflects whether the
+      // prediction stands on literature or pure LLM chain.
+      let evidenceBackingCount = 0;
+      let meanReliability = 0;
+      let groundingTier: "measured" | "estimated" | "narrative" = "narrative";
+      if (targetUuid) {
+        try {
+          const { data: evRows } = await db
+            .from("claim_evidence_links")
+            .select(
+              "evidence_id, claims!inner(source_entity_id, space_id), evidence_items!inner(reliability_prior, url)",
+            )
+            .eq("claims.space_id", spaceId)
+            .eq("claims.source_entity_id", targetUuid)
+            .gte("evidence_items.reliability_prior", 0.65);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rows = (evRows ?? []) as any[];
+          evidenceBackingCount = rows.length;
+          if (rows.length > 0) {
+            const rSum = rows.reduce(
+              (s, r) =>
+                s +
+                (r.evidence_items?.reliability_prior ?? 0),
+              0,
+            );
+            meanReliability = rSum / rows.length;
+          }
+        } catch (evErr) {
+          // Evidence table might be empty on early-adopter runs;
+          // soft-fail and continue with narrative grounding.
+          console.warn(
+            "[strategy-refresh] evidence-prior lookup failed:",
+            evErr,
+          );
+        }
+      }
+
+      if (targetUuid) {
+        try {
+          const sim = await simulateEntityChain(db, {
+            spaceId,
+            targetEntityId: targetUuid,
+            depthHops: 3,
+            iterations: 500,
+            seed: 42,
+          });
+          if (sim.targetDistribution) {
+            distribution = {
+              p10: sim.targetDistribution.p10,
+              p50: sim.targetDistribution.p50,
+              p90: sim.targetDistribution.p90,
+              mean: sim.targetDistribution.mean,
+              stddev: sim.targetDistribution.stddev,
+            };
+            distributionByRank.set(r.rank ?? i + 1, distribution);
+            // Upgrade grounding tier based on evidence backing:
+            // measured  = MC + ≥3 high-reliability citations
+            // estimated = MC only (structural propagation, no text grounding)
+            groundingTier =
+              evidenceBackingCount >= 3 && meanReliability >= 0.7
+                ? "measured"
+                : "estimated";
+          }
+        } catch (simErr) {
+          console.warn(
+            `[strategy-refresh] MC simulation for strategy ${r.rank ?? i + 1} failed (non-fatal):`,
+            simErr,
+          );
+        }
+      }
+
+      const emitHeadline = r.recommendation?.headline?.trim();
+      const emitReasoning = r.recommendation?.reasoning_chain?.trim();
+
+      // PR 5 — resolve axes_used for this strategy. We look up the
+      // NAMES of the strategy's supporting entities (both
+      // entity_references[] and key_decision.supporting_entities[]
+      // are semantic codes; resolve each through codeToUuid →
+      // uuidToName) and match them against the axis index built
+      // above. When a strategy has no explicit supporting entities,
+      // fall back to runAxes — still honest ("these lenses were
+      // active during this run") without overclaiming per-strategy
+      // precision.
+      const supportingCodes = [
+        ...(r.recommendation?.entity_references ?? []),
+        ...(r.recommendation?.key_decision?.supporting_entities ?? []),
+      ];
+      const supportingNames: string[] = [];
+      for (const code of supportingCodes) {
+        const uuid = codeToUuid.get(code);
+        if (uuid) {
+          const name = uuidToName.get(uuid);
+          if (name) supportingNames.push(name);
+        }
+      }
+      const perStrategyAxes = resolveAxesForNames(supportingNames, axisIndex);
+      const axesUsed =
+        perStrategyAxes.length > 0 ? perStrategyAxes : runAxes;
+
+      await emitStructuralEvent(db, pipelineRunId, {
+        type: "proposal_ready",
+        proposalId: `${spaceId}-strat-${r.rank ?? i + 1}-${Date.now()}`,
+        kind: "strategy",
+        title: (r.recommendation?.title ?? `Strategy rank ${r.rank ?? i + 1}`).slice(0, 200),
+        ...(emitHeadline ? { headline: emitHeadline.slice(0, 220) } : {}),
+        ...(emitReasoning ? { reasoning: emitReasoning.slice(0, 1200) } : {}),
+        ...(distribution ? { distribution } : {}),
+        ...(targetUuid ? { targetEntityId: targetUuid } : {}),
+        ...(axesUsed.length > 0 ? { axes_used: axesUsed } : {}),
+      });
+
+      // Persist the simulation to prediction_ledger + emit
+      // prediction_recorded so the resolver-cron can later compare
+      // against actual metric_observations + tag deviation. This is
+      // where today's sim becomes tomorrow's calibration signal.
+      if (distribution && targetUuid) {
+        const predictionId = await persistStrategyPrediction(db, {
+          spaceId,
+          userId: user.id,
+          strategyTitle:
+            r.recommendation?.title ?? `Strategy rank ${r.rank ?? i + 1}`,
+          rank: r.rank ?? i + 1,
+          targetEntityId: targetUuid,
+          targetEntityName: uuidToName.get(targetUuid) ?? null,
+          distribution,
+          horizonDays: 30,
+          iterations: 500,
+          // Phase 2G — research-first grounding metadata. Captured in
+          // the rationale string so prediction_ledger readers can
+          // tell whether the prediction stands on empirical evidence
+          // or is LLM-chain only.
+          evidenceBackingCount,
+          meanReliability: meanReliability || undefined,
+          groundingTier,
+        });
+        if (predictionId) {
+          const horizonAt = new Date(
+            Date.now() + 30 * 24 * 60 * 60 * 1000,
+          ).toISOString();
+          await emitStructuralEvent(db, pipelineRunId, {
+            type: "prediction_recorded",
+            predictionId,
+            entityId: targetUuid,
+            horizonAt,
+            distribution: {
+              p10: distribution.p10,
+              p50: distribution.p50,
+              p90: distribution.p90,
+            },
+            confidence:
+              distribution.stddev !== undefined && Number.isFinite(distribution.stddev)
+                ? Math.max(0, Math.min(1, 1 / (1 + Math.abs(distribution.stddev))))
+                : 0.5,
+          });
+        }
+      }
+    }
+    // Phase 1 Step 11 extension — write distributions back onto
+    // synthesis_data.strategic_recommendation.ranked_strategies so the
+    // canvas proposal rings and any downstream consumer see real sim
+    // outputs on reload (not just during the live SSE stream). Does a
+    // single read-modify-write; soft-fails if the row moves underneath
+    // us (another concurrent strategy-refresh) since the SSE path
+    // already got the values to the client.
+    if (distributionByRank.size > 0) {
+      try {
+        const { data: freshRow } = await db
+          .from("spaces")
+          .select("synthesis_data")
+          .eq("id", spaceId)
+          .single();
+        const fresh = (freshRow?.synthesis_data ?? {}) as Record<string, unknown>;
+        const stratRec = (fresh.strategic_recommendation ?? {}) as Record<string, unknown>;
+        const rankedArr = Array.isArray(stratRec.ranked_strategies)
+          ? (stratRec.ranked_strategies as Array<Record<string, unknown>>)
+          : [];
+        const patched = rankedArr.map((rs, idx) => {
+          const rank = typeof rs.rank === "number" ? (rs.rank as number) : idx + 1;
+          const dist = distributionByRank.get(rank);
+          if (!dist) return rs;
+          const rec = (rs.recommendation ?? {}) as Record<string, unknown>;
+          return {
+            ...rs,
+            recommendation: {
+              ...rec,
+              predicted_distribution: dist,
+            },
+          };
+        });
+        await db
+          .from("spaces")
+          .update({
+            synthesis_data: {
+              ...fresh,
+              strategic_recommendation: {
+                ...stratRec,
+                ranked_strategies: patched,
+              },
+            },
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", spaceId);
+      } catch (persistErr) {
+        console.warn(
+          "[strategy-refresh] distribution persistence failed (non-fatal — SSE carried it live):",
+          persistErr,
+        );
+      }
+    }
+
+    await emitStructuralEvent(db, pipelineRunId, {
+      type: "stage_boundary",
+      stage: "proposal",
+      phase: "exit",
+    });
+
+    // ── Phase 2H + 2I quality lane ──
+    // Fire cross-domain analog discovery + learning-curve measurement
+    // BEFORE completePipelineRun so their events stream to the live
+    // canvas and the measurement snapshot reflects the run's final
+    // KG state. Both soft-fail: a bad embed or ANN miss never blocks
+    // pipeline completion.
+    //
+    // Bounded with Promise.allSettled — parallel, independent, and a
+    // crash in one never taints the other.
+    try {
+      await Promise.allSettled([
+        runComputeAnalogs(db, {
+          spaceId,
+          userId: user.id,
+          runId: pipelineRunId,
+        }),
+        runLearningMeasure(db, {
+          spaceId,
+          userId: user.id,
+          // CoarseDomain classification is not persisted on spaces yet;
+          // falls back to "generic" inside runLearningMeasure. When
+          // frame-extractor starts stamping a domain on spaces this
+          // opt lookup plugs in here.
+          domain: "generic",
+        }),
+      ]);
+    } catch (qualityErr) {
+      console.warn("[strategy-refresh] quality-lane soft-fail:", qualityErr);
+    }
+
+    await completePipelineRun(db, pipelineRunId, "completed");
+
+    // ── TERMINAL COMMIT ── Strategy-refresh is the last hop of the
+    // auto-advance chain. The full pipeline succeeded: deduct the
+    // reserved credits from the user's balance. Soft-fail so a
+    // credit-ledger hiccup never blocks the strategy from returning.
+    if (reservationId) {
+      const { commitReservation } = await import("@/lib/credits");
+      const result = await commitReservation(db, reservationId, spaceId).catch(
+        (e) => ({ success: false, newBalance: 0, error: String(e) }),
+      );
+      if (!result.success) {
+        console.warn(
+          "[strategy-refresh] commit reservation failed (non-blocking):",
+          result.error,
+        );
+      }
+    }
+
     return NextResponse.json({
       success: true,
+      runId: pipelineRunId,
       strategy_count: rankedStrategies?.length ?? 0,
       top_strategy: strategicRecommendation.title,
       confidence: strategicRecommendation.confidence,
@@ -1059,6 +2719,22 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     console.error("[strategy-refresh] Failed:", err);
+    await completePipelineRun(
+      db,
+      pipelineRunId,
+      "failed",
+      err instanceof Error ? err.message : String(err),
+    ).catch((finalizeErr) => {
+      console.warn("[strategy-refresh] completePipelineRun(failed) threw:", finalizeErr);
+    });
+    // Refund the chain-wide reservation — strategy-refresh was the
+    // terminal hop, and it failed. User doesn't pay for the run.
+    if (reservationId) {
+      const { cancelReservation } = await import("@/lib/credits");
+      await cancelReservation(db, reservationId).catch((refundErr) => {
+        console.warn("[strategy-refresh] cancelReservation threw:", refundErr);
+      });
+    }
     return NextResponse.json({
       error: `Strategy generation failed: ${sanitizeErrorMessage(err)}`,
     }, { status: 500 });

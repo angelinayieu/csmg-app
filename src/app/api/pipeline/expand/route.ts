@@ -9,6 +9,7 @@ import { computeDecompFingerprint } from "@/lib/pipeline/cache";
 import { appendRun, makeRunId } from "@/lib/pipeline/analysis-runs";
 import type { AnalysisRun } from "@/types/analysis-runs";
 import { scoreDecompositionQuality } from "@/lib/decomposition-quality";
+import { invalidateCoverageForNewEntities } from "@/lib/kg/invalidate-coverage";
 
 export const maxDuration = 60;
 
@@ -252,9 +253,56 @@ export async function POST(req: NextRequest) {
         // Insert all edges
         const allMatEdges = [...matResult.parent_component_edges, ...matResult.edges];
         const edgeRecords = buildExpansionEdgeRecords(space_id, allMatEdges, idMap);
-        const { inserted: edgIns } = edgeRecords.length > 0
-          ? await resInsert(db, "edges", edgeRecords, "id")
-          : { inserted: 0 };
+        let edgIns = 0;
+        if (edgeRecords.length > 0) {
+          const { inserted } = await resInsert(db, "edges", edgeRecords, "id");
+          edgIns = inserted;
+        }
+
+        // ── Cross-entity bridges (closes the "breakdown shows pathways but
+        // KG doesn't" gap). Fresh SCs are compared against all existing SCs
+        // from OTHER parents; similar pairs become real graph edges at the
+        // "bridge" knowledge_layer. We re-fetch entities here so newly
+        // inserted rows have stable UUIDs in the idMap.
+        let bridgeIns = 0;
+        try {
+          const { computeCrossEntityBridges, extractScLikesFromEntities } = await import(
+            "@/lib/pipeline/expansion-materializer"
+          );
+          const { data: afterInsertEntities } = await db
+            .from("entities")
+            .select("*")
+            .eq("space_id", space_id);
+          const fullEntityList = (afterInsertEntities ?? []) as Entity[];
+          // Keep idMap in sync with any rows resInsert left unmapped.
+          for (const e of fullEntityList) idMap.set(e.entity_id, e.id);
+
+          const allScs = extractScLikesFromEntities(fullEntityList);
+          const newScIds = new Set(matResult.entities.map((m) => m.entity_id));
+          const newScs = allScs.filter((s) => newScIds.has(s.entity_id));
+          const existingScs = allScs.filter((s) => !newScIds.has(s.entity_id));
+
+          // Re-fetch edges too — they now include the ones we just inserted
+          // above, which lets the dedupe check skip pairs with a pre-existing
+          // has_component/internal_pathway/inherited_connection edge.
+          const { data: afterInsertEdges } = await db
+            .from("edges")
+            .select("*")
+            .eq("space_id", space_id);
+          const currentEdges = (afterInsertEdges ?? []) as Edge[];
+
+          const bridges = computeCrossEntityBridges(newScs, existingScs, currentEdges);
+          if (bridges.length > 0) {
+            const bridgeRecords = buildExpansionEdgeRecords(space_id, bridges, idMap);
+            if (bridgeRecords.length > 0) {
+              const { inserted } = await resInsert(db, "edges", bridgeRecords, "id");
+              bridgeIns = inserted;
+              console.log(`[expand] Materialized ${inserted} cross-entity bridge edges`);
+            }
+          }
+        } catch (bridgeErr) {
+          console.warn("[expand] Cross-entity bridge materialization failed (non-critical):", bridgeErr);
+        }
 
         // Mark materialized
         await db.from("expansions")
@@ -264,7 +312,34 @@ export async function POST(req: NextRequest) {
 
         await refreshCounts(db, [space_id]);
 
-        materialization = { entities_created: entIns, edges_created: edgIns };
+        // Phase 1 Step 6 — newly materialized sub-components may open
+        // indirect paths between previously-checked pairs. Flag them
+        // for prospector revisit. Uses entData UUIDs from the insert
+        // above + the parent entity (its meaning has shifted).
+        try {
+          const newEntityUuids: string[] = [entity_id];
+          for (const row of entData) {
+            if (row.id) newEntityUuids.push(row.id);
+          }
+          const invalidation = await invalidateCoverageForNewEntities(db, {
+            spaceId: space_id,
+            newEntityIds: newEntityUuids,
+            reason: "neighbor_added",
+          });
+          if (invalidation.flagged > 0) {
+            console.log(
+              `[expand] invalidated ${invalidation.flagged} pair checks for ${invalidation.neighborCount} neighbors`,
+            );
+          }
+        } catch (invErr) {
+          console.warn("[expand] coverage invalidation failed (non-fatal):", invErr);
+        }
+
+        materialization = {
+          entities_created: entIns,
+          edges_created: edgIns + bridgeIns,
+          bridges_created: bridgeIns,
+        };
       }
     } catch (matErr) {
       console.warn("Auto-materialization failed (non-critical):", matErr);
@@ -274,22 +349,43 @@ export async function POST(req: NextRequest) {
     // The whiteboard now writes the same telemetry format as /decompose and
     // /synthesize, so the synthesis-view provenance chip and the lazy-guard
     // infrastructure correctly see that the graph changed.
+    //
+    // We also recompute probability-space intersections inline here so
+    // freshly materialized sub-components + cross-entity bridges become
+    // visible insights the next time the user looks at the panel —
+    // without waiting for a full strategy refresh.
+    let intersectionsRecomputed = 0;
     try {
-      const [updatedEntRes, updatedEdgeRes, spaceRes] = await Promise.all([
-        db.from("entities")
-          .select("entity_id, name, importance, description, source_tag, manifold")
-          .eq("space_id", space_id),
-        db.from("edges")
-          .select("source_entity_id, target_entity_id, relationship_type, topology, dynamics, confidence")
+      const [fullEntRes, fullEdgeRes, allExpRes, spaceRes] = await Promise.all([
+        db.from("entities").select("*").eq("space_id", space_id),
+        db.from("edges").select("*").eq("space_id", space_id),
+        db
+          .from("expansions")
+          .select("entity_id, sub_components, internal_pathways, internal_dynamics")
           .eq("space_id", space_id),
         db.from("spaces").select("synthesis_data").eq("id", space_id).single(),
       ]);
-      const updatedEntities = (updatedEntRes.data ?? []) as Array<{
-        entity_id: string; name: string; importance?: string; description?: string; source_tag?: string; manifold?: unknown;
-      }>;
-      const updatedEdges = (updatedEdgeRes.data ?? []) as Array<{
-        source_entity_id: string; target_entity_id: string; relationship_type?: string; topology?: string | null; dynamics?: string | null; confidence?: number;
-      }>;
+      const fullEntities = (fullEntRes.data ?? []) as Entity[];
+      const fullEdges = (fullEdgeRes.data ?? []) as Edge[];
+
+      // Slim shapes for the fingerprint + quality helpers. Helpers expect
+      // optional string fields (undefined, not null), so we coerce here.
+      const updatedEntities = fullEntities.map((e) => ({
+        entity_id: e.entity_id,
+        name: e.name,
+        importance: (e.importance ?? undefined) as string | undefined,
+        description: (e.description ?? undefined) as string | undefined,
+        source_tag: (e.source_tag ?? undefined) as string | undefined,
+        manifold: (e as unknown as { manifold?: unknown }).manifold,
+      }));
+      const updatedEdges = fullEdges.map((e) => ({
+        source_entity_id: e.source_entity_id,
+        target_entity_id: e.target_entity_id,
+        relationship_type: (e.relationship_type ?? undefined) as string | undefined,
+        topology: ((e as unknown as { topology?: string | null }).topology ?? null) as string | null,
+        dynamics: ((e as unknown as { dynamics?: string | null }).dynamics ?? null) as string | null,
+        confidence: (e.confidence ?? undefined) as number | undefined,
+      }));
       const existingData = ((spaceRes?.data as { synthesis_data?: Record<string, unknown> } | null)?.synthesis_data) ?? {};
 
       const newFingerprint = computeDecompFingerprint(updatedEntities, updatedEdges);
@@ -304,6 +400,48 @@ export async function POST(req: NextRequest) {
       const filteredPrior = priorExpansionAxioms.filter((a) => a.parent_entity_id !== entity_id);
       const mergedExpansionAxioms = [...miniAxioms, ...filteredPrior].slice(0, 50);
 
+      // Recompute probability spaces + intersections (both pure, fast).
+      // Non-critical: if this fails, we still write the fingerprint/audit.
+      let spaceIntersections: unknown[] = [];
+      let computedIntersections = false;
+      try {
+        const { buildProbabilitySpacesForGraph } = await import(
+          "@/lib/pipeline/probability-space-engine"
+        );
+        const { detectIntersections } = await import(
+          "@/lib/pipeline/intersection-detector"
+        );
+        const expansionsMap = new Map<
+          string,
+          { sub_components: unknown; internal_pathways: unknown; internal_dynamics: unknown }
+        >();
+        for (const row of (allExpRes.data ?? []) as Array<{
+          entity_id: string;
+          sub_components: unknown;
+          internal_pathways: unknown;
+          internal_dynamics: unknown;
+        }>) {
+          expansionsMap.set(row.entity_id, {
+            sub_components: row.sub_components,
+            internal_pathways: row.internal_pathways,
+            internal_dynamics: row.internal_dynamics,
+          });
+        }
+        const spaces = buildProbabilitySpacesForGraph(fullEdges, fullEntities, expansionsMap);
+        const intersections = detectIntersections(spaces, fullEntities, fullEdges, 20);
+        spaceIntersections = intersections;
+        intersectionsRecomputed = intersections.length;
+        computedIntersections = true;
+        console.log(
+          `[expand] Recomputed ${spaces.length} probability spaces, ${intersections.length} intersections`,
+        );
+      } catch (intersectErr) {
+        console.warn(
+          "[expand] Intersection recompute failed (non-critical):",
+          intersectErr,
+        );
+      }
+
       const expandRun: AnalysisRun = {
         run_id: expandRunId,
         pipeline: "expand",
@@ -316,12 +454,13 @@ export async function POST(req: NextRequest) {
           ...(subComponents.some((sc) => sc.embedding) ? ["embeddings"] : []),
           ...(miniAxioms.length > 0 ? ["mini_axiom_generation"] : []),
           ...(materialization ? ["materialization", "quality_rescore", "fingerprint_update"] : ["quality_rescore", "fingerprint_update"]),
+          ...(computedIntersections ? ["intersection_recompute"] : []),
         ],
         stages_skipped: [],
         cache_hits: [],
         fingerprint: newFingerprint,
         quality_score: Math.round(quality.overall * 100),
-        note: `Expanded ${entity.name}: ${subComponents.length} sub-components, ${internalPathways.length} pathways` + (materialization ? `, ${materialization.entities_created} entities + ${materialization.edges_created} edges materialized` : "") + (miniAxioms.length > 0 ? ` · ${miniAxioms.length} mini-axiom${miniAxioms.length === 1 ? "" : "s"} (${miniAxioms.filter(a => a.visibility === "HIDDEN").length} hidden)` : ""),
+        note: `Expanded ${entity.name}: ${subComponents.length} sub-components, ${internalPathways.length} pathways` + (materialization ? `, ${materialization.entities_created} entities + ${materialization.edges_created} edges materialized` : "") + (materialization?.bridges_created ? ` (incl. ${materialization.bridges_created} bridges)` : "") + (computedIntersections ? `, ${intersectionsRecomputed} intersections` : "") + (miniAxioms.length > 0 ? ` · ${miniAxioms.length} mini-axiom${miniAxioms.length === 1 ? "" : "s"} (${miniAxioms.filter(a => a.visibility === "HIDDEN").length} hidden)` : ""),
       };
       const priorRuns = (existingData.analysis_runs as AnalysisRun[] | undefined) ?? [];
       await db.from("spaces").update({
@@ -330,6 +469,12 @@ export async function POST(req: NextRequest) {
           analysis_runs: appendRun(priorRuns, expandRun),
           decomp_fingerprint: newFingerprint,
           ...(mergedExpansionAxioms.length > 0 ? { expansion_axioms: mergedExpansionAxioms } : {}),
+          ...(computedIntersections
+            ? {
+                space_intersections: spaceIntersections,
+                space_intersections_computed_at: new Date().toISOString(),
+              }
+            : {}),
         },
       }).eq("id", space_id);
       console.log(`[expand] Audit: ${entity.name} expanded, fingerprint=${newFingerprint}, quality=${Math.round(quality.overall * 100)}, mini-axioms=${miniAxioms.length}`);
@@ -342,6 +487,7 @@ export async function POST(req: NextRequest) {
       cached: false,
       credit_cost: 1,
       ...(materialization ? { materialization } : {}),
+      ...(intersectionsRecomputed > 0 ? { intersections_recomputed: intersectionsRecomputed } : {}),
     });
 
   } catch (llmErr: unknown) {

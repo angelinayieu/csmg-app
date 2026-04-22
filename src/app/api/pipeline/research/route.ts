@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { getAnthropicClient } from "@/lib/anthropic";
 import { llmJSON } from "@/lib/llm";
 import { safeAuth, safeJsonParse, verifyMultiSpaceOwnership, refreshSpaceCounts, sanitizeErrorMessage } from "@/lib/api-helpers";
@@ -45,6 +45,15 @@ import { appendRun, makeRunId } from "@/lib/pipeline/analysis-runs";
 import type { AnalysisRun } from "@/types/analysis-runs";
 import { detectInsightConvergences } from "@/lib/synthesis/detect-convergences";
 import { generateAutoInversions } from "@/lib/synthesis/generate-auto-inversions";
+import { recordAgentFinding } from "@/lib/agents/finding-recorder";
+import {
+  startPipelineRun,
+  emitStructuralEvent,
+  emitBatchEvents,
+  completePipelineRun,
+} from "@/lib/events/structural-event-bus";
+import type { StructuralEvent } from "@/types/pipeline-events";
+import { invalidateCoverageForNewEntities } from "@/lib/kg/invalidate-coverage";
 import type {
   Axiom as AxiomType,
   AssumptionInversion as AssumptionInversionType,
@@ -197,6 +206,21 @@ export async function POST(request: Request) {
 
   const { spaceIds, inputSummary, scopeSpaces, intent } = body;
 
+  // Phase 1 Step 13 — auto-advance chain flag. When true, the
+  // completion path kicks /api/pipeline/synthesize via after().
+  const autoAdvance = body.autoAdvance === true;
+  // Phase 1 Step 14 — shared run id across chain hops. When bootstrap
+  // seeded the run, every downstream stage reuses its run_id so the
+  // client's SSE stream stays attached. Absence means this is a
+  // manually-triggered research call and we start a fresh run below.
+  const existingRunId: string | undefined =
+    typeof body.existingRunId === "string" ? body.existingRunId : undefined;
+  // Credit reservation from bootstrap — threaded through the chain.
+  // Research cancels on its own catch; commit happens only at the
+  // chain's terminal hop (strategy-refresh). Research never commits.
+  const reservationId: string | undefined =
+    typeof body.reservationId === "string" ? body.reservationId : undefined;
+
   // Focused/targeted research parameters (Phase 3.2)
   const focusAreas: string[] = Array.isArray(body.focus_areas) ? body.focus_areas.filter((a: unknown) => typeof a === "string") : [];
   const skipCategories: string[] = Array.isArray(body.skip_categories) ? body.skip_categories.filter((a: unknown) => typeof a === "string") : [];
@@ -255,6 +279,12 @@ export async function POST(request: Request) {
     triggerEvent: "research.requested",
     triggerData: { depth: body?.depth, spaceIds },
   });
+
+  // Structural event bus — runId scoped outside the try so the catch
+  // block can mark the run failed on throw. Only started AFTER the
+  // cache checks below (since cache hits return early and shouldn't
+  // create a run row).
+  let pipelineRunId: string | null = null;
 
   try {
     const rootSpaceId = spaceIds[0];
@@ -341,6 +371,27 @@ export async function POST(request: Request) {
       console.log(`[research] cacheMode=only and no fresh entry — returning empty`);
       return NextResponse.json({ ok: true, cached: false, cacheMiss: true, reason: "no_fresh_cache" });
     }
+
+    // ── Structural event bus: start or reuse the run ──
+    // Chain hop: reuse the run_id threaded from decompose so the
+    // client's SSE stream keeps receiving events on one continuous
+    // subscription. Manual caller (no existingRunId): start a fresh
+    // research-scoped run as before.
+    if (existingRunId) {
+      pipelineRunId = existingRunId;
+    } else {
+      pipelineRunId = await startPipelineRun(db, {
+        spaceId: rootSpaceId,
+        userId: user.id,
+        pipeline: "research",
+      });
+    }
+    await emitStructuralEvent(db, pipelineRunId, {
+      type: "stage_boundary",
+      stage: "landscape",
+      phase: "enter",
+      message: "Scouting external sources…",
+    });
 
     const internalEntities = (entityRes.data ?? []) as Array<{
       id: string;
@@ -722,6 +773,16 @@ These are NOT external landscape entities — these are entities the user SHOULD
       const isFirstPass = passIdx === 0;
       const passType = isFirstPass ? "discovery" : (lastDecision?.next_pass_type ?? "deepening");
 
+      // Heartbeat: research passes each take ~30-90s with the LLM
+      // web-search loop running silent the whole time. Without a
+      // stage_boundary message per pass the HUD reads as frozen.
+      await emitStructuralEvent(db, pipelineRunId, {
+        type: "stage_boundary",
+        stage: "landscape",
+        phase: "enter",
+        message: `Research pass ${passIdx + 1}/${plan.max_passes} — ${isFirstPass ? "discovering external sources" : passType}…`,
+      });
+
       // Build pass-specific user message
       let passUserMessage = userMessage;
       if (kgBuilderPromptAddendum && isFirstPass) {
@@ -827,6 +888,17 @@ These are NOT external landscape entities — these are entities the user SHOULD
         (e) => !existingNames.has(e.name.toLowerCase())
       );
       accumulatedEntities.push(...newEntities);
+
+      // Pass-level heartbeat with the count so the HUD shows progress
+      // instead of silent dead air between ~45s research passes.
+      if (newEntities.length > 0) {
+        await emitStructuralEvent(db, pipelineRunId, {
+          type: "stage_boundary",
+          stage: "landscape",
+          phase: "enter",
+          message: `Pass ${passIdx + 1} — found ${newEntities.length} external entities, ${passSearches} searches`,
+        });
+      }
       accumulatedEdges.push(...(passResult.external_edges ?? []));
       accumulatedBridges.push(...(passResult.potential_bridges ?? []));
       accumulatedInsights.push(...(passResult.cross_context_insights ?? []));
@@ -899,6 +971,24 @@ These are NOT external landscape entities — these are entities the user SHOULD
     // the accumulated result for KG-builder fields.
     const searchesPerformed = totalSearchesPerformed;
     const citationsCollected = allCitationsCollected;
+
+    // Canvas HUD: one source_cited event per collected citation (cap 30
+    // so the HUD doesn't flood). Authority is a rough signal — we
+    // leave it at 0.5 since no authority classifier runs in this route
+    // yet; will be upgradeable when tool-registry lands (Phase 1 Step 5).
+    if (citationsCollected.length > 0) {
+      const sourceEvents: StructuralEvent[] = citationsCollected
+        .slice(0, 30)
+        .map((c) => ({
+          type: "source_cited",
+          sourceUrl: c.url,
+          title: c.title ?? null,
+          authority: 0.5,
+          publishedAt: null,
+          boundToEntityId: null,
+        }));
+      await emitBatchEvents(db, pipelineRunId, sourceEvents);
+    }
 
     // Safety-net: filter out entities in skip_categories (LLM may not perfectly follow instructions)
     const rawEntities = result.external_entities ?? [];
@@ -1028,8 +1118,77 @@ These are NOT external landscape entities — these are entities the user SHOULD
 
     if (externalEntities.length === 0) {
       await agent.complete({ findingsCount: 0, artifacts: [] });
+      await emitStructuralEvent(db, pipelineRunId, {
+        type: "stage_boundary",
+        stage: "landscape",
+        phase: "exit",
+        message: "No external entities materialized",
+      });
+
+      // Chain-hop bug fix: when research is part of an auto-advancing
+      // pipeline (bootstrap → decompose → research → synthesize →
+      // strategy-refresh), the empty-external-entities branch MUST NOT
+      // close the run. Doing so terminates the client's SSE stream
+      // (EventSource closes on pipeline_runs.status !== "running") so
+      // synthesize + strategy-refresh never get a chance to emit even
+      // though their server-side handoffs would still succeed.
+      //
+      // Matches the terminal-path logic at line 2421-2424.
+      const isChainHop = autoAdvance && existingRunId;
+      if (!isChainHop) {
+        await completePipelineRun(db, pipelineRunId, "completed");
+      }
+
+      // Still chain forward to synthesize so the downstream stages
+      // (strategy, apps, simulation results) have a shot at running
+      // even when external research turned up nothing. Synthesize is
+      // designed to work from the internal KG alone if needed.
+      if (autoAdvance) {
+        const cookieHeader = request.headers.get("cookie") ?? "";
+        const origin = new URL(request.url).origin;
+        const chainedSpaceIds = Array.isArray(spaceIds) ? [...spaceIds] : [];
+        const chainedRunId = pipelineRunId;
+        after(async () => {
+          const ctrl = new AbortController();
+          const handoffTimeout = setTimeout(() => ctrl.abort(), 10000);
+          try {
+            await fetch(`${origin}/api/pipeline/synthesize`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Cookie: cookieHeader,
+              },
+              body: JSON.stringify({
+                spaceIds: chainedSpaceIds,
+                autoAdvance: true,
+                existingRunId: chainedRunId,
+                reservationId,
+              }),
+              signal: ctrl.signal,
+            });
+            clearTimeout(handoffTimeout);
+          } catch (advanceErr) {
+            clearTimeout(handoffTimeout);
+            const name = (advanceErr as { name?: string })?.name;
+            if (name === "AbortError") return;
+            console.warn("[research] empty-path synthesize handoff threw:", advanceErr);
+            if (chainedRunId) {
+              await completePipelineRun(
+                db,
+                chainedRunId,
+                "failed",
+                `handoff failed: ${advanceErr instanceof Error ? advanceErr.message : String(advanceErr)}`,
+              ).catch((finalizeErr) => {
+                console.warn("[research] completePipelineRun(failed) after handoff threw:", finalizeErr);
+              });
+            }
+          }
+        });
+      }
+
       return NextResponse.json({
         success: true,
+        runId: pipelineRunId,
         entitiesCreated: 0,
         edgesCreated: 0,
         bridgesStored: 0,
@@ -1146,6 +1305,47 @@ These are NOT external landscape entities — these are entities the user SHOULD
 
       if (inserted) {
         entityIdMap.set(entity.entity_id, inserted.id);
+      }
+    }
+
+    // Canvas HUD: one entity_added event per persisted external entity.
+    // Emitted as a batch after the insert loop completes so sequences
+    // stay contiguous.
+    if (entityIdMap.size > 0) {
+      const entityEvents: StructuralEvent[] = [];
+      for (const extEntity of externalEntities) {
+        const uuid = entityIdMap.get(extEntity.entity_id);
+        if (!uuid) continue;
+        entityEvents.push({
+          type: "entity_added",
+          entityId: uuid,
+          entityCode: extEntity.entity_id,
+          name: extEntity.name,
+          entityCategory: (extEntity.entity_category as string | null) ?? "epistemic",
+          importance: "moderate",
+          parentEntityId: null,
+        });
+      }
+      await emitBatchEvents(db, pipelineRunId, entityEvents);
+
+      // Coverage invalidation — new external entities may introduce
+      // indirect paths between previously-checked pairs. Flag those
+      // rows for revisit so the next prospector pass considers them.
+      try {
+        const newEntityUuids = Array.from(entityIdMap.values());
+        const invalidation = await invalidateCoverageForNewEntities(db, {
+          spaceId: rootSpaceId,
+          newEntityIds: newEntityUuids,
+          reason: "neighbor_added",
+        });
+        if (invalidation.flagged > 0) {
+          console.log(
+            `[research] invalidated ${invalidation.flagged} prior pair checks ` +
+            `across ${invalidation.neighborCount} neighbor entities`,
+          );
+        }
+      } catch (invErr) {
+        console.warn("[research] coverage invalidation failed (non-critical):", invErr);
       }
     }
 
@@ -1348,6 +1548,30 @@ These are NOT external landscape entities — these are entities the user SHOULD
       }
 
       console.log(`[research] Created ${bridgesCreated} bridge edges from ${potentialBridges.length} potential bridges`);
+
+      // Canvas HUD: emit bridge_formed per successful bridge (cap 20).
+      // We don't get edge UUIDs back from the insert above; synthesize
+      // stable-looking ids from the source/target pair + timestamp so
+      // the event dedupe in the hook stays sane.
+      const bridgeEvents: StructuralEvent[] = [];
+      for (let i = 0; i < Math.min(potentialBridges.length, 20); i++) {
+        const b = potentialBridges[i];
+        const extId = b.external_entity_id;
+        const sourceUuid = entityIdMap.get(extId);
+        const targetUuid = resolveEntity(b.likely_internal_concept ?? "", extId);
+        if (!sourceUuid || !targetUuid) continue;
+        bridgeEvents.push({
+          type: "bridge_formed",
+          bridgeId: `research-bridge-${rootSpaceId}-${i}-${Date.now()}`,
+          sourceSpaceId: rootSpaceId,
+          targetSpaceId: rootSpaceId,
+          sourceEntityId: sourceUuid,
+          targetEntityId: targetUuid,
+          bridgeType: String(b.connection_type ?? "validates"),
+          confidence: 0.65,
+        });
+      }
+      await emitBatchEvents(db, pipelineRunId, bridgeEvents);
     }
 
     // ── Step 5C: Auto-bridge from connection_hints ──
@@ -2111,9 +2335,42 @@ These are NOT external landscape entities — these are entities the user SHOULD
       fallbackPassCount >= totalPasses ? "training_only" :
       "mixed";
 
+    // ── Wave D L3.3 — agent write-back ──
+    // Per-run aggregate finding (severity 'info') summarizing what the
+    // researcher materialized. We don't emit one finding per entity — that
+    // would flood the feed; instead the agent_runs row's
+    // entity_ids_discovered column (populated via agent.complete below)
+    // carries the full lineage for lab drill-down.
+    const insertedEntityUuids = Array.from(entityIdMap.values());
+    if (insertedEntityUuids.length > 0) {
+      await recordAgentFinding(db, {
+        user_id: user.id,
+        space_id: rootSpaceId,
+        agent_run_id: agent.runId ?? undefined,
+        finding_kind: "entity_discovered",
+        summary: `Researcher added ${insertedEntityUuids.length} new ${insertedEntityUuids.length === 1 ? "entity" : "entities"} (${edgesCreated} edges, ${bridgesCreated} bridges).`,
+        rationale: focusAreas.length > 0
+          ? `Focus areas: ${focusAreas.join(", ")}. Depth: ${researchDepth}.`
+          : `Depth: ${researchDepth}.`,
+        severity: "info",
+        ref_kind: "space",
+        ref_id: rootSpaceId,
+        confidence: 0.75,
+        payload: {
+          entities_added: insertedEntityUuids.length,
+          edges_added: edgesCreated,
+          bridges_added: bridgesCreated,
+          depth: researchDepth,
+          focus_areas: focusAreas,
+          signal_count: signalCount,
+        },
+      });
+    }
+
     await agent.complete({
       findingsCount: entityIdMap.size + edgesCreated + bridgesCreated,
       artifacts: ["external_entities", "external_edges", "bridges"],
+      entityIdsDiscovered: insertedEntityUuids,
     });
 
     // ── Persist research cache entry + append audit run ──
@@ -2235,8 +2492,67 @@ These are NOT external landscape entities — these are entities the user SHOULD
       console.warn("[research] Cache persist failed (non-critical):", cacheErr);
     }
 
+    // Canvas HUD: mark research stage complete, but only close the
+    // shared run if this is the terminal hop. Chain hops leave the
+    // run open so synthesize's events land on the same subscription.
+    await emitStructuralEvent(db, pipelineRunId, {
+      type: "stage_boundary",
+      stage: "landscape",
+      phase: "exit",
+    });
+    const isChainHop = autoAdvance && existingRunId;
+    if (!isChainHop) {
+      await completePipelineRun(db, pipelineRunId, "completed");
+    }
+
+    // Phase 1 Step 13/16 — short-abort handoff to synthesize. See
+    // intake/bootstrap for the same pattern + rationale.
+    if (autoAdvance) {
+      const cookieHeader = request.headers.get("cookie") ?? "";
+      const origin = new URL(request.url).origin;
+      const chainedSpaceIds = Array.isArray(spaceIds) ? [...spaceIds] : [];
+      const chainedRunId = pipelineRunId;
+      after(async () => {
+        const ctrl = new AbortController();
+        const handoffTimeout = setTimeout(() => ctrl.abort(), 10000);
+        try {
+          await fetch(`${origin}/api/pipeline/synthesize`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              spaceIds: chainedSpaceIds,
+              autoAdvance: true,
+              existingRunId: chainedRunId,
+              reservationId,
+            }),
+            signal: ctrl.signal,
+          });
+          clearTimeout(handoffTimeout);
+        } catch (advanceErr) {
+          clearTimeout(handoffTimeout);
+          const name = (advanceErr as { name?: string })?.name;
+          if (name === "AbortError") return;
+          console.warn("[research] synthesize handoff threw:", advanceErr);
+          if (chainedRunId) {
+            await completePipelineRun(
+              db,
+              chainedRunId,
+              "failed",
+              `handoff failed: ${advanceErr instanceof Error ? advanceErr.message : String(advanceErr)}`,
+            ).catch((finalizeErr) => {
+              console.warn("[research] completePipelineRun(failed) after synthesize handoff threw:", finalizeErr);
+            });
+          }
+        }
+      });
+    }
+
     return NextResponse.json({
       success: true,
+      runId: pipelineRunId,
       entitiesCreated: entityIdMap.size,
       edgesCreated,
       bridgesCreated,
@@ -2285,6 +2601,43 @@ These are NOT external landscape entities — these are entities the user SHOULD
   } catch (err: unknown) {
     console.error("Research (Agent 7) error:", err);
     await agent.fail(err instanceof Error ? err.message : String(err));
+    await completePipelineRun(
+      db,
+      pipelineRunId,
+      "failed",
+      err instanceof Error ? err.message : String(err),
+    ).catch((finalizeErr) => {
+      console.warn("[research] completePipelineRun(failed) threw:", finalizeErr);
+    });
+
+    // Refund the chain-wide credit reservation — research failed, so
+    // the user pays for nothing. Soft-fail: credit-cancel errors
+    // shouldn't swallow the original error.
+    if (reservationId) {
+      const { cancelReservation } = await import("@/lib/credits");
+      await cancelReservation(db, reservationId).catch((refundErr) => {
+        console.warn("[research] cancelReservation threw:", refundErr);
+      });
+    }
+
+    // Credit-exhaustion from OpenAI or Anthropic surfaces as a 402 with a
+    // structured payload so the client can render a specific "add credits"
+    // banner instead of a generic "research failed." Covers: OpenAI
+    // `insufficient_quota` / `billing_hard_limit_reached`, Anthropic
+    // "Your credit balance is too low to access the Anthropic API".
+    const { detectCreditError } = await import("@/lib/llm");
+    const credit = detectCreditError(err);
+    if (credit.isCredit) {
+      return NextResponse.json(
+        {
+          error: "credits_exhausted",
+          provider: credit.provider,
+          message: credit.message,
+        },
+        { status: 402 },
+      );
+    }
+
     return NextResponse.json(
       { error: "Domain research failed", detail: sanitizeErrorMessage(err) },
       { status: 500 }

@@ -26,6 +26,20 @@ export type PredictionLedgerUpdate = Database["public"]["Tables"]["prediction_le
 export type PredictionStatus = PredictionLedgerRow["status"];
 export type DeviationTag = NonNullable<PredictionLedgerRow["deviation_tag"]>;
 
+/**
+ * Discriminant on prediction_ledger rows (migration 20260518). Kept here
+ * rather than derived from the row type so code can reference it without
+ * DB-types regen for seeded developers.
+ *
+ *   "metric"        — legacy path, forecast of a metric_tracker value
+ *   "step_outcome"  — forecast of a plan_step actual_return (capability
+ *                     registry era)
+ *   "action_return" — reserved: direct capability invocation outside a
+ *                     plan (e.g. an app-initiated one-off action). Not
+ *                     emitted today.
+ */
+export type PredictionSubjectKind = "metric" | "step_outcome" | "action_return";
+
 // ── Structured JSONB shapes for strategy_baselines ──────────────────────
 
 /**
@@ -222,4 +236,51 @@ export function tagDeviation(predicted: number, actual: number): DeviationTag {
   if (rel <= EXPECTED_RELATIVE) return "expected";
   if (rel <= REGIME_SHIFT_RELATIVE && sameSign) return "regime_shift";
   return "surprise";
+}
+
+// ── Step-outcome prediction helpers (migration 20260518) ────────────────
+
+/**
+ * Narrow a prediction_ledger row to the step-outcome variant. Returns null
+ * if subject_kind is "metric" or if plan_step_id is missing (shouldn't
+ * happen after migration 20260518's trigger, but we guard anyway so stale
+ * clients don't throw).
+ */
+export interface StepOutcomePrediction extends PredictionLedgerRow {
+  subject_kind: "step_outcome";
+  plan_step_id: string;
+  capability_id: string | null;
+}
+
+export function asStepOutcomePrediction(
+  row: PredictionLedgerRow & { subject_kind?: string | null; plan_step_id?: string | null; capability_id?: string | null }
+): StepOutcomePrediction | null {
+  if (row.subject_kind !== "step_outcome") return null;
+  if (!row.plan_step_id) return null;
+  return row as StepOutcomePrediction;
+}
+
+/**
+ * Deviation tag for step outcomes. Same math as tagDeviation when the
+ * actual value is numeric, but adds "failed" when the capability did not
+ * run at all (succeeded=false on the actual_return) — that's qualitatively
+ * different from "ran but surprised us" and the learning loop treats it
+ * differently (failed invocations don't update yield_priors, only
+ * success_priors).
+ *
+ * Inputs:
+ *   invocation_succeeded — did the capability call complete at all?
+ *   predicted/actual     — when numeric comparison is possible. May be
+ *                          null for qualitative attributes (enums, text).
+ */
+export type StepDeviationTag = DeviationTag | "failed";
+
+export function tagStepDeviation(
+  invocation_succeeded: boolean,
+  predicted: number | null,
+  actual: number | null
+): StepDeviationTag {
+  if (!invocation_succeeded) return "failed";
+  if (predicted === null || actual === null) return "qualitative";
+  return tagDeviation(predicted, actual);
 }

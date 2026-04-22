@@ -58,6 +58,26 @@ export async function POST(
     /* non-critical */
   }
 
+  // Wave C — log user event. Captures the "how often does this user
+  // proactively refresh" cadence the digest will interpret.
+  try {
+    const { recordUserEvent } = await import("@/lib/user-events/record");
+    await recordUserEvent(db, {
+      user_id: user.id,
+      event_type: "app.refreshed",
+      source: `user:refresh:${user.id}`,
+      ref_kind: "app",
+      ref_id: appId,
+      space_id: appRow.space_id,
+      payload: {
+        prior_stale_reason: appRow.stale_reason,
+        new_health_score: reconciled?.health_score ?? null,
+      },
+    });
+  } catch {
+    /* non-fatal */
+  }
+
   return NextResponse.json({
     success: true,
     app: reconciled ? hydrateApp(reconciled) : null,

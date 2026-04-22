@@ -1,59 +1,72 @@
-import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { StudioShell } from "@/components/studio/studio-shell";
-import type { Space } from "@/types";
-import type { Reaction } from "@/types/reactions";
+// ── /app ──
+//
+// The canonical home surface (Phase 2C revision).
+//
+// Earlier locked direction (2026-04-20) set this route to a flat
+// saved-whiteboards list. The current direction (2026-04-21) walks
+// that back slightly: the immersive welcome is the landing, and the
+// whiteboards library lives on the SAME route as a crossfade-reachable
+// view. Users get the aspirational welcome by default; one click on
+// the "N whiteboards →" pill flips them to the library with a
+// smooth spring transition. The HomeShell client component owns
+// both views + the view-state + the fixed full-bleed positioning
+// that tracks sidebar expand/collapse live.
 
-/**
- * /app — Studio landing.
- *
- * Post-auth home surface. Replaces the previous WelcomeHero/EcosystemSection/
- * GlobalQueryBox stack with the minimal Studio shell: a single "What are you
- * thinking about?" dropzone, a quiet row of model pulse tiles, a ⌘K command
- * palette, and the full model index below the fold.
- *
- * The server delivers the initial space list; the shell enriches it with
- * activity pulse via `/api/spaces/pulse` after hydration. This keeps first
- * paint fast while still giving returning users a lived-in feel.
- */
-export default async function StudioPage() {
+import { createClient, getAuthUser } from "@/lib/supabase/server";
+import { HomeShell } from "@/components/home/home-shell";
+import { TEMPLATE_LIST } from "@/lib/use-cases/library";
+import type { Space } from "@/types";
+
+export const dynamic = "force-dynamic";
+
+export default async function StudioPage({
+  searchParams,
+}: {
+  // `?style=gradient` switches the immersive surface from the default
+  // dotted canvas to the navy radial-glow aesthetic. Canvas = daily
+  // surface; gradient = showcase. Exposed as an opt-in query param
+  // so the daily experience isn't locked to one look.
+  searchParams?: Promise<{ style?: string }>;
+}) {
+  const params = await searchParams;
+  const immersiveMode =
+    params?.style === "gradient" ? "gradient" : "canvas";
+
   const user = await getAuthUser();
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  // Phase 42 — Continue row: fetch the N most-recent reactions across
-  // every space the user can see. RLS enforces ownership so we don't
-  // need an explicit filter beyond the order/limit. Join-less query
-  // (we resolve space names client-side from the already-loaded spaces
-  // list) to keep server work minimal.
-  const [spacesRes, profileRes, recentReactionsRes] = await Promise.all([
-    db
-      .from("spaces")
-      .select("*")
-      .order("updated_at", { ascending: false })
-      .limit(40),
-    user
-      ? db.from("profiles").select("display_name").eq("id", user.id).single()
-      : null,
-    db
-      .from("reactions")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(6),
-  ]);
+  const { data: spacesRaw } = await db
+    .from("spaces")
+    .select("*")
+    .is("parent_space_id", null)
+    .order("updated_at", { ascending: false })
+    .limit(60);
+  const spaces = (spacesRaw ?? []) as Space[];
 
-  const spaces = (spacesRes.data ?? []) as Space[];
-  const displayName: string | null = profileRes?.data?.display_name ?? null;
-  const recentReactions = (recentReactionsRes.data ?? []) as Reaction[];
+  const greetingName =
+    user?.email?.split("@")[0] ?? "there";
 
-  // Greeting: display_name > email local-part > "there"
-  const greetingName = displayName || user?.email?.split("@")[0] || "there";
+  const templates = TEMPLATE_LIST.map((t) => ({
+    id: t.id,
+    name: t.name,
+    tagline: t.tagline,
+    description: t.description,
+    icon: t.icon,
+    accent_color: t.accent_color,
+    category: t.category,
+    default_surface: t.default_surface,
+    seed_entity_count: t.seed_entities.length,
+    question_count: t.question_library.length,
+  }));
 
   return (
-    <StudioShell
+    <HomeShell
       greetingName={greetingName}
+      templates={templates}
       spaces={spaces}
-      recentReactions={recentReactions}
+      mode={immersiveMode}
     />
   );
 }

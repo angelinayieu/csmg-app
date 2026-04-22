@@ -89,13 +89,13 @@ export function LabReagentBay({
   );
 
   return (
-    <aside className="flex h-full flex-col overflow-hidden bg-[#10161f]">
+    <aside className="flex h-full flex-col overflow-hidden bg-[var(--lab-panel-bg)]">
       {/* Bay header */}
-      <div className="border-b border-[#94a3b8]/[0.08] px-4 py-3">
-        <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">
+      <div className="border-b border-[var(--lab-border)] px-4 py-3">
+        <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
           Reagent Bay
         </div>
-        <div className="text-[14px] font-bold leading-tight text-[#e8edf4]">
+        <div className="text-[14px] font-bold leading-tight text-[var(--lab-text)]">
           Components & Bonds
         </div>
       </div>
@@ -141,17 +141,17 @@ export function LabReagentBay({
                     {subunitSymbol(s)}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-[11.5px] font-medium text-[#e8edf4]">
+                    <div className="truncate text-[11.5px] font-medium text-[var(--lab-text)]">
                       {s.name}
                     </div>
-                    <div className="mt-0.5 flex gap-1.5 text-[9px] text-[#64748b]">
+                    <div className="mt-0.5 flex gap-1.5 text-[9px] text-[var(--lab-text-dim)]">
                       <span className="tracking-wide">{(s.entity_category as string) ?? "concept"}</span>
                       <span>·</span>
                       <span className="tracking-wide">{s.layer ?? "thread"}</span>
                       {isTuning && (
                         <>
                           <span>·</span>
-                          <span className="font-semibold tracking-wider text-[#fbbf24]">TUNING</span>
+                          <span className="font-semibold tracking-wider text-[var(--lab-warn)]">TUNING</span>
                         </>
                       )}
                     </div>
@@ -171,7 +171,7 @@ export function LabReagentBay({
                           ? "Stop tuning — return control panel to focal"
                           : `Tune ${s.name} — point control panel at this subunit`
                       }
-                      className="flex h-5 w-5 items-center justify-center rounded-[2px] border border-transparent transition-colors hover:border-[#fbbf24]/50 hover:bg-[#fbbf24]/10"
+                      className="flex h-5 w-5 items-center justify-center rounded-[2px] border border-transparent transition-colors hover:border-[var(--lab-warn)] hover:bg-[var(--lab-warn-tint)]"
                       style={{
                         color: isTuning ? "#fbbf24" : "#475569",
                       }}
@@ -179,12 +179,12 @@ export function LabReagentBay({
                       <SlidersHorizontal className="h-2.5 w-2.5" />
                     </button>
                   )}
-                  <div className="font-mono text-[10px] font-semibold tabular-nums text-[#a8b3c4]">
+                  <div className="font-mono text-[10px] font-semibold tabular-nums text-[var(--lab-text-mid)]">
                     {weight(s)}
                   </div>
                   {href && (
                     <ChevronRight
-                      className="h-3 w-3 text-[#475569] transition-colors group-hover:text-[#e8edf4]"
+                      className="h-3 w-3 text-[var(--lab-text-faint)] transition-colors group-hover:text-[var(--lab-text)]"
                       aria-hidden
                     />
                   )}
@@ -220,10 +220,10 @@ export function LabReagentBay({
             })
           )}
           {totalSubunitWeight > 0 && (
-            <div className="mt-2 flex items-center gap-2 px-1 text-[9px] text-[#64748b]">
+            <div className="mt-2 flex items-center gap-2 px-1 text-[9px] text-[var(--lab-text-dim)]">
               <span>∑ weight</span>
-              <span className="flex-1 border-t border-dashed border-[#94a3b8]/[0.14]" />
-              <span className="font-mono font-semibold text-[#a8b3c4]">{totalSubunitWeight}</span>
+              <span className="flex-1 border-t border-dashed border-[var(--lab-border-strong)]" />
+              <span className="font-mono font-semibold text-[var(--lab-text-mid)]">{totalSubunitWeight}</span>
             </div>
           )}
         </Section>
@@ -270,7 +270,7 @@ export function LabReagentBay({
             accent="#22d3ee"
           />
           {focal.description && (
-            <div className="mt-2 rounded-sm border border-[#94a3b8]/[0.08] bg-[#141b26] p-2 text-[10.5px] leading-relaxed text-[#a8b3c4]">
+            <div className="mt-2 rounded-sm border border-[var(--lab-border)] bg-[var(--lab-panel-raised)] p-2 text-[10.5px] leading-relaxed text-[var(--lab-text-mid)]">
               {focal.description}
             </div>
           )}
@@ -294,13 +294,13 @@ function Section({
   return (
     <div className="px-3 py-2">
       <div className="mb-2 flex items-center justify-between gap-2 px-1">
-        <div className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">
+        <div className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
           {title}
         </div>
         <div className="flex items-center gap-1.5">
           {action}
           {count !== undefined && (
-            <div className="rounded-sm border border-[#94a3b8]/[0.08] bg-[#141b26] px-1.5 py-0.5 font-mono text-[9px] text-[#475569]">
+            <div className="rounded-sm border border-[var(--lab-border)] bg-[var(--lab-panel-raised)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--lab-text-faint)]">
               {count}
             </div>
           )}
@@ -313,7 +313,7 @@ function Section({
 
 function EmptyHint({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-2 py-2 text-[10px] italic text-[#475569]">{children}</div>
+    <div className="px-2 py-2 text-[10px] italic text-[var(--lab-text-faint)]">{children}</div>
   );
 }
 
@@ -331,7 +331,7 @@ function BondRow({
   const arrowColor = direction === "up" ? "#22d3ee" : "#fbbf24";
   const strength = ((edge.strength as number | null) ?? 0.5).toFixed(2);
   const className =
-    "flex items-center gap-2 border-b border-[#94a3b8]/[0.08] px-1 py-1.5 transition-colors hover:bg-[#141b26]";
+    "flex items-center gap-2 border-b border-[var(--lab-border)] px-1 py-1.5 transition-colors hover:bg-[var(--lab-panel-raised)]";
   const content = (
     <>
       <div
@@ -341,12 +341,12 @@ function BondRow({
         {direction === "up" ? "↑" : "↓"}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[11px] text-[#e8edf4]">{partner.name}</div>
-        <div className="truncate text-[9px] text-[#64748b]">
+        <div className="truncate text-[11px] text-[var(--lab-text)]">{partner.name}</div>
+        <div className="truncate text-[9px] text-[var(--lab-text-dim)]">
           {edge.relationship_type} · {edge.dimension}
         </div>
       </div>
-      <div className="font-mono text-[10px] font-semibold tabular-nums text-[#a8b3c4]">
+      <div className="font-mono text-[10px] font-semibold tabular-nums text-[var(--lab-text-mid)]">
         {strength}
       </div>
     </>
@@ -375,8 +375,8 @@ function ContextRow({
       <div className="w-[22px] text-center font-mono font-bold" style={{ color: accent }}>
         φ
       </div>
-      <div className="flex-1 text-[#a8b3c4]">{label}</div>
-      <div className="text-[#e8edf4]">{value}</div>
+      <div className="flex-1 text-[var(--lab-text-mid)]">{label}</div>
+      <div className="text-[var(--lab-text)]">{value}</div>
     </div>
   );
 }

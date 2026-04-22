@@ -49,7 +49,7 @@ const DEFAULT_COMMANDS: PaletteCommand[] = [
   { id: "group-selection", label: "Group selection into cluster", shortcut: "G", icon: GroupIcon },
   { id: "decompose-active", label: "Decompose active sticky / node", shortcut: "⌘↵", icon: Zap },
   { id: "toggle-fullscreen", label: "Toggle fullscreen", shortcut: "F", icon: Maximize2 },
-  { id: "export-png", label: "Export canvas as PNG", shortcut: "⌘E", icon: FileDown },
+  { id: "export-png", label: "Export whiteboard as PNG", shortcut: "⌘E", icon: FileDown },
   { id: "run-synthesis", label: "Run synthesis across space", icon: Sparkles },
   { id: "help-shortcuts", label: "Keyboard shortcuts", shortcut: "?", icon: CommandIcon },
 ];

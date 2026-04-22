@@ -1245,10 +1245,37 @@ export function SpaceLayout({
           objectives={pendingObjectives}
           spaceId={space.id}
           spaceName={space.name}
-          onComplete={async (approved) => {
+          onComplete={async (approved, ultimate) => {
             setObjectivesReviewed(true);
-            // Create goals from approved objectives
-            let firstFundamentalGoal: ImprovementGoal | null = null;
+            // Create ultimate (parent) goal first
+            let ultimateGoal: ImprovementGoal | null = null;
+            try {
+              const res = await fetch("/api/goals", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  space_id: space.id,
+                  title: ultimate.title,
+                  description: ultimate.description,
+                  metric_name: ultimate.metric_name,
+                  metric_unit: ultimate.metric_unit ?? null,
+                  target_value: ultimate.target_value,
+                  baseline_value: ultimate.baseline_value,
+                  objective_type: ultimate.objective_type,
+                  source: "auto_detected",
+                  parent_goal_id: null,
+                }),
+              });
+              if (res.ok) {
+                const data = await res.json();
+                ultimateGoal = (data.goal ?? data) as ImprovementGoal;
+                setGoalList((prev) => [ultimateGoal as ImprovementGoal, ...prev]);
+                setActiveGoal(ultimateGoal);
+              }
+            } catch (err) {
+              console.error("Failed to create ultimate goal:", err);
+            }
+            // Create each approved sub-objective as child of ultimate
             for (const obj of approved) {
               try {
                 const res = await fetch("/api/goals", {
@@ -1264,7 +1291,7 @@ export function SpaceLayout({
                     baseline_value: obj.baseline_estimate ?? 0,
                     objective_type: obj.objective_type,
                     source: "auto_detected",
-                    parent_goal_id: obj.parent_goal_id ?? null,
+                    parent_goal_id: ultimateGoal?.id ?? obj.parent_goal_id ?? null,
                     benchmark: obj.benchmark ?? null,
                   }),
                 });
@@ -1272,9 +1299,6 @@ export function SpaceLayout({
                   const data = await res.json();
                   const newGoal = (data.goal ?? data) as ImprovementGoal;
                   setGoalList((prev) => [newGoal, ...prev]);
-                  if (!firstFundamentalGoal && (obj.depth === "fundamental" || obj.depth === "structural")) {
-                    firstFundamentalGoal = newGoal;
-                  }
                 } else {
                   const errData = await res.json().catch(() => ({}));
                   console.error(`Failed to create goal "${obj.title}":`, res.status, errData);
@@ -1282,10 +1306,6 @@ export function SpaceLayout({
               } catch (err) {
                 console.error("Failed to create goal from objective:", err);
               }
-            }
-            // Set the top fundamental/structural as active goal
-            if (firstFundamentalGoal) {
-              setActiveGoal(firstFundamentalGoal);
             }
             // Clear the pending review flag
             try {

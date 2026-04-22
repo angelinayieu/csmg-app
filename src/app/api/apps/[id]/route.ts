@@ -98,6 +98,30 @@ export async function GET(
     .order("predicted_at", { ascending: false })
     .limit(200);
 
+  // ── Tier 3: per-app sub-strategy ──────────────────────────────────
+  // The active app_strategies row (if any) + recent version log entries.
+  // Widgets that want spec-driven defaults (PredictionPanel reading the
+  // sub-strategy's prediction_spec for default horizons, SimulationLab
+  // reading perturbation_profiles for one-click scenario seeds) can
+  // bind to these fields without a separate fetch.
+  //
+  // Both queries return cleanly when no sub-strategy exists (legacy
+  // apps generated before Tier 3) — the GET endpoint shape stays
+  // stable; new fields are nullable.
+  const { data: appStrategyRow } = await db
+    .from("app_strategies")
+    .select("*")
+    .eq("app_id", id)
+    .eq("status", "active")
+    .maybeSingle();
+
+  const { data: appStrategyVersions } = await db
+    .from("app_strategy_versions")
+    .select("*")
+    .eq("app_id", id)
+    .order("changed_at", { ascending: false })
+    .limit(10);
+
   return NextResponse.json({
     app: hydrateApp(row),
     interventions: ivRows ?? [],
@@ -109,6 +133,10 @@ export async function GET(
     // on a fresh space before any baseline has been captured.
     strategy_baseline: latestBaseline ?? null,
     predictions: predictionRows ?? [],
+    // Tier 3 per-app sub-strategy. Hydrated by callers that want typed
+    // access; raw row is fine for widgets that just check existence.
+    app_strategy: appStrategyRow ?? null,
+    app_strategy_versions: appStrategyVersions ?? [],
   });
 }
 

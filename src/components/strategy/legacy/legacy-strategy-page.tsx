@@ -99,7 +99,7 @@ export function LegacyStrategyPage() {
           Generate ranked strategic recommendations with infrastructure proposals
         </p>
         <button
-          onClick={strategyAuto.generateStrategy}
+          onClick={() => { void strategyAuto.generateStrategy(); }}
           disabled={strategyAuto.loading}
           className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors disabled:opacity-50"
         >

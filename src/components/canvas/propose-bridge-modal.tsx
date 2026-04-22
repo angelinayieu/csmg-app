@@ -106,7 +106,7 @@ export function ProposeBridgeModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/30 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm"
       onClick={submitting ? undefined : onCancel}
     >
       <div

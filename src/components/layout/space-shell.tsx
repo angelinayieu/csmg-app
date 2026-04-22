@@ -208,9 +208,41 @@ function SpaceShellInner({ children }: { children: ReactNode }) {
           objectives={ctx.pendingObjectives}
           spaceId={ctx.space.id}
           spaceName={ctx.space.name}
-          onComplete={async (approved) => {
+          onComplete={async (approved, ultimate) => {
             ctx.setObjectivesReviewed(true);
-            let firstFundamentalGoal: ImprovementGoal | null = null;
+
+            // 1) Create the ultimate (parent) goal FIRST so sub-objectives can be
+            //    linked via parent_goal_id. This is the goal the dashboard shows
+            //    as "Main Objective" — without it, the banner stays "No goal set".
+            let ultimateGoal: ImprovementGoal | null = null;
+            try {
+              const res = await fetch("/api/goals", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  space_id: ctx.space.id,
+                  title: ultimate.title,
+                  description: ultimate.description,
+                  metric_name: ultimate.metric_name,
+                  metric_unit: ultimate.metric_unit ?? null,
+                  target_value: ultimate.target_value,
+                  baseline_value: ultimate.baseline_value,
+                  objective_type: ultimate.objective_type,
+                  source: "auto_detected",
+                  parent_goal_id: null,
+                }),
+              });
+              if (res.ok) {
+                const data = await res.json();
+                ultimateGoal = (data.goal ?? data) as ImprovementGoal;
+                ctx.setGoalList((prev) => [ultimateGoal as ImprovementGoal, ...prev]);
+                ctx.setActiveGoal(ultimateGoal);
+              }
+            } catch (err) {
+              console.error("Failed to create ultimate goal:", err);
+            }
+
+            // 2) Create each approved sub-objective as a child of the ultimate goal.
             for (const obj of approved) {
               try {
                 const res = await fetch("/api/goals", {
@@ -226,7 +258,7 @@ function SpaceShellInner({ children }: { children: ReactNode }) {
                     baseline_value: obj.baseline_estimate ?? 0,
                     objective_type: obj.objective_type,
                     source: "auto_detected",
-                    parent_goal_id: obj.parent_goal_id ?? null,
+                    parent_goal_id: ultimateGoal?.id ?? obj.parent_goal_id ?? null,
                     benchmark: obj.benchmark ?? null,
                   }),
                 });
@@ -234,19 +266,10 @@ function SpaceShellInner({ children }: { children: ReactNode }) {
                   const data = await res.json();
                   const newGoal = (data.goal ?? data) as ImprovementGoal;
                   ctx.setGoalList((prev) => [newGoal, ...prev]);
-                  if (
-                    !firstFundamentalGoal &&
-                    (obj.depth === "fundamental" || obj.depth === "structural")
-                  ) {
-                    firstFundamentalGoal = newGoal;
-                  }
                 }
               } catch (err) {
                 console.error("Failed to create goal from objective:", err);
               }
-            }
-            if (firstFundamentalGoal) {
-              ctx.setActiveGoal(firstFundamentalGoal);
             }
             // Clear the pending review flag
             try {

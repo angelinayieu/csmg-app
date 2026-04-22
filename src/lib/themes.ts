@@ -1,4 +1,4 @@
-export type ThemeId = "teal" | "blue";
+export type ThemeId = "teal" | "blue" | "dark";
 
 export interface ThemeDefinition {
   label: string;
@@ -41,6 +41,29 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
       "--gradient-name-end": "#0a56d6",
       "--gradient-page-start": "#eef2f8",
       "--gradient-page-mid": "#f4f7fb",
+    },
+  },
+  dark: {
+    label: "Dark",
+    // Swatch is a tiny slate-navy chip; the accent under dark stays teal
+    // so charts/rings don't lose their identity.
+    swatch: "#0a0e14",
+    cssVars: {
+      // Accent kept teal so "InterAxis teal" still reads as the brand,
+      // just slightly brighter for contrast against dark surfaces.
+      "--accent-50": "#0B2A30",
+      "--accent-100": "#0F3B44",
+      "--accent-200": "#155460",
+      "--accent-300": "#1B6F7E",
+      "--accent-400": "#22889C",
+      "--accent-500": "#26C6DA",
+      "--accent-600": "#4DD0E1",
+      "--accent-700": "#80DEEA",
+      "--accent-rgb": "77, 208, 225",
+      "--gradient-name-end": "#80DEEA",
+      // Dark page gradient — two stops of near-black slate
+      "--gradient-page-start": "#0a0e14",
+      "--gradient-page-mid": "#10161f",
     },
   },
 };

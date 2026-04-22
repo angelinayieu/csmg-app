@@ -29,6 +29,13 @@ import type {
   MetricBaseline,
   PredictedOutcome,
 } from "@/types/prediction";
+import type {
+  AppStrategySpec,
+  AppPredictionSpec,
+  AppValidationSpec,
+  AppSimulationSpec,
+  AppLearningLoop,
+} from "@/types/app-strategy";
 import {
   Surface,
   WidgetTitle,
@@ -89,6 +96,40 @@ function TagPill({ tag }: { tag: DeviationTag | null | undefined }) {
   );
 }
 
+// Tier 3.6: shows what the sub-strategy's learning_loop says is the
+// target signal for a metric. Not a live classification (we don't have
+// the live value here) — a compact hint of "what green looks like" per
+// the spec's green_reading + cadence. Hover reveals all three
+// (green/yellow/red) readings so the user can gut-check whether the
+// current actual lines up.
+function IndicatorPill({
+  indicator,
+}: {
+  indicator: AppLearningLoop["leading_indicators"][number] | null;
+}) {
+  if (!indicator) {
+    return (
+      <span className="rounded-full bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-400">
+        —
+      </span>
+    );
+  }
+  const title =
+    `Green: ${indicator.green_reading}\n` +
+    `Yellow: ${indicator.yellow_reading}\n` +
+    `Red: ${indicator.red_reading}\n` +
+    `Cadence: ${indicator.cadence}`;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full bg-emerald-50/80 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200/70"
+      title={title}
+    >
+      <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+      {indicator.cadence}
+    </span>
+  );
+}
+
 function formatNumber(n: number | null | undefined, unit?: string | null): string {
   if (n === null || n === undefined) return "—";
   const abs = Math.abs(n);
@@ -125,12 +166,41 @@ function relativeHorizon(iso: string | null | undefined): string {
 export function BaselineDeviationTracker({ instance, context }: WidgetComponentProps) {
   const baselineBinding = instance.bindings?.baseline;
   const deviationsBinding = instance.bindings?.deviations;
+  const specBinding = instance.bindings?.spec;
 
   const baselineRes = context.resolve<StrategyBaselineRow | null>(baselineBinding);
   const deviationsRes = context.resolve<PredictionLedgerRow[]>(deviationsBinding);
 
   const baseline = baselineRes.value;
   const deviations = deviationsRes.value ?? [];
+
+  // Tier 3.6: pull learning_loop.leading_indicators from sub-strategy.
+  // The indicators define per-metric green/yellow/red readings — the
+  // sub-strategy's own definition of what "on track" means for this app.
+  // When present, the tracker annotates each row with its current reading
+  // classification instead of just showing the raw value.
+  const specRes = context.resolve<AppStrategySpec | AppLearningLoop | null>(specBinding);
+  const leadingIndicators: AppLearningLoop["leading_indicators"] = (() => {
+    const v = specRes.value;
+    if (!v) return [];
+    // Narrowed binding: already the learning_loop section.
+    if ("leading_indicators" in v && Array.isArray(v.leading_indicators)) {
+      return v.leading_indicators;
+    }
+    // Full spec binding: pull the section.
+    if ("learning_loop" in v && v.learning_loop?.leading_indicators) {
+      return v.learning_loop.leading_indicators;
+    }
+    return [];
+  })();
+
+  const indicatorByMetric = useMemo(() => {
+    const m = new Map<string, AppLearningLoop["leading_indicators"][number]>();
+    for (const li of leadingIndicators) {
+      m.set(li.metric_label, li);
+    }
+    return m;
+  }, [leadingIndicators]);
 
   const rows = useMemo(() => {
     if (!baseline) return [];
@@ -148,6 +218,8 @@ export function BaselineDeviationTracker({ instance, context }: WidgetComponentP
       const deviation = deviations
         .filter((d) => d.metric_label === mb.label && d.status === "resolved")
         .sort((a, b) => (b.resolved_at ?? "").localeCompare(a.resolved_at ?? ""))[0];
+      // Tier 3.6: per-metric leading indicator (if sub-strategy defined one)
+      const indicator = indicatorByMetric.get(mb.label) ?? null;
       return {
         label: mb.label,
         unit: mb.unit,
@@ -155,9 +227,10 @@ export function BaselineDeviationTracker({ instance, context }: WidgetComponentP
         predictedValue: predicted?.predicted_value ?? null,
         actual: deviation?.resolved_actual ?? null,
         tag: (deviation?.deviation_tag as DeviationTag | null) ?? null,
+        indicator,
       };
     });
-  }, [baseline, deviations]);
+  }, [baseline, deviations, indicatorByMetric]);
 
   return (
     <Surface density="comfortable">
@@ -192,6 +265,12 @@ export function BaselineDeviationTracker({ instance, context }: WidgetComponentP
                 <th className="px-2 text-right">Actual</th>
                 <th className="px-2 text-right">Δ</th>
                 <th className="pl-2 pr-2 text-right">Tag</th>
+                {/* Tier 3.6: indicator column only renders when any
+                    row has a sub-strategy leading_indicator. Keeps
+                    pre-Tier-3 spaces with a clean 6-column layout. */}
+                {leadingIndicators.length > 0 && (
+                  <th className="pl-2 pr-2 text-right">Signal</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -218,6 +297,11 @@ export function BaselineDeviationTracker({ instance, context }: WidgetComponentP
                   <td className="py-2 pl-2 pr-2 text-right">
                     <TagPill tag={row.tag} />
                   </td>
+                  {leadingIndicators.length > 0 && (
+                    <td className="py-2 pl-2 pr-2 text-right">
+                      <IndicatorPill indicator={row.indicator} />
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -241,12 +325,44 @@ export function PredictionPanel({ instance, context }: WidgetComponentProps) {
   const res = context.resolve<PredictionLedgerRow[]>(predictionsBinding);
   const predictions = (res.value ?? []).filter((p) => p.status === "open");
 
+  // Tier 3.5: pull sub-strategy spec to get app-tuned defaults. The spec
+  // may be an AppStrategySpec (full bind) OR an AppPredictionSpec (when
+  // the binding selector narrows to .prediction_spec). Handle both
+  // shapes so widget contracts can choose the granularity.
+  const specBinding = instance.bindings?.spec;
+  const specRes = context.resolve<AppStrategySpec | AppPredictionSpec | null>(specBinding);
+  const predictionSpec: AppPredictionSpec | null = (() => {
+    const v = specRes.value;
+    if (!v) return null;
+    // Narrow: if v has metrics_to_track, it's already the prediction_spec section.
+    if ("metrics_to_track" in v) return v as AppPredictionSpec;
+    if ("prediction_spec" in v) return v.prediction_spec ?? null;
+    return null;
+  })();
+
+  // Defaults preference order: spec defaults → built-in fallback.
+  // The form's value state still wins (user can override per-prediction)
+  // but the initial value reflects what the sub-strategy says.
+  const defaultDays = String(predictionSpec?.default_horizon_days ?? 30);
+  const defaultMetric =
+    predictionSpec?.metrics_to_track?.[0]?.label ?? "";
+
   const [showForm, setShowForm] = useState(false);
-  const [metric, setMetric] = useState("");
+  const [metric, setMetric] = useState(defaultMetric);
   const [value, setValue] = useState("");
-  const [days, setDays] = useState("30");
+  const [days, setDays] = useState(defaultDays);
   const [rationale, setRationale] = useState("");
   const [busy, setBusy] = useState(false);
+  // Tier 3.6: "Show all" expansion for spec-suggested metric pills.
+  // Caps at 4 by default so the form stays compact; toggles to full
+  // list when the spec has more suggestions and the user wants to see
+  // everything. Reset on form close so reopening is back to collapsed.
+  const [showAllMetrics, setShowAllMetrics] = useState(false);
+  const suggestedMetrics = predictionSpec?.metrics_to_track ?? [];
+  const visibleSuggestions = showAllMetrics
+    ? suggestedMetrics
+    : suggestedMetrics.slice(0, 4);
+  const hiddenCount = suggestedMetrics.length - visibleSuggestions.length;
 
   async function submit() {
     if (!metric || !value) return;
@@ -286,6 +402,58 @@ export function PredictionPanel({ instance, context }: WidgetComponentProps) {
 
       {showForm && (
         <div className="mb-3 space-y-2 rounded-xl border border-violet-200/60 bg-violet-50/30 p-3">
+          {/* Tier 3.5: spec-suggested metrics as one-click pills.
+              Visible only when the sub-strategy declares metrics_to_track.
+              Clicking a pill fills the metric field (and the per-metric
+              horizon override if the spec set one) so users prefill
+              forecasts in the language the sub-strategy uses.
+              Tier 3.6: "Show all" expansion when the spec has more than 4
+              metrics — keeps the form compact by default while giving
+              users the full list on demand. */}
+          {suggestedMetrics.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-violet-700/80">
+                Spec suggests
+              </span>
+              {visibleSuggestions.map((m) => (
+                <button
+                  key={m.label}
+                  type="button"
+                  onClick={() => {
+                    setMetric(m.label);
+                    if (m.horizon_days) setDays(String(m.horizon_days));
+                  }}
+                  className={
+                    "rounded-full px-2 py-0.5 text-[10.5px] font-medium transition-colors " +
+                    (metric === m.label
+                      ? "bg-violet-600 text-white"
+                      : "bg-white/80 text-violet-700 hover:bg-violet-100")
+                  }
+                  title={m.rationale}
+                >
+                  {m.label}
+                </button>
+              ))}
+              {hiddenCount > 0 && !showAllMetrics && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllMetrics(true)}
+                  className="rounded-full border border-dashed border-violet-300/70 bg-transparent px-2 py-0.5 text-[10.5px] font-medium text-violet-600 hover:bg-violet-50"
+                >
+                  +{hiddenCount} more
+                </button>
+              )}
+              {showAllMetrics && suggestedMetrics.length > 4 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllMetrics(false)}
+                  className="rounded-full px-2 py-0.5 text-[10.5px] font-medium text-violet-600 hover:text-violet-800"
+                >
+                  Show less
+                </button>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-2">
             <input
               className="col-span-2 rounded-md border border-gray-200 bg-white px-2 py-1 text-[12px]"
@@ -340,8 +508,23 @@ export function PredictionPanel({ instance, context }: WidgetComponentProps) {
               className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 bg-white/60 px-3 py-2"
             >
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[12.5px] font-medium text-gray-800">
-                  {p.metric_label}
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-[12.5px] font-medium text-gray-800">
+                    {p.metric_label}
+                  </span>
+                  {/* Tier 5: badge agent-emitted predictions. The subtle
+                      violet pill lets users distinguish automatic from
+                      manual at a glance — relevant because agent
+                      predictions use simple extrapolation in v1 and may
+                      need trust-calibration from the user. */}
+                  {p.agent_id && (
+                    <span
+                      className="shrink-0 rounded-full bg-violet-100/70 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.06em] text-violet-700"
+                      title={`Emitted by agent "${p.agent_id}"`}
+                    >
+                      agent
+                    </span>
+                  )}
                 </div>
                 <div className="truncate text-[11px] text-gray-500">
                   {p.rationale ?? p.agent_id ?? "self-authored"}
@@ -372,10 +555,22 @@ export function PredictionPanel({ instance, context }: WidgetComponentProps) {
 
 export function DeviationSignalFeed({ instance, context }: WidgetComponentProps) {
   const signalsBinding = instance.bindings?.signals;
+  const specBinding = instance.bindings?.spec;
   const res = context.resolve<PredictionLedgerRow[]>(signalsBinding);
   const signals = (res.value ?? []).slice(0, 6);
 
+  // Tier 4.5: know whether a sub-strategy exists for this app. When it
+  // does, the widget exposes "Add hypothesis" as a second action per
+  // surprise row — the action reuses escalate_to_research with a
+  // focused prompt hint so the next regen converts the surprise into a
+  // validation_spec.hypothesis_bank entry. We don't write to the bank
+  // directly from here; re-running the generator is the right seam
+  // because it also recalibrates prediction_spec in the same pass.
+  const specRes = context.resolve<AppStrategySpec | { hypothesis_bank?: unknown } | null>(specBinding);
+  const hasSubstrategy = specRes.value != null;
+
   const [escalating, setEscalating] = useState<string | null>(null);
+  const [promoting, setPromoting] = useState<string | null>(null);
 
   async function escalate(predictionId: string) {
     setEscalating(predictionId);
@@ -385,6 +580,24 @@ export function DeviationSignalFeed({ instance, context }: WidgetComponentProps)
       });
     } finally {
       setEscalating(null);
+    }
+  }
+
+  // "Add hypothesis" = re-trigger escalate with a framing that nudges
+  // the regen prompt to include this surprise as a formal hypothesis.
+  // Uses the same handler (escalate_to_research, which Tier 3 wired to
+  // also invoke generateAppStrategy with the focus hint) — the only
+  // delta is the reason text, which shows up in the focus hint the
+  // generator prompt sees.
+  async function promoteToHypothesis(signal: PredictionLedgerRow) {
+    setPromoting(signal.id);
+    try {
+      await context.dispatch(instance.id, "escalate_to_research", {
+        prediction_id: signal.id,
+        reason: `Promote to validation hypothesis: test whether the ${signal.deviation_tag} pattern on "${signal.metric_label}" holds in future periods.`,
+      });
+    } finally {
+      setPromoting(null);
     }
   }
 
@@ -440,13 +653,33 @@ export function DeviationSignalFeed({ instance, context }: WidgetComponentProps)
                     </div>
                   )}
                 </div>
-                <ActionButton
-                  label={escalating === s.id ? "…" : "Escalate"}
-                  variant="secondary"
-                  compact
-                  disabled={escalating === s.id || (s.resolution_notes ?? "").includes("[escalated")}
-                  onClick={() => escalate(s.id)}
-                />
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <ActionButton
+                    label={escalating === s.id ? "…" : "Escalate"}
+                    variant="secondary"
+                    compact
+                    disabled={escalating === s.id || (s.resolution_notes ?? "").includes("[escalated")}
+                    onClick={() => escalate(s.id)}
+                  />
+                  {/* Tier 4.5: second action when an app_strategy exists.
+                      Triggers a regen with focused framing so the surprise
+                      enters the hypothesis_bank on the next spec version.
+                      Disabled when this signal has already been escalated
+                      (the resolution_notes prefix is how we know). */}
+                  {hasSubstrategy && (
+                    <ActionButton
+                      label={promoting === s.id ? "…" : "+ Hypothesis"}
+                      variant="subtle"
+                      compact
+                      disabled={
+                        promoting === s.id ||
+                        escalating === s.id ||
+                        (s.resolution_notes ?? "").includes("[escalated")
+                      }
+                      onClick={() => promoteToHypothesis(s)}
+                    />
+                  )}
+                </div>
               </div>
             </li>
           ))}
@@ -471,12 +704,40 @@ export function ValidationLab({ instance, context }: WidgetComponentProps) {
     (p) => p.status === "open" && (p.rationale ?? "").startsWith("[experiment]"),
   );
 
+  // Tier 3.5: pull hypothesis_bank from sub-strategy spec when bound.
+  // Same shape-handling pattern as PredictionPanel — accept either a
+  // narrowed validation_spec section or the full AppStrategySpec.
+  const specBinding = instance.bindings?.spec;
+  const specRes = context.resolve<AppStrategySpec | AppValidationSpec | null>(specBinding);
+  const validationSpec: AppValidationSpec | null = (() => {
+    const v = specRes.value;
+    if (!v) return null;
+    if ("hypothesis_bank" in v) return v as AppValidationSpec;
+    if ("validation_spec" in v) return v.validation_spec ?? null;
+    return null;
+  })();
+  const hypothesisBank = validationSpec?.hypothesis_bank ?? [];
+  const defaultHorizonDays = validationSpec?.experiment_horizon_days ?? 14;
+
   const [hypothesis, setHypothesis] = useState("");
   const [metric, setMetric] = useState("");
   const [predictedValue, setPredictedValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [endingId, setEndingId] = useState<string | null>(null);
   const [endActual, setEndActual] = useState("");
+
+  // Quick-pick a hypothesis from the spec bank — fills all three form
+  // fields in one click. The horizon override is sent via start_experiment
+  // payload but the form doesn't expose it (defaults from spec).
+  const pickHypothesis = (h: AppValidationSpec["hypothesis_bank"][number]) => {
+    setHypothesis(h.statement);
+    setMetric(h.metric_label);
+    if (h.expected_magnitude !== undefined) {
+      setPredictedValue(String(h.expected_magnitude));
+    } else {
+      setPredictedValue("");
+    }
+  };
 
   async function startExperiment() {
     if (!hypothesis || !metric) return;
@@ -486,7 +747,8 @@ export function ValidationLab({ instance, context }: WidgetComponentProps) {
         hypothesis,
         metric_label: metric,
         predicted_value: predictedValue ? Number(predictedValue) : undefined,
-        horizon_days: 14,
+        // Tier 3.5: use spec horizon when available; falls back to 14d.
+        horizon_days: defaultHorizonDays,
       });
       setHypothesis("");
       setMetric("");
@@ -521,6 +783,37 @@ export function ValidationLab({ instance, context }: WidgetComponentProps) {
 
       {/* Start form */}
       <div className="mb-3 space-y-2 rounded-xl border border-violet-200/60 bg-violet-50/25 p-3">
+        {/* Tier 3.5: hypothesis_bank from sub-strategy spec — one-click
+            selects fill all three form fields. Caps at 3 visible to keep
+            the form compact; users can still author free-form below. */}
+        {hypothesisBank.length > 0 && (
+          <div className="space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-violet-700/80">
+              From spec hypothesis bank
+            </span>
+            <div className="flex flex-col gap-1">
+              {hypothesisBank.slice(0, 3).map((h) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => pickHypothesis(h)}
+                  className={
+                    "rounded-md px-2 py-1 text-left text-[11.5px] transition-colors " +
+                    (hypothesis === h.statement
+                      ? "bg-violet-600 text-white"
+                      : "bg-white/80 text-gray-700 hover:bg-violet-100")
+                  }
+                  title={h.rationale}
+                >
+                  <span className="font-medium">{h.statement}</span>
+                  <span className="ml-1.5 text-[10px] opacity-70">
+                    · {h.metric_label} ({h.expected_direction})
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <input
           className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-[12px]"
           placeholder="Hypothesis (e.g. 'shipping X will lift retention')"
@@ -651,9 +944,24 @@ interface SimulationResult {
 export function SimulationLab({ instance, context }: WidgetComponentProps) {
   const twinBinding = instance.bindings?.twin;
   const scenariosBinding = instance.bindings?.scenarios;
+  const specBinding = instance.bindings?.spec;
 
   const twinRes = context.resolve<{ macro?: { health_score?: number } } | null>(twinBinding);
   const simRes = context.resolve<SimulationResult | null>(scenariosBinding);
+
+  // Tier 3.6: pull simulation_spec from sub-strategy. Handles either the
+  // narrowed section (AppSimulationSpec) or the full spec (AppStrategySpec).
+  // When the spec declares perturbation_profiles, the widget exposes them
+  // as one-click scenarios — the sub-strategy's "pre-canned what-ifs."
+  const specRes = context.resolve<AppStrategySpec | AppSimulationSpec | null>(specBinding);
+  const simulationSpec: AppSimulationSpec | null = (() => {
+    const v = specRes.value;
+    if (!v) return null;
+    if ("perturbation_profiles" in v) return v as AppSimulationSpec;
+    if ("simulation_spec" in v) return v.simulation_spec ?? null;
+    return null;
+  })();
+  const profiles = simulationSpec?.perturbation_profiles ?? [];
 
   // Pull baseline metrics from the app's state or from a pre-fetched
   // baseline binding. The simpler path: just read whatever simulation
@@ -688,6 +996,27 @@ export function SimulationLab({ instance, context }: WidgetComponentProps) {
     }
   }
 
+  // Tier 3.6: one-click run of a spec-defined profile. Each profile may
+  // contain multiple perturbations (different metrics moving together) —
+  // unlike the inline form which only supports one metric at a time.
+  // The label defaults to the profile's label; this is a single API call
+  // so the user doesn't have to transcribe the spec's scenarios by hand.
+  async function runProfile(profile: AppSimulationSpec["perturbation_profiles"][number]) {
+    setBusy(true);
+    try {
+      await context.dispatch(instance.id, "run_simulation", {
+        scenario_label: profile.label,
+        perturbations: profile.perturbations.map((p) => ({
+          metric_label: p.metric_label,
+          delta_pct: p.delta_pct,
+          rationale: p.rationale,
+        })),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Surface density="comfortable">
       <WidgetTitle
@@ -702,6 +1031,53 @@ export function SimulationLab({ instance, context }: WidgetComponentProps) {
           )
         }
       />
+
+      {/* Tier 3.6: spec perturbation_profiles as one-click scenarios.
+          Each card shows the profile's label + purpose + per-metric
+          perturbation preview. Clicking runs the full profile — skipping
+          the form entirely. Renders above the form so it's the primary
+          path when the spec has profiles. */}
+      {profiles.length > 0 && (
+        <div className="mb-3 space-y-1.5">
+          <div className="flex items-baseline justify-between">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-violet-700/80">
+              From spec · {profiles.length} scenario{profiles.length === 1 ? "" : "s"}
+            </span>
+            <span className="text-[10px] text-gray-400">Click to run</span>
+          </div>
+          <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
+            {profiles.slice(0, 4).map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => runProfile(p)}
+                disabled={busy}
+                className="group rounded-lg border border-violet-200/70 bg-white/70 px-3 py-2 text-left transition-colors hover:border-violet-400 hover:bg-violet-50/50 disabled:opacity-40"
+                title={p.purpose}
+              >
+                <div className="text-[12px] font-semibold text-gray-900 group-hover:text-violet-900">
+                  {p.label}
+                </div>
+                <div className="mt-0.5 line-clamp-1 text-[10.5px] text-gray-500">
+                  {p.perturbations
+                    .slice(0, 3)
+                    .map(
+                      (pert) =>
+                        `${pert.metric_label} ${pert.delta_pct > 0 ? "+" : ""}${(pert.delta_pct * 100).toFixed(0)}%`,
+                    )
+                    .join(" · ")}
+                  {p.perturbations.length > 3 ? ` · +${p.perturbations.length - 3} more` : ""}
+                </div>
+                {p.purpose && (
+                  <div className="mt-1 line-clamp-1 text-[10px] italic text-gray-400">
+                    {p.purpose}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mb-3 space-y-2 rounded-xl border border-violet-200/60 bg-violet-50/25 p-3">
         <input

@@ -93,6 +93,29 @@ export async function POST(request: Request, ctx: Ctx) {
         { status: 500 },
       );
     }
+
+    // Wave C — log user event for digest agent.
+    try {
+      const { recordUserEvent } = await import("@/lib/user-events/record");
+      await recordUserEvent(db, {
+        user_id: user.id,
+        event_type:
+          input.action === "reject"
+            ? "proposal.rejected"
+            : "proposal.dismissed",
+        source: `user:${input.action}:${user.id}`,
+        ref_kind: "proposal",
+        ref_id: proposalId,
+        payload: {
+          candidate_entity_id: proposal.entity_id,
+          source: proposal.source,
+          confidence: proposal.confidence,
+        },
+      });
+    } catch {
+      /* non-fatal */
+    }
+
     return NextResponse.json({ proposal: updated });
   }
 
@@ -269,6 +292,28 @@ export async function POST(request: Request, ctx: Ctx) {
       { error: "Failed to mark proposal accepted" },
       { status: 500 },
     );
+  }
+
+  // Wave C — log user event: proposal accepted + optional bridge created.
+  try {
+    const { recordUserEvent } = await import("@/lib/user-events/record");
+    await recordUserEvent(db, {
+      user_id: user.id,
+      event_type: "proposal.accepted",
+      source: `user:accept:${user.id}`,
+      ref_kind: "proposal",
+      ref_id: proposalId,
+      payload: {
+        entity_id: proposal.entity_id,
+        span_id: spanId,
+        bridge_id: bridgeId,
+        source: proposal.source,
+        confidence: proposal.confidence,
+        cross_canvas: !!bridgeId,
+      },
+    });
+  } catch {
+    /* non-fatal */
   }
 
   return NextResponse.json({

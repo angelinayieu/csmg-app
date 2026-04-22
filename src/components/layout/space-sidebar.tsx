@@ -11,6 +11,7 @@ import { useAppStore } from "@/stores/store-provider";
 import { cn } from "@/lib/utils";
 import { useMemo } from "react";
 import { InterAxisLogo } from "@/components/brand/interaxis-logo";
+import { AgentActivityBell } from "@/components/agent-pulse/agent-activity-bell";
 import type { Space } from "@/types";
 
 // Sidebar nav — grouped by section so new global routes don't clutter the
@@ -28,10 +29,9 @@ type NavItem = {
 const navItems: NavItem[] = [
   // ── Capture ──
   { href: "/app", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/app/library", label: "Canvas Library", icon: LayoutGrid },
+  { href: "/app/library", label: "Whiteboard Library", icon: LayoutGrid },
   { href: "/app/lab", label: "Universal Lab", icon: FlaskConical },
-  { href: "/app/brainstorm", label: "Brainstorm", icon: FlaskConical },
-  { href: "/app/analyze", label: "New Analysis", icon: Plus },
+  { href: "/app/new", label: "New Analysis", icon: Plus },
 
   // ── Explore ──
   { href: "/app/use-cases", label: "Use Cases", icon: Sparkles, sectionLabel: "Explore" },
@@ -63,9 +63,11 @@ function getAvatarGradient(letter: string) {
 
 export function SpaceSidebar({
   userEmail,
+  userId,
   creditBalance = 0,
 }: {
   userEmail: string;
+  userId?: string | null;
   creditBalance?: number;
 }) {
   const pathname = usePathname();
@@ -241,6 +243,13 @@ export function SpaceSidebar({
             {creditBalance}
           </div>
         </div>
+
+        {/* Wave D — agent activity bell, always visible (even collapsed) */}
+        {userId && (
+          <div className="mt-2">
+            <AgentActivityBell userId={userId} collapsed={collapsed} />
+          </div>
+        )}
 
         {/* Sign out */}
         <div

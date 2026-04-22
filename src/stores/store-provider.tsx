@@ -4,6 +4,7 @@ import { createContext, useContext, useRef, type ReactNode } from "react";
 import { useStore } from "zustand";
 import {
   createAppStore,
+  defaultInitState,
   type AppState,
   type AppStore,
 } from "@/stores/app-store";
@@ -21,10 +22,12 @@ export function AppStoreProvider({
 }) {
   const storeRef = useRef<AppStoreApi>(undefined);
   if (!storeRef.current) {
+    // Merge SSR-provided partial state onto the full defaults so fields
+    // added later (e.g. colorScheme) stay populated even when callers pass
+    // only a subset. Fixes TS "AppState missing colorScheme" error.
     storeRef.current = createAppStore({
-      user: initialState?.user ?? null,
-      spaces: initialState?.spaces ?? [],
-      sidebarOpen: initialState?.sidebarOpen ?? true,
+      ...defaultInitState,
+      ...(initialState ?? {}),
     });
   }
 

@@ -20,6 +20,11 @@ export interface CanvasTopBarProps {
   onToggleAutoAI: () => void;
   autoAIState: AutoAIState;
   autoAILastTarget?: string | null;
+  /**
+   * Phase 48 — slot for additional utility triggers (AI Receipts,
+   * future quiet-mode toggle, etc.) rendered in the right pill.
+   */
+  extraTriggers?: React.ReactNode;
 }
 
 export function CanvasTopBar({
@@ -36,6 +41,7 @@ export function CanvasTopBar({
   onToggleAutoAI,
   autoAIState,
   autoAILastTarget,
+  extraTriggers,
 }: CanvasTopBarProps) {
   return (
     <div
@@ -111,6 +117,13 @@ export function CanvasTopBar({
           <Magnet className={cn("h-3 w-3", snapOn && "fill-blue-100")} />
           Snap
         </button>
+        {/* Phase 48 — utility slot (AI Receipts, quiet-mode toggle, etc.). */}
+        {extraTriggers && (
+          <>
+            <div className="h-4 w-px bg-gray-200" />
+            {extraTriggers}
+          </>
+        )}
         <div className="h-4 w-px bg-gray-200" />
         <button
           className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11.5px] font-semibold text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"

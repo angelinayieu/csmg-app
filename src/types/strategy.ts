@@ -36,6 +36,13 @@ export interface StrategyPerspective {
     infrastructure_note?: string; // what infrastructure this creates or strengthens
   }>;
   confidence: "high" | "moderate" | "low";
+
+  // ── Comprehensive provenance (Phase 4 of strategy rework) ──
+  // Upstream reasoning backlinks — enables UI to show "this perspective respects
+  // axiom A2 and addresses strong convergence conv:1". Empty arrays are valid;
+  // fabricated IDs are rejected by the validator.
+  axiom_ids_respected?: string[];
+  convergence_ids_addressed?: string[];
 }
 
 /**
@@ -71,6 +78,24 @@ export interface MicroTactic {
     action: string;  // "...then I will [specific goal-directed behavior]"
     category: "proactive" | "reactive" | "course_correction";
   };
+
+  // ── Comprehensive provenance (Phase 4 of strategy rework) ──
+  // Every tactic carries backlinks to the upstream reasoning it serves. These
+  // fields are populated by the strategy LLM when comprehensive mode is on
+  // (mandated by the system prompt) and validated against the upstream axiom /
+  // convergence / gap / inversion lists before being persisted.
+  /** Axiom IDs (A1, A2, ...) this tactic honors — must not violate these */
+  axiom_ids_respected?: string[];
+  /** Axiom IDs this tactic deliberately tests or challenges */
+  axiom_ids_challenged?: string[];
+  /** Insight convergence cluster IDs (conv:1, ...) this tactic addresses */
+  convergence_ids_addressed?: string[];
+  /** Coverage gap IDs from strategy_coverage.gaps this tactic closes */
+  coverage_gap_ids_closed?: string[];
+  /** Assumption-inversion indices (inv0, inv1, ...) this tactic tests */
+  inversion_ids_tested?: string[];
+  /** Short slugs of hidden_signals this tactic addresses */
+  hidden_signal_refs?: string[];
 }
 
 /**
@@ -205,6 +230,32 @@ export interface StrategyTargetObjective {
 export interface StrategicRecommendation {
   // Macro strategy
   title: string;
+  /**
+   * Phase 1 Step 11 — the plain-language action the user should take.
+   * One short sentence, present-tense, imperative. No jargon, no entity
+   * codes, no rigor machinery. This is what renders as the strategy
+   * card's top line; the rigorous reasoning lives in `reasoning_chain`
+   * behind an expand affordance.
+   *
+   * Example: "Ship a single retention intervention before adding
+   * acquisition spend."
+   */
+  headline?: string;
+  /**
+   * Phase 1 Step 11 — the rigorous expansion. 2-4 sentences that
+   * reference specific entity codes, edge dynamics, evidence confidence,
+   * and any simulation outputs. Tucked into an expandable section so
+   * the strategy card stays scannable for users who want the action
+   * first and the reasoning on demand.
+   *
+   * Example: "Tighten the C3 (Customer Churn) → C7 (MRR) loop — the
+   * edge is causal, negative-polarity, compounding dynamics at 0.82
+   * confidence, and C3 is flagged as the master bottleneck. Evidence
+   * from user interviews (empirical, 0.9 conf) indicates the pricing
+   * change on 2026-03-01 triggered the spike. Reversibility=costly,
+   * so a targeted intervention is lower-risk than new acquisition."
+   */
+  reasoning_chain?: string;
   strategic_posture: "aggressive_growth" | "cautious_validation" | "pivot_exploration" | "consolidation" | "defensive";
   confidence: number; // 0-100
   summary: string; // 2-3 sentence strategic direction
@@ -270,6 +321,40 @@ export interface StrategicRecommendation {
     external_validated: boolean;
     infrastructure_specified?: boolean;
     objective_targeted?: boolean;
+  };
+
+  // ── Comprehensive provenance aggregate (Phase 4 of strategy rework) ──
+  // Computed at strategy-engine time from the union of per-tactic + per-perspective
+  // provenance fields. Lets UI render a "provenance health" badge without walking
+  // every tactic, and lets downstream (generate-apps) inherit the backlinks.
+  provenance?: {
+    /** Union of axiom_ids_respected across all tactics + perspectives */
+    axioms_respected: string[];
+    /** Union of axiom_ids_challenged across all tactics */
+    axioms_challenged: string[];
+    /** Union of convergence_ids_addressed across all tactics + perspectives */
+    convergences_addressed: string[];
+    /** Union of coverage_gap_ids_closed across all tactics */
+    coverage_gaps_closed: string[];
+    /** Union of inversion_ids_tested across all tactics */
+    inversions_considered: string[];
+    /** Union of hidden_signal_refs across all tactics */
+    hidden_signals_addressed: string[];
+    /** Coverage % at the time this strategy was generated (snapshot) */
+    coverage_pct_at_generation?: number;
+    /** Critical axioms that exist in upstream but are NOT in axioms_respected — a red flag */
+    critical_axioms_missed: string[];
+    /** Hidden axioms not acknowledged anywhere in the strategy */
+    hidden_axioms_missed: string[];
+    /** Strong convergences (≥ 4 signal types) NOT reflected in the strategy */
+    strong_convergences_missed: string[];
+    /**
+     * Overall provenance score 0-100 combining:
+     *  - 50%: critical axioms respected vs. total critical axioms
+     *  - 30%: strong convergences addressed vs. total strong convergences
+     *  - 20%: coverage gaps closed vs. total coverage gaps
+     */
+    overall_provenance_score: number;
   };
 }
 
@@ -427,6 +512,77 @@ export interface InfrastructureProposal {
   mechanism_hints?: MechanismHint[];
 }
 
+// ── Mechanisms (first-class, PR1) ──────────────────────────────────────
+//
+// Mirrors the `mechanisms` table created in 20260509_mechanisms.sql.
+// A mechanism is a cyclical sub-process attached to a twin (= space). Apps
+// reference a mechanism via apps.parent_mechanism_id. The MechanismHint enum
+// above remains the closed kind taxonomy; the table keeps it as `kind text`.
+
+export type MechanismStatus = "proposed" | "approved" | "active" | "paused" | "retired";
+
+export interface MechanismRow {
+  id: string;
+  space_id: string;
+  user_id: string;
+  name: string;
+  description: string | null;
+  kind: MechanismHint;
+  /** Free-text slug describing the loop, e.g. "experiment_score_reprompt". */
+  cycle_pattern: string | null;
+  /** Why this mechanism is the right fit — surfaced in the twin proposal review. */
+  rationale: string | null;
+  source_infrastructure_proposal_id: string | null;
+  source_strategy_version: number | null;
+  /** Denormalized AgentSpec[] copied from the originating InfrastructureProposal. */
+  agent_assignments: AgentSpec[];
+  status: MechanismStatus;
+  approved_at: string | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── TwinProposalJustification (structured rationale, PR1 type-only) ─────
+//
+// Generated alongside a twin proposal so the user can see *why* this workflow
+// is the most optimal for their objective. Type lives here now; persistence
+// (column on spaces / new twin_proposals table) lands in PR3.
+
+export interface TwinTradeoff {
+  /** What the tradeoff is, e.g. "speed vs. coverage". */
+  tradeoff: string;
+  /** Which side this twin chose, e.g. "speed". */
+  chosen_side: string;
+  /** One sentence: why we chose that side for this objective. */
+  why: string;
+}
+
+export interface TwinAlternativeRejected {
+  /** Short name of the alternative workflow we considered, e.g. "broad_research_then_synthesize". */
+  name: string;
+  /** One paragraph: what this alternative would have done. */
+  description: string;
+  /** Why we rejected it for this user / objective. */
+  why_rejected: string;
+}
+
+export interface TwinProposalJustification {
+  /** One paragraph: the chosen approach in plain terms. */
+  chosen_approach: string;
+  /** Tradeoffs the user should know we made. Order: most important first. */
+  key_tradeoffs: TwinTradeoff[];
+  /** Other workflows we considered and why we passed. 2-3 entries ideal. */
+  alternatives_rejected: TwinAlternativeRejected[];
+  /** Confidence in this twin being optimal for the stated objective (0-100). */
+  confidence: number;
+  /** Mechanisms this twin commits to building. References MechanismRow.id once persisted. */
+  mechanism_ids?: string[];
+  /** When this proposal was generated (ISO timestamp). */
+  generated_at: string;
+}
+
 /**
  * Strategy status — tracks lifecycle from generation to confirmation
  */
@@ -438,6 +594,11 @@ export type StrategyStatus = "generated" | "reviewing" | "confirmed" | "supersed
 export interface StrategyChangeProposal {
   change_type: "modify_perspective" | "add_tactic" | "remove_tactic" | "adjust_timeline" | "reprioritize" | "pivot";
   target: string; // what's being changed (perspective name, tactic id, etc.)
+  /** Optional stable ID reference for precise apply/match semantics. When the
+   *  LLM emits this, the apply handler uses it; otherwise falls back to
+   *  fuzzy-matching `target` against the recommendation's tactic/perspective
+   *  names. Added in Arc 3 so the change-proposals UI can round-trip safely. */
+  target_id?: string;
   current: string; // current state description
   proposed: string; // proposed change description
   reasoning: string;

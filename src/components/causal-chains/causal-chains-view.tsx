@@ -3,11 +3,12 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Info, Filter, Share2, RefreshCw, Target, Zap } from "lucide-react";
+import { Info, Filter, Share2, RefreshCw, Target, Zap, Network, List } from "lucide-react";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { useCausalChainsActions } from "@/lib/hooks/use-causal-chains-actions";
 import type { CausalChain, CausalStageKind } from "@/types/causal-chains";
 import type { SynthesisData } from "@/types/synthesis";
+import { CausalChainGraph } from "./causal-chain-graph";
 
 // Stage colors — mapped to the app's design tokens via CSS vars with inline fallback.
 // Concept=purple, Research=green, Deliverable=blue (accent), Application=amber,
@@ -62,6 +63,8 @@ export function CausalChainsView() {
   const [sortBy, setSortBy] = useState<"contribution" | "confidence" | "recency">(
     "contribution",
   );
+  // View mode: DAG-first (default, honest to the data) or legacy list.
+  const [viewMode, setViewMode] = useState<"graph" | "list">("graph");
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Keep chains in sync with synthesis_data changes
@@ -209,6 +212,39 @@ export function CausalChainsView() {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0 mt-1">
+            {/* View toggle — DAG (graph) vs legacy list */}
+            <div className="flex p-[3px] bg-white/40 border border-[rgba(11,13,18,0.08)] rounded-[10px]">
+              {[
+                { key: "graph" as const, label: "DAG", icon: Network },
+                { key: "list" as const, label: "List", icon: List },
+              ].map((opt) => {
+                const Icon = opt.icon;
+                const active = viewMode === opt.key;
+                return (
+                  <button
+                    key={opt.key}
+                    onClick={() => setViewMode(opt.key)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 px-[11px] py-1.5 rounded-[7px] text-[11.5px] font-semibold transition-colors",
+                      active
+                        ? "bg-white text-gray-900"
+                        : "text-gray-500 bg-transparent hover:text-gray-700",
+                    )}
+                    style={
+                      active
+                        ? {
+                            boxShadow:
+                              "0 1px 2px rgba(11,13,18,0.06), inset 0 0 0 1px rgba(11,13,18,0.14)",
+                          }
+                        : undefined
+                    }
+                  >
+                    <Icon className="h-3 w-3" />
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
             <div className="flex p-[3px] bg-white/40 border border-[rgba(11,13,18,0.08)] rounded-[10px]">
               {[
                 { key: "contribution", label: "Goal contribution" },
@@ -300,7 +336,19 @@ export function CausalChainsView() {
             </div>
           )}
 
-          {/* Stage headers */}
+          {/* DAG view — reactflow-powered graph. Takes over when viewMode==="graph". */}
+          {viewMode === "graph" && sortedChains.length > 0 && (
+            <div className="px-5 py-4">
+              <CausalChainGraph
+                spaceId={ctx.space.id}
+                chains={sortedChains}
+                goal={activeGoal}
+              />
+            </div>
+          )}
+
+          {/* Stage headers — only shown in list mode. */}
+          {viewMode === "list" && (
           <div
             className="grid gap-0 py-3 px-5 border-b text-[10.5px]"
             style={{
@@ -337,12 +385,14 @@ export function CausalChainsView() {
               );
             })}
           </div>
+          )}
 
           {/* Chains */}
           <div
             className={cn("flex flex-col", hoveredId && "has-hover")}
             onMouseLeave={() => setHoveredId(null)}
           >
+            {/* Empty + loading states: render once regardless of viewMode. */}
             {sortedChains.length === 0 && !generating && (
               <div className="px-6 py-12 text-center text-[13px] text-gray-500">
                 No chains generated yet.{" "}
@@ -365,6 +415,11 @@ export function CausalChainsView() {
                 Propagating L4 invariants to goal…
               </div>
             )}
+
+            {/* Per-chain rows — legacy list view. Hidden in DAG mode. */}
+            {viewMode === "list" && (
+              <>
+
 
             {sortedChains.map((chain, chainIdx) => {
               const isDimmed = hoveredId !== null && hoveredId !== chain.id;
@@ -529,6 +584,8 @@ export function CausalChainsView() {
                 </div>
               );
             })}
+              </>
+            )}
           </div>
 
           {/* Goal callout */}

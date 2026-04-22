@@ -230,13 +230,43 @@ export default function LabChamber3D({
     reactionTintRef.current = new THREE.Color(hex);
   }, [focusedReactionType]);
 
+  // Read the current theme's chamber fog color from the CSS var. Called
+  // both at init and whenever `data-theme` changes on <html>, so the
+  // Three.js scene fog flips from dark slate → near-white when the user
+  // switches themes without a page reload.
+  function readFogHex(): number {
+    if (typeof window === "undefined") return 0x02050a;
+    const raw = getComputedStyle(document.documentElement)
+      .getPropertyValue("--lab-chamber-fog-hex")
+      .trim();
+    if (!raw) return 0x02050a;
+    const cleaned = raw.replace(/^#/, "");
+    const parsed = parseInt(cleaned, 16);
+    return Number.isFinite(parsed) ? parsed : 0x02050a;
+  }
+
   // Main lifecycle: build scene, animate, dispose on unmount.
   const init = useCallback(() => {
     const host = hostRef.current;
     if (!host) return () => {};
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x02050a, 0.015);
+    scene.fog = new THREE.FogExp2(readFogHex(), 0.015);
+
+    // Theme-change observer: when the <html data-theme> attribute flips,
+    // re-read the fog hex. The background of the outer div re-colours
+    // automatically via the CSS var, but the Three.js fog must be
+    // explicitly updated since it's a JS-side color object.
+    const themeObserver = new MutationObserver(() => {
+      const fog = scene.fog as THREE.FogExp2 | null;
+      if (fog && "color" in fog) {
+        fog.color.setHex(readFogHex());
+      }
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
 
     const cam = new THREE.PerspectiveCamera(
       45,
@@ -860,6 +890,7 @@ export default function LabChamber3D({
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      themeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointerup", onPointerUp);
       renderer.domElement.removeEventListener("pointerleave", onPointerUp);
@@ -897,7 +928,7 @@ export default function LabChamber3D({
       className="relative h-full w-full overflow-hidden"
       style={{
         background:
-          "radial-gradient(circle at center, rgba(74,222,128,0.04), transparent 60%), #02050a",
+          "radial-gradient(circle at center, rgba(var(--lab-chamber-glow-rgb), 0.05), transparent 60%), var(--lab-chamber-bg)",
       }}
     >
       <div
@@ -907,35 +938,35 @@ export default function LabChamber3D({
       />
 
       {/* HUD readouts (kept 2D so they're always crisp) */}
-      <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[#4ade80]/75">
+      <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[var(--lab-accent)]/75">
         <div className="mb-1 flex gap-2.5">
           <span>CHAMBER</span>
-          <b className="font-medium text-[#e8edf4]">REACTOR-01</b>
+          <b className="font-medium text-[var(--lab-text)]">REACTOR-01</b>
         </div>
         <div className="mb-1 flex gap-2.5">
           <span>FIELD</span>
-          <b className="font-medium text-[#e8edf4]">STRUCTURE · 3D</b>
+          <b className="font-medium text-[var(--lab-text)]">STRUCTURE · 3D</b>
         </div>
         <div className="flex gap-2.5">
           <span>SUBUNITS</span>
-          <b className="font-medium text-[#e8edf4]">{subunits.length}</b>
+          <b className="font-medium text-[var(--lab-text)]">{subunits.length}</b>
         </div>
       </div>
 
-      <div className="pointer-events-none absolute right-5 top-5 text-right text-[9px] font-mono uppercase tracking-widest text-[#4ade80]/75">
+      <div className="pointer-events-none absolute right-5 top-5 text-right text-[9px] font-mono uppercase tracking-widest text-[var(--lab-accent)]/75">
         <div className="mb-1 flex justify-end gap-2.5">
           <span>BONDS</span>
-          <b className="font-medium text-[#e8edf4]">
+          <b className="font-medium text-[var(--lab-text)]">
             {upstreamPartners.length + downstreamPartners.length}
           </b>
         </div>
         <div className="mb-1 flex justify-end gap-2.5">
           <span>DRAG</span>
-          <b className="font-medium text-[#e8edf4]">ORBIT</b>
+          <b className="font-medium text-[var(--lab-text)]">ORBIT</b>
         </div>
         <div className="flex justify-end gap-2.5">
           <span>WHEEL</span>
-          <b className="font-medium text-[#e8edf4]">DOLLY</b>
+          <b className="font-medium text-[var(--lab-text)]">DOLLY</b>
         </div>
       </div>
 
@@ -959,13 +990,13 @@ export default function LabChamber3D({
           type is brightened; the others dim so the palette stays visible
           as a key. */}
       {focusedReactionType && (
-        <div className="pointer-events-none absolute left-5 bottom-5 rounded-md border border-[#94a3b8]/[0.14] bg-[#0a0f17]/80 px-3 py-2 backdrop-blur-sm">
+        <div className="pointer-events-none absolute left-5 bottom-5 rounded-md border border-[var(--lab-border-strong)] bg-[var(--lab-panel-inset)]/80 px-3 py-2 backdrop-blur-sm">
           <div className="mb-1.5 flex items-baseline justify-between gap-4">
-            <span className="text-[8.5px] font-mono uppercase tracking-[0.18em] text-[#64748b]">
+            <span className="text-[8.5px] font-mono uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
               Reaction Type
             </span>
             {typeof focusedReactionProbability === "number" && (
-              <span className="text-[9px] font-mono tabular-nums text-[#94a3b8]">
+              <span className="text-[9px] font-mono tabular-nums text-[var(--lab-text-mid)]">
                 p={(focusedReactionProbability * 100).toFixed(0)}%
               </span>
             )}
@@ -1007,8 +1038,8 @@ export default function LabChamber3D({
       )}
 
       {/* Focal label pinned at bottom-center */}
-      <div className="pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-[#06090e]/80 px-3 py-1 text-[10px] font-semibold text-[#e8edf4] shadow-[0_0_12px_rgba(74,222,128,0.2)] backdrop-blur-sm">
-        <span className="text-[#4ade80]">◉</span>{" "}
+      <div className="pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-[var(--lab-panel-inset)]/80 px-3 py-1 text-[10px] font-semibold text-[var(--lab-text)] shadow-[0_0_12px_rgba(74,222,128,0.2)] backdrop-blur-sm">
+        <span className="text-[var(--lab-accent)]">◉</span>{" "}
         {focal.name.length > 36 ? focal.name.slice(0, 36) + "…" : focal.name}
       </div>
 
@@ -1089,7 +1120,7 @@ function ProbabilityIndexPill({
             ? `Probability Index ${throughput.toFixed(1)} percent (${band}). Ghost ${ghostThroughput.toFixed(1)} percent. Hover to read formula.`
             : `Probability Index ${throughput.toFixed(1)} percent (${band}). Press to read formula.`
         }
-        className="flex cursor-help items-start gap-2 rounded-md border bg-[#0a0f17]/80 px-3 py-2 text-left backdrop-blur-sm transition-colors"
+        className="flex cursor-help items-start gap-2 rounded-md border bg-[var(--lab-panel-inset)]/80 px-3 py-2 text-left backdrop-blur-sm transition-colors"
         style={{
           borderColor: ghostActive
             ? "rgba(167, 139, 250, 0.35)"
@@ -1100,7 +1131,7 @@ function ProbabilityIndexPill({
         }}
       >
         <div>
-          <div className="flex items-center gap-1 text-[8.5px] font-mono uppercase tracking-[0.18em] text-[#64748b]">
+          <div className="flex items-center gap-1 text-[8.5px] font-mono uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
             <span>Probability Index</span>
             <Info className="h-2.5 w-2.5 opacity-60" />
             {ghostActive && (
@@ -1120,7 +1151,7 @@ function ProbabilityIndexPill({
             >
               {throughput.toFixed(1)}
             </span>
-            <span className="text-[10px] font-mono text-[#64748b]">%</span>
+            <span className="text-[10px] font-mono text-[var(--lab-text-dim)]">%</span>
             {!ghostActive && (
               <span
                 className="ml-2 rounded-sm px-1 py-0.5 font-mono text-[8px] font-semibold uppercase tracking-[0.14em]"
@@ -1132,8 +1163,8 @@ function ProbabilityIndexPill({
           </div>
           {ghostActive && (
             <div className="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tabular-nums">
-              <span className="text-[#a78bfa]">ghost</span>
-              <span className="text-[#e8edf4]">
+              <span className="text-[var(--lab-ghost)]">ghost</span>
+              <span className="text-[var(--lab-text)]">
                 {ghostThroughput.toFixed(1)}%
               </span>
               <span className="ml-1" style={{ color: ghostDiffColor }}>
@@ -1148,42 +1179,42 @@ function ProbabilityIndexPill({
       {open && (
         <div
           role="tooltip"
-          className="absolute bottom-full right-0 mb-2 w-[280px] rounded-md border border-[#94a3b8]/[0.14] bg-[#0a0f17]/95 p-3 font-mono text-[10px] leading-relaxed text-[#a8b3c4] shadow-[0_4px_20px_rgba(0,0,0,0.5)] backdrop-blur-sm"
+          className="absolute bottom-full right-0 mb-2 w-[280px] rounded-md border border-[var(--lab-border-strong)] bg-[var(--lab-panel-inset)]/95 p-3 font-mono text-[10px] leading-relaxed text-[var(--lab-text-mid)] shadow-[0_4px_20px_rgba(0,0,0,0.5)] backdrop-blur-sm"
         >
-          <div className="mb-2 text-[9px] font-semibold uppercase tracking-[0.16em] text-[#4ade80]">
+          <div className="mb-2 text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--lab-accent)]">
             How this is computed
           </div>
-          <div className="mb-2 text-[10.5px] leading-snug text-[#e8edf4]">
+          <div className="mb-2 text-[10.5px] leading-snug text-[var(--lab-text)]">
             Effective capacity under the current regime, 0–100%.
           </div>
-          <div className="space-y-1.5 border-l border-[#4ade80]/30 pl-2 text-[9.5px] text-[#94a3b8]">
+          <div className="space-y-1.5 border-l border-[var(--lab-accent)] pl-2 text-[9.5px] text-[var(--lab-text-mid)]">
             <div>
-              <span className="text-[#e8edf4]">eff</span> = min(<b className="text-[#22d3ee]">K</b>,{" "}
-              <b className="text-[#22d3ee]">α</b>+1)
-              <div className="pl-3 text-[8.5px] text-[#64748b]">
+              <span className="text-[var(--lab-text)]">eff</span> = min(<b className="text-[var(--lab-info)]">K</b>,{" "}
+              <b className="text-[var(--lab-info)]">α</b>+1)
+              <div className="pl-3 text-[8.5px] text-[var(--lab-text-dim)]">
                 attention caps usable slots
               </div>
             </div>
             <div>
-              <span className="text-[#e8edf4]">decay</span> = clamp(
-              <b className="text-[#22d3ee]">τ</b>/15, 0.3, 1.5)
-              <div className="pl-3 text-[8.5px] text-[#64748b]">
+              <span className="text-[var(--lab-text)]">decay</span> = clamp(
+              <b className="text-[var(--lab-info)]">τ</b>/15, 0.3, 1.5)
+              <div className="pl-3 text-[8.5px] text-[var(--lab-text-dim)]">
                 short τ → low; long τ → saturating
               </div>
             </div>
             <div>
-              <span className="text-[#e8edf4]">refresh</span> = 1 +{" "}
-              <b className="text-[#22d3ee]">ρ</b> × 0.25
-              <div className="pl-3 text-[8.5px] text-[#64748b]">
+              <span className="text-[var(--lab-text)]">refresh</span> = 1 +{" "}
+              <b className="text-[var(--lab-info)]">ρ</b> × 0.25
+              <div className="pl-3 text-[8.5px] text-[var(--lab-text-dim)]">
                 refresh cadence boost
               </div>
             </div>
-            <div className="pt-1 text-[10px] text-[#4ade80]">
+            <div className="pt-1 text-[10px] text-[var(--lab-accent)]">
               out = eff × decay × refresh × 12
             </div>
           </div>
-          <div className="mt-2 flex items-center justify-between border-t border-[#94a3b8]/[0.08] pt-2 text-[8.5px] uppercase tracking-[0.14em]">
-            <span className="text-[#64748b]">Bands</span>
+          <div className="mt-2 flex items-center justify-between border-t border-[var(--lab-border)] pt-2 text-[8.5px] uppercase tracking-[0.14em]">
+            <span className="text-[var(--lab-text-dim)]">Bands</span>
             <span className="flex items-center gap-1.5">
               <Swatch c="#f472b6" t="<50" />
               <Swatch c="#fbbf24" t="50-74" />

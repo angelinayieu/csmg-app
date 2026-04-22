@@ -549,7 +549,7 @@ export function SynthesisFeed({
     >
       {/* ── Header ── */}
       <header
-        className="relative flex h-[52px] shrink-0 items-center gap-4 border-b border-[#94a3b8]/[0.08] px-4"
+        className="relative flex h-[52px] shrink-0 items-center gap-4 border-b border-[var(--lab-border)] px-4"
         style={{
           boxShadow: "inset 0 -1px 0 rgba(74,222,128,0.12)",
           background: "rgba(10, 15, 23, 0.72)",
@@ -560,23 +560,23 @@ export function SynthesisFeed({
       >
         <Link
           href={`/app/space/${space.id}`}
-          className="group flex items-center gap-1.5 text-[11px] font-semibold text-[#a8b3c4] transition-colors hover:text-[#e8edf4]"
+          className="group flex items-center gap-1.5 text-[11px] font-semibold text-[var(--lab-text-mid)] transition-colors hover:text-[var(--lab-text)]"
           title={`Back to ${space.name}`}
         >
           <ArrowLeft className="h-3 w-3 transition-transform group-hover:-translate-x-0.5" />
           {space.name}
         </Link>
-        <div className="h-6 w-px bg-[#94a3b8]/[0.14]" />
+        <div className="h-6 w-px bg-[var(--lab-border-strong)]" />
         <div className="flex min-w-0 flex-1 items-baseline gap-3">
           <div>
-            <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[#4ade80]">
+            <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[var(--lab-accent)]">
               Synthesis Feed
             </div>
-            <div className="text-[16px] font-bold leading-tight text-[#e8edf4]">
+            <div className="text-[16px] font-bold leading-tight text-[var(--lab-text)]">
               Your thinking over time
             </div>
           </div>
-          <div className="flex items-center gap-2 font-mono text-[9px] tracking-[0.12em] text-[#475569]">
+          <div className="flex items-center gap-2 font-mono text-[9px] tracking-[0.12em] text-[var(--lab-text-faint)]">
             <span>
               {filtersActive ? (
                 <>
@@ -746,10 +746,10 @@ function DayHeader({ iso }: { iso: string }) {
   }
   return (
     <div className="mb-3 flex items-baseline gap-2">
-      <span className="text-[9px] font-semibold uppercase tracking-[0.22em] text-[#4ade80]">
+      <span className="text-[9px] font-semibold uppercase tracking-[0.22em] text-[var(--lab-accent)]">
         ◦ {label}
       </span>
-      <span className="flex-1 border-b border-dashed border-[#94a3b8]/[0.1]" />
+      <span className="flex-1 border-b border-dashed border-[var(--lab-border-strong)]" />
     </div>
   );
 }
@@ -2448,7 +2448,7 @@ function FilterBar({
 }) {
   return (
     <div
-      className="flex shrink-0 items-center gap-3 border-b border-[#94a3b8]/[0.08] px-4 py-2.5"
+      className="flex shrink-0 items-center gap-3 border-b border-[var(--lab-border)] px-4 py-2.5"
       style={{
         background: "rgba(10, 15, 23, 0.6)",
         backdropFilter: "blur(18px)",
@@ -2458,7 +2458,7 @@ function FilterBar({
     >
       {/* Search input */}
       <div
-        className="flex items-center gap-2 rounded-[6px] border border-[#94a3b8]/[0.1] bg-[#141b26] px-2.5 transition-colors focus-within:border-[#4ade80]/40"
+        className="flex items-center gap-2 rounded-[6px] border border-[var(--lab-border-strong)] bg-[var(--lab-panel-raised)] px-2.5 transition-colors focus-within:border-[var(--lab-accent)]"
         style={{ height: 30, minWidth: 220 }}
       >
         <Search
@@ -2471,14 +2471,14 @@ function FilterBar({
           onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search names, mechanisms, bridges…"
           aria-label="Search the synthesis feed"
-          className="flex-1 bg-transparent font-mono text-[11px] text-[#e8edf4] placeholder:text-[#475569] focus:outline-none"
+          className="flex-1 bg-transparent font-mono text-[11px] text-[var(--lab-text)] placeholder:text-[var(--lab-text-faint)] focus:outline-none"
         />
         {query && (
           <button
             type="button"
             onClick={() => onQueryChange("")}
             title="Clear search"
-            className="text-[#64748b] hover:text-[#a8b3c4]"
+            className="text-[var(--lab-text-dim)] hover:text-[var(--lab-text-mid)]"
           >
             <X className="h-3 w-3" />
           </button>
@@ -2522,7 +2522,7 @@ function FilterBar({
       </div>
 
       {/* Divider */}
-      <div className="h-5 w-px bg-[#94a3b8]/[0.1]" />
+      <div className="h-5 w-px bg-[var(--lab-border-strong)]" />
 
       {/* Reaction-type chips — only meaningful when reactions are enabled */}
       <div className="flex items-center gap-1">
@@ -2588,7 +2588,7 @@ function FilterBar({
           <button
             type="button"
             onClick={onClear}
-            className="ml-1 flex items-center gap-1 rounded-[4px] border border-[#f472b6]/30 bg-[#f472b6]/[0.06] px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[#f472b6] transition-colors hover:bg-[#f472b6]/[0.12]"
+            className="ml-1 flex items-center gap-1 rounded-[4px] border border-[var(--lab-danger)] bg-[var(--lab-danger-tint)] px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--lab-danger)] transition-colors hover:bg-[var(--lab-danger-tint)]"
             style={{ height: 22 }}
             title="Clear all filters"
           >

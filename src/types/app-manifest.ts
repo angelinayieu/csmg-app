@@ -87,6 +87,12 @@ export type DataSourceKind =
   | "deviation_ledger"    // resolved prediction_ledger rows tagged regime_shift or surprise
   | "simulation_result"   // latest scenario output for this app (simulator agents write these)
   | "agent_output"        // a named agent's most recent output (by agent id)
+  // Tier 3.5: per-app sub-strategy spec. Widgets read this to discover
+  // app-tuned defaults (prediction horizons, hypothesis bank, simulation
+  // perturbation profiles, learning loop indicators) instead of inventing
+  // generic ones. Selector.section narrows to a single spec section
+  // (e.g. "prediction_spec", "validation_spec") when set.
+  | "app_strategy"
   | "literal";            // inline constant, bound once at author time
 
 /**

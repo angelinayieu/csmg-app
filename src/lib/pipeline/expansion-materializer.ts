@@ -59,7 +59,12 @@ export interface MaterializedEdge {
   dynamics: string | null;
   mechanism?: string;
   failure_mode?: string | null;
-  source_type: "internal_pathway" | "internal_dynamic" | "has_component" | "inherited_connection";
+  source_type:
+    | "internal_pathway"
+    | "internal_dynamic"
+    | "has_component"
+    | "inherited_connection"
+    | "cross_entity_bridge";
 }
 
 export interface ExpansionMaterializationResult {
@@ -466,6 +471,14 @@ export function buildExpansionEdgeRecords(
     const tgtUuid = entityIdToUuid.get(me.target_entity_string_id);
     if (!srcUuid || !tgtUuid) continue;
 
+    // Most expansion edges live at the "internal" knowledge layer (parent/
+    // child/internal composition). Cross-entity bridges span DIFFERENT
+    // parents, so they sit at the "bridge" layer — same plane the research
+    // route uses for external bridges. This keeps KG renderers that color
+    // by knowledge_layer correct out of the box.
+    const knowledgeLayer: "internal" | "bridge" =
+      me.source_type === "cross_entity_bridge" ? "bridge" : "internal";
+
     records.push({
       space_id: spaceId,
       source_entity_id: srcUuid,
@@ -478,9 +491,7 @@ export function buildExpansionEdgeRecords(
       confidence: me.confidence,
       conditions: me.conditions,
       dynamics: me.dynamics,
-      // All expansion edges are internal/conceptual — NOT bridges.
-      // has_component is structural parent→child, not an inter-domain bridge.
-      knowledge_layer: "internal",
+      knowledge_layer: knowledgeLayer,
       is_low_confidence: me.confidence < 0.4,
       provenance: {
         source_type: "expansion_materialization",
@@ -492,6 +503,155 @@ export function buildExpansionEdgeRecords(
   }
 
   return records;
+}
+
+// ── Cross-Entity Bridge Detection ──
+//
+// When entity A decomposes into {A1, A2, A3} and entity B into {B1, B2, B3},
+// an "Ingredient Quality" SC in A may represent the same underlying variable
+// as "Raw Material Grade" in B. The probability-space engine already detects
+// these via semantic similarity to build its per-edge sub-graphs, but those
+// findings never make it into the real `edges` table — so the whiteboard and
+// KG never render the bridge, and intersection-based insights have no edge
+// to reason over.
+//
+// This pass closes that gap. For every newly materialized sub-component
+// entity, we compare its name/component_type against all existing SC entities
+// from OTHER parents; sufficiently similar pairs become real graph edges with
+// `source_type = "cross_entity_bridge"` and `relationship_type = "mirrors"`.
+//
+// Pure function — no DB access. Caller (route) supplies the existing SC
+// entities and an `existingBridgePairs` set to dedupe across runs.
+
+const BRIDGE_THRESHOLD = 0.3;
+const BRIDGE_MAX_PER_NEW_ENTITY = 3; // cap to avoid O(n²) edge explosion
+
+interface ScLike {
+  entity_id: string;
+  name: string;
+  component_type?: string;
+  parent_entity_string_id: string;
+}
+
+function tokenize(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2),
+  );
+}
+
+function jaccardSim(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let intersect = 0;
+  for (const w of a) if (b.has(w)) intersect++;
+  const union = a.size + b.size - intersect;
+  return union === 0 ? 0 : intersect / union;
+}
+
+function bridgeScore(a: ScLike, b: ScLike): number {
+  const name = jaccardSim(tokenize(a.name), tokenize(b.name));
+  const typeMatch =
+    a.component_type && b.component_type && a.component_type === b.component_type
+      ? 0.15
+      : 0;
+  return Math.min(1, name + typeMatch);
+}
+
+/**
+ * Derive ScLike descriptors from DB `Entity` rows. Only entities whose
+ * provenance identifies them as expansion-materialized sub-components are
+ * returned.
+ */
+export function extractScLikesFromEntities(entities: Entity[]): ScLike[] {
+  const out: ScLike[] = [];
+  for (const e of entities) {
+    const prov = e.provenance as Record<string, unknown> | null;
+    if (!prov || prov.source_type !== "expansion_materialization") continue;
+    const parentStringId = prov.parent_entity_string_id as string | undefined;
+    const componentType = prov.component_type as string | undefined;
+    if (!parentStringId) continue;
+    out.push({
+      entity_id: e.entity_id,
+      name: e.name,
+      component_type: componentType,
+      parent_entity_string_id: parentStringId,
+    });
+  }
+  return out;
+}
+
+/**
+ * Compute cross-entity bridge edges for newly materialized sub-components.
+ *
+ * @param newScs  ScLike descriptors for just-materialized SCs (from MaterializedEntity)
+ * @param existingScs  ScLike descriptors for SCs already in the graph (from Entity rows)
+ * @param existingEdges  Current edges — used to skip pairs that already have an edge in either direction
+ * @returns MaterializedEdge[] with source_type = "cross_entity_bridge"
+ */
+export function computeCrossEntityBridges(
+  newScs: ScLike[],
+  existingScs: ScLike[],
+  existingEdges: Edge[],
+): MaterializedEdge[] {
+  if (newScs.length === 0) return [];
+
+  // Build a dedupe key set from existing edges — we avoid creating bridges
+  // between pairs that already share ANY edge, in EITHER direction.
+  // Note: existingEdges reference entities by UUID; the caller passes
+  // entity_string IDs to us. We dedupe by string-id pair via a lookup map
+  // supplied from the route. Here we just dedupe between pairs of ScLike.
+  const edgeKeyPairs = new Set<string>();
+  for (const edge of existingEdges) {
+    edgeKeyPairs.add(`${edge.source_entity_id}|${edge.target_entity_id}`);
+    edgeKeyPairs.add(`${edge.target_entity_id}|${edge.source_entity_id}`);
+  }
+
+  const allCandidates = [...newScs, ...existingScs];
+  const bridges: MaterializedEdge[] = [];
+  const createdPairs = new Set<string>();
+
+  for (const newSc of newScs) {
+    const scored: Array<{ sc: ScLike; score: number }> = [];
+    for (const candidate of allCandidates) {
+      if (candidate.entity_id === newSc.entity_id) continue;
+      // Only bridge across DIFFERENT parent entities
+      if (candidate.parent_entity_string_id === newSc.parent_entity_string_id) continue;
+      const score = bridgeScore(newSc, candidate);
+      if (score >= BRIDGE_THRESHOLD) {
+        scored.push({ sc: candidate, score });
+      }
+    }
+    // Keep only the top N bridges per new SC
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, BRIDGE_MAX_PER_NEW_ENTITY);
+
+    for (const { sc: partner, score } of top) {
+      const a = newSc.entity_id;
+      const b = partner.entity_id;
+      const pairKey = [a, b].sort().join("|");
+      if (createdPairs.has(pairKey)) continue;
+      createdPairs.add(pairKey);
+
+      bridges.push({
+        source_entity_string_id: a,
+        target_entity_string_id: b,
+        relationship_type: "cross_entity_bridge",
+        dimension: "analogical",
+        strength: score,
+        confidence: Math.max(0.4, Math.min(0.85, score + 0.25)),
+        polarity: "positive",
+        conditions: null,
+        dynamics: null,
+        mechanism: `Structural similarity between "${newSc.name}" and "${partner.name}" (score ${score.toFixed(2)})`,
+        source_type: "cross_entity_bridge",
+      });
+    }
+  }
+
+  return bridges;
 }
 
 // ── Orphan Detection ──

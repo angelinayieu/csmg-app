@@ -22,6 +22,7 @@ import {
   safeJsonParse,
   sanitizeErrorMessage,
 } from "@/lib/api-helpers";
+import { logKnowledgeEvent } from "@/lib/changelog/log-knowledge-event";
 
 export const maxDuration = 15;
 const MAX_IDS = 100;
@@ -101,6 +102,28 @@ export async function POST(request: Request) {
     if (delErr) {
       console.warn("[entities/bulk-delete entities]", delErr);
       return NextResponse.json({ error: "Delete failed" }, { status: 500 });
+    }
+
+    // Phase 52 — log to unified event stream. Group the deleted ids by
+    // their space so the audit trail per space is complete (one cluster
+    // delete may span multiple spaces if a receipt mixed them).
+    const idsBySpace = new Map<string, string[]>();
+    for (const r of rows) {
+      if (!ownedSet.has(r.space_id)) continue;
+      const arr = idsBySpace.get(r.space_id) ?? [];
+      arr.push(r.id);
+      idsBySpace.set(r.space_id, arr);
+    }
+    for (const [sid, ids] of idsBySpace) {
+      await logKnowledgeEvent(supabase, {
+        spaceId: sid,
+        subtype: "entities_undone",
+        summary: `Undid ${ids.length} entit${ids.length === 1 ? "y" : "ies"} via AI receipts`,
+        details: {
+          entity_ids: ids,
+          source: "ai_receipts_undo",
+        },
+      });
     }
 
     return NextResponse.json({ deleted: deletableIds });

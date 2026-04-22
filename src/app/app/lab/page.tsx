@@ -35,7 +35,7 @@ export default async function UniversalLabPage() {
     .order("updated_at", { ascending: false })
     .limit(30);
   const spaces = (spacesRaw ?? []) as Space[];
-  if (spaces.length === 0) redirect("/app/analyze");
+  if (spaces.length === 0) redirect("/app/new");
 
   const spaceIds = spaces.map((s) => s.id);
 

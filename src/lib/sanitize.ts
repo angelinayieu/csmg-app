@@ -954,6 +954,20 @@ export function deduplicateEntities(
  * Returns count of successfully inserted rows and the ID map.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// Parse a PostgREST schema-cache error message to extract the missing
+// column name. Supabase returns messages like:
+//   "Could not find the 'depth' column of 'entities' in the schema cache"
+// When that happens the DB genuinely has the column (post-migration) but
+// PostgREST hasn't reloaded its introspection yet — or the migration
+// hasn't run. Either way, stripping the column lets the pipeline
+// produce *something* instead of inserting zero rows. Data loss is
+// scoped to that single field.
+function extractMissingColumn(message: string | undefined): string | null {
+  if (!message) return null;
+  const m = message.match(/Could not find the '([^']+)' column/);
+  return m?.[1] ?? null;
+}
+
 export async function resilientInsert<T extends Record<string, any>>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
@@ -964,30 +978,76 @@ export async function resilientInsert<T extends Record<string, any>>(
   if (rows.length === 0) return { inserted: 0, data: [] };
 
   // Try batch insert first
-  const { data, error } = await db
-    .from(table)
-    .insert(rows)
-    .select(selectFields);
+  let workingRows: Record<string, any>[] = rows as Record<string, any>[];
+  const strippedColumns: string[] = [];
 
-  if (!error && data) {
-    return { inserted: data.length, data };
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { data, error } = await db
+      .from(table)
+      .insert(workingRows)
+      .select(selectFields);
+
+    if (!error && data) {
+      if (strippedColumns.length > 0) {
+        console.warn(
+          `[resilientInsert] ${table}: inserted ${data.length} rows after stripping stale-schema columns: ${strippedColumns.join(", ")}. Run 'NOTIFY pgrst, \\'reload schema\\';' in Supabase SQL to clear the cache.`,
+        );
+      }
+      return { inserted: data.length, data };
+    }
+
+    // If the failure is a schema-cache miss, strip the offending
+    // column from every row and retry. This transforms the common
+    // "migration ran but PostgREST cache is stale" failure mode
+    // into a soft-degraded success instead of a full pipeline
+    // blackout.
+    const missingCol = extractMissingColumn(error?.message);
+    if (missingCol) {
+      strippedColumns.push(missingCol);
+      workingRows = workingRows.map((r) => {
+        const clone = { ...r };
+        delete clone[missingCol];
+        return clone;
+      });
+      continue;
+    }
+
+    // Not a schema-cache problem — break to the per-row fallback.
+    console.warn(
+      `[resilientInsert] Batch insert into ${table} failed: ${error?.message}. Trying individually (${rows.length} rows)`,
+    );
+    break;
   }
 
-  // Batch failed — fall back to individual inserts
-  console.warn(`[resilientInsert] Batch insert into ${table} failed: ${error?.message}. Trying individually (${rows.length} rows)`);
-
+  // Per-row fallback. Uses the same stripped rows (so individual
+  // inserts don't re-hit the schema-cache error 20 times) and the
+  // same recovery if a new missing column surfaces row-by-row.
   const results: Array<Record<string, string>> = [];
-  for (const row of rows) {
-    const { data: d, error: e } = await db
-      .from(table)
-      .insert(row)
-      .select(selectFields)
-      .single();
+  for (let i = 0; i < workingRows.length; i++) {
+    let row = workingRows[i];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { data: d, error: e } = await db
+        .from(table)
+        .insert(row)
+        .select(selectFields)
+        .single();
 
-    if (!e && d) {
-      results.push(d);
-    } else {
-      console.warn(`[resilientInsert] Row insert failed: ${e?.message}`, JSON.stringify(row).slice(0, 200));
+      if (!e && d) {
+        results.push(d);
+        break;
+      }
+      const missingCol = extractMissingColumn(e?.message);
+      if (missingCol) {
+        if (!strippedColumns.includes(missingCol)) strippedColumns.push(missingCol);
+        row = { ...row };
+        delete row[missingCol];
+        continue;
+      }
+      console.warn(
+        `[resilientInsert] Row insert failed: ${e?.message}`,
+        JSON.stringify(row).slice(0, 200),
+      );
+      break;
     }
   }
 

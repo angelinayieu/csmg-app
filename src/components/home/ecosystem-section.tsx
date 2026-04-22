@@ -316,7 +316,7 @@ export function EcosystemSection({ spaces }: EcosystemSectionProps) {
               style={{ borderTop: "1px solid rgba(255,255,255,0.55)" }}
             >
               <Link
-                href="/app/analyze"
+                href="/app/new"
                 onClick={closeOverlay}
                 className="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-[12.5px] font-semibold text-interaxis-700 transition-all hover:bg-white/60"
                 style={{

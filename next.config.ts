@@ -44,6 +44,45 @@ const nextConfig: NextConfig = {
       // ── Whiteboard overview → whiteboard (rename) ────────────────
       { source: "/app/space/:id/whiteboard/overview", destination: "/app/space/:id/whiteboard", permanent: true },
 
+      // ── Wave 1 cleanout: deleted standalone pages, functionality
+      //    will move into whiteboard drawers in Wave 2. Until those
+      //    drawers land, these redirects prevent link rot; the
+      //    ?drawer=... query-param is how Wave 2 opens the right surface.
+      { source: "/app/brainstorm", destination: "/app", permanent: true },
+      { source: "/app/space/:id/whiteboard/brainstorm", destination: "/app/space/:id/whiteboard", permanent: true },
+      { source: "/app/space/:id/leverage", destination: "/app/space/:id/whiteboard?drawer=synthesis&tab=leverage", permanent: true },
+      { source: "/app/space/:id/bottleneck", destination: "/app/space/:id/whiteboard?drawer=synthesis&tab=bottleneck", permanent: true },
+      { source: "/app/space/:id/scenarios", destination: "/app/space/:id/whiteboard?drawer=synthesis&tab=scenarios", permanent: true },
+      { source: "/app/space/:id/insights", destination: "/app/space/:id/whiteboard?drawer=synthesis&tab=insights", permanent: true },
+      { source: "/app/space/:id/inventory", destination: "/app/space/:id/whiteboard?drawer=inventory&tab=entities", permanent: true },
+      { source: "/app/space/:id/radar", destination: "/app/space/:id/whiteboard?drawer=intelligence&tab=radar", permanent: true },
+      { source: "/app/space/:id/causal-chains", destination: "/app/space/:id/whiteboard?drawer=synthesis&tab=chains", permanent: true },
+
+      // ── Wave 3 cleanout: 9 more routes absorbed into drawers.
+      { source: "/app/space/:id/risks", destination: "/app/space/:id/whiteboard?drawer=synthesis&tab=risks", permanent: true },
+      { source: "/app/space/:id/loops", destination: "/app/space/:id/whiteboard?drawer=synthesis&tab=loops", permanent: true },
+      { source: "/app/space/:id/synthesis", destination: "/app/space/:id/whiteboard?drawer=synthesis&tab=overview", permanent: true },
+      { source: "/app/space/:id/objectives", destination: "/app/space/:id/whiteboard?drawer=objectives&tab=tree", permanent: true },
+      { source: "/app/space/:id/twin", destination: "/app/space/:id/whiteboard?drawer=twin&tab=live", permanent: true },
+      { source: "/app/space/:id/strategy", destination: "/app/space/:id/whiteboard?drawer=strategy&tab=strategy", permanent: true },
+      { source: "/app/space/:id/interventions", destination: "/app/space/:id/whiteboard?drawer=strategy&tab=interventions", permanent: true },
+      { source: "/app/space/:id/probability", destination: "/app/space/:id/whiteboard?drawer=probability&tab=spaces", permanent: true },
+      { source: "/app/space/:id/probability/node/:entityId", destination: "/app/space/:id/whiteboard?drawer=probability&tab=node&entityId=:entityId", permanent: true },
+
+      // ── Wave 3B cleanout: 5 more routes → Intelligence drawer tabs +
+      //    new Graph drawer. Convergence / agents / reflexive-loop-dash
+      //    consolidate under Intelligence; graph + layers under Graph.
+      { source: "/app/space/:id/convergence", destination: "/app/space/:id/whiteboard?drawer=intelligence&tab=convergence", permanent: true },
+      { source: "/app/space/:id/agents", destination: "/app/space/:id/whiteboard?drawer=intelligence&tab=agents", permanent: true },
+      { source: "/app/space/:id/intelligence", destination: "/app/space/:id/whiteboard?drawer=intelligence&tab=reflexive", permanent: true },
+      { source: "/app/space/:id/graph", destination: "/app/space/:id/whiteboard?drawer=graph&tab=graph", permanent: true },
+      { source: "/app/space/:id/layers", destination: "/app/space/:id/whiteboard?drawer=graph&tab=layers", permanent: true },
+
+      // ── /app/analyze → /app/new (Phase 1 Step 3).
+      //    Legacy capture surface replaced by the single intake card.
+      //    Query params (?seed=, ?mode=) pass through unchanged.
+      { source: "/app/analyze", destination: "/app/new", permanent: true },
+
       // ── Twin merge: design | live tabs ────────────────────────────
       { source: "/app/space/:id/digital-twin", destination: "/app/space/:id/twin?tab=design", permanent: true },
       { source: "/app/space/:id/operating-twin", destination: "/app/space/:id/twin?tab=live", permanent: true },

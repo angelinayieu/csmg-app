@@ -101,10 +101,10 @@ export function LabControlPanel({
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-[#10161f] px-3.5 py-2.5">
+    <div className="flex h-full flex-col overflow-hidden bg-[var(--lab-panel-bg)] px-3.5 py-2.5">
       <div className="mb-2 flex items-center justify-between">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">
+          <span className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
             ⚙ Control Panel
           </span>
           {tuningTargetName ? (
@@ -125,14 +125,14 @@ export function LabControlPanel({
                   type="button"
                   onClick={onClearTuningTarget}
                   title="Return control panel to the focal"
-                  className="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-sm hover:bg-[#fbbf2422]"
+                  className="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-sm hover:bg-[var(--lab-warn-tint)]"
                 >
                   <X className="h-2.5 w-2.5" />
                 </button>
               )}
             </div>
           ) : (
-            <span className="text-[9px] text-[#475569]">LIVE PARAMETERS</span>
+            <span className="text-[9px] text-[var(--lab-text-faint)]">LIVE PARAMETERS</span>
           )}
         </div>
         <div className="flex items-center gap-1.5">
@@ -143,7 +143,7 @@ export function LabControlPanel({
               type="button"
               onClick={enterGhost}
               title="Enter counterfactual mode — try parameter changes without saving"
-              className="flex items-center gap-1 rounded-[2px] border border-[#a78bfa]/30 bg-[#a78bfa]/[0.06] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-[#a78bfa] transition-colors hover:border-[#a78bfa]/60 hover:bg-[#a78bfa]/[0.12]"
+              className="flex items-center gap-1 rounded-[2px] border border-[var(--lab-ghost-border)] bg-[var(--lab-ghost-tint)] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-[var(--lab-ghost)] transition-colors hover:border-[var(--lab-ghost-border)] hover:bg-[var(--lab-ghost-tint-strong)]"
               aria-label="Enter what-if counterfactual mode"
             >
               <FlaskConical className="h-2.5 w-2.5" />
@@ -161,7 +161,7 @@ export function LabControlPanel({
                     ? "Apply ghost values to live parameters"
                     : "Ghost is identical to live — nothing to apply"
                 }
-                className="flex items-center gap-1 rounded-[2px] border border-[#4ade80]/40 bg-[#4ade80]/[0.08] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-[#4ade80] transition-colors hover:border-[#4ade80]/70 hover:bg-[#4ade80]/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex items-center gap-1 rounded-[2px] border border-[var(--lab-accent)] bg-[var(--lab-accent-tint)] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-[var(--lab-accent)] transition-colors hover:border-[var(--lab-accent)] hover:bg-[var(--lab-accent-tint)] disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Apply ghost parameters to live"
               >
                 <Check className="h-2.5 w-2.5" />
@@ -171,7 +171,7 @@ export function LabControlPanel({
                 type="button"
                 onClick={exitGhost}
                 title="Discard ghost parameters — return to live"
-                className="flex items-center gap-1 rounded-[2px] border border-[#94a3b8]/20 bg-[#141b26] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-[#a8b3c4] transition-colors hover:border-[#f472b6]/40 hover:text-[#f472b6]"
+                className="flex items-center gap-1 rounded-[2px] border border-[var(--lab-border-strong)] bg-[var(--lab-panel-raised)] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-[var(--lab-text-mid)] transition-colors hover:border-[var(--lab-danger)] hover:text-[var(--lab-danger)]"
                 aria-label="Exit what-if mode without applying"
               >
                 <X className="h-2.5 w-2.5" />
@@ -184,7 +184,7 @@ export function LabControlPanel({
               type="button"
               onClick={() => onChange(defaults)}
               title={`Reset to ${tuningCategory ?? "default"} defaults (K=${defaults.K} · τ=${defaults.tau} · ρ=${defaults.rho} · α=${defaults.alpha})`}
-              className="flex items-center gap-1 rounded-[2px] border border-[#94a3b8]/20 bg-[#141b26] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-[#a8b3c4] transition-colors hover:border-[#4ade80]/50 hover:bg-[#4ade80]/10 hover:text-[#4ade80]"
+              className="flex items-center gap-1 rounded-[2px] border border-[var(--lab-border-strong)] bg-[var(--lab-panel-raised)] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-[var(--lab-text-mid)] transition-colors hover:border-[var(--lab-accent)] hover:bg-[var(--lab-accent-tint)] hover:text-[var(--lab-accent)]"
               aria-label="Reset parameters to category defaults"
             >
               <RotateCcw className="h-2.5 w-2.5" />
@@ -199,22 +199,22 @@ export function LabControlPanel({
           ghost mode so the resting UI stays dense. */}
       {ghostActive && ghostThroughput !== null && (
         <div
-          className="mb-2 flex items-center gap-2 rounded-[2px] border border-[#a78bfa]/30 bg-[#a78bfa]/[0.06] px-2 py-1.5"
+          className="mb-2 flex items-center gap-2 rounded-[2px] border border-[var(--lab-ghost-border)] bg-[var(--lab-ghost-tint)] px-2 py-1.5"
           style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
         >
-          <span className="text-[8px] font-semibold uppercase tracking-[0.16em] text-[#a78bfa]">
+          <span className="text-[8px] font-semibold uppercase tracking-[0.16em] text-[var(--lab-ghost)]">
             What if
           </span>
-          <span className="flex items-baseline gap-1 text-[10px] text-[#64748b]">
-            <span className="text-[#94a3b8]">live</span>
-            <span className="tabular-nums text-[#e8edf4]">
+          <span className="flex items-baseline gap-1 text-[10px] text-[var(--lab-text-dim)]">
+            <span className="text-[var(--lab-text-mid)]">live</span>
+            <span className="tabular-nums text-[var(--lab-text)]">
               {liveThroughput.toFixed(1)}%
             </span>
           </span>
-          <span className="text-[#475569]">→</span>
-          <span className="flex items-baseline gap-1 text-[10px] text-[#64748b]">
-            <span className="text-[#a78bfa]">ghost</span>
-            <span className="tabular-nums text-[#e8edf4]">
+          <span className="text-[var(--lab-text-faint)]">→</span>
+          <span className="flex items-baseline gap-1 text-[10px] text-[var(--lab-text-dim)]">
+            <span className="text-[var(--lab-ghost)]">ghost</span>
+            <span className="tabular-nums text-[var(--lab-text)]">
               {ghostThroughput.toFixed(1)}%
             </span>
           </span>
@@ -288,12 +288,12 @@ function Dial({
   const livePct =
     liveValue !== null ? (liveValue - min) / (max - min) : null;
   return (
-    <div className="relative overflow-hidden rounded-[2px] border border-[#94a3b8]/[0.08] bg-[#141b26] p-2">
+    <div className="relative overflow-hidden rounded-[2px] border border-[var(--lab-border)] bg-[var(--lab-panel-raised)] p-2">
       <div className="mb-1.5 flex items-baseline justify-between">
-        <span className="font-mono text-[8px] font-semibold uppercase tracking-[0.14em] text-[#64748b]">
+        <span className="font-mono text-[8px] font-semibold uppercase tracking-[0.14em] text-[var(--lab-text-dim)]">
           {label} · {symbol}
           {ghost && (
-            <span className="ml-1 text-[#a78bfa]" title="Counterfactual ghost value">
+            <span className="ml-1 text-[var(--lab-ghost)]" title="Counterfactual ghost value">
               ∿
             </span>
           )}
@@ -303,7 +303,7 @@ function Dial({
           style={{ color: readoutColor }}
         >
           {formatted}
-          {unit && <span className="ml-1 text-[9px] text-[#64748b]">{unit}</span>}
+          {unit && <span className="ml-1 text-[9px] text-[var(--lab-text-dim)]">{unit}</span>}
         </span>
       </div>
       <div className="relative">
@@ -315,7 +315,7 @@ function Dial({
           value={value}
           onChange={(e) => onChange(parseFloat(e.target.value))}
           aria-label={`${label} (${paramKey})${ghost ? " — ghost" : ""}`}
-          className="w-full cursor-pointer appearance-none rounded-[2px] bg-[#06090e] outline-none"
+          className="w-full cursor-pointer appearance-none rounded-[2px] bg-[var(--lab-panel-inset)] outline-none"
           style={{ height: 4 }}
         />
         {/* Phase 43 — live-value pip. Non-interactive triangle marker
@@ -337,7 +337,7 @@ function Dial({
           />
         )}
       </div>
-      <div className="mt-1 flex justify-between font-mono text-[8px] text-[#475569]">
+      <div className="mt-1 flex justify-between font-mono text-[8px] text-[var(--lab-text-faint)]">
         <span>{ticks[0]}</span>
         <span>{ticks[1]}</span>
         <span>{ticks[2]}</span>

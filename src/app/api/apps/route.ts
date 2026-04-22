@@ -84,19 +84,103 @@ export async function GET(request: Request) {
     for (const r of goalRows ?? []) goalTitleById.set(r.id, r.title);
   }
 
+  // ── Pending-apps classification + awaiting-approval summary ──
+  // The dashboard's "apps" card needs to distinguish three states:
+  //   (a) No strategy exists — show generic empty state
+  //   (b) Strategy generated, awaiting user approval — show "strategy ready" card
+  //       with title/confidence/tactic count/proposed app count
+  //   (c) Strategy confirmed, apps present (approved or pending regen) — show app list
+  //
+  // We fetch the strategy summary ALWAYS (not just when apps exist) so the card
+  // can render (b) even when no apps exist yet. This was the #1 UX gap
+  // identified in the dashboard wiring audit.
+  let strategyCommittedAt: string | null = null;
+  let strategyStatus: string | null = null;
+  let strategySummary: {
+    title: string;
+    confidence: number;
+    strategic_posture?: string;
+    tactic_count: number;
+    proposed_app_count: number;
+    ranked_alternatives_count: number;
+    provenance_score?: number;
+    coverage_pct?: number;
+    generated_at?: string;
+    has_user_constraint?: boolean;
+  } | null = null;
+  if (spaceId) {
+    const { data: spaceRow } = (await db
+      .from("spaces")
+      .select("strategy_committed_at, synthesis_data")
+      .eq("id", spaceId)
+      .eq("user_id", user.id)
+      .single()) as {
+      data: {
+        strategy_committed_at: string | null;
+        synthesis_data: Record<string, unknown> | null;
+      } | null;
+    };
+    strategyCommittedAt = spaceRow?.strategy_committed_at ?? null;
+    const stratRec = spaceRow?.synthesis_data?.strategic_recommendation as Record<string, unknown> | undefined;
+    strategyStatus = (stratRec?.status as string | undefined) ?? null;
+
+    // Build the summary when a strategy exists — regardless of app count.
+    if (stratRec?.recommendation) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rec = stratRec.recommendation as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ranked = (stratRec.ranked_strategies as any[] | undefined) ?? [];
+      const proposals = ranked[0]?.infrastructure_proposals ?? [];
+      strategySummary = {
+        title: String(rec.title ?? "(untitled strategy)"),
+        confidence: typeof rec.confidence === "number" ? rec.confidence : 0,
+        strategic_posture: rec.strategic_posture,
+        tactic_count: Array.isArray(rec.micro_tactics) ? rec.micro_tactics.length : 0,
+        proposed_app_count: Array.isArray(proposals) ? proposals.length : 0,
+        ranked_alternatives_count: Math.max(0, ranked.length - 1),
+        provenance_score: typeof rec.provenance?.overall_provenance_score === "number"
+          ? rec.provenance.overall_provenance_score : undefined,
+        coverage_pct: typeof rec.provenance?.coverage_pct_at_generation === "number"
+          ? rec.provenance.coverage_pct_at_generation : undefined,
+        generated_at: stratRec.generated_at as string | undefined,
+        has_user_constraint: !!(stratRec as Record<string, unknown>).user_constraint_applied,
+      };
+    }
+  }
+
   const hydrated = apps.map((row) => {
     const app = hydrateApp(row);
     const counts = countsByApp.get(row.id);
+    // Derive approval_state:
+    //  - "approved": strategy has been confirmed AND app was created at/before confirmation (legacy or this-confirm)
+    //  - "pending":  strategy exists but not yet confirmed — this app is from a proposed strategy
+    //  - "legacy":   no strategy status tracked (old spaces) — treat as approved to avoid disruption
+    let approvalState: "approved" | "pending" | "legacy" = "legacy";
+    if (strategyStatus === "confirmed" && strategyCommittedAt) {
+      // App created on/before confirm = approved; after = pending regeneration
+      approvalState = row.created_at <= strategyCommittedAt ? "approved" : "pending";
+    } else if (strategyStatus === "generated" || strategyStatus === "reviewing") {
+      approvalState = "pending";
+    } else if (strategyStatus) {
+      // "superseded" or other — surface as pending so user reviews
+      approvalState = "pending";
+    }
     return {
       ...app,
       intervention_count: counts?.total ?? 0,
       interventions_completed: counts?.completed ?? 0,
       sub_space_name: row.sub_space_id ? subSpaceNameById.get(row.sub_space_id) ?? null : null,
       serves_goal_title: row.serves_goal_id ? goalTitleById.get(row.serves_goal_id) ?? null : null,
+      approval_state: approvalState,
     };
   });
 
-  return NextResponse.json({ apps: hydrated });
+  return NextResponse.json({
+    apps: hydrated,
+    strategy_committed_at: strategyCommittedAt,
+    strategy_status: strategyStatus,
+    strategy_summary: strategySummary,
+  });
 }
 
 // POST — manual creation. Rare; primary path is pipeline materialization.

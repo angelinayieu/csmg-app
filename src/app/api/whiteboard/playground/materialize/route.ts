@@ -18,6 +18,8 @@ import { llmJSON } from "@/lib/llm";
 import { sanitizeEntity, sanitizeEdge, resilientInsert } from "@/lib/sanitize";
 import { detectEntities } from "@/lib/whiteboard/playground-detector";
 import { flagAppsByEntityChange } from "@/lib/apps/staleness-triggers";
+import { invalidateCoverageForNewEntities } from "@/lib/kg/invalidate-coverage";
+import { logKnowledgeEvent } from "@/lib/changelog/log-knowledge-event";
 import {
   PLAYGROUND_MATERIALIZE_SYSTEM_PROMPT,
   buildMaterializeUserPrompt,
@@ -293,6 +295,40 @@ export async function POST(request: Request) {
       `user:${user.id}`,
       `Playground materialized "${sanitized.name}"`
     );
+
+    // Phase 1 Step 6 — a new entity dropped on the canvas may introduce
+    // indirect paths between previously-checked pairs. Flag them for
+    // revisit on the next prospector pass. Soft-fail.
+    try {
+      const invalidation = await invalidateCoverageForNewEntities(db, {
+        spaceId,
+        newEntityIds: Array.from(touchedUuids),
+        reason: "neighbor_added",
+      });
+      if (invalidation.flagged > 0) {
+        console.log(
+          `[materialize] invalidated ${invalidation.flagged} pair checks for ${invalidation.neighborCount} neighbors`,
+        );
+      }
+    } catch (invErr) {
+      console.warn("[materialize] coverage invalidation failed (non-fatal):", invErr);
+    }
+
+    // Phase 52 — log to unified event stream. Previously brainstorm
+    // materialization wrote entities + edges but left no trace in the
+    // changelog; consumers reading space_changelog missed this entirely.
+    await logKnowledgeEvent(supabase, {
+      spaceId,
+      subtype: "brainstorm_materialized",
+      summary: `Brainstorm materialized "${sanitized.name}"`,
+      details: {
+        entity_id: createdUuid,
+        display_id: displayId,
+        entity_category: sanitized.entity_category,
+        layer: sanitized.layer,
+        predicted_edges: edgesInserted.length,
+      },
+    });
 
     return NextResponse.json({
       entity: {

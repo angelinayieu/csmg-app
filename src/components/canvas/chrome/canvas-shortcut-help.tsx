@@ -4,7 +4,7 @@ import { X } from "lucide-react";
 
 const GROUPS: Array<{ title: string; items: Array<{ keys: string; label: string }> }> = [
   {
-    title: "Canvas",
+    title: "Whiteboard",
     items: [
       { keys: "V", label: "Select tool" },
       { keys: "H", label: "Hand / pan tool" },
@@ -73,7 +73,7 @@ export function CanvasShortcutHelp({ open, onClose }: CanvasShortcutHelpProps) {
           <X className="h-4 w-4" />
         </button>
         <div className="mb-5">
-          <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-blue-600">Canvas</div>
+          <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-blue-600">Whiteboard</div>
           <div className="mt-1 text-[20px] font-bold tracking-tight text-gray-900">Keyboard shortcuts</div>
         </div>
         <div className="grid grid-cols-2 gap-x-8 gap-y-6">

@@ -28,6 +28,31 @@ const IMPORTANCE_WEIGHT: Record<string, number> = {
   moderate: 1,
 };
 
+// Phase 51 — activate dormant taxonomy fields.
+//
+// source_tag encodes epistemic quality: user-stated facts (`explicit`)
+// should dominate unstated assumptions. Previously this field was
+// computed at write but read by NOTHING downstream, meaning a 0.4-
+// confidence user hunch flagged as leverage was treated identically to
+// a 0.95-confidence research-backed finding. This closes that gap.
+const SOURCE_TAG_WEIGHT: Record<string, number> = {
+  explicit: 1.2,     // stated by user — trust unless contradicted
+  implicit: 1.0,     // derived from user input (baseline)
+  assumed: 0.7,      // LLM guess without grounding — downweight
+};
+
+// entity_category carries actionability signal. Concrete + epistemic
+// entities tend to produce operational strategy; abstract entities
+// surface as themes but rarely as levers.
+const CATEGORY_WEIGHT: Record<string, number> = {
+  concrete: 1.1,
+  epistemic: 1.1,
+  process: 1.05,
+  relational: 1.0,
+  abstract: 0.9,
+  fault: 1.15,  // faults are high-signal for strategy
+};
+
 /**
  * Filter entities for synthesis LLM context.
  * Always includes high-signal entities (leverage, risk, bottleneck, fundamental/critical).
@@ -156,14 +181,64 @@ export function filterEntitiesForSynthesis(
     // Bonus for shared variables (cross-space relevance)
     if (e.is_shared_variable) score += 8;
 
+    // Phase 51 — source-tag quality multiplier (applies to importance +
+    // confidence components, which are the largest score contributors).
+    // `assumed` entities drop to ~70% of their score; `explicit` get a
+    // modest lift. This is the biggest single fix to the "high-evidence
+    // and low-evidence treated identically" problem.
+    const sourceTag = (e.source_tag ?? "implicit") as string;
+    const sourceWeight = SOURCE_TAG_WEIGHT[sourceTag] ?? 1.0;
+    score *= sourceWeight;
+
+    // Phase 51 — entity-category actionability multiplier. Smaller than
+    // source_tag because category speaks to strategy *shape* rather than
+    // evidence quality. Concrete+epistemic+fault slightly over; abstract
+    // slightly under.
+    const category = (e.entity_category ?? "") as string;
+    const catWeight = CATEGORY_WEIGHT[category] ?? 1.0;
+    score *= catWeight;
+
     return { entity: e, score };
   });
 
   scored.sort((a, b) => b.score - a.score);
 
+  // Phase 51 — layer diversity. Without this, a heavily decomposed L3
+  // or L4 branch can monopolize the top-N by sheer volume, and the
+  // strategy LLM loses visibility into L1–L2 mechanisms. Rebalance so
+  // no single layer consumes more than `layerCapFrac` of the remaining
+  // slots, reserving room for cross-abstraction representation.
   const spotsLeft = maxEntities - alwaysInclude.size;
-  const additionalInclude = scored.slice(0, Math.max(0, spotsLeft));
-  const excludedEntities = scored.slice(Math.max(0, spotsLeft));
+  const layerCapFrac = 0.55;
+  const layerCap = Math.max(
+    4,
+    Math.floor(Math.max(0, spotsLeft) * layerCapFrac),
+  );
+  const layerCounts = new Map<string, number>();
+  const picks: Array<{ entity: Entity; score: number }> = [];
+  const deferred: Array<{ entity: Entity; score: number }> = [];
+  for (const s of scored) {
+    if (picks.length >= spotsLeft) break;
+    const layerKey = (s.entity.layer ?? "unset") as string;
+    const used = layerCounts.get(layerKey) ?? 0;
+    if (used >= layerCap) {
+      deferred.push(s);
+      continue;
+    }
+    picks.push(s);
+    layerCounts.set(layerKey, used + 1);
+  }
+  // If layer caps left slots empty, fill from the deferred pool in
+  // score order (the cap is soft — never exclude a high-scoring
+  // entity just because its layer is over-represented).
+  for (const s of deferred) {
+    if (picks.length >= spotsLeft) break;
+    picks.push(s);
+  }
+
+  const pickedIds = new Set(picks.map((p) => p.entity.id));
+  const additionalInclude = picks;
+  const excludedEntities = scored.filter((s) => !pickedIds.has(s.entity.id));
 
   const included = [
     ...entities.filter((e) => alwaysInclude.has(e.id)),
@@ -179,7 +254,30 @@ export function filterEntitiesForSynthesis(
     excludedSummary = `\n[${excluded.length} lower-priority entities omitted for focus: ${names.join(", ")}${more}]`;
   }
 
-  reasons.push(`Scored ${remaining.length} remaining entities, included top ${additionalInclude.length}`);
+  reasons.push(
+    `Scored ${remaining.length} remaining entities, included top ${additionalInclude.length}`,
+  );
+
+  // Phase 51 — taxonomy audit trail. Reports what the new weights
+  // actually did so we can verify the activation is working.
+  const tallyTag: Record<string, number> = {};
+  const tallyCat: Record<string, number> = {};
+  const tallyLayer: Record<string, number> = {};
+  for (const s of additionalInclude) {
+    const t = (s.entity.source_tag ?? "implicit") as string;
+    const c = (s.entity.entity_category ?? "none") as string;
+    const l = (s.entity.layer ?? "unset") as string;
+    tallyTag[t] = (tallyTag[t] ?? 0) + 1;
+    tallyCat[c] = (tallyCat[c] ?? 0) + 1;
+    tallyLayer[l] = (tallyLayer[l] ?? 0) + 1;
+  }
+  const fmt = (m: Record<string, number>) =>
+    Object.entries(m)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ");
+  reasons.push(`Taxonomy (source): ${fmt(tallyTag)}`);
+  reasons.push(`Taxonomy (category): ${fmt(tallyCat)}`);
+  reasons.push(`Taxonomy (layer): ${fmt(tallyLayer)}`);
   reasons.push(`Excluded ${excluded.length} entities (lowest connectivity + importance)`);
 
   return {

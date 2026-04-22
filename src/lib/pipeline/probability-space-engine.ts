@@ -22,6 +22,7 @@ import type {
   FailurePoint,
   EdgeCondition,
 } from "@/types/probability-space";
+import { annotateSpacesWithImpact } from "./impact-propagation";
 
 // ── Types for expansion data (read from entity provenance) ──
 
@@ -895,6 +896,13 @@ export function buildProbabilitySpacesForGraph(
       };
       spaces.push(space);
     }
+  }
+
+  // Goal-aware impact propagation (Phase 2). Attaches `impact` to every
+  // space when goal entity IDs are supplied. No-op when goalEntityIds is
+  // empty, so existing non-goal-aware callers are unaffected.
+  if (goalEntityIds && goalEntityIds.length > 0) {
+    annotateSpacesWithImpact(spaces, graphEdges, goalEntityIds);
   }
 
   return spaces;

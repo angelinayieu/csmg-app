@@ -528,7 +528,10 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
     }
   }, [pipeline.phase, pipeline.scopeResult]);
 
-  // Navigate on completion
+  // Navigate on completion. When the pipeline's event bus returned a
+  // runId, land the user on the whiteboard with ?run=<id> so the
+  // CanvasEventHud picks up the live SSE stream and shows the stage +
+  // counts. Without a runId, fall back to the space dashboard.
   useEffect(() => {
     if (activePhase === "complete") {
       const targetId = isQuick
@@ -536,6 +539,11 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
         : pipeline.rootSpaceId ?? pipeline.spaceIds[0];
 
       if (targetId) {
+        const runId = pipeline.latestRunId;
+        const destination = runId
+          ? `/app/space/${targetId}/whiteboard?run=${runId}`
+          : `/app/space/${targetId}`;
+
         const supabase = createClient();
         supabase
           .from("spaces")
@@ -544,11 +552,11 @@ export function InputPanel({ creditBalance = 10 }: { creditBalance?: number }) {
           .single()
           .then(({ data }) => {
             if (data) addSpace(data as Space);
-            router.push(`/app/space/${targetId}`);
+            router.push(destination);
           });
       }
     }
-  }, [activePhase, isQuick, quickHook.spaceId, pipeline.rootSpaceId, pipeline.spaceIds, addSpace, router]);
+  }, [activePhase, isQuick, quickHook.spaceId, pipeline.rootSpaceId, pipeline.spaceIds, pipeline.latestRunId, addSpace, router]);
 
   // Elapsed time counter for active pipeline phase
   const [elapsedMs, setElapsedMs] = useState(0);

@@ -2,8 +2,43 @@ import OpenAI from "openai";
 import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import { ValidationError } from "@/lib/validation/llm-validators";
 import { RecoveryStrategy } from "@/lib/validation/error-recovery";
+import { repairTruncatedJson } from "@/lib/llm/repair-truncated-json";
+import { getAnthropicClient } from "@/lib/anthropic";
 
 const MODEL = "gpt-4o";
+
+// ── Provider routing (Phase 2F — quality lane) ──
+//
+// The decomposition + per-axis PS generators benefit dramatically from
+// frontier reasoning models. GPT-4o is fine at structuring JSON but
+// meaningfully weaker than Claude Opus or OpenAI o-series on the
+// creative/causal-inference parts of Pass 1. Letting callers specify a
+// provider lets us route the hardest reasoning steps to the best model
+// while keeping gpt-4o for JSON formatting and small utility calls.
+//
+// Cost math: Claude Opus ~$0.15 per 16k-token generation vs gpt-4o
+// ~$0.02. For a product whose output quality IS the product, $0.13
+// extra per run is trivial. Use Opus on Pass 1 / per-axis generators;
+// keep gpt-4o elsewhere.
+export type LlmProvider = "openai" | "anthropic";
+
+export const MODEL_DEFAULTS = {
+  openai: {
+    reasoning: "gpt-4o",
+    structuring: "gpt-4o",
+    fast: "gpt-4o-mini",
+  },
+  anthropic: {
+    // Primary reasoning model. Opus-class Claude handles causal
+    // decomposition + non-obvious connection identification far better
+    // than GPT-4o. If your account has access to a newer Opus variant,
+    // override via the explicit `model` param at the call site.
+    reasoning: "claude-opus-4-20250514",
+    // Sonnet as a cheaper fallback for mid-tier reasoning where Opus
+    // would be overkill.
+    fast: "claude-3-5-sonnet-20241022",
+  },
+} as const;
 
 let openaiClient: OpenAI | null = null;
 
@@ -12,6 +47,47 @@ function getOpenAI(): OpenAI {
     openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
   }
   return openaiClient;
+}
+
+// ── Credit / billing error detection ──
+//
+// Used by pipeline routes to catch provider-level credit-exhaustion and
+// surface a structured 402 response instead of a generic 500. Covers both
+// OpenAI (insufficient_quota / billing_hard_limit_reached) and Anthropic
+// ("Your credit balance is too low to access the Anthropic API").
+export interface CreditErrorInfo {
+  isCredit: boolean;
+  provider: "openai" | "anthropic" | "unknown";
+  message: string;
+}
+
+export function detectCreditError(err: unknown): CreditErrorInfo {
+  const e = err as { code?: string; status?: number; message?: string } | null;
+  const msg = (e?.message ?? String(err ?? "")).toLowerCase();
+  const code = e?.code;
+
+  if (code === "insufficient_quota" || code === "billing_hard_limit_reached") {
+    return {
+      isCredit: true,
+      provider: "openai",
+      message: e?.message ?? "OpenAI quota exhausted",
+    };
+  }
+  if (msg.includes("credit balance is too low")) {
+    return {
+      isCredit: true,
+      provider: "anthropic",
+      message: "Anthropic credit balance is too low",
+    };
+  }
+  if (msg.includes("quota") && msg.includes("exhausted")) {
+    return {
+      isCredit: true,
+      provider: "openai",
+      message: e?.message ?? "Quota exhausted",
+    };
+  }
+  return { isCredit: false, provider: "unknown", message: "" };
 }
 
 // ── Retry with exponential backoff ──
@@ -75,11 +151,33 @@ export async function llmGenerate(opts: {
   maxTokens?: number;
   temperature?: number;
   model?: string;
+  /** Provider routing. Defaults to OpenAI; pass "anthropic" to route
+   *  to Claude (Opus by default). The caller can also pass an explicit
+   *  `model` string that overrides the provider default. */
+  provider?: LlmProvider;
 }): Promise<string> {
   return withRetry(async () => {
+    if (opts.provider === "anthropic") {
+      const anthropic = getAnthropicClient();
+      const resp = await anthropic.messages.create({
+        model: opts.model ?? MODEL_DEFAULTS.anthropic.reasoning,
+        max_tokens: opts.maxTokens ?? 8192,
+        temperature: opts.temperature ?? 0.5,
+        system: opts.system,
+        messages: [{ role: "user", content: opts.user }],
+      });
+      // Claude returns a content array of blocks; concatenate text blocks.
+      // Avoid the strict TextBlock predicate (SDK requires a `citations`
+      // field there) — narrow via filter + cast. Behavior identical.
+      const text = resp.content
+        .filter((b) => b.type === "text")
+        .map((b) => (b as { text: string }).text)
+        .join("");
+      return text;
+    }
     const openai = getOpenAI();
     const response = await openai.chat.completions.create({
-      model: opts.model ?? MODEL,
+      model: opts.model ?? MODEL_DEFAULTS.openai.reasoning,
       max_tokens: opts.maxTokens ?? 8192,
       temperature: opts.temperature ?? 0.5,
       messages: [
@@ -99,11 +197,36 @@ export async function* llmStream(opts: {
   maxTokens?: number;
   temperature?: number;
   model?: string;
+  provider?: LlmProvider;
 }): AsyncGenerator<string> {
+  if (opts.provider === "anthropic") {
+    const anthropic = getAnthropicClient();
+    // Claude's SDK exposes a stream helper that yields content deltas.
+    // Same retry caveat as below: streaming bypasses withRetry; caller
+    // handles reconnection.
+    const stream = anthropic.messages.stream({
+      model: opts.model ?? MODEL_DEFAULTS.anthropic.reasoning,
+      max_tokens: opts.maxTokens ?? 16000,
+      temperature: opts.temperature ?? 0.5,
+      system: opts.system,
+      messages: [{ role: "user", content: opts.user }],
+    });
+    for await (const event of stream) {
+      if (
+        event.type === "content_block_delta" &&
+        event.delta.type === "text_delta" &&
+        typeof event.delta.text === "string"
+      ) {
+        yield event.delta.text;
+      }
+    }
+    return;
+  }
+
   const openai = getOpenAI();
   // Streaming doesn't use retry — the caller handles reconnection
   const stream = await openai.chat.completions.create({
-    model: opts.model ?? MODEL,
+    model: opts.model ?? MODEL_DEFAULTS.openai.reasoning,
     max_tokens: opts.maxTokens ?? 16000,
     temperature: opts.temperature ?? 0.5,
     stream: true,
@@ -137,11 +260,24 @@ export async function llmJSON<T = unknown>(opts: {
   maxTokens?: number;
   temperature?: number;
   model?: string;
+  /**
+   * Provider routing hint. Accepted for API parity with
+   * `llmGenerate` / `llmStream` so call sites can pass the same
+   * options object; currently no-op here because structured-output
+   * routing lives on the OpenAI path only. A full anthropic JSON
+   * path will land when the provider adds reliable structured
+   * output — until then this param is carried but ignored.
+   */
+  provider?: LlmProvider;
   /** OpenAI JSON schema for structured output. When provided, response is guaranteed to conform. */
   responseSchema?: { name: string; schema: Record<string, unknown> };
   validator?: (data: unknown) => T;
   fallback?: T;
 }): Promise<T> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { provider: _providerHint, ...rest } = opts;
+  void _providerHint;
+  void rest;
   return withRetry(async () => {
     const openai = getOpenAI();
     const model = opts.model ?? MODEL;
@@ -176,33 +312,57 @@ export async function llmJSON<T = unknown>(opts: {
     const response = await openai.chat.completions.create(params as ChatCompletionCreateParamsNonStreaming);
     const raw = response.choices[0]?.message?.content ?? "";
 
-    // Parse JSON
+    // Parse JSON — with truncation-repair as a last resort before
+    // giving up. GPT-4o's 16384-token output cap commonly truncates
+    // large decomposition responses mid-array; repairTruncatedJson
+    // walks the partial payload, trims at the last fully-balanced
+    // boundary, appends missing closers, and retries parse. Salvages
+    // the 15-40 complete entities before the cut-off instead of
+    // discarding the whole response.
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
       // Try extracting from markdown code fences (belt-and-suspenders)
       const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (match?.[1]) {
+      let extracted: string | null = null;
+      if (match?.[1]) extracted = match[1].trim();
+
+      if (extracted) {
         try {
-          parsed = JSON.parse(match[1].trim());
+          parsed = JSON.parse(extracted);
         } catch {
-          // Last resort: find JSON object boundaries
-          const start = raw.indexOf("{");
-          const end = raw.lastIndexOf("}");
-          if (start !== -1 && end !== -1 && end > start) {
-            parsed = JSON.parse(raw.slice(start, end + 1));
+          const repair = repairTruncatedJson(extracted);
+          if (repair.parsed) {
+            console.warn(
+              `[LLM] JSON was truncated; salvaged via repair (dropped ${repair.repairedChars} chars)`,
+            );
+            parsed = repair.parsed;
+          } else {
+            parsed = undefined;
+          }
+        }
+      }
+
+      if (parsed === undefined) {
+        // Find JSON object boundaries as a pre-repair trim.
+        const start = raw.indexOf("{");
+        const end = raw.lastIndexOf("}");
+        const sliced = start !== -1 && end !== -1 && end > start
+          ? raw.slice(start, end + 1)
+          : raw;
+        try {
+          parsed = JSON.parse(sliced);
+        } catch {
+          const repair = repairTruncatedJson(raw);
+          if (repair.parsed) {
+            console.warn(
+              `[LLM] JSON was truncated; salvaged via repair (dropped ${repair.repairedChars} chars)`,
+            );
+            parsed = repair.parsed;
           } else {
             throw new Error(`Failed to parse LLM JSON. Raw: ${raw.slice(0, 300)}`);
           }
-        }
-      } else {
-        const start = raw.indexOf("{");
-        const end = raw.lastIndexOf("}");
-        if (start !== -1 && end !== -1 && end > start) {
-          parsed = JSON.parse(raw.slice(start, end + 1));
-        } else {
-          throw new Error(`Failed to parse LLM JSON. Raw: ${raw.slice(0, 300)}`);
         }
       }
     }

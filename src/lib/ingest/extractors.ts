@@ -130,7 +130,12 @@ export async function extractDocx(
   try {
     const mammoth = await import("mammoth");
     // convertToMarkdown is richer than extractRawText; falls back cleanly on unsupported styles.
-    const result = await mammoth.convertToMarkdown({ buffer });
+    // It exists at runtime (see node_modules/mammoth/lib/index.js) but is missing from
+    // the shipped .d.ts — cast the module to a typed shim locally.
+    type MammothWithMarkdown = typeof mammoth & {
+      convertToMarkdown: (input: { buffer: Buffer }) => Promise<{ value: string; messages: unknown[] }>;
+    };
+    const result = await (mammoth as unknown as MammothWithMarkdown).convertToMarkdown({ buffer });
 
     const text = (result.value ?? "").trim();
     if (!text) {

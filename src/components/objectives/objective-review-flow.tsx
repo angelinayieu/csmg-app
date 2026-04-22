@@ -21,7 +21,7 @@ import {
   Milestone,
   Activity,
 } from "lucide-react";
-import type { SuggestedObjective, ObjectiveType, ObjectiveBenchmark } from "@/types/goals";
+import type { SuggestedObjective, ObjectiveType, ObjectiveBenchmark, UltimateGoalProposal } from "@/types/goals";
 import { CalloutBox } from "@/components/ui/callout-box";
 
 // ── Props ──
@@ -30,7 +30,10 @@ interface ObjectiveReviewFlowProps {
   objectives: SuggestedObjective[];
   spaceId: string;
   spaceName: string;
-  onComplete: (approvedObjectives: SuggestedObjective[]) => void;
+  onComplete: (
+    approvedObjectives: SuggestedObjective[],
+    ultimateGoal: UltimateGoalProposal,
+  ) => void;
   onSkip: () => void;
 }
 
@@ -671,7 +674,167 @@ function BaselineConfirmationPanel({
   );
 }
 
+// ── Ultimate Goal Review Step ──
+
+function UltimateGoalReviewPanel({
+  initialProposal,
+  subObjectives,
+  onApprove,
+  onBack,
+}: {
+  initialProposal: UltimateGoalProposal;
+  subObjectives: SuggestedObjective[];
+  onApprove: (ultimate: UltimateGoalProposal) => void;
+  onBack: () => void;
+}) {
+  const [draft, setDraft] = useState<UltimateGoalProposal>(initialProposal);
+
+  const update = <K extends keyof UltimateGoalProposal>(key: K, value: UltimateGoalProposal[K]) =>
+    setDraft((prev) => ({ ...prev, [key]: value }));
+
+  const canSubmit = draft.title.trim().length > 0 && draft.metric_name.trim().length > 0;
+
+  return (
+    <div className="space-y-3" style={{ animation: "slideUp 300ms ease-out" }}>
+      <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 px-3 py-2">
+        <div className="flex items-center gap-1.5">
+          <Target className="h-3.5 w-3.5 text-indigo-600" />
+          <p className="text-[11px] font-semibold text-indigo-800">
+            Review your ultimate goal
+          </p>
+        </div>
+        <p className="text-[10px] text-indigo-700/80 mt-0.5">
+          This is the single umbrella outcome your {subObjectives.length} sub-objectives roll into.
+          Edit anything — you&apos;ll approve both the umbrella and the sub-objectives together.
+        </p>
+      </div>
+
+      <div className="rounded-xl border-2 border-indigo-200 bg-white p-4 space-y-3">
+        <div>
+          <label className="block text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
+            Ultimate goal title
+          </label>
+          <input
+            type="text"
+            value={draft.title}
+            onChange={(e) => update("title", e.target.value)}
+            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 focus:border-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+          />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
+            Description
+          </label>
+          <textarea
+            value={draft.description}
+            onChange={(e) => update("description", e.target.value)}
+            rows={2}
+            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 leading-relaxed focus:border-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
+              Headline metric
+            </label>
+            <input
+              type="text"
+              value={draft.metric_name}
+              onChange={(e) => update("metric_name", e.target.value)}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
+              Unit
+            </label>
+            <input
+              type="text"
+              value={draft.metric_unit ?? ""}
+              onChange={(e) => update("metric_unit", e.target.value || null)}
+              placeholder="%, count, hours…"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
+              Baseline (where you are now)
+            </label>
+            <input
+              type="number"
+              value={draft.baseline_value}
+              onChange={(e) => update("baseline_value", Number(e.target.value))}
+              className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-mono text-gray-900 focus:border-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
+              Target
+            </label>
+            <input
+              type="number"
+              value={draft.target_value}
+              onChange={(e) => update("target_value", Number(e.target.value))}
+              className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-mono text-gray-900 focus:border-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+            />
+          </div>
+        </div>
+
+        {draft.rationale && (
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2">
+            <p className="text-[9px] font-semibold text-indigo-700 uppercase tracking-wide">
+              Why this rollup
+            </p>
+            <p className="text-[11px] text-indigo-800/90 mt-0.5 leading-relaxed">
+              {draft.rationale}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+        <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
+          Sub-objectives rolling into this goal
+        </p>
+        <ul className="mt-1.5 space-y-1">
+          {subObjectives.map((o) => (
+            <li key={o.key} className="flex items-start gap-1.5 text-[11px] text-gray-700">
+              <ArrowRight className="h-3 w-3 text-gray-400 mt-0.5 flex-shrink-0" />
+              <span>{o.title}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="flex items-center justify-between pt-2">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+          Back
+        </button>
+        <button
+          onClick={() => canSubmit && onApprove(draft)}
+          disabled={!canSubmit}
+          className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+        >
+          <Check className="h-3.5 w-3.5" />
+          Approve ultimate goal &amp; {subObjectives.length} sub-objective{subObjectives.length !== 1 ? "s" : ""}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Component ──
+
+type ReviewStep = "list" | "baseline" | "ultimate";
 
 export function ObjectiveReviewFlow({
   objectives: initialObjectives,
@@ -687,8 +850,12 @@ export function ObjectiveReviewFlow({
   const [currentSetIndex, setCurrentSetIndex] = useState(0);
   const currentSet = proposalHistory[currentSetIndex];
 
-  // Baseline confirmation step
-  const [showBaselineConfirm, setShowBaselineConfirm] = useState(false);
+  // Step machine: list → baseline → ultimate → onComplete
+  const [step, setStep] = useState<ReviewStep>("list");
+  const [baselinedObjectives, setBaselinedObjectives] = useState<SuggestedObjective[]>([]);
+  const [ultimateProposal, setUltimateProposal] = useState<UltimateGoalProposal | null>(null);
+  const [synthesizing, setSynthesizing] = useState(false);
+  const [synthesisError, setSynthesisError] = useState<string | null>(null);
 
   // Include/exclude toggles (keyed by objective key)
   const [included, setIncluded] = useState<Record<string, boolean>>(() => {
@@ -909,17 +1076,75 @@ export function ObjectiveReviewFlow({
                 discussionOpen && "border-r border-gray-100"
               )}
             >
-              {showBaselineConfirm ? (
+              {step === "baseline" ? (
                 <BaselineConfirmationPanel
                   objectives={getApprovedObjectives()}
-                  onConfirm={(editedObjectives) => {
-                    setShowBaselineConfirm(false);
-                    onComplete(editedObjectives);
+                  onConfirm={async (editedObjectives) => {
+                    setBaselinedObjectives(editedObjectives);
+                    setSynthesizing(true);
+                    setSynthesisError(null);
+                    try {
+                      const res = await fetch("/api/goals/synthesize-ultimate", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ spaceId, approved: editedObjectives }),
+                      });
+                      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                      const data = await res.json();
+                      if (!data?.proposal) throw new Error("No proposal returned");
+                      setUltimateProposal(data.proposal as UltimateGoalProposal);
+                      setStep("ultimate");
+                    } catch (err) {
+                      console.error("[ObjectiveReview] Synthesize failed:", err);
+                      // Graceful fallback: local synthesis so the user isn't blocked
+                      const fallback: UltimateGoalProposal = {
+                        title: spaceName ? `Advance: ${spaceName}` : "Ultimate goal",
+                        description:
+                          "Umbrella outcome rolling up your approved sub-objectives.",
+                        objective_type: "maximize",
+                        metric_name: "Sub-objectives on track",
+                        metric_unit: "%",
+                        baseline_value: 0,
+                        target_value: 100,
+                        rationale:
+                          "Fallback composite metric — you can edit this before approving.",
+                        child_keys: editedObjectives.map((o) => o.key),
+                      };
+                      setUltimateProposal(fallback);
+                      setSynthesisError(
+                        "Couldn't auto-synthesize — edit this draft and continue.",
+                      );
+                      setStep("ultimate");
+                    } finally {
+                      setSynthesizing(false);
+                    }
                   }}
-                  onBack={() => setShowBaselineConfirm(false)}
+                  onBack={() => setStep("list")}
                 />
+              ) : step === "ultimate" && ultimateProposal ? (
+                <UltimateGoalReviewPanel
+                  initialProposal={ultimateProposal}
+                  subObjectives={baselinedObjectives}
+                  onApprove={(ultimate) => onComplete(baselinedObjectives, ultimate)}
+                  onBack={() => setStep("baseline")}
+                />
+              ) : synthesizing ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-indigo-500 mb-3" />
+                  <p className="text-sm font-medium text-gray-700">
+                    Synthesizing your ultimate goal…
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Rolling up {getApprovedObjectives().length} sub-objectives into one umbrella outcome.
+                  </p>
+                </div>
               ) : (
                 <>
+                  {synthesisError && (
+                    <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                      {synthesisError}
+                    </div>
+                  )}
                   <div className="space-y-3">
                     {currentSet.objectives.map((obj, i) => (
                       <ObjectiveCard
@@ -1033,8 +1258,8 @@ export function ObjectiveReviewFlow({
             )}
           </div>
 
-          {/* Footer — hidden during baseline confirmation (it has its own buttons) */}
-          {!showBaselineConfirm && (
+          {/* Footer — only shown on the list step. Baseline & ultimate steps own their own nav. */}
+          {step === "list" && !synthesizing && (
             <div className="flex items-center justify-between border-t border-gray-100 px-6 py-4">
               <button
                 onClick={onSkip}
@@ -1055,7 +1280,7 @@ export function ObjectiveReviewFlow({
                 )}
 
                 <button
-                  onClick={() => setShowBaselineConfirm(true)}
+                  onClick={() => setStep("baseline")}
                   disabled={includedCount === 0}
                   className="flex items-center gap-1.5 rounded-lg bg-interaxis-600 px-5 py-2 text-xs font-semibold text-white hover:bg-interaxis-700 disabled:opacity-40 transition-colors"
                 >

@@ -7,26 +7,7 @@ import { cn } from "@/lib/utils";
 import { Lock, ChevronRight, LayoutGrid, FlaskConical, BookOpen, Database } from "lucide-react";
 import {
   IconDashboard,
-  IconTarget,
-  IconGraph,
-  IconCurve,
-  IconPulse,
   IconLayers,
-  IconCubes,
-  IconCompass,
-  IconRadar,
-  IconBook,
-  IconConverge,
-  IconFunnel,
-  IconLever,
-  IconWarn,
-  IconLoop,
-  IconBranches,
-  IconCheckList,
-  IconSynth,
-  IconSparkles,
-  IconGauge,
-  IconBars,
 } from "@/components/dashboard/glass-glyphs";
 
 interface SectionItem {
@@ -64,6 +45,12 @@ export function SpaceSectionNav({
   const base = `/app/space/${spaceId}`;
   const needsSynthesis = "Run synthesis to unlock";
 
+  // Consolidation status: objectives / twin / strategy / synthesis / risks /
+  // loops / scenarios / leverage / bottleneck / insights / inventory /
+  // probability / radar / causal-chains / interventions are all absorbed
+  // into whiteboard drawers (Waves 1-3) — access them via the Panels
+  // dropdown in the canvas top bar. Remaining entries here are the
+  // surfaces not yet absorbed (graph / layers / convergence / agents).
   const sections: SectionItem[] = [
     // ── OVERVIEW ──
     {
@@ -73,38 +60,13 @@ export function SpaceSectionNav({
       icon: <IconDashboard className="h-4 w-4" />,
       group: "overview",
     },
-    {
-      id: "objectives",
-      label: "Objectives",
-      href: `${base}/objectives`,
-      icon: <IconTarget className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "overview",
-    },
 
-    // ── WORKSPACE (interactive surfaces) ──
-    // These are reachable immediately — no synthesis gate, no entity minimum.
-    // They're how the user ACTIVELY works on their space.
+    // ── WORKSPACE ──
     {
       id: "whiteboard",
       label: "Whiteboard",
       href: `${base}/whiteboard`,
       icon: <LayoutGrid className="h-4 w-4" />,
-      group: "workspace",
-    },
-    {
-      id: "whiteboard-brainstorm",
-      label: "Brainstorm",
-      href: `${base}/whiteboard/brainstorm`,
-      icon: <IconSparkles className="h-4 w-4" />,
-      group: "workspace",
-    },
-    {
-      id: "interventions",
-      label: "Interventions",
-      href: `${base}/interventions`,
-      icon: <IconCheckList className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
       group: "workspace",
     },
     {
@@ -114,7 +76,6 @@ export function SpaceSectionNav({
       icon: <FlaskConical className="h-4 w-4" />,
       group: "workspace",
     },
-    // Journal — only shown for journaling-template spaces
     {
       id: "journal",
       label: "Journal",
@@ -124,154 +85,11 @@ export function SpaceSectionNav({
       show_for_templates: ["journal_self_discovery", "relationship_dynamics"],
     },
 
-    // ── CORE ──
-    {
-      id: "graph",
-      label: "Knowledge Graph",
-      href: `${base}/graph`,
-      icon: <IconGraph className="h-4 w-4" />,
-      lockReason: entityCount > 0 ? undefined : "Add entities first",
-      group: "core",
-    },
-    {
-      id: "inventory",
-      label: "Entity Inventory",
-      href: `${base}/inventory`,
-      icon: <IconCubes className="h-4 w-4" />,
-      lockReason: entityCount > 0 ? undefined : "Add entities first",
-      group: "core",
-    },
-    {
-      id: "probability",
-      label: "Probability Spaces",
-      href: `${base}/probability`,
-      icon: <IconCurve className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "core",
-    },
-    {
-      id: "twin",
-      label: "Twin",
-      href: `${base}/twin`,
-      icon: <IconGauge className="h-4 w-4" />,
-      lockReason: entityCount >= 3 ? undefined : "Need 3+ entities",
-      group: "core",
-    },
-    {
-      id: "strategy",
-      label: "Strategy",
-      href: `${base}/strategy`,
-      icon: <IconCompass className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "core",
-    },
-    ...(hasSynthesis && entityCount >= 5
-      ? [
-          {
-            id: "layers",
-            label: "Knowledge Layers",
-            href: `${base}/layers`,
-            icon: <IconLayers className="h-4 w-4" />,
-            group: "core" as const,
-          },
-        ]
-      : []),
-    {
-      id: "causal-chains",
-      label: "Causal Chains",
-      href: `${base}/causal-chains`,
-      icon: <IconSparkles className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "core",
-    },
-
-    // ── INTELLIGENCE (analysis outputs from synthesis) ──
-    {
-      id: "synthesis",
-      label: "Synthesis",
-      href: `${base}/synthesis`,
-      icon: <IconSynth className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-    {
-      id: "radar",
-      label: "Intelligence Radar",
-      href: `${base}/radar`,
-      icon: <IconRadar className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-    {
-      id: "convergence",
-      label: "Convergence",
-      href: `${base}/convergence`,
-      icon: <IconConverge className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-    {
-      id: "loops",
-      label: "Feedback Loops",
-      href: `${base}/loops`,
-      icon: <IconLoop className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-    {
-      id: "scenarios",
-      label: "Scenarios",
-      href: `${base}/scenarios`,
-      icon: <IconBranches className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-    {
-      id: "leverage",
-      label: "Leverage Points",
-      href: `${base}/leverage`,
-      icon: <IconLever className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-    {
-      id: "risks",
-      label: "Risk Points",
-      href: `${base}/risks`,
-      icon: <IconWarn className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-    {
-      id: "bottleneck",
-      label: "Bottleneck",
-      href: `${base}/bottleneck`,
-      icon: <IconFunnel className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-    {
-      id: "insights",
-      label: "Insights",
-      href: `${base}/insights`,
-      icon: <IconBook className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-    {
-      id: "agents",
-      label: "Agents",
-      href: `${base}/agents`,
-      icon: <IconCubes className="h-4 w-4" />,
-      lockReason: hasSynthesis ? undefined : needsSynthesis,
-      group: "intelligence",
-    },
-
-    // ── LIBRARY (shared / global resources reachable from the space) ──
+    // ── LIBRARY ──
     {
       id: "patterns",
       label: "Pattern Library",
-      href: `/patterns`, // global — per-space version removed in route consolidation
+      href: `/patterns`,
       icon: <Database className="h-4 w-4" />,
       group: "library",
     },

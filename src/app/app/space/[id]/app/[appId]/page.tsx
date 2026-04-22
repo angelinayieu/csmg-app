@@ -27,6 +27,9 @@ import { hydrateApp } from "@/types/app";
 import type { AppRow } from "@/types/app";
 import type { Intervention } from "@/types/intervention";
 import type { StrategyBaselineRow, PredictionLedgerRow } from "@/types/prediction";
+import type { AppStrategyRow, AppStrategyVersionRow, AppStrategy } from "@/types/app-strategy";
+import { hydrateAppStrategy } from "@/types/app-strategy";
+import { AppStrategyPanel } from "@/components/apps/app-strategy-panel";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -51,6 +54,20 @@ export default function AppDetailPage() {
   // it; refetch-on-action can swap these in place via setter.
   const [strategyBaseline, setStrategyBaseline] = useState<StrategyBaselineRow | null>(null);
   const [predictions, setPredictions] = useState<PredictionLedgerRow[]>([]);
+  // Tier 3.5: per-app sub-strategy state. Hydrated from /api/apps/:id and
+  // patched in place by the panel's Generate / Promote actions so the
+  // page doesn't need a full reload after each action.
+  const [appStrategy, setAppStrategy] = useState<AppStrategy | null>(null);
+  const [appStrategyVersions, setAppStrategyVersions] = useState<AppStrategyVersionRow[]>([]);
+  // Tier 3.5: lazy auto-generation guard. Without this, the auto-trigger
+  // useEffect can fire repeatedly on re-renders (state updates → effect
+  // re-runs → another POST). We only ever attempt one auto-gen per app
+  // load; the user can manually regenerate after that via the panel.
+  const [autoGenAttempted, setAutoGenAttempted] = useState(false);
+  // Tier 3.6: surface sub-strategy generation errors to the panel so the
+  // user sees what went wrong instead of the button appearing to do nothing.
+  // Cleared on successful generate; rewritten on each retry failure.
+  const [subStrategyError, setSubStrategyError] = useState<string | null>(null);
 
   // ── Load app + interventions + synthesis (single endpoint) ──
   useEffect(() => {
@@ -72,6 +89,8 @@ export default function AppDetailPage() {
           synthesis: Record<string, unknown> | null;
           strategy_baseline?: StrategyBaselineRow | null;
           predictions?: PredictionLedgerRow[];
+          app_strategy?: AppStrategyRow | null;
+          app_strategy_versions?: AppStrategyVersionRow[];
         };
         if (cancelled) return;
         setDetail({
@@ -82,6 +101,8 @@ export default function AppDetailPage() {
         setSynth(json.synthesis ?? null);
         setStrategyBaseline(json.strategy_baseline ?? null);
         setPredictions(json.predictions ?? []);
+        setAppStrategy(json.app_strategy ? hydrateAppStrategy(json.app_strategy) : null);
+        setAppStrategyVersions(json.app_strategy_versions ?? []);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Failed to load app");
@@ -159,6 +180,19 @@ export default function AppDetailPage() {
 
     const strategyBaselineResolver: Resolver = () => strategyBaseline;
 
+    // Tier 3.5: app_strategy resolver — widgets can bind to either the
+    // whole spec or a single section via selector.section. Returns null
+    // when no sub-strategy exists or its status isn't "active" (drafts
+    // are surfaced via the panel, not via widget bindings — widgets
+    // shouldn't read in-progress refinements).
+    const appStrategyResolver: Resolver = (selector) => {
+      if (!appStrategy || appStrategy.status !== "active") return null;
+      const section = typeof selector?.section === "string" ? selector.section : null;
+      if (!section) return appStrategy.spec;
+      const spec = appStrategy.spec as unknown as Record<string, unknown>;
+      return spec[section] ?? null;
+    };
+
     const predictionLedgerResolver: Resolver = (selector, ctx) => {
       const status = typeof selector?.status === "string" ? selector.status : "open";
       const appIdFilter = selector?.app_id;
@@ -224,8 +258,9 @@ export default function AppDetailPage() {
       twin_state: twinStateResolver,
       simulation_result: simulationResultResolver,
       agent_output: agentOutputResolver,
+      app_strategy: appStrategyResolver,
     };
-  }, [detail, synth, strategyBaseline, predictions]);
+  }, [detail, synth, strategyBaseline, predictions, appStrategy]);
 
   // ── Parent refresh when an action updated the app ──
   const handleAppUpdated = (next: App) => {
@@ -236,6 +271,90 @@ export default function AppDetailPage() {
   const handleNavigate = (href: string) => {
     router.push(href);
   };
+
+  // ── Tier 3.5: sub-strategy actions ────────────────────────────────
+  // Generate (or regenerate) the app's sub-strategy. Used by both the
+  // lazy auto-trigger below and the panel's manual button. Returns the
+  // newly active strategy so the caller can update local state without
+  // a full refetch.
+  const generateSubstrategy = async (
+    triggerReason: string,
+  ): Promise<AppStrategy | null> => {
+    if (!appId) return null;
+    // Clear prior error optimistically so the "Regenerating…" state doesn't
+    // show a stale banner. Overwritten if this attempt also fails.
+    setSubStrategyError(null);
+    try {
+      const res = await fetch(`/api/apps/${appId}/strategy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trigger_reason: triggerReason }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const json = (await res.json()) as { strategy: AppStrategy };
+      // Update both the active strategy AND refetch the version log so
+      // the panel's audit list shows the new entry.
+      setAppStrategy(json.strategy);
+      try {
+        const verRes = await fetch(`/api/apps/${appId}/strategy`, { cache: "no-store" });
+        if (verRes.ok) {
+          const verJson = (await verRes.json()) as { versions: AppStrategyVersionRow[] };
+          setAppStrategyVersions(verJson.versions ?? []);
+        }
+      } catch {
+        /* version log refetch is non-critical */
+      }
+      return json.strategy;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn("[app-detail] sub-strategy generation failed:", err);
+      setSubStrategyError(message);
+      return null;
+    }
+  };
+
+  // Promote a draft sub-strategy to active. Surfaced when the latest
+  // generation hit quality gates and was persisted as draft.
+  const promoteDraft = async (): Promise<AppStrategy | null> => {
+    if (!appId || !appStrategy || appStrategy.status !== "draft") return null;
+    try {
+      const res = await fetch(`/api/apps/${appId}/strategy`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategy_id: appStrategy.id,
+          status: "active",
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const json = (await res.json()) as { strategy: AppStrategy };
+      setAppStrategy(json.strategy);
+      return json.strategy;
+    } catch (err) {
+      console.warn("[app-detail] draft promotion failed:", err);
+      return null;
+    }
+  };
+
+  // Lazy auto-generation: when an app loads with no sub-strategy at all,
+  // fire generation in the background. Guarded so it only happens once
+  // per app load — manual regen via the panel is the path for subsequent
+  // re-runs. Skipped when generation is in flight (autoGenAttempted is
+  // set BEFORE the await so concurrent renders don't double-fire).
+  useEffect(() => {
+    if (!detail || !appId) return;
+    if (appStrategy) return;
+    if (autoGenAttempted) return;
+    setAutoGenAttempted(true);
+    void generateSubstrategy("Initial sub-strategy on first app open");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail, appId, appStrategy, autoGenAttempted]);
 
   if (loading) {
     return (
@@ -350,6 +469,25 @@ export default function AppDetailPage() {
           />
         </div>
       ) : null}
+
+      {/* Tier 3.5: per-app sub-strategy panel — sits between the twin
+          surface (above) and the manifest body (below). Read-only spec
+          summary + Regenerate / Promote actions. Renders an empty
+          "generating…" shell when the lazy auto-trigger is in flight. */}
+      <div className="mb-5">
+        <AppStrategyPanel
+          strategy={appStrategy}
+          versions={appStrategyVersions}
+          generating={autoGenAttempted && !appStrategy && !subStrategyError}
+          lastError={subStrategyError}
+          onRegenerate={async (reason) => {
+            await generateSubstrategy(reason);
+          }}
+          onPromoteDraft={async () => {
+            await promoteDraft();
+          }}
+        />
+      </div>
 
       {/* Declarative body — AppRenderer reads config.manifest */}
       <AppRenderer

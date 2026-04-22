@@ -71,10 +71,37 @@ function relativeTime(iso: string): string {
 
 export interface CanvasAIReceiptsProps {
   receipts: UseAIReceipts;
+  /**
+   * Phase 48 — controlled open/close. When `open` is undefined the
+   * component owns state internally (backwards compatible). When
+   * provided, the parent controls visibility — useful when the trigger
+   * lives somewhere else (e.g. the top bar).
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /**
+   * Phase 48 — when true, the component renders the drawer + scrim
+   * only; the floating bottom-left button is omitted. Pair with an
+   * external trigger.
+   */
+  hideTrigger?: boolean;
 }
 
-export function CanvasAIReceipts({ receipts }: CanvasAIReceiptsProps) {
-  const [open, setOpen] = useState(false);
+export function CanvasAIReceipts({
+  receipts,
+  open: controlledOpen,
+  onOpenChange,
+  hideTrigger = false,
+}: CanvasAIReceiptsProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (onOpenChange) onOpenChange(next);
+      else setInternalOpen(next);
+    },
+    [onOpenChange],
+  );
   const { activeCount, receipts: all, dismiss, dismissAll, markUndone } =
     receipts;
   const router = useRouter();
@@ -155,10 +182,13 @@ export function CanvasAIReceipts({ receipts }: CanvasAIReceiptsProps) {
   return (
     <>
       {/* HUD toggle button — bottom-left, above the tool dock. Counter
-          badge appears when unseen receipts exist. */}
+          badge appears when unseen receipts exist.
+          Phase 48: suppressed via `hideTrigger` when a parent renders
+          its own trigger (e.g. inline in the top bar). */}
+      {!hideTrigger && (
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(!open)}
         aria-label={
           activeCount > 0
             ? `${activeCount} AI receipts · open log`
@@ -197,6 +227,7 @@ export function CanvasAIReceipts({ receipts }: CanvasAIReceiptsProps) {
           </span>
         )}
       </button>
+      )}
 
       {/* Drawer — slides from right. Reactor-glass dark panel so it reads
           as the "AI side" of the app, distinct from the light canvas. */}
@@ -243,12 +274,12 @@ export function CanvasAIReceipts({ receipts }: CanvasAIReceiptsProps) {
                   boxShadow: "0 0 14px rgba(167, 139, 250, 0.2)",
                 }}
               >
-                <Activity className="h-4 w-4" style={{ color: "#a78bfa" }} />
+                <Activity className="h-4 w-4" style={{ color: "var(--lab-ghost)" }} />
               </span>
               <div className="min-w-0 flex-1">
                 <div
                   className="text-[8.5px] font-semibold uppercase tracking-[0.2em]"
-                  style={{ color: "#a78bfa" }}
+                  style={{ color: "var(--lab-ghost)" }}
                 >
                   AI Receipts
                 </div>
@@ -276,7 +307,7 @@ export function CanvasAIReceipts({ receipts }: CanvasAIReceiptsProps) {
                 onClick={() => setOpen(false)}
                 aria-label="Close receipts log"
                 title="Close"
-                className="grid h-7 w-7 place-items-center rounded-[3px] border text-[#a8b3c4] transition-colors hover:border-[#f472b6]/40 hover:bg-[#f472b6]/10 hover:text-[#f472b6]"
+                className="grid h-7 w-7 place-items-center rounded-[3px] border text-[var(--lab-text-mid)] transition-colors hover:border-[var(--lab-danger)] hover:bg-[var(--lab-danger-tint)] hover:text-[var(--lab-danger)]"
                 style={{
                   borderColor: "rgba(148, 163, 184, 0.14)",
                   background: "#141b26",
@@ -307,7 +338,7 @@ export function CanvasAIReceipts({ receipts }: CanvasAIReceiptsProps) {
             </div>
 
             <footer
-              className="border-t px-4 py-2 font-mono text-[9px] tracking-[0.12em] text-[#475569]"
+              className="border-t px-4 py-2 font-mono text-[9px] tracking-[0.12em] text-[var(--lab-text-faint)]"
               style={{ borderColor: "rgba(148, 163, 184, 0.08)" }}
             >
               {all.length} total · {activeCount} active · v1 local
@@ -334,6 +365,70 @@ export function CanvasAIReceipts({ receipts }: CanvasAIReceiptsProps) {
         }
       `}</style>
     </>
+  );
+}
+
+/**
+ * Phase 48 — inline trigger component. Small, non-absolute. Designed to
+ * drop into the top bar's right-side pill cluster where Auto-AI, Snap,
+ * and Fullscreen already live.
+ */
+export function AIReceiptsInlineTrigger({
+  receipts,
+  open,
+  onOpenChange,
+}: {
+  receipts: UseAIReceipts;
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+}) {
+  const { activeCount } = receipts;
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenChange(!open)}
+      aria-label={
+        activeCount > 0
+          ? `${activeCount} AI receipts · open log`
+          : "Open AI receipts log"
+      }
+      title={
+        activeCount > 0
+          ? `${activeCount} AI receipt${activeCount === 1 ? "" : "s"} · click to review`
+          : "AI receipts log"
+      }
+      className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11.5px] font-semibold transition-colors"
+      style={{
+        background: open
+          ? "rgba(167, 139, 250, 0.1)"
+          : "transparent",
+        color: open
+          ? "#7c3aed"
+          : activeCount > 0
+            ? "#7c3aed"
+            : "#6b7280",
+        boxShadow: open
+          ? "inset 0 0 0 1px rgba(167, 139, 250, 0.4)"
+          : undefined,
+      }}
+    >
+      <Activity
+        className="h-3 w-3"
+        style={{ color: activeCount > 0 ? "#a78bfa" : undefined }}
+      />
+      Receipts
+      {activeCount > 0 && (
+        <span
+          className="ml-0.5 inline-flex min-w-[14px] items-center justify-center rounded-full px-1 font-mono text-[9px] font-bold text-white"
+          style={{
+            background: "#a78bfa",
+            boxShadow: "0 0 6px rgba(167, 139, 250, 0.5)",
+          }}
+        >
+          {activeCount > 99 ? "99+" : activeCount}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -391,7 +486,7 @@ function ReceiptRow({
               {meta.label}
             </span>
             <span
-              className="font-mono text-[9px] text-[#64748b]"
+              className="font-mono text-[9px] text-[var(--lab-text-dim)]"
               title={new Date(receipt.at).toLocaleString()}
             >
               {relativeTime(receipt.at)}
@@ -424,12 +519,12 @@ function ReceiptRow({
             {receipt.title}
           </div>
           {receipt.detail && (
-            <div className="mt-1 text-[10.5px] leading-relaxed text-[#a8b3c4]">
+            <div className="mt-1 text-[10.5px] leading-relaxed text-[var(--lab-text-mid)]">
               {receipt.detail}
             </div>
           )}
           {receipt.entity_ids.length > 0 && (
-            <div className="mt-2 font-mono text-[9px] text-[#64748b]">
+            <div className="mt-2 font-mono text-[9px] text-[var(--lab-text-dim)]">
               {receipt.entity_ids.length}{" "}
               {receipt.entity_ids.length === 1 ? "entity" : "entities"}{" "}
               affected
@@ -475,7 +570,7 @@ function ReceiptRow({
                 )}
                 {undoing ? "Undoing…" : "Undo"}
               </button>
-              <span className="font-mono text-[8.5px] text-[#475569]">
+              <span className="font-mono text-[8.5px] text-[var(--lab-text-faint)]">
                 removes {receipt.undo_target_ids?.length ?? 0}{" "}
                 {(receipt.undo_target_ids?.length ?? 0) === 1
                   ? "entity"
@@ -490,7 +585,7 @@ function ReceiptRow({
           onClick={onDismiss}
           aria-label="Dismiss receipt"
           title="Dismiss"
-          className="grid h-6 w-6 place-items-center rounded-[3px] text-[#64748b] opacity-0 transition-all group-hover:opacity-100 hover:bg-[#f472b6]/10 hover:text-[#f472b6]"
+          className="grid h-6 w-6 place-items-center rounded-[3px] text-[var(--lab-text-dim)] opacity-0 transition-all group-hover:opacity-100 hover:bg-[var(--lab-danger-tint)] hover:text-[var(--lab-danger)]"
         >
           <X className="h-3 w-3" />
         </button>
@@ -512,7 +607,7 @@ function ReceiptEmpty() {
       >
         <Activity className="h-4 w-4" />
       </span>
-      <div className="text-[13px] font-semibold text-[#e8edf4]">
+      <div className="text-[13px] font-semibold text-[var(--lab-text)]">
         Nothing yet
       </div>
       <div

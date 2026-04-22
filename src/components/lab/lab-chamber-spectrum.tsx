@@ -137,27 +137,27 @@ export function LabChamberSpectrum({ focal, subunits, edges }: LabChamberSpectru
   return (
     <div
       ref={hostRef}
-      className="relative h-full w-full overflow-hidden bg-[#02050a]"
+      className="relative h-full w-full overflow-hidden bg-[var(--lab-bg)]"
     >
       {/* HUD */}
-      <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[#4ade80]/75">
+      <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[var(--lab-accent)]/75">
         <div className="mb-1 flex gap-2.5">
           <span>CHAMBER</span>
-          <b className="font-medium text-[#e8edf4]">REACTOR-01</b>
+          <b className="font-medium text-[var(--lab-text)]">REACTOR-01</b>
         </div>
         <div className="mb-1 flex gap-2.5">
           <span>FIELD</span>
-          <b className="font-medium text-[#e8edf4]">SPECTRUM</b>
+          <b className="font-medium text-[var(--lab-text)]">SPECTRUM</b>
         </div>
         <div className="flex gap-2.5">
           <span>PEAKS</span>
-          <b className="font-medium text-[#e8edf4]">{peaks.length}</b>
+          <b className="font-medium text-[var(--lab-text)]">{peaks.length}</b>
         </div>
       </div>
 
-      <div className="pointer-events-none absolute right-5 top-5 text-right text-[9px] font-mono uppercase tracking-widest text-[#4ade80]/75">
-        <div className="text-[#a8b3c4]">
-          FREQ (Hz) → STRENGTH (%) · <span className="text-[#e8edf4]">{focal.name.length > 32 ? focal.name.slice(0, 32) + "…" : focal.name}</span>
+      <div className="pointer-events-none absolute right-5 top-5 text-right text-[9px] font-mono uppercase tracking-widest text-[var(--lab-accent)]/75">
+        <div className="text-[var(--lab-text-mid)]">
+          FREQ (Hz) → STRENGTH (%) · <span className="text-[var(--lab-text)]">{focal.name.length > 32 ? focal.name.slice(0, 32) + "…" : focal.name}</span>
         </div>
       </div>
 
@@ -328,7 +328,7 @@ export function LabChamberSpectrum({ focal, subunits, edges }: LabChamberSpectru
 
       {peaks.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="rounded-[3px] border border-[#94a3b8]/[0.14] bg-[#10161f] px-4 py-3 text-center text-[11px] text-[#a8b3c4]">
+          <div className="rounded-[3px] border border-[var(--lab-border-strong)] bg-[var(--lab-panel-bg)] px-4 py-3 text-center text-[11px] text-[var(--lab-text-mid)]">
             No peaks yet — decompose this entity (add subunits) or connect it via bonds to synthesize a signature.
           </div>
         </div>

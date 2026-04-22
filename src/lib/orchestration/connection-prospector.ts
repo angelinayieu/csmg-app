@@ -93,14 +93,54 @@ export function selectCandidatePairs(params: {
   /** Entity IDs that have open user questions attached — jump to front of queue.
    *  Connects user intent directly to prospector effort. */
   questionedEntityIds?: Set<string>;
+  /**
+   * Pairs previously examined whose `revisit_required` flag was set
+   * (invalidate-coverage helper flips this when neighborhood topology
+   * changes). These bypass the cooling-off filter and land at the
+   * front of the candidate list so the prospector re-examines them on
+   * the next pass. See supabase/migrations/20260521_pairwise_revisit_required.sql.
+   */
+  revisitPairs?: Array<{ entity_a_id: string; entity_b_id: string }>;
 }): ProspectorCandidate[] {
-  const { entities, edges, recentlyCheckedPairKeys, entitiesToExamine, pairsPerRun, questionedEntityIds } = params;
+  const { entities, edges, recentlyCheckedPairKeys, entitiesToExamine, pairsPerRun, questionedEntityIds, revisitPairs } = params;
   if (entities.length < 2) return [];
 
   // Build existing edge pair-key set (bidirectional)
   const edgePairKeys = new Set<string>();
   for (const e of edges) {
     edgePairKeys.add(canonicalPairKey(e.source_entity_id, e.target_entity_id));
+  }
+
+  // Name lookup for revisit pairs — the caller hands us entity ids
+  // only, but ProspectorCandidate carries names for the LLM prompt.
+  const nameById = new Map<string, string>();
+  for (const e of entities) nameById.set(e.id, e.name);
+
+  const candidates: ProspectorCandidate[] = [];
+  const seenKeys = new Set<string>();
+
+  // ── Revisit-flagged pairs go to the head of the queue ──
+  // These are pairs the invalidation helper marked as stale because
+  // new context (new neighbor entity, new dimension, surprise deviation)
+  // may have flipped the prior verdict. Higher leverage per examine
+  // than a fresh pair because we already know it's borderline.
+  for (const rp of revisitPairs ?? []) {
+    if (rp.entity_a_id === rp.entity_b_id) continue;
+    const key = canonicalPairKey(rp.entity_a_id, rp.entity_b_id);
+    if (seenKeys.has(key)) continue;
+    if (edgePairKeys.has(key)) continue;  // edge now exists → no longer a pair to check
+    const aName = nameById.get(rp.entity_a_id);
+    const bName = nameById.get(rp.entity_b_id);
+    if (!aName || !bName) continue;  // endpoint was deleted
+
+    seenKeys.add(key);
+    candidates.push({
+      entity_a_id: rp.entity_a_id,
+      entity_b_id: rp.entity_b_id,
+      entity_a_name: aName,
+      entity_b_name: bName,
+    });
+    if (candidates.length >= pairsPerRun) return candidates;
   }
 
   // Sort entities by (questioned first) → connection_search_count ASC → last_connection_search_at ASC (null first)
@@ -123,8 +163,6 @@ export function selectCandidatePairs(params: {
   });
 
   const focusEntities = sorted.slice(0, entitiesToExamine);
-  const candidates: ProspectorCandidate[] = [];
-  const seenKeys = new Set<string>();
 
   // For each focus entity, pair it with every other entity (pick diverse partners)
   for (const focus of focusEntities) {

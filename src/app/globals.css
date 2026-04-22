@@ -19,6 +19,387 @@
   --sidebar-width: 272px;
   --sidebar-width-collapsed: 68px;
   --header-height: 56px;
+
+  /* ─── Glass design system (Phase 2A) ─── */
+  /*
+   * Depth-tier design tokens for the Vision-Pro-adjacent surface
+   * language. Four tiers of elevation, each with its own opacity,
+   * blur, hairline, and shadow. Used by <GlassPanel tier="…" /> and
+   * related primitives — no component should hand-roll these values.
+   *
+   *   plate  — flush surfaces (section headers, inline cards)
+   *   card   — standard raised card (drawer rows, item cards)
+   *   float  — primary floating surface (drawer itself, popovers)
+   *   modal  — blocking surface (full dialogs, overlays)
+   *
+   * Light variants use frosted-white glass. Dark theme overrides
+   * below swap to smoke-glass with elevated internals.
+   */
+
+  /* Depth z-layers — for absolute-positioned overlays */
+  --z-plate: 1;
+  --z-card: 10;
+  --z-float: 100;
+  --z-modal: 1000;
+
+  /* Glass surface fills (light mode) */
+  --glass-plate-bg: rgba(255, 255, 255, 0.72);
+  --glass-card-bg: rgba(255, 255, 255, 0.86);
+  --glass-float-bg: rgba(255, 255, 255, 0.92);
+  --glass-modal-bg: rgba(255, 255, 255, 0.96);
+
+  /* Inner hairline (1px white inset — catches light on top edge) */
+  --glass-highlight: rgba(255, 255, 255, 0.8);
+
+  /* Divider colors — stronger = more contrast */
+  --glass-hairline: rgba(15, 23, 42, 0.04);
+  --glass-border: rgba(15, 23, 42, 0.08);
+  --glass-border-strong: rgba(15, 23, 42, 0.14);
+
+  /* Shadows — calibrated so each tier reads as lifted from the next */
+  --shadow-plate: 0 0 0 1px var(--glass-hairline);
+  --shadow-card:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 4px 12px -8px rgba(15, 23, 42, 0.08);
+  --shadow-float:
+    0 2px 4px rgba(15, 23, 42, 0.04),
+    0 12px 32px -16px rgba(15, 23, 42, 0.14);
+  --shadow-modal:
+    0 4px 8px rgba(15, 23, 42, 0.08),
+    0 24px 60px -24px rgba(15, 23, 42, 0.22);
+
+  /* Blur values per tier — stronger at higher elevation = more depth cue */
+  --blur-plate: 8px;
+  --blur-card: 12px;
+  --blur-float: 18px;
+  --blur-modal: 28px;
+
+  /* Accent alpha multipliers for fill/border — paired with any hex
+     accent (e.g. style: `background: color-mix(in srgb, var(--accent) 14%, transparent)`). */
+  --accent-fill-soft: 0.08;
+  --accent-fill-medium: 0.14;
+  --accent-fill-strong: 0.24;
+  --accent-border-soft: 0.18;
+  --accent-border-strong: 0.32;
+
+  /* Motion — spring timings */
+  --ease-spring-soft: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring-tight: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --dur-quick: 120ms;
+  --dur-normal: 220ms;
+  --dur-soft: 360ms;
+}
+
+/* Dark theme glass — smoke glass instead of frost */
+[data-theme="dark"] {
+  --glass-plate-bg: rgba(20, 27, 38, 0.72);
+  --glass-card-bg: rgba(22, 30, 42, 0.86);
+  --glass-float-bg: rgba(24, 32, 46, 0.92);
+  --glass-modal-bg: rgba(26, 35, 50, 0.96);
+  --glass-highlight: rgba(255, 255, 255, 0.06);
+  --glass-hairline: rgba(148, 163, 184, 0.06);
+  --glass-border: rgba(148, 163, 184, 0.12);
+  --glass-border-strong: rgba(148, 163, 184, 0.2);
+}
+
+/* ─── Immersive home surface (Phase 2B → 2C) ─── */
+/*
+ * The canonical home surface now has THREE modes, selected
+ * automatically or explicitly:
+ *
+ *   canvas (default)         — dotted whiteboard. Adapts to theme:
+ *                              white-on-white in light mode, dark
+ *                              dotted canvas in dark mode. Miro /
+ *                              Figma aesthetic.
+ *
+ *   gradient (opt-in)        — deep navy with radial accent glows.
+ *                              Triggered via `?style=gradient` on
+ *                              the URL or by the `mode-gradient`
+ *                              class applied by the component. This
+ *                              is the "showcase" mode — kept around
+ *                              because it reads beautifully but
+ *                              isn't appropriate for the daily
+ *                              surface (too opinionated).
+ *
+ *   (dark mode canvas)       — same as `canvas` but with dark bg +
+ *                              dark smoke glass cards. Triggered by
+ *                              `[data-theme="dark"]` ancestor.
+ *
+ * Chrome colors (keyboard hints, close buttons, the ⌘K pill) go
+ * through `--home-chrome-*` so they flip with the surface without
+ * per-theme hardcoding in components.
+ */
+
+/* ── CANVAS MODE — light default (Miro/Figma whiteboard) ── */
+.immersive-home-surface {
+  --home-bg-base: #fafbfc;
+  --home-bg-dim: #ffffff;
+  --home-dot-color: rgba(15, 23, 42, 0.07);
+  --home-accent-glow: transparent;
+  --home-secondary-glow: transparent;
+
+  --home-text: #0f172a;
+  --home-text-mid: rgba(15, 23, 42, 0.65);
+  --home-text-faint: rgba(15, 23, 42, 0.42);
+
+  /* Chrome (keyboard hints, corner buttons, kbd tags) */
+  --home-chrome-stroke: rgba(15, 23, 42, 0.12);
+  --home-chrome-fill: rgba(15, 23, 42, 0.04);
+  --home-chrome-fill-hover: rgba(15, 23, 42, 0.08);
+  --home-chrome-text: rgba(15, 23, 42, 0.65);
+  --home-chrome-text-hover: #0f172a;
+
+  /* Begin button (high-contrast CTA) */
+  --home-cta-bg: #0f172a;
+  --home-cta-fg: #ffffff;
+  --home-cta-bg-hover: #1e293b;
+
+  /* Glass stays default (frosted white) — GlassPanel's built-in
+     light-mode palette matches the canvas perfectly without any
+     override here. */
+}
+
+/* ── CANVAS MODE — dark theme override ── */
+[data-theme="dark"] .immersive-home-surface {
+  --home-bg-base: #0e1017;
+  --home-bg-dim: #0a0c12;
+  --home-dot-color: rgba(255, 255, 255, 0.06);
+
+  --home-text: #e7ecf5;
+  --home-text-mid: rgba(231, 236, 245, 0.7);
+  --home-text-faint: rgba(231, 236, 245, 0.4);
+
+  --home-chrome-stroke: rgba(255, 255, 255, 0.12);
+  --home-chrome-fill: rgba(255, 255, 255, 0.05);
+  --home-chrome-fill-hover: rgba(255, 255, 255, 0.1);
+  --home-chrome-text: rgba(255, 255, 255, 0.7);
+  --home-chrome-text-hover: #ffffff;
+
+  --home-cta-bg: #ffffff;
+  --home-cta-fg: #0f172a;
+  --home-cta-bg-hover: #e5e7eb;
+
+  /* Dark-mode glass tokens — smoke over the dark canvas */
+  --glass-plate-bg: rgba(23, 27, 44, 0.55);
+  --glass-card-bg: rgba(27, 31, 50, 0.7);
+  --glass-float-bg: rgba(30, 35, 56, 0.78);
+  --glass-modal-bg: rgba(34, 39, 62, 0.88);
+  --glass-highlight: rgba(255, 255, 255, 0.08);
+  --glass-hairline: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-border-strong: rgba(255, 255, 255, 0.16);
+}
+
+/* ── GRADIENT MODE — the original showcase aesthetic (opt-in) ── */
+.immersive-home-surface.mode-gradient {
+  --home-bg-base: #07091a;
+  --home-bg-dim: #040615;
+  --home-accent-glow: rgba(126, 154, 255, 0.22);
+  --home-secondary-glow: rgba(168, 85, 247, 0.14);
+
+  --home-text: #e7ecf5;
+  --home-text-mid: rgba(231, 236, 245, 0.7);
+  --home-text-faint: rgba(231, 236, 245, 0.4);
+
+  --home-chrome-stroke: rgba(255, 255, 255, 0.1);
+  --home-chrome-fill: rgba(255, 255, 255, 0.05);
+  --home-chrome-fill-hover: rgba(255, 255, 255, 0.1);
+  --home-chrome-text: rgba(255, 255, 255, 0.7);
+  --home-chrome-text-hover: #ffffff;
+
+  --home-cta-bg: #ffffff;
+  --home-cta-fg: #07091a;
+  --home-cta-bg-hover: rgba(255, 255, 255, 0.9);
+
+  /* Dark smoke glass to read on the navy gradient */
+  --glass-plate-bg: rgba(23, 27, 44, 0.55);
+  --glass-card-bg: rgba(27, 31, 50, 0.7);
+  --glass-float-bg: rgba(30, 35, 56, 0.78);
+  --glass-modal-bg: rgba(34, 39, 62, 0.88);
+  --glass-highlight: rgba(255, 255, 255, 0.08);
+  --glass-hairline: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-border-strong: rgba(255, 255, 255, 0.16);
+}
+
+/* ── Background renderers ──
+ *
+ * Canvas mode draws an evenly-spaced radial-gradient dot grid on
+ * top of the base color. Gradient mode overrides the background
+ * entirely with the stacked radial + linear gradients.
+ */
+.immersive-home-bg {
+  background-color: var(--home-bg-base);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    var(--home-dot-color) 1px,
+    transparent 0
+  );
+  background-size: 24px 24px;
+}
+
+.immersive-home-surface.mode-gradient .immersive-home-bg {
+  background:
+    radial-gradient(
+      ellipse 80% 60% at 50% 0%,
+      var(--home-accent-glow) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 60% 50% at 100% 100%,
+      var(--home-secondary-glow) 0%,
+      transparent 60%
+    ),
+    linear-gradient(180deg, var(--home-bg-base) 0%, var(--home-bg-dim) 100%);
+}
+
+/* ─── Floating card drift keyframes ─── */
+/*
+ * Seven drift patterns, one per possibility card. Each uses a
+ * unique combination of translate + rotate so the swarm feels
+ * organic rather than mechanical. Durations are intentionally
+ * prime-ish (17/19/21/23/26/29/31s) so periods don't align and
+ * the composition never repeats visibly.
+ */
+@keyframes drift-1 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(-2deg);
+  }
+  50% {
+    transform: translate3d(8px, -12px, 0) rotate(1deg);
+  }
+}
+@keyframes drift-2 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(3deg);
+  }
+  50% {
+    transform: translate3d(-10px, 8px, 0) rotate(-2deg);
+  }
+}
+@keyframes drift-3 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(-1deg);
+  }
+  50% {
+    transform: translate3d(12px, 10px, 0) rotate(2deg);
+  }
+}
+@keyframes drift-4 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(2deg);
+  }
+  50% {
+    transform: translate3d(-14px, -6px, 0) rotate(-3deg);
+  }
+}
+@keyframes drift-5 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(-3deg);
+  }
+  50% {
+    transform: translate3d(10px, -14px, 0) rotate(2deg);
+  }
+}
+@keyframes drift-6 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(1deg);
+  }
+  50% {
+    transform: translate3d(-8px, 12px, 0) rotate(-2deg);
+  }
+}
+@keyframes drift-7 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(-2deg);
+  }
+  50% {
+    transform: translate3d(14px, 6px, 0) rotate(3deg);
+  }
+}
+
+.immersive-card-drift-1 { animation: drift-1 17s ease-in-out infinite; }
+.immersive-card-drift-2 { animation: drift-2 19s ease-in-out infinite; }
+.immersive-card-drift-3 { animation: drift-3 21s ease-in-out infinite; }
+.immersive-card-drift-4 { animation: drift-4 23s ease-in-out infinite; }
+.immersive-card-drift-5 { animation: drift-5 26s ease-in-out infinite; }
+.immersive-card-drift-6 { animation: drift-6 29s ease-in-out infinite; }
+.immersive-card-drift-7 { animation: drift-7 31s ease-in-out infinite; }
+
+/* Ambient pulse on the top accent glow — subtle breath. */
+@keyframes ambient-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.82;
+  }
+}
+
+/* Phase 2H — probability-space-rail "opening…" ellipsis. Three dots
+   stagger their fade in/out so the user sees motion while the
+   axis generator is still warming up. */
+@keyframes fadeInOut {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+/* Ambient pulse — only runs in gradient mode. In canvas mode the
+   background is deliberately calm (a whiteboard, not a stage). */
+.immersive-home-surface.mode-gradient .immersive-home-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 60% 50% at 50% 0%,
+    rgba(126, 154, 255, 0.08) 0%,
+    transparent 70%
+  );
+  animation: ambient-pulse 8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Mount fade-in — whole surface eases from 0 to 1 on first paint so
+   the welcome feels gentle rather than sudden. */
+@keyframes immersive-home-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.immersive-home-enter {
+  animation: immersive-home-enter 640ms var(--ease-spring-tight) both;
+}
+
+/* Respect reduced-motion preference — freeze all drift + pulse */
+@media (prefers-reduced-motion: reduce) {
+  .immersive-card-drift-1,
+  .immersive-card-drift-2,
+  .immersive-card-drift-3,
+  .immersive-card-drift-4,
+  .immersive-card-drift-5,
+  .immersive-card-drift-6,
+  .immersive-card-drift-7,
+  .immersive-home-bg::before,
+  .immersive-home-enter {
+    animation: none !important;
+  }
 }
 
 [data-theme="blue"] {
@@ -34,6 +415,104 @@
   --gradient-name-end: #0a56d6;
   --gradient-page-start: #eef2f8;
   --gradient-page-mid: #f4f7fb;
+}
+
+/* ─── Lab surface variables ─── */
+/*
+ * The Lab chrome (control panels, what-if modal, headers) used to be
+ * hardcoded dark regardless of theme, which felt wrong in the teal/blue
+ * light themes. These semantic variables let each theme supply its own
+ * palette. The Three.js 3D chamber keeps its dark aesthetic (it's a
+ * reactor, meant to look instrumented) — only the chrome switches.
+ *
+ *   --lab-bg             outermost page surface
+ *   --lab-panel-bg       default panel fill
+ *   --lab-panel-raised   cards / dials sitting on a panel
+ *   --lab-panel-inset    input tracks, grooves
+ *   --lab-border         subtle divider
+ *   --lab-border-strong  emphasized divider
+ *   --lab-text           primary copy
+ *   --lab-text-mid       secondary copy
+ *   --lab-text-dim       labels, helper text
+ *   --lab-text-faint     tick marks, axis labels
+ *   --lab-accent         "live" values (positive, green-ish)
+ *   --lab-ghost          "ghost" / what-if values (purple-ish)
+ *   --lab-danger         negative diff / errors
+ *   --lab-warn           warnings (amber)
+ *   --lab-info           informational highlight (theme accent)
+ */
+
+/* Default + teal + blue → light Apple-style Lab */
+:root,
+[data-theme="blue"] {
+  --lab-bg: #F5F7FA;
+  --lab-panel-bg: #FFFFFF;
+  --lab-panel-raised: #F9FAFB;
+  --lab-panel-inset: #F1F3F6;
+  --lab-border: rgba(0, 0, 0, 0.06);
+  --lab-border-strong: rgba(0, 0, 0, 0.12);
+  --lab-text: #1D1D1F;
+  --lab-text-mid: #48484A;
+  --lab-text-dim: #6B7280;
+  --lab-text-faint: #9CA3AF;
+  --lab-accent: #0c8f44;    /* sharp green that reads on white */
+  --lab-ghost: #8B5CF6;
+  --lab-danger: #DC2626;
+  --lab-warn: #D97706;
+  --lab-info: var(--accent-600);
+  /* Tinted versions — used as backgrounds for pills, hover states, and
+     counterfactual ghost fills. Calibrated to stay readable on white. */
+  --lab-accent-tint: rgba(12, 143, 68, 0.1);
+  --lab-accent-tint-strong: rgba(12, 143, 68, 0.18);
+  --lab-ghost-tint: rgba(139, 92, 246, 0.1);
+  --lab-ghost-tint-strong: rgba(139, 92, 246, 0.2);
+  --lab-ghost-border: rgba(139, 92, 246, 0.3);
+  --lab-info-tint: rgba(var(--accent-rgb), 0.1);
+  --lab-info-tint-strong: rgba(var(--accent-rgb), 0.18);
+  --lab-info-border: rgba(var(--accent-rgb), 0.3);
+  --lab-danger-tint: rgba(220, 38, 38, 0.08);
+  --lab-warn-tint: rgba(217, 119, 6, 0.08);
+  /* 3D chamber surface — Three.js reads --lab-chamber-fog-hex as a raw
+     hex literal; the CSS radial gradient uses --lab-chamber-glow-rgb for
+     a subtle accent-tinted center. */
+  --lab-chamber-bg: #EEF2F7;
+  --lab-chamber-fog-hex: #EEF2F7;
+  --lab-chamber-glow-rgb: var(--accent-rgb);
+}
+
+/* Dark theme → Lab keeps the existing dark reactor palette. */
+[data-theme="dark"] {
+  --lab-bg: #02050a;
+  --lab-panel-bg: #10161f;
+  --lab-panel-raised: #141b26;
+  --lab-panel-inset: #06090e;
+  --lab-border: rgba(148, 163, 184, 0.08);
+  --lab-border-strong: rgba(148, 163, 184, 0.2);
+  --lab-text: #e8edf4;
+  --lab-text-mid: #a8b3c4;
+  --lab-text-dim: #64748b;
+  --lab-text-faint: #475569;
+  --lab-accent: #4ade80;
+  --lab-ghost: #a78bfa;
+  --lab-danger: #f472b6;
+  --lab-warn: #fbbf24;
+  --lab-info: #26C6DA;
+  --lab-accent-tint: rgba(74, 222, 128, 0.08);
+  --lab-accent-tint-strong: rgba(74, 222, 128, 0.16);
+  --lab-ghost-tint: rgba(167, 139, 250, 0.06);
+  --lab-ghost-tint-strong: rgba(167, 139, 250, 0.12);
+  --lab-ghost-border: rgba(167, 139, 250, 0.3);
+  --lab-info-tint: rgba(38, 198, 218, 0.06);
+  --lab-info-tint-strong: rgba(38, 198, 218, 0.12);
+  --lab-info-border: rgba(38, 198, 218, 0.3);
+  --lab-danger-tint: rgba(244, 114, 182, 0.08);
+  --lab-warn-tint: rgba(251, 191, 36, 0.08);
+  --lab-chamber-bg: #02050a;
+  --lab-chamber-fog-hex: #02050a;
+  --lab-chamber-glow-rgb: 74, 222, 128;   /* green tint for the reactor glow */
+
+  /* Body surface under dark theme — keep page gradient subtly lit */
+  color-scheme: dark;
 }
 
 /* Tailwind theme — references CSS vars so classes are theme-aware */
@@ -80,6 +559,60 @@ body {
   box-shadow:
     0 8px 32px rgba(var(--accent-rgb), 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+/* Dashboard variant — lifted from .gd-card (was inline in dashboard-overview-grid.tsx).
+   Higher opacity body + soft blue shadow, designed to sit on the animated sphere wash. */
+.glass-card-dashboard {
+  position: relative;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 16px 40px -14px rgba(8, 60, 180, 0.08),
+    0 6px 14px -8px rgba(8, 60, 180, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+  transition: transform 0.3s, background 0.3s, box-shadow 0.3s, border-color 0.3s;
+}
+.glass-card-dashboard::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0) 55%);
+  pointer-events: none;
+}
+.glass-card-dashboard.is-interactive:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 22px 48px -18px rgba(8, 60, 180, 0.12),
+    0 8px 18px -10px rgba(8, 60, 180, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+/* Glass input — blur + soft border, focus ring uses accent token. */
+.glass-input {
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+.glass-input:focus,
+.glass-input:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.78);
+  border-color: var(--accent-400, rgba(0, 81, 255, 0.5));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 0 0 3px rgba(var(--accent-rgb, 0, 81, 255), 0.15);
+}
+.glass-input::placeholder {
+  color: rgba(0, 0, 0, 0.38);
 }
 
 /* Gradient outline button */
@@ -1258,6 +1791,64 @@ body {
   .canvas-drop-burst::after,
   .canvas-drop-ghost,
   .canvas-drop-ghost::after {
+    animation: none;
+  }
+}
+
+/* ── Pulse Bar breathing animations (Tier 8) ──────────────────────────
+   Three variants: fast (analyzing), normal (attention/critical), slow
+   (healthy). Each expands a ring outward from the status dot and fades
+   it, mimicking a heartbeat. Scale deliberately modest (1 → 2) so it
+   reads as "alive" rather than "demanding." Opacity curve is gentle. */
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.55; }
+  70% { transform: scale(1.85); opacity: 0; }
+  100% { transform: scale(1.85); opacity: 0; }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.animate-pulse-ring-fast {
+  animation: pulse-ring 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.animate-pulse-ring-slow {
+  animation: pulse-ring 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Reduced motion — freeze the breathing ring at resting state. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-ring,
+  .animate-pulse-ring-fast,
+  .animate-pulse-ring-slow {
+    animation: none;
+    opacity: 0.25;
+    transform: scale(1);
+  }
+}
+
+/* Slide-down entry for the PulseRecentPanel. Spring-like easing on
+   translateY, subtle scale for depth perception. The shadow arrives
+   last so the panel feels like it "lands" on the page. */
+
+@keyframes pulse-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-pulse-panel-enter {
+  animation: pulse-panel-enter 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-panel-enter {
     animation: none;
   }
 }

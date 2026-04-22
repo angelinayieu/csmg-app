@@ -19,6 +19,9 @@ import { NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage, verifySpaceOwnership } from "@/lib/api-helpers";
 import { llmJSON } from "@/lib/llm";
 import { sanitizeEntity, resilientInsert } from "@/lib/sanitize";
+import { logKnowledgeEvent } from "@/lib/changelog/log-knowledge-event";
+import { emitBatchEvents } from "@/lib/events/structural-event-bus";
+import type { StructuralEvent } from "@/types/pipeline-events";
 
 export const maxDuration = 45;
 
@@ -27,6 +30,12 @@ const MAX_CHILDREN = 3;
 interface RecursiveDecomposeRequest {
   spaceId: string;
   entityId: string;
+  // Phase 52 — when called as part of the auto-advance chain (from
+  // decompose after Pass 2), the caller passes its runId so new
+  // children/edges paint on the live canvas instead of appearing only
+  // on next reload. Optional: direct user clicks on the canvas still
+  // work without a runId.
+  existingRunId?: string;
 }
 
 interface LLMResponse {
@@ -56,7 +65,7 @@ export async function POST(request: Request) {
   const { data: body, error: parseError } = await safeJsonParse<RecursiveDecomposeRequest>(request);
   if (parseError) return parseError;
 
-  const { spaceId, entityId } = body;
+  const { spaceId, entityId, existingRunId } = body;
   if (typeof spaceId !== "string" || typeof entityId !== "string") {
     return NextResponse.json({ error: "spaceId + entityId required" }, { status: 400 });
   }
@@ -226,19 +235,56 @@ must be MORE SPECIFIC than the parent, not a paraphrase of it.`;
       insertedEdges = (edgeData ?? []) as unknown as typeof insertedEdges;
     }
 
-    // Non-blocking changelog
-    db.from("space_changelog")
-      .insert({
-        space_id: spaceId,
-        change_type: "recursive_decompose",
-        summary: `Recursive decompose: +${inserted.length} indicators for ${parent.name}`,
-        details: {
-          parent_entity_id: parent.id,
-          parent_name: parent.name,
-          children_count: inserted.length,
-        },
-      })
-      .then(() => {}, () => {});
+    // Phase 52 — emit live structural events so canvas paints new
+    // proxy indicators in real time (only when called inside an active
+    // pipeline run — direct-from-canvas clicks work fine without).
+    if (existingRunId && inserted.length > 0) {
+      const events: StructuralEvent[] = [];
+      for (const row of inserted) {
+        events.push({
+          type: "entity_added",
+          entityId: row.id,
+          entityCode: row.entity_id,
+          name: row.name,
+          entityCategory: row.entity_category ?? "concrete",
+          importance: "moderate",
+          parentEntityId: parent.id,
+        });
+      }
+      for (const edge of insertedEdges) {
+        events.push({
+          type: "edge_added",
+          edgeId: edge.id,
+          sourceEntityId: edge.source_entity_id,
+          targetEntityId: edge.target_entity_id,
+          relationshipType: edge.relationship_type,
+          dimension: "structural",
+          polarity: "positive",
+          confidence: 0.75,
+        });
+      }
+      if (events.length > 0) {
+        void emitBatchEvents(db, existingRunId, events).catch(() => {});
+      }
+    }
+
+    // Phase 52 — log to unified event stream. This was previously
+    // attempting `change_type: "recursive_decompose"` which is NOT in
+    // the enum and silently failed on every call (the .then swallows
+    // errors). Switched to the unified helper which uses "manual_edit"
+    // + details.subtype — works, and flows through the same consumer
+    // pipeline as reactions/ingests/undos.
+    void logKnowledgeEvent(supabase, {
+      spaceId,
+      subtype: "entity_decomposed",
+      summary: `Decomposed "${parent.name}" → ${inserted.length} proxy indicators`,
+      details: {
+        parent_entity_id: parent.id,
+        parent_name: parent.name,
+        children_count: inserted.length,
+        children_ids: inserted.map((row) => row.id),
+      },
+    });
 
     return NextResponse.json({
       children: inserted.map((row) => ({

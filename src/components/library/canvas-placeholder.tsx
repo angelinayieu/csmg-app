@@ -42,7 +42,7 @@ export function UnivObjPlaceholder({ canvas }: { canvas: Canvas }) {
             className="text-[10px] font-semibold uppercase tracking-widest"
             style={{ color: color.text }}
           >
-            {color.label} canvas
+            {color.label} whiteboard
           </span>
         </div>
 
@@ -56,10 +56,10 @@ export function UnivObjPlaceholder({ canvas }: { canvas: Canvas }) {
         <div className="mt-6 flex items-start gap-3 rounded-xl bg-white/70 p-4">
           <Construction className="h-5 w-5 flex-shrink-0 text-gray-500" />
           <div className="text-sm text-gray-700">
-            The {color.label.toLowerCase()}-level canvas editor lands in Sprint
-            4 (universal canvas as a live weave surface). Until then, this
-            canvas is queued and will open automatically once the editor
-            ships — no migration needed.
+            The {color.label.toLowerCase()}-level whiteboard editor lands in
+            Sprint 4 (universal whiteboard as a live weave surface). Until
+            then, this whiteboard is queued and will open automatically once
+            the editor ships — no migration needed.
           </div>
         </div>
       </div>

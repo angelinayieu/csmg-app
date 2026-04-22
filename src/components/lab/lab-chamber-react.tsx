@@ -137,30 +137,30 @@ export function LabChamberReact({
       }}
     >
       {/* HUD — top-left */}
-      <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[#4ade80]/75">
+      <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[var(--lab-accent)]/75">
         <div className="mb-1 flex gap-2.5">
           <span>CHAMBER</span>
-          <b className="font-medium text-[#e8edf4]">REACTOR-01</b>
+          <b className="font-medium text-[var(--lab-text)]">REACTOR-01</b>
         </div>
         <div className="mb-1 flex gap-2.5">
           <span>FIELD</span>
-          <b className="font-medium text-[#e8edf4]">REACT</b>
+          <b className="font-medium text-[var(--lab-text)]">REACT</b>
         </div>
         <div className="flex gap-2.5">
           <span>SLOTS</span>
-          <b className="font-medium text-[#e8edf4]">
+          <b className="font-medium text-[var(--lab-text)]">
             {tray.length}/{MAX_SLOTS}
           </b>
         </div>
       </div>
 
       {/* ── Palette (left floating panel) ── */}
-      <div className="absolute left-5 top-24 bottom-[180px] w-[200px] overflow-y-auto rounded-[3px] border border-[#94a3b8]/[0.14] bg-[#10161f]/90 p-2 backdrop-blur-sm">
-        <div className="mb-2 text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">
+      <div className="absolute left-5 top-24 bottom-[180px] w-[200px] overflow-y-auto rounded-[3px] border border-[var(--lab-border-strong)] bg-[var(--lab-panel-bg)]/90 p-2 backdrop-blur-sm">
+        <div className="mb-2 text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
           Palette
         </div>
         {palette.length === 0 && (
-          <div className="px-1 text-[10px] italic text-[#475569]">
+          <div className="px-1 text-[10px] italic text-[var(--lab-text-faint)]">
             No reactants available.
           </div>
         )}
@@ -176,7 +176,7 @@ export function LabChamberReact({
                 "mb-1 flex w-full items-center gap-2 rounded-[2px] border px-2 py-1.5 text-left transition-all",
                 picked
                   ? "bg-[#1a222e]"
-                  : "bg-[#141b26] hover:bg-[#1a222e]",
+                  : "bg-[var(--lab-panel-raised)] hover:bg-[var(--lab-panel-raised)]",
               )}
               style={{
                 borderColor: picked ? color : "rgba(148,163,184,0.08)",
@@ -190,10 +190,10 @@ export function LabChamberReact({
                 {symbolOf(e)}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[10.5px] font-medium text-[#e8edf4]">
+                <div className="truncate text-[10.5px] font-medium text-[var(--lab-text)]">
                   {e.name}
                 </div>
-                <div className="mt-0.5 text-[8.5px] text-[#64748b]">
+                <div className="mt-0.5 text-[8.5px] text-[var(--lab-text-dim)]">
                   {isFocal
                     ? "focal"
                     : subunits.includes(e)
@@ -210,11 +210,11 @@ export function LabChamberReact({
 
       {/* ── Reactor tray — center ── */}
       <div className="absolute inset-0 flex flex-col items-center justify-center pb-24">
-        <div className="mb-3 text-[9px] font-semibold uppercase tracking-[0.2em] text-[#64748b]">
+        <div className="mb-3 text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--lab-text-dim)]">
           Reactor Tray
         </div>
 
-        <div className="flex items-center gap-3 rounded-[4px] border border-[#94a3b8]/[0.14] bg-[#06090e]/85 p-3 shadow-[0_0_40px_rgba(74,222,128,0.06)] backdrop-blur-md">
+        <div className="flex items-center gap-3 rounded-[4px] border border-[var(--lab-border-strong)] bg-[var(--lab-panel-inset)]/85 p-3 shadow-[0_0_40px_rgba(74,222,128,0.06)] backdrop-blur-md">
           <div className="flex gap-1.5">
             {Array.from({ length: MAX_SLOTS }).map((_, i) => {
               const id = tray[i];
@@ -243,50 +243,50 @@ export function LabChamberReact({
                       </span>
                       <button
                         onClick={() => toggleReactant(e.id)}
-                        className="absolute -right-1.5 -top-1.5 grid h-4 w-4 place-items-center rounded-full border border-[#94a3b8]/[0.22] bg-[#06090e] text-[9px] text-[#a8b3c4] hover:text-[#e8edf4]"
+                        className="absolute -right-1.5 -top-1.5 grid h-4 w-4 place-items-center rounded-full border border-[var(--lab-border-strong)] bg-[var(--lab-panel-inset)] text-[9px] text-[var(--lab-text-mid)] hover:text-[var(--lab-text)]"
                       >
                         <X className="h-2.5 w-2.5" />
                       </button>
                     </>
                   ) : (
-                    <span className="text-[#475569]">empty</span>
+                    <span className="text-[var(--lab-text-faint)]">empty</span>
                   )}
                 </div>
               );
             })}
           </div>
 
-          <div className="px-1 font-mono text-[20px] font-bold text-[#4ade80]">⟶</div>
+          <div className="px-1 font-mono text-[20px] font-bold text-[var(--lab-accent)]">⟶</div>
 
-          <div className="min-w-[200px] max-w-[280px] border-l border-[#94a3b8]/[0.14] px-3">
-            <div className="text-[8.5px] font-semibold uppercase tracking-[0.14em] text-[#64748b]">
+          <div className="min-w-[200px] max-w-[280px] border-l border-[var(--lab-border-strong)] px-3">
+            <div className="text-[8.5px] font-semibold uppercase tracking-[0.14em] text-[var(--lab-text-dim)]">
               Predicted Product
             </div>
             {combError && (
-              <div className="mt-1 text-[10px] text-[#ef4444]">{combError}</div>
+              <div className="mt-1 text-[10px] text-[var(--lab-danger)]">{combError}</div>
             )}
             {tray.length < 2 && (
-              <div className="mt-1 text-[11px] text-[#475569]">Add 2+ reagents</div>
+              <div className="mt-1 text-[11px] text-[var(--lab-text-faint)]">Add 2+ reagents</div>
             )}
             {tray.length >= 2 && combLoading && (
-              <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[#a8b3c4]">
+              <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--lab-text-mid)]">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 Interpreting…
               </div>
             )}
             {combination && !combLoading && (
               <>
-                <div className="mt-0.5 text-[14px] font-bold leading-tight text-[#4ade80]">
+                <div className="mt-0.5 text-[14px] font-bold leading-tight text-[var(--lab-accent)]">
                   {combination.title}
                 </div>
                 <div className="mt-1 flex items-center gap-1.5 text-[9.5px]">
                   <NoveltyPill kind={combination.novelty} />
-                  <span className="text-[#64748b]">
+                  <span className="text-[var(--lab-text-dim)]">
                     {Math.round(0.7 * 100)}% · est.
                   </span>
                 </div>
                 {combination.implication && (
-                  <div className="mt-1.5 line-clamp-3 text-[10px] leading-relaxed text-[#a8b3c4]">
+                  <div className="mt-1.5 line-clamp-3 text-[10px] leading-relaxed text-[var(--lab-text-mid)]">
                     {combination.implication}
                   </div>
                 )}
@@ -296,9 +296,9 @@ export function LabChamberReact({
                   className={cn(
                     "mt-2 flex w-full items-center justify-center gap-1.5 rounded-[2px] py-1.5 text-[10px] font-semibold transition-colors",
                     isSaved
-                      ? "bg-[#166534]/30 text-[#4ade80]"
+                      ? "bg-[#166534]/30 text-[var(--lab-accent)]"
                       : saving
-                        ? "bg-[#141b26] text-[#64748b]"
+                        ? "bg-[var(--lab-panel-raised)] text-[var(--lab-text-dim)]"
                         : "bg-[#e8edf4] text-[#06090e] hover:bg-white",
                   )}
                   title={
@@ -324,7 +324,7 @@ export function LabChamberReact({
         {tray.length > 0 && (
           <button
             onClick={() => onTrayChange([])}
-            className="mt-3 flex items-center gap-1 rounded-full border border-[#94a3b8]/[0.14] bg-[#141b26] px-2 py-0.5 text-[9px] font-semibold text-[#a8b3c4] hover:text-[#e8edf4]"
+            className="mt-3 flex items-center gap-1 rounded-full border border-[var(--lab-border-strong)] bg-[var(--lab-panel-raised)] px-2 py-0.5 text-[9px] font-semibold text-[var(--lab-text-mid)] hover:text-[var(--lab-text)]"
             title="Clear the tray"
           >
             <Zap className="h-2.5 w-2.5 rotate-180" />

@@ -11,7 +11,7 @@ export default function CreditSuccessPage() {
       </p>
       <div className="mt-6 flex gap-3">
         <Link
-          href="/app/analyze"
+          href="/app/new"
           className="inline-flex items-center rounded-lg bg-interaxis-600 px-6 py-3 text-base font-medium text-white hover:bg-interaxis-700 transition-colors"
         >
           Start Analyzing

@@ -26,6 +26,7 @@
 import { motion } from "framer-motion";
 import { useMemo } from "react";
 import { useSpaceData } from "@/contexts/space-data-context";
+import { useAgents } from "@/lib/hooks/use-agents";
 import type { AppManifest, DataBinding, WidgetInstance } from "@/types/app-manifest";
 import { APP_MANIFEST_SCHEMA_VERSION } from "@/types/app-manifest";
 import { getWidget } from "@/lib/apps/widget-registry";
@@ -90,8 +91,28 @@ const SPACE_INSIGHTS_MANIFEST: AppManifest = {
 
 // ── Component ────────────────────────────────────────────────────────
 
+function prettifyKind(kind: string): string {
+  return kind
+    .split("_")
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
+type AgentStatusLite = "idle" | "queued" | "running" | "paused" | "error" | "retired";
+function statusToContributor(s: AgentStatusLite): ContributorLite["status"] {
+  if (s === "running" || s === "queued") return "running";
+  if (s === "error") return "failed";
+  return s === "idle" ? "idle" : "done";
+}
+
 export function SpaceInsightsStrip() {
   const { space, entities, goalList, activeGoal } = useSpaceData();
+
+  // Shared agents fetch (deduped + polled across all dashboard consumers).
+  // Replaces the prior hardcoded Synthesizer/Critic/Reasoner triplet.
+  const { data: agentsPayload } = useAgents(space?.id);
+  const agentRows = agentsPayload?.agents ?? [];
+  const agentRuns = agentsPayload?.recent_runs ?? [];
 
   // ── Resolver wiring ──
   // Each resolver is a pure function of the space context (closed-over
@@ -175,15 +196,35 @@ export function SpaceInsightsStrip() {
         });
       }
 
-      // Stub agent entries so the widget isn't empty on a fresh space.
-      // A dedicated agents resolver with live agent_runs data lands in
-      // the Tier 3 Experiment Twin work; this is a visually-complete
-      // placeholder until then.
-      contributors.push(
-        { id: "agent:synthesizer", name: "Synthesizer", kind: "agent", role: "Meta-synthesis", status: "idle" },
-        { id: "agent:critic", name: "Critic", kind: "agent", role: "Quality review", status: "idle" },
-        { id: "agent:reasoner", name: "Reasoner", kind: "agent", role: "Deep reasoning", status: "idle" },
-      );
+      // Real agents from /api/agents (replaces the prior hardcoded triplet).
+      // Skips retired agents. Sorts running first, then by last_run_at desc.
+      const lastRunByAgent = new Map<string, string>();
+      for (const r of agentRuns) {
+        const prior = lastRunByAgent.get(r.agent_id);
+        if (!prior || new Date(r.started_at) > new Date(prior)) {
+          lastRunByAgent.set(r.agent_id, r.started_at);
+        }
+      }
+
+      const agentContribs = agentRows
+        .filter((a) => a.status !== "retired")
+        .map<ContributorLite>((a) => ({
+          id: `agent:${a.id}`,
+          name: a.display_name ?? prettifyKind(a.kind),
+          kind: "agent",
+          role: prettifyKind(a.kind),
+          status: statusToContributor(a.status),
+          last_active_at: a.last_run_at ?? lastRunByAgent.get(a.id) ?? null,
+        }))
+        .sort((a, b) => {
+          if (a.status === "running" && b.status !== "running") return -1;
+          if (b.status === "running" && a.status !== "running") return 1;
+          const ta = a.last_active_at ? new Date(a.last_active_at).getTime() : 0;
+          const tb = b.last_active_at ? new Date(b.last_active_at).getTime() : 0;
+          return tb - ta;
+        });
+
+      contributors.push(...agentContribs);
 
       return contributors;
     };
@@ -193,7 +234,7 @@ export function SpaceInsightsStrip() {
       kg_top_insights: kg_top_insights_resolver,
       contributors: contributors_resolver,
     };
-  }, [space, entities.length, goalList, activeGoal]);
+  }, [space, entities.length, goalList, activeGoal, agentRows, agentRuns]);
 
   // ── Pseudo-App for WidgetRenderContext.app ──
   // Some widget contracts read app.state / app.config fields via the

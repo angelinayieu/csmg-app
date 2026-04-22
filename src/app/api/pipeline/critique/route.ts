@@ -12,6 +12,8 @@ import {
   type MergeableCritiqueResult,
 } from "@/lib/pipeline/critique-clustering";
 import { beginRouteAgent } from "@/lib/agents/instrument-route";
+import { recordAgentFinding } from "@/lib/agents/finding-recorder";
+import { invalidateCoverageForNewEntities } from "@/lib/kg/invalidate-coverage";
 
 export const maxDuration = 120;
 
@@ -405,6 +407,33 @@ export async function POST(request: Request) {
     if (newEdgeRows.length > 0) {
       const { inserted } = await resilientInsert(db, "edges", newEdgeRows, "id");
       addedEdges = inserted;
+
+      // Phase 1 Step 6 — critique just introduced new edges that
+      // weren't in the prior graph. Pairs whose endpoints are in the
+      // 1-hop neighborhood of these new edges should get revisit flags
+      // (dimension_uncovered: a relationship critique found suggests a
+      // dimension the prospector missed on its last pass). Soft-fail.
+      try {
+        const touchedEntityUuids = new Set<string>();
+        for (const edgeRow of newEdgeRows) {
+          touchedEntityUuids.add(edgeRow.source_entity_id);
+          touchedEntityUuids.add(edgeRow.target_entity_id);
+        }
+        if (touchedEntityUuids.size > 0) {
+          const invalidation = await invalidateCoverageForNewEntities(db, {
+            spaceId,
+            newEntityIds: Array.from(touchedEntityUuids),
+            reason: "dimension_uncovered",
+          });
+          if (invalidation.flagged > 0) {
+            console.log(
+              `[critique] invalidated ${invalidation.flagged} pair checks (dimension_uncovered) across ${invalidation.neighborCount} neighbors`,
+            );
+          }
+        }
+      } catch (invErr) {
+        console.warn("[critique] coverage invalidation failed (non-fatal):", invErr);
+      }
     }
 
     // ── Insert missed cycles ──
@@ -625,6 +654,58 @@ export async function POST(request: Request) {
 
     // Refresh sidebar counts
     await refreshSpaceCounts(db, [spaceId]);
+
+    // ── Wave D L3.3 — agent write-back ──
+    // Per-violation findings (severity 'notable' — each is a concrete review
+    // target). Cap at 10 to avoid feed flooding if the critic goes wild; the
+    // changelog row + space_changelog summary carries the full aggregate.
+    const violations = result.relationship_violations ?? [];
+    for (const v of violations.slice(0, 10)) {
+      // Resolve the violation's edge back to a ref_id so the finding has
+      // somewhere to point. Edge format is "source_id → target_id".
+      const parts = v.edge.split("→").map((s) => s.trim());
+      const srcUuid = parts.length === 2 ? entityIdToUuid.get(parts[0]) : undefined;
+      await recordAgentFinding(db, {
+        user_id: user.id,
+        space_id: spaceId,
+        agent_run_id: agent.runId ?? undefined,
+        finding_kind: "contradiction_found",
+        summary: `Contradiction in graph: ${v.rule_violated} — ${v.edge}`,
+        rationale: `${v.explanation}\n\nSuggested correction: ${v.suggested_correction}`,
+        severity: "notable",
+        ref_kind: srcUuid ? "entity" : null,
+        ref_id: srcUuid ?? null,
+        confidence: 0.7,
+        payload: {
+          edge: v.edge,
+          rule_violated: v.rule_violated,
+          suggested_correction: v.suggested_correction,
+        },
+      });
+    }
+
+    // Aggregate density-risk finding if the critic flagged the graph as sparse.
+    if (result.density_assessment?.sufficient === false) {
+      await recordAgentFinding(db, {
+        user_id: user.id,
+        space_id: spaceId,
+        agent_run_id: agent.runId ?? undefined,
+        finding_kind: "risk_flagged",
+        summary: `Graph density below threshold (${(result.density_assessment.current_density ?? 0).toFixed(2)}x) — ~${result.density_assessment.estimated_missing_edges ?? 0} edges likely missing.`,
+        rationale: (result.density_assessment.sparse_areas ?? []).length > 0
+          ? `Sparse areas: ${(result.density_assessment.sparse_areas ?? []).join(", ")}.`
+          : undefined,
+        severity: "notable",
+        ref_kind: "space",
+        ref_id: spaceId,
+        confidence: 0.65,
+        payload: {
+          current_density: result.density_assessment.current_density,
+          estimated_missing_edges: result.density_assessment.estimated_missing_edges,
+          sparse_areas: result.density_assessment.sparse_areas,
+        },
+      });
+    }
 
     await agent.complete({
       findingsCount: addedEdges + addedCycles + (result.relationship_violations ?? []).length,

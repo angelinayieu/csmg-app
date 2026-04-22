@@ -18,6 +18,18 @@ import type {
   StrategicRecommendation,
   RankedStrategy,
 } from "@/types/strategy";
+import {
+  startPipelineRun,
+  emitStructuralEvent,
+  emitBatchEvents,
+  completePipelineRun,
+} from "@/lib/events/structural-event-bus";
+import type { StructuralEvent } from "@/types/pipeline-events";
+import {
+  loadLatestSpaceAxisIndex,
+  resolveAxesForNames,
+  runLevelAxes,
+} from "@/lib/pipeline/axes-used-resolver";
 
 export const maxDuration = 120;
 
@@ -111,7 +123,24 @@ export async function POST(request: Request) {
     /* snapshot table is the audit trail; missing rows shouldn't block generation */
   }
 
+  // Structural event bus — track this run so the canvas HUD shows the
+  // "Materializing apps…" stage and proposal_ready flashes per app that
+  // lands. Scoped outside try so catch can mark it failed.
+  let pipelineRunId: string | null = null;
+
   try {
+    pipelineRunId = await startPipelineRun(db, {
+      spaceId,
+      userId: user.id,
+      pipeline: "generate_apps",
+    });
+    await emitStructuralEvent(db, pipelineRunId, {
+      type: "stage_boundary",
+      stage: "lab",
+      phase: "enter",
+      message: "Materializing apps…",
+    });
+
     const result = await generateAppsAndInterventions({
       spaceId,
       userId: user.id,
@@ -123,6 +152,62 @@ export async function POST(request: Request) {
       db,
       triggeredBy: triggeredBy ?? "pipeline:generate-apps",
     });
+
+    // Canvas HUD: fetch the apps this run produced so we can emit a
+    // proposal_ready per materialized app. The generator writes rows
+    // immediately; filtering by recent updated_at is cheap and correct.
+    try {
+      const runStartIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const { data: recentApps } = await db
+        .from("apps")
+        .select("id, name, app_type, dominant_entity_ids, dominant_entity_codes")
+        .eq("space_id", spaceId)
+        .gte("updated_at", runStartIso)
+        .limit(20);
+      const appRows = (recentApps ?? []) as Array<{
+        id: string;
+        name: string;
+        app_type: string | null;
+        dominant_entity_ids: string[] | null;
+        dominant_entity_codes: string[] | null;
+      }>;
+
+      // PR 5 — resolve axes_used for each app. Apps persist their
+      // `dominant_entity_ids` (UUIDs into the entities table);
+      // resolve those to names + match against the latest axis
+      // index for this space. The axis events were emitted by the
+      // upstream decompose/synthesize run, NOT this generate-apps
+      // run, so we use loadLatestSpaceAxisIndex which finds the
+      // most recent run with axis coverage for this space.
+      const axisIndex = await loadLatestSpaceAxisIndex(db, spaceId);
+      const spaceRunAxes = runLevelAxes(axisIndex);
+      const entityIdToName = new Map<string, string>();
+      for (const e of entities) {
+        if (e.id && e.name) entityIdToName.set(e.id, e.name);
+      }
+
+      const appEvents: StructuralEvent[] = appRows.map((a) => {
+        const names: string[] = [];
+        for (const id of a.dominant_entity_ids ?? []) {
+          const n = entityIdToName.get(id);
+          if (n) names.push(n);
+        }
+        const perAppAxes = resolveAxesForNames(names, axisIndex);
+        const axesUsed = perAppAxes.length > 0 ? perAppAxes : spaceRunAxes;
+        return {
+          type: "proposal_ready",
+          proposalId: a.id,
+          kind: "experiment",
+          title: (a.name ?? "App").slice(0, 200),
+          ...(axesUsed.length > 0 ? { axes_used: axesUsed } : {}),
+        };
+      });
+      if (appEvents.length > 0) {
+        await emitBatchEvents(db, pipelineRunId, appEvents);
+      }
+    } catch (emitErr) {
+      console.warn("[generate-apps] proposal_ready emit failed (non-critical):", emitErr);
+    }
 
     // Changelog — soft-fail.
     try {
@@ -144,9 +229,24 @@ export async function POST(request: Request) {
       console.warn("[generate-apps] changelog insert failed:", logErr);
     }
 
-    return NextResponse.json({ success: true, ...result });
+    await emitStructuralEvent(db, pipelineRunId, {
+      type: "stage_boundary",
+      stage: "lab",
+      phase: "exit",
+    });
+    await completePipelineRun(db, pipelineRunId, "completed");
+
+    return NextResponse.json({ success: true, runId: pipelineRunId, ...result });
   } catch (err) {
     console.error("[generate-apps] Failed:", err);
+    await completePipelineRun(
+      db,
+      pipelineRunId,
+      "failed",
+      err instanceof Error ? err.message : String(err),
+    ).catch((finalizeErr) => {
+      console.warn("[generate-apps] completePipelineRun(failed) threw:", finalizeErr);
+    });
     return NextResponse.json(
       {
         error: `App generation failed: ${sanitizeErrorMessage(err)}`,

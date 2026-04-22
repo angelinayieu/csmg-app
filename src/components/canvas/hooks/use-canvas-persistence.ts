@@ -80,7 +80,7 @@ export function useCanvasPersistence(
   useEffect(() => {
     if (!editor) return;
 
-    const save = async () => {
+    const save = async (retriesLeft = 2) => {
       const snapshot = getSnapshot(editor.store);
 
       // Local mirror first (cheap, sync)
@@ -105,7 +105,23 @@ export function useCanvasPersistence(
         setStatus("saved");
       } catch (err) {
         if ((err as { name?: string }).name === "AbortError") return;
-        console.warn("[canvas] server save failed", err);
+        // Transient-failure retry with short backoff. Fresh-space
+        // races (read-after-write lag on the space row, brief
+        // auth-refresh pauses) commonly self-heal within a second or
+        // two — the previous behavior flashed "Save failed" on the
+        // topbar and left users staring at it. Silent retry 2x before
+        // committing to the error badge.
+        if (retriesLeft > 0) {
+          const delayMs = retriesLeft === 2 ? 800 : 2400;
+          setTimeout(() => {
+            // Skip retry if the component has already torn down or a
+            // newer save is in flight.
+            if (inflightRef.current !== ctrl) return;
+            void save(retriesLeft - 1);
+          }, delayMs);
+          return;
+        }
+        console.warn("[canvas] server save failed after retries", err);
         setStatus("error");
       }
     };
@@ -113,7 +129,7 @@ export function useCanvasPersistence(
     const unsub = editor.store.listen(
       () => {
         if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(save, DEBOUNCE_MS);
+        timerRef.current = setTimeout(() => save(2), DEBOUNCE_MS);
       },
       { scope: "document", source: "user" },
     );

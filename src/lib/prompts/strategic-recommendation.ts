@@ -1,4 +1,11 @@
-import type { SynthesisData } from "@/types/synthesis";
+import type {
+  SynthesisData,
+  Axiom,
+  AssumptionInversion,
+  InsightConvergence,
+  StrategyCoverageAudit,
+  HiddenSignalData,
+} from "@/types/synthesis";
 import type { ImprovementGoal, SuggestedObjective, ObjectiveBenchmark } from "@/types/goals";
 
 /**
@@ -60,6 +67,37 @@ export interface StrategyPipelineContext {
     priority: "critical" | "high" | "medium";
     why_it_matters: string;
   }>;
+
+  // ── Comprehensive-grounding fields (Phase 1 of strategy rework) ──
+  // These are the high-leverage findings the upstream pipeline produces that the
+  // strategy must respect. Previously they lived in synthesis_data but were never
+  // extracted into this context, so the strategic-recommendation prompt never
+  // saw them. Now explicitly surfaced so the prompt can ground against them.
+
+  /** Tier 7 load-bearing axioms — the assumptions the whole analysis rests on */
+  axioms?: Axiom[];
+  /** Assumption inversions — contrarian readings of axioms/leverage/risk/bottleneck */
+  assumptionInversions?: AssumptionInversion[];
+  /** Insight convergence clusters — cross-mechanism high-trust findings (distinct from graph-category convergences) */
+  insightConvergences?: InsightConvergence[];
+  /** Strategy coverage audit — what % of critical findings the existing action plan addresses */
+  strategyCoverage?: StrategyCoverageAudit;
+  /** Mini-axioms emitted by whiteboard expansions of individual entities */
+  expansionAxioms?: SynthesisData["expansion_axioms"];
+  /** Orphan compounding/exponential edges flagged as candidate untraced feedback loops */
+  candidateCycles?: SynthesisData["candidate_cycles"];
+  /** Hidden signals — unfiltered (caller chooses what to surface); replaces the trajectory_impact≥6 pre-filter */
+  hiddenSignalsFull?: HiddenSignalData[];
+  /** When true, strategy generation must enforce axiom respect + coverage gate + inversion stress-test */
+  comprehensiveMode?: boolean;
+  /**
+   * Optional user-provided natural-language constraint for conversational
+   * iteration. Examples: "emphasize risk mitigation", "exclude expensive options",
+   * "prefer fast wins", "treat X as fixed, not a variable".
+   * Surfaces as an explicit USER CONSTRAINT block in the prompt so the LLM
+   * honors it on top of all other grounding.
+   */
+  userConstraint?: string;
 }
 
 /**
@@ -112,6 +150,56 @@ CRITICAL RULES:
 - If QUALITY FLAGS from previous synthesis exist, explicitly avoid those weaknesses
 - temporal_phases must show when each feedback loop activates — a strategy without dynamics timing is not a strategy
 
+COMPREHENSIVE GROUNDING (mandatory when the corresponding context is provided):
+
+1. AXIOMS — When the context includes "LOAD-BEARING AXIOMS", these are assumptions the entire analysis rests on. Each axiom has:
+   • axiom_id (A1, A2, ...) — use this to reference it
+   • visibility: "EXPLICIT" (user stated it) / "IMPLICIT" (derivable) / "HIDDEN" (required but never surfaced — MOST DANGEROUS)
+   • load_bearing: "critical" / "important" / "moderate"
+   • claim + if_false — what fails if the axiom is wrong
+   MANDATORY BEHAVIOR:
+   • You MUST respect every CRITICAL axiom. A strategy that silently violates a critical axiom is INCOHERENT — do not produce one.
+   • For each HIDDEN critical axiom, the strategy MUST either (a) incorporate it as a validated premise with explicit acknowledgement, or (b) include a validation step in the first temporal_phase that tests whether the axiom holds before committing resources.
+   • Never silently contradict an axiom. If your recommended posture conflicts with one, surface the conflict in strategic_diagnosis (or guiding_policy.strategic_logic).
+   • Every micro_tactic and perspective MUST populate axiom_ids_respected (array of axiom IDs the tactic honors) and axiom_ids_challenged (axioms the tactic tests or deliberately challenges). Empty arrays are valid; fabricated IDs are not — only reference axioms from the provided list.
+
+2. COVERAGE AUDIT — When the context includes "STRATEGY COVERAGE AUDIT", this measures what % of critical/hidden findings the previous action plan addresses, plus the list of gaps (uncovered findings).
+   MANDATORY BEHAVIOR:
+   • If overall_coverage < 60%, your strategy MUST close at least half of the listed gaps. Reference the gap labels directly in guiding_policy.strategic_logic.
+   • Every coverage_gap_ids_closed array on a micro_tactic must list ONLY gap IDs from the provided list.
+   • Do NOT invent new gaps. Do NOT claim to close gaps that aren't listed.
+   • If a gap cannot be closed in this strategy iteration, explicitly acknowledge it in pre_mortem or the first temporal_phase.
+
+3. INSIGHT CONVERGENCES — When the context includes "INSIGHT CONVERGENCES", these are cross-mechanism clusters where multiple independent signals flag the same concern. They carry:
+   • cluster_id (conv:1, conv:2, ...)
+   • strength: "strong" (4+ distinct signal types) / "moderate" / "weak"
+   • has_hidden_axiom: true/false — when true, this is the HIGHEST-TRUST finding available
+   • signal_count + distinct_type_count + concern_label
+   MANDATORY BEHAVIOR:
+   • Every STRONG convergence MUST be reflected somewhere in the strategy (primary perspective, micro_tactic, or guiding_policy).
+   • Convergences with has_hidden_axiom=true get DOUBLE WEIGHT — they confirm load-bearing assumptions the user never stated; these represent the most reliable findings in the analysis.
+   • micro_tactic.convergence_ids_addressed MUST list the cluster IDs the tactic responds to.
+
+4. ASSUMPTION INVERSIONS — When the context includes "ASSUMPTION INVERSIONS", these are contrarian readings of axioms / leverage points / risks / bottleneck. Each has a plausibility:
+   • "more_likely_than_stated" — the inversion may actually be closer to truth
+   • "coin_flip" — genuinely 50/50
+   • "unlikely_but_consequential" — unlikely but would restructure the analysis if true
+   MANDATORY BEHAVIOR:
+   • For every inversion with plausibility="coin_flip", include at least one concrete test in the early-phase action plan that would disconfirm the current assumption before committing expensive resources.
+   • micro_tactic.inversion_ids_tested MUST list any inversions the tactic addresses.
+   • If an inversion targets an axiom and is marked "coin_flip", the strategy MUST NOT commit irreversibly to actions that depend on the original (un-inverted) axiom being true — hedge with parallel tests.
+
+5. HIDDEN SIGNALS — When the context includes "HIDDEN SIGNALS", these are latent mediating variables research identified. Each micro_tactic that responds to a hidden signal must have the signal slug in its hidden_signal_refs array.
+
+PROVENANCE FIELDS (MANDATORY on every micro_tactic and every strategy perspective):
+- axiom_ids_respected: string[] — axiom IDs this tactic/perspective respects (does not violate)
+- axiom_ids_challenged: string[] — axiom IDs this tactic/perspective deliberately tests or challenges
+- convergence_ids_addressed: string[] — insight-convergence cluster IDs this tactic/perspective addresses
+- coverage_gap_ids_closed: string[] — gap IDs (from strategy_coverage.gaps) this tactic closes
+- inversion_ids_tested: string[] — inversion indices this tactic actively tests
+
+These are NOT optional. Return empty arrays if a tactic genuinely has no upstream references — but the total provenance across all tactics must cover every CRITICAL axiom, every STRONG convergence, and at least 50% of coverage gaps. If it can't, the strategy is not comprehensive enough; reduce the scope or surface the incompleteness in guiding_policy.
+
 Return ONLY valid JSON. Your top-level response MUST be a wrapper object containing a "ranked_strategies" array. Each element in ranked_strategies contains a full recommendation object plus ranking metadata and infrastructure proposals.
 
 TOP-LEVEL WRAPPER (always return this):
@@ -131,6 +219,8 @@ TOP-LEVEL WRAPPER (always return this):
 RECOMMENDATION_SCHEMA (one per ranked strategy):
 {
   "title": "string — 3-6 word strategy name",
+  "headline": "string — ONE short present-tense imperative sentence. Plain language. No jargon, no entity codes (no 'C3', no 'edge E12→E7'), no rigor machinery. This is what a founder or operator would read on a card and immediately know what to do. Examples: 'Ship a single retention intervention before adding acquisition spend.' or 'Lock the pricing and test message-market fit in two niches.' or 'Cut the approval chain from five steps to two.' BAD: 'Tighten the C3→C7 causal loop.' That belongs in reasoning_chain.",
+  "reasoning_chain": "string — 2-4 sentences. This is where the rigor lives. Reference specific entity codes (C1, X2), edge dynamics (causal/compounding/threshold), polarity (negative/positive), confidence numbers, cycle membership, simulation distributions, evidence quality. This is tucked into an expandable section, so write for the reader who wants to audit the thinking. Example: 'Tighten the C3 (Customer Churn) → C7 (MRR) loop — the edge is causal, negative-polarity, compounding dynamics at 0.82 confidence, and C3 is flagged as the master bottleneck. Evidence from user interviews (empirical, 0.9 conf) indicates the pricing change on 2026-03-01 triggered the spike. Reversibility=costly, so a targeted intervention is lower-risk than new acquisition.' — headline is the WHAT, reasoning_chain is the WHY.",
   "strategic_posture": "aggressive_growth | cautious_validation | pivot_exploration | consolidation | defensive",
   "confidence": number 0-100,
   "summary": "string — 2-3 sentences: the system design, why this architecture, what dynamics drive it",
@@ -718,6 +808,86 @@ Reasoning: ${mb.reasoning?.join(" | ") ?? "none"}${mb.counterfactual_unlock ? `\
         .sort((a, b) => b.structural_value - a.structural_value)
         .map((c) => `  [${c.depth}] ${c.shared_element_name}: ${c.converging_branches} branches converge (structural value: ${(c.structural_value * 100).toFixed(0)}%) \u2014 ${c.explanation}`);
       parts.push(`CONVERGENCE INSIGHTS (cross-category leverage \u2014 deeper tiers = rarer, higher-impact. L4=invariant > L3=logic > L2=method > L1=outcome. Acting on high-depth convergences moves multiple domains at once):\n${convLines.join("\n")}`);
+    }
+
+    // ── Comprehensive grounding: axioms, coverage, insight convergences, inversions ──
+    // These populate when the upstream pipeline produced them (decompose Tier 7 for
+    // axioms, synthesize for the rest). The prompt above references these blocks
+    // and demands the strategy respect them.
+
+    if (pipelineContext.axioms?.length) {
+      const lines = pipelineContext.axioms.map((ax) => {
+        const visTag = ax.visibility === "HIDDEN" ? "HIDDEN⚠" : ax.visibility;
+        const rests = ax.rests_on?.length ? ` [rests on: ${ax.rests_on.slice(0, 4).join(", ")}]` : "";
+        return `  ${ax.axiom_id} [${visTag} · ${ax.load_bearing} · scope=${ax.scope}]: "${ax.claim}"${rests}${ax.if_false ? `\n      IF FALSE: ${ax.if_false}` : ""}${ax.validation_path ? `\n      TEST: ${ax.validation_path}` : ""}`;
+      });
+      const hiddenCount = pipelineContext.axioms.filter((a) => a.visibility === "HIDDEN").length;
+      const criticalCount = pipelineContext.axioms.filter((a) => a.load_bearing === "critical").length;
+      parts.push(
+        `LOAD-BEARING AXIOMS (${pipelineContext.axioms.length} total, ${hiddenCount} HIDDEN, ${criticalCount} critical) \u2014 the entire analysis rests on these. Strategy MUST respect every CRITICAL axiom and acknowledge every HIDDEN one. Reference these axiom IDs in tactic.axiom_ids_respected / axiom_ids_challenged fields:\n${lines.join("\n")}`,
+      );
+    }
+
+    if (pipelineContext.strategyCoverage) {
+      const cov = pipelineContext.strategyCoverage;
+      const gapLines = cov.gaps.slice(0, 20).map((g) =>
+        `  ${g.id} [${g.kind.replace(/_/g, " ")}]: "${g.label}" \u2014 ${g.why_important}`,
+      );
+      parts.push(
+        `STRATEGY COVERAGE AUDIT (overall: ${cov.overall_coverage}% \u2014 measures whether the existing action plan addresses all critical findings):\n  Critical axioms: ${cov.addressed_counts.critical_axioms}/${cov.totals.critical_axioms} addressed\n  Hidden axioms: ${cov.addressed_counts.hidden_axioms}/${cov.totals.hidden_axioms} addressed\n  Critical risks: ${cov.addressed_counts.critical_risks}/${cov.totals.critical_risks} addressed\n  High-impact signals: ${cov.addressed_counts.high_impact_signals}/${cov.totals.high_impact_signals} addressed\n${cov.gaps.length > 0 ? `\n  UNCOVERED FINDINGS (close at least half of these in your strategy):\n${gapLines.join("\n")}` : ""}`,
+      );
+    }
+
+    if (pipelineContext.insightConvergences?.length) {
+      const sorted = pipelineContext.insightConvergences
+        .slice()
+        .sort((a, b) => {
+          const rank = { strong: 3, moderate: 2, weak: 1 } as const;
+          if (a.strength !== b.strength) return rank[b.strength] - rank[a.strength];
+          if (a.has_hidden_axiom !== b.has_hidden_axiom) return a.has_hidden_axiom ? -1 : 1;
+          return b.signal_count - a.signal_count;
+        });
+      const icLines = sorted.map((c) => {
+        const hiddenTag = c.has_hidden_axiom ? " ⟡ hidden-axiom" : "";
+        return `  ${c.cluster_id} [${c.strength}${hiddenTag} · ${c.signal_count} signals, ${c.distinct_type_count} types]: "${c.concern_label}"${c.shared_entity_ids.length > 0 ? ` [entities: ${c.shared_entity_ids.slice(0, 4).join(", ")}]` : ""}`;
+      });
+      const strongCount = pipelineContext.insightConvergences.filter((c) => c.strength === "strong").length;
+      const hiddenAxiomCount = pipelineContext.insightConvergences.filter((c) => c.has_hidden_axiom).length;
+      parts.push(
+        `INSIGHT CONVERGENCES (${pipelineContext.insightConvergences.length} clusters, ${strongCount} STRONG, ${hiddenAxiomCount} involving hidden axioms) \u2014 cross-mechanism high-trust findings. Every STRONG convergence MUST be reflected in the strategy. Clusters with hidden-axiom involvement are the most reliable findings in the analysis. Reference cluster IDs in tactic.convergence_ids_addressed:\n${icLines.join("\n")}`,
+      );
+    }
+
+    if (pipelineContext.assumptionInversions?.length) {
+      const invLines = pipelineContext.assumptionInversions.map((inv, i) => {
+        const label = inv.target_type === "axiom" ? `axiom ${inv.target_entity_id}` : `${inv.target_type.replace(/_/g, " ")} ${inv.target_entity_id}`;
+        return `  inv${i} [plausibility=${inv.plausibility}, target=${label}]: "${inv.inverted_claim}"\n      Test: ${inv.test}`;
+      });
+      const coinFlipCount = pipelineContext.assumptionInversions.filter((i) => i.plausibility === "coin_flip").length;
+      parts.push(
+        `ASSUMPTION INVERSIONS (${pipelineContext.assumptionInversions.length} total, ${coinFlipCount} coin-flip) \u2014 contrarian readings that stress-test the analysis. For every coin-flip inversion, include a cheap disconfirming test in the early action plan before committing irreversibly. Reference inversion indices in tactic.inversion_ids_tested:\n${invLines.join("\n")}`,
+      );
+    }
+
+    if (pipelineContext.candidateCycles?.length) {
+      const ccLines = pipelineContext.candidateCycles.slice(0, 6).map((c) =>
+        `  ${c.edge.source} → ${c.edge.target} [${c.edge.dynamics}]: ${c.reason}`,
+      );
+      parts.push(
+        `CANDIDATE FEEDBACK LOOPS (edges with compounding/exponential dynamics not traced as cycles \u2014 likely untraced feedback loops worth investigating):\n${ccLines.join("\n")}`,
+      );
+    }
+
+    if (pipelineContext.comprehensiveMode) {
+      parts.push(
+        `═══ COMPREHENSIVE MODE ENGAGED ═══\nThe user selected comprehensive tier. Apply the strictest interpretation of the COMPREHENSIVE GROUNDING rules. The strategy MUST include axiom_ids_respected / convergence_ids_addressed / coverage_gap_ids_closed / inversion_ids_tested fields on every tactic and perspective. If the upstream context cannot support a fully-grounded strategy (missing axioms, no convergences, etc.), say so explicitly in strategic_diagnosis rather than producing an ungrounded strategy.`,
+      );
+    }
+
+    if (pipelineContext.userConstraint && pipelineContext.userConstraint.trim().length > 0) {
+      parts.push(
+        `═══ USER CONSTRAINT (iterative refinement) ═══\nThe user is iterating on a prior version of this strategy. Apply the following constraint on top of all other grounding — treat it as a hard preference unless it directly contradicts a CRITICAL axiom:\n\n"${pipelineContext.userConstraint.trim()}"\n\nIn your strategic_diagnosis, briefly acknowledge how the constraint shaped the recommendation (which options were narrowed, which trade-offs it forced).`,
+      );
     }
 
     if (pipelineContext.previousQualityFlags?.length) {

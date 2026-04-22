@@ -82,7 +82,49 @@ export interface ProbabilitySpace {
   };
   /** Strategy layer relevance — which L1-L4 layers this space informs */
   strategy_layer_relevance?: StrategyLayerRelevance;
+  /** Goal-aware impact analysis — present when computation ran with goal context */
+  impact?: ImpactAnalysis;
   computed_at: string;
+}
+
+/**
+ * Goal-aware impact analysis for a probability space.
+ *
+ * Attaches a "how much does this relationship matter to reaching the goals"
+ * score to each edge's probability space. Distinct from
+ * `total_pathway_probability`, which measures the internal likelihood of the
+ * pathway itself firing — impact layers goal-context propagation on top.
+ */
+export interface ImpactAnalysis {
+  /** Aggregate impact probability on the goal context (0-1). */
+  impact_probability: number;
+  /**
+   * "direct"   — at least one endpoint of this space IS a goal entity
+   * "indirect" — endpoints reach a goal transitively through graph edges
+   * "none"     — no reachable goal within max-hop budget
+   */
+  impact_direction: "direct" | "indirect" | "none";
+  /** Per-goal reachability breakdown. Empty array when goalEntityIds was empty. */
+  per_goal: ImpactPerGoal[];
+  /** Goal entity id with the highest combined reachability, for UI highlight. */
+  closest_goal_entity_id: string | null;
+  /** Min hop count from any endpoint to the closest goal. null when unreachable. */
+  closest_goal_hops: number | null;
+  /** True when source or target IS a goal entity. */
+  direct: boolean;
+  computed_at: string;
+}
+
+export interface ImpactPerGoal {
+  goal_entity_id: string;
+  /** Probability of propagation from source endpoint → goal via graph edges */
+  reachability_from_source: number;
+  /** Probability of propagation from target endpoint → goal via graph edges */
+  reachability_from_target: number;
+  /** max(source, target) */
+  combined: number;
+  /** Shortest path length in hops (or -1 if unreachable within budget) */
+  distance_hops: number;
 }
 
 export type StrategyLayer = "L1" | "L2" | "L3" | "L4";

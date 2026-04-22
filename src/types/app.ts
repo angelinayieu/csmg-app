@@ -74,6 +74,22 @@ export interface AppConfig {
    * See src/types/app-manifest.ts for the shape.
    */
   manifest?: AppManifest;
+  /**
+   * Reasoning provenance — backlinks from this app to upstream strategy
+   * artifacts that justify its existence. Computed by app-generator from
+   * the union of provenance fields on the tactics that cluster onto this
+   * proposal. All arrays are optional + may be empty; the validator
+   * doesn't reject apps without provenance, but UI surfaces (audit views,
+   * "why this app?" tooltips) read these to explain coverage.
+   */
+  reasoning_provenance?: {
+    axiom_ids_respected?: string[];
+    axiom_ids_challenged?: string[];
+    convergence_ids_addressed?: string[];
+    coverage_gap_ids_closed?: string[];
+    inversion_ids_tested?: string[];
+    hidden_signal_refs?: string[];
+  };
 }
 
 /**
@@ -91,6 +107,22 @@ export interface AppState {
     momentum?: number;
     risk?: number;
   };
+  /** Wave B — mirrors apps.health_score scalar for fast UI reads without
+   *  a second query. Populated by reconcileAppWithKG + recomputeAppHealth. */
+  health_score?: number;
+  /** Wave B — per-factor contribution + bonus breakdown for the score.
+   *  Feeds tooltips / debugging; the scalar health_score is the source
+   *  of truth for UI badges. */
+  health_score_factors?: {
+    coverage_contribution: number;
+    momentum_contribution: number;
+    inverse_risk_contribution: number;
+    goal_bonus: number;
+    delivery_bonus: number;
+    surprise_penalty: number;
+  };
+  /** Wave B — 1-line human-readable "why this score" string. */
+  health_score_rationale?: string;
   /** Most recent agent update envelope. */
   last_agent_update?: {
     agent: string;            // e.g. "reasoner" | "research_loop" | "critic"
@@ -104,6 +136,20 @@ export interface AppState {
     message: string;
     at: string;
   }>;
+  /**
+   * Monte Carlo distribution of the outcome-deviation signal for this
+   * app's first dominant entity. Computed post-upsert by
+   * simulateEntityChain — surfaces as the p10/p50/p90 band on the
+   * canvas app-card shape. `null`-equivalent: field omitted.
+   */
+  simulation_distribution?: {
+    p10: number;
+    p50: number;
+    p90: number;
+    mean?: number;
+    stddev?: number;
+    computed_at: string;
+  };
 }
 
 /**

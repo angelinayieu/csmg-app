@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
+import { Toaster } from "@/components/ui/toaster";
+import { GlobalKeyboardHelp } from "@/components/ui/global-keyboard-help";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -28,6 +30,8 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen bg-gradient-page text-gray-900 antialiased" suppressHydrationWarning>
         {children}
+        <Toaster />
+        <GlobalKeyboardHelp />
       </body>
     </html>
   );

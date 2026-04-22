@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
 import type {
   Space,
   Entity,
@@ -46,6 +47,15 @@ import type { EpistemicClassification } from "@/types/epistemic";
 import { ManifoldOverviewModule } from "@/components/dashboard/modules/manifold-overview-module";
 import { ExpansionSummaryModule } from "@/components/dashboard/modules/expansion-summary-module";
 import { TemporalHealthModule } from "@/components/dashboard/modules/temporal-health-module";
+import { TrackingPulseModule } from "@/components/dashboard/modules/tracking-pulse-module";
+import {
+  FirstPrinciplesPulse,
+  type FPPAxiom,
+  type FPPConvergence,
+  type FPPStrategyCoverage,
+  type FPPStrategyProvenance,
+} from "@/components/dashboard/modules/first-principles-pulse";
+import { DashboardChangeProposalsBanner } from "@/components/dashboard/modules/dashboard-change-proposals-banner";
 import type { InteractionMetadata } from "@/types/interactions";
 
 /**
@@ -545,6 +555,73 @@ export function DashboardGrid({
       )}
 
 
+      {/* ═══════════════════════════════════════════════════════════════════
+          Arc 5.5 — Visibility boosters (tracking pulse, first-principles
+          strip, change proposals banner). Rendered above the rest of the
+          dashboard so the user immediately sees:
+            • what they're tracking (from strategy confirm)
+            • the first-principles reasoning grounding their strategy
+            • pending strategy updates that otherwise hide on /strategy
+          Each module self-hides when its data is empty, so this whole
+          block is a no-op on fresh / pre-synthesis dashboards.
+          ═══════════════════════════════════════════════════════════════════ */}
+      {hasSynthesis && (
+        <div className="flex flex-col gap-3">
+          {/* Arc 5C.2 / P0.2 — Intake review CTA. Shown only when a strategy
+              has been generated but not yet confirmed. Navigates the user
+              to the 4-step review wizard instead of the old "confirm inline"
+              button, so they get agency over metrics, apps, and tactics
+              before materialization. */}
+          {strategicRec && strategicRecData?.status !== "confirmed" && (
+            <Link
+              href={`/app/space/${space.id}/intake-review`}
+              className="group flex items-center gap-3 rounded-2xl bg-gradient-to-r from-indigo-50/70 via-white/80 to-indigo-50/50 backdrop-blur-xl ring-1 ring-indigo-200/70 hover:ring-indigo-300 shadow-[0_1px_3px_rgba(15,23,42,0.04)] px-4 py-3 transition-all duration-150"
+            >
+              <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600 ring-1 ring-indigo-200 flex-shrink-0">
+                <Target className="h-3.5 w-3.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-indigo-700">
+                  Intake review · 4 steps
+                </div>
+                <div className="text-[13px] font-semibold text-slate-900">
+                  Strategy ready. Review metrics, apps, and tactics before committing.
+                </div>
+                <div className="mt-0.5 text-[10.5px] text-slate-500">
+                  Toggle what gets created. Nothing materializes until you confirm.
+                </div>
+              </div>
+              <span className="inline-flex items-center gap-1 rounded-full bg-white/80 text-indigo-700 ring-1 ring-indigo-200 px-3 py-1.5 text-[11px] font-semibold group-hover:bg-indigo-500 group-hover:text-white group-hover:ring-indigo-500 transition-colors duration-150 flex-shrink-0">
+                Review →
+              </span>
+            </Link>
+          )}
+          <DashboardChangeProposalsBanner
+            spaceId={space.id}
+            proposals={strategicRecData?.change_proposals}
+          />
+          <FirstPrinciplesPulse
+            spaceId={space.id}
+            axioms={
+              (parsedSynthData as unknown as { axioms?: FPPAxiom[] } | null)?.axioms ?? null
+            }
+            convergences={
+              (parsedSynthData as unknown as { insight_convergences?: FPPConvergence[] } | null)?.insight_convergences ?? null
+            }
+            coverage={
+              (parsedSynthData as unknown as { strategy_coverage?: FPPStrategyCoverage } | null)?.strategy_coverage ?? null
+            }
+            strategyProvenance={
+              (strategicRec as unknown as { provenance?: FPPStrategyProvenance } | null)?.provenance ?? null
+            }
+          />
+          <TrackingPulseModule
+            spaceId={space.id}
+            visible={!!strategicRec}
+          />
+        </div>
+      )}
+
       {/* Pre-synthesis guide */}
       {!hasSynthesis && entities.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-5">
@@ -805,7 +882,7 @@ export function DashboardGrid({
                   <p className="text-sm font-medium text-gray-700">Synthesis complete — ready to generate strategy</p>
                   <p className="text-xs text-gray-500">Generate ranked strategic recommendations with infrastructure proposals</p>
                   <button
-                    onClick={strategyAuto.generateStrategy}
+                    onClick={() => { void strategyAuto.generateStrategy(); }}
                     disabled={strategyAuto.loading}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-interaxis-600 px-4 py-2 text-sm font-semibold text-white hover:bg-interaxis-700 transition-colors disabled:opacity-50"
                   >

@@ -209,6 +209,94 @@ export async function executeResearchLoop(
 
     // ── Step 4: Gap analysis → research queries ──
     const p4Start = Date.now();
+
+    // Tier 6: fetch research escalations + active sub-strategy metrics
+    // so gap analysis prioritizes the user's "model is wrong about X"
+    // signal over generic KG coverage gaps. Both fetches are lightweight
+    // and soft-fail — the loop proceeds with empty arrays if either
+    // query throws.
+    //
+    // Escalation window: 30 days. Short enough that recent user action
+    // dominates; long enough that a weekly cron catches everything.
+    const ESCALATION_WINDOW_DAYS = 30;
+    let researchEscalations: Array<{
+      prediction_id: string;
+      metric_label: string;
+      deviation_tag: string | null;
+      source_app_id: string | null;
+      escalated_at: string;
+    }> = [];
+    let activeSubstrategyMetrics: Array<{
+      app_id: string;
+      metric_label: string;
+      rationale?: string;
+    }> = [];
+    try {
+      const cutoff = new Date(
+        Date.now() - ESCALATION_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      const { data: escRows } = await db
+        .from("space_changelog")
+        .select("details, created_at")
+        .eq("space_id", spaceId)
+        .eq("change_type", "research_escalation")
+        .gte("created_at", cutoff)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      const escalationsRaw = (escRows ?? []) as Array<{
+        details: unknown;
+        created_at: string;
+      }>;
+      for (const r of escalationsRaw) {
+        const d = (r.details ?? {}) as Record<string, unknown>;
+        if (typeof d.prediction_id !== "string") continue;
+        if (typeof d.metric_label !== "string") continue;
+        researchEscalations.push({
+          prediction_id: d.prediction_id,
+          metric_label: d.metric_label,
+          deviation_tag:
+            typeof d.deviation_tag === "string" ? d.deviation_tag : null,
+          source_app_id:
+            typeof d.source_app_id === "string" ? d.source_app_id : null,
+          escalated_at: r.created_at,
+        });
+      }
+    } catch (err) {
+      console.warn("[self-improving-loop] escalation fetch failed:", err);
+    }
+
+    try {
+      const { data: subRows } = await db
+        .from("app_strategies")
+        .select("app_id, spec")
+        .eq("space_id", spaceId)
+        .eq("status", "active");
+      for (const row of (subRows ?? []) as Array<{ app_id: string; spec: unknown }>) {
+        const spec = row.spec as
+          | { prediction_spec?: { metrics_to_track?: Array<{ label?: string; rationale?: string }> } }
+          | null;
+        const metrics = spec?.prediction_spec?.metrics_to_track ?? [];
+        for (const m of metrics) {
+          if (typeof m.label !== "string") continue;
+          activeSubstrategyMetrics.push({
+            app_id: row.app_id,
+            metric_label: m.label,
+            rationale: typeof m.rationale === "string" ? m.rationale : undefined,
+          });
+        }
+      }
+      // Dedup by label across apps — a metric tracked by 5 apps is still
+      // ONE research focus, not five.
+      const seen = new Set<string>();
+      activeSubstrategyMetrics = activeSubstrategyMetrics.filter((m) => {
+        if (seen.has(m.metric_label)) return false;
+        seen.add(m.metric_label);
+        return true;
+      });
+    } catch (err) {
+      console.warn("[self-improving-loop] sub-strategy metrics fetch failed:", err);
+    }
+
     const gapResult = await analyzeGaps({
       entities: ents,
       edges: edgs,
@@ -225,6 +313,8 @@ export async function executeResearchLoop(
       bridgeCoverage: bridgeEdges.length / Math.max(1, ents.length),
       inputText,
       depth: schedule.depth,
+      researchEscalations,
+      activeSubstrategyMetrics,
     });
 
     phases.push({

@@ -38,6 +38,17 @@ interface SpaceGraphProps {
   interactionMetadata?: InteractionMetadata | null;
   /** Currently selected entity UUID — auto-pan to this node on layout switch */
   selectedEntityId?: string | null;
+  /**
+   * Optional remediation for the "no connections" warning banner. When
+   * provided, the banner renders an inline Quick Connect button that kicks
+   * off /api/reevaluate. Supply via the `useQuickConnect` hook from the
+   * parent route (see graph/page.tsx + tabs.tsx).
+   */
+  onQuickConnect?: () => void;
+  /** True while Quick Connect is in-flight — dims the banner button + shows spinner. */
+  quickConnectRunning?: boolean;
+  /** Most recent Quick Connect error message, shown inline under the banner. */
+  quickConnectError?: string | null;
 }
 
 export function SpaceGraph({
@@ -52,6 +63,9 @@ export function SpaceGraph({
   layoutType = "force",
   interactionMetadata = null,
   selectedEntityId = null,
+  onQuickConnect,
+  quickConnectRunning = false,
+  quickConnectError = null,
 }: SpaceGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState<SimNode[]>([]);
@@ -639,10 +653,10 @@ export function SpaceGraph({
 
   return (
     <div className="relative h-full w-full">
-      {/* Disconnected graph warning */}
+      {/* Disconnected graph warning — now actionable. */}
       {noConnections && nodes.length > 1 && (
-        <div className="absolute top-3 left-3 right-3 z-10 rounded-lg border border-amber-200 bg-amber-50/95 px-4 py-3 backdrop-blur-sm">
-          <div className="flex items-start gap-2">
+        <div className="absolute top-3 left-3 right-3 z-10 rounded-lg border border-amber-200 bg-amber-50/95 px-4 py-3 backdrop-blur-sm shadow-sm">
+          <div className="flex items-start gap-3">
             <span className="text-amber-500 text-sm mt-0.5">⚠</span>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-amber-800">
@@ -650,11 +664,45 @@ export function SpaceGraph({
               </p>
               <p className="text-[11px] text-amber-600 mt-0.5 leading-relaxed">
                 {allExternal
-                  ? "These are external research entities with no relationships mapped yet. Re-run research to generate connections, or run decomposition first to create your core analysis graph."
-                  : "Entities exist but no edges connect them. This may indicate a pipeline issue — try re-running the analysis."
+                  ? "These are external research entities with no relationships mapped yet. Run Quick Connect to discover edges, or re-run research."
+                  : "Entities exist but no edges connect them. Run Quick Connect — a fast LLM pass that adds missing edges + cycles without re-running research."
                 }
               </p>
+              {quickConnectError && (
+                <p className="text-[11px] text-rose-600 mt-1 leading-relaxed">
+                  {quickConnectError}
+                </p>
+              )}
             </div>
+
+            {/* Inline remediation — only renders when the parent route
+                wired up useQuickConnect. Turns the banner from a dead-end
+                warning into a one-click fix. */}
+            {onQuickConnect && (
+              <button
+                onClick={onQuickConnect}
+                disabled={quickConnectRunning}
+                className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-amber-800 transition-all hover:bg-amber-50 hover:border-amber-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                title="Fast LLM pass — adds missing edges + cycles without external research. ~1 credit."
+              >
+                {quickConnectRunning ? (
+                  <>
+                    <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                      <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+                      <path d="M22 12a10 10 0 0 1-10 10" />
+                    </svg>
+                    Connecting…
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="13 2 3 14 12 14 11 22 21 10 12 10" />
+                    </svg>
+                    Quick Connect
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
       )}

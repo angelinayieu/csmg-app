@@ -162,6 +162,22 @@ export async function POST(
     await db.from("metric_trackers").update(updatePayload).eq("id", trackerId);
   }
 
+  // Wave B — flag every app tracking this metric so its health_score
+  // gets recomputed against the fresh observation. Non-fatal.
+  try {
+    const { notifyMetricObserved } = await import("@/lib/apps/notify");
+    await notifyMetricObserved(
+      db,
+      trackerId,
+      `user:observation:${user.id}`,
+    );
+  } catch (notifyErr) {
+    console.warn(
+      "[observations] app staleness notify failed (non-fatal):",
+      notifyErr,
+    );
+  }
+
   // ── Phase 4c-final+: UPF posterior fan-out ──
   // Soft-fail — logging an observation must succeed even if posterior
   // bookkeeping hits a transient error.

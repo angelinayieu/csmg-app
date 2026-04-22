@@ -693,7 +693,7 @@ export function DashboardOverviewGrid() {
           <div className="grid grid-cols-3 gap-2.5 auto-rows-[minmax(0,auto)]">
             {/* KG Multiview */}
             <GlassCard
-              href={`${base}/graph`}
+              href={`${base}/whiteboard?drawer=graph&tab=graph`}
               locked={entityCount === 0}
               lockMessage="Add entities via chat to build the graph"
               icon={<IconGraph className="h-[17px] w-[17px]" />}
@@ -736,7 +736,7 @@ export function DashboardOverviewGrid() {
 
             {/* Metrics Graph — wired to real probability_space_summary + signal_extraction */}
             <GlassCard
-              href={`${base}/probability`}
+              href={`${base}/whiteboard?drawer=probability&tab=spaces`}
               locked={!hasSynthesis}
               lockMessage="Run synthesis to unlock"
               icon={<IconBars className="h-[17px] w-[17px]" />}
@@ -802,7 +802,7 @@ export function DashboardOverviewGrid() {
 
             {/* Digital Twin — spans 2 rows, now surfaces computed TwinMacroState */}
             <GlassCard
-              href={`${base}/twin?tab=design`}
+              href={`${base}/whiteboard?drawer=twin&tab=design`}
               locked={entityCount < 3}
               lockMessage="Need 3+ entities to build a model"
               icon={<IconPulse className="h-[17px] w-[17px]" />}
@@ -916,7 +916,7 @@ export function DashboardOverviewGrid() {
 
             {/* Assets & Entities — full layer breakdown (no more silent >2-layer merging) */}
             <GlassCard
-              href={`${base}/inventory`}
+              href={`${base}/whiteboard?drawer=inventory&tab=entities`}
               locked={entityCount === 0}
               lockMessage="Add entities first"
               icon={<IconDb className="h-[17px] w-[17px]" />}
@@ -972,7 +972,7 @@ export function DashboardOverviewGrid() {
 
             {/* #1 Recommendation */}
             <GlassCard
-              href={`${base}/strategy`}
+              href={`${base}/whiteboard?drawer=strategy&tab=strategy`}
               locked={!hasSynthesis}
               lockMessage="Run synthesis first"
               icon={<IconBolt className="h-[17px] w-[17px]" />}
@@ -1004,7 +1004,7 @@ export function DashboardOverviewGrid() {
           {/* Row 3: Intelligence Radar (span 2) + Insights */}
           <div className="grid grid-cols-3 gap-2.5">
             <GlassCard
-              href={`${base}/radar`}
+              href={`${base}/whiteboard?drawer=intelligence&tab=radar`}
               locked={!hasSynthesis}
               lockMessage="Run synthesis to unlock"
               icon={<IconRadar className="h-[17px] w-[17px]" />}
@@ -1104,7 +1104,7 @@ export function DashboardOverviewGrid() {
             </GlassCard>
 
             <GlassCard
-              href={`${base}/insights`}
+              href={`${base}/whiteboard?drawer=synthesis&tab=insights`}
               locked={!hasSynthesis}
               lockMessage="Run synthesis to unlock"
               icon={<IconBook className="h-[17px] w-[17px]" />}

@@ -24,6 +24,13 @@ import {
 } from "@/lib/pipeline/deep-research-engine";
 import type { DeepResearchModel } from "@/types/deep-research";
 import type { Entity, Edge } from "@/types";
+import {
+  startPipelineRun,
+  emitStructuralEvent,
+  emitBatchEvents,
+  completePipelineRun,
+} from "@/lib/events/structural-event-bus";
+import type { StructuralEvent } from "@/types/pipeline-events";
 
 export const maxDuration = 60; // Polling is fast; start returns immediately
 
@@ -149,6 +156,22 @@ export async function POST(request: Request) {
       // Start the deep research request
       const { responseId, status } = await startDeepResearch(config);
 
+      // Structural event bus — start a run and stash its id alongside
+      // the OpenAI response_id so the poll handler can fetch it back
+      // without threading through the client.
+      const pipelineRunId = await startPipelineRun(db, {
+        spaceId,
+        userId: user.id,
+        pipeline: "research_deep",
+        initialPrompt: userPrompt.slice(0, 2000),
+      });
+      await emitStructuralEvent(db, pipelineRunId, {
+        type: "stage_boundary",
+        stage: "landscape",
+        phase: "enter",
+        message: "Deep research running…",
+      });
+
       // Store run metadata in synthesis_data (lightweight — no new table needed for v1)
       const currentSynthData = (spaceData?.synthesis_data ?? {}) as Record<string, unknown>;
       await db
@@ -158,6 +181,7 @@ export async function POST(request: Request) {
             ...currentSynthData,
             deep_research_run: {
               response_id: responseId,
+              pipeline_run_id: pipelineRunId,
               status,
               model,
               max_tool_calls: maxToolCalls,
@@ -171,6 +195,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         success: true,
         responseId,
+        runId: pipelineRunId,
         status,
         model,
         maxToolCalls,
@@ -178,6 +203,18 @@ export async function POST(request: Request) {
       });
     } catch (err) {
       console.error("[deep-research] Start failed:", err);
+      const { detectCreditError } = await import("@/lib/llm");
+      const credit = detectCreditError(err);
+      if (credit.isCredit) {
+        return NextResponse.json(
+          {
+            error: "credits_exhausted",
+            provider: credit.provider,
+            message: credit.message,
+          },
+          { status: 402 },
+        );
+      }
       return NextResponse.json(
         { error: `Failed to start deep research: ${sanitizeErrorMessage(err)}` },
         { status: 500 }
@@ -491,9 +528,52 @@ export async function POST(request: Request) {
       // Refresh space counts
       await refreshSpaceCounts(db, [spaceId]);
 
+      // Structural event bus — emit everything the poll just persisted.
+      // runId was stashed in deep_research_run at "start" time.
+      const deepRunMeta = ((freshSynthData.deep_research_run ?? {}) as Record<string, unknown>);
+      const pipelineRunId = (deepRunMeta.pipeline_run_id as string | undefined) ?? null;
+
+      if (pipelineRunId) {
+        // Per-domain entity_added events.
+        const entityEvents: StructuralEvent[] = [];
+        for (const [domain, uuid] of domainEntities) {
+          entityEvents.push({
+            type: "entity_added",
+            entityId: uuid,
+            entityCode: null,
+            name: domain,
+            entityCategory: "epistemic",
+            importance: "moderate",
+            parentEntityId: null,
+          });
+        }
+        await emitBatchEvents(db, pipelineRunId, entityEvents);
+
+        // Source_cited per high-quality evidence item (cap 30).
+        const sourceEvents: StructuralEvent[] = parsed.evidence
+          .slice(0, 30)
+          .map((ev) => ({
+            type: "source_cited",
+            sourceUrl: ev.url,
+            title: ev.title ?? null,
+            authority: typeof ev.reliabilityPrior === "number" ? ev.reliabilityPrior : 0.5,
+            publishedAt: null,
+            boundToEntityId: null,
+          }));
+        await emitBatchEvents(db, pipelineRunId, sourceEvents);
+
+        await emitStructuralEvent(db, pipelineRunId, {
+          type: "stage_boundary",
+          stage: "landscape",
+          phase: "exit",
+        });
+        await completePipelineRun(db, pipelineRunId, "completed");
+      }
+
       return NextResponse.json({
         status: "completed",
         completed: true,
+        runId: pipelineRunId,
         stats: parsed.stats,
         claimsExtracted: parsed.claims.length,
         claimsPersisted,
@@ -506,6 +586,39 @@ export async function POST(request: Request) {
       });
     } catch (err) {
       console.error("[deep-research] Poll failed:", err);
+      // Mark the associated pipeline run as failed so the canvas HUD
+      // flips from Running→Failed instead of spinning forever.
+      try {
+        const { data: rowAfterErr } = await db
+          .from("spaces")
+          .select("synthesis_data")
+          .eq("id", spaceId)
+          .single();
+        const meta = ((rowAfterErr?.synthesis_data as Record<string, unknown> | null)
+          ?.deep_research_run ?? {}) as Record<string, unknown>;
+        const failedRunId = (meta.pipeline_run_id as string | undefined) ?? null;
+        if (failedRunId) {
+          await completePipelineRun(
+            db,
+            failedRunId,
+            "failed",
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      } catch { /* non-critical */ }
+
+      const { detectCreditError } = await import("@/lib/llm");
+      const credit = detectCreditError(err);
+      if (credit.isCredit) {
+        return NextResponse.json(
+          {
+            error: "credits_exhausted",
+            provider: credit.provider,
+            message: credit.message,
+          },
+          { status: 402 },
+        );
+      }
       return NextResponse.json(
         { error: `Failed to poll deep research: ${sanitizeErrorMessage(err)}` },
         { status: 500 }

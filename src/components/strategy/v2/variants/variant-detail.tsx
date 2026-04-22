@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import { VariantFlowchart } from "./variant-flowchart";
 import { VariantInspector } from "./variant-inspector";
 import { ApprovalBar } from "./approval-bar";
+import { TwinPreviewGate } from "@/components/strategy/twin-preview-gate";
+import { PreApprovalAppPreview } from "@/components/strategy/pre-approval-app-preview";
 import type { VariantVM, FlowchartVM } from "../strategy-view-model";
 import { buildFlowchart } from "../strategy-view-model";
 import type { Entity } from "@/types";
@@ -72,6 +74,36 @@ export function VariantDetail({
     const t = (variant.recommendation.micro_tactics ?? []).length;
     return `${p} perspectives · ${t} micro-tactics · ${causalChains.length} causal trace${causalChains.length === 1 ? "" : "s"} verified`;
   }, [variant, causalChains.length]);
+
+  // Ready-to-Ship meter inputs — compose the four reasoning-layer scores from
+  // the recommendation's provenance aggregate (populated by strategy-engine).
+  const readinessInputs = useMemo(() => {
+    const prov = variant.recommendation.provenance;
+    return {
+      confidence: typeof variant.recommendation.confidence === "number"
+        ? variant.recommendation.confidence
+        : null,
+      coverage_pct: typeof prov?.coverage_pct_at_generation === "number"
+        ? prov.coverage_pct_at_generation
+        : null,
+      provenance_score: typeof prov?.overall_provenance_score === "number"
+        ? prov.overall_provenance_score
+        : null,
+      // Coherence score is derived from validation issues — when provenance
+      // shows critical_axioms_missed === 0 + hidden_axioms_missed === 0,
+      // default to 85 (strong). Heuristic approximation until coherence is
+      // persisted on the recommendation directly.
+      coherence_score: prov
+        ? Math.max(
+            0,
+            100 -
+              (prov.critical_axioms_missed?.length ?? 0) * 20 -
+              (prov.hidden_axioms_missed?.length ?? 0) * 15 -
+              (prov.strong_convergences_missed?.length ?? 0) * 8,
+          )
+        : null,
+    };
+  }, [variant.recommendation]);
 
   return (
     <div
@@ -327,6 +359,25 @@ export function VariantDetail({
         />
       </div>
 
+      {/* Pre-approval app preview — shows exactly what will be created when
+          the user clicks Approve. Placed above Twin Preview because it's the
+          more concrete question ("what gets built?") before the abstract
+          projection ("how does my twin change?"). */}
+      {!isConfirmed && variant.infrastructureProposals.length > 0 && (
+        <div className="mt-3">
+          <PreApprovalAppPreview proposals={variant.infrastructureProposals} />
+        </div>
+      )}
+
+      {/* Twin preview — shows projected twin state if this variant is approved.
+          Hidden once the strategy is confirmed since the projection is
+          retrospective at that point. */}
+      {!isConfirmed && (
+        <div className="mt-3">
+          <TwinPreviewGate spaceId={spaceId} rank={variant.rank} />
+        </div>
+      )}
+
       {/* Approval */}
       <ApprovalBar
         isConfirmed={isConfirmed}
@@ -335,6 +386,8 @@ export function VariantDetail({
         onApprove={onApprove}
         onRegenerate={onRegenerate}
         cascadeSummary={cascadeSummary}
+        readinessInputs={readinessInputs}
+        spaceId={spaceId}
       />
     </div>
   );

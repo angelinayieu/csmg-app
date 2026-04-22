@@ -7,6 +7,22 @@
     {
       "path": "/api/cron/predictions-resolve",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/agent-runtime",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/cron/recompute-app-health",
+      "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/digest-user-behavior",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/axis-scorer",
+      "schedule": "0 * * * *"
     }
   ]
 }

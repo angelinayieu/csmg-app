@@ -127,6 +127,7 @@ export type Database = {
           strategy_committed_at: string | null;
           digital_twin_state: "not_started" | "ready" | "active" | "retired";
           twin_initialized_at: string | null;
+          kind: "analysis" | "ask";
           created_at: string;
           updated_at: string;
         };
@@ -162,6 +163,7 @@ export type Database = {
           strategy_committed_at?: string | null;
           digital_twin_state?: "not_started" | "ready" | "active" | "retired";
           twin_initialized_at?: string | null;
+          kind?: "analysis" | "ask";
           created_at?: string;
           updated_at?: string;
         };
@@ -197,6 +199,7 @@ export type Database = {
           strategy_committed_at?: string | null;
           digital_twin_state?: "not_started" | "ready" | "active" | "retired";
           twin_initialized_at?: string | null;
+          kind?: "analysis" | "ask";
           created_at?: string;
           updated_at?: string;
         };
@@ -1124,6 +1127,89 @@ export type Database = {
           created_at?: string;
         };
       };
+      // ── Arc 5C.1: persistent card chat messages ──
+      // Migration: 20260519_card_chat_messages.sql
+      card_chat_messages: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          card_shape_id: string;
+          role: "user" | "assistant";
+          kind: "text" | "proposed_change";
+          content: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          card_shape_id: string;
+          role: "user" | "assistant";
+          kind: "text" | "proposed_change";
+          content?: Json;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          user_id?: string;
+          card_shape_id?: string;
+          role?: "user" | "assistant";
+          kind?: "text" | "proposed_change";
+          content?: Json;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      // ── Arc 5A: comment threads rooted on canvas shapes ──
+      // Migration: 20260513_shape_threads.sql
+      shape_threads: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          shape_id: string;
+          parent_shape_id: string | null;
+          root_shape_id: string;
+          thread_depth: number;
+          content: string;
+          author_display: string | null;
+          created_at: string;
+          updated_at: string;
+          deleted_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          shape_id: string;
+          parent_shape_id?: string | null;
+          root_shape_id: string;
+          thread_depth?: number;
+          content?: string;
+          author_display?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          deleted_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          user_id?: string;
+          shape_id?: string;
+          parent_shape_id?: string | null;
+          root_shape_id?: string;
+          thread_depth?: number;
+          content?: string;
+          author_display?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          deleted_at?: string | null;
+        };
+      };
       strategy_snapshots: {
         Row: {
           id: string;
@@ -1134,6 +1220,7 @@ export type Database = {
           status: "generated" | "reviewing" | "confirmed" | "superseded";
           trigger: "manual" | "auto_chain" | "resynthesize";
           quality_score: number | null;
+          user_label: string | null;
           created_at: string;
         };
         Insert: {
@@ -1145,6 +1232,7 @@ export type Database = {
           status?: "generated" | "reviewing" | "confirmed" | "superseded";
           trigger?: "manual" | "auto_chain" | "resynthesize";
           quality_score?: number | null;
+          user_label?: string | null;
           created_at?: string;
         };
         Update: {
@@ -1156,6 +1244,7 @@ export type Database = {
           status?: "generated" | "reviewing" | "confirmed" | "superseded";
           trigger?: "manual" | "auto_chain" | "resynthesize";
           quality_score?: number | null;
+          user_label?: string | null;
           created_at?: string;
         };
       };
@@ -1226,8 +1315,14 @@ export type Database = {
           resolved_actual_text: string | null;
           resolved_at: string | null;
           deviation: number | null;
-          deviation_tag: "expected" | "regime_shift" | "surprise" | "qualitative" | null;
+          deviation_tag: "expected" | "regime_shift" | "surprise" | "qualitative" | "failed" | null;
           resolution_notes: string | null;
+          // Tier 6: entity backlinks (migration 20260422_deep_wiring.sql)
+          entity_ids: string[];
+          // Migration 20260518 — widen ledger for plan_step outcomes.
+          subject_kind: "metric" | "step_outcome" | "action_return";
+          plan_step_id: string | null;
+          capability_id: string | null;
         };
         Insert: {
           id?: string;
@@ -1251,8 +1346,12 @@ export type Database = {
           resolved_actual_text?: string | null;
           resolved_at?: string | null;
           deviation?: number | null;
-          deviation_tag?: "expected" | "regime_shift" | "surprise" | "qualitative" | null;
+          deviation_tag?: "expected" | "regime_shift" | "surprise" | "qualitative" | "failed" | null;
           resolution_notes?: string | null;
+          entity_ids?: string[];
+          subject_kind?: "metric" | "step_outcome" | "action_return";
+          plan_step_id?: string | null;
+          capability_id?: string | null;
         };
         Update: {
           id?: string;
@@ -1276,8 +1375,12 @@ export type Database = {
           resolved_actual_text?: string | null;
           resolved_at?: string | null;
           deviation?: number | null;
-          deviation_tag?: "expected" | "regime_shift" | "surprise" | "qualitative" | null;
+          deviation_tag?: "expected" | "regime_shift" | "surprise" | "qualitative" | "failed" | null;
           resolution_notes?: string | null;
+          entity_ids?: string[];
+          subject_kind?: "metric" | "step_outcome" | "action_return";
+          plan_step_id?: string | null;
+          capability_id?: string | null;
         };
       };
       improvement_goals: {
@@ -1636,6 +1739,59 @@ export type Database = {
           error_message?: string | null;
         };
       };
+      // ── Tier 5: per-app agent runtime ─────────────────────────────────
+      // Migration: 20260421_app_agent_runs.sql
+      // Domain types: src/types/agent-run.ts
+      // Distinct from public.agent_runs (the deep-research coordinator's
+      // table) — this one tracks per-app predictor/measurer/validator
+      // agents declared in InfrastructureProposal.agent_specs.
+      app_agent_runs: {
+        Row: {
+          id: string;
+          app_id: string;
+          space_id: string;
+          user_id: string;
+          agent_id: string;
+          agent_role: string;
+          scheduled_for: string;
+          started_at: string | null;
+          completed_at: string | null;
+          status: "scheduled" | "running" | "completed" | "failed" | "skipped";
+          output: Json | null;
+          note: string | null;
+          duration_ms: number | null;
+        };
+        Insert: {
+          id?: string;
+          app_id: string;
+          space_id: string;
+          user_id: string;
+          agent_id: string;
+          agent_role: string;
+          scheduled_for: string;
+          started_at?: string | null;
+          completed_at?: string | null;
+          status?: "scheduled" | "running" | "completed" | "failed" | "skipped";
+          output?: Json | null;
+          note?: string | null;
+          duration_ms?: number | null;
+        };
+        Update: {
+          id?: string;
+          app_id?: string;
+          space_id?: string;
+          user_id?: string;
+          agent_id?: string;
+          agent_role?: string;
+          scheduled_for?: string;
+          started_at?: string | null;
+          completed_at?: string | null;
+          status?: "scheduled" | "running" | "completed" | "failed" | "skipped";
+          output?: Json | null;
+          note?: string | null;
+          duration_ms?: number | null;
+        };
+      };
       interventions: {
         Row: {
           id: string;
@@ -1870,6 +2026,117 @@ export type Database = {
           changed_at?: string;
         };
       };
+      // ── Tier 3: per-app sub-strategies ────────────────────────────────
+      // Migration: 20260420_app_strategies.sql
+      // Domain types: src/types/app-strategy.ts
+      app_strategies: {
+        Row: {
+          id: string;
+          app_id: string;
+          space_id: string;
+          user_id: string;
+          parent_strategy_snapshot_id: string | null;
+          parent_proposal_id: string | null;
+          version: number;
+          status: "draft" | "active" | "superseded" | "archived";
+          generated_at: string;
+          generated_by: string;
+          last_deviation_trigger_at: string | null;
+          generation_rationale: string | null;
+          spec: Json;
+          parent_proposal_snapshot: Json | null;
+          quality: Json;
+          // Tier 6: KG entity backlinks (migration 20260422_deep_wiring.sql)
+          // Mirrors apps.dominant_entity_ids — cascade staleness uses same pattern.
+          entity_refs: string[];
+        };
+        Insert: {
+          id?: string;
+          app_id: string;
+          space_id: string;
+          user_id: string;
+          parent_strategy_snapshot_id?: string | null;
+          parent_proposal_id?: string | null;
+          version?: number;
+          status?: "draft" | "active" | "superseded" | "archived";
+          generated_at?: string;
+          generated_by: string;
+          last_deviation_trigger_at?: string | null;
+          generation_rationale?: string | null;
+          spec: Json;
+          parent_proposal_snapshot?: Json | null;
+          quality?: Json;
+          entity_refs?: string[];
+        };
+        Update: {
+          id?: string;
+          app_id?: string;
+          space_id?: string;
+          user_id?: string;
+          parent_strategy_snapshot_id?: string | null;
+          parent_proposal_id?: string | null;
+          version?: number;
+          status?: "draft" | "active" | "superseded" | "archived";
+          generated_at?: string;
+          generated_by?: string;
+          last_deviation_trigger_at?: string | null;
+          generation_rationale?: string | null;
+          spec?: Json;
+          parent_proposal_snapshot?: Json | null;
+          quality?: Json;
+          entity_refs?: string[];
+        };
+      };
+      app_strategy_versions: {
+        Row: {
+          id: string;
+          app_strategy_id: string;
+          app_id: string;
+          change_type:
+            | "generated"
+            | "superseded"
+            | "agent_refined"
+            | "user_edit"
+            | "deviation_triggered"
+            | "archived";
+          change_summary: string | null;
+          diff: Json | null;
+          changed_by: string;
+          changed_at: string;
+        };
+        Insert: {
+          id?: string;
+          app_strategy_id: string;
+          app_id: string;
+          change_type:
+            | "generated"
+            | "superseded"
+            | "agent_refined"
+            | "user_edit"
+            | "deviation_triggered"
+            | "archived";
+          change_summary?: string | null;
+          diff?: Json | null;
+          changed_by: string;
+          changed_at?: string;
+        };
+        Update: {
+          id?: string;
+          app_strategy_id?: string;
+          app_id?: string;
+          change_type?:
+            | "generated"
+            | "superseded"
+            | "agent_refined"
+            | "user_edit"
+            | "deviation_triggered"
+            | "archived";
+          change_summary?: string | null;
+          diff?: Json | null;
+          changed_by?: string;
+          changed_at?: string;
+        };
+      };
       user_app_preferences: {
         Row: {
           id: string;
@@ -2001,6 +2268,317 @@ export type Database = {
           user_verdict?: "accepted" | "rejected" | "uncertain" | null;
           user_verdict_at?: string | null;
         };
+      };
+      // ── Capability registry (migration 20260516) ───────────────────────
+      capabilities: {
+        Row: {
+          id: string;
+          slug: string | null;
+          name: string;
+          description: string;
+          category:
+            | "person_contact"
+            | "community_inquiry"
+            | "literature_research"
+            | "dataset_acquisition"
+            | "direct_observation"
+            | "instrumentation"
+            | "experiment"
+            | "synthesis"
+            | "temporal_capture";
+          yields: Json;
+          preconditions: Json;
+          cost_user_minutes_p50: number;
+          cost_user_minutes_p90: number;
+          cost_money_usd_p50: number;
+          cost_calendar_latency_days_p50: number;
+          cost_calendar_latency_days_p90: number;
+          requires_human: boolean;
+          requires_agent: boolean;
+          requires_instrument: boolean;
+          requires_external_service: boolean;
+          repeatable: boolean;
+          one_shot: boolean;
+          perturbs_system: boolean;
+          yields_structured_data: boolean;
+          relational_cost: "none" | "low" | "medium" | "high";
+          latency_kind: "sync" | "async" | "scheduled_event";
+          success_priors: Json;
+          yield_priors: Json;
+          proposed_by_user_id: string | null;
+          status: "active" | "proposed" | "deprecated";
+          tags: string[];
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          slug?: string | null;
+          name: string;
+          description: string;
+          category:
+            | "person_contact"
+            | "community_inquiry"
+            | "literature_research"
+            | "dataset_acquisition"
+            | "direct_observation"
+            | "instrumentation"
+            | "experiment"
+            | "synthesis"
+            | "temporal_capture";
+          yields: Json;
+          preconditions?: Json;
+          cost_user_minutes_p50?: number;
+          cost_user_minutes_p90?: number;
+          cost_money_usd_p50?: number;
+          cost_calendar_latency_days_p50?: number;
+          cost_calendar_latency_days_p90?: number;
+          requires_human?: boolean;
+          requires_agent?: boolean;
+          requires_instrument?: boolean;
+          requires_external_service?: boolean;
+          repeatable?: boolean;
+          one_shot?: boolean;
+          perturbs_system?: boolean;
+          yields_structured_data?: boolean;
+          relational_cost?: "none" | "low" | "medium" | "high";
+          latency_kind?: "sync" | "async" | "scheduled_event";
+          success_priors?: Json;
+          yield_priors?: Json;
+          proposed_by_user_id?: string | null;
+          status?: "active" | "proposed" | "deprecated";
+          tags?: string[];
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["capabilities"]["Insert"]>;
+      };
+      data_needs: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          target_entity_id: string | null;
+          target_metric_tracker_id: string | null;
+          question: string;
+          rationale: string | null;
+          expected_answer_shape: Json;
+          current_confidence: number;
+          priority: number;
+          source_kind:
+            | "prediction_spec"
+            | "validation_spec"
+            | "user_authored"
+            | "planner_recursion"
+            | "agent_detected";
+          source_ref: Json | null;
+          status: "open" | "planning" | "in_flight" | "resolved" | "abandoned";
+          first_opened_at: string;
+          last_activity_at: string;
+          resolved_at: string | null;
+          resolved_confidence: number | null;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          target_entity_id?: string | null;
+          target_metric_tracker_id?: string | null;
+          question: string;
+          rationale?: string | null;
+          expected_answer_shape?: Json;
+          current_confidence?: number;
+          priority?: number;
+          source_kind:
+            | "prediction_spec"
+            | "validation_spec"
+            | "user_authored"
+            | "planner_recursion"
+            | "agent_detected";
+          source_ref?: Json | null;
+          status?: "open" | "planning" | "in_flight" | "resolved" | "abandoned";
+          first_opened_at?: string;
+          last_activity_at?: string;
+          resolved_at?: string | null;
+          resolved_confidence?: number | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["data_needs"]["Insert"]>;
+      };
+      acquisition_plans: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          data_need_ids: string[];
+          title: string;
+          summary: string | null;
+          parent_plan_id: string | null;
+          version: number;
+          expected_info_gain: number;
+          expected_compound_success: number;
+          expected_cost_user_minutes: number;
+          expected_cost_money_usd: number;
+          expected_calendar_latency_days: number;
+          novelty_score: number;
+          contains_perturbing_step: boolean;
+          contains_one_shot_step: boolean;
+          status:
+            | "draft"
+            | "proposed"
+            | "approved"
+            | "in_flight"
+            | "resolved"
+            | "abandoned"
+            | "superseded";
+          generated_by: string;
+          rationale: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          data_need_ids?: string[];
+          title: string;
+          summary?: string | null;
+          parent_plan_id?: string | null;
+          version?: number;
+          expected_info_gain?: number;
+          expected_compound_success?: number;
+          expected_cost_user_minutes?: number;
+          expected_cost_money_usd?: number;
+          expected_calendar_latency_days?: number;
+          novelty_score?: number;
+          contains_perturbing_step?: boolean;
+          contains_one_shot_step?: boolean;
+          status?:
+            | "draft"
+            | "proposed"
+            | "approved"
+            | "in_flight"
+            | "resolved"
+            | "abandoned"
+            | "superseded";
+          generated_by?: string;
+          rationale?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["acquisition_plans"]["Insert"]>;
+      };
+      plan_steps: {
+        Row: {
+          id: string;
+          plan_id: string;
+          space_id: string;
+          user_id: string;
+          capability_id: string;
+          params: Json;
+          predicted_return: Json;
+          actual_return: Json | null;
+          deviation_tag:
+            | "expected"
+            | "regime_shift"
+            | "surprise"
+            | "qualitative"
+            | "failed"
+            | null;
+          deviation_notes: string | null;
+          closes_data_need_ids: string[];
+          status: "blocked" | "ready" | "in_flight" | "resolved" | "skipped" | "failed";
+          dispatched_at: string | null;
+          resolved_at: string | null;
+          executed_by: "human" | "agent" | "instrument" | "external_service" | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          plan_id: string;
+          space_id: string;
+          user_id: string;
+          capability_id: string;
+          params?: Json;
+          predicted_return?: Json;
+          actual_return?: Json | null;
+          deviation_tag?:
+            | "expected"
+            | "regime_shift"
+            | "surprise"
+            | "qualitative"
+            | "failed"
+            | null;
+          deviation_notes?: string | null;
+          closes_data_need_ids?: string[];
+          status?: "blocked" | "ready" | "in_flight" | "resolved" | "skipped" | "failed";
+          dispatched_at?: string | null;
+          resolved_at?: string | null;
+          executed_by?: "human" | "agent" | "instrument" | "external_service" | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["plan_steps"]["Insert"]>;
+      };
+      plan_step_edges: {
+        Row: {
+          id: string;
+          plan_id: string;
+          from_step_id: string;
+          to_step_id: string;
+          edge_kind: "sequential" | "parallel" | "fallback" | "branch" | "join";
+          branch_predicate: Json | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          plan_id: string;
+          from_step_id: string;
+          to_step_id: string;
+          edge_kind: "sequential" | "parallel" | "fallback" | "branch" | "join";
+          branch_predicate?: Json | null;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["plan_step_edges"]["Insert"]>;
+      };
+      capability_observations: {
+        Row: {
+          id: string;
+          space_id: string;
+          user_id: string;
+          capability_id: string;
+          plan_step_id: string;
+          context_key: string;
+          succeeded: boolean;
+          yield_completeness: number | null;
+          deviation_tag:
+            | "expected"
+            | "regime_shift"
+            | "surprise"
+            | "qualitative"
+            | "failed"
+            | null;
+          observed_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          user_id: string;
+          capability_id: string;
+          plan_step_id: string;
+          context_key?: string;
+          succeeded: boolean;
+          yield_completeness?: number | null;
+          deviation_tag?:
+            | "expected"
+            | "regime_shift"
+            | "surprise"
+            | "qualitative"
+            | "failed"
+            | null;
+          observed_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["capability_observations"]["Insert"]>;
       };
     };
     Views: {

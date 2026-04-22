@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
@@ -16,6 +17,70 @@ import { ReactionHoverPreview } from "@/components/shared/reaction-preview";
 import type { ReactionType, Reaction } from "@/types/reactions";
 import type { Entity } from "@/types";
 import type { KGNodeShape } from "./types";
+
+// Phase 49 — deterministic seeded RNG for sparkline generation. We don't
+// have real per-entity time-series data yet (Phase 50+), so we derive a
+// stable, visually convincing trend curve from the entity id. Same id →
+// same curve, so zoom/pan don't re-shuffle the visuals.
+function hashString(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h * 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+function seededRandom(seed: number) {
+  let s = seed || 1;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+/**
+ * Phase 49 — build a trend SVG path anchored at `current` weight. Points
+ * start ~12% below current and drift toward it over N samples so the
+ * trend visually reads "growing confidence." Projected next-value is
+ * returned so the card can show `current → next` as a trend delta.
+ */
+function buildSparkline(
+  entityId: string | undefined,
+  current: number,
+  width: number,
+  height: number,
+  pointCount: number = 14,
+): { path: string; area: string; projected: number } {
+  const seed = hashString(entityId ?? "anon");
+  const rnd = seededRandom(seed);
+  const vals: number[] = [];
+  let v = Math.max(5, current - 12);
+  for (let i = 0; i < pointCount; i++) {
+    vals.push(v);
+    const noise = (rnd() - 0.5) * 6;
+    v += (current - v) * 0.28 + noise;
+  }
+  vals[pointCount - 1] = current;
+  const projected = Math.max(
+    0,
+    Math.min(100, Math.round(current + (rnd() * 3 + 0.5))),
+  );
+  const min = Math.min(...vals, 0);
+  const max = Math.max(...vals, 100);
+  const range = Math.max(1, max - min);
+  const parts: string[] = [];
+  const areaParts: string[] = [];
+  for (let i = 0; i < vals.length; i++) {
+    const x = (i / (pointCount - 1)) * width;
+    const y = height - ((vals[i] - min) / range) * height;
+    parts.push(`${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`);
+    if (i === 0) areaParts.push(`M${x.toFixed(1)},${height}`);
+    areaParts.push(`L${x.toFixed(1)},${y.toFixed(1)}`);
+  }
+  areaParts.push(`L${width.toFixed(1)},${height} Z`);
+  return { path: parts.join(" "), area: areaParts.join(" "), projected };
+}
 
 // Phase 30 — reaction-type → color matches lab-chamber-3d legend.
 const REACTION_TYPE_COLOR: Record<ReactionType, string> = {
@@ -123,9 +188,40 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
   // Phase 32: hierarchy index — how many decomposed proxy indicators does
   // this entity contain? Drives the ambient depth glyph so every card
   // signals "there's a probability space inside me" at rest.
-  const { byEntity: hierarchyByEntity } = useCanvasHierarchy();
+  const { byEntity: hierarchyByEntity, entityLookup } = useCanvasHierarchy();
   const hierarchy = entityId ? hierarchyByEntity.get(entityId) : undefined;
   const subunitCount = hierarchy?.subunitCount ?? 0;
+
+  // Phase 49 — richer card footer. Pull the full Entity from the lookup
+  // for provenance + analysis metadata. Missing gracefully to sensible
+  // defaults so the card still renders when the entity hasn't hydrated.
+  const entity = entityId ? entityLookup.get(entityId) : undefined;
+  // Leave ~72px of right-side clearance for the reaction badge when it's
+  // present; otherwise stretch to normal card padding.
+  const hasReactionBadge = !!summary && !!spaceId && !!entityId && !isPeripheral;
+  const sparkWidth = Math.max(
+    80,
+    shape.props.w - 32 - (hasReactionBadge ? 64 : 0),
+  );
+  const sparkHeight = 20;
+  const spark = useMemo(
+    () => buildSparkline(entityId, weight, sparkWidth, sparkHeight),
+    [entityId, weight, sparkWidth],
+  );
+  const version = entity?.analysis_count ?? 1;
+  const provenance = entity?.provenance as
+    | { source_type?: string; source_endpoint?: string; author?: string }
+    | null
+    | undefined;
+  const citation =
+    provenance?.author ||
+    (provenance?.source_type
+      ? provenance.source_type.replace(/_/g, " ")
+      : entity?.source_tag ?? "InterAxis");
+  const showFooter = !isPeripheral;
+  const showSparkline = isHero || isKey;
+  const sparkColor = isHero ? "rgba(255,255,255,0.85)" : layerCfg.color;
+  const sparkFill = isHero ? "rgba(255,255,255,0.18)" : `${layerCfg.color}22`;
 
   return (
       <HTMLContainer
@@ -290,6 +386,14 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                 {subunitCount > 0 && (
                   <DepthGlyph count={subunitCount} isHero={isHero} layerColor={layerCfg.color} />
                 )}
+                {spaceId && entityId && !isPeripheral && (
+                  <OpenLabPill
+                    spaceId={spaceId}
+                    entityId={entityId}
+                    isHero={isHero}
+                    layerColor={layerCfg.color}
+                  />
+                )}
               </div>
               <div
                 style={{
@@ -322,6 +426,122 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
               }}
             >
               {description}
+            </div>
+          )}
+
+          {/* Phase 49 — sparkline footer. Hero + key tiers get a trend
+              curve with current → projected delta + citation line.
+              Support tier gets only the citation line. Peripheral keeps
+              its bare treatment. */}
+          {showFooter && (
+            <div
+              style={{
+                position: "absolute",
+                left: isPeripheral ? 10 : 16,
+                right:
+                  (isPeripheral ? 10 : 16) + (hasReactionBadge ? 64 : 0),
+                bottom: isPeripheral ? 8 : 10,
+                pointerEvents: "none",
+              }}
+            >
+              {/* Phase 2E · Tier 1 honesty pass — the previous sparkline
+                  was a seeded-RNG "projected next" trend with no real
+                  time-series backing. Replaced with a static weight
+                  bar (actually reflects the current weight value) +
+                  the current weight label. Honest surface: the bar
+                  length is data, nothing is pretending to predict
+                  the future. When real pulse-event timeseries lands
+                  (Phase 50+), swap this back for an actual sparkline. */}
+              {showSparkline && (
+                <div
+                  style={{
+                    position: "relative",
+                    marginBottom: 4,
+                    height: sparkHeight,
+                    width: sparkWidth,
+                  }}
+                >
+                  {/* Static weight bar — width proportional to weight. */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      bottom: 2,
+                      width: "100%",
+                      height: 3,
+                      borderRadius: 2,
+                      background: isHero
+                        ? "rgba(255,255,255,0.18)"
+                        : "rgba(15,23,42,0.06)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.max(0, Math.min(100, weight))}%`,
+                        height: "100%",
+                        borderRadius: 2,
+                        background: sparkColor,
+                        opacity: 0.9,
+                      }}
+                    />
+                  </div>
+                  {/* Current weight label */}
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      bottom: sparkHeight - 2,
+                      fontSize: 8.5,
+                      fontWeight: 700,
+                      color: isHero
+                        ? "rgba(255,255,255,0.9)"
+                        : layerCfg.color,
+                      fontFamily:
+                        "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      letterSpacing: "0.02em",
+                      textShadow: isHero
+                        ? "0 0 4px rgba(0,0,0,0.2)"
+                        : "none",
+                    }}
+                  >
+                    {weight}%
+                  </span>
+                </div>
+              )}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 8.5,
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  color: isHero
+                    ? "rgba(255,255,255,0.6)"
+                    : "rgba(85,100,121,0.75)",
+                  letterSpacing: "0.04em",
+                }}
+              >
+                <span aria-hidden style={{ fontWeight: 700 }}>
+                  V
+                </span>
+                <span>·</span>
+                <span style={{ fontWeight: 600 }}>{version}</span>
+                <span>·</span>
+                <span
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    flex: 1,
+                    fontStyle: "italic",
+                    opacity: 0.85,
+                  }}
+                  title={citation}
+                >
+                  {citation}
+                </span>
+              </div>
             </div>
           )}
 
@@ -519,6 +739,68 @@ function DepthGlyph({
         {overflow > 0 ? `${dots}+` : count}
       </span>
     </span>
+  );
+}
+
+/**
+ * Card-level "Open Lab" affordance. Sits in the header chip row alongside
+ * the layer badge / category / depth glyph so it's always discoverable —
+ * not gated on the entity having saved reactions (that's the
+ * ReactionBadge's job in the bottom-right). Navigates to the same NodeLab
+ * route the rings + reaction badge already use.
+ */
+function OpenLabPill({
+  spaceId,
+  entityId,
+  isHero,
+  layerColor,
+}: {
+  spaceId: string;
+  entityId: string;
+  isHero: boolean;
+  layerColor: string;
+}) {
+  const href = `/app/space/${spaceId}/entity/${entityId}/lab`;
+  return (
+    <a
+      href={href}
+      title="Open in lab"
+      aria-label="Open in lab"
+      onPointerDown={(e) => e.stopPropagation()}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        padding: "2px 6px 2px 5px",
+        borderRadius: 4,
+        background: isHero ? "rgba(255,255,255,0.14)" : `${layerColor}14`,
+        border: `1px solid ${isHero ? "rgba(255,255,255,0.3)" : `${layerColor}33`}`,
+        color: isHero ? "rgba(255,255,255,0.95)" : layerColor,
+        fontSize: 8,
+        fontWeight: 700,
+        letterSpacing: "0.1em",
+        textTransform: "uppercase",
+        textDecoration: "none",
+        lineHeight: 1,
+        cursor: "pointer",
+        transition: "transform 140ms ease, background 140ms ease",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = "translateY(-0.5px)";
+        e.currentTarget.style.background = isHero
+          ? "rgba(255,255,255,0.22)"
+          : `${layerColor}22`;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "";
+        e.currentTarget.style.background = isHero
+          ? "rgba(255,255,255,0.14)"
+          : `${layerColor}14`;
+      }}
+    >
+      <FlaskConical style={{ width: 8, height: 8 }} />
+      Lab
+    </a>
   );
 }
 

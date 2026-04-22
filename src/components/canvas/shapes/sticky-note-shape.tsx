@@ -5,13 +5,22 @@ import {
   HTMLContainer,
   T,
   stopEventPropagation,
+  useValue,
   type RecordProps,
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import type { StickyNoteShape, StickyColor, StickyDimension } from "./types";
+import { useBrainstormContext } from "../brainstorm-context";
+import {
+  INITIAL_RESEARCH_STATE,
+  StickyResearchChips,
+  StickyResearchTrigger,
+  type ResearchState,
+} from "./sticky-research-ui";
+import type { CardWebSearchResponse } from "@/app/api/canvas/card-web-search/route";
 
 const COLOR_PALETTE: Record<
   StickyColor,
@@ -101,7 +110,18 @@ function StickyNoteRenderer({
 }) {
   const palette = COLOR_PALETTE[shape.props.color];
   const editor = util.editor;
-  const isEditing = editor.getEditingShapeId() === shape.id;
+  // BUG FIX: previously this was a plain function call —
+  //   `const isEditing = editor.getEditingShapeId() === shape.id`
+  // — which made `isEditing` non-reactive. After the user blurred the
+  // textarea, tldraw's editing state cleared but this component had no
+  // way to know, so re-clicking the sticky failed to re-enter edit
+  // mode. `useValue` subscribes to the reactive editor signal so any
+  // change to the editing shape id triggers a re-render.
+  const isEditing = useValue(
+    "sticky-note-is-editing",
+    () => editor.getEditingShapeId() === shape.id,
+    [editor, shape.id],
+  );
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -123,6 +143,81 @@ function StickyNoteRenderer({
   );
 
   const dimensionBadge = shape.props.dimension ? shape.props.dimension.toUpperCase() : null;
+
+  // ── Phase 2D — Deep Search per-sticky research ─────────────────────
+  //
+  // When the brainstorm `deepSearch` toggle is on, each sticky
+  // exposes a small search button that calls card-web-search with
+  // the sticky text. Results render inline below the sticky's text.
+  // State is local to the sticky — cached across re-renders, invalidated
+  // when the sticky's text diverges from the one the results were
+  // fetched for.
+  const brainstormCtx = useBrainstormContext();
+  const deepSearchEnabled = Boolean(
+    brainstormCtx?.settings.enabled && brainstormCtx?.settings.deepSearch,
+  );
+  const [research, setResearch] = useState<ResearchState>(
+    INITIAL_RESEARCH_STATE,
+  );
+
+  // Invalidate stale results when the user edits sticky text away from
+  // what was searched. Keeps the chips honest — they always reflect
+  // the current text.
+  useEffect(() => {
+    if (
+      research.forText !== null &&
+      research.forText !== shape.props.text &&
+      research.status !== "running"
+    ) {
+      setResearch(INITIAL_RESEARCH_STATE);
+    }
+  }, [shape.props.text, research.forText, research.status]);
+
+  const triggerResearch = useCallback(async () => {
+    if (!brainstormCtx?.spaceId) return;
+    if (research.status === "running") return;
+    const textAtFire = shape.props.text;
+    setResearch({
+      status: "running",
+      forText: textAtFire,
+      results: [],
+      summary: null,
+      error: null,
+    });
+    try {
+      const res = await fetch("/api/canvas/card-web-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spaceId: brainstormCtx.spaceId,
+          shape_id: shape.id,
+          primary_text: textAtFire,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res
+          .json()
+          .catch(() => ({ error: `${res.status}` }));
+        throw new Error(body.error ?? `${res.status}`);
+      }
+      const json = (await res.json()) as CardWebSearchResponse;
+      setResearch({
+        status: "done",
+        forText: textAtFire,
+        results: json.results,
+        summary: json.summary,
+        error: null,
+      });
+    } catch (err) {
+      setResearch({
+        status: "error",
+        forText: textAtFire,
+        results: [],
+        summary: null,
+        error: err instanceof Error ? err.message : "Search failed",
+      });
+    }
+  }, [brainstormCtx, shape.id, shape.props.text, research.status]);
 
   return (
     <HTMLContainer
@@ -235,6 +330,25 @@ function StickyNoteRenderer({
           >
             {shape.props.text || "Double-click to type…"}
           </div>
+        )}
+
+        {/* Phase 2D — Deep Search results. Rendered inline below the
+            sticky text when the brainstorm toggle is on AND research
+            has fired for this sticky. Not editable in-place; chips
+            open sources in new tab on click. */}
+        {deepSearchEnabled && !isEditing && (
+          <StickyResearchChips state={research} />
+        )}
+
+        {/* Phase 2D — Deep Search trigger button. Positioned
+            absolute in the sticky's bottom-right. Hidden while
+            editing so it doesn't obstruct the textarea. */}
+        {deepSearchEnabled && !isEditing && (
+          <StickyResearchTrigger
+            stickyText={shape.props.text}
+            status={research.status}
+            onTrigger={triggerResearch}
+          />
         )}
       </div>
     </HTMLContainer>

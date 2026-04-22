@@ -442,7 +442,20 @@ export interface SynthesisData {
   research_provenance?: ResearchProvenance;
 
   // Phase 7B: Strategic recommendation (macro strategy + micro tactics)
+  // Tier 2 of strategy rework: this field becomes a backward-compat alias
+  // to strategy_batch.strategies[0] (the primary). New code should prefer
+  // strategy_batch directly so it can iterate the full multi-objective
+  // fan-out. Older readers (UI view models, validators) keep working
+  // against this field unchanged.
   strategic_recommendation?: import("./strategy").StrategicRecommendationData;
+
+  /**
+   * Tier 2: multi-objective strategy fan-out. One StrategyBatchEntry per
+   * active objective (top-level goal + children, capped at
+   * MAX_OBJECTIVES_PER_BATCH). Absent on legacy spaces — readers should
+   * fall back to `strategic_recommendation` in that case.
+   */
+  strategy_batch?: import("./strategy-batch").StrategyBatch;
 
   // Stale synthesis detection (populated by critique cascade check)
   stale_report?: import("../lib/twin/cascade-propagation").StaleReport;

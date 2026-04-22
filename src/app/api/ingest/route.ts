@@ -30,11 +30,19 @@ export const runtime = "nodejs";
  * through the existing analysis flow.
  */
 export async function POST(request: Request) {
-  const { user, error: authError } = await safeAuth();
+  const { user, supabase, error: authError } = await safeAuth();
   if (authError) return authError;
-  void user; // auth is enforced; user id not currently persisted with ingest
 
   const contentType = request.headers.get("content-type") ?? "";
+
+  // Phase 2D — persistence. Track source metadata we'll write to
+  // ingested_files after the extraction succeeds. Captured per-branch
+  // below so the multipart / url / text paths each set them uniquely.
+  let sourceType: "file" | "url" | "text" = "file";
+  let sourceUrl: string | null = null;
+  let mimeType: string | null = null;
+  let extractionMethod: string | null = null;
+  let spaceIdForPersist: string | null = null;
 
   let extraction: { ok: true; result: ExtractResult } | { ok: false; error: { code: string; message: string } };
 
@@ -60,13 +68,25 @@ export async function POST(request: Request) {
     const buf = Buffer.from(await file.arrayBuffer());
     const mime = check.resolvedType;
 
+    // Capture persistence metadata before extraction diverges by mime.
+    sourceType = "file";
+    mimeType = mime;
+    const formSpaceId = form.get("space_id");
+    if (typeof formSpaceId === "string" && formSpaceId) {
+      spaceIdForPersist = formSpaceId;
+    }
+
     if (mime === "application/pdf") {
+      extractionMethod = "pdf-parse";
       extraction = await extractPdf(buf, file.name || "document.pdf");
     } else if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+      extractionMethod = "docx";
       extraction = await extractDocx(buf, file.name || "document.docx");
     } else if (isImageMime(mime)) {
+      extractionMethod = "image-ocr";
       extraction = await extractImage(buf, file.name || "image", mime);
     } else if (mime === "text/plain" || mime === "text/markdown") {
+      extractionMethod = mime === "text/markdown" ? "markdown" : "text";
       extraction = extractText(
         buf.toString("utf-8"),
         file.name || (mime === "text/markdown" ? "document.md" : "document.txt"),
@@ -78,11 +98,15 @@ export async function POST(request: Request) {
     }
   } else if (contentType.includes("application/json")) {
     // ── URL or text path ───────────────────────────────────────────
-    let body: { type?: string; url?: string; text?: string };
+    let body: { type?: string; url?: string; text?: string; space_id?: string };
     try {
       body = await request.json();
     } catch {
       return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    }
+
+    if (typeof body.space_id === "string" && body.space_id) {
+      spaceIdForPersist = body.space_id;
     }
 
     if (body.type === "url") {
@@ -93,11 +117,19 @@ export async function POST(request: Request) {
       if (!check.ok) {
         return NextResponse.json({ error: check.error.message, code: check.error.code }, { status: 400 });
       }
+      sourceType = "url";
+      // `check.url` is a parsed URL object; stringify for persistence.
+      sourceUrl = String(check.url);
+      mimeType = "text/html";
+      extractionMethod = "url-fetch";
       extraction = await extractUrl(check.url);
     } else if (body.type === "text") {
       if (typeof body.text !== "string" || !body.text.trim()) {
         return NextResponse.json({ error: "Text missing." }, { status: 400 });
       }
+      sourceType = "text";
+      mimeType = "text/plain";
+      extractionMethod = "paste";
       extraction = extractText(body.text, "pasted-text", "text");
     } else {
       return NextResponse.json(
@@ -125,6 +157,44 @@ export async function POST(request: Request) {
   // ── Normalize ────────────────────────────────────────────────────
   const { text: normalizedText, normalized, chunks } = await normalizeText(extraction.result.text);
 
+  // Phase 2D — persist to ingested_files so the upload survives the
+  // parse/submit gap and surfaces in the Library's Files folder.
+  // Non-blocking: if the insert fails we still return the extracted
+  // text so the user isn't blocked on a storage hiccup.
+  let ingestedFileId: string | null = null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabase as any;
+    const { data: inserted, error: insertErr } = await db
+      .from("ingested_files")
+      .insert({
+        user_id: user.id,
+        space_id: spaceIdForPersist,
+        source_type: sourceType,
+        source_name: extraction.result.source_name,
+        mime_type: mimeType,
+        source_url: sourceUrl,
+        normalized_text: normalizedText,
+        raw_chars: extraction.result.text.length,
+        normalized_chars: normalizedText.length,
+        extraction_method: extractionMethod,
+        metadata: {
+          ...extraction.result.metadata,
+          normalize_chunks: chunks,
+          normalized,
+        },
+      })
+      .select("id")
+      .single();
+    if (insertErr) {
+      console.warn("[ingest] persist failed (non-fatal):", insertErr);
+    } else {
+      ingestedFileId = (inserted as { id: string } | null)?.id ?? null;
+    }
+  } catch (err) {
+    console.warn("[ingest] persist threw (non-fatal):", err);
+  }
+
   return NextResponse.json({
     text: normalizedText,
     source_name: extraction.result.source_name,
@@ -135,6 +205,9 @@ export async function POST(request: Request) {
       normalized,
       normalize_chunks: chunks,
     },
+    // New: row id so the client can reference this ingest in future
+    // calls (e.g. /api/analyze could link entities back to source).
+    ingested_file_id: ingestedFileId,
     // Small reminder to the client: text is editable before submit.
     notice:
       "Review the extracted text below. You can edit it before submitting for analysis.",

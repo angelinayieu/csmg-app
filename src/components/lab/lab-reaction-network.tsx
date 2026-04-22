@@ -45,26 +45,26 @@ export function LabReactionNetwork({
   );
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-[#10161f] px-3.5 py-2.5">
+    <div className="flex h-full flex-col overflow-hidden bg-[var(--lab-panel-bg)] px-3.5 py-2.5">
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">
+          <span className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
             ⚗ Reaction Network
           </span>
-          <span className="font-mono text-[9px] text-[#475569]">{reactions.length}</span>
+          <span className="font-mono text-[9px] text-[var(--lab-text-faint)]">{reactions.length}</span>
         </div>
-        <span className="text-[8px] tracking-wide text-[#475569]">
+        <span className="text-[8px] tracking-wide text-[var(--lab-text-faint)]">
           CLICK TO FOCUS · PROBABILITY · TYPE
         </span>
       </div>
 
       {enriched.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center rounded-[3px] border border-dashed border-[#94a3b8]/[0.08] bg-[#141b26]">
+        <div className="flex flex-1 items-center justify-center rounded-[3px] border border-dashed border-[var(--lab-border)] bg-[var(--lab-panel-raised)]">
           <div className="text-center">
-            <div className="text-[11px] text-[#a8b3c4]">No saved reactions yet.</div>
-            <div className="mt-1 text-[9.5px] text-[#475569]">
+            <div className="text-[11px] text-[var(--lab-text-mid)]">No saved reactions yet.</div>
+            <div className="mt-1 text-[9.5px] text-[var(--lab-text-faint)]">
               Combine this entity with others on the canvas and hit{" "}
-              <span className="font-semibold text-[#a8b3c4]">Save as Reaction</span>.
+              <span className="font-semibold text-[var(--lab-text-mid)]">Save as Reaction</span>.
             </div>
           </div>
         </div>
@@ -85,7 +85,7 @@ export function LabReactionNetwork({
                 onClick={() =>
                   onFocusReaction(focusedReactionId === r.id ? null : r.id)
                 }
-                className="grid w-full grid-cols-[1fr_auto_auto] items-center gap-3 rounded-[2px] border-l-2 border-[#94a3b8]/[0.08] bg-[#141b26] px-3 py-2 text-left transition-colors hover:bg-[#1a222e]"
+                className="grid w-full grid-cols-[1fr_auto_auto] items-center gap-3 rounded-[2px] border-l-2 border-[var(--lab-border)] bg-[var(--lab-panel-raised)] px-3 py-2 text-left transition-colors hover:bg-[var(--lab-panel-raised)]"
                 style={{
                   borderLeftColor: accent,
                   borderLeftWidth: focused ? 3 : 2,
@@ -102,19 +102,19 @@ export function LabReactionNetwork({
                           <span
                             className={
                               isFocal
-                                ? "rounded-sm bg-[#4ade80]/10 px-1 font-semibold text-[#4ade80]"
-                                : "text-[#a8b3c4]"
+                                ? "rounded-sm bg-[var(--lab-accent-tint)] px-1 font-semibold text-[var(--lab-accent)]"
+                                : "text-[var(--lab-text-mid)]"
                             }
                           >
                             {participantSymbol(p ?? undefined, i)}
                           </span>
                           {i < r.entity_ids.length - 1 && (
-                            <span className="mx-1 text-[#475569]">+</span>
+                            <span className="mx-1 text-[var(--lab-text-faint)]">+</span>
                           )}
                         </span>
                       );
                     })}
-                    <span className="mx-2 text-[#475569]">⟶</span>
+                    <span className="mx-2 text-[var(--lab-text-faint)]">⟶</span>
                     <span
                       className="truncate text-[11px] font-semibold"
                       style={{ color: "#e8edf4" }}
@@ -123,7 +123,7 @@ export function LabReactionNetwork({
                     </span>
                   </div>
                   {r.implication && (
-                    <div className="mt-0.5 truncate text-[9.5px] text-[#a8b3c4]">
+                    <div className="mt-0.5 truncate text-[9.5px] text-[var(--lab-text-mid)]">
                       {r.implication}
                     </div>
                   )}

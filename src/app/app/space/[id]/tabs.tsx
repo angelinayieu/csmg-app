@@ -21,6 +21,7 @@ import { PathResults } from "@/components/reasoning/path-results";
 import { LoopDetailCards } from "@/components/reasoning/loop-detail-card";
 import { useReasoning } from "@/lib/hooks/use-reasoning";
 import { useIterativeReasoning } from "@/lib/hooks/use-iterative-reasoning";
+import { useQuickConnect } from "@/lib/hooks/use-quick-connect";
 import { DeepenButton } from "@/components/reasoning/deepen-button";
 import { IterationResultsCard } from "@/components/reasoning/iteration-results-card";
 import { edgeDimensionStyles, domainColors } from "@/lib/design-tokens";
@@ -215,6 +216,9 @@ export function SpaceDetailTabs({
 
   const iterativeReasoning = useIterativeReasoning(space.id);
 
+  // Quick Connect — remediates the "no connections" warning inline.
+  const quickConnect = useQuickConnect(space.id);
+
   // Build entity UUID → Entity lookup for NodeDetail
   const entityMap = useMemo(() => {
     const map = new Map<string, Entity>();
@@ -400,6 +404,9 @@ export function SpaceDetailTabs({
                   spaceDescription={space.description ?? space.name}
                   domainMap={showSiblings ? domainMap : undefined}
                   layoutType={layoutType}
+                  onQuickConnect={quickConnect.run}
+                  quickConnectRunning={quickConnect.isRunning}
+                  quickConnectError={quickConnect.error}
                 />
               </div>
             </div>

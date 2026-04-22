@@ -90,8 +90,11 @@ export function SettingsForm({
       .join(" ");
 
     const supabase = createClient();
-    const { error } = await supabase
-      .from("profiles")
+    // Supabase-ssr's typed update() narrows to `never` when the generated
+    // Database type doesn't include an explicit Update type for this table.
+    // Cast to `any` locally — the query is well-formed at runtime.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from("profiles") as any)
       .update({ display_name: displayName || null })
       .eq("id", userId);
 

@@ -97,3 +97,28 @@ export type {
   FrameBridge,
   FramesResponse,
 } from "./canvas-frame";
+export type {
+  EntityObjective,
+  EntityObjectiveSource,
+  GoalStatus,
+  ImprovementGoalSprintWaveAAdditions,
+  ProposedGoalHydrated,
+  ApproveGoalInput,
+  RejectGoalInput,
+} from "./entity-objective";
+export type {
+  UserEvent,
+  UserEventType,
+  UserEventRefKind,
+  RecordUserEventInput,
+  ProfileBaselineFields,
+  UserBehaviorDigestOutput,
+} from "./user-baseline";
+export type {
+  AgentFinding,
+  AgentFindingKind,
+  AgentFindingSeverity,
+  AgentFindingStatus,
+  RecordAgentFindingInput,
+  ReviewAgentFindingInput,
+} from "./agent-finding";

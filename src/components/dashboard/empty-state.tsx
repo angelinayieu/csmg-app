@@ -31,7 +31,7 @@ export function EmptyState() {
         Paste any text — a business situation, research problem, or complex
         decision — and analyze it into a structured knowledge graph.
       </p>
-      <Link href="/app/analyze" className="mt-6">
+      <Link href="/app/new" className="mt-6">
         <Button>
           <Plus className="mr-2 h-4 w-4" />
           Create your first space

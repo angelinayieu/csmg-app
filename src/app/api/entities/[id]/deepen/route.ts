@@ -23,6 +23,7 @@ import {
   buildEntityInput,
   upsertMemoryItemsBatch,
 } from "@/lib/memory/writer";
+import { invalidateCoverageForNewEntities } from "@/lib/kg/invalidate-coverage";
 
 export const maxDuration = 60;
 
@@ -105,6 +106,46 @@ export async function POST(_request: Request, ctx: Ctx) {
         );
       } catch (memErr) {
         console.warn("[deepen] memory index failed (non-fatal):", memErr);
+      }
+
+      // Wave B — the parent entity's meaning has shifted (it now has
+      // new structural children), and the children are brand-new KG
+      // nodes. Flag apps that reference the parent OR whose served goal
+      // depends on the parent via entity_objectives. Non-fatal.
+      try {
+        const { notifyEntitiesChanged } = await import("@/lib/apps/notify");
+        const changedIds = [entity.id, ...result.children.map((c) => c.id)];
+        await notifyEntitiesChanged(
+          db,
+          entity.space_id,
+          changedIds,
+          `user:deepen:${user.id}`,
+        );
+      } catch (notifyErr) {
+        console.warn(
+          "[deepen] app staleness notify failed (non-fatal):",
+          notifyErr,
+        );
+      }
+
+      // Phase 1 Step 6 — prior pairwise checks involving the parent's
+      // 1-hop neighborhood may be stale now that the parent has
+      // internal structure. Flag them for revisit on the next
+      // prospector pass.
+      try {
+        const newEntityUuids = [entity.id, ...result.children.map((c) => c.id)];
+        const invalidation = await invalidateCoverageForNewEntities(db, {
+          spaceId: entity.space_id,
+          newEntityIds: newEntityUuids,
+          reason: "neighbor_added",
+        });
+        if (invalidation.flagged > 0) {
+          console.log(
+            `[deepen] invalidated ${invalidation.flagged} pair checks for ${invalidation.neighborCount} neighbors`,
+          );
+        }
+      } catch (invErr) {
+        console.warn("[deepen] coverage invalidation failed (non-fatal):", invErr);
       }
     }
 

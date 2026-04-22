@@ -57,6 +57,14 @@ export interface GenerateAppsInput {
   activeGoalId?: string | null;
   /** Strategy version from strategy_snapshots.version, for provenance. */
   strategyVersion?: number;
+  /**
+   * Map from InfrastructureProposal.id → mechanism row IDs that were
+   * materialized for it. When present, the generator sets
+   * `apps.parent_mechanism_id` to the first mechanism in the list, attaching
+   * each app to its parent mechanism (apps as sub-branches of mechanisms).
+   * Optional for back-compat — when omitted, parent_mechanism_id stays null.
+   */
+  mechanismIdsByProposal?: Map<string, string[]>;
   /** DB client — caller passes an authenticated supabase client. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: SupabaseClient<Database> | any;
@@ -90,6 +98,7 @@ export async function generateAppsAndInterventions(
     entities,
     activeGoalId,
     strategyVersion,
+    mechanismIdsByProposal,
     db,
     triggeredBy,
   } = input;
@@ -102,10 +111,22 @@ export async function generateAppsAndInterventions(
     codeToEntity.set(e.entity_id, e);
   }
 
-  // Pull proposals from top-ranked strategy. Fall back to empty list — we still
-  // want to materialize interventions even when proposals are missing.
+  // Tier 1 fix: pull proposals from the strategy entry that MATCHES the
+  // `recommendation` we were handed, not blindly from rank 1. Rationale:
+  // when a user selects an alternative variant via /strategy-refresh
+  // action=select_alternative, the route now re-ranks so the selected
+  // variant is rank 1 — but if anything upstream forgets to re-rank (older
+  // saved data, manual DB edits, future code paths) we still pick the
+  // proposals attached to the recommendation that's actually being
+  // committed instead of silently approving a different variant.
+  // Match strategy: title equality is reliable for a single space (the
+  // 3 variants always have distinct titles by prompt design) and survives
+  // JSON round-trips that drop reference identity.
+  const matchingRanked =
+    rankedStrategies?.find((r) => r.recommendation?.title === recommendation.title) ??
+    rankedStrategies?.[0];
   const proposals: InfrastructureProposal[] =
-    rankedStrategies?.[0]?.infrastructure_proposals ?? [];
+    matchingRanked?.infrastructure_proposals ?? [];
 
   // ── Load existing rows (for upsert + merge preservation) ─────────────
   const { data: existingApps } = (await db
@@ -154,6 +175,7 @@ export async function generateAppsAndInterventions(
     strategyVersion: strategyVersion ?? null,
     existingAppByProposalId,
     appSeeds,
+    mechanismIdsByProposal,
     db,
     triggeredBy,
   });
@@ -211,6 +233,131 @@ export async function generateAppsAndInterventions(
   };
 }
 
+// ── Tier 2: batch entry point ────────────────────────────────────────
+//
+// Iterates a StrategyBatch (one entry per active objective) and generates
+// apps + interventions for each. Each per-entry call uses the existing
+// generateAppsAndInterventions function — no duplication of materialization
+// logic — but with the entry's own recommendation, ranked_strategies, and
+// goal_id so apps land tagged with the right objective.
+//
+// Side effects:
+//   - apps.source_infrastructure_proposal_id is the unique key, so
+//     proposals from different strategies (different IDs) never collide,
+//     even when two strategies happen to share a proposal name.
+//   - apps.serves_goal_id gets the per-entry goal id (root vs each child),
+//     so the deliverables view (Tier 2.5) can group apps by objective.
+//   - apps.serves_sub_objective_ids gets the entry's parent_goal_id when
+//     the entry is a sub-objective — this is the chain back to the root
+//     that lets cross-objective rollups work.
+//
+// What this does NOT do (deferred):
+//   - Per-entry baseline capture (only the primary entry currently has its
+//     T0 baseline written; sub-objective baselines come in Tier 2.5).
+//   - Cross-strategy app deduplication when two strategies propose
+//     identical infrastructure. Today they create two apps; agents can
+//     manually merge or the user can retire duplicates.
+
+import type { StrategyBatch } from "@/types/strategy-batch";
+
+export interface GenerateAppsForBatchInput {
+  spaceId: string;
+  userId: string;
+  batch: StrategyBatch;
+  entities: Entity[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: SupabaseClient<Database> | any;
+  triggeredBy: string;
+  /** Strategy version from strategy_snapshots.version, for provenance. */
+  strategyVersion?: number;
+}
+
+export interface GenerateAppsForBatchResult {
+  /** Aggregate counts across all entries. */
+  apps_created: number;
+  apps_updated: number;
+  apps_total: number;
+  interventions_total: number;
+  orphan_interventions: number;
+  /** Per-entry breakdown so callers can surface "X apps for objective Y" UX. */
+  per_entry: Array<{
+    objective_id: string | null;
+    objective_title: string;
+    apps_total: number;
+    interventions_total: number;
+  }>;
+}
+
+export async function generateAppsForBatch(
+  input: GenerateAppsForBatchInput,
+): Promise<GenerateAppsForBatchResult> {
+  const agg: GenerateAppsForBatchResult = {
+    apps_created: 0,
+    apps_updated: 0,
+    apps_total: 0,
+    interventions_total: 0,
+    orphan_interventions: 0,
+    per_entry: [],
+  };
+
+  // Sequential — not parallel — because each entry's app upsert reads
+  // existing apps and we want a deterministic write order. The cost is
+  // small (each entry produces 1-3 apps; 5 entries = ~10-15 apps total).
+  for (const entry of input.batch.strategies) {
+    const result = await generateAppsAndInterventions({
+      spaceId: input.spaceId,
+      userId: input.userId,
+      recommendation: entry.recommendation,
+      rankedStrategies: entry.ranked_strategies,
+      entities: input.entities,
+      activeGoalId: entry.objective_id,
+      strategyVersion: input.strategyVersion,
+      db: input.db,
+      triggeredBy: input.triggeredBy,
+    });
+
+    agg.apps_created += result.apps_created;
+    agg.apps_updated += result.apps_updated;
+    agg.apps_total += result.apps_total;
+    agg.interventions_total += result.interventions_total;
+    agg.orphan_interventions += result.orphan_interventions;
+    agg.per_entry.push({
+      objective_id: entry.objective_id,
+      objective_title: entry.objective_title,
+      apps_total: result.apps_total,
+      interventions_total: result.interventions_total,
+    });
+
+    // For sub-objective entries, also stamp serves_sub_objective_ids on the
+    // apps we just created/updated. The base materializer doesn't know
+    // about sub-objectives — it only sees activeGoalId — so we patch the
+    // hierarchy backlink in here. parent_goal_id is the root the entry
+    // is a child of.
+    if (entry.parent_goal_id && result.app_ids.length > 0) {
+      try {
+        await input.db
+          .from("apps")
+          .update({
+            serves_sub_objective_ids: [entry.parent_goal_id],
+          })
+          .in("id", result.app_ids);
+      } catch (err) {
+        console.warn(
+          `[generateAppsForBatch] failed to stamp serves_sub_objective_ids for entry ${entry.objective_title}:`,
+          err,
+        );
+      }
+    }
+  }
+
+  console.log(
+    `[generateAppsForBatch] batch ${input.batch.batch_id}: ${agg.apps_total} apps ` +
+    `across ${input.batch.strategies.length} objectives (${agg.apps_created} new, ${agg.apps_updated} updated)`,
+  );
+
+  return agg;
+}
+
 // ── App materialization ───────────────────────────────────────────────
 
 interface MaterializeAppsArgs {
@@ -224,6 +371,8 @@ interface MaterializeAppsArgs {
   strategyVersion: number | null;
   existingAppByProposalId: Map<string, AppRow>;
   appSeeds: AppSeed[];
+  /** Optional proposal_id → mechanism_ids[] map; first mechanism becomes parent. */
+  mechanismIdsByProposal?: Map<string, string[]>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any;
   triggeredBy: string;
@@ -241,6 +390,7 @@ async function materializeApps(args: MaterializeAppsArgs) {
     strategyVersion,
     existingAppByProposalId,
     appSeeds,
+    mechanismIdsByProposal,
     db,
     triggeredBy,
   } = args;
@@ -300,6 +450,31 @@ async function materializeApps(args: MaterializeAppsArgs) {
           strategyVersion,
         });
 
+    // ── Reasoning provenance (Phase 6 of strategy rework) ──
+    // Compute the union of provenance fields across all tactics that will
+    // cluster under this proposal (by source_perspective or dominant entity
+    // match), plus the proposal's own infrastructure-map component references.
+    // Persist into config.reasoning_provenance — schema-compatible (config is
+    // Json), queryable at read-time, preserved across regen.
+    const proposalTactics = (recommendation.micro_tactics ?? []).filter((t) => {
+      if (t.macro_link && t.macro_link === proposal.source_perspective) return true;
+      if (t.entity_id && sourceCodes.includes(t.entity_id)) return true;
+      return false;
+    });
+    const reasoningProvenance = {
+      axiom_ids_respected: uniqueStrings(proposalTactics.flatMap((t) => t.axiom_ids_respected ?? [])),
+      axiom_ids_challenged: uniqueStrings(proposalTactics.flatMap((t) => t.axiom_ids_challenged ?? [])),
+      convergence_ids_addressed: uniqueStrings(proposalTactics.flatMap((t) => t.convergence_ids_addressed ?? [])),
+      coverage_gap_ids_closed: uniqueStrings(proposalTactics.flatMap((t) => t.coverage_gap_ids_closed ?? [])),
+      inversion_ids_tested: uniqueStrings(proposalTactics.flatMap((t) => t.inversion_ids_tested ?? [])),
+      hidden_signal_refs: uniqueStrings(proposalTactics.flatMap((t) => t.hidden_signal_refs ?? [])),
+      // Source-tactic IDs so UI can walk back to the specific tactic rows that motivated this app
+      source_tactic_ids: proposalTactics.map((t) => t.id).filter(Boolean),
+      // Snapshot of strategy-level provenance at generation time
+      strategy_provenance_score: recommendation.provenance?.overall_provenance_score,
+      strategy_coverage_at_generation: recommendation.provenance?.coverage_pct_at_generation,
+    };
+
     const config: AppConfig = {
       // agent-authored fields survive regen
       agent_hints: priorConfig.agent_hints ?? [],
@@ -313,6 +488,10 @@ async function materializeApps(args: MaterializeAppsArgs) {
       surfaced_metrics: (proposal.metrics_tracked ?? []).map((m) => ({ name: m })),
       // Declarative UI + behavior spec — what AppRenderer consumes.
       manifest: nextManifest,
+      // Reasoning provenance — backlinks to axioms/convergences/gaps/inversions
+      // this app's parent tactics respect/address. Empty arrays are valid.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      reasoning_provenance: reasoningProvenance as any,
     };
 
     // Preserve agent-written runtime state; only reset things we own.
@@ -324,6 +503,17 @@ async function materializeApps(args: MaterializeAppsArgs) {
       recent_signals: priorState.recent_signals ?? [],
     };
 
+    // Mechanism parent: take the first mechanism row materialized for this
+    // proposal (apps as sub-branches of mechanisms). Multi-mechanism
+    // proposals: V1 picks the first; future iterations may split apps
+    // across mechanisms or re-parent based on widget content.
+    const mechIds = mechanismIdsByProposal?.get(proposal.id) ?? [];
+    const parentMechanismId = mechIds.length > 0 ? mechIds[0] : null;
+
+    // The `parent_mechanism_id` column was added in 20260509_mechanisms.sql
+    // but database.types.ts hasn't been regenerated yet. We cast through
+    // unknown to bypass the literal-property check while keeping the field
+    // strongly typed at the call site.
     const row: AppInsert = {
       space_id: spaceId,
       user_id: userId,
@@ -338,6 +528,7 @@ async function materializeApps(args: MaterializeAppsArgs) {
       serves_goal_id: activeGoalId,
       serves_sub_objective_ids: existing?.serves_sub_objective_ids ?? [],
       tracked_metric_tracker_ids: existing?.tracked_metric_tracker_ids ?? [],
+      ...({ parent_mechanism_id: parentMechanismId } as unknown as Partial<AppInsert>),
       config: config as unknown as AppInsert["config"],
       state: state as unknown as AppInsert["state"],
       status: existing?.status ?? (proposal.status === "proposed" ? "proposed" : "proposed"),
@@ -449,6 +640,86 @@ async function materializeApps(args: MaterializeAppsArgs) {
   for (const a of apps) {
     if (existingIds.has(a.id)) updated++;
     else created++;
+  }
+
+  // Wire p10/p50/p90 simulation onto each app's state. Soft-fails per app:
+  // if the Monte Carlo subgraph fetch fails or the app has no dominant
+  // entity, we simply skip that app. Batched state merge avoids N round
+  // trips to PostgREST.
+  if (apps.length > 0) {
+    try {
+      const { simulateEntityChain } = await import(
+        "@/lib/simulation/simulate-entity-chain"
+      );
+      const now = new Date().toISOString();
+      const simResults = await Promise.all(
+        apps.map(async (a) => {
+          const targetEntityId = (a.dominant_entity_ids ?? [])[0];
+          if (!targetEntityId) return { app: a, dist: null };
+          try {
+            const res = await simulateEntityChain(db, {
+              spaceId,
+              targetEntityId,
+              depthHops: 3,
+              iterations: 400,
+              timesteps: 8,
+            });
+            return { app: a, dist: res.targetDistribution };
+          } catch {
+            return { app: a, dist: null };
+          }
+        }),
+      );
+      const updates = simResults.filter((r) => r.dist !== null);
+      for (const { app: a, dist } of updates) {
+        if (!dist) continue;
+        const nextState: AppState = {
+          ...asAppState(a.state),
+          simulation_distribution: {
+            p10: dist.p10,
+            p50: dist.p50,
+            p90: dist.p90,
+            mean: dist.mean,
+            stddev: dist.stddev,
+            computed_at: now,
+          },
+        };
+        await db
+          .from("apps")
+          .update({ state: nextState as unknown as AppInsert["state"] })
+          .eq("id", a.id);
+        // Mirror onto the in-memory row so the caller / memory indexer
+        // sees the enriched state without a second fetch.
+        (a as AppRow).state = nextState as unknown as AppRow["state"];
+      }
+    } catch (simErr) {
+      console.warn("[app-generator] simulation enrichment failed (non-fatal):", simErr);
+    }
+  }
+
+  // Wave C — activate the 'app' memory kind. buildAppInput has existed
+  // since Sprint 2 but no write path invoked it; apps never landed in
+  // ambient retrieval. Now every materialized/upserted app gets indexed.
+  // Non-fatal — app upsert is the primary work.
+  if (apps.length > 0) {
+    try {
+      const { upsertMemoryItemsBatch, buildAppInput } = await import(
+        "@/lib/memory/writer"
+      );
+      const firstUserId = apps[0].user_id;
+      await upsertMemoryItemsBatch(
+        db,
+        apps.map((a) =>
+          buildAppInput(a.user_id ?? firstUserId, {
+            id: a.id,
+            name: a.name,
+            description: a.description,
+          }),
+        ),
+      );
+    } catch (memErr) {
+      console.warn("[app-generator] memory index failed (non-fatal):", memErr);
+    }
   }
 
   return { apps, created, updated };
@@ -668,6 +939,11 @@ async function recordAppVersions(args: RecordAppVersionsArgs) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
+
+/** Dedup + sort string array; filters out empty/null entries. */
+function uniqueStrings(arr: string[]): string[] {
+  return Array.from(new Set(arr.filter((s) => typeof s === "string" && s.length > 0))).sort();
+}
 
 function coerceAppType(t: InfrastructureProposal["type"]): AppType {
   switch (t) {

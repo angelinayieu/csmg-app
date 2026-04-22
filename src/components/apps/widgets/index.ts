@@ -267,10 +267,16 @@ export function bootstrapWidgetRegistry(): void {
         "Predicted-vs-actual grid for tracked metrics, grouped by deviation_tag. Reads strategy_baseline + deviation_ledger.",
       category: "lab",
       capabilities: ["baseline_tracking", "deviation_capture"],
-      optional_bindings: ["baseline", "deviations"],
+      // Tier 3.6: bind to app_strategy to annotate rows with
+      // learning_loop.leading_indicators thresholds (green/yellow/red).
+      // Without this, the tracker shows raw values; with it, it shows
+      // whether each metric is "on track" according to the sub-strategy's
+      // own definition of success.
+      optional_bindings: ["baseline", "deviations", "spec"],
       accepted_sources: {
         baseline: ["strategy_baseline", "literal"],
         deviations: ["deviation_ledger", "literal"],
+        spec: ["app_strategy", "literal"],
       },
     },
     BaselineDeviationTracker
@@ -283,9 +289,14 @@ export function bootstrapWidgetRegistry(): void {
         "Open predictions for this app — metric, horizon, predicted value, confidence. Supports log_prediction + adjust_horizon actions.",
       category: "lab",
       capabilities: ["prediction"],
-      optional_bindings: ["predictions"],
+      // Tier 3.5: optionally bind to app_strategy to pull sub-strategy
+      // defaults (default_horizon_days, default_confidence). When present,
+      // the widget pre-fills the log-prediction form with these defaults
+      // instead of generic 30d / 0.6.
+      optional_bindings: ["predictions", "spec"],
       accepted_sources: {
         predictions: ["prediction_ledger", "literal"],
+        spec: ["app_strategy", "literal"],
       },
     },
     PredictionPanel
@@ -298,11 +309,16 @@ export function bootstrapWidgetRegistry(): void {
         "Run hypothesis tests against open predictions. start_experiment seeds a prediction; end_experiment writes the resolved actual.",
       category: "lab",
       capabilities: ["validation", "prediction"],
-      optional_bindings: ["experiments", "interventions", "predictions"],
+      // Tier 3.5: bind to app_strategy.spec.validation_spec.hypothesis_bank
+      // when present so the user gets an inline picker of pre-formulated
+      // hypotheses instead of having to author every experiment from
+      // scratch. Falls back to free-form when no sub-strategy exists.
+      optional_bindings: ["experiments", "interventions", "predictions", "spec"],
       accepted_sources: {
         experiments: ["prediction_ledger", "literal"],
         interventions: ["interventions"],
         predictions: ["prediction_ledger"],
+        spec: ["app_strategy", "literal"],
       },
     },
     ValidationLab
@@ -315,11 +331,16 @@ export function bootstrapWidgetRegistry(): void {
         "What-if scenarios against the current TwinState. Saved scenarios can be promoted into a strategy regen.",
       category: "lab",
       capabilities: ["simulation"],
-      optional_bindings: ["twin", "entities", "scenarios"],
+      // Tier 3.6: bind to app_strategy to pull perturbation_profiles +
+      // scenario_seeds from the sub-strategy spec. When present, the
+      // widget surfaces one-click pre-canned scenarios instead of
+      // requiring the user to author every perturbation from scratch.
+      optional_bindings: ["twin", "entities", "scenarios", "spec"],
       accepted_sources: {
         twin: ["twin_state"],
         entities: ["entities"],
         scenarios: ["simulation_result", "literal"],
+        spec: ["app_strategy", "literal"],
       },
     },
     SimulationLab
@@ -332,9 +353,15 @@ export function bootstrapWidgetRegistry(): void {
         "Resolved predictions tagged as surprise — the highest-value training data. Each row surfaces escalate_to_research.",
       category: "lab",
       capabilities: ["deviation_capture"],
-      optional_bindings: ["signals"],
+      // Tier 4.5: bind to app_strategy to know whether a sub-strategy
+      // exists. When present, the widget surfaces an extra "Add
+      // hypothesis" action that re-triggers sub-strategy generation
+      // with the surprise as focus hint — turning surprises into
+      // testable validation_spec.hypothesis_bank entries on next regen.
+      optional_bindings: ["signals", "spec"],
       accepted_sources: {
         signals: ["deviation_ledger", "literal"],
+        spec: ["app_strategy", "literal"],
       },
     },
     DeviationSignalFeed

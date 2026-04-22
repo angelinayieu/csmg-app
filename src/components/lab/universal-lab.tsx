@@ -13,12 +13,19 @@ import { LabAnalysis } from "./lab-analysis";
 import { LabReactionNetwork } from "./lab-reaction-network";
 import { LabControlPanel } from "./lab-control-panel";
 import { LabDistribution } from "./lab-distribution";
+import { UniversalLabControlPanel } from "./universal-lab-control-panel";
+import { WhatIfPanel } from "./what-if-panel";
 import { useEntityParameters } from "./hooks/use-entity-parameters";
 import { useLabUrlState } from "./hooks/use-lab-url-state";
 import {
   throughput as computeThroughput,
   type InstrumentParameters,
 } from "@/lib/lab-formulas";
+import {
+  UNIVERSAL_DEFAULTS,
+  type UniversalParameters,
+  type InterweaveSignals,
+} from "@/lib/lab-formulas-universal";
 import type { LabMode } from "./lab-mode-switcher";
 
 const LabChamber3D = dynamic(() => import("./lab-chamber-3d"), {
@@ -301,6 +308,60 @@ export function UniversalLab({
   const focusedReactionProbability = focusedReaction?.probability ?? null;
   const focusedReactionType = focusedReaction?.reaction_type ?? null;
 
+  // ── Universal-scope state (Sprint follow-up) ──
+  // The intra-entity parameters above model a single focal's attention
+  // dynamics. At universal scope the meaningful dials are cross-space:
+  // weave density, contradiction sensitivity, recency window, coherence.
+  // These drive the interweaveHealth score shown alongside throughput.
+  const [universalParams, setUniversalParams] =
+    useState<UniversalParameters>(UNIVERSAL_DEFAULTS);
+  const [universalGhost, setUniversalGhost] =
+    useState<UniversalParameters | null>(null);
+  const handleUniversalChange = (patch: Partial<UniversalParameters>) =>
+    setUniversalParams((prev) => ({ ...prev, ...patch }));
+
+  // Interweave signals — derived from the real KG payload we already have.
+  const interweaveSignals = useMemo<InterweaveSignals>(() => {
+    const activeBridges = bridges.filter(
+      (b) => (b as unknown as { status?: string }).status !== "user_rejected",
+    ).length;
+    const confirmedBridges = bridges.filter(
+      (b) => (b as unknown as { status?: string }).status === "user_confirmed",
+    ).length;
+    // Recency: newest bridge within the universal-tau window → 1, older decays
+    const newest = bridges
+      .map((b) => {
+        const c = (b as unknown as { created_at?: string }).created_at;
+        return c ? new Date(c).getTime() : 0;
+      })
+      .reduce((a, b) => Math.max(a, b), 0);
+    const ageDays = newest
+      ? (Date.now() - newest) / (24 * 60 * 60 * 1000)
+      : 9999;
+    const tau = universalParams.crossSpaceTau;
+    const recencyMult = Math.max(0, Math.min(1, 1 - ageDays / Math.max(1, tau)));
+    // Contradictions count comes from the edges/bridges we don't have direct
+    // access to here — approximate via edges flagged is_tradeoff until the
+    // parent wires through a dedicated contradictions prop. (Best-effort;
+    // low-bias default if absent.)
+    const contradictions = edges.filter((e) => e.is_tradeoff).length;
+    return {
+      activeBridges,
+      confirmedBridges,
+      totalEntities: entities.length,
+      contradictions,
+      recencyMult: bridges.length > 0 ? recencyMult : 0,
+    };
+  }, [bridges, entities.length, edges, universalParams.crossSpaceTau]);
+
+  // What-If panel + impact overlay state
+  const [whatIfOpen, setWhatIfOpen] = useState(false);
+  const [impactEntityIds, setImpactEntityIds] = useState<string[] | null>(null);
+  // Silence lint — impact overlay is consumed by subcomponents that don't
+  // exist yet; chamber integration is a follow-up. Keep the plumbing in
+  // place so the follow-up is a one-line wire-through.
+  void impactEntityIds;
+
   // Phase 17: top of the fractal hierarchy. Each space-subunit drills
   // into its own space lab; bond partners (cross-space entities) drill
   // to their space lab or node lab where resolvable.
@@ -384,6 +445,23 @@ export function UniversalLab({
         <LabAnalysis focal={focal} subunits={subunits} />
       </div>
 
+      {/* Universal-scope control strip — cross-space dials + LLM What-If.
+          Sits above the reaction-network panel so the intra-entity control
+          panel (bottom-right) keeps working for focal tuning. */}
+      <div
+        className="border-t border-[#94a3b8]/[0.08]"
+        style={{ background: "rgba(148,163,184,0.08)", height: 180 }}
+      >
+        <UniversalLabControlPanel
+          parameters={universalParams}
+          onChange={handleUniversalChange}
+          signals={interweaveSignals}
+          ghostParams={universalGhost}
+          onGhostParamsChange={setUniversalGhost}
+          onOpenLlmWhatIf={() => setWhatIfOpen(true)}
+        />
+      </div>
+
       <div
         className="grid border-t border-[#94a3b8]/[0.08]"
         style={{
@@ -413,6 +491,14 @@ export function UniversalLab({
           onGhostParamsChange={setGhostParams}
         />
       </div>
+
+      {whatIfOpen && (
+        <WhatIfPanel
+          entities={entities}
+          onClose={() => setWhatIfOpen(false)}
+          onImpactOverlay={setImpactEntityIds}
+        />
+      )}
 
       <style jsx global>{`
         @keyframes lab-spin {

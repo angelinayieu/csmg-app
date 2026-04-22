@@ -22,6 +22,7 @@
 import { NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage, verifySpaceOwnership } from "@/lib/api-helpers";
 import { canonicalKey, type Reaction, type ReactionType, type ReactionSourceTag } from "@/types/reactions";
+import { logKnowledgeEvent } from "@/lib/changelog/log-knowledge-event";
 
 export const maxDuration = 15;
 
@@ -220,6 +221,19 @@ export async function POST(request: Request) {
         console.warn("[canvas/reactions POST update]", error);
         return NextResponse.json({ error: "Save failed" }, { status: 500 });
       }
+      // Phase 52 — log to unified event stream (update path).
+      await logKnowledgeEvent(supabase, {
+        spaceId,
+        subtype: "reaction_saved",
+        summary: `Updated reaction "${name.trim()}" (${reaction_type}, p=${probability.toFixed(2)})`,
+        details: {
+          reaction_id: (data as Reaction).id,
+          reaction_type,
+          probability,
+          entity_ids,
+          mode: "update",
+        },
+      });
       return NextResponse.json({ reaction: data as Reaction });
     }
 
@@ -232,6 +246,19 @@ export async function POST(request: Request) {
       console.warn("[canvas/reactions POST insert]", error);
       return NextResponse.json({ error: "Save failed" }, { status: 500 });
     }
+    // Phase 52 — log to unified event stream (insert path).
+    await logKnowledgeEvent(supabase, {
+      spaceId,
+      subtype: "reaction_saved",
+      summary: `Saved reaction "${name.trim()}" (${reaction_type}, p=${probability.toFixed(2)})`,
+      details: {
+        reaction_id: (data as Reaction).id,
+        reaction_type,
+        probability,
+        entity_ids,
+        mode: "insert",
+      },
+    });
     return NextResponse.json({ reaction: data as Reaction });
   } catch (err) {
     return NextResponse.json(

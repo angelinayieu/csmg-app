@@ -140,3 +140,37 @@ export async function retrieveEntities(
 ): Promise<MemoryHit[]> {
   return retrieve(db, { ...opts, kinds: ["entity"] });
 }
+
+/**
+ * Wave D unshadow — retrieve across every useful memory kind when the
+ * caller wants broad ambient awareness (not just entities). Previously
+ * `retrieveEntities` hard-filtered to `kind='entity'`, which meant Wave
+ * C's indexing of `objective` and `app` was invisible to every active
+ * consumer. Use this new helper anywhere you want the full KG context.
+ *
+ * Explicitly does NOT include `kind='note'` by default — note memory
+ * is canvas-scoped and should be retrieved with that scope narrowing,
+ * otherwise ambient would surface stale sticky-note text from other
+ * canvases.
+ */
+export async function retrieveKg(
+  db: AnyDb,
+  opts: Omit<RetrieveOptions, "kinds"> & {
+    /** Optional broadening — add 'note' or 'bridge' to the default set.
+     *  If omitted, defaults to the cross-surface kinds that matter for
+     *  ambient / strategy / synthesis context. */
+    extraKinds?: Array<"note" | "bridge" | "canvas">;
+  },
+): Promise<MemoryHit[]> {
+  const { extraKinds, ...rest } = opts;
+  const baseKinds: Array<"entity" | "objective" | "app" | "bridge"> = [
+    "entity",
+    "objective",
+    "app",
+    "bridge",
+  ];
+  const kinds = extraKinds
+    ? Array.from(new Set([...baseKinds, ...extraKinds]))
+    : baseKinds;
+  return retrieve(db, { ...rest, kinds });
+}

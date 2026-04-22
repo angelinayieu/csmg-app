@@ -12,14 +12,14 @@ export function GlobalQueryBox() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const expandToCanvas = useCallback(() => {
-    // "Expand to canvas" now routes into /app/analyze (the seed → analysis
+    // "Expand to canvas" now routes into /app/new (the seed → analysis
     // entry). The standalone /app/canvas route was retired in the route
-    // consolidation; /app/analyze is the canonical capture entry point.
+    // consolidation; /app/new is the canonical capture entry point.
     const query = input.trim();
     if (query) {
-      router.push(`/app/analyze?seed=${encodeURIComponent(query)}`);
+      router.push(`/app/new?seed=${encodeURIComponent(query)}`);
     } else {
-      router.push("/app/analyze");
+      router.push("/app/new");
     }
   }, [input, router]);
 
@@ -28,7 +28,7 @@ export function GlobalQueryBox() {
     if (!query || loading) return;
 
     if (/^(create|new|analyze|build|decompose|map)/i.test(query)) {
-      router.push("/app/analyze");
+      router.push("/app/new");
       return;
     }
     if (/^(weave|bridge|connect|link)/i.test(query)) {
@@ -41,7 +41,7 @@ export function GlobalQueryBox() {
     }
 
     setLoading(true);
-    router.push("/app/analyze");
+    router.push("/app/new");
   }, [input, loading, router]);
 
   return (
@@ -118,7 +118,7 @@ export function GlobalQueryBox() {
 
         {/* Toolbar */}
         <div className="relative z-10 mt-2 flex items-center gap-1.5 border-t border-white/50 pt-2">
-          <button className="chat-chip" onClick={() => router.push("/app/analyze")}>
+          <button className="chat-chip" onClick={() => router.push("/app/new")}>
             <Plus className="h-3.5 w-3.5" />
             Add
           </button>
