@@ -1,6 +1,28 @@
+// ── / (public landing) ──
+//
+// Marketing surface for unauthenticated visitors. Composed top-down:
+//
+//   1. LandingMarketingNav — sticky brand + nav + Log in / Get started
+//   2. Immersive hero — the same <ImmersiveHome /> rendered for /app,
+//      with `demoMode` enabled so:
+//        • the greeting becomes the rotating-word marketing headline,
+//        • the prompt textbox is replaced with the whiteboard's
+//          PlaygroundDock,
+//        • Enter / template-card click stash the intent in
+//          sessionStorage and redirect to /auth/signup,
+//        • after auth, /app's PendingIntakeRunner picks up the stash
+//          and runs the same downstream call the visitor would have
+//          fired if they'd been signed in.
+//   3. Feature tiles + ecosystem diagram — preserved from the prior
+//      landing page; they remain the strongest existing sections.
+//   4. Footer.
+//
+// Single source of truth: the immersive demo IS ImmersiveHome — there
+// is no parallel landing-only floating-cards component. Adding a card
+// position or polishing a hover state is a one-file change.
+
 import Link from "next/link";
 import {
-  Lock,
   SlidersHorizontal,
   GitBranch,
   Database,
@@ -11,17 +33,10 @@ import {
   Wrench,
   Cloud,
   User,
-  Search,
 } from "lucide-react";
-
-const navTabs = [
-  { label: "Home", href: "/", active: true },
-  { label: "Advice", href: "#" },
-  { label: "Library", href: "#" },
-  { label: "Enterprise", href: "#" },
-  { label: "Innovation", href: "#" },
-  { label: "Join Us", href: "/auth/signup" },
-];
+import { ImmersiveHome } from "@/components/home/immersive-home";
+import { LandingMarketingNav } from "@/components/landing/landing-marketing-nav";
+import { TEMPLATE_LIST } from "@/lib/use-cases/library";
 
 const features = [
   { icon: SlidersHorizontal, label: "Adjustable\nreasoning depth" },
@@ -31,121 +46,70 @@ const features = [
 ];
 
 const ecosystemNodes = [
-  {
-    icon: Globe,
-    label: "Weekly new tool updates",
-    x: 50,
-    y: 8,
-    labelSide: "right" as const,
-  },
+  { icon: Globe, label: "Weekly new tool updates", x: 50, y: 8 },
   {
     icon: BarChart3,
     label: "24/7 personalized real-time\nweb updates",
     x: 85,
     y: 30,
-    labelSide: "right" as const,
   },
   {
     icon: Network,
     label: "Reasoning with deep logic\nconstruction",
     x: 15,
     y: 30,
-    labelSide: "left" as const,
   },
   {
     icon: PieChart,
     label: "Precise statistical insights\nand metric analysis",
     x: 85,
     y: 65,
-    labelSide: "right" as const,
   },
   {
     icon: Wrench,
     label: "Embedded Third Party and\nCustom Tools",
     x: 15,
     y: 65,
-    labelSide: "left" as const,
   },
-  {
-    icon: Cloud,
-    label: "Cloud Backup",
-    x: 50,
-    y: 88,
-    labelSide: "right" as const,
-  },
+  { icon: Cloud, label: "Cloud Backup", x: 50, y: 88 },
 ];
 
 export default function LandingPage() {
+  const templates = TEMPLATE_LIST.map((t) => ({
+    id: t.id,
+    name: t.name,
+    tagline: t.tagline,
+    description: t.description,
+    icon: t.icon,
+    accent_color: t.accent_color,
+    category: t.category,
+    default_surface: t.default_surface,
+    seed_entity_count: t.seed_entities.length,
+    question_count: t.question_library.length,
+  }));
+
   return (
     <div className="flex min-h-screen flex-col">
-      {/* Header */}
-      <header className="relative flex items-center justify-between px-8 py-5">
-        <span className="text-xl font-bold tracking-tight">InterAxis</span>
-
-        {/* Centered pill nav */}
-        <nav className="absolute left-1/2 -translate-x-1/2 rounded-full border border-gray-200/80 bg-white/70 px-2 py-1.5 backdrop-blur-sm">
-          <div className="flex items-center gap-1">
-            {navTabs.map((tab) => (
-              <Link
-                key={tab.label}
-                href={tab.href}
-                className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
-                  tab.active
-                    ? "bg-white text-gray-900 shadow-sm"
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
-                {tab.label}
-              </Link>
-            ))}
-            <button className="rounded-full p-1.5 text-gray-500 hover:text-gray-700">
-              <Search className="h-4 w-4" />
-            </button>
-          </div>
-        </nav>
-
-        <Link
-          href="/auth/login"
-          className="text-sm font-medium text-gray-600 hover:text-gray-900"
-        >
-          Log in
-        </Link>
-      </header>
+      {/* ─── Hero ─────────────────────────────────────────────────────
+          Full-viewport immersive demo. The marketing nav is rendered
+          inside this section so it sits above the floating-cards
+          surface (z-50), which itself uses absolute inset-0. */}
+      <section className="relative h-screen overflow-hidden bg-white">
+        <LandingMarketingNav />
+        <ImmersiveHome
+          demoMode
+          greetingName=""
+          templates={templates}
+          mode="canvas"
+        />
+      </section>
 
       <main className="flex-1">
-        {/* Hero */}
-        <section className="mx-auto max-w-3xl px-6 pt-20 pb-16 text-center">
-          <h1 className="text-5xl font-bold tracking-tight text-gray-900">
-            Your intelligence system
-          </h1>
-
-          <div className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-gray-200/80 bg-white/60 px-3 py-1 backdrop-blur-sm">
-            <Lock className="h-3.5 w-3.5 text-gray-500" />
-            <span className="text-sm text-gray-600">encrypted data</span>
-          </div>
-
-          <div className="mt-6 space-y-1">
-            <p className="text-base text-gray-700">
-              <strong className="font-bold text-gray-900">AI</strong> with
-              enhanced real world logic reasoning capabilities
-            </p>
-            <p className="text-base text-gray-700">
-              <strong className="font-bold text-gray-900">
-                Digital Infrastructure
-              </strong>{" "}
-              for speed, quality, and accuracy
-            </p>
-          </div>
-
-          <div className="mt-8">
-            <Link href="/auth/signup" className="btn-gradient-outline text-base">
-              Get Started
-            </Link>
-          </div>
-        </section>
-
-        {/* Feature Cards */}
-        <section className="mx-auto grid max-w-5xl grid-cols-2 gap-6 px-6 pb-20 md:grid-cols-4">
+        {/* ─── Feature tiles ───────────────────────────────────────── */}
+        <section
+          id="platform"
+          className="mx-auto grid max-w-5xl grid-cols-2 gap-6 px-6 pt-24 pb-12 md:grid-cols-4"
+        >
           {features.map((feature) => {
             const Icon = feature.icon;
             return (
@@ -153,10 +117,10 @@ export default function LandingPage() {
                 key={feature.label}
                 className="glass-card-icon flex flex-col items-center rounded-2xl p-6 text-center"
               >
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/60 border border-white/50 shadow-sm">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/50 bg-white/60 shadow-sm">
                   <Icon className="h-8 w-8 text-interaxis-600" />
                 </div>
-                <p className="mt-4 text-sm font-medium leading-tight text-gray-700 whitespace-pre-line">
+                <p className="mt-4 whitespace-pre-line text-sm font-medium leading-tight text-gray-700">
                   {feature.label}
                 </p>
               </div>
@@ -164,8 +128,11 @@ export default function LandingPage() {
           })}
         </section>
 
-        {/* Ecosystem Diagram */}
-        <section className="mx-auto max-w-3xl px-6 pb-24">
+        {/* ─── Ecosystem diagram ───────────────────────────────────── */}
+        <section
+          id="solutions"
+          className="mx-auto max-w-3xl px-6 pb-24 pt-8"
+        >
           <div className="glass-card rounded-3xl px-8 pt-8 pb-12">
             <div className="mx-auto mb-8 w-fit rounded-full border border-gray-200/80 bg-white/70 px-6 py-2">
               <h2 className="text-lg font-semibold text-gray-900">
@@ -173,9 +140,7 @@ export default function LandingPage() {
               </h2>
             </div>
 
-            {/* Hub and spoke */}
             <div className="relative mx-auto" style={{ height: 420 }}>
-              {/* SVG connecting lines */}
               <svg
                 className="absolute inset-0 h-full w-full"
                 viewBox="0 0 100 100"
@@ -193,14 +158,12 @@ export default function LandingPage() {
                 ))}
               </svg>
 
-              {/* Center hub */}
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
                 <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-interaxis-200 bg-white shadow-md">
                   <User className="h-9 w-9 text-gray-600" />
                 </div>
               </div>
 
-              {/* Spoke nodes */}
               {ecosystemNodes.map((node) => {
                 const Icon = node.icon;
                 return (
@@ -213,7 +176,7 @@ export default function LandingPage() {
                       <div className="flex h-14 w-14 items-center justify-center rounded-full border border-gray-200/80 bg-white shadow-sm">
                         <Icon className="h-6 w-6 text-gray-600" />
                       </div>
-                      <p className="max-w-[140px] text-center text-xs font-medium leading-tight text-gray-600 whitespace-pre-line">
+                      <p className="max-w-[140px] whitespace-pre-line text-center text-xs font-medium leading-tight text-gray-600">
                         {node.label}
                       </p>
                     </div>
@@ -223,9 +186,26 @@ export default function LandingPage() {
             </div>
           </div>
         </section>
+
+        {/* ─── Closing CTA ─────────────────────────────────────────── */}
+        <section className="mx-auto max-w-3xl px-6 pb-24 text-center">
+          <h2 className="text-3xl font-bold tracking-tight text-gray-900">
+            Ready to build your intelligence system?
+          </h2>
+          <p className="mt-3 text-base text-gray-600">
+            Sign up free — your prompt picks up exactly where you left it.
+          </p>
+          <div className="mt-6">
+            <Link
+              href="/auth/signup"
+              className="inline-flex items-center rounded-full bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-md transition-transform hover:scale-[1.02] hover:bg-slate-800"
+            >
+              Get started
+            </Link>
+          </div>
+        </section>
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-gray-200/60 px-6 py-6 text-center text-sm text-gray-400">
         InterAxis &mdash; Your Intelligence System
       </footer>

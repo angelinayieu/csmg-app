@@ -1,11 +1,10 @@
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { SpaceSidebar } from "@/components/layout/space-sidebar";
-import { SidebarShell } from "@/components/layout/sidebar-shell";
 import { AppStoreProvider } from "@/stores/store-provider";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { GlobalToolbox } from "@/components/layout/global-toolbox";
 import { PulseStrip } from "@/components/pulse";
+import { PendingIntakeMount } from "@/components/landing/pending-intake-mount";
 import type { Space } from "@/types";
 
 export default async function AppLayout({
@@ -24,29 +23,21 @@ export default async function AppLayout({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  // Fetch user's spaces and profile in parallel
-  const [spacesRes, profileRes] = await Promise.all([
-    db
-      .from("spaces")
-      .select("*")
-      .order("updated_at", { ascending: false }),
-    db
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .single(),
-  ]);
+  // Fetch user's spaces (profile data now lives on the immersive home top-bar
+  // and is fetched per-page where it's actually rendered).
+  const { data: spacesData } = await db
+    .from("spaces")
+    .select("*")
+    .eq("archived", false)
+    .order("pinned", { ascending: false })
+    .order("updated_at", { ascending: false });
 
-  const spaces = (spacesRes.data ?? []) as Space[];
-  const creditBalance: number = profileRes.data?.credit_balance ?? 0;
+  const spaces = (spacesData ?? []) as Space[];
 
   return (
     <AppStoreProvider initialState={{ spaces }}>
       <ThemeProvider>
         <div className="flex h-screen overflow-hidden">
-          <SidebarShell>
-            <SpaceSidebar userEmail={user.email ?? ""} userId={user.id} creditBalance={creditBalance} />
-          </SidebarShell>
           <main className="flex-1 overflow-y-auto bg-gradient-page">
             {/* Tier 8: persistent Pulse strip — sticky at the top of
                 the main scroll container so it stays visible across
@@ -59,6 +50,12 @@ export default async function AppLayout({
         </div>
         {/* Global floating toolbox — present on every page */}
         <GlobalToolbox />
+        {/* Picks up any prompt/template the user stashed on the public
+            landing page before signing up. Mounted at the layout level
+            (rather than in /app/page) so the email-confirm callback
+            can drop the user on any /app/* route and we still resume
+            their intent. Renders nothing when no stash is present. */}
+        <PendingIntakeMount />
       </ThemeProvider>
     </AppStoreProvider>
   );

@@ -32,21 +32,129 @@ import {
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
-  Command,
+  Brain,
+  FileText,
+  Image as ImageIcon,
+  Link as LinkIcon,
   Loader2,
   MessageCircleQuestion,
+  Mic,
+  Paperclip,
+  Plus,
+  Send,
   Sparkles,
+  Table,
+  Video,
   Wand2,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { AccentChip } from "@/components/ui/accent-chip";
+import {
+  AirtableLogo,
+  ArxivLogo,
+  ChatGPTLogo,
+  ClaudeOpusLogo,
+  DropboxLogo,
+  FigmaLogo,
+  GeminiLogo,
+  GitHubLogo,
+  GmailLogo,
+  GoogleCalendarLogo,
+  GoogleDocsLogo,
+  GoogleDriveLogo,
+  GoogleScholarLogo,
+  GoogleSheetsLogo,
+  JiraLogo,
+  LinearLogo,
+  NotionLogo,
+  SemanticScholarLogo,
+  SlackLogo,
+  TeamsLogo,
+  WebSearchLogo,
+  WikipediaLogo,
+} from "@/components/entity/integration-logos";
 import type { UseCaseTemplate } from "@/types/use-case";
 import * as LucideIcons from "lucide-react";
+import { TopBar } from "./top-bar";
+import { LandingPromptPill } from "@/components/landing/landing-prompt-pill";
+import { RotatingWord } from "@/components/landing/rotating-word";
+import { stashPendingIntake } from "@/components/landing/pending-intake";
+
+const LANDING_ROTATING_WORDS = [
+  "Methods",
+  "Solutions",
+  "Life",
+  "Decisions",
+  "Research",
+  "Analysis",
+] as const;
 
 export type ImmersiveMode = "canvas" | "gradient";
 type PromptMode = "ask" | "create";
+type ReasoningDepth = "quick" | "standard" | "deep";
+
+const REASONING_META: Record<
+  ReasoningDepth,
+  { label: string; hint: string }
+> = {
+  quick: { label: "Fast", hint: "Fast sketch, ~10s" },
+  standard: { label: "Balanced", hint: "Depth-tuned, ~60s" },
+  deep: { label: "Deep", hint: "Multi-pass rigor, ~3 min" },
+};
+
+// Third-party integrations catalog. Pulls the provider list from
+// the existing sources catalog (src/app/api/spaces/[id]/sources/catalog)
+// plus common workspace apps the user wanted visible even if the
+// OAuth surface isn't wired yet. `status: "coming_soon"` matches the
+// integration_placeholder convention elsewhere in the codebase.
+const INTEGRATIONS: Array<{
+  id: string;
+  label: string;
+  Logo: React.ComponentType;
+  status: "available" | "coming_soon";
+}> = [
+  { id: "sheets", label: "Sheets", Logo: GoogleSheetsLogo, status: "coming_soon" },
+  { id: "drive", label: "Drive", Logo: GoogleDriveLogo, status: "coming_soon" },
+  { id: "calendar", label: "Calendar", Logo: GoogleCalendarLogo, status: "coming_soon" },
+  { id: "notion", label: "Notion", Logo: NotionLogo, status: "coming_soon" },
+  { id: "airtable", label: "Airtable", Logo: AirtableLogo, status: "coming_soon" },
+  { id: "slack", label: "Slack", Logo: SlackLogo, status: "coming_soon" },
+  { id: "gmail", label: "Gmail", Logo: GmailLogo, status: "coming_soon" },
+  { id: "docs", label: "Docs", Logo: GoogleDocsLogo, status: "coming_soon" },
+  { id: "github", label: "GitHub", Logo: GitHubLogo, status: "coming_soon" },
+  { id: "dropbox", label: "Dropbox", Logo: DropboxLogo, status: "coming_soon" },
+  { id: "figma", label: "Figma", Logo: FigmaLogo, status: "coming_soon" },
+  { id: "linear", label: "Linear", Logo: LinearLogo, status: "coming_soon" },
+  { id: "jira", label: "Jira", Logo: JiraLogo, status: "coming_soon" },
+  { id: "teams", label: "Teams", Logo: TeamsLogo, status: "coming_soon" },
+  { id: "arxiv", label: "arXiv", Logo: ArxivLogo, status: "coming_soon" },
+  { id: "semantic", label: "Semantic Scholar", Logo: SemanticScholarLogo, status: "coming_soon" },
+  { id: "scholar", label: "Google Scholar", Logo: GoogleScholarLogo, status: "coming_soon" },
+  { id: "wikipedia", label: "Wikipedia", Logo: WikipediaLogo, status: "coming_soon" },
+  { id: "web", label: "Web Search", Logo: WebSearchLogo, status: "coming_soon" },
+  { id: "claude", label: "Claude", Logo: ClaudeOpusLogo, status: "coming_soon" },
+  { id: "chatgpt", label: "ChatGPT", Logo: ChatGPTLogo, status: "coming_soon" },
+  { id: "gemini", label: "Gemini", Logo: GeminiLogo, status: "coming_soon" },
+];
+
+// Icons shown inline after the Apps pill (first 5 — rest are in the
+// popup). Keeps the toolbar compact while hinting at the breadth of
+// integrations behind the "..." affordance.
+const INLINE_INTEGRATION_IDS = ["notion", "drive", "slack", "figma", "github"];
+
+const FILE_CHIPS: Array<{
+  label: string;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+}> = [
+  { label: "Image", icon: ImageIcon },
+  { label: "Video", icon: Video },
+  { label: "Audio", icon: Mic },
+  { label: "CSV", icon: Table },
+  { label: "PDF", icon: FileText },
+  { label: "Link", icon: LinkIcon },
+];
 
 export interface ImmersiveHomeProps {
   greetingName: string;
@@ -78,6 +186,19 @@ export interface ImmersiveHomeProps {
    * Shell component consumes this to crossfade to the library view.
    */
   onViewLibrary?: () => void;
+  /** Profile data for the top-bar profile chip / sign-out menu. */
+  userEmail?: string;
+  userId?: string | null;
+  creditBalance?: number;
+  /**
+   * Landing-page demo mode. Disables real submissions: typing + Enter
+   * stashes the prompt in sessionStorage and redirects to /auth/signup.
+   * Card clicks stash the template id and redirect the same way. After
+   * auth, /app's PendingIntakeRunner picks up the stash and runs the
+   * downstream call. Also hides authed-only chrome (TopBar) and swaps
+   * the greeting for the rotating-word marketing headline.
+   */
+  demoMode?: boolean;
 }
 
 // Fixed layout positions for up to 7 cards — calculated by hand so
@@ -136,12 +257,21 @@ export function ImmersiveHome({
   mode = "canvas",
   whiteboardCount,
   onViewLibrary,
+  userEmail = "",
+  userId,
+  creditBalance = 0,
+  demoMode = false,
 }: ImmersiveHomeProps) {
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
   const [promptMode, setPromptMode] = useState<PromptMode>("ask");
   const [askSubmitting, setAskSubmitting] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
+  const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [depth, setDepth] = useState<ReasoningDepth>("standard");
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [appsOpen, setAppsOpen] = useState(false);
   const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(
     null,
   );
@@ -206,23 +336,64 @@ export function ImmersiveHome({
   // Pick up to 7 templates; extra positions skip silently.
   const cards = useMemo(() => templates.slice(0, 7), [templates]);
 
-  const submitPrompt = useCallback(
-    (mode: "sketch" | "analyze") => {
-      const trimmed = prompt.trim();
-      const params = new URLSearchParams();
-      if (mode === "sketch") params.set("mode", "sketch");
-      if (trimmed) params.set("seed", trimmed);
-      const qs = params.toString();
-      router.push(`/app/new${qs ? `?${qs}` : ""}`);
-    },
-    [prompt, router],
-  );
+  // Create mode: submit directly to /api/intake/bootstrap — same
+  // wiring as /app/new, so the logic stays single-sourced. On success
+  // navigate to the new whiteboard; the SSE subscription picks up the
+  // pipeline run.
+  const submitCreate = useCallback(async () => {
+    const trimmed = prompt.trim();
+    if (trimmed.length < 4 || createSubmitting) return;
+    if (demoMode) {
+      stashPendingIntake({ kind: "create", prompt: trimmed, depth });
+      router.push("/auth/signup?next=/app");
+      return;
+    }
+    setCreateSubmitting(true);
+    setCreateError(null);
+    try {
+      const res = await fetch("/api/intake/bootstrap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: trimmed, reasoningDepth: depth }),
+      });
+      const raw = await res.text();
+      const asJson = (() => {
+        try {
+          return JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })();
+      if (!res.ok) {
+        throw new Error(
+          (asJson?.error as string) ?? `Bootstrap failed (${res.status})`,
+        );
+      }
+      const data = asJson as unknown as {
+        spaceId: string;
+        runId: string | null;
+      };
+      const destination = data.runId
+        ? `/app/space/${data.spaceId}/whiteboard?run=${data.runId}`
+        : `/app/space/${data.spaceId}/whiteboard`;
+      router.push(destination);
+    } catch (err) {
+      console.error("[ImmersiveHome] submitCreate failed:", err);
+      setCreateError(err instanceof Error ? err.message : "Bootstrap failed");
+      setCreateSubmitting(false);
+    }
+  }, [prompt, depth, createSubmitting, router, demoMode]);
 
   // Ask mode: create an ask-kind whiteboard, trigger the cross-whiteboard
   // synthesis inngest job, navigate to the new space.
   const submitAsk = useCallback(async () => {
     const query = prompt.trim();
     if (!query || askSubmitting) return;
+    if (demoMode) {
+      stashPendingIntake({ kind: "ask", prompt: query });
+      router.push("/auth/signup?next=/app");
+      return;
+    }
     setAskSubmitting(true);
     setAskError(null);
     try {
@@ -242,7 +413,7 @@ export function ImmersiveHome({
       setAskError(err instanceof Error ? err.message : "Ask failed");
       setAskSubmitting(false);
     }
-  }, [prompt, askSubmitting, router]);
+  }, [prompt, askSubmitting, router, demoMode]);
 
   const handlePromptKey = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -251,16 +422,21 @@ export function ImmersiveHome({
         if (promptMode === "ask") {
           void submitAsk();
         } else {
-          submitPrompt(e.metaKey || e.ctrlKey ? "analyze" : "sketch");
+          void submitCreate();
         }
       }
     },
-    [promptMode, submitPrompt, submitAsk],
+    [promptMode, submitCreate, submitAsk],
   );
 
   const createFromTemplate = useCallback(
     async (templateId: string) => {
       if (pendingTemplateId) return;
+      if (demoMode) {
+        stashPendingIntake({ kind: "template", templateId });
+        router.push("/auth/signup?next=/app");
+        return;
+      }
       setPendingTemplateId(templateId);
       try {
         const res = await fetch("/api/use-cases/create", {
@@ -281,7 +457,7 @@ export function ImmersiveHome({
         setPendingTemplateId(null);
       }
     },
-    [pendingTemplateId, router],
+    [pendingTemplateId, router, demoMode],
   );
 
   return (
@@ -319,67 +495,18 @@ export function ImmersiveHome({
         })}
       </div>
 
-      {/* Corner chrome — top-right: whiteboards library pill + ⌘K. */}
-      <div className="pointer-events-auto absolute right-6 top-6 z-10 flex items-center gap-2">
-        {onViewLibrary && (
-          <button
-            onClick={onViewLibrary}
-            className="group flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-semibold backdrop-blur-sm transition-all"
-            style={{
-              border: "1px solid var(--home-chrome-stroke)",
-              background: "var(--home-chrome-fill)",
-              color: "var(--home-chrome-text)",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background =
-                "var(--home-chrome-fill-hover)";
-              e.currentTarget.style.color = "var(--home-chrome-text-hover)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "var(--home-chrome-fill)";
-              e.currentTarget.style.color = "var(--home-chrome-text)";
-            }}
-            title="View your whiteboards library"
-          >
-            <LucideIcons.LayoutGrid className="h-3 w-3" strokeWidth={1.75} />
-            <span>
-              {whiteboardCount && whiteboardCount > 0
-                ? `${whiteboardCount} whiteboard${whiteboardCount === 1 ? "" : "s"}`
-                : "Whiteboards"}
-            </span>
-            <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-          </button>
-        )}
-        <button
-          className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-medium backdrop-blur-sm transition-colors"
-          style={{
-            border: "1px solid var(--home-chrome-stroke)",
-            background: "var(--home-chrome-fill)",
-            color: "var(--home-chrome-text)",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background =
-              "var(--home-chrome-fill-hover)";
-            e.currentTarget.style.color = "var(--home-chrome-text-hover)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "var(--home-chrome-fill)";
-            e.currentTarget.style.color = "var(--home-chrome-text)";
-          }}
-          title="Command palette"
-          onClick={() => {
-            const evt = new KeyboardEvent("keydown", {
-              key: "k",
-              metaKey: true,
-              bubbles: true,
-            });
-            document.dispatchEvent(evt);
-          }}
-        >
-          <Command className="h-3 w-3" />
-          <span>K</span>
-        </button>
-      </div>
+      {/* Top bar — brand + primary nav + overview/settings/profile.
+          Skipped in demoMode; the landing page renders its own
+          marketing nav above the immersive surface. */}
+      {!demoMode && (
+        <TopBar
+          userEmail={userEmail}
+          userId={userId}
+          creditBalance={creditBalance}
+          whiteboardCount={whiteboardCount}
+          onViewLibrary={onViewLibrary}
+        />
+      )}
 
       {/* Center stage — greeting + glass prompt.
           IMPORTANT: `pointer-events-none` on the wrapper so it
@@ -399,20 +526,46 @@ export function ImmersiveHome({
         }}
       >
         <div className="pointer-events-auto w-full max-w-[640px]">
-          <div className="mb-5 text-center">
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--home-text-faint)]">
-              InterAxis
+          {demoMode ? (
+            <div className="mb-6 text-center">
+              <h1 className="text-[44px] font-bold leading-[1.05] tracking-tight text-slate-900 sm:text-[56px]">
+                Infinite Possibilities
+                <br />
+                to Make Better{" "}
+                <RotatingWord words={LANDING_ROTATING_WORDS} />
+              </h1>
+              <p className="mx-auto mt-4 max-w-md text-[15px] font-light text-slate-600">
+                Research, development, and experiment in{" "}
+                <span className="font-semibold text-slate-900">one click.</span>
+              </p>
             </div>
-            <h1 className="text-[32px] font-light leading-tight text-[color:var(--home-text)]">
-              Welcome, {greetingName}.
-            </h1>
-            <p className="mt-2 text-[14px] font-light text-[color:var(--home-text-mid)]">
-              {promptMode === "ask"
-                ? "Ask anything — I'll answer using every whiteboard you've built."
-                : "What do you want to think about?"}
-            </p>
-          </div>
+          ) : (
+            <div className="mb-5 text-center">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--home-text-faint)]">
+                InterAxis
+              </div>
+              <h1 className="text-[32px] font-light leading-tight text-[color:var(--home-text)]">
+                Welcome, {greetingName}.
+              </h1>
+              <p className="mt-2 text-[14px] font-light text-[color:var(--home-text-mid)]">
+                {promptMode === "ask"
+                  ? "Ask anything — I'll answer using every whiteboard you've built."
+                  : "What do you want to think about?"}
+              </p>
+            </div>
+          )}
 
+          {demoMode && (
+            <LandingPromptPill
+              value={prompt}
+              onChange={setPrompt}
+              onSubmit={() => void submitCreate()}
+              loading={createSubmitting}
+            />
+          )}
+
+          {!demoMode && (
+            <>
           {/* Ask | Create segmented toggle. Ask = cross-whiteboard synthesis
               (new). Create = existing /app/new template + pipeline flow. */}
           <div className="mb-4 flex justify-center">
@@ -426,18 +579,18 @@ export function ImmersiveHome({
               }}
             >
               <ModeTab
-                active={promptMode === "ask"}
-                onClick={() => setPromptMode("ask")}
-                icon={<MessageCircleQuestion className="h-3.5 w-3.5" />}
-                label="Ask"
-                sublabel="across whiteboards"
-              />
-              <ModeTab
                 active={promptMode === "create"}
                 onClick={() => setPromptMode("create")}
                 icon={<Wand2 className="h-3.5 w-3.5" />}
                 label="Create"
                 sublabel="new analysis"
+              />
+              <ModeTab
+                active={promptMode === "ask"}
+                onClick={() => setPromptMode("ask")}
+                icon={<MessageCircleQuestion className="h-3.5 w-3.5" />}
+                label="Ask"
+                sublabel="across whiteboards"
               />
             </div>
           </div>
@@ -457,7 +610,7 @@ export function ImmersiveHome({
                 placeholder={
                   promptMode === "ask"
                     ? "Ask anything that touches your whiteboards — I'll stitch an answer from them."
-                    : "Drop a thought, paste a URL, describe a tension — or pick a starting point."
+                    : "Ask anything, create anything"
                 }
                 className={cn(
                   "w-full resize-none bg-transparent px-5 py-4 text-[15px] font-light leading-relaxed text-[color:var(--home-text)] placeholder:text-[color:var(--home-text-faint)]",
@@ -487,86 +640,311 @@ export function ImmersiveHome({
               )}
             </div>
 
-            <div
-              className="flex items-center justify-between px-4 py-2.5"
-              style={{ borderTop: "1px solid var(--glass-hairline)" }}
-            >
-              <div className="flex items-center gap-3 text-[10.5px] font-medium text-[color:var(--home-text-faint)]">
-                {promptMode === "ask" ? (
+            {promptMode === "create" ? (
+              <div
+                className="flex flex-col gap-2 px-4 py-2.5"
+                style={{ borderTop: "1px solid var(--glass-hairline)" }}
+              >
+                {/* Row 1: + | Apps pill | File toggle (+ expanded chips) | Send */}
+                <div className="flex items-center gap-2">
+                  <button
+                    className="flex h-7 w-7 items-center justify-center rounded-full transition-colors"
+                    style={{
+                      border: "1px solid var(--home-chrome-stroke)",
+                      color: "var(--home-text-mid)",
+                    }}
+                    title="Add"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+
+                  {/* Apps pill + inline integration icons + "..." opens full popup */}
+                  <div
+                    className="flex items-center gap-1.5 rounded-full px-1.5 py-1"
+                    style={{
+                      border: "1px solid var(--home-chrome-stroke)",
+                      background: "var(--home-chrome-fill)",
+                    }}
+                  >
+                    <button
+                      onClick={() => setAppsOpen((v) => !v)}
+                      className="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors"
+                      style={{ color: "var(--home-text-mid)" }}
+                      title="Apps & integrations"
+                      aria-expanded={appsOpen}
+                    >
+                      <LucideIcons.LayoutGrid
+                        className="h-3 w-3"
+                        strokeWidth={1.75}
+                      />
+                      <span>Apps</span>
+                    </button>
+                    <div className="flex items-center gap-0.5">
+                      {INLINE_INTEGRATION_IDS.map((id) => {
+                        const integ = INTEGRATIONS.find((i) => i.id === id);
+                        if (!integ) return null;
+                        const { Logo } = integ;
+                        return (
+                          <button
+                            key={id}
+                            onClick={() => setAppsOpen(true)}
+                            className="flex h-5 w-5 items-center justify-center rounded-md transition-transform hover:scale-110"
+                            title={`${integ.label} — coming soon`}
+                          >
+                            <span className="[&_svg]:h-4 [&_svg]:w-4">
+                              <Logo />
+                            </span>
+                          </button>
+                        );
+                      })}
+                      <button
+                        onClick={() => setAppsOpen((v) => !v)}
+                        className="flex h-5 w-5 items-center justify-center rounded-md text-[color:var(--home-text-mid)] transition-colors"
+                        title="See all integrations"
+                      >
+                        <LucideIcons.MoreHorizontal
+                          className="h-3.5 w-3.5"
+                          strokeWidth={2}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setFilesOpen((v) => !v)}
+                    className="flex h-7 w-7 items-center justify-center rounded-full transition-colors"
+                    style={{
+                      border: "1px solid var(--home-chrome-stroke)",
+                      background: filesOpen
+                        ? "var(--home-chrome-fill-hover)"
+                        : "transparent",
+                      color: filesOpen
+                        ? "var(--home-text)"
+                        : "var(--home-text-mid)",
+                    }}
+                    title={filesOpen ? "Hide file options" : "Attach files"}
+                    aria-expanded={filesOpen}
+                  >
+                    <Paperclip className="h-3.5 w-3.5" />
+                  </button>
+
+                  <div className="ml-auto flex items-center gap-2">
+                    {/* Reasoning: Fast / Balanced / Deep */}
+                    <div
+                      className="inline-flex items-center gap-1 rounded-full p-[3px]"
+                      style={{
+                        border: "1px solid var(--home-chrome-stroke)",
+                        background: "var(--home-chrome-fill)",
+                      }}
+                      title="Reasoning depth"
+                    >
+                      <Brain
+                        className="ml-1.5 h-3 w-3 text-[color:var(--home-text-faint)]"
+                        strokeWidth={1.75}
+                      />
+                      {(Object.keys(REASONING_META) as ReasoningDepth[]).map(
+                        (d) => {
+                          const meta = REASONING_META[d];
+                          const active = depth === d;
+                          return (
+                            <button
+                              key={d}
+                              onClick={() => setDepth(d)}
+                              title={meta.hint}
+                              className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors"
+                              style={
+                                active
+                                  ? {
+                                      background: "var(--home-cta-bg)",
+                                      color: "var(--home-cta-fg)",
+                                    }
+                                  : { color: "var(--home-text-mid)" }
+                              }
+                            >
+                              {meta.label}
+                            </button>
+                          );
+                        },
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => void submitCreate()}
+                      disabled={prompt.trim().length < 4 || createSubmitting}
+                      className="flex h-8 w-8 items-center justify-center rounded-full transition-all disabled:cursor-not-allowed"
+                      style={
+                        prompt.trim().length >= 4 && !createSubmitting
+                          ? {
+                              background: "var(--home-cta-bg)",
+                              color: "var(--home-cta-fg)",
+                            }
+                          : {
+                              background: "var(--home-chrome-fill)",
+                              color: "var(--home-text-faint)",
+                            }
+                      }
+                      title="Begin (⌘↵)"
+                    >
+                      {createSubmitting ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Send className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Row 2: file chips (collapsible) */}
+                {filesOpen && (
+                  <div
+                    className="flex flex-wrap items-center gap-1.5 pt-1"
+                    style={{ borderTop: "1px dashed var(--glass-hairline)" }}
+                  >
+                    {FILE_CHIPS.map(({ label, icon: Icon }) => (
+                      <button
+                        key={label}
+                        className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10.5px] font-medium transition-colors"
+                        style={{
+                          border: "1px solid var(--home-chrome-stroke)",
+                          background: "var(--home-chrome-fill)",
+                          color: "var(--home-text-mid)",
+                        }}
+                        title={`Attach ${label}`}
+                      >
+                        <Icon className="h-3 w-3" strokeWidth={1.75} />
+                        <span>{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div
+                className="flex items-center justify-between px-4 py-2.5"
+                style={{ borderTop: "1px solid var(--glass-hairline)" }}
+              >
+                <div className="flex items-center gap-3 text-[10.5px] font-medium text-[color:var(--home-text-faint)]">
                   <span className="inline-flex items-center gap-1.5">
                     <MessageCircleQuestion className="h-3 w-3" />
                     Searches across every whiteboard you own.
                   </span>
-                ) : (
-                  <>
-                    <span>
-                      <kbd
-                        className="rounded px-1 py-0.5 font-mono text-[9.5px]"
-                        style={{
-                          border: "1px solid var(--home-chrome-stroke)",
+                </div>
+                <button
+                  onClick={() => void submitAsk()}
+                  disabled={!prompt.trim() || askSubmitting}
+                  className="flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold transition-all"
+                  style={
+                    prompt.trim() && !askSubmitting
+                      ? {
+                          background: "var(--home-cta-bg)",
+                          color: "var(--home-cta-fg)",
+                        }
+                      : {
                           background: "var(--home-chrome-fill)",
-                        }}
-                      >
-                        Enter
-                      </kbd>{" "}
-                      sketch
-                    </span>
-                    <span>
-                      <kbd
-                        className="rounded px-1 py-0.5 font-mono text-[9.5px]"
-                        style={{
-                          border: "1px solid var(--home-chrome-stroke)",
-                          background: "var(--home-chrome-fill)",
-                        }}
-                      >
-                        ⌘↵
-                      </kbd>{" "}
-                      analyze
-                    </span>
-                  </>
-                )}
+                          color: "var(--home-text-faint)",
+                        }
+                  }
+                >
+                  {askSubmitting ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : null}
+                  <span>Ask</span>
+                  <ArrowRight className="h-3 w-3" />
+                </button>
               </div>
-              <button
-                onClick={() => {
-                  if (promptMode === "ask") void submitAsk();
-                  else submitPrompt("sketch");
-                }}
-                disabled={!prompt.trim() || askSubmitting}
-                className="flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold transition-all"
-                style={
-                  prompt.trim() && !askSubmitting
-                    ? {
-                        background: "var(--home-cta-bg)",
-                        color: "var(--home-cta-fg)",
-                      }
-                    : {
-                        background: "var(--home-chrome-fill)",
-                        color: "var(--home-text-faint)",
-                      }
-                }
-                onMouseEnter={(e) => {
-                  if (prompt.trim() && !askSubmitting) {
-                    e.currentTarget.style.background =
-                      "var(--home-cta-bg-hover)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (prompt.trim() && !askSubmitting) {
-                    e.currentTarget.style.background = "var(--home-cta-bg)";
-                  }
-                }}
-              >
-                {askSubmitting ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : null}
-                <span>{promptMode === "ask" ? "Ask" : "Begin"}</span>
-                <ArrowRight className="h-3 w-3" />
-              </button>
-            </div>
+            )}
           </GlassPanel>
-          {askError && (
+
+          {/* Apps & Inputs popup — mirrors the reference design: all
+              third-party integrations visible (even unlaunched) so the
+              user can see the full surface. Click outside or the close
+              affordance to dismiss. */}
+          {promptMode === "create" && appsOpen && (
+            <div className="relative mt-2">
+              <GlassPanel tier="modal" radius={18} className="p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-[12px] font-semibold text-[color:var(--home-text)]">
+                    Apps & Inputs
+                  </div>
+                  <button
+                    onClick={() => setAppsOpen(false)}
+                    className="flex h-6 w-6 items-center justify-center rounded-full text-[color:var(--home-text-faint)] transition-colors hover:text-[color:var(--home-text)]"
+                    title="Close"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-[color:var(--home-text-faint)]">
+                    Integrations
+                  </div>
+                  <span className="text-[10px] text-[color:var(--home-text-faint)]">
+                    Coming soon
+                  </span>
+                </div>
+                <div className="grid grid-cols-5 gap-2 sm:grid-cols-6">
+                  {INTEGRATIONS.map(({ id, label, Logo }) => (
+                    <button
+                      key={id}
+                      className="group flex flex-col items-center gap-1 rounded-xl p-2 transition-colors"
+                      style={{ border: "1px solid transparent" }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor =
+                          "var(--home-chrome-stroke)";
+                        e.currentTarget.style.background =
+                          "var(--home-chrome-fill)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = "transparent";
+                        e.currentTarget.style.background = "transparent";
+                      }}
+                      title={`${label} — coming soon`}
+                    >
+                      <span className="flex h-9 w-9 items-center justify-center">
+                        <Logo />
+                      </span>
+                      <span className="text-[10.5px] font-medium text-[color:var(--home-text-mid)]">
+                        {label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div
+                  className="mt-3 flex items-center justify-between pt-3 text-[10.5px] text-[color:var(--home-text-faint)]"
+                  style={{ borderTop: "1px solid var(--glass-hairline)" }}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <Sparkles className="h-3 w-3" />
+                    Drag & drop files anywhere, or paste from clipboard.
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {FILE_CHIPS.map(({ label, icon: Icon }) => (
+                      <span
+                        key={label}
+                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5"
+                        style={{
+                          border: "1px solid var(--home-chrome-stroke)",
+                          background: "var(--home-chrome-fill)",
+                        }}
+                      >
+                        <Icon className="h-2.5 w-2.5" strokeWidth={1.75} />
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </GlassPanel>
+            </div>
+          )}
+
+          {askError && promptMode === "ask" && (
             <div className="mt-2 text-center text-[10.5px] text-red-500">
               {askError}
+            </div>
+          )}
+          {createError && promptMode === "create" && (
+            <div className="mt-2 text-center text-[10.5px] text-red-500">
+              {createError}
             </div>
           )}
 
@@ -576,6 +954,8 @@ export function ImmersiveHome({
               Hover a floating card to peek inside. Click to open the space.
             </span>
           </div>
+            </>
+          )}
         </div>
       </div>
     </div>

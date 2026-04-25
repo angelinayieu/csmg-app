@@ -37,6 +37,9 @@ export interface HomeShellProps {
   templates: ImmersiveHomeProps["templates"];
   spaces: Space[];
   mode?: ImmersiveMode;
+  userEmail: string;
+  userId?: string | null;
+  creditBalance?: number;
 }
 
 export function HomeShell({
@@ -44,6 +47,9 @@ export function HomeShell({
   templates,
   spaces,
   mode = "canvas",
+  userEmail,
+  userId,
+  creditBalance = 0,
 }: HomeShellProps) {
   const [view, setView] = useState<HomeView>("welcome");
   const [mounted, setMounted] = useState(false);
@@ -139,6 +145,9 @@ export function HomeShell({
           mode={mode}
           whiteboardCount={spaces.length}
           onViewLibrary={() => setView("library")}
+          userEmail={userEmail}
+          userId={userId}
+          creditBalance={creditBalance}
         />
       </div>
 
