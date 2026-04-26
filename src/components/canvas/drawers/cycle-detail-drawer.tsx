@@ -15,7 +15,17 @@
 // leverage/risk flags.
 
 import { useCallback, useEffect, useState } from "react";
-import { X, Repeat, TrendingUp, Clock, Target, ArrowRight } from "lucide-react";
+import {
+  X,
+  Repeat,
+  TrendingUp,
+  Clock,
+  Target,
+  ArrowRight,
+  Network,
+  Loader2,
+  Check,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Cycle, Entity } from "@/types";
 
@@ -40,6 +50,12 @@ export function CycleDetailDrawer({ cycleId, onClose }: CycleDetailDrawerProps) 
   const [data, setData] = useState<CycleDetailResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Phase 4 — "Save as system" gesture state. Tri-state: idle / saving /
+  // saved (transient success badge for ~1.5s before resetting).
+  const [savingState, setSavingState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [savedSystemId, setSavedSystemId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!cycleId) {
@@ -75,8 +91,61 @@ export function CycleDetailDrawer({ cycleId, onClose }: CycleDetailDrawerProps) 
   const handleClose = useCallback(() => {
     setData(null);
     setError(null);
+    setSavingState("idle");
+    setSavedSystemId(null);
     onClose();
   }, [onClose]);
+
+  // Phase 4 — promote this cycle to a saved system. Source-tags as
+  // `cycle` so the systems page renders the right icon + lets users
+  // back-navigate to the cycle drawer if they want.
+  const handleSaveAsSystem = useCallback(async () => {
+    if (!data) return;
+    const cycle = data.cycle as unknown as {
+      id: string;
+      space_id: string;
+      name: string | null;
+      entity_ids: string[] | null;
+      description: string | null;
+    };
+    const entityIds = Array.isArray(cycle.entity_ids) ? cycle.entity_ids : [];
+    if (entityIds.length === 0) {
+      setSavingState("error");
+      return;
+    }
+    setSavingState("saving");
+    try {
+      const res = await fetch(
+        `/api/spaces/${cycle.space_id}/systems`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: cycle.name
+              ? `Loop · ${cycle.name}`
+              : `Loop · ${entityIds.length} nodes`,
+            description: cycle.description ?? null,
+            entity_ids: entityIds,
+            // Edges auto-resolved server-side from entity_ids.
+            source_kind: "cycle",
+            source_ref_id: cycle.id,
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      const json = (await res.json()) as { system?: { id: string } };
+      setSavedSystemId(json.system?.id ?? null);
+      setSavingState("saved");
+      // Auto-reset back to idle after a moment so the user can save
+      // again if they want to (e.g., to a different objective).
+      window.setTimeout(() => setSavingState("idle"), 1800);
+    } catch (err) {
+      console.warn("[cycle drawer] save-as-system failed:", err);
+      setSavingState("error");
+      window.setTimeout(() => setSavingState("idle"), 2200);
+    }
+  }, [data]);
 
   if (!cycleId) return null;
 
@@ -149,12 +218,45 @@ export function CycleDetailDrawer({ cycleId, onClose }: CycleDetailDrawerProps) 
               {cycle.name ?? "(unnamed cycle)"}
             </h2>
           </div>
-          <button
-            onClick={handleClose}
-            className="flex-shrink-0 rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1">
+            {/* Phase 4 — promote this cycle to a saved system. */}
+            <button
+              onClick={handleSaveAsSystem}
+              disabled={savingState === "saving"}
+              className={cn(
+                "flex items-center gap-1 rounded-md px-2 py-1 text-[10.5px] font-semibold transition",
+                savingState === "saved"
+                  ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                  : savingState === "error"
+                    ? "bg-rose-50 text-rose-700 ring-1 ring-rose-200"
+                    : "bg-violet-600 text-white hover:bg-violet-700 disabled:cursor-wait disabled:opacity-70",
+              )}
+              title={
+                savedSystemId
+                  ? "Saved! Click again to make another system."
+                  : "Save this loop as a System you can experiment against in the lab."
+              }
+            >
+              {savingState === "saving" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : savingState === "saved" ? (
+                <Check className="h-3 w-3" />
+              ) : (
+                <Network className="h-3 w-3" />
+              )}
+              {savingState === "saved"
+                ? "Saved"
+                : savingState === "error"
+                  ? "Failed"
+                  : "Save as system"}
+            </button>
+            <button
+              onClick={handleClose}
+              className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-1">

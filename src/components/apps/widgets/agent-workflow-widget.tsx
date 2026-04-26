@@ -38,6 +38,15 @@ const EDGE_CORNER_R = 10;
 const PAD_X = 20;
 const PAD_Y = 20;
 
+// ── VP DigitalTwin signal palette ──
+// Downward (command) flow: blue solid; upward (signal) flow: teal dashed.
+// `evaluates` is the only edge kind that conceptually carries an upward
+// signal (criteria → scored output returns up to the agent that consumes it);
+// everything else flows downward. Edges whose target.row < source.row are
+// also treated as upward regardless of kind.
+const CMD_COLOR = "#0a5ad4";
+const SIG_COLOR = "#65c9e0";
+
 interface AgentWorkflowGraphConfig {
   /** Override the card title — default "Experiment Digital Twin". */
   title?: string;
@@ -45,6 +54,8 @@ interface AgentWorkflowGraphConfig {
   edge_label_mode?: "hover" | "always" | "never";
   /** Max rows shown before the widget scrolls vertically. Default unlimited. */
   max_visible_rows?: number;
+  /** Turn off pulse particles (accessibility / perf). Default true. */
+  pulse?: boolean;
 }
 
 export function AgentWorkflowGraph({
@@ -103,21 +114,29 @@ export function AgentWorkflowGraph({
               <stop offset="0%" stopColor="rgb(var(--accent-rgb))" stopOpacity="0.95" />
               <stop offset="100%" stopColor="rgb(var(--accent-rgb))" stopOpacity="0.75" />
             </linearGradient>
-            <linearGradient id="agent-edge-grad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgb(var(--accent-rgb))" stopOpacity="0.35" />
-              <stop offset="100%" stopColor="rgb(var(--accent-rgb))" stopOpacity="0.15" />
-            </linearGradient>
-            {/* Arrow head marker */}
+            {/* Arrow head — command (blue, downward) */}
             <marker
-              id="agent-arrow"
-              viewBox="0 0 6 6"
-              refX="5"
-              refY="3"
-              markerWidth="5"
-              markerHeight="5"
-              orient="auto"
+              id="agent-arrow-cmd"
+              viewBox="0 0 10 10"
+              refX="7"
+              refY="5"
+              markerWidth="5.5"
+              markerHeight="5.5"
+              orient="auto-start-reverse"
             >
-              <path d="M 0 0 L 6 3 L 0 6 z" fill="rgb(var(--accent-rgb))" opacity="0.55" />
+              <path d="M0 0 L10 5 L0 10 z" fill={CMD_COLOR} />
+            </marker>
+            {/* Arrow head — signal (teal, upward) */}
+            <marker
+              id="agent-arrow-sig"
+              viewBox="0 0 10 10"
+              refX="7"
+              refY="5"
+              markerWidth="5.5"
+              markerHeight="5.5"
+              orient="auto-start-reverse"
+            >
+              <path d="M0 0 L10 5 L0 10 z" fill={SIG_COLOR} />
             </marker>
           </defs>
 
@@ -128,6 +147,7 @@ export function AgentWorkflowGraph({
               layout={edgeLayout}
               edgeLabelMode={cfg.edge_label_mode ?? "hover"}
               delay={idx * 0.04}
+              pulse={cfg.pulse !== false}
             />
           ))}
 
@@ -145,9 +165,30 @@ export function AgentWorkflowGraph({
       {/* Legend */}
       <div className="mt-3 flex flex-wrap items-center gap-3 text-[10.5px] text-[color:var(--muted-fg,#86868b)]">
         <LegendSwatch kind="agent" label="Agent" />
-        <LegendSwatch kind="data" label="Data" />
-        <LegendSwatch kind="criteria" label="Criteria" />
+        <LegendSwatch kind="data" label="Artifact" />
+        <LegendSwatch kind="criteria" label="Criterion" />
         <LegendSwatch kind="output" label="Output" />
+        <span className="inline-flex items-center gap-1.5">
+          <svg width="22" height="6" viewBox="0 0 22 6" aria-hidden>
+            <line x1="1" y1="3" x2="21" y2="3" stroke={CMD_COLOR} strokeWidth={1.4} />
+          </svg>
+          command
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <svg width="22" height="6" viewBox="0 0 22 6" aria-hidden>
+            <line
+              x1="1"
+              y1="3"
+              x2="21"
+              y2="3"
+              stroke={SIG_COLOR}
+              strokeWidth={1.4}
+              strokeDasharray="4 2.5"
+            />
+          </svg>
+          signal
+        </span>
+        <span className="italic opacity-70">top-down command · bottom-up signal</span>
         <div className="ml-auto flex items-center gap-2">
           <StatusDot status="running" />
           <span>Running</span>
@@ -178,6 +219,8 @@ interface EdgeLayout {
   d: string;           // SVG path d attribute
   labelX: number;
   labelY: number;
+  /** True if this edge carries a bottom-up signal (teal dashed). */
+  upward: boolean;
 }
 
 interface LayoutResult {
@@ -225,15 +268,19 @@ function buildEdgeLayout(
   from: NodeLayout,
   to: NodeLayout
 ): EdgeLayout {
-  // Anchor points: from-bottom-center → to-top-center (vertical), or
-  // from-right-center → to-left-center (horizontal). Bent corner at midY.
-  const dx = to.cx - from.cx;
-  const dy = to.cy - from.cy;
+  // An edge is "upward" (bottom-up signal) when either:
+  //   - its kind is `evaluates` (criteria returning a score), or
+  //   - it routes against the grid flow (target row < source row).
+  const upward = edge.kind === "evaluates" || to.node.row < from.node.row;
 
+  const dx = to.cx - from.cx;
+
+  // Downward edges anchor bottom→top; upward edges anchor top→bottom so the
+  // arrowhead reads correctly when flowing against the grid.
   const startX = from.cx;
-  const startY = from.y + from.h; // bottom of from
+  const startY = upward ? from.y : from.y + from.h;
   const endX = to.cx;
-  const endY = to.y; // top of to
+  const endY = upward ? to.y + to.h : to.y;
 
   const labelX = (startX + endX) / 2;
   const labelY = (startY + endY) / 2;
@@ -247,17 +294,18 @@ function buildEdgeLayout(
     const midY = (startY + endY) / 2;
     const dir = dx > 0 ? 1 : -1;
     const rx = Math.min(EDGE_CORNER_R, Math.abs(dx) / 2);
+    const toSign = endY > startY ? 1 : -1;
     d = [
       `M ${startX} ${startY}`,
-      `L ${startX} ${midY - rx}`,
+      `L ${startX} ${midY - toSign * rx}`,
       `Q ${startX} ${midY} ${startX + dir * rx} ${midY}`,
       `L ${endX - dir * rx} ${midY}`,
-      `Q ${endX} ${midY} ${endX} ${midY + rx}`,
+      `Q ${endX} ${midY} ${endX} ${midY + toSign * rx}`,
       `L ${endX} ${endY}`,
     ].join(" ");
   }
 
-  return { edge, d, labelX, labelY };
+  return { edge, d, labelX, labelY, upward };
 }
 
 // ── Node component ──────────────────────────────────────────────────
@@ -272,10 +320,17 @@ function NodeShape({
   const { node, x, y, w, h, cx } = layout;
   const statusStyle = statusStrokeStyle(node.status);
 
+  // Primary-artifact highlight: a running data/artifact node is the active
+  // iteration (e.g. "Prompt Design v4.2 — running"). Borrow VP's primary
+  // styling (blue frame + pale blue wash) so users can find the current
+  // artifact at a glance — even when the graph is busy.
+  const isPrimaryArtifact =
+    (node.kind === "data" || node.kind === "output") && node.status === "running";
+
   // Per-kind visual treatment
-  const fillStyle = fillForKind(node.kind);
-  const strokeStyle = strokeForKind(node.kind);
-  const labelColor = labelColorForKind(node.kind);
+  const fillStyle = isPrimaryArtifact ? "rgba(26,122,255,0.10)" : fillForKind(node.kind);
+  const strokeStyle = isPrimaryArtifact ? CMD_COLOR : strokeForKind(node.kind);
+  const labelColor = isPrimaryArtifact ? "#0a4a99" : labelColorForKind(node.kind);
 
   // Pill-y rects. Data/criteria nodes get slightly taller font + left accent bar.
   return (
@@ -307,9 +362,9 @@ function NodeShape({
         height={h}
         rx={node.kind === "agent" ? h / 2 : 10}
         fill={fillStyle}
-        stroke={statusStyle?.stroke ?? strokeStyle}
-        strokeWidth={statusStyle?.width ?? 1}
-        strokeDasharray={statusStyle?.dasharray}
+        stroke={isPrimaryArtifact ? strokeStyle : (statusStyle?.stroke ?? strokeStyle)}
+        strokeWidth={isPrimaryArtifact ? 1.8 : (statusStyle?.width ?? 1)}
+        strokeDasharray={isPrimaryArtifact ? undefined : statusStyle?.dasharray}
       />
 
       {/* Status dot on top-right corner */}
@@ -388,12 +443,19 @@ function EdgePath({
   layout,
   edgeLabelMode,
   delay,
+  pulse,
 }: {
   layout: EdgeLayout;
   edgeLabelMode: "hover" | "always" | "never";
   delay: number;
+  pulse: boolean;
 }) {
   const label = layout.edge.label;
+  const up = layout.upward;
+  const stroke = up ? "rgba(101,201,224,0.78)" : "rgba(10,90,212,0.62)";
+  const dash = up ? "4 2.5" : undefined;
+  const marker = up ? "url(#agent-arrow-sig)" : "url(#agent-arrow-cmd)";
+
   return (
     <motion.g
       initial={{ opacity: 0 }}
@@ -402,14 +464,39 @@ function EdgePath({
     >
       <motion.path
         d={layout.d}
-        stroke="url(#agent-edge-grad)"
-        strokeWidth={1.3}
+        stroke={stroke}
+        strokeWidth={1.4}
         fill="none"
-        markerEnd="url(#agent-arrow)"
+        strokeDasharray={dash}
+        markerEnd={marker}
         initial={{ pathLength: 0 }}
         animate={{ pathLength: 1 }}
         transition={{ duration: 0.5, ease: EASE, delay: delay + 0.1 }}
       />
+
+      {/* Pulse particle — rides the full edge. Downward edges get a command
+          packet (blue); upward edges get a signal packet (teal). Staggered
+          per-edge so the whole graph looks alive. */}
+      {pulse ? (
+        <circle
+          r={2.2}
+          fill={up ? SIG_COLOR : CMD_COLOR}
+          opacity={0.9}
+          style={{
+            filter: `drop-shadow(0 0 3px ${up ? SIG_COLOR : CMD_COLOR}cc)`,
+          }}
+        >
+          <animateMotion
+            dur={up ? "3.4s" : "2.6s"}
+            repeatCount="indefinite"
+            begin={`${(delay * 1.5).toFixed(2)}s`}
+            path={layout.d}
+            keyPoints="0;1"
+            keyTimes="0;1"
+          />
+        </circle>
+      ) : null}
+
       {label && edgeLabelMode !== "never" ? (
         <g className={edgeLabelMode === "hover" ? "opacity-0 group-hover:opacity-100" : ""}>
           <rect

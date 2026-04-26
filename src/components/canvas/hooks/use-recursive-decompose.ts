@@ -141,6 +141,7 @@ export function useRecursiveDecompose({
               isBottleneck: false,
               isConvergence: false,
               isGhost: true,
+              confirmedPulse: 0,
             },
           });
         });

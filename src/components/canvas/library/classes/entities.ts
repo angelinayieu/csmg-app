@@ -165,6 +165,7 @@ export const entityAssetClass: AssetClassDefinition<Entity | EntityCatalogEntry>
         isBottleneck: false,
         isConvergence: false,
         isGhost: false,
+        confirmedPulse: 0,
       },
       w: 220,
       h: 112,

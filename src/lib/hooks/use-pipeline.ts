@@ -343,6 +343,16 @@ export function usePipeline() {
             )
           );
 
+          // Read memory settings from localStorage global defaults.
+          // Intake-flow spaces don't have a per-space brainstorm key yet
+          // (they're created during the run), so we fall back to the
+          // global default key written by GlobalMemoryPanel.
+          let memorySettings: Record<string, unknown> | undefined;
+          try {
+            const raw = localStorage.getItem("interaxis:memory:global_defaults");
+            if (raw) memorySettings = JSON.parse(raw);
+          } catch { /* ignore */ }
+
           const res = await fetch("/api/pipeline/decompose", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -355,6 +365,7 @@ export function usePipeline() {
               intent: config.intent,
               epistemicClassification,
               comprehensiveMode: config.comprehensiveMode ?? false,
+              memorySettings,
             }),
             signal,
           });

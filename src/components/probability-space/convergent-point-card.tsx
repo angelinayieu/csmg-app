@@ -14,6 +14,8 @@ import type {
   ObjectiveAlignment,
 } from "@/types/convergent-point";
 import type { Entity } from "@/types";
+import type { NodeSignature } from "@/types/node-signature";
+import { NodeSignatureRing } from "@/components/signatures/node-signature-ring";
 
 type FeedbackValue = "useful" | "noise" | "inaccurate" | null;
 
@@ -22,6 +24,23 @@ interface Props {
   entitiesByUuid: Map<string, Entity>;
   rank?: number;
   className?: string;
+  /**
+   * Phase 1.1 — opens the parent's NodeSignatureDetail drawer when a
+   * ring is clicked. The card stays stateless about drawer ownership
+   * so we don't end up with N drawers stacking on top of each other.
+   * Optional; rings render but stay non-interactive when omitted.
+   */
+  onSelectSignature?: (sig: NodeSignature, entityName: string) => void;
+}
+
+// Same loose-cast guard as in node-probability-space-view; entities[*]
+// .node_signature is jsonb so we narrow at the boundary.
+function asSignature(json: Entity["node_signature"]): NodeSignature | null {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  const sig = json as unknown as NodeSignature;
+  if (typeof sig.canonical_code !== "string") return null;
+  if (!Array.isArray(sig.basis) || sig.basis.length === 0) return null;
+  return sig;
 }
 
 // ── Visual helpers ──
@@ -122,13 +141,36 @@ function AlignmentBar({ score }: { score: number }) {
 
 // ── Component ──
 
-export function ConvergentPointCard({ point, entitiesByUuid, rank, className }: Props) {
+export function ConvergentPointCard({
+  point,
+  entitiesByUuid,
+  rank,
+  className,
+  onSelectSignature,
+}: Props) {
   const [expanded, setExpanded] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackValue>(point.user_feedback ?? null);
   const [feedbackPending, setFeedbackPending] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const polarity = POLARITY_CONFIG[point.outcome.polarity];
   const Polarity = polarity.Icon;
+
+  // Pre-compute signatures for the expansion's signature row. Cheap —
+  // the cast is structural, no JSON parsing — but useMemo keeps it
+  // stable across feedback toggles so child rings don't remount.
+  const signatureRow = React.useMemo(() => {
+    const focal = entitiesByUuid.get(point.focal_entity_id);
+    const focalSig = focal ? asSignature(focal.node_signature) : null;
+    const interactors = point.interactor_entity_ids.map((uuid) => {
+      const ent = entitiesByUuid.get(uuid);
+      return {
+        uuid,
+        name: ent?.name ?? "(unknown)",
+        sig: ent ? asSignature(ent.node_signature) : null,
+      };
+    });
+    return { focal: focal ? { name: focal.name, sig: focalSig } : null, interactors };
+  }, [entitiesByUuid, point.focal_entity_id, point.interactor_entity_ids]);
 
   const submitFeedback = async (value: FeedbackValue) => {
     // Toggle-off when the same button is pressed twice.
@@ -257,6 +299,53 @@ export function ConvergentPointCard({ point, entitiesByUuid, rank, className }: 
       {/* Expanded detail */}
       {expanded && (
         <div className="border-t border-gray-200 p-3 pt-3">
+          {/* Signatures row (Phase 1.1) — focal + interactor canonical
+              rings, click-to-open detail drawer. Hidden entirely when
+              none of the participating entities have a materialized
+              signature; we don't show empty rings.
+              Layout: focal stays prominent on the left, interactors
+              shrink to size 32 in a horizontal flow. The chevron-style
+              ⋈ glyph reads as "composes-with" and ties the visual
+              language to the Phase 4 combination-signature work. */}
+          {(signatureRow.focal?.sig ||
+            signatureRow.interactors.some((i) => i.sig)) && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-gray-100 bg-gray-50/40 p-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                Signatures
+              </div>
+              {signatureRow.focal?.sig && (
+                <SignatureChip
+                  sig={signatureRow.focal.sig}
+                  name={signatureRow.focal.name}
+                  size={40}
+                  onSelect={onSelectSignature}
+                />
+              )}
+              {signatureRow.interactors.length > 0 && (
+                <span className="text-xs text-gray-400">⋈</span>
+              )}
+              {signatureRow.interactors.map((i) =>
+                i.sig ? (
+                  <SignatureChip
+                    key={i.uuid}
+                    sig={i.sig}
+                    name={i.name}
+                    size={32}
+                    onSelect={onSelectSignature}
+                  />
+                ) : (
+                  <span
+                    key={i.uuid}
+                    className="rounded-full border border-dashed border-gray-300 px-2 py-0.5 text-[10px] text-gray-400"
+                    title={`${i.name} has no materialized signature`}
+                  >
+                    {i.name}
+                  </span>
+                ),
+              )}
+            </div>
+          )}
+
           {/* Mechanism */}
           {point.outcome.mechanism && (
             <div className="mb-3">
@@ -300,6 +389,50 @@ export function ConvergentPointCard({ point, entitiesByUuid, rank, className }: 
               </div>
             </div>
           )}
+
+          {/* Downstream preview (Phase 1.3) — pulls the focal entity's
+              consequence_surface and shows the top 3 targets resolved
+              to names + probability. This answers "what does this
+              focal node actually cause downstream?" without forcing
+              the user to open the signature detail drawer. Hidden
+              when the surface is empty (un-materialized signatures
+              or terminal nodes). */}
+          {signatureRow.focal?.sig &&
+            signatureRow.focal.sig.consequence_surface.length > 0 && (
+              <div className="mb-3">
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                  Downstream from focal
+                </div>
+                <ul className="space-y-0.5 text-xs">
+                  {signatureRow.focal.sig.consequence_surface
+                    .slice(0, 3)
+                    .map((c) => {
+                      const target = entitiesByUuid.get(c.target_entity_id);
+                      const polColor =
+                        c.polarity === "positive"
+                          ? "text-emerald-700"
+                          : c.polarity === "negative"
+                            ? "text-rose-700"
+                            : c.polarity === "conditional"
+                              ? "text-amber-700"
+                              : "text-gray-600";
+                      return (
+                        <li
+                          key={c.target_entity_id}
+                          className="flex items-center justify-between gap-2 pl-2"
+                        >
+                          <span className="truncate text-gray-700">
+                            → {target?.name ?? c.target_entity_id.slice(0, 8)}
+                          </span>
+                          <span className={cn("font-mono text-[10.5px] font-semibold", polColor)}>
+                            {Math.round(c.probability * 100)}%
+                          </span>
+                        </li>
+                      );
+                    })}
+                </ul>
+              </div>
+            )}
 
           {/* External conditions */}
           {point.external_conditions.length > 0 && (
@@ -416,6 +549,48 @@ function FeedbackButton({
     >
       {pending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Icon className="h-2.5 w-2.5" />}
       {label}
+    </button>
+  );
+}
+
+// ── SignatureChip (Phase 1.1) ──
+//
+// Compact ring + name pair used in the expanded card's signature row.
+// Wraps NodeSignatureRing so it's the same primitive as the header /
+// constellation widget, just with the name slotted in beside the ring
+// instead of below it. Click bubbles up to onSelectSignature, which
+// the parent view binds to the shared NodeSignatureDetail drawer.
+
+function SignatureChip({
+  sig,
+  name,
+  size,
+  onSelect,
+}: {
+  sig: NodeSignature;
+  name: string;
+  size: number;
+  onSelect?: (sig: NodeSignature, entityName: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation(); // don't trigger card collapse
+        if (onSelect) onSelect(sig, name);
+      }}
+      className="group inline-flex items-center gap-1.5 rounded-md border border-transparent px-1 py-0.5 transition-colors hover:border-gray-200 hover:bg-white"
+      title={`${name} · ${sig.canonical_code} · ${sig.rings} ring${sig.rings === 1 ? "" : "s"}`}
+    >
+      <NodeSignatureRing
+        signature={sig}
+        size={size}
+        showCode={false}
+        animated={false}
+      />
+      <span className="max-w-[100px] truncate text-[10.5px] font-medium text-gray-700 group-hover:text-gray-900">
+        {name}
+      </span>
     </button>
   );
 }

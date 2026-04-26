@@ -1,7 +1,7 @@
 "use client";
 
-import { type ReactNode, useMemo, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { type ReactNode, useMemo, useCallback, useEffect, useState } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import { MessageCircle, X, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -13,7 +13,11 @@ import { useDeepRefresh } from "@/lib/hooks/use-deep-refresh";
 import { useExpansion } from "@/lib/hooks/use-expansion";
 import { SpaceHeader } from "@/components/space/space-header";
 import { SpaceChat } from "@/components/chat/space-chat";
-import { SpaceSectionNav } from "@/components/layout/space-section-nav";
+import { FloatingGlassSidebar } from "@/components/layout/floating-glass-sidebar";
+import { ProjectionPanel } from "@/components/layout/projection-panel";
+import { WhiteboardBackdrop } from "@/components/layout/whiteboard-backdrop";
+import { KGMiniMap } from "@/components/layout/kg-mini-map";
+import { KGHighlightProvider, useKGHighlight } from "@/components/layout/kg-highlight-context";
 import { NodeDetail } from "@/components/graph/node-detail";
 import { ExpansionShell } from "@/components/graph/expansion-shell";
 import { ObjectiveReviewFlow } from "@/components/objectives/objective-review-flow";
@@ -28,7 +32,9 @@ export function SpaceShell({
 }: SpaceDataProps & { children: ReactNode }) {
   return (
     <SpaceDataProvider {...data}>
-      <SpaceShellInner>{children}</SpaceShellInner>
+      <KGHighlightProvider>
+        <SpaceShellInner>{children}</SpaceShellInner>
+      </KGHighlightProvider>
     </SpaceDataProvider>
   );
 }
@@ -36,8 +42,51 @@ export function SpaceShell({
 function SpaceShellInner({ children }: { children: ReactNode }) {
   const ctx = useSpaceData();
   const router = useRouter();
+  const pathname = usePathname();
   const deepRefresh = useDeepRefresh(ctx.space.id);
   const expansion = useExpansion({ spaceId: ctx.space.id });
+
+  // ── Projection shell state ──────────────────────────────────────────
+  // The projection is open for every route EXCEPT the whiteboard (which
+  // gets the full canvas to itself). Origin rect tracks the active
+  // sidebar button — captured on click and re-synced on every active-
+  // route change so direct URL loads still anchor the tail correctly.
+  const whiteboardHref = `/app/space/${ctx.space.id}/whiteboard`;
+  const isWhiteboardRoute = pathname === whiteboardHref;
+  const [originRect, setOriginRect] = useState<DOMRect | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  // Hover-peek: when the panel is fullscreen the sidebar slides off
+  // the left edge and reappears when the user hovers the edge zone.
+  const [sidebarPeek, setSidebarPeek] = useState(false);
+
+  const handleSidebarActivate = useCallback(
+    ({
+      rect,
+      dismissProjection,
+    }: {
+      rect: DOMRect;
+      id: string;
+      href: string;
+      dismissProjection: boolean;
+    }) => {
+      setOriginRect(rect);
+      if (dismissProjection) {
+        // Whiteboard button: leaving the projection entirely also drops
+        // fullscreen so the next projection opens at normal inset.
+        setFullscreen(false);
+      }
+    },
+    [],
+  );
+
+  const handleActiveRectChange = useCallback((rect: DOMRect | null) => {
+    setOriginRect(rect);
+  }, []);
+
+  const handleClosePanel = useCallback(() => {
+    setFullscreen(false);
+    router.push(whiteboardHref);
+  }, [router, whiteboardHref]);
 
   // Entity map for NodeDetail
   const entityMap = useMemo(
@@ -45,91 +94,181 @@ function SpaceShellInner({ children }: { children: ReactNode }) {
     [ctx.entities]
   );
 
+  // ── Mini-map highlight: focused entity + 1-hop neighborhood ────────
+  // Whenever the user opens a NodeDetail (by clicking the mini-map, the
+  // graph, or any other surface that calls setSelectedEntity), light up
+  // the focused node together with its directly-connected neighbors.
+  // This makes the rail behave like a "you are here" minimap — the
+  // user's current focus + its immediate causal/structural context, no
+  // matter where on the page they triggered the focus from.
+  //
+  // Layered above app-detail and plan-drawer in the highlight stack
+  // (last-pushed wins), so opening a node temporarily overrides those;
+  // closing the detail panel pops back to the underlying highlight.
+  const { setHighlight, clearHighlight } = useKGHighlight();
+  useEffect(() => {
+    const focused = ctx.selectedEntity;
+    if (!focused) {
+      clearHighlight("node-detail");
+      return;
+    }
+    // Build 1-hop neighborhood. Edges reference entity_id (slug), so
+    // collect neighboring entity_ids first then map back to UUIDs.
+    const focusEntityId = focused.entity_id;
+    const neighborEntityIds = new Set<string>();
+    for (const e of ctx.edges) {
+      if (e.source_entity_id === focusEntityId) neighborEntityIds.add(e.target_entity_id);
+      else if (e.target_entity_id === focusEntityId) neighborEntityIds.add(e.source_entity_id);
+    }
+    const ids = new Set<string>([focused.id]);
+    for (const ent of ctx.entities) {
+      if (neighborEntityIds.has(ent.entity_id)) ids.add(ent.id);
+    }
+    const neighborCount = ids.size - 1;
+    setHighlight("node-detail", {
+      ids,
+      reason: `Focus · ${focused.name}${neighborCount > 0 ? ` + ${neighborCount} neighbor${neighborCount === 1 ? "" : "s"}` : ""}`,
+    });
+    return () => clearHighlight("node-detail");
+  }, [ctx.selectedEntity, ctx.entities, ctx.edges, setHighlight, clearHighlight]);
+
   // Graph changed callback
   const handleGraphChanged = useCallback(() => {
     router.refresh();
   }, [router]);
 
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* HEADER — persists across all section pages */}
-      <div className="flex-shrink-0 px-6 pt-4 pb-2">
-        <SpaceHeader
-          space={ctx.space}
-          liveCounts={ctx.liveCounts}
-          deepRefresh={deepRefresh}
-        />
-      </div>
+  // The sidebar is visible on every route — it's the navigation
+  // affordance. The only time it slides off-screen is when the
+  // projection is fullscreen AND the user isn't hovering the peek
+  // zone. On /whiteboard the sidebar floats over the canvas so the
+  // user can return to any section without going "back".
+  const sidebarHidden = fullscreen && !sidebarPeek && !isWhiteboardRoute;
 
-      <div className="relative flex flex-1 overflow-hidden">
-        {/* LEFT: Section navigation sidebar */}
-        <SpaceSectionNav
+  return (
+    <div className="relative h-full w-full overflow-hidden">
+      {/* Always-mounted whiteboard-ish backdrop — the product's base
+          layer. Kept lightweight (no tldraw here) so routing between
+          sections doesn't pay the canvas boot cost. The real tldraw
+          editor only loads on the /whiteboard route. */}
+      <WhiteboardBackdrop />
+
+      {/* Left-edge hover hit-zone that brings the sidebar back when
+          the projection is fullscreen. Wider (28px) than the visible
+          rail so users don't have to be pixel-precise. */}
+      {!isWhiteboardRoute && fullscreen && (
+        <div
+          onMouseEnter={() => setSidebarPeek(true)}
+          onMouseLeave={() => setSidebarPeek(false)}
+          className="fixed left-0 top-0 z-[55] h-full w-7"
+          aria-hidden
+        />
+      )}
+
+      {/* Floating glass sidebar — always mounted, slides off-screen
+          when fullscreen + not peeking. The hide animation lives on
+          the motion element itself (no transformed wrapper) so its
+          position:fixed resolves against the viewport. */}
+      <div
+        onMouseEnter={() => fullscreen && setSidebarPeek(true)}
+        onMouseLeave={() => fullscreen && setSidebarPeek(false)}
+      >
+        <FloatingGlassSidebar
           spaceId={ctx.space.id}
-          hasSynthesis={ctx.hasSynthesis}
-          entityCount={ctx.entities.length}
-          hasStrategy={
-            !!(ctx.space.synthesis_data as Record<string, unknown>)
-              ?.strategic_recommendation
-          }
-          hasGoal={!!ctx.activeGoal}
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           useCaseTemplateId={(ctx.space as any).use_case_template_id ?? null}
+          onActivate={handleSidebarActivate}
+          onActiveRectChange={handleActiveRectChange}
+          hidden={sidebarHidden}
+          compact={fullscreen}
+          // On the whiteboard route, collapse to a thin glass strip so
+          // it doesn't fight the canvas tool dock for left-edge real
+          // estate. Hover expands it and the dock slides right.
+          railMode={isWhiteboardRoute}
         />
+      </div>
 
-        {/* CENTER: Routed content */}
-        <main className="flex-1 overflow-y-auto min-w-0">{children}</main>
+      {/* Whiteboard route: children render at root so WhiteboardPage's
+          own `fixed inset-0` overlay can take the full viewport. The
+          projection panel stays closed (no card, no backdrop) so the
+          tldraw canvas isn't competing with anything but the floating
+          sidebar above it. */}
+      {isWhiteboardRoute && children}
 
-        {/* TOP-RIGHT: Chat Panel — expandable overlay */}
-        {ctx.chatOpen && (
-          <div
-            className={cn(
-              "absolute top-2 right-3 z-30 flex flex-col rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-300 overflow-hidden",
-              ctx.chatExpanded
-                ? "w-[480px] h-[calc(100%-16px)]"
-                : "w-[360px] h-[420px]"
-            )}
-          >
-            <div className="absolute top-2.5 right-2 z-10 flex items-center gap-0.5">
-              <button
-                onClick={() => ctx.setChatExpanded(!ctx.chatExpanded)}
-                className="flex h-6 w-6 items-center justify-center rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-                title={ctx.chatExpanded ? "Shrink" : "Expand"}
-              >
-                {ctx.chatExpanded ? (
-                  <Minimize2 className="h-3 w-3" />
-                ) : (
-                  <Maximize2 className="h-3 w-3" />
-                )}
-              </button>
-              <button
-                onClick={() => ctx.setChatOpen(false)}
-                className="flex h-6 w-6 items-center justify-center rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-                title="Close chat"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-            <SpaceChat
-              spaceId={ctx.space.id}
-              entities={ctx.entities}
-              onGraphChanged={handleGraphChanged}
-              mode="inline"
-              onChatReady={ctx.handleChatReady}
+      {/* Every other route: children render inside the projection card.
+          The card holds the SpaceHeader, the routed main, the KG mini-
+          map, and the chat overlay. AnimatePresence handles enter/exit
+          so closing returns to the bare canvas with a smooth fade. */}
+      <ProjectionPanel
+        open={!isWhiteboardRoute}
+        originRect={originRect}
+        fullscreen={fullscreen}
+        onToggleFullscreen={() => setFullscreen((v) => !v)}
+        onClose={handleClosePanel}
+      >
+        <div className="flex h-full min-h-full flex-col">
+          <div className="flex-shrink-0 px-6 pt-5 pb-2 pr-28">
+            <SpaceHeader
+              space={ctx.space}
+              liveCounts={ctx.liveCounts}
+              deepRefresh={deepRefresh}
             />
           </div>
-        )}
 
-        {/* Chat toggle button — shown when chat is closed */}
-        {!ctx.chatOpen && (
-          <button
-            onClick={() => ctx.setChatOpen(true)}
-            className="absolute top-3 right-4 z-30 flex h-9 w-9 items-center justify-center rounded-lg bg-interaxis-50 text-interaxis-600 hover:bg-interaxis-100 shadow-sm border border-interaxis-100 transition-colors"
-            title="Open chat"
-          >
-            <MessageCircle className="h-4 w-4" />
-          </button>
-        )}
-      </div>
+          <div className="relative flex flex-1 min-h-0 overflow-hidden">
+            <main className="flex-1 min-w-0 overflow-y-auto">{children}</main>
+            <KGMiniMap />
+
+            {ctx.chatOpen && (
+              <div
+                className={cn(
+                  "absolute top-2 right-3 z-30 flex flex-col rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-300 overflow-hidden",
+                  ctx.chatExpanded
+                    ? "w-[480px] h-[calc(100%-16px)]"
+                    : "w-[360px] h-[420px]"
+                )}
+              >
+                <div className="absolute top-2.5 right-2 z-10 flex items-center gap-0.5">
+                  <button
+                    onClick={() => ctx.setChatExpanded(!ctx.chatExpanded)}
+                    className="flex h-6 w-6 items-center justify-center rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                    title={ctx.chatExpanded ? "Shrink" : "Expand"}
+                  >
+                    {ctx.chatExpanded ? (
+                      <Minimize2 className="h-3 w-3" />
+                    ) : (
+                      <Maximize2 className="h-3 w-3" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => ctx.setChatOpen(false)}
+                    className="flex h-6 w-6 items-center justify-center rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                    title="Close chat"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+                <SpaceChat
+                  spaceId={ctx.space.id}
+                  entities={ctx.entities}
+                  onGraphChanged={handleGraphChanged}
+                  mode="inline"
+                  onChatReady={ctx.handleChatReady}
+                />
+              </div>
+            )}
+
+            {!ctx.chatOpen && (
+              <button
+                onClick={() => ctx.setChatOpen(true)}
+                className="absolute bottom-4 right-4 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-white/90 text-[color:rgb(var(--accent-rgb,6_145_154))] shadow-[0_6px_20px_-6px_rgba(15,23,42,0.18)] border border-black/5 backdrop-blur hover:bg-white transition-colors"
+                title="Open chat"
+              >
+                <MessageCircle className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      </ProjectionPanel>
 
       {/* Node detail slide-out */}
       {ctx.selectedEntity && (

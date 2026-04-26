@@ -164,6 +164,7 @@ export function HomeShell({
         <WhiteboardsGrid
           spaces={spaces}
           onBack={() => setView("welcome")}
+          onCreateNew={() => setView("welcome")}
         />
       </div>
     </div>

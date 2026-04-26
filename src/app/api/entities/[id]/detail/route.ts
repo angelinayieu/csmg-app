@@ -87,9 +87,37 @@ export async function GET(
     console.warn("[entities/detail] claims fetch failed (non-fatal):", claimsRes.error);
   }
 
+  // Phase 6 — partner-entity hydration for the ego-network view.
+  // Collect every UUID at the FAR side of an incident edge, then
+  // batch-fetch (id, name, entity_category) so the drawer can render
+  // labels without a per-edge follow-up roundtrip. Ignored when
+  // edges came back empty.
+  const edgeRows = (edgesRes.data ?? []) as Array<{
+    source_entity_id: string;
+    target_entity_id: string;
+  }>;
+  const partnerIds = new Set<string>();
+  for (const e of edgeRows) {
+    if (e.source_entity_id !== id) partnerIds.add(e.source_entity_id);
+    if (e.target_entity_id !== id) partnerIds.add(e.target_entity_id);
+  }
+  let partner_entities: Array<{
+    id: string;
+    name: string;
+    entity_category: string | null;
+  }> = [];
+  if (partnerIds.size > 0) {
+    const { data: partnerRows } = await db
+      .from("entities")
+      .select("id, name, entity_category")
+      .in("id", Array.from(partnerIds));
+    partner_entities = (partnerRows ?? []) as typeof partner_entities;
+  }
+
   return NextResponse.json({
     entity,
     edges: edgesRes.data ?? [],
     claims: claimsRes.data ?? [],
+    partner_entities,
   });
 }

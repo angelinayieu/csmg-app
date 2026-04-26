@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { ImmersiveHome } from "@/components/home/immersive-home";
 import { LandingMarketingNav } from "@/components/landing/landing-marketing-nav";
+import { AuthModal } from "@/components/auth/auth-modal";
 import { TEMPLATE_LIST } from "@/lib/use-cases/library";
 
 const features = [
@@ -196,12 +197,12 @@ export default function LandingPage() {
             Sign up free — your prompt picks up exactly where you left it.
           </p>
           <div className="mt-6">
-            <Link
-              href="/auth/signup"
+            <a
+              href="#signup"
               className="inline-flex items-center rounded-full bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-md transition-transform hover:scale-[1.02] hover:bg-slate-800"
             >
               Get started
-            </Link>
+            </a>
           </div>
         </section>
       </main>
@@ -209,6 +210,8 @@ export default function LandingPage() {
       <footer className="border-t border-gray-200/60 px-6 py-6 text-center text-sm text-gray-400">
         InterAxis &mdash; Your Intelligence System
       </footer>
+
+      <AuthModal />
     </div>
   );
 }

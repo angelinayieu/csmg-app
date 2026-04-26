@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useStructuralEventStream } from "../hooks/use-structural-event-stream";
+import { useRunEventStore } from "../hooks/run-event-store";
 import { CanvasAnalogCard } from "./canvas-analog-card";
 import type { StructuralAnalogFoundEvent } from "@/types/pipeline-events";
 
@@ -31,7 +31,7 @@ interface AnalogCard extends StructuralAnalogFoundEvent {
 }
 
 export function CanvasAnalogRail({ runId }: CanvasAnalogRailProps) {
-  const { events, status } = useStructuralEventStream(runId);
+  const { events, status } = useRunEventStore();
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [hiddenAfterComplete, setHiddenAfterComplete] = useState(false);
 
@@ -73,7 +73,14 @@ export function CanvasAnalogRail({ runId }: CanvasAnalogRailProps) {
   return (
     <aside
       className={cn(
-        "pointer-events-auto absolute left-4 top-20 z-30 flex w-[320px] flex-col gap-2",
+        // Moved off the `left-4 top-20 z-30 w-[320px]` slot — that's
+        // CanvasRunContextPanel's anchor and the two components were
+        // rendering on top of each other. Anchor to the LEFT BOTTOM
+        // instead (above the AI Receipts chip at bottom-24) so analog
+        // discovery has its own lane. max-h keeps the rail from
+        // climbing into the run-context panel's territory even when
+        // many analogs arrive.
+        "pointer-events-auto absolute left-4 bottom-[140px] z-30 flex max-h-[45vh] w-[320px] flex-col gap-2 overflow-y-auto",
       )}
       aria-label="Cross-domain structural analogs"
     >

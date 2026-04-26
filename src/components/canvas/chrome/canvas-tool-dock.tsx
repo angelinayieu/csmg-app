@@ -36,7 +36,14 @@ const TOOLS: { id: CanvasTool; icon: typeof MousePointer2; label: string; shortc
 
 export function CanvasToolDock({ active, libraryOpen, onSelect }: CanvasToolDockProps) {
   return (
-    <div className="pointer-events-auto absolute left-4 top-1/2 z-30 -translate-y-1/2">
+    // Slides right when the outer glass rail expands. `--kg-rail-offset`
+    // is set on document.documentElement by FloatingGlassSidebar — 0px
+    // when the rail is the thin collapsed strip, ~140px when the user
+    // hovers and pills appear. Spring easing gives the physics feel.
+    <div
+      style={{ left: `calc(1rem + var(--kg-rail-offset, 0px))` }}
+      className="pointer-events-auto absolute top-1/2 z-30 -translate-y-1/2 transition-[left] duration-[420ms] ease-[cubic-bezier(0.34,1.56,0.64,1)]"
+    >
       <div className="flex flex-col gap-0.5 rounded-2xl border border-gray-200/70 bg-white/85 p-1 shadow-md backdrop-blur-md">
         {TOOLS.map((tool, idx) => {
           const Icon = tool.icon;

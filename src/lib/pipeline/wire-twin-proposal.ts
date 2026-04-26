@@ -20,6 +20,7 @@ import type {
   StrategicRecommendation,
   InfrastructureProposal,
   TwinProposalJustification,
+  CalibrationGateSnapshot,
 } from "@/types/strategy";
 import { extractTwinProposalFromStrategy } from "./extract-twin-proposal";
 import { materializeMechanismsFromStrategy } from "./materialize-mechanisms";
@@ -77,6 +78,53 @@ export async function wireTwinProposalAndMechanisms(
     // can show "this proposal commits to N mechanisms".
     const allMechIds = Array.from(mechanismIdsByProposal.values()).flat();
     justification.mechanism_ids = allMechIds;
+
+    // Gap B — stamp the reality-calibration snapshot. This is the cache
+    // the review panel renders against; the approve route re-queries the
+    // live row before flipping statuses so a stale "calibrated" snapshot
+    // can't sneak through after a failed re-capture.
+    //
+    // Soft-fail: if the calibration row is missing (capture ran before
+    // the Gap B migration, or calibration stage crashed) we leave
+    // calibration_gate undefined. The panel treats undefined as "unknown"
+    // — visible but not blocking — so legacy spaces keep working.
+    try {
+      const { data: calRow } = (await db
+        .from("reality_calibrations")
+        .select(
+          "status, reproduced_count, total_count, aggregate_score, strategy_baseline_id, bypassed_at, computed_at",
+        )
+        .eq("space_id", spaceId)
+        .order("computed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()) as {
+        data: {
+          status: CalibrationGateSnapshot["status"];
+          reproduced_count: number;
+          total_count: number;
+          aggregate_score: number;
+          strategy_baseline_id: string | null;
+          bypassed_at: string | null;
+          computed_at: string;
+        } | null;
+      };
+      if (calRow) {
+        justification.calibration_gate = {
+          status: calRow.status,
+          reproduced_count: calRow.reproduced_count,
+          total_count: calRow.total_count,
+          aggregate_score: Number(calRow.aggregate_score),
+          strategy_baseline_id: calRow.strategy_baseline_id,
+          checked_at: calRow.computed_at,
+          bypassed_at: calRow.bypassed_at,
+        };
+      }
+    } catch (err) {
+      console.warn(
+        "[wire-twin-proposal] calibration snapshot read failed (non-fatal):",
+        err,
+      );
+    }
   }
 
   // ── 3. twin_proposals row ────────────────────────────────────────────

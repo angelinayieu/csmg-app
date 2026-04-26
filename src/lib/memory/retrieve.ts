@@ -25,6 +25,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { embedTexts } from "@/lib/embeddings";
 import type { MemoryHit, MemoryQuery, MemoryItem } from "@/types";
+import type { MemorySettings } from "@/lib/brainstorm/brainstorm-settings";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyDb = SupabaseClient<any>;
@@ -173,4 +174,110 @@ export async function retrieveKg(
     ? Array.from(new Set([...baseKinds, ...extraKinds]))
     : baseKinds;
   return retrieve(db, { ...rest, kinds });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Decomposition-specific retrieval
+// ──────────────────────────────────────────────────────────────────────
+
+export interface DecompositionMemoryContext {
+  /** Pre-formatted block ready to inject into the LLM system prompt. */
+  promptBlock: string;
+  /** Number of memory items included. */
+  itemCount: number;
+  /** Rough token estimate (chars / 4). */
+  tokenEstimate: number;
+  /** Raw hits for downstream telemetry / HUD event. */
+  hits: MemoryHit[];
+}
+
+/**
+ * Retrieve semantically relevant prior context for a new decomposition.
+ *
+ * Queries `memory_items` using the user's input text as the query vector,
+ * filtered by the user's MemorySettings preferences. Returns a formatted
+ * prompt block that can be prepended to the decompose Pass-1 system prompt.
+ *
+ * Returns null when:
+ *   - memory is disabled in settings
+ *   - no relevant items found above the similarity threshold
+ *   - embedding fails (soft-fail)
+ */
+export async function queryMemoryForDecomposition(
+  db: AnyDb,
+  inputText: string,
+  ownerId: string,
+  settings: MemorySettings,
+  /** Restrict to a single space when scope === "this_space". */
+  currentSpaceId?: string,
+): Promise<DecompositionMemoryContext | null> {
+  if (!settings.enabled) return null;
+
+  // Build kind list from source preferences
+  const kinds: Array<MemoryHit["item"]["kind"]> = [];
+  if (settings.sources.priorDecompositions || settings.sources.synthesisInsights) {
+    kinds.push("entity");
+  }
+  if (settings.sources.synthesisInsights || settings.sources.journalHistory) {
+    kinds.push("note");
+  }
+  if (settings.sources.objectives) {
+    kinds.push("objective");
+  }
+  // Always include bridges (cross-space leverage) when scope is all_spaces
+  if (settings.scope === "all_spaces") {
+    kinds.push("bridge");
+  }
+  if (kinds.length === 0) return null;
+
+  // Scope filter
+  const scopeRefIds: string[] | undefined =
+    settings.scope === "this_space" && currentSpaceId
+      ? [currentSpaceId]
+      : settings.scope === "custom" && settings.customSpaceIds.length > 0
+        ? settings.customSpaceIds
+        : undefined;
+
+  const hits = await retrieve(db, {
+    owner_id: ownerId,
+    query_text: inputText,
+    kinds: Array.from(new Set(kinds)) as Parameters<typeof retrieve>[1]["kinds"],
+    scope_ref_ids: scopeRefIds,
+    k: settings.maxContextItems,
+    min_salience: 0,
+  });
+
+  // Filter by similarity threshold
+  const filtered = hits.filter((h) => h.similarity >= settings.minSimilarityThreshold);
+  if (filtered.length === 0) return null;
+
+  // Format into a prompt-injectable block
+  const lines: string[] = [
+    "--- PRIOR CONTEXT FROM YOUR PAST WORK ---",
+    "The following was retrieved from your previous analyses based on semantic similarity.",
+    "Use it to recognise recurring themes — not to constrain fresh thinking.",
+    "",
+  ];
+
+  for (const hit of filtered) {
+    const kindLabel =
+      hit.item.kind === "entity"
+        ? "Entity"
+        : hit.item.kind === "note"
+          ? "Insight"
+          : hit.item.kind === "objective"
+            ? "Objective"
+            : hit.item.kind === "bridge"
+              ? "Cross-space link"
+              : "Memory";
+
+    lines.push(`[${kindLabel}] ${hit.item.text}`);
+  }
+
+  lines.push("--- END PRIOR CONTEXT ---");
+
+  const promptBlock = lines.join("\n");
+  const tokenEstimate = Math.ceil(promptBlock.length / 4);
+
+  return { promptBlock, itemCount: filtered.length, tokenEstimate, hits: filtered };
 }

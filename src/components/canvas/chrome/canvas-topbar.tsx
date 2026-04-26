@@ -1,7 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Maximize2, Minimize2, Users, MoreHorizontal, Magnet, Sparkles } from "lucide-react";
+import {
+  ArrowLeft,
+  Maximize2,
+  Minimize2,
+  Users,
+  MoreHorizontal,
+  Magnet,
+  Sparkles,
+  Network,
+  ListTree,
+  Cog,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type AutoAIState = "off" | "watching" | "running" | "cooldown";
@@ -49,28 +60,60 @@ export function CanvasTopBar({
         "pointer-events-none absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 py-3",
       )}
     >
-      <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-gray-200/70 bg-white/80 px-2.5 py-1.5 shadow-sm backdrop-blur-md">
+      <div className="pointer-events-auto flex min-w-0 max-w-[52%] items-center gap-2 rounded-xl border border-gray-200/70 bg-white/80 px-2.5 py-1.5 shadow-sm backdrop-blur-md">
         <Link
           href={`/app/space/${spaceId}`}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
           title="Back to space"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
         </Link>
-        <div className="h-4 w-px bg-gray-200" />
-        <div className="flex items-center gap-2 pr-2">
+        <div className="h-4 w-px flex-shrink-0 bg-gray-200" />
+        <div className="flex min-w-0 items-center gap-2 pr-2">
           <div
-            className="h-2 w-2 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 shadow-sm"
+            className="h-2 w-2 flex-shrink-0 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 shadow-sm"
             aria-hidden
           />
-          <div className="text-[13px] font-semibold tracking-tight text-gray-900">
+          <div
+            className="truncate text-[13px] font-semibold tracking-tight text-gray-900"
+            title={spaceName}
+          >
             {spaceName}
           </div>
-          <div className="text-[11px] font-medium text-gray-400">
+          <div className="flex-shrink-0 text-[11px] font-medium text-gray-400">
             {entityCount} · {edgeCount}
           </div>
         </div>
         <SaveBadge status={saveStatus} />
+        {/* Browse entry points — Phase 4/5 follow-on. Routes exist
+            but were unreachable from the canvas. These two chips are
+            the durable nav into the entity library + saved systems. */}
+        <div className="ml-1 flex items-center gap-0.5 border-l border-gray-200 pl-1.5">
+          <Link
+            href={`/app/space/${spaceId}/entities`}
+            className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[10.5px] font-semibold text-gray-500 transition hover:bg-gray-100 hover:text-gray-800"
+            title="Entity library — browse every entity in this space, sortable by dominance / chains / cost."
+          >
+            <ListTree className="h-3 w-3" />
+            Entities
+          </Link>
+          <Link
+            href={`/app/space/${spaceId}/systems`}
+            className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[10.5px] font-semibold text-gray-500 transition hover:bg-gray-100 hover:text-gray-800"
+            title="Systems — saved subgraphs ready to experiment against in the lab."
+          >
+            <Network className="h-3 w-3" />
+            Systems
+          </Link>
+          <Link
+            href={`/app/space/${spaceId}/mechanisms`}
+            className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[10.5px] font-semibold text-gray-500 transition hover:bg-gray-100 hover:text-gray-800"
+            title="Mechanisms — cycle patterns staffed by agents in this space. Promote any to a system in one click."
+          >
+            <Cog className="h-3 w-3" />
+            Mechanisms
+          </Link>
+        </div>
       </div>
 
       <div className="pointer-events-auto flex items-center gap-1 rounded-xl border border-gray-200/70 bg-white/80 px-1.5 py-1.5 shadow-sm backdrop-blur-md">

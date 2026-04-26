@@ -49,6 +49,12 @@ export interface Hub {
 export class HubTracker {
   private degrees = new Map<string, number>();
   private names = new Map<string, string>();
+  /** Undirected edge set, encoded as canonical "smallerId→largerId"
+   *  strings so lookups dedupe by orientation. Lets the kg-formation
+   *  card render REAL edges between visible hubs instead of the
+   *  cosmetic all-pairs lines it used to draw. Also drives the
+   *  honest edge count when ghost shapes aren't being painted. */
+  private edgePairs = new Set<string>();
 
   addEntity(entityId: string, name: string): void {
     // Don't overwrite an existing name (preview → real rebind keeps
@@ -66,11 +72,22 @@ export class HubTracker {
     }
     this.names.delete(oldId);
     this.names.set(newId, name);
+    // Rewire edgePairs that referenced the old id so existing real
+    // edges stay counted under the new identity.
+    const updated = new Set<string>();
+    for (const pair of this.edgePairs) {
+      const [a, b] = pair.split("→");
+      const na = a === oldId ? newId : a;
+      const nb = b === oldId ? newId : b;
+      updated.add(canonicalPair(na, nb));
+    }
+    this.edgePairs = updated;
   }
 
   /** Undirected: bumps both endpoints. Edge direction isn't meaningful
    *  for hub discovery — a highly-cited node is central regardless of
-   *  which direction the edges point. */
+   *  which direction the edges point. Self-loops (same source/target)
+   *  are still counted toward degree but not added to edgePairs. */
   addEdge(sourceEntityId: string, targetEntityId: string): void {
     this.degrees.set(
       sourceEntityId,
@@ -80,6 +97,9 @@ export class HubTracker {
       targetEntityId,
       (this.degrees.get(targetEntityId) ?? 0) + 1,
     );
+    if (sourceEntityId !== targetEntityId) {
+      this.edgePairs.add(canonicalPair(sourceEntityId, targetEntityId));
+    }
   }
 
   /** Current top-N hubs, freshly computed on every call. Callers don't
@@ -105,10 +125,50 @@ export class HubTracker {
     return n;
   }
 
+  /** Total unique entities the tracker has seen. Used by the
+   *  kg-formation card for an honest "N entities" footer when no
+   *  ghost shapes are being painted to count from. */
+  entityCount(): number {
+    return this.names.size;
+  }
+
+  /** Total unique undirected edges the tracker has seen (excluding
+   *  self-loops). Used by the kg-formation card for an honest "M
+   *  edges" footer + as the source-of-truth counter independent of
+   *  whether ghost arrows were painted. */
+  edgeCount(): number {
+    return this.edgePairs.size;
+  }
+
+  /** Edges among a specific set of entity ids — drives the
+   *  kg-formation card's mini-graph: only render lines between hubs
+   *  that have a REAL edge connecting them, instead of the
+   *  cosmetic all-pairs lines it used to draw. Returns
+   *  {source, target} pairs (canonicalized so each pair appears
+   *  once). */
+  edgesAmong(
+    ids: ReadonlySet<string>,
+  ): Array<{ source: string; target: string }> {
+    const out: Array<{ source: string; target: string }> = [];
+    for (const pair of this.edgePairs) {
+      const idx = pair.indexOf("→");
+      if (idx < 0) continue;
+      const a = pair.slice(0, idx);
+      const b = pair.slice(idx + 1);
+      if (ids.has(a) && ids.has(b)) out.push({ source: a, target: b });
+    }
+    return out;
+  }
+
   clear(): void {
     this.degrees.clear();
     this.names.clear();
+    this.edgePairs.clear();
   }
+}
+
+function canonicalPair(a: string, b: string): string {
+  return a < b ? `${a}→${b}` : `${b}→${a}`;
 }
 
 // ── Static (full-graph) computation ──

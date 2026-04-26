@@ -16,6 +16,9 @@ import "tldraw/tldraw.css";
 import type { Entity, Edge, Space } from "@/types";
 import { KGNodeShapeUtil, KG_NODE_TIER_SIZE } from "./shapes/kg-node-shape";
 import { KGFormationShapeUtil } from "./shapes/kg-formation-shape";
+import { OriginPromptShapeUtil } from "./shapes/origin-prompt-shape";
+import { ProbabilitySpaceShellShapeUtil } from "./shapes/probability-space-shell-shape";
+import { RunEventStoreProvider } from "./hooks/run-event-store";
 import { StickyNoteShapeUtil } from "./shapes/sticky-note-shape";
 import { SynthesisCardShapeUtil } from "./shapes/synthesis-card-shape";
 import { ClusterFrameShapeUtil } from "./shapes/cluster-frame-shape";
@@ -34,14 +37,56 @@ import { SourceCardShapeUtil } from "./shapes/source-card-shape";
 import { FileCardShapeUtil } from "./shapes/file-card-shape";
 import { ThreadSnapshotShapeUtil } from "./shapes/thread-snapshot-shape";
 import { ProposalSnapshotShapeUtil } from "./shapes/proposal-snapshot-shape";
+import { RootCauseTreeShapeUtil } from "./shapes/root-cause-tree-shape";
+import { ProposalChainRibbonShapeUtil } from "./shapes/proposal-chain-ribbon-shape";
+import { TaxonomyCardShapeUtil } from "./shapes/taxonomy-card-shape";
+import { VariantCardShapeUtil } from "./shapes/variant-card-shape";
+// Sprint A — wrap-what-exists pass: pre-built widgets from /apps/widgets
+// surfaced as first-class tldraw shapes so the painter can drop them
+// during the downstream / experiment bands of the unfurl.
+import { DownstreamRealityShapeUtil } from "./shapes/downstream-reality-shape";
+import { IVDecompositionShapeUtil } from "./shapes/iv-decomposition-shape";
+import { VariantCarouselShapeUtil } from "./shapes/variant-carousel-shape";
+import { StageNodeShapeUtil } from "./shapes/stage-node-shape";
+// 5-column experiment-design card — IV / DV / Control / Process / Results.
+// Painted alongside the proposal-snapshot for experiment-kind events
+// to give the canvas a single cohesive surface that names what's
+// being tested in experimental-design vocabulary.
+import { ExperimentDesignCardShapeUtil } from "./shapes/experiment-design-card-shape";
+// Synthesis intersection card — the canvas's final-ranking anchor.
+// Painted once after axes settle; proposals fork off this card
+// instead of off individual entity ghosts. Closes the unfurl as:
+// prompt → axis landscapes → intersection → proposals.
+import { SynthesisIntersectionCardShapeUtil } from "./shapes/synthesis-intersection-card-shape";
+// Top-of-flow input layer — asset chips (per ingested file) painted
+// alongside the origin-prompt, plus the situation card that maps
+// the user's CURRENT state from intake_text + assets.
+import { AssetCardShapeUtil } from "./shapes/asset-card-shape";
+import { SituationCardShapeUtil } from "./shapes/situation-card-shape";
 import { ThreadNoteShapeUtil, THREAD_DEFAULT_W, THREAD_DEFAULT_H } from "./shapes/thread-note-shape";
 import type { StickyNoteShape, KGNodeShape, StrategyShape, ThreadNoteShape } from "./shapes/types";
 import { ThreadTethersOverlay } from "./chrome/thread-tethers-overlay";
+// Phase 3 — legend / filter sidebar. Reads kind + layer counts from
+// the entity catalog API; reads axis chips live from the tldraw store
+// (every probability-space-shell shape exposes its axis as a prop).
+// Mounted via InFrontOfTheCanvas so it lives inside the editor
+// context and can call useEditor().
+import { CanvasLegendSidebar } from "./chrome/canvas-legend-sidebar";
+// Phase 8 — top-of-canvas stage indicator. Reads the latest
+// `stage_boundary` event off the run event store and renders a
+// breadth → depth → weave → test pill strip with active-chip glow.
+import { CanvasStageIndicator } from "./chrome/canvas-stage-indicator";
+// Phase 4/5 follow-on — lasso save-as-system button. Appears top-
+// right when the user has selected one or more shells / synthesis
+// card; click → POSTs the union of their entity ids as a new
+// System with source_kind="user_lasso".
+import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
 import { useThreadPersistence } from "./hooks/use-thread-persistence";
 import { CardSidecar } from "./sidecar/card-sidecar";
 import { toast } from "@/lib/hooks/use-toast";
 import { useClusterFrames } from "./hooks/use-cluster-frames";
 import { entityToLayerId } from "@/lib/whiteboard/layer-config";
+import { PAINT_GLOBAL_GHOST_KG_NODES } from "@/lib/whiteboard/canvas-feature-flags";
 import { useSyncEntities } from "./hooks/use-sync-entities";
 import { useCanvasPersistence } from "./hooks/use-canvas-persistence";
 import { useCanvasAmbient } from "./hooks/use-canvas-ambient";
@@ -62,6 +107,10 @@ import {
 } from "./chrome/brainstorm-panel";
 import { BrainstormToggleButton } from "./chrome/brainstorm-toggle-button";
 import { BrainstormContextProvider } from "./brainstorm-context";
+import {
+  AdvancedContextPicker,
+  type ContextOverride,
+} from "./chrome/advanced-context-picker";
 import { CanvasTopBar } from "./chrome/canvas-topbar";
 import { CanvasCreditChip } from "./chrome/canvas-credit-chip";
 import { CanvasToolDock, type CanvasTool } from "./chrome/canvas-tool-dock";
@@ -96,6 +145,10 @@ import {
   type AtmosphericZoomHandle,
 } from "@/components/shared/reactor-glass";
 import { useRouter as useNextRouter } from "next/navigation";
+import {
+  setCanvasNavigator,
+  setCanvasDispatcher,
+} from "@/lib/canvas/canvas-bus";
 import { useAIReceipts } from "./hooks/use-ai-receipts";
 import {
   CanvasAIReceipts,
@@ -113,8 +166,7 @@ import { ObjectivesDrawer } from "./drawers/objectives-drawer";
 import { ProbabilityDrawer } from "./drawers/probability-drawer";
 import { GraphDrawer } from "./drawers/graph-drawer";
 import { CanvasEventHud } from "./chrome/canvas-event-hud";
-import { CanvasOriginCard } from "./chrome/canvas-origin-card";
-import { ProbabilitySpaceRail } from "./chrome/probability-space-rail";
+import { CanvasRunSignalsBanner } from "./chrome/canvas-run-signals-banner";
 import { CanvasReasoningStream } from "./chrome/canvas-reasoning-stream";
 import { CanvasProposalRings } from "./chrome/canvas-proposal-rings";
 import { CanvasAnalogRail } from "./chrome/canvas-analog-rail";
@@ -126,6 +178,7 @@ import { CanvasLayerToggle } from "./chrome/canvas-layer-toggle";
 import { CanvasProbabilityBadge } from "./chrome/canvas-probability-badge";
 import { useLayerFilterState } from "./drawers/use-layer-filter-state";
 import { PipelineEventPainter } from "./pipeline-event-painter";
+import type { ProbabilitySpaceAxis } from "@/types/pipeline-events";
 import { CanvasErrorBoundary } from "./canvas-error-boundary";
 import { EntityDetailDrawer } from "./drawers/entity-detail-drawer";
 import { useEntityDetailState } from "./drawers/use-entity-detail-state";
@@ -140,6 +193,17 @@ const SHAPE_UTILS = [
   KGNodeShapeUtil,
   // Project-Overview design pass — live landscape overview during a run
   KGFormationShapeUtil,
+  // Lineage root — the user's intake prompt as a real tldraw shape so
+  // kg-formation (and everything below it) can tether UP to it,
+  // turning the canvas into a readable "thought → landscape →
+  // branches" tree. Replaces the prior chrome CanvasOriginCard.
+  OriginPromptShapeUtil,
+  // Per-axis intake lens cards. Painted by the pipeline painter on
+  // `space_opened`, updated on entity_added / edge_added / merge /
+  // scored events, tethered up to origin-prompt. Replaces the prior
+  // chrome ProbabilitySpaceRail — shells now pan with the canvas and
+  // drags land on tldraw so the whiteboard isn't "stuck" anymore.
+  ProbabilitySpaceShellShapeUtil,
   StickyNoteShapeUtil,
   SynthesisCardShapeUtil,
   ClusterFrameShapeUtil,
@@ -171,6 +235,40 @@ const SHAPE_UTILS = [
   // Phase 2E · PR 4 — forked proposal snapshot card painted live by
   // the pipeline event painter when proposal_ready events arrive
   ProposalSnapshotShapeUtil,
+  // Root-cause fan-in tree painted by the event painter on
+  // root_cause_identified / updated on why_chain_deepened. Single
+  // shape per space; upserts on re-emission.
+  RootCauseTreeShapeUtil,
+  // Project-Overview design pass — reasoning chain ribbon painted
+  // directly below each proposal snapshot. Breadcrumb of upstream
+  // entity names → target + signed lift chip.
+  ProposalChainRibbonShapeUtil,
+  // VP Project report (Phase 3) — independent-variable taxonomy card,
+  // painted at end of intake once the domain-inferrer emits. Drives
+  // the DecomposedPromptViz widget downstream.
+  TaxonomyCardShapeUtil,
+  // VP Project report (Phase 3, Batch 2e) — variant flashcards painted
+  // live when the writer-path's variant_factory emits variant_proposed.
+  VariantCardShapeUtil,
+  // Sprint A — wrap-what-exists pass: the four pre-built widgets that
+  // were previously only reachable from the App detail page. Now first-
+  // class canvas shapes so the painter can drop them during the
+  // downstream / experiment / root-cause bands of the unfurl. Each one
+  // takes JSON-serialized payloads on the shape and re-hydrates
+  // internally via the standalone widget context (no AppRenderer).
+  DownstreamRealityShapeUtil,
+  IVDecompositionShapeUtil,
+  VariantCarouselShapeUtil,
+  StageNodeShapeUtil,
+  // 5-column experiment-design card (IV / DV / Control / Process /
+  // Results + editable hypothesis). Painted by pipeline-event-painter
+  // when a proposal_ready event fires with kind="experiment".
+  ExperimentDesignCardShapeUtil,
+  // Synthesis intersection card — the canvas's final-ranking anchor.
+  SynthesisIntersectionCardShapeUtil,
+  // Input layer — asset chips + situation/baseline card.
+  AssetCardShapeUtil,
+  SituationCardShapeUtil,
 ];
 
 // Hide tldraw's stock UI — we supply our own chrome (top bar, left tool
@@ -198,13 +296,28 @@ const HIDDEN_TLDRAW_COMPONENTS = {
   KeyboardShortcutsDialog: null,
 } as const;
 
-// Arc 5A: tether overlay renders above the canvas background, below shapes,
-// inside the editor context so it can `useEditor()`. Kept separate from
-// HIDDEN_TLDRAW_COMPONENTS so the "hide stock UI" intent stays readable.
-const CANVAS_TLDRAW_COMPONENTS = {
-  ...HIDDEN_TLDRAW_COMPONENTS,
-  InFrontOfTheCanvas: ThreadTethersOverlay,
-} as const;
+// Arc 5A + Phase 3: tether overlay AND legend sidebar render above
+// the canvas background, inside the editor context so they can call
+// `useEditor()`. Combined into a single component because tldraw's
+// `InFrontOfTheCanvas` slot accepts only one component.
+//
+// The factory takes `spaceId` so the legend sidebar can fetch the
+// per-space entity catalog. Memoized at call site to avoid re-mounts
+// when other props change.
+function makeCanvasOverlays(spaceId: string) {
+  const Overlays = function CanvasOverlays() {
+    return (
+      <>
+        <ThreadTethersOverlay />
+        <CanvasLegendSidebar spaceId={spaceId} />
+        <CanvasStageIndicator />
+        <CanvasLassoSystemButton spaceId={spaceId} />
+      </>
+    );
+  };
+  Overlays.displayName = "CanvasOverlays";
+  return Overlays;
+}
 
 export interface InteraxisCanvasProps {
   space: Space;
@@ -224,6 +337,17 @@ export function InteraxisCanvas({
   libraryspaceNames,
 }: InteraxisCanvasProps) {
   const [editor, setEditor] = useState<Editor | null>(null);
+
+  // Phase 3 — combined overlays (tether + legend sidebar) memoized
+  // per space id so the inner closure captures the right spaceId for
+  // the legend's catalog fetch.
+  const canvasTldrawComponents = useMemo(
+    () => ({
+      ...HIDDEN_TLDRAW_COMPONENTS,
+      InFrontOfTheCanvas: makeCanvasOverlays(space.id),
+    }),
+    [space.id],
+  );
   const [tool, setTool] = useState<CanvasTool>("select");
 
   // Arc 5A: thread-note persistence. Two-way sync between tldraw
@@ -252,6 +376,8 @@ export function InteraxisCanvas({
   // + honest status badges and wait for their primitives to land.
   const brainstorm = useBrainstormSettings(space.id);
   const [brainstormPanelOpen, setBrainstormPanelOpen] = useState(false);
+  const [advancedContextOpen, setAdvancedContextOpen] = useState(false);
+  const [contextOverride, setContextOverride] = useState<ContextOverride | null>(null);
   // Wave 2: URL-param-driven drawers (synthesis / intelligence / inventory).
   // Redirects from deleted standalone pages arrive with ?drawer=&tab= so the
   // drawer opens on first render. Triggers in the top bar toggle the same state.
@@ -279,6 +405,7 @@ export function InteraxisCanvas({
   // ghost grid the painter was showing during the run.
   const spaceDataCtx = useSpaceData();
   const refreshSpaceEntities = spaceDataCtx.refreshEntities;
+  const patchEntitySignature = spaceDataCtx.patchEntitySignature;
   // Counter bumped whenever a pipeline run terminates. Consumed by
   // the credit chip so the balance updates the moment a commit or
   // cancel lands — without this the user sees stale balance until
@@ -290,6 +417,52 @@ export function InteraxisCanvas({
     );
     setCreditRefreshKey((k) => k + 1);
   }, [refreshSpaceEntities]);
+
+  // Gap #13 — live ring growth during streaming runs. The painter fires
+  // this every signature_deepened event with the painter's accumulated
+  // ring set; we translate camelCase (sourceAxis) → snake_case
+  // (source_axis) BasisElement and splice it onto the matching
+  // entity in the live store. Constellation widgets / ring overlays
+  // re-render against the new node_signature within the same React
+  // commit cycle, so the user sees the ring grow without waiting for
+  // the post-run refreshEntities() round-trip.
+  const onSignatureProgress = useCallback(
+    (
+      entityId: string,
+      snapshot: {
+        canonicalCode: string;
+        rings: Array<{
+          index: number;
+          code: string;
+          label: string;
+          sourceAxis: ProbabilitySpaceAxis | null;
+          contribution: number;
+          confidence: number;
+          controllability: "direct" | "indirect" | "uncontrollable";
+        }>;
+        residualUncertainty: number;
+        version: number;
+      },
+    ) => {
+      const basis = snapshot.rings.map((r) => ({
+        index: r.index,
+        code: r.code,
+        label: r.label,
+        source_axis: r.sourceAxis,
+        contribution: r.contribution,
+        confidence: r.confidence,
+        controllability: r.controllability,
+      }));
+      patchEntitySignature(entityId, {
+        canonical_code: snapshot.canonicalCode,
+        rings: snapshot.rings.length,
+        residual_uncertainty: snapshot.residualUncertainty,
+        version: snapshot.version,
+        basis,
+      });
+    },
+    [patchEntitySignature],
+  );
   const [hoveredRingChildId, setHoveredRingChildId] = useState<string | null>(null);
   const [ringsDecomposeLoading, setRingsDecomposeLoading] = useState(false);
   const [combinationSlot, setCombinationSlot] = useState<string[]>([]);
@@ -387,7 +560,16 @@ export function InteraxisCanvas({
   );
 
   // ── Sync KG entities + edges into tldraw on first mount ──
-  useSyncEntities(editor, { entities, edges, enabled: true });
+  // Architecture redesign — disabled on the main whiteboard. Previous
+  // behavior seeded every entity in the space onto the canvas as a
+  // kg-node shape, producing a 25-40-card cloud that competed with
+  // the axis-shell row + synthesis card for attention. Entities now
+  // live inside their owning probability-space-shells (as entity
+  // chips) and are browseable via the entity-library route at
+  // /app/space/[id]/entities. The whiteboard surfaces only major
+  // outputs: shells (per-axis landscapes), synthesis card (cross-
+  // axis intersection), and proposal cards (apps + experiments).
+  useSyncEntities(editor, { entities, edges, enabled: false });
 
   // ── Auto-surface synthesis insights as cards on the canvas ──
   useSynthesisSeeder(editor, { space, entities, enabled: true });
@@ -418,6 +600,50 @@ export function InteraxisCanvas({
     document.addEventListener("fullscreenchange", onChange);
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
+
+  // ── Root-cause tree → entity-ghost focus bridge ─────────────────────
+  //
+  // The RootCauseTreeShape dispatches a window CustomEvent when a user
+  // clicks a node inside its SVG. Listener here resolves the entityId
+  // to a kg-node shape on the canvas and pans/zooms to it. Keeps the
+  // shape self-contained (no prop drilling of editor / entities) while
+  // still hooking the shape clicks into tldraw's viewport system.
+  useEffect(() => {
+    if (!editor) return;
+    const onFocus = (ev: Event) => {
+      try {
+        const detail = (ev as CustomEvent<{ entityId?: string }>).detail;
+        const entityId = detail?.entityId;
+        if (!entityId) return;
+        // Find any shape on the canvas whose props reference this
+        // entity uuid. kg-node shapes carry entityId on their props;
+        // other shapes (e.g. proposals) may reference it via
+        // targetEntityId. We prefer kg-node matches.
+        const shapes = editor.getCurrentPageShapes();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const match = shapes.find((s: any) => {
+          const p = s.props ?? {};
+          return (
+            (s.type === "kg-node" && p.entityId === entityId) ||
+            (typeof p.entityId === "string" && p.entityId === entityId)
+          );
+        });
+        if (!match) return;
+        // Pan + zoom to the shape. tldraw's zoomToBounds handles
+        // smooth animation; we pad a bit so the node isn't flush
+        // against the edges.
+        const b = editor.getShapePageBounds(match.id);
+        if (!b) return;
+        editor.zoomToBounds(b, { animation: { duration: 400 }, inset: 140 });
+        editor.select(match.id);
+      } catch (err) {
+        console.warn("[root-cause-tree] focus bridge failed:", err);
+      }
+    };
+    window.addEventListener("root-cause-tree:focus", onFocus as EventListener);
+    return () =>
+      window.removeEventListener("root-cause-tree:focus", onFocus as EventListener);
+  }, [editor]);
 
   // ── Snap mode (Phase 5) ──
   // Initialize from tldraw user prefs on mount, then push our state down.
@@ -599,10 +825,13 @@ export function InteraxisCanvas({
     selectedEntity?.name ||
     "";
 
+  // Gate ambient lookups behind the brainstorm master toggle. When the
+  // user disables brainstorming we stop firing network calls for ambient
+  // questions/entities so the feature is truly off — not just hidden.
   const { loading: ambientLoading, result: ambient } = useCanvasAmbient({
     spaceId: space.id,
     text: ambientText,
-    enabled: !!(activeSticky || selectedEntity),
+    enabled: brainstorm.settings.enabled && !!(activeSticky || selectedEntity),
   });
 
   const relatedEntitiesForRail = useMemo<HudRailEntity[]>(() => {
@@ -621,11 +850,13 @@ export function InteraxisCanvas({
       })),
     [relatedEntitiesForRail],
   );
+  // Also gated behind the brainstorm master toggle — probes call the
+  // LLM so they should be suppressed when the user turns brainstorm off.
   const { questions: llmProbes, loading: probesLoading } = useCanvasProbes({
     spaceId: space.id,
     text: ambientText,
     nearby: probeNearby,
-    enabled: !!(activeSticky || selectedEntity),
+    enabled: brainstorm.settings.enabled && !!(activeSticky || selectedEntity),
   });
   const displayedQuestions = llmProbes.length > 0 ? llmProbes : ambient?.questions ?? [];
 
@@ -697,6 +928,7 @@ export function InteraxisCanvas({
           isBottleneck: false,
           isConvergence: false,
           isGhost: true, // Phase 3: materialize as ghost, user accepts or rejects.
+          confirmedPulse: 0,
         },
       });
 
@@ -895,6 +1127,16 @@ export function InteraxisCanvas({
     "rings anchors",
     () => {
       if (!editor) return [];
+      // Architecture redesign — kg-node selection-based ring overlays
+      // are dead in the new architecture (no kg-node ghosts on the
+      // global canvas). Short-circuit so we don't waste a per-tick
+      // iteration on shapes that won't exist. The Phase 1 mini-graph
+      // inside each shell already shows entity weight + degree, and
+      // the entity-detail drawer's ego view (Phase 6) renders the
+      // upstream/downstream picture per entity. The "ring overlay
+      // anchored to multi-selected kg-nodes" UX is superseded by
+      // those two surfaces.
+      if (!PAINT_GLOBAL_GHOST_KG_NODES) return [];
       const sel = editor.getSelectedShapes();
       const rect = rootRef.current?.getBoundingClientRect();
       const cam = editor.getCamera();
@@ -1129,6 +1371,69 @@ export function InteraxisCanvas({
     },
     [nextRouter],
   );
+
+  // Sprint B.5 — register the canvas bus hooks so tldraw shape utils
+  // (DownstreamRealityShapeUtil, VariantCarouselShapeUtil, etc.) can
+  // navigate + dispatch without holding a React hook. Shape-class
+  // `onDoubleClick` handlers fire outside the React tree, so they
+  // can't call `useRouter()`; they call `canvasNavigate()` instead,
+  // which routes through the singleton we register here.
+  //
+  // Dispatcher routes by actionKey:
+  //   • activate   → POST /api/experiment-variants/[variantId]/activate
+  //                  (variant carousel double-click in the canvas
+  //                  actually flips is_active in the DB now)
+  //   • focus      → navigate to /app/space/:id/app/:appId
+  //                  (focus_variant maps to "open the detail page")
+  //   • everything else → {ok:false, reason:"unhandled-on-canvas"}
+  //
+  // Any thrown error inside the dispatcher is caught by canvas-bus and
+  // returned as {ok:false, reason} — widgets can surface failure state
+  // without their own try/catch.
+  useEffect(() => {
+    const unregisterNav = setCanvasNavigator((href) => {
+      nextRouter.push(href);
+    });
+    const unregisterDispatch = setCanvasDispatcher(async (call) => {
+      const { actionKey, payload, spaceId, appId } = call;
+      if (actionKey === "activate") {
+        const variantId = (payload as { variantId?: string } | undefined)
+          ?.variantId;
+        if (!variantId) {
+          return { ok: false, reason: "missing-variantId" };
+        }
+        try {
+          const res = await fetch(
+            `/api/experiment-variants/${variantId}/activate`,
+            { method: "POST" },
+          );
+          if (!res.ok) {
+            return { ok: false, reason: `http-${res.status}` };
+          }
+          return { ok: true };
+        } catch (err) {
+          return {
+            ok: false,
+            reason: err instanceof Error ? err.message : "fetch-threw",
+          };
+        }
+      }
+      if (actionKey === "focus") {
+        // focus_variant on the canvas is a navigation: open the app
+        // detail page where the full carousel + dispatcher lives.
+        if (spaceId && appId) {
+          nextRouter.push(`/app/space/${spaceId}/app/${appId}`);
+          return { ok: true };
+        }
+        return { ok: false, reason: "no-app-route" };
+      }
+      return { ok: false, reason: "unhandled-on-canvas" };
+    });
+    return () => {
+      unregisterNav();
+      unregisterDispatch();
+    };
+  }, [nextRouter]);
 
   // Phase 31: return-from-lab focus. The lab's Exit button writes
   // `?focus=<entityId>&rings=1` into the canvas URL. On mount we read
@@ -1520,6 +1825,39 @@ export function InteraxisCanvas({
     editor,
     enabled: brainstorm.settings.enabled && brainstorm.settings.autoConnect,
   });
+
+  // ── "Why connected" tooltip for auto-connect arrows ────────────────
+  // Polls the tldraw hovered shape ID and reads meta from the shape to
+  // show a small overlay explaining the connection when the user hovers
+  // a dashed auto-connect arrow.
+  const [autoConnectHover, setAutoConnectHover] = useState<{
+    x: number; y: number;
+    similarity: number;
+    sharedTokens: string[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!editor) return;
+    const unsubscribe = editor.store.listen(() => {
+      const hoveredId = editor.getHoveredShapeId();
+      if (!hoveredId) { setAutoConnectHover(null); return; }
+      const shape = editor.getShape(hoveredId);
+      if (!shape || shape.type !== "arrow") { setAutoConnectHover(null); return; }
+      const meta = (shape.meta ?? {}) as Record<string, unknown>;
+      if (meta.source !== "auto-connect") { setAutoConnectHover(null); return; }
+      // Compute screen-space position from the shape's page bounds.
+      const bounds = editor.getShapePageBounds(hoveredId);
+      if (!bounds) { setAutoConnectHover(null); return; }
+      const screenPt = editor.pageToScreen({ x: bounds.midX, y: bounds.minY - 8 });
+      setAutoConnectHover({
+        x: screenPt.x,
+        y: screenPt.y,
+        similarity: (meta.similarity as number) ?? 0,
+        sharedTokens: (meta.sharedTokens as string[]) ?? [],
+      });
+    }, { scope: "session" });
+    return () => unsubscribe();
+  }, [editor]);
   const clusterProposals = useMemo(
     () =>
       rawProposals.filter((p) => {
@@ -1750,6 +2088,7 @@ export function InteraxisCanvas({
           isBottleneck: false,
           isConvergence: false,
           isGhost: false,
+          confirmedPulse: 0,
         },
       });
       editor.select(shapeId);
@@ -2014,6 +2353,12 @@ export function InteraxisCanvas({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Single SSE owner (T3.1). Every descendant that needs live
+          run events reads from this store via useRunEventStore() /
+          selectors. Replaces the prior pattern where ~9 components
+          each opened their own EventSource to the same run stream
+          (pipeline audit 2026-04-24). */}
+      <RunEventStoreProvider runId={activeRunId}>
       <BrainstormContextProvider
         value={{ settings: brainstorm.settings, spaceId: space.id }}
       >
@@ -2026,7 +2371,7 @@ export function InteraxisCanvas({
         <CanvasErrorBoundary>
           <Tldraw
             shapeUtils={SHAPE_UTILS}
-            components={CANVAS_TLDRAW_COMPONENTS}
+            components={canvasTldrawComponents}
             onMount={(e) => setEditor(e)}
             persistenceKey={`interaxis-canvas-${space.id}`}
           />
@@ -2230,6 +2575,12 @@ export function InteraxisCanvas({
             open={brainstormPanelOpen}
             onClose={() => setBrainstormPanelOpen(false)}
             settings={brainstorm}
+            // Unified panel: ambient context flows in here so the
+            // separate HUD rail is no longer rendered standalone.
+            hudCtx={hudCtx}
+            onDecompose={handleDecompose}
+            onJumpToEntity={handleJumpToEntity}
+            onAppendQuestion={handleAppendQuestion}
           />
         </>
       )}
@@ -2293,30 +2644,27 @@ export function InteraxisCanvas({
           pipeline emits structural events. */}
       <CanvasEventHud runId={activeRunId} onClose={dismissRun} />
 
-      {/* Phase 2E — origin prompt card. Keeps the user's original
-          intake text anchored at top-center during a run so the
-          tree of entities materializing below reads as "growing from
-          this thought". Falls quiet once the run completes and auto-
-          collapses 10s later. Rendered whether or not a run is
-          active so returning users still see the origin thought. */}
-      {(space as unknown as { input_text?: string | null }).input_text && (
-        <CanvasOriginCard
-          inputText={
-            (space as unknown as { input_text?: string | null }).input_text ?? null
-          }
-          runActive={Boolean(activeRunId)}
-          entityCount={entities.length}
-        />
-      )}
+      {/* Run-level signal pills — surfaces target_outcome_identified
+          (once per run, 20s auto-fade pill) and layer_coverage_gap
+          (sticky warning until dismissed). Both events used to be
+          silently dropped because no consumer listened. */}
+      <CanvasRunSignalsBanner runId={activeRunId} />
 
-      {/* Phase 2E · Tier 2 — probability space rail. Subscribes to
-          the same SSE stream + renders one floating glass shell per
-          axis the frame extractor opened for this run. Shells fan
-          out below the origin card, fill in as per-axis generators
-          emit space_entity_added events (follow-up phase), then fade
-          / converge during the merge animation. Rendered only when
-          a run is active so returning users see a clean canvas. */}
-      {activeRunId && <ProbabilitySpaceRail runId={activeRunId} />}
+      {/* Origin prompt card is now a real tldraw shape (`origin-prompt`,
+          painted by PipelineEventPainter at the top of the canvas) so
+          downstream shapes can tether up to it and the whole canvas
+          reads as a tree from the user's thought. The prior chrome
+          CanvasOriginCard — viewport-pinned, couldn't be an arrow
+          endpoint — was retired. See origin-prompt-shape.tsx. */}
+
+      {/* Probability space shells are now real tldraw shapes
+          (`probability-space-shell`) painted by the pipeline painter
+          on `space_opened` events. Shells pan/zoom with the canvas
+          and tether UP to origin-prompt so the intake lenses read as
+          descending from the user's thought. The prior chrome
+          ProbabilitySpaceRail — viewport-pinned, ate drags that
+          should have reached tldraw for pan, and couldn't be arrow
+          endpoints — was retired. See probability-space-shell-shape.tsx. */}
 
       {/* Phase 2E · PR 3 — live AI reasoning stream. Tucks into the
           top-left corner (below top bar, right of tool dock) as a
@@ -2422,7 +2770,11 @@ export function InteraxisCanvas({
       <PipelineEventPainter
         editor={editor}
         runId={activeRunId}
+        originPromptText={
+          (space as unknown as { input_text?: string | null }).input_text ?? null
+        }
         onCompleted={onPipelineRunCompleted}
+        onSignatureProgress={onSignatureProgress}
       />
 
       <CanvasToolDock active={tool} libraryOpen={libraryOpen} onSelect={setTool} />
@@ -2452,18 +2804,78 @@ export function InteraxisCanvas({
         spaceNameById={librarySpaceNames}
         onClose={() => setLibraryOpen(false)}
       />
-      {!quietMode && (
-        <CanvasHudRail
-          ctx={hudCtx}
-          collapsed={hudCollapsed}
-          onToggleCollapsed={() => setHudCollapsed((v) => !v)}
-          onDecompose={handleDecompose}
-          onJumpToEntity={handleJumpToEntity}
-          onAppendQuestion={handleAppendQuestion}
-        />
+      {/* HUD rail absorbed into BrainstormPanel above (unified AI
+          Companion). When the panel is closed and ambient content is
+          available, show a small pulsing indicator button that opens
+          the panel — so the user knows suggestions are ready. */}
+      {!quietMode && brainstorm.settings.enabled && !brainstormPanelOpen && (hudCtx.activeShape || hudCtx.selectedEntity) && (
+        <button
+          onClick={() => setBrainstormPanelOpen(true)}
+          className="pointer-events-auto absolute right-4 z-30 flex items-center gap-1.5 rounded-full border border-purple-200/70 bg-white/90 px-3 py-1.5 shadow-md backdrop-blur-md transition-all hover:bg-white hover:shadow-lg"
+          style={{ top: "30%" }}
+          title="Open AI companion"
+        >
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-purple-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-purple-500" />
+          </span>
+          <span className="text-[11px] font-semibold text-purple-700">
+            {hudCtx.loading ? "Thinking…" : `${hudCtx.suggestedQuestions.length > 0 ? hudCtx.suggestedQuestions.length + " probes" : hudCtx.relatedEntities.length + " related"}`}
+          </span>
+        </button>
       )}
       {!quietMode && (
-        <CanvasBottomDock onSubmit={handleBottomSubmit} loading={decomposing} />
+        <CanvasBottomDock
+          onSubmit={handleBottomSubmit}
+          loading={decomposing}
+          memorySettings={brainstorm.settings.memory}
+          onMemorySettingsChange={(patch) =>
+            brainstorm.update({ memory: { ...brainstorm.settings.memory, ...patch } })
+          }
+          onOpenAdvancedContext={() => setAdvancedContextOpen(true)}
+          hasContextOverride={!!(contextOverride?.customText || contextOverride?.sourceOverrides || contextOverride?.scopeOverride)}
+        />
+      )}
+
+      {/* Advanced context picker — slide-up sheet for one-shot context overrides */}
+      <AdvancedContextPicker
+        open={advancedContextOpen}
+        onClose={() => setAdvancedContextOpen(false)}
+        memorySettings={brainstorm.settings.memory}
+        onApply={(override) => setContextOverride(override)}
+        activeOverride={contextOverride}
+      />
+
+      {/* "Why connected" tooltip for auto-connect arrows */}
+      {autoConnectHover && (
+        <div
+          className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full"
+          style={{ left: autoConnectHover.x, top: autoConnectHover.y - 8 }}
+        >
+          <div className="flex flex-col gap-1 rounded-xl border border-gray-200/80 bg-white/95 px-3 py-2 shadow-lg backdrop-blur-md">
+            <div className="flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-purple-500" />
+              <span className="text-[10.5px] font-bold text-gray-700">
+                AI connection · {autoConnectHover.similarity}% overlap
+              </span>
+            </div>
+            {autoConnectHover.sharedTokens.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {autoConnectHover.sharedTokens.map((t) => (
+                  <span
+                    key={t}
+                    className="rounded-md bg-purple-50 px-1.5 py-0.5 text-[10px] font-medium text-purple-700"
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="text-[9.5px] text-gray-400">
+              Delete this arrow to dismiss the suggestion.
+            </p>
+          </div>
+        </div>
       )}
 
       {/* Ghost accept/reject chip (Phase 3) */}
@@ -2686,6 +3098,7 @@ export function InteraxisCanvas({
         onOpenChange={setAiReceiptsOpen}
         hideTrigger
       />
+      </RunEventStoreProvider>
     </div>
     </CanvasReactionsContext.Provider>
     </CanvasHierarchyContext.Provider>

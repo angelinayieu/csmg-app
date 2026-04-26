@@ -105,6 +105,31 @@ export interface MultiStepStrategyParams {
     confidence: number;
     rationale: string | null;
   }>;
+  /**
+   * Root-cause intervention candidates — the top user-controllable
+   * causal drivers identified by the why-chain deepener + root-trace,
+   * ranked by how many goal chains converge through them. Each entry
+   * is an actionable lever: "fixing this upstream driver has downstream
+   * consequences for N goals." Surfacing these structurally to the
+   * final strategy LLM (rather than letting them dissolve into
+   * aggregate entity signals) lets the model explicitly reason about
+   * which levers the recommendation should pull. Empty array when
+   * why-chain didn't run, found no user-controllable drivers, or
+   * root-trace hasn't tagged convergence counts yet. */
+  interventionCandidates?: Array<{
+    /** Entity display name */
+    name: string;
+    /** Number of goal chains that converge through this driver */
+    convergesCount: number;
+    /** 1 = proximate, 2 = intermediate, 3 = distal — level in the driver tree */
+    causeLevel: 1 | 2 | 3;
+    /** Polarity of the driver's effect on its parent thread */
+    polarity: "positive" | "negative" | "ambiguous";
+    /** 1-sentence causal justification from the why-chain LLM */
+    whyItCauses: string;
+    /** 0..1 — model's self-reported confidence in this driver */
+    confidence: number;
+  }>;
 }
 
 // ── Output ──
@@ -599,6 +624,29 @@ export async function generateMultiStepStrategy(
           .join("\n")}\n\nReference these entities by name in your recommendation where relevant. They are the concrete KG objects the goal depends on — grounding recommendations in them makes the output actionable.\n\n`
       : "";
 
+  // Root-cause intervention candidates — the why-chain deepener + root-
+  // tracer together identify a handful of USER-CONTROLLABLE upstream
+  // drivers that sit on the backward BFS from multiple goals. These are
+  // the highest-leverage levers the space contains: a single upstream
+  // move propagates to every goal whose trace passes through the driver.
+  // Surfacing them here as a structured section (rather than leaving
+  // them dissolved into aggregate entity signals) lets the strategy LLM
+  // explicitly reason "this recommendation pulls lever X, which controls
+  // N downstream goals" instead of re-deriving the leverage relationship
+  // from raw centrality numbers.
+  const interventionCandidatesBlock =
+    params.interventionCandidates && params.interventionCandidates.length > 0
+      ? `## Root-cause intervention candidates (user-controllable levers)\n` +
+        `These are upstream causal drivers the why-chain deepener identified as USER-CONTROLLABLE (inside the user's locus of action, not external-boundary conditions). Each "converges ×N" count means N goal chains pass through this driver — so one move upstream here has downstream consequences for N goals.\n\n` +
+        params.interventionCandidates
+          .map(
+            (c) =>
+              `- **${c.name}** — converges ×${c.convergesCount} · cause-level ${c.causeLevel} · ${c.polarity} polarity · confidence ${Math.round(c.confidence * 100)}%. ${c.whyItCauses}`,
+          )
+          .join("\n") +
+        `\n\nWhen your recommendation acts on one of these levers, SAY SO EXPLICITLY: name the driver and the number of goals it controls. These are the intervention points the space graph has already identified as actionable; the strategy's job is to decide which to pull, in what order, with what safeguards — not to re-discover them.\n\n`
+      : "";
+
   const priorCtxBlock = params.priorRunContextBlock
     ? `${params.priorRunContextBlock}\n\n`
     : "";
@@ -639,6 +687,12 @@ export async function generateMultiStepStrategy(
     patternsBlock,
     richKgBlock,
     servedByBlock,
+    // Intervention candidates sit LAST before the core prompt so they're
+    // the freshest context in the LLM's working memory when it starts
+    // reasoning. The served-by entities say "here's what the goal rests
+    // on"; the intervention candidates say "here's what you can actually
+    // MOVE." Ordering matters: levers should be the last thing read.
+    interventionCandidatesBlock,
     stratPrompt.user,
   ].join("");
 

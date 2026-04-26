@@ -25,6 +25,7 @@
 import { llmJSON } from "@/lib/llm";
 import type { QuestionType } from "@/lib/prompts/axis-prompts";
 import type { ProbabilitySpaceAxis } from "@/types/pipeline-events";
+import type { DataPresenceTags } from "@/lib/prompts/data-presence-classifier";
 
 export type DomainTag =
   | "business"
@@ -217,6 +218,7 @@ export async function classifyQuestionType(
 export function applicableAxesFor(
   type: QuestionType,
   domain: DomainTag,
+  dataPresence?: DataPresenceTags | null,
 ): ProbabilitySpaceAxis[] {
   const base: ProbabilitySpaceAxis[] = ["assumptions"];
 
@@ -277,5 +279,69 @@ export function applicableAxesFor(
     for (const a of domainRule.add) typeSet.add(a);
     for (const a of domainRule.remove) typeSet.delete(a);
   }
+
+  // ── Data-presence gating ────────────────────────────────────────
+  //
+  // Skip this block when dataPresence is null/undefined (legacy rows,
+  // classifier hasn't run, or classifier soft-failed). That matches
+  // pre-migration behavior exactly.
+  //
+  // Rules are CONSERVATIVE — we only remove an axis when we're
+  // confident the user brought no raw material for it. When in doubt,
+  // keep the axis (the frame-extractor LLM still has final say).
+  //
+  //   financial : drops when the user has no spec, no baseline, no
+  //               historical outcomes — i.e. no numbers at all. An
+  //               "I'm thinking about sales" input shouldn't spawn a
+  //               financial axis stuffed with hallucinated dollar
+  //               figures.
+  //
+  //   evidence  : drops when the user is in pure-idea mode with no
+  //               spec. The evidence axis mines CITED material; a
+  //               hypothesis with no measurable grounding has nothing
+  //               to cite and the axis pads with filler.
+  //
+  //   timeline  : drops when the user is in pure-idea mode AND the
+  //               type isn't a prediction. Pure-idea + non-prediction
+  //               timelines degenerate into generic "Week 1/2/3"
+  //               roadmaps that don't ground the rest of the graph.
+  //
+  //   evidence  : FORCE-ADD when telemetry is present regardless of
+  //               type/domain — live data IS evidence and should
+  //               always be mined.
+  if (dataPresence) {
+    const hasAnyData =
+      dataPresence.has_telemetry ||
+      dataPresence.has_historical_output ||
+      dataPresence.has_baseline ||
+      dataPresence.has_spec;
+
+    // Pure-idea gate: user brought nothing measurable.
+    if (dataPresence.has_just_idea && !hasAnyData) {
+      typeSet.delete("financial");
+      typeSet.delete("evidence");
+      if (type !== "prediction") {
+        typeSet.delete("timeline");
+      }
+    }
+
+    // No-numbers gate: drop financial when nothing quantitative landed
+    // even if other tags (e.g. has_spec) are true.
+    if (
+      !dataPresence.has_telemetry &&
+      !dataPresence.has_historical_output &&
+      !dataPresence.has_baseline
+    ) {
+      typeSet.delete("financial");
+    }
+
+    // Telemetry always pulls evidence back in — it's the strongest
+    // form of evidence we can mine, even if domain rules had dropped
+    // it (e.g. creative + has_telemetry is rare but valid).
+    if (dataPresence.has_telemetry) {
+      typeSet.add("evidence");
+    }
+  }
+
   return Array.from(typeSet);
 }

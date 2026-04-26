@@ -1,10 +1,5 @@
-import { Skeleton } from "@/components/ui/skeleton";
+import { ImmersiveLoader } from "@/components/ui/immersive-loader";
 
 export default function SpaceLoading() {
-  return (
-    <div>
-      <Skeleton className="h-8 w-64" />
-      <Skeleton className="mt-6 h-96 w-full rounded-xl" />
-    </div>
-  );
+  return <ImmersiveLoader label="Opening your whiteboard…" />;
 }

@@ -64,6 +64,15 @@ export function CanvasRunContextPanel({
   const [fetching, setFetching] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<RunHistoryItem[]>([]);
+  // Live-ticking clock so running stages show "12.3s" counting up
+  // instead of a frozen "…". Cheap — one setState per second, scoped
+  // to this panel.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (ctx?.status !== "running") return;
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [ctx?.status]);
 
   const fetchCtx = useCallback(async () => {
     if (!runId) return;
@@ -271,27 +280,42 @@ export function CanvasRunContextPanel({
                 Stages
               </h3>
               <div className="space-y-1.5">
-                {ctx.stages.map((s) => (
-                  <div
-                    key={s.stage}
-                    className="rounded-md bg-gray-50/60 px-2 py-1.5 text-[11px]"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-1.5">
-                        <StageDot stage={s.stage} completed={!!s.exitedAt} />
-                        <span className="font-medium capitalize text-gray-700">{s.stage}</span>
-                      </span>
-                      <span className="font-mono text-[10px] tabular-nums text-gray-500">
-                        {fmtDuration(s.durationMs)}
-                      </span>
+                {ctx.stages.map((s) => {
+                  // Live duration: while the stage is still running
+                  // (entered, not exited), count up from enteredAt
+                  // using the ticking clock. Once exitedAt lands the
+                  // server's durationMs is authoritative.
+                  const isActive = !!s.enteredAt && !s.exitedAt;
+                  const liveMs = isActive
+                    ? Math.max(0, nowMs - new Date(s.enteredAt!).getTime())
+                    : s.durationMs;
+                  return (
+                    <div
+                      key={s.stage}
+                      className="rounded-md bg-gray-50/60 px-2 py-1.5 text-[11px]"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <StageDot stage={s.stage} completed={!!s.exitedAt} />
+                          <span className="font-medium capitalize text-gray-700">{s.stage}</span>
+                        </span>
+                        <span
+                          className={cn(
+                            "font-mono text-[10px] tabular-nums",
+                            isActive ? "text-blue-600" : "text-gray-500",
+                          )}
+                        >
+                          {fmtDuration(liveMs)}
+                        </span>
+                      </div>
+                      {s.digest && (
+                        <p className="mt-1 text-[10.5px] leading-snug text-gray-600">
+                          {s.digest}
+                        </p>
+                      )}
                     </div>
-                    {s.digest && (
-                      <p className="mt-1 text-[10.5px] leading-snug text-gray-600">
-                        {s.digest}
-                      </p>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           )}

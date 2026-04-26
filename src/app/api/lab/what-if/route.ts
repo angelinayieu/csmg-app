@@ -110,10 +110,16 @@ export async function POST(request: Request) {
       ),
     );
 
-    // Pull second-hop for high-magnitude calls so the model can trace
-    // propagation past the immediate neighbors.
+    // Always pull second-hop. Previously this was gated on magnitude >= 0.7
+    // which made narrative walk see a smaller subgraph than monte-carlo and
+    // bootstrap (both always 2-hop). Users comparing modes on the same
+    // target were getting answers to subtly different questions — the
+    // stronger engines had more downstream surface to propagate through.
+    // Uniform 2-hop keeps the three rungs of the taxonomy epistemically
+    // comparable: they see the same substrate, they just reason about
+    // it differently.
     let secondHopEdges: EdgeRow[] = [];
-    if (magnitude >= 0.7 && neighborIds.length > 0) {
+    if (neighborIds.length > 0) {
       const { data } = (await db
         .from("edges")
         .select(
@@ -282,6 +288,11 @@ export async function POST(request: Request) {
     };
 
     const clean: WhatIfResponse = {
+      // Gap B — this engine is an LLM walking the graph. Anything
+      // downstream that wants to trust the numerics (promote to
+      // proposal, roll up into a portfolio view, etc.) must see the
+      // tag and gate accordingly.
+      simulation_mode: "narrative_walk",
       narrative: typeof result?.narrative === "string" ? result.narrative : "",
       affected_entities: affected,
       propagation_paths: paths,

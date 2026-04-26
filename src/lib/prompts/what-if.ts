@@ -83,7 +83,19 @@ export interface WhatIfRequest {
   magnitude: number; // 0.1 – 1.0
 }
 
+// eslint-disable-next-line @typescript-eslint/consistent-type-imports
+import type { SimulationMode } from "@/types/simulation-mode";
+
 export interface WhatIfResponse {
+  /**
+   * Gap B — every prediction carries its own epistemic provenance.
+   * This route always emits `"narrative_walk"` because the underlying
+   * engine is an LLM reasoning over the KG, not a computed simulation.
+   * When the computed Monte-Carlo path wires in, a different route
+   * will emit `"monte_carlo"` and the UI will know to promote numeric
+   * p-bands from qualitative to quantitative.
+   */
+  simulation_mode: SimulationMode;
   narrative: string;
   affected_entities: Array<{
     entity_id: string;

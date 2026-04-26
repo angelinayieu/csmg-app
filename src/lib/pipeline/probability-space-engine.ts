@@ -23,6 +23,7 @@ import type {
   EdgeCondition,
 } from "@/types/probability-space";
 import { annotateSpacesWithImpact } from "./impact-propagation";
+import { computeMeasuredNodeProbability } from "./probability-node-backing";
 
 // ── Types for expansion data (read from entity provenance) ──
 
@@ -182,8 +183,24 @@ export function scoreCrossEntitySimilarity(
   return { score: combinedScore, mechanism };
 }
 
-function deriveSpaceQualityTier(spaceId: string, edges: ProbabilityEdge[]): "verified" | "estimated" | "speculative" {
-  if (spaceId.startsWith("synth_")) return "speculative";
+function deriveSpaceQualityTier(
+  spaceId: string,
+  edges: ProbabilityEdge[],
+  nodes: ProbabilityNode[] = [],
+): "verified" | "estimated" | "speculative" {
+  if (spaceId.startsWith("synth_")) {
+    // R6 — a synthetic space whose BOTH endpoint nodes are
+    // "measured" (backed by real KG entities with edge degree) has
+    // earned "estimated" instead of flat "speculative". Still below
+    // "verified" — that tier requires measured EDGES, which a purely
+    // synthetic space doesn't have. But this lets the UI distinguish
+    // "we have real entity backing" from "no backing at all".
+    const measuredNodes = nodes.filter(
+      (n) => n.probability_source === "measured",
+    ).length;
+    if (measuredNodes >= 2) return "estimated";
+    return "speculative";
+  }
   if (edges.length === 0) return "speculative";
 
   const defaultEdges = edges.filter((e) => e.probability_source === "default").length;
@@ -193,6 +210,18 @@ function deriveSpaceQualityTier(spaceId: string, edges: ProbabilityEdge[]): "ver
   const defaultRatio = defaultEdges / edges.length;
   if (defaultRatio >= 0.5) return "speculative";
   if (measuredEdges > 0 && defaultRatio <= 0.2) return "verified";
+
+  // R6 extension — node-level measured backing bumps "estimated" → close
+  // to "verified" when ≥50% of nodes have measured probabilities. An
+  // edge-only check missed this signal before: a space with all LLM
+  // edges but MC-backed entity nodes was flagged as "estimated" same as
+  // one with neither. Now they're distinguished.
+  const measuredNodeRatio =
+    nodes.length > 0
+      ? nodes.filter((n) => n.probability_source === "measured").length /
+        nodes.length
+      : 0;
+  if (measuredNodeRatio >= 0.5 && defaultRatio <= 0.2) return "verified";
   if (estimatedEdges > 0 || defaultEdges > 0) return "estimated";
   return "speculative";
 }
@@ -218,6 +247,11 @@ export function buildProbabilitySpace(
   const edges: ProbabilityEdge[] = [];
 
   // ── Step 1: Extract source-side sub-components ──
+  // These nodes come from LLM expansion data — `sc.probability` is a
+  // language-model self-report, NOT a measurement. Stamp
+  // `probability_source: "estimated"` honestly. Callers with access to
+  // the full KG (entities + edges) can post-hoc upgrade nodes via
+  // `upgradeNodesWithMeasuredBacking` below.
   const sourceScMap = new Map<string, string>(); // original SC id → PS node id
   if (sourceExpansion) {
     for (const [idx, sc] of sourceExpansion.sub_components.entries()) {
@@ -231,6 +265,7 @@ export function buildProbabilitySpace(
         parent_entity_id: sourceEntity.entity_id,
         source_expansion_sc_id: scId,
         probability: sc.probability,
+        probability_source: "estimated",
         controllability: sc.manifold?.controllability,
         visibility: sc.manifold?.visibility,
         volatility: sc.manifold?.volatility,
@@ -242,6 +277,8 @@ export function buildProbabilitySpace(
   }
 
   // ── Step 2: Extract target-side sub-components ──
+  // Same honesty tag as source-side. These are LLM-derived until a
+  // measurement upgrade runs.
   const targetScMap = new Map<string, string>();
   if (targetExpansion) {
     for (const [idx, sc] of targetExpansion.sub_components.entries()) {
@@ -255,6 +292,7 @@ export function buildProbabilitySpace(
         parent_entity_id: targetEntity.entity_id,
         source_expansion_sc_id: scId,
         probability: sc.probability,
+        probability_source: "estimated",
         controllability: sc.manifold?.controllability,
         visibility: sc.manifold?.visibility,
         volatility: sc.manifold?.volatility,
@@ -418,6 +456,9 @@ export function buildProbabilitySpace(
         parent_entity_id: cond.internal_entity_id,
         controllability: cond.controllability,
         probability: cond.probability,
+        // Condition probabilities come from the LLM-derived
+        // EdgeCondition output — honest "estimated" tag.
+        probability_source: "estimated",
       });
 
       // Wire condition to nearest source-side node (first available)
@@ -469,6 +510,9 @@ export function buildProbabilitySpace(
           type: "mediator",
           parent_entity_id: entityId,
           importance: dyn.type === "bottleneck" ? "critical" : "important",
+          // Mediator nodes have no probability field populated (only
+          // `importance`). No provenance stamp needed since there's
+          // no probability number to disclaim.
         });
         // Wire mediator to its component IDs
         for (const compId of dyn.component_ids) {
@@ -553,7 +597,7 @@ export function buildProbabilitySpace(
     nodes,
     edges,
     total_pathway_probability: pathProb,
-    quality_tier: deriveSpaceQualityTier(spaceId, edges),
+    quality_tier: deriveSpaceQualityTier(spaceId, edges, nodes),
     critical_path: criticalPath,
     alternative_paths: alternativePaths,
     failure_points: failurePoints,
@@ -686,13 +730,48 @@ function buildSyntheticProbabilitySpace(
   const sourceNodeId = `PS_${edgeId}_SRC`;
   const targetNodeId = `PS_${edgeId}_TGT`;
 
+  // Synthetic space — no expansion data available, so node
+  // probabilities are just the edge's confidence score. Both nodes
+  // correspond to REAL KG entities, so we CAN upgrade these to
+  // "measured" backing: the confidence is a genuine KG-stored number
+  // and the entity itself appears in the edge table. Call
+  // computeMeasuredNodeProbability with a single-edge context and stamp
+  // accordingly. When the measurement is rejected (edge-degree below
+  // threshold), fall back to `"estimated"` — not `"default"` — because
+  // the confidence IS real data, just not enough of it for a
+  // measurement claim.
+  const syntheticKgEdges = [
+    { source_entity_id: edge.source_entity_id, target_entity_id: edge.target_entity_id },
+  ];
+  const syntheticEntities = [
+    { id: sourceEntity.entity_id, confidence: sourceEntity.confidence },
+    { id: targetEntity.entity_id, confidence: targetEntity.confidence },
+  ];
+  const sourceMeasured = computeMeasuredNodeProbability({
+    entityId: sourceEntity.entity_id,
+    entities: syntheticEntities,
+    edges: syntheticKgEdges,
+    minEdgeDegree: 1, // one edge is all we have in this synthetic path
+  });
+  const targetMeasured = computeMeasuredNodeProbability({
+    entityId: targetEntity.entity_id,
+    entities: syntheticEntities,
+    edges: syntheticKgEdges,
+    minEdgeDegree: 1,
+  });
+
   const nodes: ProbabilityNode[] = [
     {
       id: sourceNodeId,
       name: sourceEntity.name,
       type: "sub_component" as const,
       parent_entity_id: sourceEntity.entity_id,
-      probability: confidence,
+      probability:
+        sourceMeasured.source === "measured"
+          ? sourceMeasured.probability
+          : confidence,
+      probability_source:
+        sourceMeasured.source === "measured" ? "measured" : "estimated",
       importance: sourceEntity.importance === "critical" ? "critical" as const : "important" as const,
     },
     {
@@ -700,7 +779,12 @@ function buildSyntheticProbabilitySpace(
       name: targetEntity.name,
       type: "sub_component" as const,
       parent_entity_id: targetEntity.entity_id,
-      probability: confidence,
+      probability:
+        targetMeasured.source === "measured"
+          ? targetMeasured.probability
+          : confidence,
+      probability_source:
+        targetMeasured.source === "measured" ? "measured" : "estimated",
       importance: targetEntity.importance === "critical" ? "critical" as const : "important" as const,
     },
   ];
@@ -720,7 +804,9 @@ function buildSyntheticProbabilitySpace(
     },
   ];
 
-  // Add condition nodes from edge conditions
+  // Add condition nodes from edge conditions. Condition probabilities
+  // come from LLM-derived EdgeCondition output — stamp "estimated" to
+  // disclose honestly.
   for (let i = 0; i < edgeConditions.length; i++) {
     const cond = edgeConditions[i];
     const condNodeId = `PS_${edgeId}_C${i}`;
@@ -730,6 +816,7 @@ function buildSyntheticProbabilitySpace(
       type: "condition" as const,
       parent_entity_id: sourceEntity.entity_id,
       probability: cond.probability,
+      probability_source: "estimated",
       controllability: cond.controllability,
     });
   }
@@ -810,7 +897,11 @@ function buildSyntheticProbabilitySpace(
     nodes,
     edges: probEdges,
     total_pathway_probability: pathProb,
-    quality_tier: "speculative",
+    // R6 — synthetic spaces now differentiate "speculative" (no entity
+    // backing) from "estimated" (≥2 nodes backed by real KG entities
+    // with measured probability). The derivation fn handles synth_
+    // prefix specifically; see deriveSpaceQualityTier.
+    quality_tier: deriveSpaceQualityTier(`synth_${edgeId}`, probEdges, nodes),
     critical_path: [sourceNodeId, mediatorId, targetNodeId],
     alternative_paths: [[sourceNodeId, targetNodeId]],
     failure_points: failurePoints,

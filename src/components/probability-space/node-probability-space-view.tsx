@@ -31,7 +31,38 @@ import type {
   InteractorCandidate,
   ConvergentOutcome,
 } from "@/types/convergent-point";
+import type { NodeSignature } from "@/types/node-signature";
 import { ConvergentPointCard } from "./convergent-point-card";
+import { NodeSignatureRing } from "@/components/signatures/node-signature-ring";
+import { NodeSignatureDetail } from "@/components/signatures/node-signature-detail";
+
+// ── Phase 1.1 — Surface canonical NodeSignature on probability space ──
+//
+// Entities carry a `node_signature jsonb` column (populated by
+// /api/pipeline/materialize-signatures). Until now that data was only
+// surfaced on the Constellation widget + the standalone signature
+// detail page. The probability space — the canvas the user actually
+// inspects — never showed it. We're light-touch wiring it in:
+//
+//   • Header: focal entity's signature ring (size 56) — primary affordance
+//   • Card expansion: row of focal + interactor signature rings
+//   • Click any ring: opens NodeSignatureDetail drawer at parent scope
+//
+// `Entity.node_signature` is typed as `Json | null` because the column
+// is jsonb. The shape conforms to NodeSignature (validated by the DB
+// trigger in 20260423_node_signatures.sql at write time), so we cast
+// at the boundary and treat the parsed value as authoritative.
+
+function asSignature(json: Entity["node_signature"]): NodeSignature | null {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  const sig = json as unknown as NodeSignature;
+  // Cheap sanity check — DB trigger enforces the full invariant; here
+  // we just guard against legacy rows missing rings/basis so the ring
+  // primitive doesn't render an empty SVG.
+  if (typeof sig.canonical_code !== "string") return null;
+  if (!Array.isArray(sig.basis) || sig.basis.length === 0) return null;
+  return sig;
+}
 
 interface Props {
   spaceId: string;
@@ -89,6 +120,45 @@ export function NodeProbabilitySpaceView({
   const [reversibilityFilter, setReversibilityFilter] = useState<ReversibilityFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("composite");
 
+  // Signature detail drawer (Phase 1.1) — single shared instance lives at
+  // this level so all rings (header + per-card) drive the same panel.
+  // Storing the entity name alongside the signature spares the drawer
+  // from a second lookup against entitiesByUuid.
+  const [selectedSig, setSelectedSig] = useState<{
+    sig: NodeSignature;
+    entityName: string;
+  } | null>(null);
+
+  const focalSignature = useMemo(
+    () => asSignature(focalEntity.node_signature),
+    [focalEntity],
+  );
+
+  // Phase 1.2 — index entities by canonical_code so the detail
+  // drawer's `composes_with` chips can resolve siblings without an
+  // extra round-trip. Built once per entitiesByUuid change; callers
+  // (drawer chip handlers) get O(1) lookup.
+  const signaturesByCode = useMemo(() => {
+    const m = new Map<string, { sig: NodeSignature; name: string }>();
+    for (const ent of entitiesByUuid.values()) {
+      const sig = asSignature(ent.node_signature);
+      if (sig) m.set(sig.canonical_code, { sig, name: ent.name });
+    }
+    return m;
+  }, [entitiesByUuid]);
+
+  const handleSelectByCode = useCallback(
+    (code: string) => {
+      const hit = signaturesByCode.get(code);
+      if (hit) setSelectedSig({ sig: hit.sig, entityName: hit.name });
+      // Silently no-op when the sibling isn't in the current entity
+      // map — happens for cross-space combination codes that aren't
+      // hydrated on this view. Phase 4 (combination signatures) wires
+      // a server-backed resolver to handle that case.
+    },
+    [signaturesByCode],
+  );
+
   const runAnalysis = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -144,6 +214,23 @@ export function NodeProbabilitySpaceView({
     <div className={cn("flex h-full flex-col", className)}>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-200 bg-white px-5 py-4">
+        {/* Focal signature ring — Phase 1.1. Only renders when the
+            entity has a materialized signature; otherwise the header
+            collapses back to text-only so we don't show a hollow
+            placeholder for un-materialized rows. */}
+        {focalSignature && (
+          <div className="flex-shrink-0">
+            <NodeSignatureRing
+              signature={focalSignature}
+              size={56}
+              showCode
+              animated={false}
+              onSelect={(sig) =>
+                setSelectedSig({ sig, entityName: focalEntity.name })
+              }
+            />
+          </div>
+        )}
         <div className="min-w-0 flex-1">
           <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
             Probability Space
@@ -357,6 +444,9 @@ export function NodeProbabilitySpaceView({
                     point={point}
                     entitiesByUuid={entitiesByUuid}
                     rank={sortMode === "composite" ? idx : undefined}
+                    onSelectSignature={(sig, name) =>
+                      setSelectedSig({ sig, entityName: name })
+                    }
                   />
                 ))
               )}
@@ -364,6 +454,20 @@ export function NodeProbabilitySpaceView({
           </div>
         </>
       )}
+
+      {/* Signature detail drawer (Phase 1.1) — shared by header ring +
+          per-card rings. Renders nothing when selectedSig is null, so
+          there's no DOM cost when the drawer is closed.
+          Phase 1.2: passes onSelectByCode so the drawer's
+          `composes_with` chips can swap to a sibling signature in
+          place without closing first. */}
+      <NodeSignatureDetail
+        signature={selectedSig?.sig ?? null}
+        entityName={selectedSig?.entityName}
+        onClose={() => setSelectedSig(null)}
+        onSelectByCode={handleSelectByCode}
+        resolveEntityName={(id) => entitiesByUuid.get(id)?.name ?? null}
+      />
     </div>
   );
 }

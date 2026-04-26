@@ -93,6 +93,30 @@ export type DataSourceKind =
   // generic ones. Selector.section narrows to a single spec section
   // (e.g. "prediction_spec", "validation_spec") when set.
   | "app_strategy"
+  // ── Phase 3 (VP Project report) taxonomy-as-data sources ──────────
+  // Populated by the domain-inferrer at end-of-intake + the writer-path
+  // agents (variant_factory / iv_extractor / iv_scorer). Widgets
+  // built on these: iv_decomposition, variant_carousel, objective_tree,
+  // downstream_reality. See src/types/experiment-taxonomy.ts.
+  | "experiment_taxonomy"       // ExperimentTaxonomy row for the current space
+  | "experiment_variants"       // ExperimentVariant[] for the space (optionally app-scoped)
+  | "experiment_active_variant" // single VariantWithSlots — the current champion / active card
+  | "downstream_reality"        // DownstreamReality — latent dims + variant×dim scores
+  // ── Phase 3 (Batch 4) — explanatory widgets for the VP Project report ──
+  // Populated from already-persisted pipeline data: causal_chains live in
+  // synthesis_data.causal_chains, ranked strategies in
+  // synthesis_data.strategic_recommendation.ranked_strategies, goal trees
+  // are composed client-side from the improvement_goals rows that
+  // /api/apps/:id surfaces alongside the app payload.
+  | "causal_chains"             // CausalChain[] from synthesis.causal_chains
+  | "ranked_strategies"         // RankedStrategy[] from strategic_recommendation
+  | "goal_tree"                 // GoalTreeNode — the active goal + descendants
+  // ── Batch 8 — canonical signature substrate ──────────────────────────
+  // Per-entity NodeSignature array — layered-ring visual reads from this.
+  // The resolver joins entity names in at read time so the widget doesn't
+  // need to cross-reference two sources. See ConstellationItem in
+  // signature-constellation-widget.tsx for the shape.
+  | "node_signatures"
   | "literal";            // inline constant, bound once at author time
 
 /**
@@ -214,6 +238,17 @@ export type WidgetType =
   | "validation_lab"             // experiment / hypothesis tests against predictions
   | "simulation_lab"             // what-if runs against twin_state
   | "deviation_signal_feed"      // resolved surprises + escalate-to-research action
+  // ── Phase 3 VP Project widgets ────────────────────────────────────
+  | "iv_decomposition"         // per-slot ring row for the active variant
+  | "variant_carousel"         // coverflow of variant flashcards
+  | "downstream_reality"       // variant × latent-dim heatmap
+  | "chain_discoveries"        // causal chains from synthesis → goal contribution
+  | "strategy_carousel"        // ranked-strategy coverflow with tradeoff_vs_top
+  | "objective_tree"           // recursive improvement_goals tree with status dots
+  // ── Batch 8 — canonical signature UX ──────────────────────────────
+  // Grid of layered-ring visuals per entity. Click a ring opens the
+  // signature detail drawer (basis + evidence + resolution plane).
+  | "signature_constellation"
   | "text_block"        // always-available: markdown/plain text
   | "divider";          // always-available: layout separator
 

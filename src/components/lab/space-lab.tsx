@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { Loader2 } from "lucide-react";
 import type { Entity, Edge, Bridge, Space } from "@/types";
 import type { Reaction } from "@/types/reactions";
+import type { System } from "@/types/system";
 import { LabHeader } from "./lab-header";
 import { LabReagentBay } from "./lab-reagent-bay";
 import { LabChamberReact } from "./lab-chamber-react";
@@ -13,6 +14,9 @@ import { LabAnalysis } from "./lab-analysis";
 import { LabReactionNetwork } from "./lab-reaction-network";
 import { LabControlPanel } from "./lab-control-panel";
 import { LabDistribution } from "./lab-distribution";
+import { CalibrationStatusStrip } from "./calibration-status-strip";
+import { CalibrationReviewGapsDrawer } from "./calibration-review-gaps-drawer";
+import { summarizeCalibration, type CalibrationSummary } from "@/types/simulation-mode";
 import { useEntityParameters } from "./hooks/use-entity-parameters";
 import { useLabUrlState } from "./hooks/use-lab-url-state";
 import {
@@ -46,6 +50,22 @@ export interface SpaceLabProps {
    * that id so the reagent bay shows real names + categories.
    */
   partnerEntities?: Entity[];
+  /**
+   * Phase 5 — when present, the lab page narrowed `entities` and
+   * `edges` to this saved System's contents. The component uses this
+   * only to render a "Scoped to: <name>" pill so users understand
+   * why the chamber is scoped down (and offers a 1-click escape back
+   * to the whole-space lab).
+   */
+  scopedSystem?: System | null;
+  /**
+   * A/B comparator (Phase 5 follow-on) — when present, the user has
+   * paired two systems via `?systemId=A&systemB=B`. The lab still
+   * renders only the active scopedSystem (real split-screen is a
+   * future pass) but exposes a "Swap to: B" pill so users can ping-
+   * pong between the two without re-navigating.
+   */
+  comparedSystem?: System | null;
 }
 
 /**
@@ -188,6 +208,8 @@ export function SpaceLab({
   reactions,
   bridges,
   partnerEntities,
+  scopedSystem,
+  comparedSystem,
 }: SpaceLabProps) {
   const focal = useMemo(() => synthesizeSpaceAsEntity(space, entities), [space, entities]);
 
@@ -267,6 +289,79 @@ export function SpaceLab({
   const [hoveredSubunitId, setHoveredSubunitId] = useState<string | null>(null);
   const [mode, setMode] = useState<LabMode>("structure");
   const [reactTray, setReactTray] = useState<string[]>([]);
+
+  // Gap B — pull the latest RealityCalibration so the strip shows a
+  // real verdict instead of the `unknown` stub. Fire once on mount;
+  // re-fetches on space id change (user navigates between spaces) or
+  // after a bypass flip. Soft-fail to `summarizeCalibration(0, 0)` so
+  // the strip is never absent — the UI's honesty contract needs the
+  // strip mounted even when the endpoint times out.
+  const [calibration, setCalibration] = useState<CalibrationSummary>(() =>
+    summarizeCalibration(0, 0),
+  );
+  const [calibrationBump, setCalibrationBump] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/lab/calibration?space_id=${encodeURIComponent(space.id)}`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) return;
+        const body = (await res.json()) as { summary?: CalibrationSummary };
+        if (cancelled || !body.summary) return;
+        setCalibration(body.summary);
+      } catch (err) {
+        console.warn("[space-lab] calibration fetch failed:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [space.id, calibrationBump]);
+  const handleBypass = async () => {
+    try {
+      await fetch("/api/lab/calibration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ space_id: space.id, bypass: true }),
+      });
+      setCalibrationBump((n) => n + 1);
+    } catch (err) {
+      console.warn("[space-lab] bypass failed:", err);
+    }
+  };
+  // Gap B — re-run calibration against current KG state. Fires after
+  // the user fixes blocker entities surfaced by the review-gaps drawer.
+  // The route returns the new summary synchronously, so we update
+  // optimistically from the response instead of round-tripping through
+  // calibrationBump (faster + avoids a visible flash-to-previous-state).
+  const [recomputing, setRecomputing] = useState(false);
+  const handleRecompute = async () => {
+    if (recomputing) return;
+    setRecomputing(true);
+    try {
+      const res = await fetch("/api/lab/calibration/recompute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ space_id: space.id }),
+      });
+      if (res.ok) {
+        const body = (await res.json()) as { summary?: CalibrationSummary };
+        if (body.summary) setCalibration(body.summary);
+      } else {
+        console.warn("[space-lab] recompute returned", res.status);
+      }
+    } catch (err) {
+      console.warn("[space-lab] recompute failed:", err);
+    } finally {
+      setRecomputing(false);
+    }
+  };
+  // Gap B — review gaps drawer visibility. The drawer fetches its own
+  // data; this flag just opens/closes it.
+  const [reviewGapsOpen, setReviewGapsOpen] = useState(false);
   // Phase 27: URL-backed lab state (shareable `?rxn=...&tune=...`).
   const {
     focusedReactionId,
@@ -358,6 +453,133 @@ export function SpaceLab({
         }
       />
 
+      {/* Phase 5 — scoped-to-system pill. Tells users why the chamber
+          may look smaller than the whole-space lab and offers a
+          one-click escape back to the unscoped view. Renders nothing
+          when not scoped. */}
+      {scopedSystem && (
+        <div className="flex items-center gap-2 border-b border-[rgba(255,255,255,0.08)] bg-[rgba(124,58,237,0.10)] px-4 py-1.5 text-[11px] text-violet-200">
+          <span className="font-bold uppercase tracking-[0.14em]">Scoped</span>
+          <span className="text-violet-300">·</span>
+          <span className="font-medium text-violet-100">
+            {scopedSystem.name}
+          </span>
+          <span className="text-violet-400">·</span>
+          <span className="font-mono tabular-nums text-violet-300">
+            {scopedSystem.entity_count} entit
+            {scopedSystem.entity_count === 1 ? "y" : "ies"} ·{" "}
+            {scopedSystem.edge_count} edge
+            {scopedSystem.edge_count === 1 ? "" : "s"}
+          </span>
+          {scopedSystem.is_complex && (
+            <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-rose-200">
+              complex
+            </span>
+          )}
+          {scopedSystem.is_probabilistic && (
+            <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-violet-200">
+              probabilistic
+            </span>
+          )}
+          {scopedSystem.is_open && (
+            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-200">
+              open
+            </span>
+          )}
+          <a
+            href={`/app/space/${space.id}/lab`}
+            className="ml-auto rounded border border-violet-300/30 px-2 py-0.5 text-[10px] font-medium text-violet-100 transition hover:bg-violet-500/20"
+            title="Exit scoped view — return to whole-space lab"
+          >
+            Whole space
+          </a>
+          <a
+            href={`/app/space/${space.id}/systems/${scopedSystem.id}`}
+            className="rounded border border-violet-300/30 px-2 py-0.5 text-[10px] font-medium text-violet-100 transition hover:bg-violet-500/20"
+            title="Open system detail page"
+          >
+            Inspect
+          </a>
+        </div>
+      )}
+
+      {/* A/B comparator — when paired with another system, surface a
+          one-click swap so the user can ping-pong between them while
+          running the same scenario manually in each. Real split-
+          screen comparator is a future pass; for now this is the
+          navigational substrate that establishes the pair. */}
+      {scopedSystem && comparedSystem && (
+        <div className="flex items-center gap-2 border-b border-[rgba(255,255,255,0.08)] bg-[rgba(8,145,178,0.10)] px-4 py-1 text-[11px] text-cyan-200">
+          <span className="font-bold uppercase tracking-[0.14em]">A/B</span>
+          <span className="text-cyan-300">·</span>
+          <span className="font-medium text-cyan-100">
+            comparing with{" "}
+            <strong className="text-cyan-50">{comparedSystem.name}</strong>{" "}
+            ({comparedSystem.entity_count} entities)
+          </span>
+          <a
+            href={`/app/space/${space.id}/lab?systemId=${comparedSystem.id}&systemB=${scopedSystem.id}`}
+            className="ml-auto inline-flex items-center gap-1 rounded border border-cyan-300/30 px-2 py-0.5 text-[10px] font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
+            title="Swap which system is the active scope"
+          >
+            ⇄ Swap active
+          </a>
+          <a
+            href={`/app/space/${space.id}/lab?systemId=${scopedSystem.id}`}
+            className="rounded border border-cyan-300/30 px-2 py-0.5 text-[10px] font-medium text-cyan-100 transition hover:bg-cyan-500/20"
+            title="Exit comparison"
+          >
+            ✕ Unpair
+          </a>
+        </div>
+      )}
+
+      {/* Gap B — calibration gate. Today the `reality-calibration`
+          pipeline stage doesn't exist yet, so we seed the strip with
+          an "unknown" summary (no baselines declared → soft neutral
+          note). When the stage lands it will emit a
+          CalibrationSummary per space and this mount point pulls it
+          from the space row. The strip itself is epistemically
+          authoritative: until it turns emerald, any proposal built
+          on lab results is unverified. */}
+      <div className="px-3 pb-1 pt-2">
+        <CalibrationStatusStrip
+          summary={calibration}
+          onReviewGaps={
+            // Review gaps is meaningful only when there are gaps to
+            // review. Unknown (no baselines) and calibrated (all pass)
+            // have nothing to show.
+            calibration.status === "uncalibrated" ||
+            calibration.status === "partial" ||
+            calibration.status === "bypassed"
+              ? () => setReviewGapsOpen(true)
+              : undefined
+          }
+          onBypass={
+            // Only surface "run anyway" when there's a real failure to
+            // bypass. An unknown/calibrated state doesn't need the
+            // escape hatch.
+            calibration.status === "uncalibrated" ||
+            calibration.status === "partial"
+              ? handleBypass
+              : undefined
+          }
+          onRecompute={
+            // Re-run makes sense in any state where a KG fix could
+            // flip the verdict. `unknown` has no baselines to check;
+            // `calibrated` is already green and a recompute just
+            // spends an LLM call to confirm the status quo.
+            calibration.status === "uncalibrated" ||
+            calibration.status === "partial" ||
+            calibration.status === "bypassed"
+              ? handleRecompute
+              : undefined
+          }
+          recomputing={recomputing}
+          dense
+        />
+      </div>
+
       <div
         className="grid flex-1 overflow-hidden"
         style={{
@@ -442,6 +664,31 @@ export function SpaceLab({
           onGhostParamsChange={setGhostParams}
         />
       </div>
+
+      {/* Gap B — review gaps drawer. Mounted last so it overlays the lab
+          chamber when open. Closed state returns null so there's no
+          cost when it's not visible. Focus handler hooks blocker chips
+          into the reagent bay's selection so the user can jump from
+          "this baseline is off because of entity X" straight to tuning X. */}
+      <CalibrationReviewGapsDrawer
+        open={reviewGapsOpen}
+        onClose={() => setReviewGapsOpen(false)}
+        spaceId={space.id}
+        entitiesByUuid={entitiesByUuid}
+        onFocusEntity={(entityId) => {
+          // If the blocker is one of the hero subunits, select it so the
+          // control panel tunes it and the reagent bay highlights it.
+          // Otherwise this is a best-effort close-the-drawer — cross-space
+          // / bridge entities don't have a local selection surface yet.
+          const isSubunit = subunits.some((s) => s.id === entityId);
+          if (isSubunit) {
+            setSelectedSubunitId(entityId);
+          } else {
+            setHoveredSubunitId(entityId);
+          }
+          setReviewGapsOpen(false);
+        }}
+      />
 
       <style jsx global>{`
         @keyframes lab-spin {

@@ -23,6 +23,26 @@ export interface ProbabilityNode {
   source_expansion_sc_id?: string;
   /** Probability of this node being active (0-1) */
   probability?: number;
+  /**
+   * Provenance of `probability` — matches ProbabilityEdge.probability_source.
+   * Before R6 this was always LLM-self-reported (from sub-component
+   * expansion data); the field was missing, so UIs rendered all values
+   * identically regardless of source.
+   *
+   *   "measured"  — derived from the parent entity's observable KG data
+   *                 (edge degree, confidence, linked evidence). See
+   *                 `computeMeasuredNodeProbability` in
+   *                 src/lib/pipeline/probability-node-backing.ts.
+   *   "estimated" — LLM-assigned via expansion data / pathway analyzer.
+   *                 This is the honest default when no measurement exists.
+   *   "default"   — synthetic placeholder (0.5/0.7/0.8). Present in legacy
+   *                 rows and some fallback paths; flagged by quality tier
+   *                 as speculative.
+   *
+   * Optional for back-compat — pre-R6 persisted spaces lack the field;
+   * consumers default to "estimated" (the conservative assumption).
+   */
+  probability_source?: "measured" | "estimated" | "default";
   controllability?: "direct" | "indirect" | "uncontrollable";
   visibility?: "observable" | "latent" | "hidden";
   volatility?: "stable" | "fluctuating" | "chaotic";

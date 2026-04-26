@@ -33,6 +33,7 @@ import {
   resizeBox,
 } from "tldraw";
 import type { KGFormationShape } from "./types";
+import { nameHashSlot, type Hub } from "@/lib/graph/hub-discovery";
 
 const DEFAULT_W = 360;
 const DEFAULT_H = 280;
@@ -49,6 +50,10 @@ export class KGFormationShapeUtil extends BaseBoxShapeUtil<KGFormationShape> {
     // tldraw props don't support complex unions well; JSON round-trip
     // keeps the schema flat while still giving us typed data at runtime.
     hubsJson: T.string,
+    // JSON: Array<{ a: string; b: string }> — REAL edges connecting
+    // visible hubs. Replaces the cosmetic all-pairs lines the
+    // renderer used to draw.
+    hubEdgesJson: T.string,
     // Monotonic counter bumped every paint-event so the shape re-renders
     // even when semantic content is unchanged (edge count can increment
     // without hub list changing).
@@ -71,6 +76,7 @@ export class KGFormationShapeUtil extends BaseBoxShapeUtil<KGFormationShape> {
       edgeCount: 0,
       hubCount: 0,
       hubsJson: "[]",
+      hubEdgesJson: "[]",
       pulse: 0,
       accent: "#2563eb",
     };
@@ -85,38 +91,61 @@ export class KGFormationShapeUtil extends BaseBoxShapeUtil<KGFormationShape> {
   }
 }
 
-interface Hub {
-  name: string;
-  degree: number;
-}
+// Hub shape imported from the shared utility — same definition the
+// painter (incremental HubTracker) and SpaceDataContext (static
+// computeHubsFromGraph) use. Payload stores only name + degree for
+// compactness in the tldraw doc; entityId isn't needed for rendering.
+type RenderedHub = Pick<Hub, "name" | "degree">;
 
-function safeParseHubs(json: string): Hub[] {
+function safeParseHubs(json: string): RenderedHub[] {
   try {
     const parsed = JSON.parse(json);
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter((h) => h && typeof h.name === "string" && typeof h.degree === "number")
+      .filter(
+        (h) => h && typeof h.name === "string" && typeof h.degree === "number",
+      )
       .slice(0, 6);
   } catch {
     return [];
   }
 }
 
-// Deterministic hash → [0, 1) so the same hub name always maps to the
-// same slot on the mini-graph, even as lower-degree hubs get displaced.
-function nameHash(name: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < name.length; i++) {
-    h ^= name.charCodeAt(i);
-    h = Math.imul(h, 16777619);
+interface HubEdgePair {
+  a: string;
+  b: string;
+}
+
+function safeParseHubEdges(json: string): HubEdgePair[] {
+  try {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (e) =>
+        e &&
+        typeof e.a === "string" &&
+        typeof e.b === "string" &&
+        e.a !== e.b,
+    );
+  } catch {
+    return [];
   }
-  return ((h >>> 0) % 1000) / 1000;
 }
 
 function KGFormationView({ shape }: { shape: KGFormationShape }) {
-  const { w, h, entityCount, edgeCount, hubCount, hubsJson, accent, pulse } =
-    shape.props;
+  const {
+    w,
+    h,
+    entityCount,
+    edgeCount,
+    hubCount,
+    hubsJson,
+    hubEdgesJson,
+    accent,
+    pulse,
+  } = shape.props;
   const hubs = safeParseHubs(hubsJson);
+  const realHubEdges = safeParseHubEdges(hubEdgesJson);
   const svgW = w - 28;
   const svgH = h - 104;
   const cx = svgW / 2;
@@ -128,7 +157,10 @@ function KGFormationView({ shape }: { shape: KGFormationShape }) {
   const positioned = hubs
     .slice(0, 6)
     .map((hub, i) => {
-      const slotJitter = (nameHash(hub.name) - 0.5) * 14;
+      // nameHashSlot → deterministic jitter keeps the same name in the
+      // same radial slot across paints, so as new hubs displace old
+      // ones the layout reads as "graph growing" not "graph churning".
+      const slotJitter = (nameHashSlot(hub.name) - 0.5) * 14;
       const theta = (i / Math.max(1, hubs.length)) * Math.PI * 2 - Math.PI / 2;
       return {
         ...hub,
@@ -229,21 +261,31 @@ function KGFormationView({ shape }: { shape: KGFormationShape }) {
               preserveAspectRatio="xMidYMid meet"
               style={{ display: "block" }}
             >
-              {/* Connector lines between every hub pair — gives the
-                  "formation" feel. Low-opacity so they don't dominate. */}
-              {positioned.map((a, i) =>
-                positioned.slice(i + 1).map((b, j) => (
+              {/* Connector lines between hub pairs that have a REAL
+                  edge between them. Replaces the prior cosmetic
+                  all-pairs lines that misrepresented "every hub
+                  is connected to every other hub." When the painter
+                  doesn't yet have edge data (early in a run, or if
+                  the shape is restored from a pre-fix snapshot
+                  where hubEdgesJson is "[]"), the field of nodes
+                  renders without connectors — accurate "no edges
+                  observed yet" state. */}
+              {realHubEdges.map((pair, i) => {
+                const a = positioned.find((p) => p.name === pair.a);
+                const b = positioned.find((p) => p.name === pair.b);
+                if (!a || !b) return null;
+                return (
                   <line
-                    key={`l-${i}-${j}`}
+                    key={`l-${i}-${pair.a}-${pair.b}`}
                     x1={a.x}
                     y1={a.y}
                     x2={b.x}
                     y2={b.y}
-                    stroke="rgba(37, 99, 235, 0.18)"
-                    strokeWidth={0.8}
+                    stroke="rgba(37, 99, 235, 0.32)"
+                    strokeWidth={1.1}
                   />
-                )),
-              )}
+                );
+              })}
               {/* PROMPT center — always present, represents the run's root */}
               <circle
                 cx={cx}

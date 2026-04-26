@@ -26,11 +26,12 @@
 // have passed (gives the user time to read the final state).
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, Sparkles, TrendingUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Shield, ShieldAlert, ShieldQuestion, Sparkles, TrendingUp, Zap, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useStructuralEventStream } from "../hooks/use-structural-event-stream";
+import { useRunEventStore } from "../hooks/run-event-store";
 import { AXIS_CATALOG } from "@/lib/probability-space/axis-catalog";
 import type { ProbabilitySpaceAxis } from "@/types/pipeline-events";
+import type { DoWhyContract } from "@/types/dowhy";
 
 export interface CanvasProposalRingsProps {
   runId: string | null;
@@ -55,16 +56,29 @@ interface ProposalCard {
     p90: number;
     mean?: number;
     stddev?: number;
+    provenance?:
+      | "mc_simulation"
+      | "bootstrap"
+      | "llm_estimate"
+      | "composite_computed"
+      | "ode_rk4";
+    sampleCount?: number | null;
   };
   targetEntityId: string | null;
   /** PR 5 — probability-space lenses that contributed supporting
    *  entities to this proposal. Rendered as axis-colored chips. */
   axesUsed: ProbabilitySpaceAxis[];
+  /** R5 Phase A · P4 — DoWhy 4-field causal contract, when the
+   *  strategy-refresh pipeline computed it. Absent for pre-P4 events,
+   *  for proposals with no identifiable lever, or when any of the
+   *  four fields failed to compute. The card falls back to the
+   *  legacy distribution-only view in that case. */
+  dowhy: DoWhyContract | null;
   sequence: number;
 }
 
 export function CanvasProposalRings({ runId }: CanvasProposalRingsProps) {
-  const { events, status } = useStructuralEventStream(runId);
+  const { events, status } = useRunEventStore();
   const [hiddenAfterComplete, setHiddenAfterComplete] = useState(false);
 
   const proposals = useMemo<ProposalCard[]>(() => {
@@ -85,6 +99,7 @@ export function CanvasProposalRings({ runId }: CanvasProposalRingsProps) {
         axesUsed: (s.event.axes_used ?? []).filter(
           (a): a is ProbabilitySpaceAxis => a in AXIS_CATALOG,
         ),
+        dowhy: s.event.dowhy ?? null,
         sequence: s.sequence,
       });
     }
@@ -179,7 +194,7 @@ function ProposalCard({
   const hasReasoning = typeof card.reasoning === "string" && card.reasoning.length > 0;
   const topLine = card.headline ?? card.title;
 
-  const { p10, p50, p90, stddev } = card.distribution;
+  const { p10, p50, p90, stddev, provenance, sampleCount } = card.distribution;
   const span = Math.max(scaleMax - scaleMin, 0.0001);
   const pctP10 = ((p10 - scaleMin) / span) * 100;
   const pctP50 = ((p50 - scaleMin) / span) * 100;
@@ -190,10 +205,34 @@ function ProposalCard({
     ? Math.max(0, Math.min(1, 1 / (1 + Math.abs(stddev))))
     : 0.5;
   const confPct = Math.round(confidence * 100);
-  const confTone =
-    confPct >= 75 ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-      : confPct >= 50 ? "bg-blue-50 text-blue-700 ring-blue-200"
-      : "bg-amber-50 text-amber-700 ring-amber-200";
+  // Provenance-aware tone. LLM-estimated distributions wear an amber
+  // ring regardless of the numeric confPct, because the number itself
+  // is LLM self-reported — a 95% confidence chip on an LLM-invented
+  // distribution should NOT visually outrank a 55% chip on a real MC
+  // run. Users need to see "this came from real math" vs "this is a
+  // guess" before reading the number.
+  const isComputed =
+    provenance === "mc_simulation" ||
+    provenance === "bootstrap" ||
+    provenance === "composite_computed" ||
+    provenance === "ode_rk4";
+  const confTone = !isComputed
+    ? "bg-amber-50 text-amber-700 ring-amber-200"
+    : confPct >= 75
+      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+      : confPct >= 50
+        ? "bg-blue-50 text-blue-700 ring-blue-200"
+        : "bg-amber-50 text-amber-700 ring-amber-200";
+  const provenanceLabel =
+    provenance === "ode_rk4"
+      ? `Monte Carlo + RK4 ODE (${sampleCount ?? "—"} samples × continuous integration)`
+      : provenance === "mc_simulation"
+        ? `Monte Carlo (${sampleCount ?? "—"} samples)`
+        : provenance === "bootstrap"
+          ? `Bootstrap resample (${sampleCount ?? "—"} draws)`
+          : provenance === "composite_computed"
+            ? "Composite computed"
+            : "LLM-estimated — not sample-derived";
 
   return (
     <div className="rounded-xl border border-gray-200/70 bg-white/95 px-3 py-2.5 shadow-sm ring-1 ring-black/[0.02] backdrop-blur">
@@ -208,14 +247,25 @@ function ProposalCard({
           {topLine}
         </span>
         <span
+          className="flex flex-shrink-0 h-5 w-5 items-center justify-center rounded-md"
+          title={provenanceLabel}
+          aria-label={provenanceLabel}
+        >
+          {isComputed ? (
+            <Zap className="h-3 w-3 text-blue-600" aria-hidden />
+          ) : (
+            <Bot className="h-3 w-3 text-amber-600" aria-hidden />
+          )}
+        </span>
+        <span
           className={cn(
             "flex-shrink-0 rounded-md px-1.5 py-0.5 text-[9.5px] font-semibold ring-1 tabular-nums",
             confTone,
           )}
           title={
             stddev !== undefined
-              ? `Confidence derived from stddev ${stddev.toFixed(2)}`
-              : undefined
+              ? `${provenanceLabel} — confidence from stddev ${stddev.toFixed(2)}`
+              : provenanceLabel
           }
         >
           {confPct}%
@@ -291,6 +341,13 @@ function ProposalCard({
         </div>
       )}
 
+      {/* R5 Phase A · P4 — DoWhy 4-field contract strip.
+          Renders ONLY when the emitter computed the full contract.
+          Shows IDENTIFY + REFUTE verdict + sensitivity ratio — the
+          two fields that carry the audit weight. MODEL (path) is
+          accessed via the expand chevron below. */}
+      {card.dowhy && <DoWhyStrip dowhy={card.dowhy} />}
+
       {/* Reasoning chain — collapsed by default. Chevron only renders
           when there's a real reasoning string on the event; a card with
           no reasoning stays visually identical to before. */}
@@ -332,4 +389,81 @@ function num(v: number): string {
   if (abs >= 100) return v.toFixed(0);
   if (abs >= 10) return v.toFixed(1);
   return v.toFixed(2);
+}
+
+// ── DoWhy strip (R5 Phase A · P4) ────────────────────────────────────
+//
+// Compact two-chip row:
+//   1. IDENTIFY chip — "direct" / "mediator" / "backdoor" / "unknown"
+//      with color-coded tone + rationale tooltip.
+//   2. REFUTE chip — pass/fail/skip with sensitivity ratio.
+//
+// The card already shows MODEL (via the target entity id + axes
+// strip) and ESTIMATE (via the certainty bar + numeric readout). The
+// DoWhy strip makes the last two fields — which carry the audit
+// weight — visible at a glance without requiring the user to expand
+// the reasoning chain.
+
+function DoWhyStrip({ dowhy }: { dowhy: DoWhyContract }) {
+  const id = dowhy.identify;
+  const ref = dowhy.refute;
+
+  const idTone =
+    id.kind === "direct"
+      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+      : id.kind === "mediator"
+        ? "bg-blue-50 text-blue-700 ring-blue-200"
+        : id.kind === "backdoor"
+          ? "bg-amber-50 text-amber-700 ring-amber-200"
+          : id.kind === "frontdoor"
+            ? "bg-indigo-50 text-indigo-700 ring-indigo-200"
+            : "bg-gray-100 text-gray-600 ring-gray-200";
+
+  const refTone =
+    ref.verdict === "pass"
+      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+      : ref.verdict === "fail"
+        ? "bg-rose-50 text-rose-700 ring-rose-200"
+        : "bg-gray-100 text-gray-600 ring-gray-200";
+  const RefIcon =
+    ref.verdict === "pass"
+      ? Shield
+      : ref.verdict === "fail"
+        ? ShieldAlert
+        : ShieldQuestion;
+
+  const ratioText =
+    ref.sensitivityRatio != null && Number.isFinite(ref.sensitivityRatio)
+      ? `${Math.round(ref.sensitivityRatio * 100)}%`
+      : "—";
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+      <span className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-gray-400">
+        dowhy
+      </span>
+      <span
+        className={cn(
+          "rounded-sm px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] ring-1",
+          idTone,
+        )}
+        title={id.rationale}
+      >
+        {id.kind}
+      </span>
+      <span
+        className={cn(
+          "flex items-center gap-0.5 rounded-sm px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] ring-1",
+          refTone,
+        )}
+        title={ref.rationale}
+      >
+        <RefIcon className="h-2.5 w-2.5" />
+        refute {ref.verdict}
+        <span className="ml-0.5 font-mono tabular-nums opacity-80">
+          {ratioText}
+        </span>
+      </span>
+    </div>
+  );
 }

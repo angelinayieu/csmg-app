@@ -1,0 +1,377 @@
+"use client";
+
+// ── AuthModal ──
+//
+// Hash-driven, in-place sign-in / sign-up popover that lives on top of
+// the landing page so visitors never lose the whiteboard underneath.
+// Mount once at the root of any page that should be able to summon it
+// (e.g. landing page) — buttons elsewhere just navigate to `#signin` or
+// `#signup` and the modal handles the rest.
+//
+// Design intent:
+//   • Backdrop is a frosted white blur so the floating-cards stay
+//     legible but obviously out-of-focus → the modal is *the* surface.
+//   • Modal itself is a GlassPanel tier="modal" with the InterAxis teal
+//     accent rim — same vocabulary as the rest of the whiteboard UI.
+//   • A segmented pill swaps between sign in and sign up without ever
+//     unmounting the modal — feels continuous, not page-y.
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { InterAxisLogo } from "@/components/brand/interaxis-logo";
+import { X } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+type Mode = "signin" | "signup";
+
+const ACCENT = "#00BCD4";
+
+function readHashMode(): Mode | null {
+  if (typeof window === "undefined") return null;
+  const h = window.location.hash.replace(/^#/, "").toLowerCase();
+  if (h === "signin" || h === "login") return "signin";
+  if (h === "signup" || h === "register") return "signup";
+  return null;
+}
+
+function clearHash() {
+  if (typeof window === "undefined") return;
+  const url = window.location.pathname + window.location.search;
+  window.history.replaceState(null, "", url);
+}
+
+export function AuthModal() {
+  const [mode, setMode] = useState<Mode | null>(null);
+  const closeRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    const sync = () => setMode(readHashMode());
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+
+  const close = useCallback(() => {
+    clearHash();
+    setMode(null);
+  }, []);
+  closeRef.current = close;
+
+  useEffect(() => {
+    if (!mode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [mode]);
+
+  if (!mode) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center px-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={mode === "signin" ? "Log in" : "Create account"}
+    >
+      {/* Frosted backdrop — blurred white so the whiteboard underneath
+          stays present but obviously out of focus. */}
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={close}
+        className="absolute inset-0 cursor-default animate-[fadeIn_220ms_ease-out]"
+        style={{
+          background:
+            "radial-gradient(120% 80% at 50% 40%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.78) 60%, rgba(244,250,252,0.86) 100%)",
+          backdropFilter: "blur(22px) saturate(1.4)",
+          WebkitBackdropFilter: "blur(22px) saturate(1.4)",
+        }}
+      />
+
+      <div className="relative w-full max-w-md animate-[modalIn_320ms_var(--ease-spring-tight,cubic-bezier(0.22,1,0.36,1))]">
+        <GlassPanel
+          tier="modal"
+          accent={ACCENT}
+          radius={24}
+          className="px-7 pb-7 pt-6"
+        >
+          {/* Close */}
+          <button
+            type="button"
+            onClick={close}
+            aria-label="Close"
+            className="absolute right-4 top-4 rounded-full p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          {/* Brand */}
+          <div className="flex flex-col items-center pt-2">
+            <InterAxisLogo className="h-8 w-8" size={64} />
+            <h2 className="mt-3 text-[20px] font-semibold tracking-tight text-slate-900">
+              {mode === "signin"
+                ? "Welcome back"
+                : "Build your intelligence system"}
+            </h2>
+            <p className="mt-1 text-[13px] text-slate-500">
+              {mode === "signin"
+                ? "Pick up where your whiteboard left off."
+                : "Free to start. Your prompt comes with you."}
+            </p>
+          </div>
+
+          {/* Mode toggle */}
+          <div
+            className="mx-auto mt-5 grid w-full max-w-[260px] grid-cols-2 rounded-full border border-slate-200/70 bg-white/60 p-1 text-[13px] font-medium"
+            role="tablist"
+          >
+            {(["signin", "signup"] as Mode[]).map((m) => {
+              const active = mode === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => {
+                    if (m === mode) return;
+                    window.history.replaceState(null, "", `#${m}`);
+                    setMode(m);
+                  }}
+                  className={cn(
+                    "rounded-full px-3 py-1.5 transition-all duration-200",
+                    active
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-500 hover:text-slate-800",
+                  )}
+                >
+                  {m === "signin" ? "Log in" : "Sign up"}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-6">
+            {mode === "signin" ? (
+              <SignInBody onSwitch={() => switchTo("signup", setMode)} />
+            ) : (
+              <SignUpBody onSwitch={() => switchTo("signin", setMode)} />
+            )}
+          </div>
+        </GlassPanel>
+
+        {/* Soft glow under the modal — extra depth */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -inset-x-6 -bottom-8 h-24 rounded-full opacity-60 blur-2xl"
+          style={{
+            background:
+              "radial-gradient(60% 100% at 50% 0%, rgba(0,188,212,0.22), rgba(0,188,212,0) 70%)",
+          }}
+        />
+      </div>
+
+      <style jsx global>{`
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+        @keyframes modalIn {
+          from {
+            opacity: 0;
+            transform: translateY(8px) scale(0.97);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function switchTo(next: Mode, setMode: (m: Mode) => void) {
+  if (typeof window !== "undefined") {
+    window.history.replaceState(null, "", `#${next}`);
+  }
+  setMode(next);
+}
+
+// ── Sign in ────────────────────────────────────────────────────────
+function SignInBody({ onSwitch }: { onSwitch: () => void }) {
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    if (error) {
+      setError(error.message);
+      setLoading(false);
+      return;
+    }
+    router.push("/app");
+    router.refresh();
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <Input
+        id="modal-email"
+        label="Email"
+        type="email"
+        placeholder="you@example.com"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        required
+        autoFocus
+      />
+      <Input
+        id="modal-password"
+        label="Password"
+        type="password"
+        placeholder="Your password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        required
+      />
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <Button type="submit" loading={loading} className="w-full">
+        Log in
+      </Button>
+      <p className="text-center text-[13px] text-slate-500">
+        Don&apos;t have an account?{" "}
+        <button
+          type="button"
+          onClick={onSwitch}
+          className="font-medium text-interaxis-600 hover:text-interaxis-500"
+        >
+          Sign up
+        </button>
+      </p>
+    </form>
+  );
+}
+
+// ── Sign up ────────────────────────────────────────────────────────
+function SignUpBody({ onSwitch }: { onSwitch: () => void }) {
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
+      return;
+    }
+    setLoading(true);
+    const supabase = createClient();
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { display_name: displayName },
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+    if (error) {
+      setError(error.message);
+      setLoading(false);
+      return;
+    }
+    setSuccess(true);
+    setLoading(false);
+  }
+
+  if (success) {
+    return (
+      <div className="py-2 text-center">
+        <h3 className="text-base font-semibold text-slate-900">
+          Check your email
+        </h3>
+        <p className="mt-2 text-sm text-slate-600">
+          We sent a confirmation link to <strong>{email}</strong>. Click it to
+          activate your account.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <Input
+        id="modal-name"
+        label="Display name"
+        type="text"
+        placeholder="Your name"
+        value={displayName}
+        onChange={(e) => setDisplayName(e.target.value)}
+        required
+        autoFocus
+      />
+      <Input
+        id="modal-email-su"
+        label="Email"
+        type="email"
+        placeholder="you@example.com"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        required
+      />
+      <Input
+        id="modal-password-su"
+        label="Password"
+        type="password"
+        placeholder="At least 6 characters"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        required
+        minLength={6}
+      />
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <Button type="submit" loading={loading} className="w-full">
+        Create account
+      </Button>
+      <p className="text-center text-[13px] text-slate-500">
+        Already have an account?{" "}
+        <button
+          type="button"
+          onClick={onSwitch}
+          className="font-medium text-interaxis-600 hover:text-interaxis-500"
+        >
+          Log in
+        </button>
+      </p>
+    </form>
+  );
+}

@@ -45,6 +45,7 @@ import {
   emitBatchEvents,
   emitStructuralEvent,
 } from "@/lib/events/structural-event-bus";
+import { readAxesUsedFromProvenance } from "@/lib/pipeline/axes-used-resolver";
 import type {
   CrossSpaceLinkEvent,
   ProbabilitySpaceAxis,
@@ -273,17 +274,36 @@ export async function POST(request: Request) {
   const spaceId =
     (runRow as { space_id?: string } | null)?.space_id ?? null;
 
-  let persistedCount = 0;
-  if (spaceId && crossSpaceGroups.length > 0) {
+  // Pre-fetch existing entities once — used for both dedup (skip
+  // inserting leverage rows that decompose already wrote) AND for the
+  // axis_used backfill below. A single read saves a round-trip when
+  // there are groups to persist; even when there aren't, the backfill
+  // needs the same data.
+  const existingByNormName = new Map<
+    string,
+    { id: string; provenance: Record<string, unknown> | null }
+  >();
+  if (spaceId) {
     const { data: existingRows } = await db
       .from("entities")
-      .select("id, name")
+      .select("id, name, provenance")
       .eq("space_id", spaceId);
-    const existingNormalized = new Set<string>(
-      ((existingRows ?? []) as Array<{ name: string }>).map((r) =>
-        normalizeName(r.name),
-      ),
-    );
+    const rows = (existingRows ?? []) as Array<{
+      id: string;
+      name: string;
+      provenance: Record<string, unknown> | null;
+    }>;
+    for (const r of rows) {
+      existingByNormName.set(normalizeName(r.name), {
+        id: r.id,
+        provenance: r.provenance,
+      });
+    }
+  }
+
+  let persistedCount = 0;
+  if (spaceId && crossSpaceGroups.length > 0) {
+    const existingNormalized = new Set<string>(existingByNormName.keys());
 
     const toInsert: Array<Record<string, unknown>> = [];
     const groupForRow: LinkGroup[] = [];
@@ -319,7 +339,10 @@ export async function POST(request: Request) {
         provenance: {
           producer: "cross-space-linker",
           run_id: runId,
-          axes: Array.from(g.axes),
+          // Canonical key is `axes_used` (matches the downstream
+          // resolver naming). Legacy `axes` key is still accepted by
+          // readEntityAxesUsed() for rows written before this change.
+          axes_used: Array.from(g.axes),
           axis_count: g.axes.size,
         },
       });
@@ -357,6 +380,85 @@ export async function POST(request: Request) {
           };
         });
         await emitBatchEvents(db, runId, entityEvents);
+      }
+    }
+  }
+
+  // ── Backfill provenance.axes_used on existing entities ──────────
+  //
+  // Every group (single- AND multi-axis) is a cross-axis provenance
+  // signal for the matching existing entity row. Prior to this step
+  // only multi-axis leverage entities inserted BY this linker had
+  // any axis attribution on the row; decompose entities (the bulk of
+  // the KG) were untagged, forcing downstream consumers to re-query
+  // pipeline_run_events via axes-used-resolver. Now every entity the
+  // linker can reach by normalized name gets the axes it was spotted
+  // in stored on provenance.axes_used, enabling row-level cross-axis
+  // queries (e.g. "find entities appearing in ≥2 axes" via JSONB
+  // containment) without event scans.
+  //
+  // Idempotent: the update union-merges with any existing axes_used,
+  // so repeated linker runs never shrink provenance. Old-key rows
+  // (provenance.axes) are migrated in place to the canonical key.
+  //
+  // Soft-fail: individual UPDATE errors are logged but don't abort
+  // the linker's terminal events (merge_begin / merge_complete).
+  let backfilledCount = 0;
+  if (spaceId && groups.length > 0 && existingByNormName.size > 0) {
+    const updates: Array<{
+      id: string;
+      provenance: Record<string, unknown>;
+    }> = [];
+    for (const g of groups) {
+      const existing = existingByNormName.get(normalizeName(g.canonicalName));
+      if (!existing) continue; // decompose hasn't inserted this one yet
+      const prev = existing.provenance ?? {};
+      const prevAxes = readAxesUsedFromProvenance(prev);
+      const merged = new Set<ProbabilitySpaceAxis>(prevAxes);
+      for (const a of g.axes) merged.add(a);
+      // No-op skip: already captures this axis set.
+      if (merged.size === prevAxes.length && prevAxes.every((a) => merged.has(a))) {
+        continue;
+      }
+      // Drop the legacy `axes` key if present so we don't leave two
+      // parallel arrays on the row. The reader already tolerates it
+      // being absent.
+      const { axes: _legacy, ...rest } = prev as Record<string, unknown> & {
+        axes?: unknown;
+      };
+      void _legacy;
+      updates.push({
+        id: existing.id,
+        provenance: {
+          ...rest,
+          axes_used: Array.from(merged).sort(),
+          axis_count: merged.size,
+        },
+      });
+    }
+    if (updates.length > 0) {
+      // Supabase has no native bulk-update; parallel updates keep
+      // the hot path short. Cap concurrency to avoid hammering the
+      // row-level lock path when there are many.
+      const CONCURRENCY = 8;
+      for (let i = 0; i < updates.length; i += CONCURRENCY) {
+        const chunk = updates.slice(i, i + CONCURRENCY);
+        await Promise.all(
+          chunk.map(async (u) => {
+            const { error } = await db
+              .from("entities")
+              .update({ provenance: u.provenance })
+              .eq("id", u.id);
+            if (error) {
+              console.warn(
+                "[cross-space-linker] provenance backfill soft-fail:",
+                error.message,
+              );
+            } else {
+              backfilledCount += 1;
+            }
+          }),
+        );
       }
     }
   }
@@ -411,5 +513,6 @@ export async function POST(request: Request) {
     soloEntityCount,
     leverageEntityCount,
     persistedLeverageEntities: persistedCount,
+    backfilledProvenanceRows: backfilledCount,
   });
 }

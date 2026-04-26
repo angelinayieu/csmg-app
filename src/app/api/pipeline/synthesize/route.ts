@@ -50,6 +50,11 @@ import {
   emitStructuralEvent,
   completePipelineRun,
 } from "@/lib/events/structural-event-bus";
+import {
+  rollupLayerCoverageGates,
+  type LayerCoverageGateInput,
+} from "@/lib/situation-frame/layer-coverage-gate";
+import { validateFrame as validateSituationFrame } from "@/lib/situation-frame/frame-helpers";
 
 export const maxDuration = 300; // Multi-step strategy needs more time
 
@@ -75,6 +80,12 @@ export async function POST(request: Request) {
     /** Optional tier label for audit trail; informational only. */
     tier,
   } = body;
+
+  // Piece 4 — allow the client to proceed past a failed layer-coverage
+  // gate after the user has reviewed the report. No-op when the gate
+  // passes. Captured separately so the main body destructure above stays
+  // readable.
+  const bypassLayerGate = body.bypassLayerGate === true;
 
   // Phase 1 Step 13 — auto-advance chain flag. When true, the
   // completion path kicks /api/pipeline/strategy-refresh via after().
@@ -140,6 +151,7 @@ export async function POST(request: Request) {
     // Fetch active goal if goalId provided, or look up active goal for root space
     let activeGoal: ImprovementGoal | null = null;
     let userInputText: string | undefined;
+    let rawDecompositionContext: string | undefined;
     const rootSpaceId = spaceIds[0];
     if (goalId) {
       const { data: goalData } = await db
@@ -167,13 +179,20 @@ export async function POST(request: Request) {
     const cachedEdges = new Map<string, Edge[]>();
     const cachedCycles = new Map<string, Cycle[]>();
     let totalFilterReport: { total: number; included: number; excluded: number } | null = null;
+    // Piece 4 — collect per-space gate inputs as we load entities so
+    // the rollup check runs once after the loop without re-querying.
+    const gateInputs: LayerCoverageGateInput[] = [];
 
     for (const spaceId of spaceIds) {
       const [entRes, edgRes, cycRes, spaceRes] = await Promise.all([
         db.from("entities").select("*").eq("space_id", spaceId),
         db.from("edges").select("*").eq("space_id", spaceId),
         db.from("cycles").select("*").eq("space_id", spaceId),
-        db.from("spaces").select("name, description, synthesis_data, input_text").eq("id", spaceId).single(),
+        db
+          .from("spaces")
+          .select("name, description, synthesis_data, input_text, situation_frame, raw_decomposition")
+          .eq("id", spaceId)
+          .single(),
       ]);
 
       const allEntities = (entRes.data ?? []) as Entity[];
@@ -262,6 +281,20 @@ export async function POST(request: Request) {
       if (!userInputText && (spaceRes.data as any)?.input_text) {
         userInputText = (spaceRes.data as any).input_text as string;
       }
+      // Capture raw decomposition prose for Pass 1 reasoning context (first space only)
+      if (!rawDecompositionContext && (spaceRes.data as any)?.raw_decomposition) {
+        const rawDecomp = (spaceRes.data as any).raw_decomposition as string;
+        if (rawDecomp.trim().length > 50) {
+          // Truncate to ~2000 chars to keep token budget reasonable
+          const excerpt = rawDecomp.length > 2000 ? rawDecomp.slice(0, 2000) + "\n[… truncated …]" : rawDecomp;
+          rawDecompositionContext =
+            "--- DECOMPOSITION REASONING CONTEXT ---\n" +
+            "The following is the free-form reasoning produced during the decomposition pass.\n" +
+            "Use it to align synthesis findings with the analytical intent already established.\n\n" +
+            excerpt +
+            "\n--- END DECOMPOSITION REASONING CONTEXT ---\n\n";
+        }
+      }
       let metaSection = buildDecompReconciliationContext(meta);
 
       // Add excluded entity summary (Gap 3)
@@ -281,6 +314,73 @@ export async function POST(request: Request) {
         cycleLines,
         metaSection,
       });
+
+      // Piece 4 — per-space layer-coverage gate input. validateSituationFrame
+      // is a never-throws coercer; legacy rows / soft-failed panels return
+      // the neutral-default frame which the gate treats as "no_frame" pass.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rawFrame = (spaceRes.data as any)?.situation_frame;
+      gateInputs.push({
+        frame: rawFrame ? validateSituationFrame(rawFrame) : null,
+        entities: allEntities,
+        spaceId,
+      });
+    }
+
+    // ── Piece 4 · Layer coverage gate (multi-space rollup) ────────────
+    //
+    // Runs ONCE after all spaces are loaded. Any single space failing
+    // its gate fails the rollup. No-situation_frame spaces (legacy /
+    // panel-soft-failed) pass silently — exact pre-Piece-4 behavior.
+    //
+    // bypassLayerGate=true forces past a failed gate. The bypass is
+    // echoed into the terminal response for audit so we can see in
+    // telemetry which synthesis runs skipped the check.
+    const gateRollup = rollupLayerCoverageGates(gateInputs);
+
+    // Piece 4b — emit a `layer_coverage_gap` structural event for every
+    // report that has ANY gap or panel-block divergence, regardless of
+    // whether we block or bypass. Two reasons:
+    //   1. The auto-advance chain passes bypassLayerGate=true so the
+    //      pipeline always completes; without this event, the UI would
+    //      silently lose the signal that the frame said a layer was
+    //      required but the KG never populated it.
+    //   2. Clients hitting the 409 path still get the gap surfaced on
+    //      the canvas via SSE before they've parsed the error body.
+    // Soft-emit: reports with clean gate AND no block divergences emit
+    // nothing (green-path silence).
+    for (const report of gateRollup.reports) {
+      const hasSignal =
+        report.gaps.length > 0 || report.panel_block_divergences.length > 0;
+      if (!hasSignal) continue;
+      await emitStructuralEvent(db, pipelineRunId, {
+        type: "layer_coverage_gap",
+        bypassed: !report.pass && bypassLayerGate,
+        spaceId: report.space_id ?? "",
+        message: report.message,
+        gaps: report.gaps.map((g) => ({
+          layer: g.layer,
+          severity:
+            g.reason === "panel_required_but_kg_empty" ? "hard" : "soft",
+          required_cell_count: g.required_cell_count,
+        })),
+        panel_block_divergences: report.panel_block_divergences,
+      });
+    }
+
+    if (!gateRollup.pass && !bypassLayerGate) {
+      return NextResponse.json(
+        {
+          error:
+            gateRollup.reports.find((r) => !r.pass)?.message ??
+            "Layer coverage gate failed.",
+          gate: "layer_coverage",
+          reports: gateRollup.reports,
+          bypass_hint:
+            "Re-POST with { bypassLayerGate: true } after acknowledging the gap reports.",
+        },
+        { status: 409 },
+      );
     }
 
     // ── Gap 10: Structured cross-space context ──
@@ -808,7 +908,7 @@ YOU MUST address each signal in your synthesis:
     try {
       synthesis = await llmJSON<SynthesisData>({
         system: getSynthesisPrompt(intent, activeGoal, epistemicClassification),
-        user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${baselineBlock}${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}`,
+        user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${rawDecompositionContext ?? ""}${baselineBlock}${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}`,
         maxTokens: 16384,
         temperature: 0.3,
       });
@@ -929,7 +1029,7 @@ REQUIREMENTS FOR THIS PASS:
           // Re-run synthesis LLM call with the same base prompt + regen guidance appended
           const regenSynthesis = await llmJSON<SynthesisData>({
             system: getSynthesisPrompt(intent, activeGoal, epistemicClassification),
-            user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}${regenGuidance}`,
+            user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${rawDecompositionContext ?? ""}${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}${regenGuidance}`,
             maxTokens: 16384,
             temperature: 0.3,
           });
@@ -1512,6 +1612,63 @@ REQUIREMENTS FOR THIS PASS:
       }
     } catch (stErr) {
       console.warn("[strategy-staleness] Detection failed (non-critical):", stErr);
+    }
+
+    // ── Tier 1 → Tier 3 bridge: computed composite strategy ranking ──
+    //
+    // Before this pass, `ranked_strategies[*].rank` was literally the
+    // LLM's array order — an opinion dressed as a measurement. We now
+    // compute a [0,1] composite score from existing signals (coverage-
+    // gap closure, convergence addressed, axiom support, MC p50
+    // normalized across candidates, evidence grounding, risk balance,
+    // complexity penalty) and re-order the array by that score. The
+    // LLM's original ordering is preserved as `llm_rank` on each
+    // entry for audit. See src/lib/pipeline/strategy-composite-ranker.ts.
+    //
+    // We don't have per-strategy MC distributions here (that happens
+    // in strategy-refresh), so the mc_p50_normalized + mc_confidence
+    // signals fall out of the composite with null values and the
+    // renormalization gives full weight to the structural signals.
+    // strategy-refresh re-runs the same ranker after it computes
+    // distributions, so the final rank incorporates MC data.
+    if (rankedStrategies && rankedStrategies.length > 0) {
+      try {
+        const { rerankStrategiesByComposite } = await import(
+          "@/lib/pipeline/strategy-composite-ranker"
+        );
+        const reranked = rerankStrategiesByComposite(
+          rankedStrategies as unknown as Array<Record<string, unknown>>,
+          {
+            totalCoverageGaps:
+              (strategyCoverage as { gaps?: unknown[] } | undefined)?.gaps
+                ?.length ?? 0,
+            totalConvergenceClusters: insightConvergences.length,
+            totalCriticalAxioms: (() => {
+              const mergedAxioms =
+                ((existingData.axioms as unknown[]) ??
+                  (synthesis as unknown as { axioms?: unknown[] }).axioms ??
+                  []) as Array<{ strength?: string }>;
+              return mergedAxioms.filter(
+                (a) => a?.strength === "critical",
+              ).length;
+            })(),
+          },
+        );
+        // Cast back through the chain — `rerankStrategiesByComposite`
+        // preserves every original field and augments with rank_score
+        // etc., so this is safe. TypeScript can't see through the
+        // generic Record<string, unknown> bridge.
+        rankedStrategies =
+          reranked as unknown as typeof rankedStrategies;
+        console.log(
+          `[strategy-composite] Re-ranked ${reranked.length} strategies by computed score (top: ${reranked[0]?.rank_score.toFixed(3)}, bottom: ${reranked[reranked.length - 1]?.rank_score.toFixed(3)})`,
+        );
+      } catch (rankErr) {
+        console.warn(
+          "[strategy-composite] Re-rank failed (non-critical, keeping LLM order):",
+          rankErr,
+        );
+      }
     }
 
     const finalSynthData: Record<string, unknown> = {
@@ -2207,14 +2364,223 @@ REQUIREMENTS FOR THIS PASS:
     }
 
     // Phase 1 Step 13/16 — short-abort handoff to strategy-refresh.
-    // Terminal hop: strategy-refresh runs with deferApps=true so the
-    // user still confirms before apps/interventions materialize.
+    // Terminal hop: strategy-refresh runs with deferApps=FALSE so apps
+    // + interventions materialize automatically as part of the auto-
+    // advance chain. Previously `deferApps=true` was used to require a
+    // human "confirm" click, but the pipeline audit (2026-04-24)
+    // revealed that confirm also never fires writer-path, so
+    // downstream-reality / iv-decomp / variant-carousel shapes never
+    // appeared on canvas. The auto-chain now generates everything
+    // end-to-end; a separate user-review gate can be added later
+    // without gating visible artifacts on it.
+    //
+    // Temporal order of the handoff chain:
+    //
+    //   synthesize (THIS)
+    //     → why-chain-deepen         ← recursive LLM causal decomposition
+    //                                   on top threads; adds 2-3 levels
+    //                                   of upstream drivers + fan-in
+    //                                   edges. Runs FIRST because
+    //                                   root-trace's backward BFS is
+    //                                   structurally pointless until
+    //                                   there are real upstream chains
+    //                                   to walk.
+    //     → audit-edges              ← independent edge-auditor agent
+    //                                   endorses/disputes every edge
+    //                                   (including the freshly-added
+    //                                   causal drivers). Writes into
+    //                                   edges.agent_feedback JSONB so
+    //                                   the strategizer can surface
+    //                                   contentious relationships. Soft
+    //                                   -fails; downstream stages don't
+    //                                   depend on the ledger being
+    //                                   populated.
+    //     → root-trace               ← backward BFS from goals along
+    //                                   causal subgraph; writes
+    //                                   causal_depth + converges_chains
+    //                                   onto entities. Now operates on
+    //                                   a graph that actually has
+    //                                   depth.
+    //     → materialize-signatures   ← deterministic seed; needed so
+    //                                   strategizer's uncertainty +
+    //                                   controllability_spread signals
+    //                                   have non-null input
+    //     → space-strategizer        ← plans probability-space work;
+    //                                   writes space_plans + queues
+    //                                   items into space_work_queue
+    //     → strategy-refresh         ← reasons over the (now more
+    //                                   informative) graph
+    //
+    // The two new hops are SOFT: if either fails, strategy-refresh
+    // still runs. Rationale: the strategizer is a planning optimizer;
+    // missing signatures or a failed plan shouldn't block the core
+    // user-facing hop. We log the failure and move on.
     if (autoAdvance && rootSpaceId) {
       const cookieHeader = request.headers.get("cookie") ?? "";
       const origin = new URL(request.url).origin;
       const chainedSpaceId = rootSpaceId;
       const chainedRunId = pipelineRunId;
       after(async () => {
+        // Outer safety net — every hop below is wrapped in its OWN
+        // soft-fail try/catch, but if anything escapes those (e.g. a
+        // throw in the setup lines, an unexpected unhandled-rejection
+        // from an `after()` handler deeper in the chain, a DB pool
+        // failure), the run would sit in `running` forever because
+        // only strategy-refresh marks the terminal status. This
+        // catches those escapes and marks the run failed so the
+        // client sees a proper end state instead of an endless spinner.
+        try {
+        // ── Hop 0: why-chain-deepen (LLM, adds causal depth) ──────
+        //
+        // Before the root-tracer can find keystone causes, the causal
+        // subgraph has to actually HAVE depth. Hierarchical decomp
+        // produces threads but stops there; without this hop, the
+        // backward BFS that runs in root-trace terminates after 1-2
+        // hops at most and the fan-in diagram never materializes.
+        // One LLM call per selected thread (default 6 threads, cap 20);
+        // each call generates a 3-level tree of drivers. 120s timeout
+        // because 6 concurrent-3 LLM calls at reasoning tier can take
+        // 60-90s realistically. SOFT-FAIL: if this whole hop dies,
+        // root-trace just runs on the shallower graph — no regression
+        // vs the pre-deepener behavior.
+        try {
+          const wcCtrl = new AbortController();
+          const wcTimeout = setTimeout(() => wcCtrl.abort(), 120_000);
+          await fetch(`${origin}/api/pipeline/decompose-why-chain`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              space_id: chainedSpaceId,
+              run_id: chainedRunId,
+              max_threads: 6,
+              concurrency: 3,
+            }),
+            signal: wcCtrl.signal,
+          });
+          clearTimeout(wcTimeout);
+        } catch (wcErr) {
+          console.warn("[synthesize] why-chain-deepen soft-fail:", wcErr);
+        }
+
+        // ── Hop 0.5: audit-edges (independent edge reviewer) ──────
+        //
+        // Now that why-chain has added the final round of causal
+        // edges, invoke the edge-auditor agent to endorse/dispute
+        // every edge in the space. Output lands in edges.agent_feedback
+        // JSONB (no schema changes to the consuming stages), and the
+        // strategizer uses agent-level consensus as a signal later.
+        //
+        // SOFT-FAIL: if auditor collapses, downstream stages don't
+        // care — agent_feedback stays empty {}, signals fall back to
+        // the default single-perspective behavior. 60s timeout
+        // covers a space with ~300 edges at 70 per LLM batch with
+        // concurrency 3.
+        try {
+          const auditCtrl = new AbortController();
+          const auditTimeout = setTimeout(() => auditCtrl.abort(), 60_000);
+          await fetch(`${origin}/api/pipeline/audit-edges`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              space_id: chainedSpaceId,
+              run_id: chainedRunId,
+            }),
+            signal: auditCtrl.signal,
+          });
+          clearTimeout(auditTimeout);
+        } catch (auditErr) {
+          console.warn("[synthesize] audit-edges soft-fail:", auditErr);
+        }
+
+        // ── Hop 1: root-trace (backward BFS, pure structure) ──────
+        //
+        // Now has the driver-deepened graph to walk. Writes
+        // causal_depth + converges_chains onto entities so the
+        // strategizer's root-cause signals (convergence_count,
+        // causal_depth_normalized) have non-null input. No LLM; 5s
+        // timeout is plenty for the BFS + persist loop.
+        try {
+          const rootCtrl = new AbortController();
+          const rootTimeout = setTimeout(() => rootCtrl.abort(), 8000);
+          await fetch(`${origin}/api/pipeline/root-trace`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              space_id: chainedSpaceId,
+              run_id: chainedRunId,
+              top_n: 10,
+            }),
+            signal: rootCtrl.signal,
+          });
+          clearTimeout(rootTimeout);
+        } catch (rootErr) {
+          console.warn("[synthesize] root-trace soft-fail:", rootErr);
+        }
+
+        // ── Hop 2: materialize-signatures (seed only, no LLM) ─────
+        //
+        // Runs first because the strategizer reads NodeSignature.basis
+        // for uncertainty + controllability signals. Without this,
+        // 2/9 signals return null and the ranker silently degrades.
+        // 8s timeout is generous — seeding a few hundred entities
+        // takes single-digit seconds with no model calls.
+        try {
+          const sigCtrl = new AbortController();
+          const sigTimeout = setTimeout(() => sigCtrl.abort(), 8000);
+          await fetch(`${origin}/api/pipeline/materialize-signatures`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              space_id: chainedSpaceId,
+              run_id: chainedRunId,
+            }),
+            signal: sigCtrl.signal,
+          });
+          clearTimeout(sigTimeout);
+        } catch (sigErr) {
+          console.warn("[synthesize] materialize-signatures soft-fail:", sigErr);
+        }
+
+        // ── Hop 3: space-strategizer (plans work into queue) ──────
+        //
+        // Depends on signatures from Hop 1. Soft-fails with
+        // strategy-refresh still running if the plan can't be built.
+        // 15s timeout accounts for the one LLM call (~4s) plus
+        // signal computation (sub-second for normal space sizes).
+        try {
+          const planCtrl = new AbortController();
+          const planTimeout = setTimeout(() => planCtrl.abort(), 15000);
+          await fetch(`${origin}/api/pipeline/space-strategizer`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              space_id: chainedSpaceId,
+              run_id: chainedRunId,
+              budget_tokens: 4000,
+            }),
+            signal: planCtrl.signal,
+          });
+          clearTimeout(planTimeout);
+        } catch (planErr) {
+          console.warn("[synthesize] space-strategizer soft-fail:", planErr);
+        }
+
+        // ── Hop 4: strategy-refresh (terminal user-facing hop) ────
         const ctrl = new AbortController();
         const handoffTimeout = setTimeout(() => ctrl.abort(), 10000);
         try {
@@ -2226,7 +2592,9 @@ REQUIREMENTS FOR THIS PASS:
             },
             body: JSON.stringify({
               spaceId: chainedSpaceId,
-              deferApps: true,
+              // Auto-chain materializes apps directly — no confirm gate
+              // (pipeline audit 2026-04-24).
+              deferApps: false,
               existingRunId: chainedRunId,
               reservationId,
             }),
@@ -2246,6 +2614,25 @@ REQUIREMENTS FOR THIS PASS:
               `handoff failed: ${advanceErr instanceof Error ? advanceErr.message : String(advanceErr)}`,
             ).catch((finalizeErr) => {
               console.warn("[synthesize] completePipelineRun(failed) after handoff threw:", finalizeErr);
+            });
+          }
+        }
+        } catch (outerErr) {
+          // Outer safety net. Something escaped every hop's soft-fail
+          // wrapper — likely a setup-line throw or a deep unhandled
+          // rejection. Mark the run failed so the client unsticks.
+          console.warn("[synthesize] after() chain escape (outer safety net):", outerErr);
+          if (chainedRunId) {
+            await completePipelineRun(
+              db,
+              chainedRunId,
+              "failed",
+              `synthesize chain escape: ${outerErr instanceof Error ? outerErr.message : String(outerErr)}`,
+            ).catch((finalizeErr) => {
+              console.warn(
+                "[synthesize] completePipelineRun(failed) after outer escape threw:",
+                finalizeErr,
+              );
             });
           }
         }
@@ -2271,6 +2658,14 @@ REQUIREMENTS FOR THIS PASS:
       } : null,
       // Strategy auto-chain decision
       chainDecision,
+      // Piece 4 — echo the gate rollup for telemetry. `bypassed` is
+      // true iff the caller forced through a failing gate so audit
+      // can distinguish clean passes from acknowledged overrides.
+      layer_coverage_gate: {
+        pass: gateRollup.pass,
+        bypassed: bypassLayerGate && !gateRollup.pass,
+        reports: gateRollup.reports,
+      },
     });
   } catch (err) {
     console.error("Synthesis error:", err);

@@ -42,6 +42,7 @@ import { buildDefaultManifest } from "./app-manifest-builder";
 import type { AppManifest } from "@/types/app-manifest";
 import type { AppSeed } from "@/types/use-case";
 import { getTemplate } from "@/lib/use-cases/library";
+import type { StructuralEvent } from "@/types/pipeline-events";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -70,6 +71,19 @@ export interface GenerateAppsInput {
   db: SupabaseClient<Database> | any;
   /** Who triggered this generation — 'pipeline:strategy-refresh' typical. */
   triggeredBy: string;
+  /**
+   * Current pipeline run id. When present, the generator emits a
+   * `proposal_ready` structural event per materialized app AFTER the
+   * MC distribution lands on `apps.state.simulation_distribution`.
+   * This is what makes the canvas paint per-app cards live during an
+   * auto-chain run (vs only surfacing them after a page reload that
+   * reads from `apps` directly).
+   *
+   * Null / omitted when the caller has no run context (e.g. manual
+   * app-generation from a user action outside the pipeline). In that
+   * case events are silently skipped — apps still land in the DB.
+   */
+  pipelineRunId?: string | null;
 }
 
 export interface GenerateAppsResult {
@@ -101,6 +115,7 @@ export async function generateAppsAndInterventions(
     mechanismIdsByProposal,
     db,
     triggeredBy,
+    pipelineRunId,
   } = input;
 
   // Code (e.g. "C1", "X3") → entities table UUID lookup.
@@ -178,6 +193,7 @@ export async function generateAppsAndInterventions(
     mechanismIdsByProposal,
     db,
     triggeredBy,
+    pipelineRunId: pipelineRunId ?? null,
   });
 
   // ── Step 2: materialize Interventions from micro_tactics ─────────────
@@ -376,6 +392,9 @@ interface MaterializeAppsArgs {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any;
   triggeredBy: string;
+  /** When present, emit `proposal_ready` per materialized app after the
+   *  MC simulation enrichment lands on apps.state. */
+  pipelineRunId: string | null;
 }
 
 async function materializeApps(args: MaterializeAppsArgs) {
@@ -393,6 +412,7 @@ async function materializeApps(args: MaterializeAppsArgs) {
     mechanismIdsByProposal,
     db,
     triggeredBy,
+    pipelineRunId,
   } = args;
 
   // Build a perspective → entities map so dominant factors can fall back
@@ -646,6 +666,25 @@ async function materializeApps(args: MaterializeAppsArgs) {
   // if the Monte Carlo subgraph fetch fails or the app has no dominant
   // entity, we simply skip that app. Batched state merge avoids N round
   // trips to PostgREST.
+  //
+  // Per-app distribution cache used by the proposal_ready emitter below.
+  // app.id → { p10, p50, p90, mean, stddev, iterations, targetEntityId }
+  // Entries absent for apps with no dominant entity or soft-failed MC —
+  // we emit a distribution-less proposal_ready event in that case so
+  // the canvas still paints a card.
+  const MC_ITERATIONS = 400;
+  const perAppDistribution = new Map<
+    string,
+    {
+      p10: number;
+      p50: number;
+      p90: number;
+      mean?: number;
+      stddev?: number;
+      sampleCount: number;
+      targetEntityId: string;
+    }
+  >();
   if (apps.length > 0) {
     try {
       const { simulateEntityChain } = await import(
@@ -661,18 +700,36 @@ async function materializeApps(args: MaterializeAppsArgs) {
               spaceId,
               targetEntityId,
               depthHops: 3,
-              iterations: 400,
+              iterations: MC_ITERATIONS,
               timesteps: 8,
             });
-            return { app: a, dist: res.targetDistribution };
+            return {
+              app: a,
+              dist: res.targetDistribution,
+              gates: res.gateDecisions,
+              targetEntityId,
+            };
           } catch {
-            return { app: a, dist: null };
+            return { app: a, dist: null, gates: [] };
           }
         }),
       );
       const updates = simResults.filter((r) => r.dist !== null);
-      for (const { app: a, dist } of updates) {
+      for (const { app: a, dist, gates, targetEntityId } of updates) {
         if (!dist) continue;
+        // Persist per-conditional-edge gate verdicts alongside the
+        // distribution so the app detail page can render the audit
+        // panel without re-running the simulation. Snake-cased on the
+        // wire (matches AppState shape conventions); empty arrays are
+        // dropped so legacy rows without gates don't grow noise.
+        const gateRows = (gates ?? []).map((g) => ({
+          source_id: g.sourceId,
+          target_id: g.targetId,
+          gate: g.gate,
+          source: g.source,
+          certainty: g.certainty,
+          condition_text: g.conditionText,
+        }));
         const nextState: AppState = {
           ...asAppState(a.state),
           simulation_distribution: {
@@ -682,6 +739,7 @@ async function materializeApps(args: MaterializeAppsArgs) {
             mean: dist.mean,
             stddev: dist.stddev,
             computed_at: now,
+            ...(gateRows.length > 0 ? { gate_decisions: gateRows } : {}),
           },
         };
         await db
@@ -691,9 +749,114 @@ async function materializeApps(args: MaterializeAppsArgs) {
         // Mirror onto the in-memory row so the caller / memory indexer
         // sees the enriched state without a second fetch.
         (a as AppRow).state = nextState as unknown as AppRow["state"];
+        // Cache distribution for proposal_ready emission downstream.
+        if (targetEntityId) {
+          perAppDistribution.set(a.id, {
+            p10: dist.p10,
+            p50: dist.p50,
+            p90: dist.p90,
+            mean: dist.mean,
+            stddev: dist.stddev,
+            sampleCount: MC_ITERATIONS,
+            targetEntityId,
+          });
+        }
       }
     } catch (simErr) {
       console.warn("[app-generator] simulation enrichment failed (non-fatal):", simErr);
+    }
+  }
+
+  // ── Per-app proposal_ready emission ──────────────────────────────────
+  //
+  // When the caller passed a pipelineRunId (auto-chain from
+  // strategy-refresh, or generate-apps route with run context), emit one
+  // `proposal_ready` structural event per materialized app so the canvas
+  // live-paints per-app proposal-snapshot cards during the run. This
+  // replaces the post-hoc batch emit that used to live in the
+  // generate-apps route — by emitting from inside the generator we
+  // guarantee the MC distribution (when it exists) rides along on the
+  // event, not just on apps.state where a page reload would be needed
+  // to see it.
+  //
+  // Soft-fail: emission failures are non-fatal. Apps still land in the
+  // DB; users just won't see per-app cards flash during this run.
+  if (pipelineRunId && apps.length > 0) {
+    try {
+      const { emitBatchEvents } = await import(
+        "@/lib/events/structural-event-bus"
+      );
+      const { loadLatestSpaceAxisIndex, resolveAxesForNames, runLevelAxes } =
+        await import("@/lib/pipeline/axes-used-resolver");
+      const axisIndex = await loadLatestSpaceAxisIndex(db, spaceId).catch(
+        () => null,
+      );
+      const spaceRunAxes = axisIndex ? runLevelAxes(axisIndex) : [];
+      const entityIdToName = new Map<string, string>();
+      for (const [code, uuid] of codeToUuid.entries()) {
+        const e = codeToEntity.get(code);
+        if (uuid && e?.name) entityIdToName.set(uuid, e.name);
+      }
+
+      const events: StructuralEvent[] = apps.map((a, idx) => {
+        const dist = perAppDistribution.get(a.id);
+        const cfg = asAppConfig(a.config);
+        const tagline =
+          typeof cfg.tagline === "string" ? cfg.tagline : null;
+
+        // Chain node names — dominant entity UUIDs → names.
+        const names: string[] = [];
+        for (const id of a.dominant_entity_ids ?? []) {
+          const n = entityIdToName.get(id);
+          if (n && !names.includes(n)) names.push(n);
+        }
+        const perAppAxes = axisIndex
+          ? resolveAxesForNames(names, axisIndex)
+          : [];
+        const axesUsed = perAppAxes.length > 0 ? perAppAxes : spaceRunAxes;
+        const chain =
+          names.length > 0
+            ? {
+                nodeNames: names.slice(0, 6),
+                shortId: `E-${idx + 1}`,
+              }
+            : undefined;
+
+        return {
+          type: "proposal_ready",
+          proposalId: a.id,
+          kind: "experiment",
+          title: (a.name ?? "App").slice(0, 200),
+          ...(tagline ? { headline: tagline.slice(0, 220) } : {}),
+          ...(dist
+            ? {
+                distribution: {
+                  p10: dist.p10,
+                  p50: dist.p50,
+                  p90: dist.p90,
+                  ...(dist.mean !== undefined ? { mean: dist.mean } : {}),
+                  ...(dist.stddev !== undefined
+                    ? { stddev: dist.stddev }
+                    : {}),
+                  provenance: "mc_simulation",
+                  sampleCount: dist.sampleCount,
+                },
+                targetEntityId: dist.targetEntityId,
+              }
+            : {}),
+          ...(axesUsed.length > 0 ? { axes_used: axesUsed } : {}),
+          ...(chain ? { chain } : {}),
+        };
+      });
+
+      if (events.length > 0) {
+        await emitBatchEvents(db, pipelineRunId, events);
+      }
+    } catch (emitErr) {
+      console.warn(
+        "[app-generator] proposal_ready emission failed (non-fatal):",
+        emitErr,
+      );
     }
   }
 

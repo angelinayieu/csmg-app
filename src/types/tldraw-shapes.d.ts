@@ -25,6 +25,11 @@ declare module "@tldraw/tlschema" {
       isBottleneck: boolean;
       isConvergence: boolean;
       isGhost: boolean;
+      // P0 #4 — monotonic counter the painter bumps when a preview
+      // (Pass 1 speculative) kg-node upgrades to a real entity. The
+      // view component plays a one-shot saturate+scale pulse so the
+      // transition reads as "confirmed" without moving the card.
+      confirmedPulse: number;
     };
     "sticky-note": {
       w: number;
@@ -143,6 +148,23 @@ declare module "@tldraw/tlschema" {
       p10: number | null;
       p50: number | null;
       p90: number | null;
+      accent: string;
+    };
+    // Project-Overview design pass — reasoning chain ribbon docked
+    // below a proposal-snapshot. Breadcrumb of upstream entity names
+    // → target + signed lift chip. Not persisted; painted live by the
+    // pipeline event painter when proposal_ready events carry a
+    // `chain` field, and cleaned up alongside the snapshot on run
+    // completion.
+    "proposal-chain-ribbon": {
+      w: number;
+      h: number;
+      proposalId: string;
+      kind: "strategy" | "experiment" | "variant";
+      shortId: string;
+      nodeNames: string[];
+      lift: number | null;
+      constraintLabel: string | null;
       accent: string;
     };
     // Phase 2D — universal asset catalog: source card (external
@@ -296,6 +318,38 @@ declare module "@tldraw/tlschema" {
       multiplier: number | null;
       firstEntityId: string | null;
     };
+    // Lineage root — the user's intake prompt painted as a tldraw shape
+    // so kg-formation (and everything downstream) can tether UP to it.
+    // Replaces the prior chrome CanvasOriginCard so arrows actually
+    // terminate on the prompt and the canvas reads as a tree.
+    "origin-prompt": {
+      w: number;
+      h: number;
+      promptText: string;
+      runActive: boolean;
+      accent: string;
+    };
+    // Per-axis intake lens card (ACTORS / TIMELINE / CULTURAL / …).
+    // Painted by the pipeline painter on `space_opened` and updated on
+    // entity_added / edge_added / merge / scored events. Replaces the
+    // prior chrome ProbabilitySpaceRail so shells pan with the canvas
+    // and stop eating drags that should have reached tldraw.
+    "probability-space-shell": {
+      w: number;
+      h: number;
+      spaceKey: string;
+      axis: string;
+      label: string;
+      tagline: string;
+      accent: string;
+      rationale: string;
+      orderIndex: number;
+      entitiesJson: string;
+      edgesJson: string;
+      merging: boolean;
+      scoreJson: string;
+      pulse: number;
+    };
     // Project-Overview design pass — live KG formation card. Painted at
     // top of canvas during a run; mutated in place as entity/edge events
     // stream; deleted on run completion.
@@ -306,7 +360,216 @@ declare module "@tldraw/tlschema" {
       edgeCount: number;
       hubCount: number;
       hubsJson: string;
+      hubEdgesJson: string;
       pulse: number;
+      accent: string;
+    };
+    // VP Project report (Phase 3, Batch 2e) — variant flashcard painted
+    // live by the pipeline-event-painter when a `variant_proposed` event
+    // fires from the writer-path run. Run-scoped ghost; canonical row
+    // lives in `experiment_variants`.
+    "variant-card": {
+      w: number;
+      h: number;
+      variantId: string;
+      spaceId: string;
+      appId: string | null;
+      label: string;
+      status: string;
+      summary: string | null;
+      shortId: string | null;
+      situationKey: string | null;
+      aggregateQuality: number | null;
+      aggregateLift: number | null;
+      accent: string;
+    };
+    // VP Project report (Phase 3) — independent-variable taxonomy card.
+    // Painted once per run at tail of intake when the domain-inferrer
+    // emits `taxonomy_inferred`. Cleared on run completion alongside
+    // the other ghost shapes.
+    "taxonomy-card": {
+      w: number;
+      h: number;
+      taxonomyId: string | null;
+      spaceId: string;
+      domainKey: string;
+      artifactNoun: string;
+      variantNoun: string;
+      situationNoun: string;
+      slotsJson: string;
+      confidence: number;
+      accent: string;
+    };
+    // Root-cause tree — Kaufman-style fan-in diagram painted live by the
+    // pipeline event painter on `root_cause_identified` (backward BFS from
+    // goals) and updated on `why_chain_deepened` (driver counter refresh).
+    // One per space — upserts on re-emission. Nodes + edges packed as JSON
+    // strings so tldraw's prop validation stays flat.
+    "root-cause-tree": {
+      w: number;
+      h: number;
+      spaceId: string;
+      title: string;
+      goalEntityIds: string[];
+      goalNames: string[];
+      nodesJson: string;
+      edgesJson: string;
+      reachableCount: number;
+      convergencePoints: number;
+      rootCandidates: number;
+      driversTotal: number;
+      userControllableCount: number;
+      accent: string;
+      version: number;
+    };
+    // Sprint A — wrap-what-exists pass: downstream reality heatmap.
+    // Pre-built widget from /apps/widgets wrapped as a tldraw shape so
+    // the painter can drop it during the downstream band of the unfurl.
+    "downstream-reality": {
+      w: number;
+      h: number;
+      spaceId: string;
+      appId: string | null;
+      title: string | null;
+      realityJson: string;
+      variantsJson: string;
+      taxonomyJson: string;
+      accent: string;
+      version: number;
+    };
+    // Sprint A — wrap-what-exists pass: IV decomposition rings.
+    "iv-decomposition": {
+      w: number;
+      h: number;
+      spaceId: string;
+      appId: string | null;
+      title: string | null;
+      dense: boolean;
+      variantJson: string;
+      taxonomyJson: string;
+      accent: string;
+      version: number;
+    };
+    // Sprint A — wrap-what-exists pass: variant carousel (3D coverflow).
+    "variant-carousel": {
+      w: number;
+      h: number;
+      spaceId: string;
+      appId: string | null;
+      title: string | null;
+      variantsJson: string;
+      taxonomyJson: string;
+      accent: string;
+      version: number;
+    };
+    // Sprint A — wrap-what-exists pass: single causal-chain stage card.
+    // Painter drops one per stage; arrows between them form the chain.
+    "stage-node": {
+      w: number;
+      h: number;
+      spaceId: string;
+      chainId: string;
+      chainName: string;
+      chainRank: number;
+      stageIndex: number;
+      kind:
+        | "concept"
+        | "research"
+        | "deliverable"
+        | "application"
+        | "outcome"
+        | "goal";
+      title: string;
+      meta: string;
+      confidence: number | null;
+      verified: boolean;
+      valueLabel: string | null;
+      entityId: string | null;
+      isTerminal: boolean;
+      convergingCount: number | null;
+    };
+    // Asset card — chip per ingested file painted at top-of-canvas
+    // alongside the origin-prompt. Spawned from `asset_added` events.
+    "asset-card": {
+      w: number;
+      h: number;
+      assetId: string;
+      spaceId: string;
+      sourceName: string;
+      assetClass:
+        | "research_pdf"
+        | "internal_doc"
+        | "dataset"
+        | "image_diagram"
+        | "prior_analysis"
+        | "spec_sheet"
+        | "web_article"
+        | "pasted_text";
+      charCount: number;
+      accent: string;
+      uploadedAt: string;
+    };
+    // Situation card — current-state baseline. Five-section render
+    // (inputs / process / outputs / knowns / unknowns) plus an
+    // uncertainty pill. Spawned from `situation_analyzed` events.
+    "situation-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      uncertaintyScore: number;
+      inputsCount: number;
+      processStepsCount: number;
+      outputsCurrentCount: number;
+      outputsTargetCount: number;
+      knownsCount: number;
+      unknownsCount: number;
+      assetCount: number;
+      skippedReason: string;
+      accent: string;
+      version: number;
+    };
+    // Synthesis intersection card — the canvas's final-ranking
+    // anchor. Painted once per run after axes complete; proposals
+    // fork off this card instead of off individual entity ghosts.
+    // Data is derived from painter state (axis shells × entities)
+    // so no extra DB query is needed.
+    "synthesis-intersection-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      title: string;
+      totalAxes: number;
+      rowsJson: string;
+      appsProposedCount: number;
+      isComputing: boolean;
+      accent: string;
+      version: number;
+    };
+    // 5-column experiment-design card. Painted alongside the
+    // proposal-snapshot for kind="experiment" proposal_ready events.
+    // Lays out IV / DV / Control / Process / Results columns plus an
+    // editable hypothesis row, giving the canvas a single cohesive
+    // surface in experimental-design vocabulary. Run-scoped ghost —
+    // cleaned up alongside the snapshot + chain ribbon on run
+    // completion.
+    "experiment-design-card": {
+      w: number;
+      h: number;
+      proposalId: string;
+      appId: string | null;
+      title: string;
+      hypothesis: string;
+      ivNames: string[];
+      dvName: string | null;
+      controlLabel: string;
+      processChain: string[];
+      identifyKind: string;
+      refuteVerdict: string;
+      p10: number | null;
+      p50: number | null;
+      p90: number | null;
+      distributionProvenance: string;
+      distributionSampleCount: number | null;
       accent: string;
     };
     // Phase A1.2 — universal asset catalog: app card.

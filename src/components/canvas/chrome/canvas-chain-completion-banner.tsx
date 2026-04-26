@@ -28,7 +28,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Loader2, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useStructuralEventStream } from "../hooks/use-structural-event-stream";
+import { useRunEventStore } from "../hooks/run-event-store";
 import { useSpaceData } from "@/contexts/space-data-context";
 
 export interface CanvasChainCompletionBannerProps {
@@ -48,7 +48,7 @@ export function CanvasChainCompletionBanner({
   spaceId,
 }: CanvasChainCompletionBannerProps) {
   const router = useRouter();
-  const { status, events } = useStructuralEventStream(runId);
+  const { status, events } = useRunEventStore();
   const spaceData = useSpaceData();
   const strategyApproved = spaceData?.strategyApproved ?? false;
 

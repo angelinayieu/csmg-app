@@ -199,6 +199,27 @@ export function JiraLogo() {
   );
 }
 
+export function GoogleSheetsLogo() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-[22px] h-[22px]">
+      <path d="M7 2 H14 L19 7 V21 a1 1 0 0 1 -1 1 H7 a1 1 0 0 1 -1 -1 V3 a1 1 0 0 1 1 -1 Z" fill="#0f9d58"/>
+      <path d="M14 2 V7 H19 Z" fill="#87ceac"/>
+      <rect x="8" y="10" width="8" height="8" rx="0.6" fill="none" stroke="white" strokeWidth="1"/>
+      <path d="M8 13 H16 M8 16 H16 M11 10 V18 M14 10 V18" stroke="white" strokeWidth="0.9"/>
+    </svg>
+  );
+}
+
+export function AirtableLogo() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-[22px] h-[22px]">
+      <path d="M12 3 L2 7 L12 11 L22 7 Z" fill="#fcb400"/>
+      <path d="M2 8.5 V17 L11 21 V12.5 Z" fill="#18bfff"/>
+      <path d="M22 8.5 V17 L13 21 V12.5 Z" fill="#f82b60"/>
+    </svg>
+  );
+}
+
 export function DropboxLogo() {
   return (
     <svg viewBox="0 0 24 24" className="w-[22px] h-[22px]">

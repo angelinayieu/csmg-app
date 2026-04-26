@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { llmJSON } from "@/lib/llm";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { getObjectiveDetectionPrompt } from "@/lib/prompts/objective-detection";
@@ -564,6 +564,11 @@ export async function POST(request: Request) {
           mechanismIdsByProposal: wireResult.mechanismIdsByProposal,
           db,
           triggeredBy: `user:${user.id}:confirm`,
+          // Confirm path has no pipeline run in flight — user is
+          // manually confirming a previously-generated strategy. Apps
+          // still land in the DB; they just don't fire per-app
+          // proposal_ready events (nothing to listen on).
+          pipelineRunId: null,
         });
         confirmAppsResult = {
           apps_created: result.apps_created,
@@ -1689,6 +1694,76 @@ export async function POST(request: Request) {
       console.warn("[strategy-refresh] learning context build failed:", err);
     }
 
+    // Root-cause intervention candidates — extract the top user-
+    // controllable causal drivers from allEntities in-memory (they
+    // were already loaded with everything else on line 1170). The why-
+    // chain deepener stamps `entity_type="causal_driver"` and a
+    // `provenance.stop_reason` field; the root-tracer writes back the
+    // `converges_chains` array per entity. Together these let us pick
+    // the drivers that are BOTH actionable (user-controllable) AND
+    // high-leverage (converge through multiple goal chains).
+    //
+    // Soft-fail: if the deepener didn't run (empty array) or the
+    // provenance shape is malformed, we pass an empty list and the
+    // strategy engine's block collapses out. The rest of the pipeline
+    // is unaffected.
+    //
+    // Shared across all per-objective strategy calls in this refresh —
+    // the candidates are space-level (not goal-level), so re-extracting
+    // per objective would be waste.
+    type DriverProvenance = {
+      source?: string;
+      stop_reason?: string;
+      cause_level?: number;
+      why_it_causes?: string;
+      polarity?: string;
+    };
+    const interventionCandidates = allEntities
+      .filter((e) => {
+        if (e.entity_type !== "causal_driver") return false;
+        const prov = (e.provenance ?? null) as DriverProvenance | null;
+        if (!prov || prov.source !== "why_chain") return false;
+        return prov.stop_reason === "user_controllable";
+      })
+      .map((e) => {
+        const prov = (e.provenance ?? {}) as DriverProvenance;
+        // converges_chains lives on entities but isn't in the older
+        // database.types.ts generated schema — cast narrowly here.
+        const converges = ((e as unknown as { converges_chains?: string[] })
+          .converges_chains ?? []) as string[];
+        const rawLevel =
+          typeof prov.cause_level === "number" ? prov.cause_level : 1;
+        const causeLevel: 1 | 2 | 3 =
+          rawLevel === 2 ? 2 : rawLevel === 3 ? 3 : 1;
+        const polarity: "positive" | "negative" | "ambiguous" =
+          prov.polarity === "positive" || prov.polarity === "negative"
+            ? prov.polarity
+            : "ambiguous";
+        return {
+          name: e.name,
+          convergesCount: converges.length,
+          causeLevel,
+          polarity,
+          whyItCauses: prov.why_it_causes ?? "",
+          confidence: typeof e.confidence === "number" ? e.confidence : 0.5,
+        };
+      })
+      // Rank: convergence desc first (multi-goal leverage dominates),
+      // then confidence desc (model's own certainty), then shallower
+      // (proximate) causes first — proximate drivers are closer to the
+      // action surface and usually easier to justify touching.
+      .sort((a, b) => {
+        if (a.convergesCount !== b.convergesCount)
+          return b.convergesCount - a.convergesCount;
+        if (Math.abs(a.confidence - b.confidence) > 0.05)
+          return b.confidence - a.confidence;
+        return a.causeLevel - b.causeLevel;
+      })
+      // Cap at 6 so the prompt stays scannable. Drivers beyond the top
+      // 6 rarely shift the recommendation — convergence counts tail off
+      // fast after the keystone drivers.
+      .slice(0, 6);
+
     // Strategy silent-zone heartbeat. generateMultiStepStrategy runs
     // Diagnose → Synthesize → Verify (3 LLM calls) + MC sim per
     // strategy = 60-120s typical. Without this the HUD sits on
@@ -1735,6 +1810,10 @@ export async function POST(request: Request) {
             // final strategy prompt names actual entities that serve
             // this goal.
             activeGoalServedByEntities: objective?.served_by_entities,
+            // Root-cause levers — user-controllable drivers that
+            // converge through multiple goal chains. Shared across
+            // all objectives in this refresh (space-level signal).
+            interventionCandidates,
           });
           return { objective, goal, result };
         }),
@@ -2201,6 +2280,10 @@ export async function POST(request: Request) {
         mechanismIdsByProposal: wireResult.mechanismIdsByProposal,
         db,
         triggeredBy: "pipeline:strategy-refresh",
+        // Auto-chain path — thread the live run id so the generator
+        // emits per-app `proposal_ready` events with MC distributions
+        // as each app materializes. The canvas live-paints the cards.
+        pipelineRunId,
       });
       appsGeneration = {
         apps_created: appsResult.apps_created,
@@ -2212,6 +2295,80 @@ export async function POST(request: Request) {
       console.log(
         `[strategy-refresh] Materialized ${appsResult.apps_total} apps (${appsResult.apps_created} new) + ${appsResult.interventions_total} interventions for space ${spaceId}`
       );
+
+      // ── Fire writer-path for each new app (pipeline audit 2026-04-24) ──
+      //
+      // The `/api/pipeline/generate-apps` route already fires writer-path
+      // for its newly-created apps, but strategy-refresh calls the
+      // `generateAppsAndInterventions` library directly — which means
+      // writer-path was never kicked off in the auto-chain. Users never
+      // saw variant carousel / downstream-reality / iv-decomposition
+      // cards on canvas during a normal run.
+      //
+      // Mirror the generate-apps route's writer-path fan-out here:
+      // space-level variants + per-app variants for the 3 most-recent
+      // apps. Fire-and-forget via `void fetch` so the user gets the
+      // strategy response immediately; variants stream into the
+      // carousel over ~15-30s.
+      if (appsResult.apps_total > 0) {
+        try {
+          const cookieHeader = request.headers.get("cookie") ?? "";
+          const origin = new URL(request.url).origin;
+          // Space-level variants (champion template lane).
+          void fetch(`${origin}/api/pipeline/writer-path`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              spaceId,
+              triggeredBy: "pipeline:strategy-refresh",
+              variantCount: 4,
+            }),
+          }).catch((err) =>
+            console.warn(
+              "[strategy-refresh] writer-path kickoff (space) failed:",
+              err,
+            ),
+          );
+
+          // Per-app variants for the 3 most-recent apps.
+          const runStartIso = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+          const { data: recentApps } = await db
+            .from("apps")
+            .select("id")
+            .eq("space_id", spaceId)
+            .gte("updated_at", runStartIso)
+            .order("updated_at", { ascending: false })
+            .limit(3);
+          for (const a of ((recentApps ?? []) as Array<{ id: string }>)) {
+            void fetch(`${origin}/api/pipeline/writer-path`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Cookie: cookieHeader,
+              },
+              body: JSON.stringify({
+                spaceId,
+                appId: a.id,
+                triggeredBy: `pipeline:strategy-refresh:app:${a.id}`,
+                variantCount: 3,
+              }),
+            }).catch((err) =>
+              console.warn(
+                `[strategy-refresh] writer-path kickoff (app ${a.id}) failed:`,
+                err,
+              ),
+            );
+          }
+        } catch (writerErr) {
+          console.warn(
+            "[strategy-refresh] writer-path fan-out block threw (non-critical):",
+            writerErr,
+          );
+        }
+      }
 
       // ── Sprint 4: strategy_regen staleness ──
       // When the strategy is re-generated (not just created), flag every
@@ -2432,7 +2589,20 @@ export async function POST(request: Request) {
       const targetUuid = preferredCode ? codeToUuid.get(preferredCode) : undefined;
 
       let distribution:
-        | { p10: number; p50: number; p90: number; mean?: number; stddev?: number }
+        | {
+            p10: number;
+            p50: number;
+            p90: number;
+            mean?: number;
+            stddev?: number;
+            provenance?:
+              | "mc_simulation"
+              | "bootstrap"
+              | "llm_estimate"
+              | "composite_computed"
+              | "ode_rk4";
+            sampleCount?: number | null;
+          }
         | undefined;
 
       // Phase 2G · research-first priors check. Before Monte Carlo,
@@ -2494,6 +2664,13 @@ export async function POST(request: Request) {
               p90: sim.targetDistribution.p90,
               mean: sim.targetDistribution.mean,
               stddev: sim.targetDistribution.stddev,
+              // Provenance — this came from a real Monte Carlo run via
+              // simulateEntityChain (500 iterations, seeded). The UI
+              // can now distinguish this from LLM-self-reported
+              // distributions that might reach the proposal card via
+              // other code paths.
+              provenance: "mc_simulation",
+              sampleCount: 500,
             };
             distributionByRank.set(r.rank ?? i + 1, distribution);
             // Upgrade grounding tier based on evidence backing:
@@ -2540,6 +2717,160 @@ export async function POST(request: Request) {
       const axesUsed =
         perStrategyAxes.length > 0 ? perStrategyAxes : runAxes;
 
+      // Project-Overview design pass — build the reasoning-chain
+      // summary for the companion ribbon. supportingNames already
+      // captures the upstream entities the strategy leans on (via
+      // entity_references[] + key_decision.supporting_entities[]);
+      // the target entity's name caps the breadcrumb so the ribbon
+      // reads upstream → ... → target. Dedupe in case the target
+      // name also shows up in supporting (small-graph runs).
+      const targetName = targetUuid ? uuidToName.get(targetUuid) : null;
+      const chainNodeNames: string[] = [];
+      for (const n of supportingNames) {
+        if (n && !chainNodeNames.includes(n)) chainNodeNames.push(n);
+      }
+      if (targetName && !chainNodeNames.includes(targetName)) {
+        chainNodeNames.push(targetName);
+      }
+      // Constraint label: pull from the strategy's key_decision if the
+      // LLM surfaced one — a short tag like "throughput" / "latency"
+      // works, anything longer gets truncated so it fits the ribbon
+      // without wrap. Falls through to null when not present.
+      const rawConstraint =
+        (r.recommendation?.key_decision as { constraint?: unknown } | undefined)
+          ?.constraint;
+      const constraintLabel =
+        typeof rawConstraint === "string" && rawConstraint.trim()
+          ? rawConstraint.trim().slice(0, 18)
+          : undefined;
+      const chain =
+        chainNodeNames.length > 0
+          ? {
+              nodeNames: chainNodeNames.slice(0, 6),
+              shortId: `S-${r.rank ?? i + 1}`,
+              ...(distribution ? { lift: distribution.p50 } : {}),
+              ...(constraintLabel ? { constraintLabel } : {}),
+            }
+          : undefined;
+
+      // ── R5 Phase A · P4 — DoWhy 4-field causal contract ─────────
+      //
+      // When we have both a lever (first supporting entity UUID that
+      // isn't the target) AND a target AND the MC ran, compute the
+      // full model/identify/estimate/refute bundle. Each field is a
+      // real computed artifact:
+      //   - model + identify — pure graph analysis
+      //   - estimate — mirrors the MC distribution above
+      //   - refute — runs a SECOND MC with a random non-path entity
+      //     as the lever. If placebo lift ≈ real lift, the effect
+      //     isn't specific; verdict fails.
+      //
+      // Soft-fail: any step throwing leaves `dowhy` undefined and the
+      // emit falls back to the legacy distribution-only shape.
+      let dowhyContract:
+        | import("@/types/dowhy").DoWhyContract
+        | undefined;
+      if (targetUuid && distribution && supportingCodes.length > 0) {
+        try {
+          // Lever: first supporting-entity UUID that isn't the target.
+          let leverUuid: string | null = null;
+          for (const code of supportingCodes) {
+            const uuid = codeToUuid.get(code);
+            if (uuid && uuid !== targetUuid) {
+              leverUuid = uuid;
+              break;
+            }
+          }
+          if (leverUuid) {
+            const { computeCausalIdentification } = await import(
+              "@/lib/dowhy/causal-identification"
+            );
+            const { computePlaceboRefutation } = await import(
+              "@/lib/dowhy/placebo-refutation"
+            );
+            const { simulateVariantLift } = await import(
+              "@/lib/simulation/simulate-variant-lift"
+            );
+
+            // Load the full subgraph for the identification step.
+            // This is a second fetch vs the MC's scope (lighter — we
+            // just need entity ids + edge source/target/polarity/
+            // strength/confidence). Acceptable cost once per ranked
+            // strategy.
+            const [entsRes, edgesRes] = await Promise.all([
+              db
+                .from("entities")
+                .select("id, name, confidence")
+                .eq("space_id", spaceId),
+              db
+                .from("edges")
+                .select(
+                  "id, source_entity_id, target_entity_id, polarity, strength, confidence",
+                )
+                .eq("space_id", spaceId),
+            ]);
+
+            const identified = computeCausalIdentification({
+              leverEntityId: leverUuid,
+              targetEntityId: targetUuid,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              entities: (entsRes.data ?? []) as any,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              edges: (edgesRes.data ?? []) as any,
+            });
+
+            // Run the real variant lift — needed both as the estimate
+            // AND as the real-lift reference for the placebo refute.
+            // Fixed magnitude (0.5σ) matches simulate-variant-lift's
+            // default so the placebo comparison is apples-to-apples.
+            const PERTURBATION = 0.5;
+            const REFUTE_SEED = 42;
+            const realLiftResult = await simulateVariantLift(db, {
+              spaceId,
+              leverEntityId: leverUuid,
+              targetEntityId: targetUuid,
+              perturbationMagnitude: PERTURBATION,
+              seed: REFUTE_SEED,
+              iterations: 300,
+            });
+
+            if (realLiftResult.error === null) {
+              const refute = await computePlaceboRefutation(db, {
+                spaceId,
+                realLiftResult,
+                pathEntityIds: identified.model.pathEntityIds,
+                perturbationMagnitude: PERTURBATION,
+                seed: REFUTE_SEED,
+                iterations: 300,
+              });
+
+              dowhyContract = {
+                model: identified.model,
+                identify: identified.identify,
+                estimate: {
+                  pointEstimate: distribution.p50,
+                  lowerCI: distribution.p10,
+                  upperCI: distribution.p90,
+                  stddev:
+                    typeof distribution.stddev === "number"
+                      ? distribution.stddev
+                      : 0,
+                  sampleCount: distribution.sampleCount ?? 500,
+                  provenance: "mc_simulation",
+                },
+                refute,
+                computedAt: new Date().toISOString(),
+              };
+            }
+          }
+        } catch (dowhyErr) {
+          console.warn(
+            `[strategy-refresh] DoWhy contract for strategy ${r.rank ?? i + 1} failed (non-fatal):`,
+            dowhyErr,
+          );
+        }
+      }
+
       await emitStructuralEvent(db, pipelineRunId, {
         type: "proposal_ready",
         proposalId: `${spaceId}-strat-${r.rank ?? i + 1}-${Date.now()}`,
@@ -2550,6 +2881,8 @@ export async function POST(request: Request) {
         ...(distribution ? { distribution } : {}),
         ...(targetUuid ? { targetEntityId: targetUuid } : {}),
         ...(axesUsed.length > 0 ? { axes_used: axesUsed } : {}),
+        ...(chain ? { chain } : {}),
+        ...(dowhyContract ? { dowhy: dowhyContract } : {}),
       });
 
       // Persist the simulation to prediction_ledger + emit
@@ -2688,6 +3021,20 @@ export async function POST(request: Request) {
     }
 
     await completePipelineRun(db, pipelineRunId, "completed");
+
+    // ── POST-RUN MEMORY WRITE-BACK ─────────────────────────────────
+    // Fire-and-forget — index the space's entities + synthesis summary
+    // into memory_items so future decompositions can retrieve them via
+    // semantic search. Runs after the response is sent so the user
+    // never waits on embedding API latency. Soft-fail only.
+    after(async () => {
+      try {
+        const { writeSpaceMemory } = await import("@/lib/memory/write-back");
+        await writeSpaceMemory(db, spaceId, user.id);
+      } catch (memErr) {
+        console.warn("[strategy-refresh] memory write-back failed:", memErr);
+      }
+    });
 
     // ── TERMINAL COMMIT ── Strategy-refresh is the last hop of the
     // auto-advance chain. The full pipeline succeeded: deduct the

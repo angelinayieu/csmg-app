@@ -43,9 +43,25 @@ import {
   emitBatchEvents,
   completePipelineRun,
 } from "@/lib/events/structural-event-bus";
+import { materializeAndEmitSignatures } from "@/lib/pipeline/materialize-signatures";
 import type { StructuralEvent } from "@/types/pipeline-events";
 
 export const maxDuration = 300; // Deep tier: 2 large LLM passes, up to 50 entities + full manifold
+
+// ── Pass 2 fallback-used signal (2026-04-24 stall fix) ─────────────
+//
+// `structureDecompositionJSON` can silently return the pre-built
+// fallback when both LLM retries throw (line ~111). Without a signal,
+// the caller can't distinguish "LLM worked, 0 entities validly
+// extracted" from "LLM blew up twice, we gave up". That distinction
+// matters for the HUD — the silent-fallback case should surface a
+// "⚠ structuring failed" heartbeat just like Pass 1 does on throw.
+//
+// We thread a mutable signal object through instead of adding a
+// second return value, so the existing 30+ call-site expression
+// (`parsed = pass1Failed ? ... : await structureDecompositionJSON(...)`)
+// keeps working as a single expression.
+interface Pass2Signal { fellBack: boolean }
 
 async function structureDecompositionJSON(opts: {
   decompositionText: string;
@@ -55,6 +71,7 @@ async function structureDecompositionJSON(opts: {
   fallbackName?: string;
   fallbackDescription?: string;
   extraGuidance?: string;
+  signal?: Pass2Signal;
 }): Promise<StructuredDecomposition> {
   // Extract Tier 3 annotations (topology / dynamics / conditions / strength) from
   // the Pass 1 prose via regex scan, then inject them as a preservation hint.
@@ -107,6 +124,7 @@ async function structureDecompositionJSON(opts: {
         "[decompose] Structuring exhausted both retries; using fallback decomposition:",
         strictErr,
       );
+      if (opts.signal) opts.signal.fellBack = true;
       return fallback;
     }
   }
@@ -158,6 +176,10 @@ export async function POST(request: Request) {
   // and refunds. Undefined = manual caller that bypassed bootstrap
   // (e.g., dashboard retry button) — no reservation to manage.
   let reservationId: string | undefined;
+  // Memory settings — optional. When present and enabled, a semantic
+  // search against the user's memory_items runs before Pass 1 and the
+  // top-k hits are injected into the system prompt as prior context.
+  let memorySettings: import("@/lib/brainstorm/brainstorm-settings").MemorySettings | undefined;
 
   try {
     const body = await request.json();
@@ -177,6 +199,11 @@ export async function POST(request: Request) {
     if (typeof body.existingRunId === "string") existingRunId = body.existingRunId;
     if (body.autoAdvance === true) autoAdvance = true;
     if (typeof body.reservationId === "string") reservationId = body.reservationId;
+    // Memory settings — optional, sent by the canvas UI when the user
+    // has opted in. Absent = memory disabled for this run.
+    if (body.memorySettings && typeof body.memorySettings === "object") {
+      memorySettings = body.memorySettings as import("@/lib/brainstorm/brainstorm-settings").MemorySettings;
+    }
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -216,6 +243,34 @@ ${text}`;
       : 12000;
     const structTokens = 16384; // Always max for structured JSON output
 
+    // ── Memory pre-retrieval ──────────────────────────────────────────
+    // When the user has opted into "memory from past work", query their
+    // memory_items table for semantically similar prior context and
+    // prepend it to the Pass 1 system prompt. Soft-fail — a retrieval
+    // hiccup must never block the decomposition.
+    let memoryPromptBlock: string | null = null;
+    let memoryItemCount = 0;
+    let memoryTokenEstimate = 0;
+    if (memorySettings?.enabled) {
+      try {
+        const { queryMemoryForDecomposition } = await import("@/lib/memory/retrieve");
+        const memCtx = await queryMemoryForDecomposition(
+          db,
+          text,
+          user.id,
+          memorySettings,
+          existingSpaceId,
+        );
+        if (memCtx) {
+          memoryPromptBlock = memCtx.promptBlock;
+          memoryItemCount = memCtx.itemCount;
+          memoryTokenEstimate = memCtx.tokenEstimate;
+        }
+      } catch (memErr) {
+        console.warn("[decompose] memory pre-retrieval failed:", memErr);
+      }
+    }
+
     // Audit-trail timestamps (run_id assigned at completion after we know final metrics)
     const decomposeStartedAt = new Date().toISOString();
 
@@ -233,7 +288,22 @@ ${text}`;
         phase: "enter",
         message: `Decomposing prompt (${reasoningDepth} reasoning)…`,
       });
+      // Emit memory context signal to the canvas HUD so the user can
+      // see "Drawing on N memories" while the LLM is reasoning.
+      if (memoryItemCount > 0) {
+        await emitStructuralEvent(db, existingRunId, {
+          type: "memory_context_loaded",
+          itemCount: memoryItemCount,
+          tokenEstimate: memoryTokenEstimate,
+        });
+      }
     }
+
+    // Build Pass 1 system prompt — base decomposition prompt optionally
+    // extended with the memory context block when memory is enabled.
+    const pass1SystemPrompt = memoryPromptBlock
+      ? `${getDecompositionPrompt(reasoningDepth)}\n\n${memoryPromptBlock}`
+      : getDecompositionPrompt(reasoningDepth);
 
     // Pass 1: Decomposition (free-form reasoning). STREAMED so the
     // user sees the AI's reasoning as it arrives instead of a 45-90s
@@ -260,6 +330,30 @@ ${text}`;
       // them, but not so frequent that we re-regex a huge buffer every
       // token.
       const PREVIEW_SCAN_EVERY_MS = 1500;
+      // ── Pass 1 timeouts (2026-04-24 stall fix) ──────────────────────
+      //
+      // Previously Pass 1 had NO upper bound. When the LLM provider
+      // hung (not errored — hung), the streaming for-await would sit
+      // indefinitely waiting for the first token. The UI froze on
+      // "Decomposing prompt (standard reasoning)…" with no way to
+      // surface the hang to the user. Two bounds protect against this:
+      //
+      //   • PASS1_HARD_CAP_MS (150s): absolute ceiling on Pass 1 wall
+      //     time. Anthropic's reasoning-depth=deep tier occasionally
+      //     takes 90-120s on legitimate reasoning; 150s leaves
+      //     headroom without becoming a latent forever-hang.
+      //   • PASS1_IDLE_MS (45s): max gap between tokens. The stream
+      //     typically yields sub-second cadence once underway; a 45s
+      //     silence means the connection stalled.
+      //
+      // Either breach throws → caught by the existing pass1Err handler
+      // → emits "⚠ LLM unreachable — showing empty analysis" heartbeat
+      // → falls through to createFallbackDecomposition. The user sees
+      // a visible failure state instead of an invisible infinite spin.
+      const PASS1_HARD_CAP_MS = 150_000;
+      const PASS1_IDLE_MS = 45_000;
+      const pass1Deadline = Date.now() + PASS1_HARD_CAP_MS;
+      let lastTokenAt = Date.now();
       // Preview entities let the main canvas populate DURING Pass 1
       // instead of waiting for Pass 2's batch. We regex candidate names
       // out of the accumulated markdown and emit synthetic entity_added
@@ -274,12 +368,70 @@ ${text}`;
       // for. Edges referencing unknown codes are silently dropped.
       const previewCodeToUuid = new Map<string, string>();
       const previewEdgePairsSeen = new Set<string>();
-      for await (const tokenChunk of llmStream({
-        system: getDecompositionPrompt(reasoningDepth),
+
+      // Iterate the stream manually so we can race each `.next()`
+      // against a timeout. `for await` has no natural timeout hook;
+      // manual iteration + Promise.race is the standard workaround.
+      // On timeout we call iter.return?.() to signal the underlying
+      // stream to stop (SDK implementations of Anthropic + OpenAI both
+      // honor this by closing the HTTP connection), then re-throw to
+      // hit the pass1Err handler.
+      const pass1Stream = llmStream({
+        system: pass1SystemPrompt,
         user: enrichedPrompt,
         maxTokens: decompTokens,
         temperature: 0.3,
-      })) {
+      });
+      const iter = pass1Stream[Symbol.asyncIterator]();
+
+      while (true) {
+        const nowForBudget = Date.now();
+        const hardRemaining = pass1Deadline - nowForBudget;
+        const idleRemaining = PASS1_IDLE_MS - (nowForBudget - lastTokenAt);
+        if (hardRemaining <= 0) {
+          await iter.return?.(undefined).catch(() => {});
+          throw new Error(
+            `Pass 1 exceeded hard cap (${PASS1_HARD_CAP_MS}ms) — LLM stream likely hung.`,
+          );
+        }
+        if (idleRemaining <= 0) {
+          await iter.return?.(undefined).catch(() => {});
+          throw new Error(
+            `Pass 1 idle timeout (${PASS1_IDLE_MS}ms since last token) — LLM stream stalled.`,
+          );
+        }
+        const timeoutMs = Math.min(hardRemaining, idleRemaining);
+
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const timeoutPromise = new Promise<IteratorResult<string>>(
+          (_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("__pass1_timeout__")),
+              timeoutMs,
+            );
+          },
+        );
+
+        let result: IteratorResult<string>;
+        try {
+          result = await Promise.race([iter.next(), timeoutPromise]);
+        } catch (err) {
+          if (timer) clearTimeout(timer);
+          // Timeout fired — ensure the underlying stream is cleaned
+          // up before re-throwing into the pass1Err handler.
+          await iter.return?.(undefined).catch(() => {});
+          if (err instanceof Error && err.message === "__pass1_timeout__") {
+            throw new Error(
+              `Pass 1 timed out after ${timeoutMs}ms of inactivity — LLM stream stalled.`,
+            );
+          }
+          throw err;
+        }
+        if (timer) clearTimeout(timer);
+
+        if (result.done) break;
+        const tokenChunk = result.value;
+        lastTokenAt = Date.now();
         accumulated += tokenChunk;
         const now = Date.now();
         if (runId && now - lastEmitMs >= EMIT_EVERY_MS) {
@@ -368,6 +520,39 @@ ${text}`;
       }
     }
 
+    // ── Pass 1 empty-success guard (2026-04-24 stall fix) ───────────
+    //
+    // Observed failure mode in run c13f5bbf…: the LLM stream sat
+    // silent for 6 minutes then closed cleanly with `done:true` on
+    // the very first `iter.next()` — zero tokens yielded, zero
+    // throws. Pass 1 "completed" with rawDecomposition = "". pass1Err
+    // never fired so pass1Failed stayed false, the "⚠ LLM unreachable"
+    // heartbeat never emitted, and we silently marched to Pass 2 with
+    // empty input.
+    //
+    // Promote this to pass1Failed so downstream paths treat it like
+    // any other LLM outage: visible heartbeat, fallback decomposition,
+    // no wasted structuring LLM call. The new 150s hard cap + 45s
+    // idle timeout should make this case rarer (the stream is now
+    // aborted instead of being allowed to run silent indefinitely),
+    // but belt-and-suspenders: even if those timeouts DON'T fire and
+    // the stream legitimately returns empty, we catch the shape here.
+    if (!pass1Failed && rawDecomposition.length === 0) {
+      pass1Failed = true;
+      console.warn(
+        "[decompose] Pass 1 stream returned zero tokens without throwing — promoting to pass1Failed for fallback path.",
+      );
+      if (runId) {
+        await emitStructuralEvent(db, runId, {
+          type: "stage_boundary",
+          stage: "intake",
+          phase: "enter",
+          message:
+            "⚠ LLM returned empty response — showing empty analysis. Retry when the provider recovers.",
+        });
+      }
+    }
+
     if (runId && !pass1Failed) {
       await emitStructuralEvent(db, runId, {
         type: "stage_boundary",
@@ -406,6 +591,7 @@ ${text}`;
     }
 
     let parsed: StructuredDecomposition;
+    const pass2Signal: Pass2Signal = { fellBack: false };
     try {
       parsed = pass1Failed
         ? createFallbackDecomposition(
@@ -421,9 +607,33 @@ ${text}`;
             fallbackPrefix: spaceConfig?.prefix,
             fallbackName: spaceConfig?.name,
             fallbackDescription: spaceConfig?.description,
+            signal: pass2Signal,
           });
     } finally {
       if (pass2HeartbeatTimer) clearInterval(pass2HeartbeatTimer);
+    }
+
+    // ── Pass 2 silent-fallback heartbeat (2026-04-24 stall fix) ──
+    //
+    // Observed failure mode in run 68274c8f…: Pass 1 returned garbage
+    // tokens (non-empty so the empty-success guard skipped), Pass 2
+    // threw twice trying to parse them to JSON, and
+    // `structureDecompositionJSON` silently returned the pre-built
+    // fallback. The run then emitted "Decomposing: Analysis" → "
+    // Persisting 0 entities…" → kg:exit and the HUD froze mid-intake
+    // with no visible signal of what went wrong.
+    //
+    // When the signal fires, surface the same "⚠ structuring failed"
+    // heartbeat shape as the Pass 1 throw path so the user sees a
+    // concrete retry prompt instead of a soundless stall.
+    if (pass2Signal.fellBack && runId) {
+      await emitStructuralEvent(db, runId, {
+        type: "stage_boundary",
+        stage: "intake",
+        phase: "enter",
+        message:
+          "⚠ Structuring failed (LLM returned unparseable output) — showing empty analysis. Retry when the provider recovers.",
+      });
     }
 
     // Filter low-confidence edges + deduplicate entities
@@ -1103,6 +1313,32 @@ ${enrichedPrompt}`;
         entityIds: Array.isArray(c.entity_ids) ? c.entity_ids : [],
       }));
       await emitBatchEvents(db, runId, cycleEvents);
+    }
+
+    // ── Batch 7 · canonical node signatures ──
+    //
+    // Now that entities, edges, and cycles are all persisted + emitted,
+    // walk each entity and materialize its canonical signature from
+    // the already-persisted KG context. Signatures drive the layered-
+    // ring visual in the three-panel UI. Soft-fail: a failure here
+    // does not abort the stage — worst case is entities render as
+    // bare dots without rings until a re-materialize pass lands.
+    try {
+      const { materialized, emitted } = await materializeAndEmitSignatures({
+        db,
+        runId,
+        spaceId,
+        sanitizedEntities,
+        entityIdMap,
+        sanitizedEdges,
+      });
+      if (materialized > 0) {
+        console.log(
+          `[decompose] Materialized ${materialized} node signatures (${emitted} ring events emitted).`,
+        );
+      }
+    } catch (sigErr) {
+      console.warn("[decompose] signature materialization failed (non-fatal):", sigErr);
     }
 
     // ── Insert propositions (non-critical) ──

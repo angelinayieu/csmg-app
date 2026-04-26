@@ -198,6 +198,62 @@ export const validators = {
     }
     return result;
   },
+
+  /**
+   * Like `array`, but skips elements that fail validation instead of
+   * aborting the whole array. Returns the well-formed elements plus a
+   * console.warn telling the operator how many were dropped.
+   *
+   * Why this exists: the strict `array` validator was throwing on a
+   * single malformed cycle/scenario/proposition deep inside an
+   * otherwise-perfect decomposition payload — and the throw cascaded
+   * up through `validateStructuredDecomposition` →
+   * `RecoveryStrategy.recover` → `llmJSON`'s fallback path, which
+   * returns an empty `{ entities: [] }` shell. The user's entities and
+   * edges (perfectly valid) were getting silently nuked because
+   * `cycles[2].intervention_point` came back as `undefined`. Soft
+   * arrays should never have that power; only `entities` + `edges`
+   * should be strict.
+   */
+  tolerantArray: <T>(
+    value: unknown,
+    elementValidator: (v: unknown, idx: number) => T,
+    path: string
+  ): T[] => {
+    if (!Array.isArray(value)) {
+      // If the LLM returned a non-array (e.g., null, undefined, an
+      // object), treat as empty — softer than throwing.
+      if (value === null || value === undefined) return [];
+      console.warn(
+        `[validators.tolerantArray] ${path}: expected array, got ${typeof value} — using []`
+      );
+      return [];
+    }
+    const result: T[] = [];
+    let dropped = 0;
+    for (let i = 0; i < value.length; i++) {
+      try {
+        result.push(elementValidator(value[i], i));
+      } catch (e) {
+        dropped++;
+        if (e instanceof ValidationError) {
+          // First handful of drops are informative; after that they're
+          // just noise.
+          if (dropped <= 3) {
+            console.warn(
+              `[validators.tolerantArray] ${path}[${i}] dropped: ${e.message}`
+            );
+          }
+        }
+      }
+    }
+    if (dropped > 0) {
+      console.warn(
+        `[validators.tolerantArray] ${path}: kept ${result.length}, dropped ${dropped} invalid element(s)`
+      );
+    }
+    return result;
+  },
 };
 
 // ────────────────────────────────────────────────────────────────────
@@ -578,37 +634,46 @@ export const validateStructuredDecomposition = (
     },
     entities,
     edges,
-    cycles: validators.array(
+    // ─── Soft fields below ───────────────────────────────────────────
+    // Switched to `tolerantArray` (2026-04-25) after the audit found
+    // that one malformed cycle/scenario/proposition would throw out of
+    // `validateStructuredDecomposition`, cascade through llmJSON's
+    // recovery path, and silently swap in the empty-fallback — which
+    // meant the user's perfectly-valid `entities` and `edges` got
+    // discarded because of an unrelated nested field (e.g. a single
+    // cycle with `intervention_point: undefined`). Soft-fail per
+    // element here; load-bearing fields (entities, edges) stay strict.
+    cycles: validators.tolerantArray(
       obj.cycles ?? [],
       (c, i) => validateCycle(c, `root.cycles[${i}]`),
       "root.cycles"
     ),
-    propositions: validators.array(
+    propositions: validators.tolerantArray(
       obj.propositions ?? [],
       (p, i) => validateProposition(p, `root.propositions[${i}]`),
       "root.propositions"
     ),
-    novel_connections: validators.array(
+    novel_connections: validators.tolerantArray(
       obj.novel_connections ?? [],
       (nc, i) => validateNovelConnection(nc, `root.novel_connections[${i}]`),
       "root.novel_connections"
     ),
-    contradictions: validators.array(
+    contradictions: validators.tolerantArray(
       obj.contradictions ?? [],
       (c, i) => validateContradiction(c, `root.contradictions[${i}]`),
       "root.contradictions"
     ),
-    scenarios: validators.array(
+    scenarios: validators.tolerantArray(
       obj.scenarios ?? [],
       (s, i) => validateScenario(s, `root.scenarios[${i}]`),
       "root.scenarios"
     ),
-    action_items: validators.array(
+    action_items: validators.tolerantArray(
       obj.action_items ?? [],
       (a, i) => validateActionItem(a, `root.action_items[${i}]`),
       "root.action_items"
     ),
-    leverage_points: validators.array(
+    leverage_points: validators.tolerantArray(
       obj.leverage_points ?? [],
       (lp, i) => {
         if (typeof lp !== "object" || lp === null) {
@@ -638,7 +703,7 @@ export const validateStructuredDecomposition = (
       },
       "root.leverage_points"
     ),
-    risk_points: validators.array(
+    risk_points: validators.tolerantArray(
       obj.risk_points ?? [],
       (rp, i) => {
         if (typeof rp !== "object" || rp === null) {
@@ -674,33 +739,50 @@ export const validateStructuredDecomposition = (
       },
       "root.risk_points"
     ),
-    master_bottleneck:
-      obj.master_bottleneck === null || obj.master_bottleneck === undefined
-        ? null
-        : (() => {
-            if (typeof obj.master_bottleneck !== "object") {
-              return null;
-            }
-            const mb = obj.master_bottleneck as Record<string, unknown>;
-            return {
-              entity_id: validators.string(
-                mb.entity_id,
-                `root.master_bottleneck.entity_id`
-              ),
-              blast_radius: validators.number(
-                mb.blast_radius ?? 75,
-                `root.master_bottleneck.blast_radius`,
-                0,
-                100
-              ),
-              reason: validators.string(
-                mb.reason,
-                `root.master_bottleneck.reason`,
-                500
-              ),
-            };
-          })(),
-    open_questions: validators.array(
+    // master_bottleneck is optional — soft-fail to null on malformed
+    // shape rather than throwing. Same rationale as the soft arrays
+    // above: a missing or wrong-typed `reason` field used to nuke the
+    // entire decomposition payload through the recovery → fallback
+    // pipeline. Now it just degrades gracefully to `null`.
+    master_bottleneck: (() => {
+      if (
+        obj.master_bottleneck === null ||
+        obj.master_bottleneck === undefined ||
+        typeof obj.master_bottleneck !== "object"
+      ) {
+        return null;
+      }
+      const mb = obj.master_bottleneck as Record<string, unknown>;
+      try {
+        return {
+          entity_id: validators.string(
+            mb.entity_id,
+            `root.master_bottleneck.entity_id`
+          ),
+          blast_radius: validators.number(
+            mb.blast_radius ?? 75,
+            `root.master_bottleneck.blast_radius`,
+            0,
+            100
+          ),
+          // Permissive on `reason`: an empty string is fine, undefined
+          // becomes "" (was the actual production failure mode).
+          reason:
+            typeof mb.reason === "string"
+              ? mb.reason.slice(0, 500)
+              : "",
+        };
+      } catch (err) {
+        if (err instanceof ValidationError) {
+          console.warn(
+            `[validateStructuredDecomposition] master_bottleneck dropped: ${err.message}`
+          );
+          return null;
+        }
+        throw err;
+      }
+    })(),
+    open_questions: validators.tolerantArray(
       obj.open_questions ?? [],
       (oq, i) => {
         if (typeof oq !== "object" || oq === null) {
@@ -719,7 +801,7 @@ export const validateStructuredDecomposition = (
       },
       "root.open_questions"
     ),
-    shared_variables: validators.array(
+    shared_variables: validators.tolerantArray(
       obj.shared_variables ?? [],
       (sv, i) => {
         if (typeof sv !== "object" || sv === null) {

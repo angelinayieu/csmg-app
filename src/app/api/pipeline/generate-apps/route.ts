@@ -10,7 +10,7 @@
 // Body: { spaceId: string, triggeredBy?: string }
 // Returns: GenerateAppsResult (see src/lib/pipeline/app-generator.ts)
 
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { generateAppsAndInterventions } from "@/lib/pipeline/app-generator";
 import type { Entity } from "@/types";
@@ -21,15 +21,8 @@ import type {
 import {
   startPipelineRun,
   emitStructuralEvent,
-  emitBatchEvents,
   completePipelineRun,
 } from "@/lib/events/structural-event-bus";
-import type { StructuralEvent } from "@/types/pipeline-events";
-import {
-  loadLatestSpaceAxisIndex,
-  resolveAxesForNames,
-  runLevelAxes,
-} from "@/lib/pipeline/axes-used-resolver";
 
 export const maxDuration = 120;
 
@@ -151,63 +144,14 @@ export async function POST(request: Request) {
       strategyVersion,
       db,
       triggeredBy: triggeredBy ?? "pipeline:generate-apps",
+      // Thread the run id so the generator emits per-app
+      // `proposal_ready` events (with MC distributions) directly after
+      // its internal simulation enrichment lands. Removes the need for
+      // the post-hoc batch emit that used to live in this route —
+      // that version emitted distribution-less events and could fire
+      // before the enrichment had completed the DB write.
+      pipelineRunId,
     });
-
-    // Canvas HUD: fetch the apps this run produced so we can emit a
-    // proposal_ready per materialized app. The generator writes rows
-    // immediately; filtering by recent updated_at is cheap and correct.
-    try {
-      const runStartIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      const { data: recentApps } = await db
-        .from("apps")
-        .select("id, name, app_type, dominant_entity_ids, dominant_entity_codes")
-        .eq("space_id", spaceId)
-        .gte("updated_at", runStartIso)
-        .limit(20);
-      const appRows = (recentApps ?? []) as Array<{
-        id: string;
-        name: string;
-        app_type: string | null;
-        dominant_entity_ids: string[] | null;
-        dominant_entity_codes: string[] | null;
-      }>;
-
-      // PR 5 — resolve axes_used for each app. Apps persist their
-      // `dominant_entity_ids` (UUIDs into the entities table);
-      // resolve those to names + match against the latest axis
-      // index for this space. The axis events were emitted by the
-      // upstream decompose/synthesize run, NOT this generate-apps
-      // run, so we use loadLatestSpaceAxisIndex which finds the
-      // most recent run with axis coverage for this space.
-      const axisIndex = await loadLatestSpaceAxisIndex(db, spaceId);
-      const spaceRunAxes = runLevelAxes(axisIndex);
-      const entityIdToName = new Map<string, string>();
-      for (const e of entities) {
-        if (e.id && e.name) entityIdToName.set(e.id, e.name);
-      }
-
-      const appEvents: StructuralEvent[] = appRows.map((a) => {
-        const names: string[] = [];
-        for (const id of a.dominant_entity_ids ?? []) {
-          const n = entityIdToName.get(id);
-          if (n) names.push(n);
-        }
-        const perAppAxes = resolveAxesForNames(names, axisIndex);
-        const axesUsed = perAppAxes.length > 0 ? perAppAxes : spaceRunAxes;
-        return {
-          type: "proposal_ready",
-          proposalId: a.id,
-          kind: "experiment",
-          title: (a.name ?? "App").slice(0, 200),
-          ...(axesUsed.length > 0 ? { axes_used: axesUsed } : {}),
-        };
-      });
-      if (appEvents.length > 0) {
-        await emitBatchEvents(db, pipelineRunId, appEvents);
-      }
-    } catch (emitErr) {
-      console.warn("[generate-apps] proposal_ready emit failed (non-critical):", emitErr);
-    }
 
     // Changelog — soft-fail.
     try {
@@ -235,6 +179,73 @@ export async function POST(request: Request) {
       phase: "exit",
     });
     await completePipelineRun(db, pipelineRunId, "completed");
+
+    // ── Phase 3 (VP Project report) — fire writer-path in background ──
+    // Kicks off variant_factory → iv_scorer → champion-pick for the
+    // space (+ each newly-generated app). Uses after() so the caller
+    // doesn't wait — the user sees apps in the dashboard immediately;
+    // variants stream into the app-detail carousel over the next
+    // ~15-30s per app. Soft-fail: a failed kickoff here doesn't break
+    // generate-apps; the app detail page's carousel just stays empty
+    // until the user re-triggers. Skipped entirely when no taxonomy
+    // exists yet (the domain-inferrer didn't run or soft-failed).
+    const cookieHeader = request.headers.get("cookie") ?? "";
+    const origin = new URL(request.url).origin;
+    after(async () => {
+      try {
+        const { data: taxCheck } = await db
+          .from("experiment_taxonomies")
+          .select("id")
+          .eq("space_id", spaceId)
+          .maybeSingle();
+        if (!taxCheck) return;
+
+        // Space-level variants (the champion template lane).
+        void fetch(`${origin}/api/pipeline/writer-path`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+          body: JSON.stringify({
+            spaceId,
+            triggeredBy: "pipeline:generate-apps",
+            variantCount: 4,
+          }),
+        }).catch((err) =>
+          console.warn("[generate-apps] writer-path kickoff (space) failed:", err),
+        );
+
+        // Per-app variants — scoped to each newly-created app so each
+        // App detail page's carousel gets its own tailored variants.
+        // Limit to the 3 most-recent apps to cap token spend on
+        // strategies that emit many Apps.
+        const runStartIso = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+        const { data: recentApps } = await db
+          .from("apps")
+          .select("id")
+          .eq("space_id", spaceId)
+          .gte("updated_at", runStartIso)
+          .order("updated_at", { ascending: false })
+          .limit(3);
+        for (const a of ((recentApps ?? []) as Array<{ id: string }>)) {
+          void fetch(`${origin}/api/pipeline/writer-path`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+            body: JSON.stringify({
+              spaceId,
+              appId: a.id,
+              triggeredBy: `pipeline:generate-apps:app:${a.id}`,
+              variantCount: 3,
+            }),
+          }).catch((err) =>
+            console.warn(
+              `[generate-apps] writer-path kickoff (app ${a.id}) failed:`,
+              err,
+            ),
+          );
+        }
+      } catch (err) {
+        console.warn("[generate-apps] writer-path after() block threw:", err);
+      }
+    });
 
     return NextResponse.json({ success: true, runId: pipelineRunId, ...result });
   } catch (err) {

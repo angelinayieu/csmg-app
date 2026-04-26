@@ -34,7 +34,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BrainCircuit, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useStructuralEventStream } from "../hooks/use-structural-event-stream";
+import { useRunEventStore } from "../hooks/run-event-store";
 
 export interface CanvasReasoningTracePanelProps {
   runId: string | null;
@@ -72,7 +72,7 @@ function extractCandidateConcepts(text: string, max = 6): string[] {
 export function CanvasReasoningTracePanel({
   runId,
 }: CanvasReasoningTracePanelProps) {
-  const { events, status } = useStructuralEventStream(runId);
+  const { events, status } = useRunEventStore();
   const [expanded, setExpanded] = useState(true);
 
   // Latest snapshot wins. reasoning_chunk events carry the FULL

@@ -151,6 +151,74 @@ function sortAxes(axes: ProbabilitySpaceAxis[]): ProbabilitySpaceAxis[] {
   return axes.sort((a, b) => AXIS_SORT[a] - AXIS_SORT[b]);
 }
 
+// ── Row-level axis provenance readers ────────────────────────────────
+//
+// The cross-space-linker (and, going forward, any row-level cross-axis
+// reasoner) stamps `provenance.axes_used` on `entities` rows when it
+// spots the entity across multiple axis shells in a run. Older rows
+// used the unprefixed `axes` key — these readers tolerate both so
+// legacy data keeps working without a backfill migration.
+//
+// Neither reader throws. Garbage input → empty array. Callers can
+// treat an empty array as "no known axis coverage."
+
+const CANONICAL_AXES: readonly ProbabilitySpaceAxis[] = [
+  "financial",
+  "timeline",
+  "actors",
+  "causal_scenarios",
+  "evidence",
+  "assumptions",
+  "risk",
+  "cultural",
+];
+
+function isCanonicalAxis(x: unknown): x is ProbabilitySpaceAxis {
+  return (
+    typeof x === "string" &&
+    (CANONICAL_AXES as readonly string[]).includes(x)
+  );
+}
+
+/**
+ * Read axis-provenance off a raw `provenance` JSONB blob. Accepts both
+ * the canonical `axes_used` key and the legacy `axes` key (single
+ * source of truth: `axes_used` wins if both appear, with `axes`
+ * union-merged in so we never silently lose coverage).
+ *
+ * Returns a sorted unique array of canonical ProbabilitySpaceAxis
+ * values. Never throws — returns `[]` on `null`, missing, or malformed
+ * input.
+ */
+export function readAxesUsedFromProvenance(
+  provenance: Record<string, unknown> | null | undefined,
+): ProbabilitySpaceAxis[] {
+  if (!provenance || typeof provenance !== "object") return [];
+  const collected = new Set<ProbabilitySpaceAxis>();
+  const pushFrom = (raw: unknown) => {
+    if (!Array.isArray(raw)) return;
+    for (const v of raw) {
+      if (isCanonicalAxis(v)) collected.add(v);
+    }
+  };
+  pushFrom((provenance as Record<string, unknown>).axes_used);
+  pushFrom((provenance as Record<string, unknown>).axes);
+  return sortAxes(Array.from(collected));
+}
+
+/**
+ * Convenience reader for an entity-shaped row (anything with a
+ * `provenance` field). Useful at call sites that already have the
+ * row object in hand and don't want to pick the JSONB column off it
+ * themselves.
+ */
+export function readEntityAxesUsed(
+  entity: { provenance?: Record<string, unknown> | null } | null | undefined,
+): ProbabilitySpaceAxis[] {
+  if (!entity) return [];
+  return readAxesUsedFromProvenance(entity.provenance ?? null);
+}
+
 /**
  * Space-scoped axis index loader for endpoints that run OUTSIDE the
  * original decompose/synthesize run (most notably `generate-apps`,

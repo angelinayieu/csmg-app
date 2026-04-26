@@ -467,19 +467,39 @@ export interface AgentSpec {
 }
 
 /**
- * Mechanism hints — signals to the app-manifest-builder about which
- * digital-twin mechanisms this app needs. Drives widget selection
- * (simulation_lab vs. plain dashboard, etc.) once the plugin registry
- * (Item 3) is wired.
+ * Mechanism hints — **widget-routing tags**, NOT executable mechanisms.
+ *
+ * Each hint selects a category of widget to inject onto the linked
+ * app's manifest via the `HINT_TO_CAPABILITY` map in
+ * `src/lib/pipeline/app-manifest-builder.ts`. The row materialized
+ * into `public.mechanisms` from these hints is a declarative record —
+ * it does NOT itself run anything.
+ *
+ * Where the actual work happens:
+ *   simulation         → src/lib/simulation/monte-carlo.ts (seeded MC)
+ *   prediction         → writes to prediction_ledger; resolved later
+ *                        by src/lib/twin/resolve-predictions.ts
+ *   validation         → src/lib/pipeline/reality-calibration.ts +
+ *                        numerical-calibration.ts (Tier 3/4 audit)
+ *   baseline_tracking  → metric_trackers + metric_observations tables
+ *   deviation_capture  → prediction_ledger.deviation_tag + UI feed
+ *   game               → no runtime yet
+ *   ml_personalization → no runtime yet
+ *
+ * If code or UI seems to claim a mechanism row "runs" anything, follow
+ * the path above to the module that actually does the work. Calling
+ * these "mechanisms" is historical; "widget_hints" would be more
+ * precise. See docs/COMPUTATIONAL_SUBSTANCE_ROADMAP.md §R4 and
+ * migration 20260601_mechanisms_honest_comments.sql.
  */
 export type MechanismHint =
-  | "simulation"            // supports what-if runs against twin state
-  | "prediction"            // writes to prediction_ledger
-  | "validation"            // runs experiments / hypothesis tests
-  | "baseline_tracking"     // captures baseline at generation time
-  | "deviation_capture"     // flags surprises as high-value data
-  | "game"                  // behavioral / engagement mechanics
-  | "ml_personalization";   // personalized model consuming ledgers
+  | "simulation"            // surfaces a simulation-lab widget
+  | "prediction"            // surfaces a prediction-panel widget
+  | "validation"            // surfaces a validation-lab widget
+  | "baseline_tracking"     // surfaces a baseline-tracker widget
+  | "deviation_capture"     // surfaces a deviation-feed widget
+  | "game"                  // surfaces a game-mechanics widget
+  | "ml_personalization";   // surfaces a personalization widget
 
 /**
  * An infrastructure setup proposal — a concrete tool/app/system
@@ -568,6 +588,31 @@ export interface TwinAlternativeRejected {
   why_rejected: string;
 }
 
+/**
+ * Snapshot of the reality-calibration state at the moment a proposal was
+ * wired. Stamped into the twin_proposal justification so the review panel
+ * can render the gate banner (and the approve route can re-check it)
+ * without a cross-table join on every read.
+ *
+ * The LIVE status is still the authoritative source — this snapshot is a
+ * cache for display. The approve route re-queries `reality_calibrations`
+ * to avoid honoring a stale pass when the user reran capture and failed.
+ */
+export interface CalibrationGateSnapshot {
+  /** Mirrors RealityCalibration["status"]. */
+  status: "unknown" | "uncalibrated" | "partial" | "calibrated" | "bypassed";
+  reproduced_count: number;
+  total_count: number;
+  /** 0..1 — unverifiable attempts count as 0.5. */
+  aggregate_score: number;
+  /** Which strategy_baseline the calibration was computed against. */
+  strategy_baseline_id: string | null;
+  /** When this snapshot was captured (ISO). */
+  checked_at: string;
+  /** Set when the user explicitly chose to run without calibration. */
+  bypassed_at: string | null;
+}
+
 export interface TwinProposalJustification {
   /** One paragraph: the chosen approach in plain terms. */
   chosen_approach: string;
@@ -581,6 +626,13 @@ export interface TwinProposalJustification {
   mechanism_ids?: string[];
   /** When this proposal was generated (ISO timestamp). */
   generated_at: string;
+  /**
+   * Reality-calibration snapshot captured at wire-time. Optional because
+   * legacy proposals (pre-Gap-B) won't have one — the review panel treats
+   * `undefined` as "unknown; no baselines to reproduce" rather than a
+   * blocking gate. See CalibrationGateSnapshot.
+   */
+  calibration_gate?: CalibrationGateSnapshot;
 }
 
 /**

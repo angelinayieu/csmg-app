@@ -61,7 +61,7 @@ export function CanvasHudRail({
   }
 
   return (
-    <div className="pointer-events-auto absolute right-4 top-16 bottom-24 z-30 flex w-[320px] flex-col overflow-hidden rounded-2xl border border-gray-200/70 bg-white/90 shadow-lg backdrop-blur-md">
+    <div className="pointer-events-auto absolute right-4 top-28 bottom-24 z-30 flex w-[320px] flex-col overflow-hidden rounded-2xl border border-gray-200/70 bg-white/90 shadow-lg backdrop-blur-md">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
         <div className="flex items-center gap-2">

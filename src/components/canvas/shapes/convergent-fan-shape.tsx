@@ -151,6 +151,49 @@ function ConvergentFanShapeView({ shape }: { shape: ConvergentFanShape }) {
           }
         }}
       >
+        {/* Phase 4 follow-on — quick "Inspect" button that fires the
+            entity-detail drawer on the focal. The drawer's "Save as
+            system" gesture handles promoting the convergent's
+            neighborhood to a saved System without us duplicating
+            the API calls or classification logic here. Floats top-
+            right so it doesn't fight the main click target. */}
+        {focalEntityId && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              try {
+                window.dispatchEvent(
+                  new CustomEvent("shell-graph:focus", {
+                    detail: { entityId: focalEntityId, name: focalName },
+                  }),
+                );
+              } catch {
+                /* no-op */
+              }
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute",
+              top: 6,
+              right: 6,
+              zIndex: 2,
+              padding: "2px 6px",
+              borderRadius: 4,
+              border: `1px solid ${meta.color}40`,
+              background: `${meta.color}10`,
+              color: meta.color,
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+            }}
+            title={`Inspect ${focalName} — opens drawer where you can Save as system.`}
+          >
+            ⌖ Inspect
+          </button>
+        )}
         {/* Left accent rail */}
         <div
           aria-hidden

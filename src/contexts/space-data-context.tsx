@@ -26,6 +26,11 @@ import type {
   Bridge,
   Claim,
 } from "@/types";
+import type { BasisElement, NodeSignature } from "@/types/node-signature";
+import {
+  computeHubsFromGraph,
+  type HubComputationResult,
+} from "@/lib/graph/hub-discovery";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -106,6 +111,41 @@ export interface SpaceUIState {
   // lists so callers can act immediately (no closure-over-stale-state race).
   refreshEntities: () => Promise<{ entities: Entity[]; edges: Edge[] } | null>;
   entitiesRefreshing: boolean;
+
+  /**
+   * Surgical signature update — used by the canvas painter to splice the
+   * latest ring growth into liveEntities without a full refetch. Drives
+   * gap #13: while a pipeline run is streaming, the same NodeSignature
+   * shown in the constellation widget / detail drawer reflects the
+   * just-emitted ring within ~16ms of the SSE event landing.
+   *
+   * Partial mirrors the SignatureDeepenedEvent payload (snake_case
+   * normalized at the call site). When an existing node_signature is
+   * present we merge in place, preserving evidence/composes_with/
+   * consequence_surface; when absent we synthesize a minimal-but-valid
+   * NodeSignature so the constellation can render immediately. The
+   * authoritative materializer overwrite arrives via refreshEntities()
+   * on run completion and replaces the in-memory shim wholesale.
+   */
+  patchEntitySignature: (
+    entityId: string,
+    partial: {
+      canonical_code: string;
+      rings: number;
+      residual_uncertainty: number;
+      version: number;
+      basis: BasisElement[];
+    },
+  ) => void;
+
+  // Derived — KG summary (hubs, counts) computed via the shared
+  // hub-discovery utility. Consumed by the KG Formation card (post-run
+  // hydration), the SpaceGraph explorer header strip, twin snapshots,
+  // and any future "what are the hubs of this space" surface. During
+  // an active pipeline run the mini-card tracks these incrementally
+  // via HubTracker; this derivation takes over once the run completes
+  // and refreshEntities() swaps live state with authoritative data.
+  kgSummary: HubComputationResult;
 
   // Derived
   hasSynthesis: boolean;
@@ -332,6 +372,82 @@ export function SpaceDataProvider({
     }
   }, [entitiesRefreshing, data.space.id, router]);
 
+  // ── Live signature patch ──
+  // Splices an in-memory NodeSignature update onto the matching entity
+  // so subscribers (constellation widget, ring overlays) see ring growth
+  // while a pipeline run is still streaming. Stable identity via
+  // useCallback so widget memos don't churn every render.
+  const patchEntitySignature = useCallback(
+    (
+      entityId: string,
+      partial: {
+        canonical_code: string;
+        rings: number;
+        residual_uncertainty: number;
+        version: number;
+        basis: BasisElement[];
+      },
+    ) => {
+      setLiveEntities((prev) => {
+        let mutated = false;
+        const next = prev.map((e) => {
+          if (e.id !== entityId) return e;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const existing = (e as any).node_signature as NodeSignature | null | undefined;
+          // Optimistic skip: ignore stale events whose version is older
+          // than what we already hold (handles SSE re-broadcast +
+          // out-of-order delivery without rolling state backwards).
+          if (existing && existing.version > partial.version) return e;
+          mutated = true;
+          const merged: NodeSignature = existing
+            ? {
+                ...existing,
+                canonical_code: partial.canonical_code,
+                rings: partial.rings,
+                basis: partial.basis,
+                residual_uncertainty: partial.residual_uncertainty,
+                version: partial.version,
+                materialized_at: new Date().toISOString(),
+              }
+            : {
+                entity_id: entityId,
+                canonical_code: partial.canonical_code,
+                rings: partial.rings,
+                basis: partial.basis,
+                evidence: [],
+                resolution: {
+                  zoom: Math.min(5, Math.max(0, partial.rings)) as 0 | 1 | 2 | 3 | 4 | 5,
+                  horizon: "indefinite",
+                  pinned_because: "saturated",
+                },
+                residual_uncertainty: partial.residual_uncertainty,
+                composes_with: [],
+                consequence_surface: [],
+                materialized_at: new Date().toISOString(),
+                version: partial.version,
+              };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return { ...(e as any), node_signature: merged } as Entity;
+        });
+        return mutated ? next : prev;
+      });
+    },
+    [],
+  );
+
+  // ── Derived KG summary ──
+  // Single source of truth for "top hubs of this space" — used by the
+  // post-run KG Formation card, the SpaceGraph header, twin snapshots,
+  // and any future dashboard surface that wants a compact graph
+  // summary. Uses the same HUB_MIN_DEGREE / HUB_TOP_N / nameHashSlot
+  // definitions the live painter uses, so what "hub" means never
+  // drifts between surfaces. Cheap — O(n+m) over live lists which
+  // already fit in memory; useMemo gates recomputation.
+  const kgSummary = useMemo<HubComputationResult>(
+    () => computeHubsFromGraph(liveEntities, liveEdges),
+    [liveEntities, liveEdges],
+  );
+
   // ── Build context value ──
   const value = useMemo<SpaceContextValue>(
     () => ({
@@ -366,6 +482,7 @@ export function SpaceDataProvider({
       pendingObjectives,
       strategyApproved,
       setStrategyApproved,
+      kgSummary,
       hasSynthesis,
       stage,
       refresh,
@@ -373,6 +490,7 @@ export function SpaceDataProvider({
       bridgesRefreshing,
       refreshEntities,
       entitiesRefreshing,
+      patchEntitySignature,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -391,12 +509,14 @@ export function SpaceDataProvider({
       objectivesReviewed,
       pendingObjectives,
       strategyApproved,
+      kgSummary,
       hasSynthesis,
       stage,
       refreshBridges,
       bridgesRefreshing,
       refreshEntities,
       entitiesRefreshing,
+      patchEntitySignature,
     ]
   );
 

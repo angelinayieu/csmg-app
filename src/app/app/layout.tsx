@@ -25,14 +25,27 @@ export default async function AppLayout({
 
   // Fetch user's spaces (profile data now lives on the immersive home top-bar
   // and is fetched per-page where it's actually rendered).
-  const { data: spacesData } = await db
+  //
+  // Curated query relies on `archived` + `pinned` columns (migration
+  // 20260527). If that migration hasn't been applied to live Supabase
+  // yet, the query errors silently and the sidebar / home read as
+  // empty — fall back to a column-light query and filter client-side.
+  const richSpacesRes = await db
     .from("spaces")
     .select("*")
     .eq("archived", false)
     .order("pinned", { ascending: false })
     .order("updated_at", { ascending: false });
 
-  const spaces = (spacesData ?? []) as Space[];
+  const spacesRes = richSpacesRes.error
+    ? await db
+        .from("spaces")
+        .select("*")
+        .order("updated_at", { ascending: false })
+    : richSpacesRes;
+
+  const rawSpaces = (spacesRes.data ?? []) as Space[];
+  const spaces = rawSpaces.filter((s) => !s.archived);
 
   return (
     <AppStoreProvider initialState={{ spaces }}>

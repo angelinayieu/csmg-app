@@ -105,11 +105,16 @@ function hasExistingArrowBetween(
  * Materialize a dashed gray arrow between two shapes. Style matches
  * `pipeline-event-painter.tsx`'s ghost-edge convention so users
  * recognize AI-suggested connections at a glance.
+ *
+ * Stores similarity score + shared tokens in meta so the canvas can
+ * show a "why connected" tooltip on hover.
  */
 function createArrowBetween(
   editor: Editor,
   fromId: TLShapeId,
   toId: TLShapeId,
+  similarity: number,
+  sharedTokens: string[],
 ): TLShapeId | null {
   const arrowId = createShapeId();
   try {
@@ -122,9 +127,10 @@ function createArrowBetween(
         dash: "dashed",
       },
       meta: {
-        // Mark the arrow as AI-created so future features (an undo
-        // affordance, an accept/reject review mode) can filter it.
         source: "auto-connect",
+        // Persisted so hover tooltip can explain the connection.
+        similarity: Math.round(similarity * 100),
+        sharedTokens: sharedTokens.slice(0, 5),
       },
     };
     editor.createShapes([arrow]);
@@ -234,7 +240,9 @@ export function useAutoConnect({ editor, enabled }: UseAutoConnectOptions) {
             if (bTokens.size < 2) continue;
             const sim = jaccardSimilarity(aTokens, bTokens);
             if (sim >= SIMILARITY_THRESHOLD) {
-              const arrowId = createArrowBetween(editor, a.id, b.id);
+              // Compute shared tokens for the "why connected" tooltip.
+              const shared = [...aTokens].filter((t) => bTokens.has(t));
+              const arrowId = createArrowBetween(editor, a.id, b.id, sim, shared);
               if (arrowId) {
                 connectedPairsRef.current.add(key);
               }

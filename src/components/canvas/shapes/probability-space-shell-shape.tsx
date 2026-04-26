@@ -1,0 +1,700 @@
+"use client";
+
+// ── Probability Space Shell shape ──
+//
+// One card per axis the frame extractor opens (ACTORS, TIMELINE,
+// CULTURAL, ASSUMPTIONS, RISK, …). Previously rendered as a chrome
+// overlay (`ProbabilitySpaceRail`) — great looking, but it was
+// viewport-pinned, couldn't be a tldraw arrow endpoint, and its
+// `pointer-events-auto` shells ate drags that should have reached
+// tldraw for panning.
+//
+// As a real tldraw shape each shell:
+//   • pans/zooms with the canvas so the user reads it as part of the
+//     graph, not a floating HUD
+//   • is a valid arrow terminal so the painter can tether it UP to
+//     the origin-prompt, giving the canvas a legible "thought →
+//     lenses" spine
+//   • no longer blocks pan — once outside the shell bounds, drags
+//     hit tldraw directly
+//
+// Entities + edges + score ride as JSON strings because tldraw
+// props schemas are flat. View parses them back out on render.
+
+import {
+  BaseBoxShapeUtil,
+  HTMLContainer,
+  T,
+  type RecordProps,
+  type TLResizeInfo,
+  resizeBox,
+} from "tldraw";
+import { useMemo, useState } from "react";
+import type { ProbabilitySpaceShellShape } from "./types";
+import { computeForceLayout } from "@/lib/graph/force-layout";
+import { useAxisActive, useCanvasFilter } from "../hooks/use-canvas-filter";
+
+export const SPACE_SHELL_DEFAULT_W = 280;
+export const SPACE_SHELL_DEFAULT_H = 200;
+
+interface ShellEntity {
+  entityId: string;
+  name: string;
+  weight: number;
+}
+interface ShellEdge {
+  sourceEntityId: string;
+  targetEntityId: string;
+  mechanism: string;
+  polarity: "positive" | "negative" | "conditional" | "neutral";
+  dynamics: string;
+  confidence: number;
+}
+interface ShellScore {
+  weighted: number;
+  breakdown: {
+    specificity: number;
+    mechanism_depth: number;
+    distinctness: number;
+    coverage: number;
+    insight_density: number;
+  } | null;
+  notes: string;
+}
+
+function safeParse<T>(json: string, fallback: T): T {
+  if (!json) return fallback;
+  try {
+    const parsed = JSON.parse(json);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export class ProbabilitySpaceShellShapeUtil extends BaseBoxShapeUtil<ProbabilitySpaceShellShape> {
+  static override type = "probability-space-shell" as const;
+  static override props: RecordProps<ProbabilitySpaceShellShape> = {
+    w: T.number,
+    h: T.number,
+    spaceKey: T.string,
+    axis: T.string,
+    label: T.string,
+    tagline: T.string,
+    accent: T.string,
+    rationale: T.string,
+    orderIndex: T.number,
+    entitiesJson: T.string,
+    edgesJson: T.string,
+    merging: T.boolean,
+    scoreJson: T.string,
+    failureJson: T.string,
+    pulse: T.number,
+  };
+
+  override canResize = () => true;
+  override canEdit = () => false;
+
+  override onResize = (
+    shape: ProbabilitySpaceShellShape,
+    info: TLResizeInfo<ProbabilitySpaceShellShape>,
+  ) => resizeBox(shape, info);
+
+  getDefaultProps(): ProbabilitySpaceShellShape["props"] {
+    return {
+      w: SPACE_SHELL_DEFAULT_W,
+      h: SPACE_SHELL_DEFAULT_H,
+      spaceKey: "",
+      axis: "",
+      label: "",
+      tagline: "",
+      accent: "#2563eb",
+      rationale: "",
+      orderIndex: 0,
+      entitiesJson: "[]",
+      edgesJson: "[]",
+      merging: false,
+      scoreJson: "",
+      failureJson: "",
+      pulse: 0,
+    };
+  }
+
+  component(shape: ProbabilitySpaceShellShape) {
+    return <ShellView shape={shape} />;
+  }
+
+  indicator(shape: ProbabilitySpaceShellShape) {
+    return (
+      <rect width={shape.props.w} height={shape.props.h} rx={18} ry={18} />
+    );
+  }
+}
+
+interface ShellFailure {
+  reason: "thin_output" | "hard_fail" | "timeout";
+  errorMessage: string | null;
+}
+
+function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
+  const {
+    w,
+    h,
+    axis,
+    label,
+    tagline,
+    accent,
+    rationale,
+    merging,
+    entitiesJson,
+    edgesJson,
+    scoreJson,
+    failureJson,
+  } = shape.props;
+  // Phase 3 — sidebar filter. When the user has selected a subset of
+  // axes from the legend, dim shells outside that subset so the
+  // soloed lens reads as "the focus." Empty selection = no dimming.
+  const axisActive = useAxisActive(axis);
+  // Phase 7 — shell layout mode. In "stack" mode the soloed axis
+  // (axisActive=true) renders normally; non-soloed shells recede
+  // visually (scale + opacity) so the canvas reads as one focused
+  // landscape with peer lenses receding into the background. The
+  // user's "3D layered landscape" mental model.
+  const layoutMode = useCanvasFilter((s) => s.shellLayoutMode);
+  const stackedRecede = layoutMode === "stack" && !axisActive;
+  const entities = safeParse<ShellEntity[]>(entitiesJson, []);
+  const edges = safeParse<ShellEdge[]>(edgesJson, []);
+  const score = scoreJson ? safeParse<ShellScore | null>(scoreJson, null) : null;
+  const failure = failureJson
+    ? safeParse<ShellFailure | null>(failureJson, null)
+    : null;
+  const isEmpty = entities.length === 0;
+
+  const [expanded, setExpanded] = useState(false);
+
+  // Phase 1 — replace the chip list with a real mini-graph. Layout
+  // is memoized on the JSON-string contents so it only recomputes
+  // when the painter mutates the shell (entity / edge added). Cap
+  // at 12 nodes for readability inside the small viewport — overflow
+  // is reported as a "+N" badge below the graph.
+  const graphMaxNodes = 12;
+  const graphEntities = entities.slice(0, graphMaxNodes);
+  const graphOverflow = Math.max(0, entities.length - graphEntities.length);
+  // Graph viewport: shell body area minus padding for header/footer.
+  // Header ≈ 60, footer (lens-expand button + score) ≈ 50, gap 8 each
+  // side. The shell can be resized so we recompute from props each
+  // render — cheap, since the layout itself is memoized.
+  const graphViewportW = Math.max(120, w - 32);
+  const graphViewportH = Math.max(80, h - 168);
+  const layout = useMemo(
+    () => {
+      const allowedIds = new Set(graphEntities.map((e) => e.entityId));
+      const filteredEdges = edges
+        .filter(
+          (e) =>
+            allowedIds.has(e.sourceEntityId) &&
+            allowedIds.has(e.targetEntityId),
+        )
+        .map((e) => ({ source: e.sourceEntityId, target: e.targetEntityId }));
+      return computeForceLayout(
+        graphEntities.map((e) => ({ id: e.entityId, weight: e.weight })),
+        filteredEdges,
+        {
+          width: graphViewportW,
+          height: graphViewportH,
+          padding: 10,
+        },
+      );
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [entitiesJson, edgesJson, graphViewportW, graphViewportH],
+  );
+
+  // Quick lookup: entityId → name for label rendering.
+  const idToName = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of entities) m.set(e.entityId, e.name);
+    return m;
+  }, [entities]);
+
+  return (
+    <HTMLContainer
+      style={{
+        width: w,
+        height: h,
+        pointerEvents: "all",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          borderRadius: 18,
+          background: "rgba(255,255,255,0.85)",
+          backdropFilter: "blur(16px)",
+          border: "1px solid rgba(15,23,42,0.06)",
+          boxShadow:
+            "0 1px 2px rgba(16,24,40,0.04), 0 12px 32px -14px rgba(16,24,40,0.14)",
+          padding: "14px 16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          opacity: stackedRecede
+            ? 0.42
+            : !axisActive
+              ? 0.28
+              : merging
+                ? 0.6
+                : 1,
+          // Phase 7 — when stack-receded, scale down + push slightly
+          // up + drop a softer shadow so the shell visually steps
+          // back. transformOrigin keeps the recede pivoting around
+          // top-center so the soloed shell (rendered at full size)
+          // reads as the front of the stack.
+          transform: stackedRecede
+            ? "scale(0.78) translateY(-12px)"
+            : undefined,
+          transformOrigin: "top center",
+          transition:
+            "opacity 320ms ease, transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+          overflow: "hidden",
+        }}
+      >
+        {/* Soft density field */}
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: 18,
+            background: `radial-gradient(ellipse 85% 55% at 50% 15%, color-mix(in srgb, ${accent} 14%, transparent) 0%, transparent 70%)`,
+            pointerEvents: "none",
+          }}
+        />
+        {/* Header */}
+        <div style={{ position: "relative", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div
+              style={{
+                fontSize: 9.5,
+                fontWeight: 700,
+                letterSpacing: "0.2em",
+                textTransform: "uppercase",
+                color: accent,
+              }}
+              title={label}
+            >
+              {label}
+            </div>
+            <div
+              style={{
+                marginTop: 3,
+                fontSize: 11,
+                fontWeight: 500,
+                color: "#64748b",
+                display: "-webkit-box",
+                WebkitLineClamp: 1,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
+            >
+              {tagline}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+            {failure ? (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "#b91c1c",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.12em",
+                }}
+                title={failure.errorMessage ?? undefined}
+              >
+                {failure.reason === "thin_output" ? "thin" : "failed"}
+              </span>
+            ) : isEmpty ? (
+              <span style={{ fontSize: 10, fontStyle: "italic", color: "#94a3b8" }}>opening…</span>
+            ) : (
+              <span
+                style={{
+                  fontSize: 26,
+                  fontWeight: 600,
+                  color: accent,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1,
+                }}
+              >
+                {entities.length}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Mini-graph (Phase 1 — replaces flat chip list) */}
+        {entities.length > 0 && (
+          <ShellMiniGraph
+            viewportW={graphViewportW}
+            viewportH={graphViewportH}
+            accent={accent}
+            nodes={layout.nodes}
+            edges={edges}
+            coreId={layout.coreId}
+            idToName={idToName}
+            graphEntities={graphEntities}
+            graphOverflow={graphOverflow}
+          />
+        )}
+
+        {/* Failure explanation */}
+        {failure && (
+          <div
+            style={{
+              position: "relative",
+              alignSelf: "stretch",
+              padding: "6px 10px",
+              borderRadius: 8,
+              background: "rgba(185,28,28,0.06)",
+              border: "1px solid rgba(185,28,28,0.15)",
+              color: "#991b1b",
+              fontSize: 10.5,
+              fontWeight: 500,
+              lineHeight: 1.4,
+            }}
+            role="alert"
+          >
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 2 }}>
+              {failure.reason === "thin_output"
+                ? "Axis produced thin output"
+                : failure.reason === "timeout"
+                  ? "Axis generator timed out"
+                  : "Axis generator failed"}
+            </div>
+            {failure.errorMessage && (
+              <div style={{ fontWeight: 400, opacity: 0.85 }}>
+                {failure.errorMessage}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Score pill (when available) */}
+        {score && typeof score.weighted === "number" && (
+          <div
+            style={{
+              position: "relative",
+              alignSelf: "flex-start",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "2px 7px",
+              borderRadius: 999,
+              fontSize: 9.5,
+              fontWeight: 600,
+              background:
+                score.weighted >= 0.7
+                  ? "rgba(22,163,74,0.1)"
+                  : score.weighted >= 0.4
+                    ? "rgba(217,119,6,0.1)"
+                    : "rgba(220,38,38,0.08)",
+              color:
+                score.weighted >= 0.7
+                  ? "#16a34a"
+                  : score.weighted >= 0.4
+                    ? "#b45309"
+                    : "#b91c1c",
+            }}
+            title={score.notes || "Semantic rigor score"}
+          >
+            rigor {Math.round(score.weighted * 100)}
+          </div>
+        )}
+
+        {/* Why this lens — expand/collapse */}
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          style={{
+            position: "relative",
+            marginTop: "auto",
+            border: "none",
+            borderTop: "1px solid rgba(15,23,42,0.06)",
+            background: "transparent",
+            padding: "8px 0 0",
+            textAlign: "left",
+            fontSize: 10.5,
+            fontWeight: 500,
+            color: "#64748b",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <span>{expanded ? "Hide context" : "Why this lens"}</span>
+          <span style={{ fontSize: 9, color: "#94a3b8" }}>
+            {expanded ? "▲" : "▼"}
+          </span>
+        </button>
+        {expanded && (
+          <div
+            style={{
+              position: "relative",
+              fontSize: 11,
+              lineHeight: 1.45,
+              color: "#475569",
+              maxHeight: 80,
+              overflowY: "auto",
+            }}
+          >
+            {rationale || "No rationale recorded."}
+            {edges.length > 0 && (
+              <div style={{ marginTop: 6, fontSize: 10, color: "#64748b" }}>
+                {edges.length} mechanism{edges.length === 1 ? "" : "s"} traced
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </HTMLContainer>
+  );
+}
+
+// ── Mini-graph view (Phase 1) ──
+//
+// Renders the shell's entities + edges as a real force-directed
+// graph instead of the prior chip list. Color/size encode:
+//   - Fill: axis accent (varying saturation by node weight)
+//   - Stroke: white halo for "core" (highest-degree) node; thin
+//     accent stroke for everyone else
+//   - Size: scaled by max(weight, degree) so hubs stand out
+//   - Edge color: polarity-coded (green positive, red negative,
+//     amber conditional, gray neutral)
+//
+// Phase 2 will add per-entity kind colors + canonical-signature
+// rings + click-to-detail drawer. Phase 1 keeps the kind/depth
+// hydration off the critical path because shell events don't carry
+// those fields yet.
+//
+// Click handler dispatches a window CustomEvent so the canvas can
+// route it (Phase 2 wires the detail drawer; until then the click
+// is a no-op listener slot).
+
+const POLARITY_STROKE: Record<ShellEdge["polarity"], string> = {
+  positive: "rgba(22, 163, 74, 0.55)",
+  negative: "rgba(220, 38, 38, 0.55)",
+  conditional: "rgba(217, 119, 6, 0.55)",
+  neutral: "rgba(100, 116, 139, 0.4)",
+};
+
+interface ShellMiniGraphProps {
+  viewportW: number;
+  viewportH: number;
+  accent: string;
+  nodes: Array<{ id: string; x: number; y: number; degree: number }>;
+  edges: ShellEdge[];
+  coreId: string | null;
+  idToName: Map<string, string>;
+  graphEntities: ShellEntity[];
+  graphOverflow: number;
+}
+
+function ShellMiniGraph({
+  viewportW,
+  viewportH,
+  accent,
+  nodes,
+  edges,
+  coreId,
+  idToName,
+  graphEntities,
+  graphOverflow,
+}: ShellMiniGraphProps) {
+  const positionById = useMemo(() => {
+    const m = new Map<string, { x: number; y: number; degree: number }>();
+    for (const n of nodes) m.set(n.id, n);
+    return m;
+  }, [nodes]);
+
+  // Weight lookup for node radius. Max weight in the shell becomes
+  // the size reference so the largest node hits ~9px and others scale
+  // down proportionally.
+  const weightById = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of graphEntities) m.set(e.entityId, e.weight);
+    return m;
+  }, [graphEntities]);
+  const maxWeight = Math.max(
+    0.001,
+    ...graphEntities.map((e) => e.weight),
+  );
+  const maxDegree = Math.max(
+    1,
+    ...nodes.map((n) => n.degree),
+  );
+
+  // Edges that connect two laid-out nodes (others are dropped — usually
+  // because the target wasn't in the top-N visible slice).
+  const visibleEdges = useMemo(
+    () =>
+      edges.filter(
+        (e) =>
+          positionById.has(e.sourceEntityId) &&
+          positionById.has(e.targetEntityId),
+      ),
+    [edges, positionById],
+  );
+
+  const handleNodeClick = (entityId: string) => {
+    try {
+      window.dispatchEvent(
+        new CustomEvent("shell-graph:focus", { detail: { entityId } }),
+      );
+    } catch {
+      /* no-op — feature flag-gated by Phase 2's listener */
+    }
+  };
+
+  // Find the core's name + degree for the corner badge so the user
+  // immediately knows what this lens centers on.
+  const coreName = coreId ? idToName.get(coreId) : null;
+  const coreDegree = coreId ? positionById.get(coreId)?.degree ?? 0 : 0;
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        height: viewportH,
+      }}
+    >
+      <svg
+        width={viewportW}
+        height={viewportH}
+        viewBox={`0 0 ${viewportW} ${viewportH}`}
+        style={{
+          display: "block",
+          overflow: "visible",
+        }}
+      >
+        {/* Edges */}
+        {visibleEdges.map((edge, i) => {
+          const a = positionById.get(edge.sourceEntityId)!;
+          const b = positionById.get(edge.targetEntityId)!;
+          const stroke = POLARITY_STROKE[edge.polarity] ?? POLARITY_STROKE.neutral;
+          const dashed = edge.polarity === "conditional";
+          // Confidence drives stroke opacity: low-confidence edges
+          // appear ghosted so the user reads the "soft" relationships
+          // as such.
+          const opacity = 0.45 + Math.max(0, Math.min(1, edge.confidence ?? 0.5)) * 0.55;
+          return (
+            <line
+              key={`e-${i}`}
+              x1={a.x}
+              y1={a.y}
+              x2={b.x}
+              y2={b.y}
+              stroke={stroke}
+              strokeWidth={1}
+              strokeDasharray={dashed ? "3 2" : undefined}
+              opacity={opacity}
+            />
+          );
+        })}
+        {/* Nodes */}
+        {nodes.map((n) => {
+          const isCore = n.id === coreId;
+          const weight = weightById.get(n.id) ?? 0.5;
+          // Size: scales 4..9 based on max(weight, degreeRatio) so
+          // hubs by either measure are visually larger.
+          const sizeBasis = Math.max(weight / maxWeight, n.degree / maxDegree);
+          const r = 3.5 + sizeBasis * 5;
+          // Fill saturation: weight modulates how bold the accent is.
+          const saturationPct = Math.round(20 + weight * 60);
+          const fill = `color-mix(in srgb, ${accent} ${saturationPct}%, white)`;
+          return (
+            <g
+              key={`n-${n.id}`}
+              style={{ cursor: "pointer" }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleNodeClick(n.id);
+              }}
+            >
+              {isCore && (
+                // Soft halo behind the core node so it reads as the
+                // "center of gravity" without us having to label
+                // every node — labels would clutter at this scale.
+                <circle
+                  cx={n.x}
+                  cy={n.y}
+                  r={r + 4}
+                  fill={`color-mix(in srgb, ${accent} 18%, transparent)`}
+                  opacity={0.9}
+                />
+              )}
+              <circle
+                cx={n.x}
+                cy={n.y}
+                r={r}
+                fill={fill}
+                stroke={isCore ? accent : `color-mix(in srgb, ${accent} 50%, white)`}
+                strokeWidth={isCore ? 1.6 : 1}
+              />
+              <title>{idToName.get(n.id) ?? n.id}</title>
+            </g>
+          );
+        })}
+      </svg>
+      {/* Core badge (corner) — names what the lens centers on */}
+      {coreName && (
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            padding: "2px 6px",
+            borderRadius: 4,
+            background: `color-mix(in srgb, ${accent} 14%, transparent)`,
+            border: `1px solid color-mix(in srgb, ${accent} 25%, transparent)`,
+            fontSize: 9,
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            color: accent,
+            maxWidth: viewportW * 0.55,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+          title={`${coreName} · ${coreDegree} connection${coreDegree === 1 ? "" : "s"}`}
+        >
+          ⌖ {coreName}
+        </div>
+      )}
+      {/* Overflow note */}
+      {graphOverflow > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 0,
+            left: 0,
+            fontSize: 9,
+            color: "rgba(15,23,42,0.45)",
+            fontStyle: "italic",
+          }}
+          title={`${graphOverflow} more entit${graphOverflow === 1 ? "y" : "ies"} not shown — open detail to see all`}
+        >
+          +{graphOverflow} more
+        </div>
+      )}
+    </div>
+  );
+}

@@ -31,6 +31,12 @@ import {
   buildDecompIntentBlock,
   buildDomainDecompBlock,
 } from "@/lib/prompts/intent-context";
+import { AXIS_CATALOG } from "@/lib/probability-space/axis-catalog";
+import type {
+  AxisSpec as RichAxisSpec,
+  AxisInstrumentKind,
+  AxisOutputShape,
+} from "@/lib/probability-space/axis-spec";
 
 export interface AxisExemplar {
   /** Brief description of the input that produced this exemplar. */
@@ -67,6 +73,14 @@ export interface AxisPromptContext {
    * emphasizes failure-mode mechanisms for designs.
    */
   questionType?: QuestionType | null;
+  /**
+   * Phase 2E · Axis Richness (2026-04-24) — optional variant id
+   * picked by the framing panel (AxisProposal.prompt_variant). When
+   * present AND the axis's catalog entry registers this variant,
+   * the variant's focus_delta replaces the default focus line in the
+   * system prompt. When absent or unknown, default focus applies.
+   */
+  variant?: string | null;
 }
 
 /**
@@ -268,18 +282,26 @@ Return strict JSON with this shape:
       "importance": "fundamental" | "critical" | "important" | "moderate",
       "category": "concrete" | "abstract" | "process" | "relational" | "epistemic",
       "confidence": <0..1>,
-      "source_tag": "explicit" | "implicit" | "assumed"
+      "source_tag": "explicit" | "implicit" | "assumed",
+      "observables": ["<concrete leading indicator that would tell you this entity is active or shifting>", "..."],
+      "failure_mode": "<what would invalidate or break this entity, in one phrase> | null",
+      "intervention_handle": {
+        "lever": "<the specific action / decision / instrument that moves this entity>",
+        "controllability": "direct" | "indirect" | "uncontrollable",
+        "cost": "low" | "med" | "high"
+      } | null
     }
   ],
   "relationships": [
     {
       "source_id": "<entity id>",
       "target_id": "<entity id>",
-      "mechanism": "<how A actually produces B — not just a label>",
+      "mechanism": "<how A actually produces B — at least one full sentence naming the channel, not just a label>",
       "dimension": "structural" | "causal" | "temporal" | "logical" | "agentive",
       "polarity": "positive" | "negative" | "conditional" | "neutral",
       "dynamics": "linear" | "threshold" | "compounding" | "exponential" | "decay" | "delayed",
-      "confidence": <0..1>
+      "confidence": <0..1>,
+      "condition_text": "<gating condition for when this edge fires; required when polarity = 'conditional', else empty string>"
     }
   ],
   "axis_summary": "<2-3 sentences: what the key insight from THIS axis is>"
@@ -287,7 +309,11 @@ Return strict JSON with this shape:
 
 Rules that matter more than the shape:
 • Every entity must be SPECIFIC to the input. Generic-sounding entities are a sign the prompt was too shallow — expand or drop them.
-• Every relationship must name a MECHANISM, not just a label. "A → B" is not enough; "A → B because (specific reason)" is the bar.
+• Every relationship must name a MECHANISM in a full sentence (≥40 chars). "A → B" is not enough; "A → B because (specific channel)" is the bar.
+• Every entity should have at least ONE observable — a concrete leading indicator someone could actually look at to tell if the entity is firing or shifting. Vague observables ("market sentiment") are worse than no observable.
+• \`failure_mode\` should be substantive when present — what would falsify this entity? what would render it irrelevant? null only when the entity is definitionally tautological.
+• \`intervention_handle\` is null for purely epistemic / observational entities. For anything an actor could move on, name the LEVER (not just "policy") and rate honestly: most things are "indirect" controllability and "med" or "high" cost — say so.
+• When polarity = "conditional", \`condition_text\` MUST be a real gating condition ("if X exceeds threshold Y", "given Z holds"), and it must NOT just restate the mechanism — those are different fields.
 • 6-18 entities is the sweet spot. Fewer = too shallow; more = too fragmented.
 • It's better to output FEWER high-quality entities than many vague ones. The next-stage scorer is semantic, not count-based.
 `;
@@ -347,12 +373,31 @@ export function getAxisPrompt(
     ? buildAxisQuestionTypeBlock(axis, ctx.questionType)
     : "";
 
+  // Variant focus-delta swap. When the framing panel recorded a
+  // variant hint on the AxisProposal (e.g. financial → payback_period),
+  // and the catalog registers that variant on this axis, the variant's
+  // focus_delta REPLACES the default focus line. Vocabulary + anti-
+  // goal + CoT scaffolding remain intact so variant-specific guidance
+  // composes with the axis's overall rigor bar. Unknown variant id =
+  // silent no-op (default focus used). See axis-spec.ts for variant
+  // contract.
+  const catalogEntry = AXIS_CATALOG[axis];
+  const variantEntry = ctx.variant
+    ? catalogEntry.prompt_variants[ctx.variant]
+    : undefined;
+  const focusLine = variantEntry
+    ? `Focus of this axis (variant: ${variantEntry.label}): ${variantEntry.focus_delta}`
+    : `Focus of this axis: ${spec.focus}`;
+  const variantNote = variantEntry
+    ? `\nThe panel selected the "${variantEntry.label}" variant — lean into its focus without abandoning the axis's overall vocabulary.\n`
+    : "";
+
   const system = [
     `You are ${spec.role}.`,
     `You are examining a situation through ONE specific lens: the ${spec.label} axis.`,
     ``,
-    `Focus of this axis: ${spec.focus}`,
-    ``,
+    focusLine,
+    variantNote,
     `Vocabulary to prime on (use these terms where they apply, don't force them where they don't): ${spec.vocabulary.join(", ")}.`,
     ``,
     `Anti-goal: ${spec.avoid}`,
@@ -495,4 +540,186 @@ export function getAxisMeta(axis: ProbabilitySpaceAxis): {
 } {
   const s = AXIS_SPECS[axis];
   return { label: s.label, tagline: s.tagline };
+}
+
+// ── Ad-hoc axis prompt builder (Phase 2E · Axis Richness) ────────────
+//
+// Ad-hoc axes are minted by the framing panel when ≥2 lenses
+// independently propose a dimension not covered by the canonical 8.
+// They arrive at the generator route with a live `AxisSpec` in the
+// request payload (not a `ProbabilitySpaceAxis` key) and therefore
+// cannot use AXIS_SPECS above — they have no hand-written role /
+// vocabulary / avoid block.
+//
+// `getAdHocAxisPrompt` assembles a stance-aware generic prompt from
+// the panel-provided AxisSpec fields:
+//
+//   • instrument_kind  → analyst role + cognitive stance
+//   • output_shape     → what entities should look like
+//   • generator_focus  → primary focus line
+//   • hard/soft preconditions → briefing paragraph
+//
+// The output-shape scaffolding (entity schema) remains the same
+// OUTPUT_SHAPE constant — axis-output-validator expects the same JSON
+// shape for every axis, canonical or ad-hoc. What changes is the
+// framing language that nudges the LLM toward producing relevant
+// content for this ad-hoc dimension.
+
+const INSTRUMENT_KIND_STANCE: Record<
+  AxisInstrumentKind,
+  { role: string; stance_note: string }
+> = {
+  calibration: {
+    role:
+      "a quantitative analyst producing bounded numerical estimates with explicit uncertainty ranges",
+    stance_note:
+      "Every entity that can be quantified should carry a range or distribution, not a point estimate. Flag which numbers are grounded vs extrapolated.",
+  },
+  constraint: {
+    role:
+      "a systems-safety analyst mapping the hard bounds and failure envelope of this situation",
+    stance_note:
+      "Every entity names a SPECIFIC limit, boundary condition, or failure mode — not generic warnings.",
+  },
+  enumeration: {
+    role:
+      "a taxonomist enumerating the distinct cases or instances relevant to this situation",
+    stance_note:
+      "Prefer completeness without redundancy — each entity should name a DIFFERENT case, not a variation of the same one.",
+  },
+  stratification: {
+    role:
+      "a segmentation analyst decomposing broad categories into distinctive sub-groups",
+    stance_note:
+      "Each sub-segment must have a different MENTAL MODEL or DECISION LOGIC — segments that behave the same are one segment, not two.",
+  },
+  decomposition: {
+    role:
+      "a mechanism analyst breaking the situation into its constituent moving parts",
+    stance_note:
+      "Every entity names a SPECIFIC mechanism — what it does, how it couples to neighbors, not a restatement of its label.",
+  },
+  counterfactual: {
+    role:
+      "a scenario planner tracing what would happen if key variables took different values",
+    stance_note:
+      "Each entity represents a DIFFERENT world — not different adjectives for the same world. Name the fork point that sends us down each branch.",
+  },
+  evidentiary: {
+    role:
+      "an epistemologist auditing claims against their supporting evidence",
+    stance_note:
+      "Every entity names a specific CLAIM with its source type (empirical / theoretical / anecdotal / assumed) and what would flip it.",
+  },
+};
+
+const OUTPUT_SHAPE_NOTE: Record<AxisOutputShape, string> = {
+  numeric_with_distribution:
+    "Where numeric, entities carry a range not a point. Describe the shape (skew, tail) when it matters.",
+  named_stakeholder_set:
+    "Entities are specific named actors or well-defined sub-segments, each with distinct incentives and default actions.",
+  scenario_tree:
+    "Entities represent distinct possible worlds linked by fork-point mechanisms. Each scenario has a concrete trigger condition.",
+  claim_ledger:
+    "Entities are specific claims with source-type tags and load-bearing vs cosmetic classification.",
+  assumption_ledger:
+    "Entities are hidden axioms the situation rests on, each with an if-false counterfactual.",
+  failure_mode_catalog:
+    "Entities are named failure paths with likelihood mechanism, severity, reversibility, and earliest signal.",
+  temporal_phase_map:
+    "Entities are phases / gates ordered in time, each with entry + exit conditions and the signal that advances it.",
+  norm_and_identity_map:
+    "Entities are concrete norms or identity markers — who enforces them, what behavior they produce, what breaks them.",
+  constraint_envelope:
+    "Entities are binding constraints with numeric or categorical bounds and the consequence of breaching them.",
+  precedent_set:
+    "Entities are historical analogs with a mapping back to this situation — what matches, what doesn't.",
+  generic_entity_set:
+    "Entities may be any concept central to the axis; every one must still be SPECIFIC to the input, not generic.",
+};
+
+export interface AdHocAxisPromptContext {
+  /** The user's original prompt. */
+  userInput: string;
+  /** Optional domain classification from the frame extractor. */
+  domain?: string | null;
+  /** Optional analyze-time intent. */
+  intent?: UserIntent | null;
+  /** Optional question-type classification. */
+  questionType?: QuestionType | null;
+}
+
+/**
+ * Build a generator prompt for an ad-hoc axis. Uses the panel-
+ * minted `AxisSpec` to pick a stance (from instrument_kind), a
+ * shape note (from output_shape), and anchors the focus line on
+ * the spec's `generator_focus`.
+ *
+ * Returns the same shape as `getAxisPrompt` — the caller can route
+ * uniformly through `llmJSON` regardless of catalog vs ad-hoc.
+ */
+export function getAdHocAxisPrompt(
+  spec: RichAxisSpec,
+  ctx: AdHocAxisPromptContext,
+): AxisPromptResult {
+  const stance = INSTRUMENT_KIND_STANCE[spec.instrument_kind];
+  const shapeNote = OUTPUT_SHAPE_NOTE[spec.output_shape];
+
+  const domainBlock = ctx.domain
+    ? `\nThe frame extractor classified this as domain=${ctx.domain}. Use that to narrow vocabulary and filter out obviously-inapplicable concepts.\n`
+    : "";
+  const intentBlock = ctx.intent
+    ? "\n\n" + buildDecompIntentBlock(ctx.intent).trim() + "\n"
+    : "";
+  const domainVocabBlock = ctx.intent?.context_type
+    ? "\n\n" + buildDomainDecompBlock(ctx.intent.context_type).trim() + "\n"
+    : "";
+  const questionTypeBlock = ctx.questionType
+    ? `\n\nQUESTION TYPE CONTEXT — this input is a ${ctx.questionType}. Tune the lens accordingly.\n`
+    : "";
+
+  const precondBlock =
+    spec.hard_preconditions.length > 0 || spec.soft_preconditions.length > 0
+      ? `\nWhy this axis was opened:\n${[...spec.hard_preconditions, ...spec.soft_preconditions].map((p) => `- ${p}`).join("\n")}\n`
+      : "";
+
+  const system = [
+    `You are ${stance.role}.`,
+    `You are examining a situation through ONE specific lens: the ${spec.label} axis (${spec.tagline}).`,
+    ``,
+    `Focus of this axis: ${spec.generator_focus}`,
+    ``,
+    `Output shape expectation: ${shapeNote}`,
+    ``,
+    `Stance note: ${stance.stance_note}`,
+    precondBlock,
+    domainBlock,
+    intentBlock,
+    domainVocabBlock,
+    questionTypeBlock,
+    COT_UNFOLDING,
+    OUTPUT_SHAPE,
+  ].join("\n");
+
+  const user = [
+    `Situation to analyze through the ${spec.label} lens:`,
+    ``,
+    ctx.userInput.trim(),
+    ``,
+    `Produce the JSON now. Every entity must be specific to THIS situation — no generic placeholders.`,
+  ].join("\n");
+
+  // Ad-hoc axes inherit a moderate temperature (0.4) unless the
+  // instrument_kind is rigor-heavy (calibration, evidentiary).
+  const temperature =
+    spec.instrument_kind === "calibration" ||
+    spec.instrument_kind === "evidentiary"
+      ? 0.25
+      : 0.4;
+  const maxTokens = Math.max(
+    4000,
+    Math.min(10000, spec.cost_profile.tokens_estimate),
+  );
+
+  return { system, user, temperature, maxTokens };
 }

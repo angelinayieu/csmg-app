@@ -9,6 +9,25 @@
  *   - filter nodes/edges to the App's dominant_entity_ids + downstream reach
  *   - surface the App's interventions as sticky-note overlays
  *   - feed user edits back into `apps.stale_reason = 'whiteboard_edit'`
+ *
+ * ── Why NOT InteraxisCanvas / Phase 4-8 chrome ────────────────────
+ * Audit decision (post-Phase 8 cleanup): this surface deliberately
+ * does NOT mount the new chrome (CanvasLegendSidebar /
+ * CanvasStageIndicator / CanvasEntityDetailDrawer /
+ * CanvasLassoSystemButton) that lives on the space-level whiteboard.
+ * Reasons:
+ *   - Scope mismatch: the legend sidebar pulls the WHOLE space's
+ *     entity catalog; on a per-app surface that's noise.
+ *   - Stage indicator tracks SPACE-level pipeline runs; an app-
+ *     detail surface doesn't have its own pipeline.
+ *   - "Save selection as System" already fires on the parent space's
+ *     whiteboard — duplicating it here would create two paths to the
+ *     same end-state with different mental models.
+ *   - WhiteboardOverview's tier layout is deliberately focused and
+ *     read-only-ish; layering canvas chrome would dilute it.
+ * If a future spec calls for app-scoped systems, that's a NEW
+ * primitive (an "app system" — entities scoped to an app) rather
+ * than reusing the space-level systems table here.
  */
 
 import { motion } from "framer-motion";

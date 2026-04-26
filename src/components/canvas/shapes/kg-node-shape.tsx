@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
@@ -17,6 +17,8 @@ import { ReactionHoverPreview } from "@/components/shared/reaction-preview";
 import type { ReactionType, Reaction } from "@/types/reactions";
 import type { Entity } from "@/types";
 import type { KGNodeShape } from "./types";
+import { NodeSignatureRing } from "@/components/signatures/node-signature-ring";
+import type { NodeSignature } from "@/types/node-signature";
 
 // Phase 49 — deterministic seeded RNG for sparkline generation. We don't
 // have real per-entity time-series data yet (Phase 50+), so we derive a
@@ -108,6 +110,39 @@ function iconFor(category: string, isLeverage: boolean, isBottleneck: boolean, i
   return FileText;
 }
 
+// Shared stylesheet for kg-node animations. Rendered once per shape but
+// tldraw's HTMLContainer isolates each shape's tree, so each instance
+// gets its own <style> tag. That's fine — browsers dedupe identical
+// stylesheet content, and it keeps the animations co-located with the
+// shape definition rather than scattered across a global CSS file.
+function KGNodeAnimationStyles() {
+  return (
+    <style>{`
+      /* P1 #5 — kg-node enter animation. Fires once on mount so every
+         entity (ghost or real) fades+scales in instead of snapping.
+         320ms matches proposal-snapshot cadence. */
+      .kg-node-enter {
+        animation: kg-node-enter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+      @keyframes kg-node-enter {
+        from { opacity: 0; transform: scale(0.94) translateY(-4px); }
+        to   { opacity: 1; transform: scale(1) translateY(0); }
+      }
+      /* P0 #4 — preview→real identity-confirm pulse. Saturation spike +
+         subtle scale pop marks the moment a speculative card locks into
+         the real entity. */
+      .kg-node-confirm-pulse {
+        animation: kg-node-confirm 320ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+      }
+      @keyframes kg-node-confirm {
+        0%   { filter: saturate(1) brightness(1); transform: scale(1); }
+        45%  { filter: saturate(1.35) brightness(1.08); transform: scale(1.035); }
+        100% { filter: saturate(1) brightness(1); transform: scale(1); }
+      }
+    `}</style>
+  );
+}
+
 export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
   static override type = "kg-node" as const;
   static override props: RecordProps<KGNodeShape> = {
@@ -125,6 +160,13 @@ export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
     isBottleneck: T.boolean,
     isConvergence: T.boolean,
     isGhost: T.boolean,
+    // P0 #4 — monotonic counter bumped whenever a preview kg-node is
+    // upgraded to a real entity (Pass 1 speculative → Pass 2 confirmed).
+    // The view component watches this prop via useEffect and plays a
+    // one-shot "identity-confirm" CSS animation when it increments, so
+    // the user sees a subtle pulse marking the moment a tentative
+    // entity becomes real. Default 0 for never-upgraded shapes.
+    confirmedPulse: T.number,
   };
 
   override canResize = () => true;
@@ -151,6 +193,7 @@ export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
       isBottleneck: false,
       isConvergence: false,
       isGhost: false,
+      confirmedPulse: 0,
     };
   }
 
@@ -164,8 +207,35 @@ export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
 }
 
 function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
-  const { name, description, layer, category, tier, weight, isLeverage, isRisk, isBottleneck, isConvergence, isGhost, entityId } =
+  const { name, description, layer, category, tier, weight, isLeverage, isRisk, isBottleneck, isConvergence, isGhost, entityId, confirmedPulse } =
     shape.props;
+
+  // P1 #5 — one-shot enter animation. Tldraw keeps the same React
+  // instance mounted for the life of a shape, so this ref tracks
+  // "first render" and we apply the class only on that render cycle.
+  // The CSS animation runs once and self-cleans via `animation-fill-mode: both`.
+  const enteredRef = useRef(false);
+  const [showEnter, setShowEnter] = useState(true);
+  useEffect(() => {
+    if (enteredRef.current) return;
+    enteredRef.current = true;
+    const t = setTimeout(() => setShowEnter(false), 400);
+    return () => clearTimeout(t);
+  }, []);
+
+  // P0 #4 — identity-confirm pulse. Watches confirmedPulse for changes
+  // (the painter bumps it on preview→real upgrade). On increment, plays
+  // a 320ms saturate-pop animation. Skips the first render so newly-
+  // created shapes with confirmedPulse=0 don't accidentally fire.
+  const lastPulseRef = useRef(confirmedPulse);
+  const [pulsing, setPulsing] = useState(false);
+  useEffect(() => {
+    if (confirmedPulse === lastPulseRef.current) return;
+    lastPulseRef.current = confirmedPulse;
+    setPulsing(true);
+    const t = setTimeout(() => setPulsing(false), 360);
+    return () => clearTimeout(t);
+  }, [confirmedPulse]);
   const layerCfg = LAYERS[layer];
   const Icon = iconFor(category, isLeverage, isBottleneck, isRisk);
   const isHero = tier === "hero";
@@ -223,8 +293,16 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
   const sparkColor = isHero ? "rgba(255,255,255,0.85)" : layerCfg.color;
   const sparkFill = isHero ? "rgba(255,255,255,0.18)" : `${layerCfg.color}22`;
 
+  const containerClasses = [
+    showEnter ? "kg-node-enter" : "",
+    pulsing ? "kg-node-confirm-pulse" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
       <HTMLContainer
+        className={containerClasses || undefined}
         style={{
           width: shape.props.w,
           height: shape.props.h,
@@ -234,6 +312,7 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
           transition: "opacity 200ms ease, filter 200ms ease",
         }}
       >
+        <KGNodeAnimationStyles />
         <div
           style={{
             position: "relative",
@@ -301,6 +380,18 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
               }}
             />
           )}
+
+          {/* Canonical signature rings — read off the entity row, render
+              top-right of the card. The whole point of materializing
+              NodeSignature is to surface a node's basis of resolution
+              ("this dot has a category ring, an axis ring, a dominant
+              relation ring, a leverage ring") at a glance. Without this
+              overlay, that reasoning structure exists in the DB but is
+              invisible on the canvas. Skip on peripheral cards (too
+              little real estate for a meaningful ring stack) and skip
+              ghost cards (their dashed border already telegraphs
+              "speculative — no resolved variables yet"). */}
+          <SignatureRingOverlay entity={entity} isHero={isHero} hidden={isPeripheral || isGhost} />
 
           <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
             {/* gauge */}
@@ -801,6 +892,70 @@ function OpenLabPill({
       <FlaskConical style={{ width: 8, height: 8 }} />
       Lab
     </a>
+  );
+}
+
+/**
+ * Canvas-side ring overlay. Reads the entity's persisted node_signature
+ * (written by the signature_materializer pipeline) and renders the
+ * NodeSignatureRing primitive at a tile-appropriate size in the top-
+ * right corner of the card.
+ *
+ * Static for now — when a `signature_deepened` event lands and the
+ * executor calls persistSignature(), the entity row updates and the
+ * canvas's entity lookup re-fetches; React re-renders the card with
+ * the new ring count. Ring-growth animation (motion-wrapped circles)
+ * is a follow-up; the first move that earns the "movie unravel" feel
+ * is just MAKING the rings visible at all.
+ *
+ * Click does NOT open the detail drawer here — that drawer is mounted
+ * on the constellation widget / app detail page, not the canvas. The
+ * overlay's hover title is the affordance: it shows the canonical_code
+ * + ring count + residual_uncertainty so the user gets the headline
+ * without navigating away.
+ */
+function SignatureRingOverlay({
+  entity,
+  isHero,
+  hidden,
+}: {
+  entity: Entity | undefined;
+  isHero: boolean;
+  hidden: boolean;
+}) {
+  if (hidden) return null;
+  const sig = entity?.node_signature as NodeSignature | null | undefined;
+  if (!sig || !sig.basis || sig.basis.length === 0) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 8,
+        right: 8,
+        width: 36,
+        height: 36,
+        pointerEvents: "auto",
+        // Hero cards have a saturated gradient background; lift the ring
+        // onto a translucent disc so the strokes stay legible against
+        // any color underneath.
+        borderRadius: "50%",
+        background: isHero ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.6)",
+        backdropFilter: "blur(4px)",
+        boxShadow: isHero
+          ? "0 0 0 1px rgba(255,255,255,0.18)"
+          : "0 0 0 1px rgba(10,30,80,0.06)",
+        display: "grid",
+        placeItems: "center",
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <NodeSignatureRing
+        signature={sig}
+        size={32}
+        showCode={false}
+        showLabel={false}
+      />
+    </div>
   );
 }
 

@@ -221,6 +221,35 @@ export async function POST(request: Request) {
   const reservationId: string | undefined =
     typeof body.reservationId === "string" ? body.reservationId : undefined;
 
+  // ── Handshake beacon (2026-04-24 stall fix) ────────────────────────
+  //
+  // Emit a stage_boundary the SECOND we know this Lambda accepted the
+  // request, BEFORE auth validation, ownership check, agent tracking,
+  // and the 4-way Promise.all DB fetch. Multiple failure modes in the
+  // chain-hop path (empty decomposition → cache lookup returning 0
+  // entities, auth cookie decode failing between hops, ownership
+  // check rejecting a cross-user race) silently `return` here and
+  // leave the run orphaned at status=running because the caller's
+  // AbortController already hung up. This beacon gives us a visible
+  // "research started" signal in pipeline_run_events so we can
+  // distinguish "Lambda never fired" from "Lambda fired and bailed".
+  //
+  // Only emitted on the chain-hop path (existingRunId present) —
+  // manually-triggered research opens its own run row later and
+  // doesn't need the beacon.
+  if (existingRunId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const beaconDb = supabase as any;
+    await emitStructuralEvent(beaconDb, existingRunId, {
+      type: "stage_boundary",
+      stage: "landscape",
+      phase: "enter",
+      message: "Research handoff received…",
+    }).catch((err) => {
+      console.warn("[research] handshake beacon emit soft-fail:", err);
+    });
+  }
+
   // Focused/targeted research parameters (Phase 3.2)
   const focusAreas: string[] = Array.isArray(body.focus_areas) ? body.focus_areas.filter((a: unknown) => typeof a === "string") : [];
   const skipCategories: string[] = Array.isArray(body.skip_categories) ? body.skip_categories.filter((a: unknown) => typeof a === "string") : [];
@@ -1163,6 +1192,14 @@ These are NOT external landscape entities — these are entities the user SHOULD
                 autoAdvance: true,
                 existingRunId: chainedRunId,
                 reservationId,
+                // Piece 4b — chain-hops always bypass the layer-coverage
+                // gate. Blocking a first-prompt pipeline on a framing
+                // mismatch would leave the canvas half-painted with no
+                // recovery path. synthesize still emits
+                // `layer_coverage_gap` events so the UI surfaces the
+                // warning; manual re-runs (dashboard button) omit this
+                // flag and see the 409 as intended.
+                bypassLayerGate: true,
               }),
               signal: ctrl.signal,
             });
@@ -2527,6 +2564,14 @@ These are NOT external landscape entities — these are entities the user SHOULD
               autoAdvance: true,
               existingRunId: chainedRunId,
               reservationId,
+              // Piece 4b — chain-hops always bypass the layer-coverage
+              // gate. Blocking a first-prompt pipeline on a framing
+              // mismatch would leave the canvas half-painted with no
+              // recovery path. synthesize still emits
+              // `layer_coverage_gap` events so the UI surfaces the
+              // warning; manual re-runs (dashboard button) omit this
+              // flag and see the 409 as intended.
+              bypassLayerGate: true,
             }),
             signal: ctrl.signal,
           });

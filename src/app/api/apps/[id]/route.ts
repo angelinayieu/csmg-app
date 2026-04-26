@@ -122,6 +122,82 @@ export async function GET(
     .order("changed_at", { ascending: false })
     .limit(10);
 
+  // ── Phase 3 VP-Project: experiment taxonomy + variants ───────────
+  // The iv_decomposition + variant_carousel widgets bind to these.
+  // One taxonomy row per space (inferred by domain-inferrer at end
+  // of intake). Variants are fetched with their per-slot rows joined
+  // in a second pass so the widgets don't need to round-trip again
+  // when the user activates a different variant card.
+  const { data: taxonomyRow } = await db
+    .from("experiment_taxonomies")
+    .select("*")
+    .eq("space_id", row.space_id)
+    .maybeSingle();
+
+  const { data: variantRows } = await db
+    .from("experiment_variants")
+    .select("*")
+    .eq("space_id", row.space_id)
+    .order("is_active", { ascending: false })
+    .order("aggregate_quality", { ascending: false, nullsFirst: false })
+    .limit(48);
+
+  // Active variant (singular) — hydrated with its per-slot grid rows
+  // so the IV decomposition widget can render immediately.
+  const activeVariantRow = (variantRows ?? []).find(
+    (v: { is_active: boolean }) => v.is_active,
+  ) ?? (variantRows ?? [])[0] ?? null;
+
+  let activeVariantSlots: unknown[] = [];
+  if (activeVariantRow) {
+    const { data: slotRows } = await db
+      .from("experiment_variant_slots")
+      .select("*")
+      .eq("variant_id", activeVariantRow.id);
+    activeVariantSlots = slotRows ?? [];
+  }
+
+  // ── Phase 3 (Batch 3) — downstream reality: latent dims + scores ──
+  // The downstream_reality widget renders a variant × latent-variable
+  // heatmap. Two side-by-side fetches here are cheap (both scoped to
+  // the space) and mean the widget can render with zero extra
+  // round-trips. Both lists are bounded (≤5 latents, ≤20*5=100 scores
+  // typically) so we skip pagination for now.
+  const { data: latentVariableRows } = await db
+    .from("latent_variables")
+    .select("*")
+    .eq("space_id", row.space_id)
+    .order("created_at", { ascending: true });
+
+  const { data: outcomeScoreRows } = await db
+    .from("variant_outcome_scores")
+    .select("*")
+    .eq("space_id", row.space_id);
+
+  // ── Phase 3 (Batch 4) — objective_tree source rows ────────────────
+  // Flat list of every goal in the space. The client composes a tree
+  // (parent_goal_id → children) inside the resolver memo so widgets
+  // can bind to a single root GoalTreeNode without re-querying. Scoped
+  // by space_id; order by created_at so the composed tree is stable
+  // across renders.
+  const { data: goalRows } = await db
+    .from("improvement_goals")
+    .select("*")
+    .eq("space_id", row.space_id)
+    .order("created_at", { ascending: true });
+
+  // Batch 8 — canonical signature substrate. Fetch entities that have
+  // a materialized node_signature so the constellation widget + future
+  // three-panel UI can read them via the `node_signatures` resolver.
+  // Selecting only the columns the widget needs keeps payload tight —
+  // the full signature lives in the JSONB column already; we attach
+  // entity name for the ring labels.
+  const { data: entitySigRows } = await db
+    .from("entities")
+    .select("id, name, node_signature")
+    .eq("space_id", row.space_id)
+    .not("node_signature", "is", null);
+
   return NextResponse.json({
     app: hydrateApp(row),
     interventions: ivRows ?? [],
@@ -137,6 +213,24 @@ export async function GET(
     // access; raw row is fine for widgets that just check existence.
     app_strategy: appStrategyRow ?? null,
     app_strategy_versions: appStrategyVersions ?? [],
+    // Phase 3 — VP Project taxonomy data. The client hydrates via
+    // hydrateTaxonomy() before feeding the ResolverTable.
+    experiment_taxonomy: taxonomyRow ?? null,
+    experiment_variants: variantRows ?? [],
+    experiment_active_variant: activeVariantRow
+      ? { ...activeVariantRow, slots: activeVariantSlots }
+      : null,
+    // Phase 3 Batch 3 — raw rows; the client composes a
+    // DownstreamReality shape via composeDownstreamReality().
+    latent_variables: latentVariableRows ?? [],
+    variant_outcome_scores: outcomeScoreRows ?? [],
+    // Phase 3 Batch 4 — flat improvement_goals array. The client
+    // composes a parent→children tree in the objective_tree resolver.
+    improvement_goals: goalRows ?? [],
+    // Batch 8 — canonical node signatures + their entity names for the
+    // signature_constellation widget. Resolver wraps these into
+    // ConstellationItem[] at read time.
+    node_signature_entities: entitySigRows ?? [],
   });
 }
 

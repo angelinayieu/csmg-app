@@ -128,6 +128,9 @@ export type Database = {
           digital_twin_state: "not_started" | "ready" | "active" | "retired";
           twin_initialized_at: string | null;
           kind: "analysis" | "ask";
+          pinned: boolean;
+          archived: boolean;
+          dominant_entity_category: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -164,6 +167,9 @@ export type Database = {
           digital_twin_state?: "not_started" | "ready" | "active" | "retired";
           twin_initialized_at?: string | null;
           kind?: "analysis" | "ask";
+          pinned?: boolean;
+          archived?: boolean;
+          dominant_entity_category?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -200,6 +206,9 @@ export type Database = {
           digital_twin_state?: "not_started" | "ready" | "active" | "retired";
           twin_initialized_at?: string | null;
           kind?: "analysis" | "ask";
+          pinned?: boolean;
+          archived?: boolean;
+          dominant_entity_category?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -460,6 +469,18 @@ export type Database = {
           connection_search_count: number;
           last_connection_search_at: string | null;
           decomposition_probed_at: string | null;
+          // Batch 6 · canonical node signature substrate.
+          // node_signature shape lives in src/types/node-signature.ts.
+          node_signature: Json | null;
+          resolution_zoom: number | null;
+          resolution_horizon:
+            | "immediate"
+            | "hours"
+            | "days"
+            | "months"
+            | "years"
+            | "indefinite"
+            | null;
         };
         Insert: {
           id?: string;
@@ -513,6 +534,17 @@ export type Database = {
           connection_search_count?: number;
           last_connection_search_at?: string | null;
           decomposition_probed_at?: string | null;
+          // Batch 6 · canonical node signature substrate.
+          node_signature?: Json | null;
+          resolution_zoom?: number | null;
+          resolution_horizon?:
+            | "immediate"
+            | "hours"
+            | "days"
+            | "months"
+            | "years"
+            | "indefinite"
+            | null;
         };
         Update: {
           id?: string;
@@ -566,6 +598,17 @@ export type Database = {
           connection_search_count?: number;
           last_connection_search_at?: string | null;
           decomposition_probed_at?: string | null;
+          // Batch 6 · canonical node signature substrate.
+          node_signature?: Json | null;
+          resolution_zoom?: number | null;
+          resolution_horizon?:
+            | "immediate"
+            | "hours"
+            | "days"
+            | "months"
+            | "years"
+            | "indefinite"
+            | null;
         };
       };
       expansions: {
@@ -652,6 +695,19 @@ export type Database = {
           temporal_validity: Json | null;
           analysis_count: number;
           last_analyzed_at: string | null;
+          // Batch 6 · typed relation enum alongside free-text relationship_type.
+          relation_type:
+            | "causes"
+            | "enables"
+            | "inhibits"
+            | "moderates"
+            | "mediates"
+            | "constrains"
+            | "composes"
+            | "competes"
+            | "temporally_precedes"
+            | "relates_to"
+            | null;
         };
         Insert: {
           id?: string;
@@ -689,6 +745,19 @@ export type Database = {
           temporal_validity?: Json | null;
           analysis_count?: number;
           last_analyzed_at?: string | null;
+          // Batch 6 · typed relation enum alongside free-text relationship_type.
+          relation_type?:
+            | "causes"
+            | "enables"
+            | "inhibits"
+            | "moderates"
+            | "mediates"
+            | "constrains"
+            | "composes"
+            | "competes"
+            | "temporally_precedes"
+            | "relates_to"
+            | null;
         };
         Update: {
           id?: string;
@@ -726,6 +795,19 @@ export type Database = {
           temporal_validity?: Json | null;
           analysis_count?: number;
           last_analyzed_at?: string | null;
+          // Batch 6 · typed relation enum alongside free-text relationship_type.
+          relation_type?:
+            | "causes"
+            | "enables"
+            | "inhibits"
+            | "moderates"
+            | "mediates"
+            | "constrains"
+            | "composes"
+            | "competes"
+            | "temporally_precedes"
+            | "relates_to"
+            | null;
         };
       };
       cycles: {

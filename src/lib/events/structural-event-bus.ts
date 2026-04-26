@@ -25,7 +25,10 @@ export type Pipeline =
   | "generate_apps"
   | "critique"
   | "expand"
-  | "intake_bootstrap";
+  | "intake_bootstrap"
+  // VP Project report (Phase 3) — writer-path run that produces
+  // variant flashcards via variant_factory + iv_scorer.
+  | "writer_path";
 
 export interface StartPipelineRunOpts {
   spaceId: string;
@@ -85,7 +88,24 @@ export async function startPipelineRun(
  * and use nextval(), but that requires a migration; this retry loop
  * unblocks the UX today.
  */
-const MAX_SEQ_RETRIES = 8;
+// Sized for the realistic concurrency pattern: the frame-extractor
+// fan-out emits from 6 axis generators × ~20 events per axis × a
+// cross-space-linker that also emits, all racing on the same sequence
+// counter. At 8 retries with ≤40ms back-off the worst-case dwell time
+// was ~320ms — not enough headroom for a 6-way stampede, causing
+// events to drop silently and the canvas to freeze. 32 retries keep
+// the p99 under ~2s while still giving up long before the SSE
+// keepalive (~15s) would notice, so a truly stuck run still surfaces.
+const MAX_SEQ_RETRIES = 32;
+// Jitter: base window widens with attempt count so early retries
+// don't clump together (the classic stampede shape). Max per-attempt
+// ~140ms × 32 ≈ a bounded ~2-3s total.
+function nextBackoffMs(attempt: number): number {
+  const base = 12;
+  const jitter = Math.floor(Math.random() * 48);
+  const growth = Math.min(attempt + 1, 10); // cap growth at 10x
+  return base + jitter * growth;
+}
 
 function isUniqueViolation(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -137,8 +157,7 @@ export async function emitStructuralEvent(
       // Unique-constraint collision — another concurrent emit won the
       // slot. Short jittered back-off so retry storm doesn't pile up,
       // then re-read last_sequence and try again.
-      const backoffMs = 8 + Math.floor(Math.random() * 16) * (attempt + 1);
-      await new Promise((r) => setTimeout(r, backoffMs));
+      await new Promise((r) => setTimeout(r, nextBackoffMs(attempt)));
     }
     console.warn(
       "[event-bus] emit exhausted retries — event dropped:",
@@ -195,8 +214,7 @@ export async function emitBatchEvents(
         return;
       }
 
-      const backoffMs = 8 + Math.floor(Math.random() * 16) * (attempt + 1);
-      await new Promise((r) => setTimeout(r, backoffMs));
+      await new Promise((r) => setTimeout(r, nextBackoffMs(attempt)));
     }
     console.warn(
       "[event-bus] batch emit exhausted retries — dropped",
@@ -216,6 +234,22 @@ export async function completePipelineRun(
 ): Promise<void> {
   if (!runId) return;
   try {
+    // Look up the run's space_id BEFORE marking complete so we can
+    // refresh the space's dominant_entity_category in the same tick.
+    let spaceId: string | null = null;
+    if (status === "completed") {
+      try {
+        const { data } = await db
+          .from("pipeline_runs")
+          .select("space_id")
+          .eq("id", runId)
+          .maybeSingle();
+        spaceId = (data as { space_id?: string | null } | null)?.space_id ?? null;
+      } catch {
+        // Non-fatal — proceed to mark the run complete regardless.
+      }
+    }
+
     await db
       .from("pipeline_runs")
       .update({
@@ -224,7 +258,53 @@ export async function completePipelineRun(
         error_message: errorMessage?.slice(0, 2000) ?? null,
       })
       .eq("id", runId);
+
+    if (spaceId) {
+      await refreshDominantEntityCategory(db, spaceId);
+    }
   } catch (err) {
     console.warn("[event-bus] completePipelineRun threw:", err);
+  }
+}
+
+/**
+ * Recompute `spaces.dominant_entity_category` from the entities table.
+ * Picks the category with the highest count for that space; ties broken
+ * by lexical order (deterministic). No-op when the space has no
+ * entities yet. Soft-fails so a category-write hiccup never blocks
+ * pipeline completion.
+ */
+export async function refreshDominantEntityCategory(
+  db: AnyDb,
+  spaceId: string,
+): Promise<void> {
+  try {
+    const { data: rows } = await db
+      .from("entities")
+      .select("entity_category")
+      .eq("space_id", spaceId);
+
+    const list = (rows as Array<{ entity_category: string | null }> | null) ?? [];
+    if (list.length === 0) return;
+
+    const counts = new Map<string, number>();
+    for (const r of list) {
+      const cat = r.entity_category;
+      if (!cat) continue;
+      counts.set(cat, (counts.get(cat) ?? 0) + 1);
+    }
+    if (counts.size === 0) return;
+
+    const dominant = [...counts.entries()].sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return a[0].localeCompare(b[0]);
+    })[0][0];
+
+    await db
+      .from("spaces")
+      .update({ dominant_entity_category: dominant })
+      .eq("id", spaceId);
+  } catch (err) {
+    console.warn("[event-bus] refreshDominantEntityCategory threw:", err);
   }
 }

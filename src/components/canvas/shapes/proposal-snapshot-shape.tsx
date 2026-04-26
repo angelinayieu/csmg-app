@@ -53,6 +53,13 @@ export class ProposalSnapshotShapeUtil extends BaseBoxShapeUtil<ProposalSnapshot
     p10: T.number.nullable(),
     p50: T.number.nullable(),
     p90: T.number.nullable(),
+    // Distribution provenance tag so the shape renderer can disclose
+    // whether p10/p50/p90 came from real math or LLM prose. Written by
+    // the painter from `ProposalReadyEvent.distribution.provenance`.
+    // Empty string = unknown (pre-migration events); treated as
+    // llm_estimate by the UI for the conservative assumption.
+    distributionProvenance: T.string,
+    distributionSampleCount: T.number.nullable(),
     accent: T.string,
     axesUsed: T.arrayOf(T.string),
   };
@@ -69,6 +76,8 @@ export class ProposalSnapshotShapeUtil extends BaseBoxShapeUtil<ProposalSnapshot
       p10: null,
       p50: null,
       p90: null,
+      distributionProvenance: "",
+      distributionSampleCount: null,
       accent: "#D97706",
       axesUsed: [],
     };
@@ -81,13 +90,39 @@ export class ProposalSnapshotShapeUtil extends BaseBoxShapeUtil<ProposalSnapshot
   ) => resizeBox(shape, info);
 
   override component(shape: ProposalSnapshotShape) {
-    const { kind, title, headline, p10, p50, p90, accent, axesUsed } = shape.props;
+    const {
+      kind,
+      title,
+      headline,
+      p10,
+      p50,
+      p90,
+      accent,
+      axesUsed,
+      distributionProvenance,
+      distributionSampleCount,
+    } = shape.props;
     const meta = KIND_META[kind];
     const Icon = meta.icon;
     const hasDistribution =
       typeof p10 === "number" &&
       typeof p50 === "number" &&
       typeof p90 === "number";
+    const isComputedDist =
+      distributionProvenance === "mc_simulation" ||
+      distributionProvenance === "bootstrap" ||
+      distributionProvenance === "composite_computed" ||
+      distributionProvenance === "ode_rk4";
+    const provenanceTitle =
+      distributionProvenance === "ode_rk4"
+        ? `Monte Carlo + RK4 ODE (${distributionSampleCount ?? "—"} samples)`
+        : distributionProvenance === "mc_simulation"
+          ? `Monte Carlo (${distributionSampleCount ?? "—"} samples)`
+          : distributionProvenance === "bootstrap"
+            ? `Bootstrap resample (${distributionSampleCount ?? "—"} draws)`
+            : distributionProvenance === "composite_computed"
+              ? "Composite computed"
+              : "LLM-estimated — not sample-derived";
     // PR 5 — filter to known axes (catalog lookup). Unknown strings
     // get silently dropped rather than crashing the shape render.
     const validAxes = (axesUsed ?? []).filter(
@@ -289,9 +324,30 @@ export class ProposalSnapshotShapeUtil extends BaseBoxShapeUtil<ProposalSnapshot
                   textTransform: "uppercase",
                   color: "rgba(15,23,42,0.45)",
                   marginBottom: 5,
+                  gap: 4,
                 }}
               >
-                <span>p10–p90</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span
+                    title={provenanceTitle}
+                    aria-label={provenanceTitle}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: 12,
+                      height: 12,
+                      borderRadius: 3,
+                      background: isComputedDist ? "rgba(37,99,235,0.12)" : "rgba(217,119,6,0.14)",
+                      color: isComputedDist ? "#2563eb" : "#b45309",
+                      fontSize: 9,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {isComputedDist ? "⚡" : "✎"}
+                  </span>
+                  <span>p10–p90</span>
+                </span>
                 <span
                   style={{
                     fontSize: 11,

@@ -13,11 +13,22 @@
 // entity_added event so users watch the tree unfurl. For now the HUD
 // proves the stream works end-to-end + gives a live count.
 
-import { useMemo, useState } from "react";
-import { Loader2, CheckCircle2, AlertCircle, Check, StopCircle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Loader2, CheckCircle2, AlertCircle, Check, StopCircle, Clock, Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useStructuralEventStream } from "../hooks/use-structural-event-stream";
+import { useRunEventStore } from "../hooks/run-event-store";
 import type { PipelineStage } from "@/types/pipeline-events";
+
+// Stall thresholds. The pipeline emits a heartbeat stage_boundary
+// every 5s during synthesize (synthesize/route.ts:879-888) and events
+// stream continuously during the axis fan-out, so >STALL_WARN_MS with
+// nothing arriving is a real signal the backend is stuck.
+const STALL_WARN_MS = 30_000;
+const STALL_CRITICAL_MS = 90_000;
+// Auto-fail threshold for the client-side watchdog. If the run has
+// been silent for this long, prompt the user to cancel — we won't
+// auto-cancel without consent (destructive).
+const STALL_AUTOFAIL_HINT_MS = 300_000;
 
 export interface CanvasEventHudProps {
   runId: string | null;
@@ -52,11 +63,34 @@ const STAGE_SHORT: Record<PipelineStage, string> = {
 };
 
 export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
-  const { events, status, error, latest } = useStructuralEventStream(runId);
+  const { events, status, error, latest, lastEventAtMs } = useRunEventStore();
   const [cancelPending, setCancelPending] = useState(false);
+  // `now` ticks every second so the stall badge updates live. Cheap:
+  // setState re-renders this one component, not the whole tree.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (status !== "open" && status !== "connecting") return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [status]);
 
   const isRunning = status === "connecting" || status === "open";
   const canCancel = !!runId && isRunning && !cancelPending;
+
+  // Stall detection — how long since the last event arrived?
+  const stallMs =
+    isRunning && lastEventAtMs !== null ? now - lastEventAtMs : 0;
+  const stallLevel: "ok" | "warn" | "critical" | "autofail" =
+    !isRunning || lastEventAtMs === null
+      ? "ok"
+      : stallMs >= STALL_AUTOFAIL_HINT_MS
+        ? "autofail"
+        : stallMs >= STALL_CRITICAL_MS
+          ? "critical"
+          : stallMs >= STALL_WARN_MS
+            ? "warn"
+            : "ok";
+  const stallSeconds = Math.floor(stallMs / 1000);
 
   const handleCancel = async () => {
     if (!runId || cancelPending) return;
@@ -76,6 +110,7 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
     let proposals = 0;
     let sources = 0;
     let predictions = 0;
+    let memoriesLoaded = 0; // from memory_context_loaded event
     for (const e of events) {
       switch (e.event.type) {
         case "entity_added": entities++; break;
@@ -85,9 +120,28 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
         case "proposal_ready": proposals++; break;
         case "source_cited": sources++; break;
         case "prediction_recorded": predictions++; break;
+        case "memory_context_loaded":
+          // itemCount from the event — take the max in case there are multiple
+          memoriesLoaded = Math.max(memoriesLoaded, (e.event as { itemCount?: number }).itemCount ?? 0);
+          break;
       }
     }
-    return { entities, edges, cycles, bridges, proposals, sources, predictions };
+    return { entities, edges, cycles, bridges, proposals, sources, predictions, memoriesLoaded };
+  }, [events]);
+
+  // Per-axis progress — tallied from space_opened / axis_scored / axis_failed.
+  // Surfaces "3/6 axes scored" so the user can see the intake fan-out
+  // progress instead of a single "Intake…" label covering 90s of work.
+  const axisProgress = useMemo(() => {
+    const opened = new Set<string>();
+    const settled = new Set<string>(); // scored OR failed
+    for (const s of events) {
+      const e = s.event;
+      if (e.type === "space_opened") opened.add(e.spaceKey);
+      else if (e.type === "axis_scored") settled.add(e.spaceKey);
+      else if (e.type === "axis_failed") settled.add(e.spaceKey);
+    }
+    return { total: opened.size, settled: settled.size };
   }, [events]);
 
   const currentStage = useMemo(() => {
@@ -149,7 +203,7 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
   const hasAnyStage = Object.values(stageStateByName).some((s) => s !== "pending");
 
   return (
-    <div className="pointer-events-auto absolute left-4 top-4 z-20 rounded-xl border border-gray-200/80 bg-white/95 px-4 py-2.5 shadow-lg backdrop-blur-md">
+    <div className="pointer-events-auto absolute bottom-[100px] left-1/2 z-20 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 px-4 py-2.5 shadow-[0_12px_36px_-12px_rgba(15,23,42,0.22)] backdrop-blur-md">
       <div className="flex items-center gap-3">
         {/* Status pill */}
         <div className="flex items-center gap-1.5">
@@ -171,6 +225,27 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
 
         {/* Counters — only non-zero show */}
         <div className="flex items-center gap-2.5 text-[11px] text-gray-500">
+          {counts.memoriesLoaded > 0 && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10.5px] font-semibold text-indigo-600"
+              title={`Drew on ${counts.memoriesLoaded} memory item${counts.memoriesLoaded !== 1 ? "s" : ""} from your past work`}
+            >
+              <Brain className="h-2.5 w-2.5" strokeWidth={1.75} />
+              <span className="tabular-nums">{counts.memoriesLoaded}</span>
+              <span className="font-normal">memories</span>
+            </span>
+          )}
+          {axisProgress.total > 0 && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 font-semibold text-violet-700"
+              title="Probability-space axes that have finished generating"
+            >
+              <span className="tabular-nums">
+                {axisProgress.settled}/{axisProgress.total}
+              </span>
+              <span className="font-normal">axes</span>
+            </span>
+          )}
           {counts.entities > 0 && (
             <CounterPill label="entities" value={counts.entities} tone="blue" />
           )}
@@ -190,6 +265,30 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
             <CounterPill label="sources" value={counts.sources} tone="gray" />
           )}
         </div>
+
+        {/* Stall badge — shows seconds since last event; flips amber at
+            30s, red at 90s, red+actionable at 5min. Addresses the user's
+            complaint that indicators "don't seem to truly update." */}
+        {isRunning && lastEventAtMs !== null && stallLevel !== "ok" && (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+              stallLevel === "warn" && "bg-amber-50 text-amber-700",
+              stallLevel === "critical" && "bg-red-50 text-red-700",
+              stallLevel === "autofail" && "bg-red-100 text-red-800",
+            )}
+            title={
+              stallLevel === "autofail"
+                ? "No events for over 5 minutes — this run is likely stuck. Click Stop to cancel."
+                : stallLevel === "critical"
+                  ? "No events in 90+ seconds — pipeline may be stuck"
+                  : "Waiting for the next event…"
+            }
+          >
+            <Clock className="h-2.5 w-2.5" />
+            {stallLevel === "autofail" ? `stuck ${stallSeconds}s` : `idle ${stallSeconds}s`}
+          </span>
+        )}
 
         {/* Latest event preview (truncated). */}
         {latest && latest.event.type !== "stage_boundary" && (
@@ -321,7 +420,7 @@ function CounterPill({
 }
 
 function describeEvent(
-  s: ReturnType<typeof useStructuralEventStream>["events"][number],
+  s: ReturnType<typeof useRunEventStore>["events"][number],
 ): string {
   const e = s.event;
   switch (e.type) {

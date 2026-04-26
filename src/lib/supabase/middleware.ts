@@ -7,6 +7,45 @@ export async function updateSession(request: NextRequest) {
       request,
     });
 
+    // ── RSC prefetch fast-path ──────────────────────────────────────
+    //
+    // Next.js sends `?_rsc=<hash>` GETs whenever a Link prefetches a
+    // route. Under certain conditions (re-mounting Links, prefetch
+    // loops on the public landing) we'd see *thousands* of these in
+    // seconds — each one used to call `supabase.auth.getSession()`,
+    // which burns through the project's auth rate limit. Once the
+    // rate limit trips, every legitimate auth call (including the
+    // browser's silent token refresh) starts failing with
+    // "TypeError: Failed to fetch", which then logs the user out and
+    // makes the whiteboard look empty (RLS denies their own data).
+    //
+    // RSC prefetches don't need their session refreshed — they're
+    // background prefetches; the user-visible navigation that follows
+    // will hit the middleware again and refresh then. Pass through.
+    const isRscPrefetch =
+      request.nextUrl.searchParams.has("_rsc") ||
+      request.headers.get("rsc") === "1" ||
+      request.headers.get("next-router-prefetch") === "1";
+    if (isRscPrefetch) {
+      return supabaseResponse;
+    }
+
+    const pathname = request.nextUrl.pathname;
+    const needsAuthCheck =
+      pathname.startsWith("/app") || pathname.startsWith("/auth");
+
+    // ── Public-route fast-path ──────────────────────────────────────
+    //
+    // Public pages (marketing landing, pricing, etc.) don't gate on
+    // auth and don't need a fresh session cookie on every render —
+    // skip Supabase entirely so a flood of public-page requests can't
+    // exhaust the auth rate limit. The user's existing session cookie
+    // stays valid; it'll be refreshed the next time they hit a
+    // protected route.
+    if (!needsAuthCheck) {
+      return supabaseResponse;
+    }
+
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -29,21 +68,6 @@ export async function updateSession(request: NextRequest) {
         },
       }
     );
-
-    // ── Rate-limit protection ──
-    // Only call getUser() for protected routes (/app/*) and auth routes.
-    // Skip for API routes (they handle auth themselves via safeAuth),
-    // public pages, and other non-critical paths.
-    const pathname = request.nextUrl.pathname;
-    const needsAuthCheck =
-      pathname.startsWith("/app") || pathname.startsWith("/auth");
-
-    if (!needsAuthCheck) {
-      // For non-protected routes, just refresh the session cookie
-      // without making a full getUser() API call
-      await supabase.auth.getSession();
-      return supabaseResponse;
-    }
 
     const {
       data: { user },

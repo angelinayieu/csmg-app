@@ -5,6 +5,7 @@ import type { Editor, TLShapeId } from "tldraw";
 import { useValue } from "tldraw";
 import type { KGNodeShape, ClusterFrameShape } from "../shapes/types";
 import { LAYER_ORDER } from "@/lib/whiteboard/layer-config";
+import { PAINT_GLOBAL_GHOST_KG_NODES } from "@/lib/whiteboard/canvas-feature-flags";
 void LAYER_ORDER;
 
 // Finds spatially-close groups of KG nodes that *aren't* already wrapped
@@ -51,6 +52,13 @@ export function useAutoClusterDetect(
 
   return useMemo<AutoClusterProposal[]>(() => {
     if (!editor || !enabled) return [];
+    // Architecture redesign — when global kg-node ghosts are off,
+    // there's nothing to cluster. The hook used to scan for kg-node
+    // shapes and silently return [], producing no UI cue. Now we
+    // short-circuit at the top so no work is done and the consumer
+    // can render an explicit "auto-cluster unavailable in this
+    // canvas mode" affordance if needed.
+    if (!PAINT_GLOBAL_GHOST_KG_NODES) return [];
 
     // Collect eligible KG nodes (not stashed, not already in a cluster)
     const kgShapes: Array<{

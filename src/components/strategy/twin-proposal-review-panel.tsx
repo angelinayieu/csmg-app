@@ -26,6 +26,9 @@ import {
   CheckCircle2,
   Loader2,
   Wand2,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
@@ -33,6 +36,7 @@ import type {
   MechanismRow,
   TwinTradeoff,
   TwinAlternativeRejected,
+  CalibrationGateSnapshot,
 } from "@/types/strategy";
 
 interface ProposalRow {
@@ -64,6 +68,17 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
   const [error, setError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
+  /**
+   * Gap B — calibration gate block state. Populated when the approve
+   * route returns HTTP 409 `calibration_gate`. While non-null we swap
+   * the primary Approve CTA for a two-button block panel (Review gaps /
+   * Approve anyway) and require a second click to force. Cleared on
+   * success, on force-approve success, or on route change.
+   */
+  const [gateBlock, setGateBlock] = useState<{
+    message: string;
+    gate: { status: string; reproduced_count: number; total_count: number };
+  } | null>(null);
 
   const load = useCallback(async () => {
     if (!spaceId) return;
@@ -94,23 +109,52 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
   const isExtracted = data?.is_extracted ?? false;
   const isApproved = persistedProposal?.user_status === "approved";
 
-  const approve = useCallback(async () => {
-    if (!spaceId || approving) return;
-    setApproving(true);
-    try {
-      const res = await fetch(
-        `/api/spaces/${encodeURIComponent(spaceId)}/twin-proposal/approve`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      onApproved?.();
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to approve");
-    } finally {
-      setApproving(false);
-    }
-  }, [spaceId, approving, load, onApproved]);
+  const approve = useCallback(
+    async (force = false) => {
+      if (!spaceId || approving) return;
+      setApproving(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/spaces/${encodeURIComponent(spaceId)}/twin-proposal/approve`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ force }),
+          },
+        );
+        if (res.status === 409) {
+          // Gap B gate — don't treat as error. Surface the block panel
+          // so the user can Review gaps or force-approve.
+          const body = (await res.json().catch(() => null)) as {
+            error?: string;
+            message?: string;
+            gate?: {
+              status: string;
+              reproduced_count: number;
+              total_count: number;
+            };
+          } | null;
+          if (body?.error === "calibration_gate" && body.gate) {
+            setGateBlock({
+              message: body.message ?? "Calibration gate failed.",
+              gate: body.gate,
+            });
+            return;
+          }
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setGateBlock(null);
+        onApproved?.();
+        await load();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to approve");
+      } finally {
+        setApproving(false);
+      }
+    },
+    [spaceId, approving, load, onApproved],
+  );
 
   if (loading) {
     return (
@@ -162,6 +206,16 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
         <ConfidenceRing pct={confidence} />
       </header>
 
+      {/* Gap B — stamped calibration snapshot. Rendered as a thin status
+          banner above the chosen approach so the epistemic posture of
+          the proposal is visible BEFORE the user reads the pitch.
+          Omitted when the justification is legacy (no snapshot) — the
+          panel treats that as "unknown" which isn't blocking and doesn't
+          need an extra banner. */}
+      {justification.calibration_gate && (
+        <CalibrationBanner snapshot={justification.calibration_gate} spaceId={spaceId} />
+      )}
+
       {/* Chosen approach */}
       <section className="mb-5">
         <SectionLabel icon={<Sparkles className="h-3 w-3" />}>Chosen approach</SectionLabel>
@@ -201,8 +255,63 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
         </section>
       )}
 
+      {/* Gap B block panel — shown instead of the normal footer while a
+          gate block is active. Stays mounted until the user either
+          reviews gaps (client-side nav to the lab), force-approves, or
+          navigates away. Keeping the normal approve CTA hidden during
+          this state avoids the "approve still visible but also blocked
+          banner" ambiguity. */}
+      {!isApproved && gateBlock && (
+        <footer className="mt-1 rounded-xl border border-amber-300/70 bg-amber-50/70 px-4 py-3">
+          <div className="flex items-start gap-2">
+            <ShieldAlert className="h-4 w-4 text-amber-700 mt-0.5 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="text-[11.5px] font-semibold text-amber-900 leading-snug">
+                Reality calibration hasn&apos;t passed — approval is blocked.
+              </div>
+              <div className="text-[11px] text-amber-800/90 mt-1 leading-relaxed">
+                {gateBlock.message}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <a
+                  href={`/app/space/${spaceId}/lab`}
+                  className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-amber-900 ring-1 ring-amber-300 hover:bg-amber-100"
+                >
+                  Review gaps in Lab
+                </a>
+                <button
+                  type="button"
+                  onClick={() => approve(true)}
+                  disabled={approving}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors",
+                    approving
+                      ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                      : "bg-amber-700 text-white hover:bg-amber-800",
+                  )}
+                >
+                  {approving ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ShieldOff className="h-3 w-3" />
+                  )}
+                  {approving ? "Approving" : "Approve anyway"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGateBlock(null)}
+                  className="text-[10.5px] text-amber-800/70 hover:text-amber-900"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        </footer>
+      )}
+
       {/* Footer actions */}
-      {!isApproved && (
+      {!isApproved && !gateBlock && (
         <footer className="flex items-center justify-between gap-3 pt-3 border-t border-black/5">
           <button
             type="button"
@@ -214,7 +323,7 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
           </button>
           <button
             type="button"
-            onClick={approve}
+            onClick={() => approve(false)}
             disabled={approving || isExtracted}
             title={
               isExtracted
@@ -378,11 +487,165 @@ function RejectedSection({ items }: { items: TwinAlternativeRejected[] }) {
   );
 }
 
+// Gap B — stamped-snapshot banner. Five states mirror the lab strip but
+// in dashboard chrome (light bg, not the lab's dark). Cheap to render;
+// stays visible above the fold so the user never sees the pitch without
+// the calibration context.
+function CalibrationBanner({
+  snapshot,
+  spaceId,
+}: {
+  snapshot: CalibrationGateSnapshot;
+  spaceId: string;
+}) {
+  const tone = BANNER_TONE[snapshot.status] ?? BANNER_TONE.unknown;
+  const Icon = tone.icon;
+  const wasBypassed = !!snapshot.bypassed_at;
+  return (
+    <div
+      className={cn(
+        "mb-4 flex items-center gap-2.5 rounded-xl px-3 py-2 ring-1",
+        tone.ring,
+        tone.bg,
+      )}
+      style={wasBypassed ? { borderStyle: "dashed" } : undefined}
+    >
+      <Icon className={cn("h-3.5 w-3.5 shrink-0", tone.icon_color)} />
+      <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            "text-[10px] font-bold uppercase tracking-widest leading-none",
+            tone.label_color,
+          )}
+        >
+          {tone.label}
+        </div>
+        <div className="mt-0.5 text-[11px] text-gray-700 leading-snug">
+          {tone.tagline(snapshot)}
+        </div>
+      </div>
+      {snapshot.total_count > 0 && (
+        <span
+          className={cn(
+            "shrink-0 rounded-md px-2 py-0.5 font-mono text-[10.5px] tabular-nums",
+            tone.pill,
+          )}
+        >
+          {snapshot.reproduced_count}/{snapshot.total_count}
+        </span>
+      )}
+      {(snapshot.status === "uncalibrated" || snapshot.status === "partial") && (
+        <a
+          href={`/app/space/${spaceId}/lab`}
+          className="shrink-0 rounded-md bg-white/70 px-2 py-0.5 text-[10.5px] font-semibold text-gray-700 ring-1 ring-black/5 hover:bg-white"
+        >
+          Review
+        </a>
+      )}
+    </div>
+  );
+}
+
+const BANNER_TONE: Record<
+  CalibrationGateSnapshot["status"],
+  {
+    label: string;
+    tagline: (s: CalibrationGateSnapshot) => string;
+    icon: typeof ShieldCheck;
+    icon_color: string;
+    label_color: string;
+    bg: string;
+    ring: string;
+    pill: string;
+  }
+> = {
+  unknown: {
+    label: "No baselines declared",
+    tagline: () => "No stated-reality baselines to reproduce — the workflow is proposed without a calibration test.",
+    icon: ShieldCheck,
+    icon_color: "text-gray-500",
+    label_color: "text-gray-600",
+    bg: "bg-gray-50/60",
+    ring: "ring-gray-200",
+    pill: "bg-gray-200/70 text-gray-700",
+  },
+  calibrated: {
+    label: "Calibrated",
+    tagline: (s) =>
+      `The KG reproduces all ${s.total_count} declared baselines within tolerance. Approval is clear.`,
+    icon: ShieldCheck,
+    icon_color: "text-emerald-700",
+    label_color: "text-emerald-800",
+    bg: "bg-emerald-50/70",
+    ring: "ring-emerald-200",
+    pill: "bg-emerald-200/60 text-emerald-800",
+  },
+  partial: {
+    label: "Partial calibration",
+    tagline: (s) =>
+      `${s.reproduced_count} of ${s.total_count} baselines reproduce — approval will be blocked unless you review the gaps or force-approve.`,
+    icon: ShieldAlert,
+    icon_color: "text-amber-700",
+    label_color: "text-amber-800",
+    bg: "bg-amber-50/70",
+    ring: "ring-amber-200",
+    pill: "bg-amber-200/60 text-amber-900",
+  },
+  uncalibrated: {
+    label: "Model does not reproduce reality",
+    tagline: (s) =>
+      `0 of ${s.total_count} baselines reproduce. The KG disagrees with your stated reality — approving now would build against an unverified graph.`,
+    icon: ShieldAlert,
+    icon_color: "text-red-700",
+    label_color: "text-red-800",
+    bg: "bg-red-50/70",
+    ring: "ring-red-200",
+    pill: "bg-red-200/60 text-red-900",
+  },
+  bypassed: {
+    label: "Calibration bypassed",
+    tagline: () =>
+      "You chose to run past a failing calibration gate. Downstream predictions carry this caveat.",
+    icon: ShieldOff,
+    icon_color: "text-amber-700",
+    label_color: "text-amber-800",
+    bg: "bg-amber-50/40",
+    ring: "ring-amber-300",
+    pill: "bg-amber-200/50 text-amber-900",
+  },
+};
+
+// Plain-English descriptions of what surfacing this row actually
+// does. Kept in sync with rationaleForMechanism() in
+// src/lib/pipeline/materialize-mechanisms.ts — both describe the ROW
+// (widget routing), not the abstract capability. See
+// src/types/strategy.ts `MechanismHint` for the source of truth and
+// the pointers to where each capability's actual work happens.
+const KIND_TOOLTIP: Record<string, string> = {
+  simulation:
+    "Widget hint — surfaces a simulation-lab widget on the linked app. The Monte Carlo engine itself lives in src/lib/simulation/; this row does not execute.",
+  prediction:
+    "Widget hint — surfaces a prediction-panel widget. Forecasts persist to prediction_ledger and are resolved against actuals later.",
+  validation:
+    "Widget hint — surfaces a validation-lab widget. Hypotheses are checked against the KG's reality calibration.",
+  baseline_tracking:
+    "Widget hint — surfaces a baseline-tracker widget backed by metric_trackers + metric_observations.",
+  deviation_capture:
+    "Widget hint — surfaces a deviation-feed widget. Surprises from prediction become learning signals.",
+  game:
+    "Widget hint — surfaces a game-mechanics widget (no runtime yet).",
+  ml_personalization:
+    "Widget hint — surfaces a personalization widget (no runtime yet).",
+};
+
 function MechanismChip({ mechanism }: { mechanism: MechanismRow }) {
   const kindLabel = mechanism.kind
     .split("_")
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
     .join(" ");
+  const kindTooltip =
+    KIND_TOOLTIP[mechanism.kind] ??
+    "Widget-routing hint — declarative record, not an executable mechanism.";
   return (
     <li className="rounded-lg bg-white/55 ring-1 ring-black/5 px-3 py-2 flex items-start gap-2">
       <span
@@ -396,10 +659,20 @@ function MechanismChip({ mechanism }: { mechanism: MechanismRow }) {
         )}
       />
       <div className="min-w-0">
-        <div className="text-[11.5px] font-medium text-gray-800 truncate">
+        <div
+          className="text-[11.5px] font-medium text-gray-800 truncate"
+          title={mechanism.rationale ?? undefined}
+        >
           {mechanism.name}
         </div>
-        <div className="text-[10px] text-gray-500 leading-tight">
+        <div
+          className="text-[10px] text-gray-500 leading-tight"
+          title={kindTooltip}
+        >
+          <span className="font-semibold uppercase tracking-wider text-gray-400">
+            Widget hint
+          </span>
+          {" · "}
           {kindLabel}
           {mechanism.agent_assignments.length > 0 &&
             ` · ${mechanism.agent_assignments.length} agent${

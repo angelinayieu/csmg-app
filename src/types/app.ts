@@ -149,6 +149,32 @@ export interface AppState {
     mean?: number;
     stddev?: number;
     computed_at: string;
+    /**
+     * Per-conditional-edge gate verdicts produced by the heuristic
+     * resolver during the same simulation pass. Surfaces in the app
+     * detail page as a "Conditional gates in this chain" audit panel —
+     * lets the user see which edges were treated as flaky and why,
+     * instead of having that rigor disappear inside a numeric band.
+     *
+     * Always omitted (rather than `[]`) when the chain contained no
+     * conditional edges, so legacy app rows stay shape-stable.
+     */
+    gate_decisions?: Array<{
+      source_id: string;
+      target_id: string;
+      gate: number;
+      source:
+        | "always"
+        | "usually"
+        | "sometimes"
+        | "rarely"
+        | "never"
+        | "conditional"
+        | "confidence_fallback"
+        | "default_neutral";
+      certainty: number;
+      condition_text: string | null;
+    }>;
   };
 }
 

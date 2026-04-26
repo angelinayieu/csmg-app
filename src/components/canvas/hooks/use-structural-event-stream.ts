@@ -30,6 +30,11 @@ export interface UseStructuralEventStreamResult {
   error: string | null;
   /** Most recent event (convenience for "last step" UIs). */
   latest: StreamedEvent | null;
+  /** Client-clock timestamp (Date.now()) of the most recent event
+   *  arriving from SSE. Used by stall detection — `Date.now() -
+   *  lastEventAtMs` gives "N seconds since anything happened." Null
+   *  when no events have arrived yet. */
+  lastEventAtMs: number | null;
 }
 
 export function useStructuralEventStream(
@@ -38,6 +43,7 @@ export function useStructuralEventStream(
   const [events, setEvents] = useState<StreamedEvent[]>([]);
   const [status, setStatus] = useState<StreamStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [lastEventAtMs, setLastEventAtMs] = useState<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -45,12 +51,14 @@ export function useStructuralEventStream(
       setEvents([]);
       setStatus("idle");
       setError(null);
+      setLastEventAtMs(null);
       return;
     }
 
     setStatus("connecting");
     setError(null);
     setEvents([]);
+    setLastEventAtMs(null);
 
     const es = new EventSource(`/api/pipeline/stream/${runId}`);
     esRef.current = es;
@@ -65,6 +73,10 @@ export function useStructuralEventStream(
           if (prev.some((p) => p.sequence === parsed.sequence)) return prev;
           return [...prev, parsed].sort((a, b) => a.sequence - b.sequence);
         });
+        // Stall detection relies on this timestamp — update even on
+        // dedupe-dropped events so a repeated heartbeat-style emission
+        // still keeps the stream fresh.
+        setLastEventAtMs(Date.now());
       } catch {
         // ignore malformed frames
       }
@@ -107,5 +119,5 @@ export function useStructuralEventStream(
   }, [runId]);
 
   const latest = events.length > 0 ? events[events.length - 1] : null;
-  return { events, status, error, latest };
+  return { events, status, error, latest, lastEventAtMs };
 }

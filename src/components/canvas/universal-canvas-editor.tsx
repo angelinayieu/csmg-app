@@ -528,9 +528,9 @@ export function UniversalCanvasEditor({
             Add frame
           </button>
           <Link
-            href="/app/weave"
+            href="/app"
             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-gray-700 shadow-sm hover:bg-gray-50"
-            title="Open bilateral deep-dive"
+            title="Open a whiteboard and use its Connect panel to weave"
           >
             <Search className="h-3 w-3" />
             Deep weave

@@ -10,6 +10,7 @@ import {
   type ExtractResult,
 } from "@/lib/ingest/extractors";
 import { normalizeText } from "@/lib/ingest/normalizer";
+import { inferAssetClass, type AssetClass } from "@/types/asset";
 
 export const maxDuration = 90;
 // Node runtime needed: pdf-parse + jsdom don't run on edge.
@@ -157,6 +158,18 @@ export async function POST(request: Request) {
   // ── Normalize ────────────────────────────────────────────────────
   const { text: normalizedText, normalized, chunks } = await normalizeText(extraction.result.text);
 
+  // ── Asset class classification ───────────────────────────────────
+  // Filename + mime + first-500-char heuristic. Reliable enough for
+  // the obvious cases (PDFs named "research.pdf", spreadsheets, image
+  // diagrams). For ambiguous documents the LLM-driven situation
+  // analyzer downstream can re-classify — this is the cheap pre-pass.
+  const assetClass: AssetClass = inferAssetClass({
+    sourceType,
+    mimeType,
+    sourceName: extraction.result.source_name,
+    contentSnippet: normalizedText.slice(0, 500),
+  });
+
   // Phase 2D — persist to ingested_files so the upload survives the
   // parse/submit gap and surfaces in the Library's Files folder.
   // Non-blocking: if the insert fails we still return the extracted
@@ -178,6 +191,12 @@ export async function POST(request: Request) {
         raw_chars: extraction.result.text.length,
         normalized_chars: normalizedText.length,
         extraction_method: extractionMethod,
+        // Asset class is set by inferAssetClass above. The situation
+        // analyzer reads this field downstream to decide whether to
+        // treat the file as evidence (research_pdf, prior_analysis),
+        // structure (spec_sheet, internal_doc), or observation
+        // (dataset). See src/types/asset.ts.
+        asset_class: assetClass,
         metadata: {
           ...extraction.result.metadata,
           normalize_chunks: chunks,
@@ -208,6 +227,9 @@ export async function POST(request: Request) {
     // New: row id so the client can reference this ingest in future
     // calls (e.g. /api/analyze could link entities back to source).
     ingested_file_id: ingestedFileId,
+    // The classified asset class — UI can render the upload chip with
+    // the right color/label without a second roundtrip.
+    asset_class: assetClass,
     // Small reminder to the client: text is editable before submit.
     notice:
       "Review the extracted text below. You can edit it before submitting for analysis.",

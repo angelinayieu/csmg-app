@@ -26,6 +26,7 @@ import {
   StickyNote as StickyNoteIcon,
   Network,
   Layers,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useReducedMotion } from "@/lib/hooks/use-reduced-motion";
@@ -39,6 +40,7 @@ import type {
   StickyNoteShape,
   KGNodeShape,
   StrategyShape,
+  RootCauseTreeShape,
 } from "../shapes/types";
 
 type TabId = "insights" | "knowledge" | "web";
@@ -95,6 +97,23 @@ function describeShape(shape: TLShape | null): {
       kind: `Strategy · ${s.props.label}`,
       Icon: Layers,
       tint: "rgba(16,185,129,0.14)",
+    };
+  }
+  if (shape.type === "root-cause-tree") {
+    // Root-cause tree carries summary counters in its props. Surface
+    // the two metrics the user cares about most — convergence points
+    // (keystone roots) and user-controllable driver count — directly
+    // in the header chip so a glance tells them whether this tree has
+    // actionable leverage or is dominated by external factors.
+    const t = shape as RootCauseTreeShape;
+    const levers = t.props.userControllableCount;
+    const convs = t.props.convergencePoints;
+    return {
+      title: t.props.title || "Root-cause tree",
+      kind:
+        `${convs} converge · ${levers} lever${levers === 1 ? "" : "s"}`,
+      Icon: Target,
+      tint: "rgba(124,58,237,0.14)",
     };
   }
   return {

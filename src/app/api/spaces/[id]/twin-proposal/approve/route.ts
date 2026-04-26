@@ -3,12 +3,32 @@
 //   flips linked mechanisms.status from 'proposed' → 'approved' so the
 //   downstream agent fleet can begin executing them.
 //
-// Body (optional): { proposal_id?: string }  — when omitted, latest is used.
+// Body (optional): { proposal_id?: string, force?: boolean }
+//   - proposal_id: explicit proposal to approve; omit for latest.
+//   - force: bypass the reality-calibration gate. Only honored when the
+//     gate is `partial` or `uncalibrated` — there's nothing to bypass on
+//     `calibrated`, and `unknown` doesn't block. The bypass is NOT
+//     persisted to reality_calibrations.bypassed_at here — that stays
+//     the explicit user action via /api/lab/calibration. This flag is
+//     just "I saw the warning, ship it anyway for this approval."
+//
+// Gap B gate:
+//   We re-query reality_calibrations (rather than trusting
+//   justification.calibration_gate) so a stale snapshot can't sneak
+//   through after a failed re-capture. The snapshot remains the UI
+//   cache; this is the authoritative check.
 
 import { NextResponse } from "next/server";
 import { safeAuth, verifySpaceOwnership, safeJsonParse } from "@/lib/api-helpers";
 
 export const maxDuration = 15;
+
+type CalibrationGateRow = {
+  status: "unknown" | "uncalibrated" | "partial" | "calibrated" | "bypassed";
+  reproduced_count: number;
+  total_count: number;
+  bypassed_at: string | null;
+};
 
 export async function POST(
   request: Request,
@@ -25,9 +45,45 @@ export async function POST(
 
   const { data: body } = await safeJsonParse(request);
   const explicitId = (body as { proposal_id?: string } | null)?.proposal_id;
+  const force = (body as { force?: boolean } | null)?.force === true;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
+
+  // ── Gap B gate ────────────────────────────────────────────────────────
+  // Block approval when the KG can't reproduce the user's stated reality.
+  // Soft-fail: missing row → treat as "unknown" (no baselines to prove) and
+  // allow through. Only `uncalibrated` and `partial` block, and both can
+  // be overridden with `force: true` so the user has an escape hatch.
+  const { data: calRow } = (await db
+    .from("reality_calibrations")
+    .select("status, reproduced_count, total_count, bypassed_at")
+    .eq("space_id", spaceId)
+    .order("computed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()) as { data: CalibrationGateRow | null };
+
+  if (calRow && !calRow.bypassed_at && !force) {
+    if (calRow.status === "uncalibrated" || calRow.status === "partial") {
+      return NextResponse.json(
+        {
+          error: "calibration_gate",
+          message:
+            calRow.status === "uncalibrated"
+              ? `Reality calibration failed: 0 of ${calRow.total_count} baselines reproduced. Approving would materialize mechanisms against a graph that doesn't match your stated reality.`
+              : `Reality calibration is partial: ${calRow.reproduced_count} of ${calRow.total_count} baselines reproduced. Review the gaps before approving, or approve with force=true to override.`,
+          gate: {
+            status: calRow.status,
+            reproduced_count: calRow.reproduced_count,
+            total_count: calRow.total_count,
+          },
+          /** Client should surface a "Review gaps" CTA and a "Run anyway" override. */
+          actions: ["review_gaps", "force_approve"],
+        },
+        { status: 409 },
+      );
+    }
+  }
 
   // Resolve which proposal to approve.
   let targetId = explicitId;

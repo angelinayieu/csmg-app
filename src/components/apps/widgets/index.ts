@@ -41,6 +41,13 @@ import {
   SimulationLab,
   DeviationSignalFeed,
 } from "./lab-widgets";
+import { IVDecomposition } from "./iv-decomposition-widget";
+import { VariantCarousel } from "./variant-carousel-widget";
+import { DownstreamReality } from "./downstream-reality-widget";
+import { ChainDiscoveries } from "./chain-discoveries-widget";
+import { SignatureConstellation } from "./signature-constellation-widget";
+import { StrategyCarousel } from "./strategy-carousel-widget";
+import { ObjectiveTree } from "./objective-tree-widget";
 
 let booted = false;
 
@@ -365,6 +372,132 @@ export function bootstrapWidgetRegistry(): void {
       },
     },
     DeviationSignalFeed
+  );
+
+  // ── Experiment taxonomy widgets (Phase 3 — VP Project report) ──
+  //
+  // iv_decomposition reads one active variant + the taxonomy schema to
+  // paint the per-slot ring row ("decomposed prompt" in the VP Project
+  // design). variant_carousel reads the full variant list + taxonomy
+  // and renders the coverflow flashcards. Both are driven by
+  // taxonomy-as-data so they work identically for prompt / recipe /
+  // routine / any domain the inferrer classifies.
+  registerWidget(
+    {
+      type: "iv_decomposition",
+      description:
+        "Independent-variable decomposition — per-slot rings with score, sparkline, and value preview for the active variant.",
+      category: "core",
+      required_bindings: ["variant", "taxonomy"],
+      accepted_sources: {
+        variant: ["experiment_active_variant", "literal"],
+        taxonomy: ["experiment_taxonomy", "literal"],
+      },
+    },
+    IVDecomposition
+  );
+
+  registerWidget(
+    {
+      type: "variant_carousel",
+      description:
+        "Coverflow of experiment variants — one flashcard per variant, with status pill, outcome KPI pills, and click-to-focus / double-click-to-activate.",
+      category: "core",
+      required_bindings: ["variants", "taxonomy"],
+      accepted_sources: {
+        variants: ["experiment_variants", "literal"],
+        taxonomy: ["experiment_taxonomy", "literal"],
+      },
+    },
+    VariantCarousel
+  );
+
+  // downstream_reality reads the DownstreamReality shape (latent
+  // dimensions + scores_by_variant map) and renders the variant ×
+  // latent heatmap — the "what actually happened when we varied the
+  // IVs" answer that the taxonomy's pre-declared outcome_axes can't
+  // give. Needs the variant list + taxonomy for row labels/ordering.
+  registerWidget(
+    {
+      type: "downstream_reality",
+      description:
+        "Variant × latent-dimension heatmap — surfaces outcome dimensions discovered after variants were materialized.",
+      category: "core",
+      required_bindings: ["reality", "variants", "taxonomy"],
+      accepted_sources: {
+        reality: ["downstream_reality", "literal"],
+        variants: ["experiment_variants", "literal"],
+        taxonomy: ["experiment_taxonomy", "literal"],
+      },
+    },
+    DownstreamReality
+  );
+
+  // ── Explanatory widgets (Phase 3 — VP Project report, Batch 4) ──
+  //
+  // chain_discoveries renders the 6-stage causal chains from synthesis
+  // (concept → research → deliverable → application → outcome → goal),
+  // so the user can trace *why* a strategy contributes to the goal.
+  //
+  // strategy_carousel renders ranked strategies with ranking_rationale
+  // and tradeoff_vs_top — "here's the chosen path and what we considered
+  // and passed on."
+  //
+  // objective_tree renders the ultimate goal + sub-objective hierarchy
+  // with per-node status and progress — "what we're steering toward."
+  registerWidget(
+    {
+      type: "chain_discoveries",
+      description:
+        "Provenance-linked causal chains from synthesis — concept → research → deliverable → application → outcome → goal, one mini-timeline per chain.",
+      category: "core",
+      required_bindings: ["chains"],
+      accepted_sources: { chains: ["causal_chains", "literal"] },
+    },
+    ChainDiscoveries
+  );
+
+  registerWidget(
+    {
+      type: "strategy_carousel",
+      description:
+        "Ranked strategies coverflow — headline, posture, ranking_rationale, and tradeoff_vs_top for each alternative.",
+      category: "core",
+      required_bindings: ["strategies"],
+      accepted_sources: { strategies: ["ranked_strategies", "literal"] },
+    },
+    StrategyCarousel
+  );
+
+  registerWidget(
+    {
+      type: "objective_tree",
+      description:
+        "Recursive improvement_goals tree with per-node status dots, objective_type glyphs, and baseline→target progress.",
+      category: "core",
+      required_bindings: ["tree"],
+      accepted_sources: { tree: ["goal_tree", "literal"] },
+    },
+    ObjectiveTree
+  );
+
+  // ── Batch 8 · canonical signature UX ──
+  //
+  // signature_constellation renders a grid of layered-ring visuals, one
+  // per entity that has a materialized NodeSignature. Clicking a ring
+  // opens the detail drawer (basis + evidence + resolution plane +
+  // consequence surface). Data source is the `node_signatures` resolver
+  // which the page/report wires up to read from entities.node_signature.
+  registerWidget(
+    {
+      type: "signature_constellation",
+      description:
+        "Grid of layered-ring visuals — one ring layer per variable/basis element in each entity's canonical NodeSignature. Click a ring to open the detail drawer.",
+      category: "core",
+      required_bindings: ["signatures"],
+      accepted_sources: { signatures: ["node_signatures", "literal"] },
+    },
+    SignatureConstellation
   );
 
   // ── Layout widgets ──

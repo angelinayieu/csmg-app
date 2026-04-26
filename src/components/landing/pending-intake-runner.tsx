@@ -23,8 +23,8 @@
 //   • sessionStorage stays populated until AFTER router.push resolves
 //     so a hard reload during the in-flight call recovers the prompt.
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import { ArrowRight, Loader2 } from "lucide-react";
 import {
   clearPendingIntake,
@@ -43,6 +43,32 @@ interface Props {
 
 const RETRY_DELAY_MS = 800;
 
+// ── Module-level dedupe set ──────────────────────────────────────────
+//
+// React StrictMode in dev intentionally mounts → unmounts → re-mounts
+// every effect to surface bugs that survive remount. The intake runner
+// hits an API that creates a row in `spaces` and a row in
+// `pipeline_runs`, so a double-mount creates TWO whiteboards for one
+// prompt — and triggers TWO copies of the entire decompose chain
+// downstream. The user sees this as "every time I go in, it
+// regenerates a duplicate."
+//
+// `useRef` doesn't survive remount in StrictMode (each fresh mount
+// gets a new ref), so we keep the in-flight key on the module itself
+// — singleton across all PendingIntakeRunner instances during the
+// life of the page. The key is the stash payload + a short-window
+// timestamp bucket, so legitimate "same user submits the same prompt
+// 10 minutes later" still works.
+const inflightIntakeKeys = new Set<string>();
+
+function intakeKey(intake: PendingIntake): string {
+  // Bucket by 30s window so a "real" retry within the StrictMode
+  // double-mount pattern (~10ms apart) collides, but a deliberate
+  // re-submit minutes later does not.
+  const bucket = Math.floor(intake.stashedAt / 30_000);
+  return `${intake.kind}:${bucket}:${"prompt" in intake ? intake.prompt.slice(0, 80) : ""}:${"templateId" in intake ? intake.templateId : ""}`;
+}
+
 type RunError =
   | { kind: "credits"; balance: number; required: number }
   | { kind: "auth" }
@@ -50,12 +76,43 @@ type RunError =
 
 export function PendingIntakeRunner({ surfaceFor }: Props) {
   const router = useRouter();
+  const pathname = usePathname();
+  const startPathRef = useRef<string | null>(null);
   const [running, setRunning] = useState<PendingIntake | null>(null);
   const [error, setError] = useState<RunError | null>(null);
+
+  // Tear the veil down once the router has actually moved off the
+  // route we started on. PendingIntakeRunner is mounted in the
+  // shared /app layout, so it stays alive across the router.push to
+  // /app/space/{id}/whiteboard — without this clear, the veil
+  // (z-100, full-viewport) covers the whiteboard forever and the
+  // user is stuck on "Bootstrapping your whiteboard…".
+  useEffect(() => {
+    if (!running) return;
+    if (startPathRef.current && pathname !== startPathRef.current) {
+      setRunning(null);
+    }
+  }, [pathname, running]);
 
   useEffect(() => {
     const intake = readPendingIntake();
     if (!intake) return;
+
+    // StrictMode dev double-mount guard. See `inflightIntakeKeys`
+    // comment above. The very first mount of an intake claims the
+    // key and proceeds; the second mount reads the same intake from
+    // sessionStorage but bails because the key is claimed.
+    const key = intakeKey(intake);
+    if (inflightIntakeKeys.has(key)) {
+      // Surface the splash so the user still sees "we're working on
+      // it" — the OTHER mount is doing the real fetch.
+      startPathRef.current = pathname;
+      setRunning(intake);
+      return;
+    }
+    inflightIntakeKeys.add(key);
+
+    startPathRef.current = pathname;
     setRunning(intake);
 
     let cancelled = false;
@@ -117,6 +174,14 @@ export function PendingIntakeRunner({ surfaceFor }: Props) {
           if (!cancelled) {
             clearPendingIntake();
             router.push(dest);
+            // The destination route owns its own bootstrap splash
+            // (WhiteboardBootstrapSplash). Drop our veil now so the
+            // user isn't staring at "Bootstrapping…" while Next.js
+            // compiles the destination route in dev (can take 15-20s
+            // because router.push doesn't resolve until SSR finishes).
+            // The pathname-watch effect above is a no-op once running
+            // is null.
+            setRunning(null);
           }
           return;
         }
@@ -146,6 +211,7 @@ export function PendingIntakeRunner({ surfaceFor }: Props) {
           if (!cancelled) {
             clearPendingIntake();
             router.push(`/app/space/${json.spaceId}`);
+            setRunning(null);
           }
           return;
         }
@@ -174,6 +240,7 @@ export function PendingIntakeRunner({ surfaceFor }: Props) {
           if (!cancelled) {
             clearPendingIntake();
             router.push(`/app/space/${space.id}${surface}`);
+            setRunning(null);
           }
           return;
         }
@@ -186,6 +253,10 @@ export function PendingIntakeRunner({ surfaceFor }: Props) {
           });
           setRunning(null);
         }
+      } finally {
+        // Always release the inflight key so a deliberate retry
+        // (refresh + same prompt) can re-fire.
+        inflightIntakeKeys.delete(key);
       }
     };
 
@@ -194,6 +265,10 @@ export function PendingIntakeRunner({ surfaceFor }: Props) {
     return () => {
       cancelled = true;
     };
+    // pathname intentionally excluded — we only want to fire the
+    // intake once on mount; the cleanup-on-navigate effect above
+    // handles teardown.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router, surfaceFor]);
 
   if (!running && !error) return null;

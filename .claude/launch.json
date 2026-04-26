@@ -4,7 +4,7 @@
     {
       "name": "next-dev",
       "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": ["node_modules/.bin/next", "dev"],
+      "runtimeArgs": ["node_modules/.bin/next", "dev", "--webpack"],
       "cwd": "/Users/angelina/Desktop/interaxis kg build v1",
       "env": { "PATH": "/usr/local/bin:/usr/bin:/bin" },
       "port": 3000,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react"; // P0 #1: useEffect used twice (seed + prop reconcile)
 import type { Editor, TLArrowShape, TLShapeId, TLShapePartial } from "tldraw";
 import { createShapeId } from "tldraw";
 import type { Entity, Edge } from "@/types";
@@ -37,6 +37,15 @@ export interface SyncEntitiesOptions {
 // shapes for each edge. Runs ONCE per canvas mount when enabled flips true
 // and the editor has no kg-node shapes yet. Subsequent edits (move, add
 // sticky, etc.) are user-owned.
+//
+// P0 #1 companion — syncExistingProps effect (below the seed effect)
+// reconciles authoritative entity props onto kg-node shapes that already
+// exist on the canvas. This is what lets the painter keep ghost shapes
+// in place on run completion (instead of deleting + re-seeding into a
+// flat grid): after refreshEntities() brings the final values back from
+// the DB, this effect pushes leverage/tier/layer/category/weight updates
+// onto the existing shapes WITHOUT moving them. Positions stay exactly
+// where the painter placed them during the unfurl.
 export function useSyncEntities(editor: Editor | null, { entities, edges, enabled }: SyncEntitiesOptions) {
   const seeded = useRef(false);
 
@@ -119,6 +128,7 @@ export function useSyncEntities(editor: Editor | null, { entities, edges, enable
             isBottleneck: !!c.entity.is_master_bottleneck,
             isConvergence: false,
             isGhost: false,
+            confirmedPulse: 0,
           },
         });
         cursorX += c.w + HORIZONTAL_GAP;
@@ -197,5 +207,99 @@ export function useSyncEntities(editor: Editor | null, { entities, edges, enable
     );
 
     seeded.current = true;
+  }, [editor, enabled, entities, edges]);
+
+  // ── Property reconciliation pass (P0 #1) ───────────────────────────
+  //
+  // Runs whenever `entities` updates AND we have pre-existing kg-node
+  // shapes on the canvas. Finds each entity's matching shape by
+  // entityId prop and pushes the authoritative props (leverage,
+  // tier, layer, category, weight, risk, bottleneck) onto it —
+  // critically, WITHOUT updating x/y, so positions set by the ghost
+  // painter during the unfurl stay put.
+  //
+  // The initial seed branch above handles the "fresh canvas" case and
+  // sets `seeded.current`; this effect handles the "canvas already has
+  // shapes from the painter, now apply real props" case.
+  useEffect(() => {
+    if (!editor || !enabled) return;
+    if (entities.length === 0) return;
+    const existingShapes = editor
+      .getCurrentPageShapes()
+      .filter((s): s is KGNodeShape => s.type === "kg-node");
+    if (existingShapes.length === 0) return;
+
+    const shapeByEntityId = new Map<string, KGNodeShape>();
+    for (const s of existingShapes) {
+      const eid = (s.props as KGNodeShape["props"]).entityId;
+      if (eid) shapeByEntityId.set(eid, s);
+    }
+    if (shapeByEntityId.size === 0) return;
+
+    // Edge count per entity — same rule as the seed branch so tier
+    // inference stays consistent.
+    const edgeCount = new Map<string, number>();
+    for (const e of edges) {
+      edgeCount.set(e.source_entity_id, (edgeCount.get(e.source_entity_id) ?? 0) + 1);
+      edgeCount.set(e.target_entity_id, (edgeCount.get(e.target_entity_id) ?? 0) + 1);
+    }
+
+    const patches: TLShapePartial<KGNodeShape>[] = [];
+    for (const e of entities) {
+      const shape = shapeByEntityId.get(e.id);
+      if (!shape) continue;
+      const props = shape.props;
+      const tier = tierForEntity(e, edgeCount.get(e.id) ?? 0);
+      const layer = entityToLayerId(e);
+      const category = (e.entity_category as string) ?? "concrete";
+      const weight = Math.round(((e.confidence ?? 0.7) as number) * 100);
+      const isLeverage = !!e.is_leverage_point;
+      const isRisk = !!e.is_risk_point;
+      const isBottleneck = !!e.is_master_bottleneck;
+      const name = e.name;
+      const description = e.description ?? "";
+
+      // Diff check — skip the editor round-trip if nothing actually changed.
+      if (
+        props.tier === tier &&
+        props.layer === layer &&
+        props.category === category &&
+        props.weight === weight &&
+        props.isLeverage === isLeverage &&
+        props.isRisk === isRisk &&
+        props.isBottleneck === isBottleneck &&
+        props.name === name &&
+        props.description === description &&
+        props.isGhost === false
+      ) {
+        continue;
+      }
+
+      patches.push({
+        id: shape.id,
+        type: "kg-node",
+        props: {
+          name,
+          description,
+          layer,
+          category: category as KGNodeShape["props"]["category"],
+          tier,
+          weight,
+          isLeverage,
+          isRisk,
+          isBottleneck,
+          isGhost: false,
+        },
+      });
+    }
+
+    if (patches.length > 0) {
+      try {
+        editor.updateShapes(patches);
+      } catch (err) {
+        // Non-fatal — shape may have been deleted by the user mid-sync.
+        console.warn("[use-sync-entities] prop reconcile failed:", err);
+      }
+    }
   }, [editor, enabled, entities, edges]);
 }

@@ -15,10 +15,8 @@
 // (cursor blink, dot glow) and fade-out timing.
 
 import { useMemo } from "react";
-import {
-  useStructuralEventStream,
-  type StreamedEvent,
-} from "./use-structural-event-stream";
+import type { StreamedEvent } from "./use-structural-event-stream";
+import { useRunEventStore } from "./run-event-store";
 
 export interface ReasoningStreamState {
   /** Accumulated text from the most recent reasoning_chunk event. */
@@ -40,8 +38,12 @@ export interface ReasoningStreamState {
 // user can tell when the LLM is idle vs working.
 const ACTIVE_WINDOW_MS = 2000;
 
-export function useReasoningStream(runId: string | null): ReasoningStreamState {
-  const { events } = useStructuralEventStream(runId);
+export function useReasoningStream(
+  // runId kept for backward-compat with existing callers; the store
+  // owns the actual SSE connection. Arg is accepted but unused.
+  _runId?: string | null,
+): ReasoningStreamState {
+  const { events } = useRunEventStore();
 
   return useMemo(() => {
     // Walk backward to find the most recent reasoning_chunk — we don't

@@ -13,6 +13,68 @@
 // behavior on the relevant field. When a primitive ships, we flip
 // its status in `TOGGLE_STATUS` and no consumer code changes.
 
+// ── Memory settings ───────────────────────────────────────────────
+//
+// Controls whether the AI draws on the user's past work (prior
+// decompositions, synthesis insights, journal extractions) when
+// generating new analysis. Scoped separately from the brainstorm
+// feature toggles so it can be surfaced independently in the bottom
+// dock popover and the global settings page.
+
+export interface MemorySettings {
+  /** Master toggle — draw on past work at all. Off by default so
+   *  users opt in rather than being surprised by stale context. */
+  enabled: boolean;
+
+  /** Which spaces to search for prior context.
+   *  "this_space" — only the current space's own KG.
+   *  "all_spaces" — search across all the user's spaces (cross-space
+   *  recall; most useful for journal resonance + recurring themes).
+   *  "custom" — restrict to specific space IDs listed in customSpaceIds. */
+  scope: "this_space" | "all_spaces" | "custom";
+
+  /** Space UUIDs included when scope === "custom". Empty = all. */
+  customSpaceIds: string[];
+
+  /** Fine-grained source toggles. Let the user exclude noisy sources
+   *  (e.g., journal history may surface irrelevant personal content
+   *  in a technical analysis session). */
+  sources: {
+    /** Pull similar entities + synthesis insights from prior runs. */
+    priorDecompositions: boolean;
+    /** Include master_bottleneck + leverage_point summaries. */
+    synthesisInsights: boolean;
+    /** Include journal entry extractions (emotions, tensions, values). */
+    journalHistory: boolean;
+    /** Include improvement_goals text. */
+    objectives: boolean;
+  };
+
+  /** Maximum number of memory items to inject into the prompt.
+   *  Higher = richer context but more tokens consumed.
+   *  Practical range: 5–20; default 10. */
+  maxContextItems: number;
+
+  /** Minimum cosine similarity for a memory item to be included.
+   *  Range 0–1; lower = broader recall, higher = tighter focus.
+   *  Default 0.72 (empirically good signal-to-noise trade-off). */
+  minSimilarityThreshold: number;
+}
+
+export const DEFAULT_MEMORY_SETTINGS: MemorySettings = {
+  enabled: false,
+  scope: "all_spaces",
+  customSpaceIds: [],
+  sources: {
+    priorDecompositions: true,
+    synthesisInsights: true,
+    journalHistory: false,
+    objectives: false,
+  },
+  maxContextItems: 10,
+  minSimilarityThreshold: 0.72,
+};
+
 export interface BrainstormSettings {
   /** Master switch. When false, every other toggle is inert
    *  regardless of its stored value — lets a user pause the whole
@@ -66,6 +128,10 @@ export interface BrainstormSettings {
 
   /** Right-rail panel collapse state. */
   panelExpanded: boolean;
+
+  /** Memory & Context settings. Stored here so one localStorage key
+   *  per space covers both brainstorm and memory preferences. */
+  memory: MemorySettings;
 }
 
 export const DEFAULT_BRAINSTORM_SETTINGS: BrainstormSettings = {
@@ -78,6 +144,7 @@ export const DEFAULT_BRAINSTORM_SETTINGS: BrainstormSettings = {
   clusterToCanvas: true,
   clusterFromNotes: false,
   panelExpanded: true,
+  memory: DEFAULT_MEMORY_SETTINGS,
 };
 
 // ── Wiring status per toggle ──────────────────────────────────────
@@ -92,7 +159,7 @@ export type ToggleStatus = "active" | "coming_soon" | "blocked_on_sources";
 export const TOGGLE_STATUS: Record<
   Exclude<
     keyof BrainstormSettings,
-    "enabled" | "scheduledConnectIntervalMin" | "panelExpanded"
+    "enabled" | "scheduledConnectIntervalMin" | "panelExpanded" | "memory"
   >,
   ToggleStatus
 > = {
@@ -130,13 +197,14 @@ export const PRESETS: Preset[] = [
       scheduledConnect: false,
       clusterToCanvas: true,
       clusterFromNotes: false,
+      memory: { ...DEFAULT_MEMORY_SETTINGS, enabled: false },
     },
   },
   {
     id: "deep_research",
     label: "Deep",
     description:
-      "Every toggle on. Background research, scheduled scans, source ingest.",
+      "Every toggle on. Background research, scheduled scans, memory from past work.",
     patch: {
       autoConnect: true,
       deepSearch: true,
@@ -144,6 +212,17 @@ export const PRESETS: Preset[] = [
       scheduledConnect: true,
       clusterToCanvas: true,
       clusterFromNotes: true,
+      memory: {
+        ...DEFAULT_MEMORY_SETTINGS,
+        enabled: true,
+        scope: "all_spaces",
+        sources: {
+          priorDecompositions: true,
+          synthesisInsights: true,
+          journalHistory: true,
+          objectives: true,
+        },
+      },
     },
   },
   {
@@ -158,6 +237,7 @@ export const PRESETS: Preset[] = [
       scheduledConnect: true,
       clusterToCanvas: false,
       clusterFromNotes: false,
+      memory: { ...DEFAULT_MEMORY_SETTINGS, enabled: false },
     },
   },
 ];
@@ -182,7 +262,20 @@ export function loadBrainstormSettings(spaceId: string): BrainstormSettings {
     const parsed = JSON.parse(raw) as Partial<BrainstormSettings>;
     // Merge with defaults so stored settings that predate new
     // fields don't cause `undefined` reads downstream.
-    return { ...DEFAULT_BRAINSTORM_SETTINGS, ...parsed };
+    // Deep-merge `memory` so partial stored memory objects (missing
+    // new sub-fields) still get correct defaults.
+    return {
+      ...DEFAULT_BRAINSTORM_SETTINGS,
+      ...parsed,
+      memory: {
+        ...DEFAULT_MEMORY_SETTINGS,
+        ...(parsed.memory ?? {}),
+        sources: {
+          ...DEFAULT_MEMORY_SETTINGS.sources,
+          ...(parsed.memory?.sources ?? {}),
+        },
+      },
+    };
   } catch {
     return DEFAULT_BRAINSTORM_SETTINGS;
   }

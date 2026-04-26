@@ -26,6 +26,18 @@
 // Box-Muller is 20 lines, quantile sort is trivial, and shipping
 // without new deps keeps the Vercel bundle tight.
 
+import { integrateRK4 } from "./ode-integrator";
+
+/**
+ * Thin wrapper so the hot-loop integrator call reads the same shape
+ * whether we ever swap the implementation. Kept as a function so
+ * tree-shaking can drop the ODE module when no caller opts in — the
+ * discrete path never touches this reference.
+ */
+function odeIntegratorModule() {
+  return { integrateRK4 };
+}
+
 export type EdgeDynamics =
   | "linear"
   | "threshold"
@@ -64,6 +76,30 @@ export interface EdgeSpec {
    *   decay: { halfLife: 5 }
    */
   params?: Record<string, number>;
+  /**
+   * Phase 3 §4.2 — conditional gate.
+   *
+   * For edges with `polarity === "conditional"`, the engine rolls a
+   * Bernoulli draw at the START of each iteration: with probability
+   * `conditionGate` the edge fires NORMALLY for that iteration; with
+   * probability (1 - conditionGate) the edge contributes 0 across all
+   * timesteps for that iteration. This is how branching scenarios get
+   * sampled honestly — instead of treating "X causes Y under condition
+   * Z" as either always-on or always-off, the simulator samples Z's
+   * truth-state per-iteration.
+   *
+   * Default 0.5 when omitted on a conditional edge (assumes the
+   * condition fires half the time — neutral prior). Ignored on non-
+   * conditional polarities. Range [0,1]; the engine clamps.
+   *
+   * The probability itself isn't computed by the engine — it has no way
+   * to evaluate prose conditions. Callers (simulate-entity-chain,
+   * synthesize, etc.) are responsible for translating `condition_text`
+   * into a numeric gate. Until that infrastructure lands, leaving this
+   * field unset gives a 0.5 prior — strictly better than the
+   * pre-Phase-3 behavior, which treated conditional edges as always-on.
+   */
+  conditionGate?: number;
 }
 
 export interface SimulationSpec {
@@ -71,10 +107,37 @@ export interface SimulationSpec {
   edges: EdgeSpec[];
   /** Number of Monte Carlo iterations. Default 1000. */
   iterations?: number;
-  /** Propagation timesteps per iteration. Default 10. */
+  /** Propagation timesteps per iteration. Default 10.
+   *  In discrete mode: number of synchronous update rounds.
+   *  In ode_rk4 mode: total integration time in normalized units (the
+   *  ODE integrator further subdivides this into fine substeps). */
   timesteps?: number;
   /** Deterministic seed. Default 42. */
   seed?: number;
+  /**
+   * R3 — integrator selection.
+   *
+   *   "discrete" (default) — synchronous per-step update using
+   *     `applyDynamics`. Tier 4 math: each edge contributes a per-step
+   *     scalar effect, nodes accumulate via `prior + contribution/N`.
+   *     Fast, proven, matches the original v1 behavior.
+   *
+   *   "ode_rk4" — continuous-time propagation via classical 4th-order
+   *     Runge-Kutta. Each edge's dynamics becomes a dx/dt rate (see
+   *     `ode-dynamics.ts`); the integrator evolves all nodes in
+   *     lockstep over `timesteps` time units with 40 substeps per
+   *     time unit. Tier 5 math — real numerical integration of a
+   *     continuous system. OPT-IN because (a) it's newer and stiff
+   *     graphs can blow up on fixed-step, (b) the threshold dynamics
+   *     are smoothed to be integrable which is a slight semantic
+   *     change from the hard step in discrete mode.
+   *
+   * Distributions from the two integrators are NOT identical on the
+   * same graph — they compute different (though related) quantities.
+   * Callers should record which integrator produced a distribution
+   * (see ProposalReadyEvent.distribution.provenance).
+   */
+  integrator?: "discrete" | "ode_rk4";
 }
 
 export interface NodeDistribution {
@@ -95,6 +158,10 @@ export interface SimulationResult {
   nodes: NodeDistribution[];
   /** Milliseconds the full simulation took. Useful for cost budgeting. */
   durationMs: number;
+  /** Which integrator produced these samples. Echoed so downstream
+   *  callers can stamp the right provenance on their event payloads
+   *  (e.g. ProposalReadyEvent.distribution.provenance). */
+  integrator: "discrete" | "ode_rk4";
 }
 
 const DEFAULT_ITERATIONS = 1000;
@@ -110,6 +177,7 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
   const iterations = spec.iterations ?? DEFAULT_ITERATIONS;
   const timesteps = spec.timesteps ?? DEFAULT_TIMESTEPS;
   const seed = spec.seed ?? DEFAULT_SEED;
+  const integrator = spec.integrator ?? "discrete";
   const startedAt =
     typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
@@ -135,41 +203,99 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
       values.set(n.id, clamp(raw, n.min, n.max));
     }
 
-    // Propagate effects through `timesteps` rounds. Each round reads
-    // the prior round's state and writes new state so all effects
-    // apply simultaneously (synchronous update — matches spreadsheet
-    // intuition better than asynchronous for small graphs).
-    let state = new Map(values);
-    for (let t = 0; t < timesteps; t++) {
-      const next = new Map(state);
-      for (const node of spec.nodes) {
-        const prior = state.get(node.id) ?? 0;
-        const edges = incoming.get(node.id) ?? [];
-        if (edges.length === 0) {
-          // No inbound edges — value persists (minus any self-decay
-          // the node's own outbound carries can't influence itself here).
-          continue;
-        }
-        let contribution = 0;
-        for (const edge of edges) {
-          const src = state.get(edge.sourceId) ?? 0;
-          const polarSign = edge.polarity === "negative" ? -1 : 1;
-          const effect = applyDynamics(edge.dynamics, src, edge.strength * polarSign, edge.params);
-          contribution += effect;
-        }
-        // Blend prior + contribution. For v1 we use a damped
-        // additive update: target_new = prior + contribution / N-steps.
-        // Divides by timesteps so total injected magnitude is
-        // independent of simulation resolution.
-        const raw = prior + contribution / timesteps;
-        next.set(node.id, clamp(raw, node.min, node.max));
+    // ── Phase 3 §4.2 — per-iteration conditional-edge sampling ──
+    //
+    // Roll the conditionGate Bernoulli ONCE per iteration per
+    // conditional edge — the result holds across all timesteps for
+    // that iteration. Otherwise re-rolling each timestep would dilute
+    // the gate's signal: an edge with gate=0.5 would effectively fire
+    // every iteration with high probability over 10 steps, which is
+    // the opposite of what conditional polarity is supposed to mean.
+    //
+    // Non-conditional edges always fire (activeEdges entry = true).
+    // Edges without a gate get a 0.5 default — see EdgeSpec doc.
+    const activeEdges = new Map<EdgeSpec, boolean>();
+    for (const edge of spec.edges) {
+      if (edge.polarity !== "conditional") {
+        activeEdges.set(edge, true);
+        continue;
       }
-      state = next;
+      const gate = clamp01(edge.conditionGate ?? 0.5);
+      activeEdges.set(edge, rng() < gate);
+    }
+
+    // ── Integrator dispatch ────────────────────────────────────────
+    // Both paths: sample initial conditions above, evolve them
+    // forward, record final value per node. The difference is HOW
+    // they evolve — discrete scalar multiplication vs. continuous
+    // ODE integration. Tier 4 vs. Tier 5.
+    let finalState: Map<string, number>;
+    if (integrator === "ode_rk4") {
+      // Lazy import is fine — this is a hot loop but the import is
+      // hoisted by the bundler. Keeps the discrete path's cold-start
+      // cost identical to pre-R3 when ODE isn't used.
+      const { integrateRK4 } = odeIntegratorModule();
+      finalState = integrateRK4({
+        nodes: spec.nodes.map((n) => ({
+          id: n.id,
+          min: n.min,
+          max: n.max,
+        })),
+        edges: spec.edges.map((e) => {
+          const polarSign = e.polarity === "negative" ? -1 : 1;
+          return {
+            sourceId: e.sourceId,
+            targetId: e.targetId,
+            strength: e.strength * polarSign,
+            dynamics: e.dynamics,
+            params: e.params,
+            active: activeEdges.get(e) !== false,
+          };
+        }),
+        initial: values,
+        tMax: timesteps, // timesteps reinterpreted as total integration time
+        steps: Math.max(40, timesteps * 4), // ≥40 substeps for 4th-order accuracy
+      });
+    } else {
+      // Propagate effects through `timesteps` rounds. Each round reads
+      // the prior round's state and writes new state so all effects
+      // apply simultaneously (synchronous update — matches spreadsheet
+      // intuition better than asynchronous for small graphs).
+      let state = new Map(values);
+      for (let t = 0; t < timesteps; t++) {
+        const next = new Map(state);
+        for (const node of spec.nodes) {
+          const prior = state.get(node.id) ?? 0;
+          const edges = incoming.get(node.id) ?? [];
+          if (edges.length === 0) {
+            // No inbound edges — value persists (minus any self-decay
+            // the node's own outbound carries can't influence itself here).
+            continue;
+          }
+          let contribution = 0;
+          for (const edge of edges) {
+            // Skip conditional edges that didn't fire this iteration.
+            if (activeEdges.get(edge) === false) continue;
+            const src = state.get(edge.sourceId) ?? 0;
+            const polarSign = edge.polarity === "negative" ? -1 : 1;
+            const effect = applyDynamics(edge.dynamics, src, edge.strength * polarSign, edge.params);
+            contribution += effect;
+          }
+          // Blend prior + contribution. For v1 we use a damped
+          // additive update: target_new = prior + contribution / N-steps.
+          // Divides by timesteps so total injected magnitude is
+          // independent of simulation resolution.
+          const raw = prior + contribution / timesteps;
+          next.set(node.id, clamp(raw, node.min, node.max));
+        }
+        state = next;
+      }
+      finalState = state;
     }
 
     // Record final state for this iteration.
     for (const node of spec.nodes) {
-      samplesByNode.get(node.id)!.push(state.get(node.id) ?? 0);
+      samplesByNode.get(node.id)!.push(finalState.get(node.id) ?? 0);
     }
   }
 
@@ -193,6 +319,7 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
     seed,
     nodes,
     durationMs: Math.round(endedAt - startedAt),
+    integrator,
   };
 }
 
@@ -235,6 +362,14 @@ function applyDynamics(
     default:
       return strength * source;
   }
+}
+
+/** Clamp to [0, 1]. Used for probability gates (conditionGate). */
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
 }
 
 /** Clamp to [min, max] when either bound is defined. */

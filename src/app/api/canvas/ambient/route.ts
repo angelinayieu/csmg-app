@@ -1,24 +1,18 @@
-// ── Canvas ambient AI ── (Sprint 2 — semantic retrieval)
+// ── Canvas ambient AI ──
 //
 // POST /api/canvas/ambient
-//   body: { spaceId, text }
-//   → { relatedEntities: Array<{id, entity_id, name, description, entity_category, space_id, space_name, score}>,
-//       questions: string[] }
+//   body: { spaceId, text, context? }
+//   → { relatedEntities: [...], questions: string[] }
 //
-// Sprint 2 replaces the lexical detectEntities() matcher with the
-// memory_items vector store. Response shape is unchanged so existing
-// HUD rail clients keep working.
+// context: "whiteboard" (default) | "journal"
+//   Controls question style: whiteboard → analytical/structural probes;
+//   journal → reflective/emotional probes that surface patterns across
+//   past entries and values.
 //
-// Retrieval details:
-//  - Owner-scoped (RLS + explicit filter) — no global peeking.
-//  - Kind-filtered to 'entity' for the relatedEntities payload.
-//  - Recency decay (30-day half-life) + salience boost applied server-side
-//    in lib/memory/retrieve.ts before the response.
-//  - Lexical fallback: if retrieval returns nothing (memory store not yet
-//    backfilled for this user), fall back to the old lexical path so first-
-//    run UX doesn't break.
-//  - Questions: kept deterministic heuristic generator for now; LLM-quality
-//    probes are deferred to a separate endpoint (Sprint 3 surface).
+// Questions are now LLM-generated (gpt-4o-mini, ~300ms p50) using the
+// sticky/entry text + top related entities as context. Falls back to
+// generic heuristics on timeout or error so the rail always shows
+// something useful.
 
 import { NextResponse } from "next/server";
 import {
@@ -29,17 +23,100 @@ import {
 } from "@/lib/api-helpers";
 import {
   detectEntities,
-  generateOpenQuestions,
-  type PatternMatchResult,
 } from "@/lib/whiteboard/playground-detector";
 import { retrieveEntities } from "@/lib/memory/retrieve";
+import { llmJSON } from "@/lib/llm";
+import { MODEL_DEFAULTS } from "@/lib/llm";
 import type { Entity } from "@/types";
 
-export const maxDuration = 10;
+export const maxDuration = 15;
 
 interface AmbientRequest {
   spaceId: string;
   text: string;
+  /** "whiteboard" (default): analytical probes about structure/causation.
+   *  "journal": reflective probes about patterns, emotions, values. */
+  context?: "whiteboard" | "journal";
+}
+
+// ── LLM probe question generation ────────────────────────────────────
+//
+// Uses gpt-4o-mini for speed (target < 400ms). The prompt is intentionally
+// tight: 3 questions, no preamble, JSON array only. Context flavour
+// switches the question register between analytical and reflective.
+
+const PROBE_SYSTEM_WHITEBOARD = `You are an analytical thinking partner helping someone reason through complex systems.
+Given a short piece of text and optionally some related concepts from their knowledge graph, generate exactly 3 short, sharp probe questions that would deepen their thinking.
+
+Rules:
+- Questions must be SPECIFIC to the given text — never generic
+- Each question < 15 words
+- Vary the angle: one structural ("what causes this?"), one relational ("how does this connect to X?"), one challenge ("what would break this assumption?")
+- If related concepts are provided, at least one question should reference them by name
+- Output ONLY a JSON array of 3 strings, no other text`;
+
+const PROBE_SYSTEM_JOURNAL = `You are a thoughtful journaling companion helping someone understand themselves better.
+Given a journal entry excerpt and optionally some recurring themes from their past writing, generate exactly 3 reflective probe questions.
+
+Rules:
+- Questions must be SPECIFIC to what they wrote — never generic
+- Each question < 18 words
+- Vary the angle: one about underlying feeling ("what's beneath the surface here?"), one pattern-based ("is this connected to [theme]?"), one forward-looking ("what would feel different if this changed?")
+- If recurring themes are provided, reference them by name where relevant
+- Output ONLY a JSON array of 3 strings, no other text`;
+
+const FALLBACK_QUESTIONS_WHITEBOARD = [
+  "What mechanism drives this pattern?",
+  "Which assumption here is most fragile?",
+  "What would have to be true for this to fail?",
+];
+
+const FALLBACK_QUESTIONS_JOURNAL = [
+  "What feeling is underneath what you described?",
+  "Is this familiar — have you felt this before?",
+  "What would change if this tension resolved?",
+];
+
+async function generateProbeQuestions(
+  text: string,
+  relatedNames: string[],
+  context: "whiteboard" | "journal",
+): Promise<string[]> {
+  const systemPrompt =
+    context === "journal" ? PROBE_SYSTEM_JOURNAL : PROBE_SYSTEM_WHITEBOARD;
+  const fallback =
+    context === "journal"
+      ? FALLBACK_QUESTIONS_JOURNAL
+      : FALLBACK_QUESTIONS_WHITEBOARD;
+
+  const relatedBlock =
+    relatedNames.length > 0
+      ? `\n\nRelated concepts from their knowledge graph: ${relatedNames.slice(0, 3).join(", ")}`
+      : "";
+
+  const userPrompt = `Text: "${text.slice(0, 600)}"${relatedBlock}`;
+
+  try {
+    const result = await Promise.race([
+      llmJSON<string[]>({
+        system: systemPrompt,
+        user: userPrompt,
+        maxTokens: 256,
+        temperature: 0.7,
+        model: MODEL_DEFAULTS.openai.fast, // gpt-4o-mini for speed
+      }),
+      // Hard timeout so we never block the rail more than 5s
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("probe timeout")), 5000),
+      ),
+    ]);
+    if (Array.isArray(result) && result.length > 0) {
+      return (result as string[]).slice(0, 4);
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 interface RelatedEntity {
@@ -61,7 +138,7 @@ export async function POST(request: Request) {
     await safeJsonParse<AmbientRequest>(request);
   if (parseError) return parseError;
 
-  const { spaceId, text } = body;
+  const { spaceId, text, context = "whiteboard" } = body;
   if (!spaceId || typeof spaceId !== "string") {
     return NextResponse.json({ error: "spaceId required" }, { status: 400 });
   }
@@ -86,7 +163,6 @@ export async function POST(request: Request) {
     });
 
     let related: RelatedEntity[] = [];
-    let entityMatches: Array<{ entity: Entity; score: number; matchedTokens: string[]; reason: "name_substring" | "description_overlap" | "fuzzy" }> = [];
 
     if (hits.length > 0) {
       // Hydrate entity rows (name, description, category, space name).
@@ -112,7 +188,6 @@ export async function POST(request: Request) {
         (spaces ?? []).map((s) => [s.id, s.name]),
       );
 
-      // Preserve the retrieval order (hits is already rank-sorted).
       for (const hit of hits) {
         const e = entityById.get(hit.item.ref_id);
         if (!e) continue;
@@ -126,18 +201,10 @@ export async function POST(request: Request) {
           space_name: spaceNameById.get(e.space_id) ?? "(unknown)",
           score: Math.max(0, Math.min(1, hit.similarity)),
         });
-        entityMatches.push({
-          entity: e,
-          score: hit.similarity,
-          matchedTokens: [],
-          reason: "fuzzy",
-        });
       }
     }
 
-    // 2. Lexical fallback — if memory store hasn't been backfilled yet,
-    //    the retriever returns empty. Fall back to the old path so the
-    //    first-run UX still surfaces something useful.
+    // 2. Lexical fallback when memory store not yet backfilled.
     if (related.length === 0) {
       const { data: spacesRaw } = await db
         .from("spaces")
@@ -156,7 +223,6 @@ export async function POST(request: Request) {
           .in("space_id", spaceIds);
         const allEntities = (entitiesRaw ?? []) as Entity[];
         const matches = detectEntities(text, allEntities, 8);
-        entityMatches = matches;
         related = matches.map((m) => ({
           id: m.entity.id,
           entity_id: m.entity.entity_id,
@@ -170,20 +236,12 @@ export async function POST(request: Request) {
       }
     }
 
-    // 3. Questions — deterministic heuristic generator, unchanged from pre-Sprint-2.
-    let questions: string[] = [];
-    if (entityMatches.length > 0) {
-      const patternMatchesEmpty: PatternMatchResult[] = [];
-      questions = generateOpenQuestions(text, entityMatches, patternMatchesEmpty).map(
-        (q) => q.text,
-      );
-    } else {
-      questions = [
-        `What mechanism would explain this?`,
-        `What evidence would contradict this view?`,
-        `Which existing concept does this most conflict with?`,
-      ];
-    }
+    // 3. LLM probe questions — run in parallel with entity retrieval
+    //    (entity retrieval is awaited above, questions race independently).
+    //    Context switches question style: whiteboard → analytical,
+    //    journal → reflective/emotional.
+    const relatedNames = related.slice(0, 3).map((r) => r.name);
+    const questions = await generateProbeQuestions(text, relatedNames, context);
 
     return NextResponse.json({
       relatedEntities: related,

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { InterAxisLogo } from "@/components/brand/interaxis-logo";
 
 const NAV_ITEMS = [
   { label: "Platform", href: "#platform" },
@@ -14,9 +15,7 @@ export function LandingMarketingNav() {
   return (
     <header className="pointer-events-auto absolute inset-x-0 top-0 z-50 flex items-center justify-between px-8 py-5">
       <Link href="/" className="flex items-center gap-2">
-        <span className="grid h-7 w-7 place-items-center rounded-md bg-gradient-to-br from-slate-900 to-slate-700 text-[12px] font-bold text-white">
-          N
-        </span>
+        <InterAxisLogo className="h-7 w-7" size={56} />
         <span className="text-[15px] font-semibold tracking-tight text-slate-900">
           InterAxis
         </span>
@@ -38,18 +37,18 @@ export function LandingMarketingNav() {
       </nav>
 
       <div className="flex items-center gap-3">
-        <Link
-          href="/auth/login"
+        <a
+          href="#signin"
           className="text-[13px] font-medium text-slate-600 hover:text-slate-900"
         >
           Log in
-        </Link>
-        <Link
-          href="/auth/signup"
+        </a>
+        <a
+          href="#signup"
           className="rounded-full bg-slate-900 px-4 py-2 text-[13px] font-semibold text-white shadow-sm transition-transform hover:scale-[1.02] hover:bg-slate-800"
         >
           Get started
-        </Link>
+        </a>
       </div>
     </header>
   );

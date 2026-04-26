@@ -30,12 +30,33 @@ import {
   AXIS_CATALOG,
   AXIS_ORDER,
 } from "@/lib/probability-space/axis-catalog";
+import {
+  buildAdHocSpec,
+  type AxisDimension,
+  type AxisInstrumentKind,
+  type AxisOutputShape,
+  type AxisSpec,
+} from "@/lib/probability-space/axis-spec";
 import type { ProbabilitySpaceAxis } from "@/types/pipeline-events";
 import {
   applicableAxesFor,
   classifyQuestionType,
   type QuestionTypeResult,
 } from "@/lib/pipeline/question-type-classifier";
+import {
+  extractTargetOutcome,
+  type TargetOutcome,
+} from "@/lib/pipeline/target-outcome-extractor";
+import type { DataPresenceTags } from "@/lib/prompts/data-presence-classifier";
+import {
+  axesCoveringRequiredCells,
+  validateFrame as validateSituationFrame,
+} from "@/lib/situation-frame/frame-helpers";
+import type {
+  FramingDivergence,
+  SituationFrame,
+} from "@/types/situation-frame";
+import type { SituationBaseline } from "@/types/situation";
 
 export const maxDuration = 30;
 export const runtime = "nodejs";
@@ -49,10 +70,25 @@ interface FrameExtractorRequest {
 interface FrameSelection {
   axis: ProbabilitySpaceAxis;
   rationale: string;
+  /** Variant hint from panel AxisProposal.prompt_variant. */
+  variant?: string;
+}
+
+// Ad-hoc axes carry a full AxisSpec rather than a canonical axis key.
+// Kept separate from FrameSelection so the catalog path (which inserts
+// into probability_space_runs and paints shells from AXIS_CATALOG)
+// remains unchanged when the frame only has canonical axes.
+interface AdHocSelection {
+  spec: AxisSpec;
+  rationale: string;
+  variant?: string;
 }
 
 interface FrameResponse {
   frame: FrameSelection[];
+  /** Ad-hoc axes dispatched to the generator with a live spec. Empty
+   *  when the panel didn't propose any ad-hoc dimensions. */
+  adhoc_frame?: AdHocSelection[];
 }
 
 const SYSTEM_PROMPT = `You are a meta-analyst classifying a user's input to decide which lenses ("probability space axes") should be used to model the situation.
@@ -89,6 +125,178 @@ Classify this input. Which axes apply? Return the strict JSON described in the s
 
 function isValidAxis(s: unknown): s is ProbabilitySpaceAxis {
   return typeof s === "string" && s in AXIS_CATALOG;
+}
+
+// ── Hint coercers (Phase 2E · Axis Richness) ─────────────────────────
+//
+// Panel lens prompts suggest dimension / instrument_kind / output_shape
+// as free-form strings (lenses speak English, not TypeScript enums).
+// These coercers narrow to canonical enums; unknown strings fall
+// through to undefined so `buildAdHocSpec` uses its defaults.
+
+const DIMENSIONS: AxisDimension[] = [
+  "money", "time", "people", "physical", "truth",
+  "meaning", "causation", "risk", "precedent", "generic",
+];
+const INSTRUMENT_KINDS: AxisInstrumentKind[] = [
+  "calibration", "constraint", "enumeration", "stratification",
+  "decomposition", "counterfactual", "evidentiary",
+];
+const OUTPUT_SHAPES: AxisOutputShape[] = [
+  "numeric_with_distribution", "named_stakeholder_set", "scenario_tree",
+  "claim_ledger", "assumption_ledger", "failure_mode_catalog",
+  "temporal_phase_map", "norm_and_identity_map", "constraint_envelope",
+  "precedent_set", "generic_entity_set",
+];
+
+function asDimension(s?: string): AxisDimension | undefined {
+  return s && (DIMENSIONS as string[]).includes(s) ? (s as AxisDimension) : undefined;
+}
+function asInstrumentKind(s?: string): AxisInstrumentKind | undefined {
+  return s && (INSTRUMENT_KINDS as string[]).includes(s)
+    ? (s as AxisInstrumentKind)
+    : undefined;
+}
+function asOutputShape(s?: string): AxisOutputShape | undefined {
+  return s && (OUTPUT_SHAPES as string[]).includes(s)
+    ? (s as AxisOutputShape)
+    : undefined;
+}
+
+function humanizeAxisId(id: string): string {
+  return id
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .slice(0, 60);
+}
+
+// ── Panel → frame derivation ─────────────────────────────────────────
+//
+// Takes the panel's SituationFrame and returns both catalog-axis and
+// ad-hoc selections by (a) filtering to panel axes whose target_cells
+// intersect at least one required cell, (b) splitting catalog vs
+// ad_hoc: catalog goes to FrameSelection, ad_hoc goes to AdHocSelection
+// with a freshly-minted AxisSpec from buildAdHocSpec. (c) ordering
+// each list by lens_support_count desc so the most broadly-endorsed
+// axes paint first.
+//
+// Always appends `assumptions` as backstop if missing — mirrors the
+// legacy validator behavior. Returns {frame: []} when the frame isn't
+// usable (no required cells), which is the caller's signal to fall
+// through to the legacy LLM path.
+//
+// Ad-hoc quality bar: the panel already enforces ≥2 lens_support_count
+// for ad_hoc admission (framing-panel.ts consensus merge). Single-lens
+// ad_hoc dropouts don't reach this function.
+function deriveFrameFromPanel(
+  frame: SituationFrame | null,
+): { frame: FrameSelection[]; adhoc: AdHocSelection[] } {
+  if (!frame) return { frame: [], adhoc: [] };
+  const covering = axesCoveringRequiredCells(frame);
+  if (covering.length === 0) return { frame: [], adhoc: [] };
+
+  const sorted = [...covering].sort(
+    (a, b) => b.lens_support_count - a.lens_support_count,
+  );
+
+  const catalogOut: FrameSelection[] = [];
+  const adhocOut: AdHocSelection[] = [];
+  const seenCatalog = new Set<ProbabilitySpaceAxis>();
+  const seenAdhoc = new Set<string>();
+
+  for (const axis of sorted) {
+    if (axis.source === "catalog") {
+      if (!isValidAxis(axis.axis_id)) continue;
+      if (seenCatalog.has(axis.axis_id)) continue;
+      seenCatalog.add(axis.axis_id);
+      catalogOut.push({
+        axis: axis.axis_id,
+        rationale:
+          axis.rationale.slice(0, 220) ||
+          `Panel selected: covers ${axis.target_cells.length} required cell(s).`,
+        variant: axis.prompt_variant,
+      });
+    } else {
+      // Ad-hoc: require axis_id not collide with canonical catalog
+      // (defensive — panel consensus should enforce this but we
+      // guard anyway so a mis-tagged proposal can't shadow a real
+      // catalog axis).
+      if (isValidAxis(axis.axis_id)) continue;
+      if (seenAdhoc.has(axis.axis_id)) continue;
+      seenAdhoc.add(axis.axis_id);
+      const label = axis.label ?? humanizeAxisId(axis.axis_id);
+      const tagline = axis.tagline ?? axis.rationale.slice(0, 140);
+      const spec = buildAdHocSpec({
+        axis_id: axis.axis_id,
+        label,
+        tagline,
+        rationale: axis.rationale,
+        dimension: asDimension(axis.dimension_hint),
+        instrument_kind: asInstrumentKind(axis.instrument_kind_hint),
+        output_shape: asOutputShape(axis.output_shape_hint),
+      });
+      adhocOut.push({
+        spec,
+        rationale:
+          axis.rationale.slice(0, 220) ||
+          `Panel-minted ad-hoc axis covering ${axis.target_cells.length} required cell(s).`,
+        variant: axis.prompt_variant,
+      });
+    }
+  }
+
+  // Backstop — guarantee assumptions is present (every situation has
+  // load-bearing beliefs; legacy validator enforces this too).
+  for (const alwaysAxis of ALWAYS_APPLICABLE_AXES) {
+    if (!catalogOut.some((f) => f.axis === alwaysAxis)) {
+      catalogOut.push({
+        axis: alwaysAxis,
+        rationale:
+          "Surfaces the load-bearing assumptions underlying the situation.",
+      });
+    }
+  }
+  return { frame: catalogOut, adhoc: adhocOut };
+}
+
+// ── Temperature nudge from divergence ────────────────────────────────
+//
+// When the panel saw lenses disagree, downstream LLMs should explore
+// more not less — the disagreement IS information that the framing is
+// ambiguous. Base 0.2 (legacy value), +0.1 per block divergence,
+// +0.04 per surface divergence, notes free. Capped at 0.55 so we
+// don't run the generator at hallucination-prone temperatures.
+function temperatureForDivergence(divergences: FramingDivergence[]): number {
+  let t = 0.2;
+  for (const d of divergences) {
+    if (d.severity === "block") t += 0.1;
+    else if (d.severity === "surface") t += 0.04;
+  }
+  return Math.min(0.55, t);
+}
+
+// Top-N divergences for surfacing in the response. Severity already
+// sorted (block > surface > note) by consensusMerge; we just slice.
+function topDivergences(
+  frame: SituationFrame | null,
+  n: number,
+): Array<{
+  topic: string;
+  severity: "block" | "surface" | "note";
+  positions: number;
+  lenses: string[];
+}> {
+  if (!frame || frame.divergences.length === 0) return [];
+  return frame.divergences.slice(0, n).map((d) => ({
+    topic: d.topic,
+    severity: d.severity,
+    positions: d.positions.length,
+    lenses: Array.from(
+      new Set(
+        d.positions.flatMap((p) => p.supporting_lenses),
+      ),
+    ).sort(),
+  }));
 }
 
 function validateFrame(raw: unknown): FrameResponse {
@@ -156,66 +364,260 @@ export async function POST(request: Request) {
   //
   // Soft-fail: classifier returns a neutral fallback on error, which
   // means applicableAxesFor falls back to the legacy all-8 behavior.
-  const qType: QuestionTypeResult = await classifyQuestionType(inputText);
-  const candidateAxes = applicableAxesFor(qType.type, qType.domain);
+  //
+  // Phase 3 §4.1 — run the target-outcome extractor in parallel with
+  // the question-type classifier. They're independent (both read only
+  // inputText), so Promise.all keeps the latency tax to one round-trip
+  // instead of two. extractTargetOutcome returns null on failure /
+  // when no extractable outcome — downstream stages handle null
+  // gracefully (outcome-agnostic ranking).
+  const [qType, targetOutcome]: [QuestionTypeResult, TargetOutcome | null] =
+    await Promise.all([
+      classifyQuestionType(inputText),
+      extractTargetOutcome(inputText),
+    ]);
+
+  // ── Data-presence tags (migration 20260425_data_presence.sql) ─────
+  //
+  // classify-data-presence ran earlier in the intake bootstrap and
+  // wrote the tags to spaces.data_presence. We re-read rather than
+  // accept via body so frame-extractor stays replayable on its own.
+  //
+  // Soft-fail: if the column is null (legacy row, classifier hasn't
+  // run, or classifier soft-failed), applicableAxesFor ignores the
+  // param and returns the legacy (type, domain)-only axis set. Exact
+  // pre-migration behavior.
+  let dataPresence: DataPresenceTags | null = null;
+  let situationFrame: SituationFrame | null = null;
+  let situationBaseline: SituationBaseline | null = null;
+  try {
+    const { data: spaceRow } = await db
+      .from("spaces")
+      .select("data_presence, situation_frame, situation_baseline")
+      .eq("id", spaceId)
+      .maybeSingle();
+    const raw = (spaceRow as { data_presence?: unknown } | null)?.data_presence;
+    if (raw && typeof raw === "object") {
+      const r = raw as Record<string, unknown>;
+      dataPresence = {
+        has_telemetry: r.has_telemetry === true,
+        has_historical_output: r.has_historical_output === true,
+        has_baseline: r.has_baseline === true,
+        has_spec: r.has_spec === true,
+        has_just_idea: r.has_just_idea === true,
+        data_presence_score:
+          typeof r.data_presence_score === "number" ? r.data_presence_score : 0,
+        evidence_excerpts: Array.isArray(r.evidence_excerpts)
+          ? (r.evidence_excerpts as unknown[]).filter(
+              (s): s is string => typeof s === "string",
+            )
+          : [],
+      };
+    }
+    // situation_frame column populated by the framing panel upstream
+    // (migration 20260528_situation_frame.sql). validateSituationFrame
+    // is a never-throws coercer that returns emptyFrame() on bad data.
+    const rawFrame = (spaceRow as { situation_frame?: unknown } | null)
+      ?.situation_frame;
+    if (rawFrame) {
+      situationFrame = validateSituationFrame(rawFrame);
+    }
+    // situation_baseline column populated by the situation analyzer
+    // (migration 20260605_assets_and_situation_baseline.sql). Carries
+    // the structured "current state" + an `unknowns` array we can use
+    // to scope axis selection toward the gaps the user actually has.
+    // Null when the analyzer was skipped (vague intake) — same legacy
+    // axis selection as before.
+    const rawBaseline = (
+      spaceRow as { situation_baseline?: unknown } | null
+    )?.situation_baseline;
+    if (rawBaseline && typeof rawBaseline === "object") {
+      const r = rawBaseline as Record<string, unknown>;
+      // Defensive shape assertion — only surface unknowns + uncertainty
+      // here; we don't need the full nested structure for axis prompt
+      // scoping. If the column is malformed, set to null and proceed.
+      if (
+        Array.isArray(r.unknowns) &&
+        typeof r.uncertainty_score === "number" &&
+        r.skipped_reason !== "twin_mode_structural" &&
+        r.skipped_reason !== "no_assets_no_richness" &&
+        r.skipped_reason !== "analyzer_failed"
+      ) {
+        situationBaseline = rawBaseline as SituationBaseline;
+      }
+    }
+  } catch (err) {
+    console.warn("[frame-extractor] space lookup failed:", err);
+  }
+
+  const candidateAxes = applicableAxesFor(qType.type, qType.domain, dataPresence);
+  const presenceHintBlock = dataPresence
+    ? `\n\nDATA PRESENCE (classified upstream — the user's raw materials):\n- telemetry: ${dataPresence.has_telemetry}\n- historical output: ${dataPresence.has_historical_output}\n- baseline: ${dataPresence.has_baseline}\n- spec/description: ${dataPresence.has_spec}\n- only an idea: ${dataPresence.has_just_idea}\nDO NOT include axes that have no raw material (e.g. financial axis when no numbers were provided). Let the candidate axes constrain you.\n`
+    : "";
+  // Baseline-driven scoping. When the situation analyzer extracted
+  // an `unknowns` list, surface those gaps to the axis classifier so
+  // it picks lenses that can address them. E.g., an unknown like
+  // "no thermal stress data" pushes the LLM toward the engineer/risk
+  // axes instead of cultural. Also surfaces uncertainty_score: high
+  // uncertainty → suggest more axes (>=4); low → fewer (3 ok).
+  const baselineHintBlock =
+    situationBaseline && situationBaseline.unknowns.length > 0
+      ? `\n\nBASELINE GAPS (extracted from intake + assets — these are what landscape axes should help close):\n${situationBaseline.unknowns
+          .slice(0, 8)
+          .map((u, idx) => `  ${idx + 1}. ${u}`)
+          .join(
+            "\n",
+          )}\nUncertainty score: ${situationBaseline.uncertainty_score.toFixed(2)} (0=fully known, 1=fully unknown).\nPrefer axes that can plausibly produce evidence for the gaps above. When uncertainty >= 0.5, lean toward 4-5 axes (more lenses); when < 0.3, 3 axes is fine.\n`
+      : "";
   const candidateSetBlock =
     qType.confidence >= 0.4
-      ? `\n\nCANDIDATE AXES (derived from question type "${qType.type}" + domain "${qType.domain}"): ${candidateAxes.join(", ")}.\nPrefer these axes. Only include a non-candidate axis if there's a specific, input-grounded reason.\n`
-      : "";
+      ? `\n\nCANDIDATE AXES (derived from question type "${qType.type}" + domain "${qType.domain}"): ${candidateAxes.join(", ")}.\nPrefer these axes. Only include a non-candidate axis if there's a specific, input-grounded reason.${presenceHintBlock}${baselineHintBlock}`
+      : presenceHintBlock + baselineHintBlock;
 
-  // Extract frame via LLM. Soft-fail: if the LLM misbehaves, we
-  // fall back to a sensible default frame (3 most-generally-
-  // applicable axes) so the user still sees the choreography.
+  // ── Panel-first path (Piece 3 of the 2026-04-23 review) ──────────
+  //
+  // If the framing panel ran upstream and produced a usable frame —
+  // defined as ≥1 required cell AND ≥1 axis whose target_cells
+  // intersect a required cell — we skip the LLM classifier entirely
+  // and derive the axis list directly from the panel's output via
+  // axesCoveringRequiredCells(). This is the core "frame drives axes
+  // instead of (type, domain) matrix" bridge.
+  //
+  // If the frame exists but has no required cells (e.g. panel
+  // soft-failed to empty frame, or legacy row with null column), we
+  // fall through to the legacy LLM classifier path below — exact
+  // pre-Piece-3 behavior.
   let frame: FrameResponse;
-  try {
-    frame = await llmJSON<FrameResponse>({
-      system: SYSTEM_PROMPT + candidateSetBlock,
-      user: buildUserPrompt(inputText),
-      maxTokens: 800,
-      temperature: 0.2,
-      validator: validateFrame,
-      fallback: {
+  let frameSource: "panel" | "legacy_classifier" | "fallback" = "fallback";
+  let frameTemperature = 0.2;
+  const panelFrame = deriveFrameFromPanel(situationFrame);
+
+  // Boost temperature when the panel surfaced divergences — the LLM
+  // downstream (if we do call it) should explore more, not less, when
+  // lenses disagreed. Applied whether we took the panel path or the
+  // legacy LLM path so generator temperature hints are consistent.
+  if (situationFrame) {
+    frameTemperature = temperatureForDivergence(situationFrame.divergences);
+  }
+
+  if (panelFrame.frame.length > 0 || panelFrame.adhoc.length > 0) {
+    frame = { frame: panelFrame.frame, adhoc_frame: panelFrame.adhoc };
+    frameSource = "panel";
+  } else {
+    // Legacy path — LLM classifier on the candidate-axis pool.
+    try {
+      frame = await llmJSON<FrameResponse>({
+        system: SYSTEM_PROMPT + candidateSetBlock,
+        user: buildUserPrompt(inputText),
+        maxTokens: 800,
+        temperature: frameTemperature,
+        validator: validateFrame,
+        fallback: {
+          frame: [
+            {
+              axis: "causal_scenarios",
+              rationale: "Default lens — outcomes branch with uncertainty.",
+            },
+            {
+              axis: "assumptions",
+              rationale:
+                "Surfaces the load-bearing assumptions underlying the situation.",
+            },
+            {
+              axis: "risk",
+              rationale: "Default lens — most decisions carry downside exposure.",
+            },
+          ],
+        },
+      });
+      frameSource = "legacy_classifier";
+    } catch (err) {
+      console.warn("[frame-extractor] LLM classification failed:", err);
+      frame = {
         frame: [
           {
             axis: "causal_scenarios",
-            rationale: "Default lens — outcomes branch with uncertainty.",
+            rationale: "Fallback after classifier error.",
           },
           {
             axis: "assumptions",
-            rationale:
-              "Surfaces the load-bearing assumptions underlying the situation.",
+            rationale: "Surfaces load-bearing beliefs.",
           },
           {
             axis: "risk",
-            rationale: "Default lens — most decisions carry downside exposure.",
+            rationale: "Fallback after classifier error.",
           },
         ],
-      },
+      };
+      frameSource = "fallback";
+    }
+  }
+
+  // ── Phase 2 §3.3 — always-include causal_scenarios under uncertainty ──
+  //
+  // Decision-under-uncertainty inputs MUST get the causal_scenarios
+  // lens — that's the axis that surfaces "branching outcomes with
+  // probability mass on each branch", and dropping it under any non-
+  // trivial uncertainty produces probability spaces that pretend the
+  // future is single-pathed when it isn't.
+  //
+  // No `outcome_uncertainty` field exists in the upstream classifiers
+  // yet, so we synthesize a proxy from signals we DO have:
+  //   • situationFrame.framing_confidence (low ⇒ uncertain)
+  //   • situationFrame.divergences.length (high ⇒ uncertain)
+  //   • qType.confidence (low ⇒ classifier itself was unsure)
+  //   • dataPresence.has_just_idea  (only an idea ⇒ huge uncertainty)
+  //
+  // Threshold of 0.3 matches the plan's outcome_uncertainty > 0.3
+  // gate; the proxy is conservative (errs toward including the lens),
+  // which is correct — adding causal_scenarios on a confident input
+  // is mildly redundant, dropping it on an uncertain input is
+  // structurally wrong.
+  function deriveOutcomeUncertainty(): number {
+    let u = 0;
+    if (situationFrame) {
+      const conf = situationFrame.framing_confidence;
+      if (typeof conf === "number" && conf < 0.7) {
+        u = Math.max(u, 0.7 - conf); // 0..0.7 range
+      }
+      const divCount = situationFrame.divergences?.length ?? 0;
+      if (divCount >= 1) {
+        u = Math.max(u, Math.min(0.6, divCount * 0.2)); // 0.2..0.6
+      }
+    }
+    if (qType.confidence < 0.5) {
+      u = Math.max(u, 0.5 - qType.confidence); // 0..0.5
+    }
+    if (dataPresence?.has_just_idea) {
+      u = Math.max(u, 0.6);
+    }
+    return u;
+  }
+
+  const outcomeUncertainty = deriveOutcomeUncertainty();
+  const hasCausalScenarios = frame.frame.some(
+    (sel) => sel.axis === "causal_scenarios",
+  );
+  if (!hasCausalScenarios && outcomeUncertainty > 0.3) {
+    // Insert at index 0 so it paints first (lowest order_index ⇒
+    // closest to the origin card). The rationale calls out WHY we
+    // forced inclusion so users can see the gate fired.
+    frame.frame.unshift({
+      axis: "causal_scenarios",
+      rationale: `Auto-included: outcome uncertainty ${outcomeUncertainty.toFixed(2)} (>0.3 threshold). Branching scenarios are load-bearing here even if the panel didn't surface them.`,
     });
-  } catch (err) {
-    console.warn("[frame-extractor] LLM classification failed:", err);
-    frame = {
-      frame: [
-        {
-          axis: "causal_scenarios",
-          rationale: "Fallback after classifier error.",
-        },
-        {
-          axis: "assumptions",
-          rationale: "Surfaces load-bearing beliefs.",
-        },
-        {
-          axis: "risk",
-          rationale: "Fallback after classifier error.",
-        },
-      ],
-    };
   }
 
   // Persist frame rows + emit space_opened events for each axis in
   // order. Persistence first so a reload after the frame is set
   // re-reads from the DB rather than re-running the classifier.
-  const rows = frame.frame.map((sel, idx) => ({
+  //
+  // Ad-hoc axes ALSO persist (Phase 2E · Axis Richness) — the
+  // `axis` column is plain text so the panel-minted axis_id stores
+  // cleanly. The rationale field absorbs the spec's failure_mode
+  // prefix for traceability when an ad-hoc axis produces thin output.
+  const adhocList = frame.adhoc_frame ?? [];
+  const catalogRows = frame.frame.map((sel, idx) => ({
     run_id: runId,
     space_id: spaceId,
     user_id: user.id,
@@ -224,6 +626,16 @@ export async function POST(request: Request) {
     order_index: idx,
     status: "pending" as const,
   }));
+  const adhocRows = adhocList.map((sel, idx) => ({
+    run_id: runId,
+    space_id: spaceId,
+    user_id: user.id,
+    axis: sel.spec.axis_id,
+    rationale: sel.rationale,
+    order_index: frame.frame.length + idx,
+    status: "pending" as const,
+  }));
+  const rows = [...catalogRows, ...adhocRows];
 
   if (rows.length > 0) {
     const { error: insertErr } = await db
@@ -237,9 +649,49 @@ export async function POST(request: Request) {
     }
   }
 
+  // ── Phase 3 §4.1 — persist + emit target_outcome ─────────────────
+  //
+  // Outcome persistence happens BEFORE the space_opened events fire,
+  // so a downstream consumer that re-reads pipeline_runs while the
+  // space shells are animating in always sees the outcome on the row.
+  // Soft-fail on either step — the pipeline still works without the
+  // outcome (just degrades to outcome-agnostic ranking). Skipped
+  // entirely when extractor returned null (no signal).
+  if (targetOutcome) {
+    try {
+      await db
+        .from("pipeline_runs")
+        .update({ target_outcome: targetOutcome })
+        .eq("id", runId);
+    } catch (err) {
+      console.warn(
+        "[frame-extractor] target_outcome persist failed:",
+        err,
+      );
+    }
+    try {
+      await emitStructuralEvent(db, runId, {
+        type: "target_outcome_identified",
+        runId,
+        name: targetOutcome.name,
+        direction: targetOutcome.direction,
+        metricKind: targetOutcome.metric_kind,
+        horizon: targetOutcome.horizon,
+        confidence: targetOutcome.confidence,
+        rationale: targetOutcome.rationale,
+      });
+    } catch (err) {
+      console.warn(
+        "[frame-extractor] target_outcome event emit failed:",
+        err,
+      );
+    }
+  }
+
   // Emit space_opened events so the canvas paints shells in
   // real-time. Order matters — lower order_index = closer to the
-  // origin card, painted first.
+  // origin card, painted first. Catalog axes use AXIS_CATALOG meta;
+  // ad-hoc axes pull label/tagline/accent off their minted AxisSpec.
   for (let i = 0; i < frame.frame.length; i++) {
     const sel = frame.frame[i];
     const meta = AXIS_CATALOG[sel.axis];
@@ -251,6 +703,23 @@ export async function POST(request: Request) {
       tagline: meta.tagline,
       accent: meta.accent,
       orderIndex: i,
+      rationale: sel.rationale,
+    });
+  }
+  for (let j = 0; j < adhocList.length; j++) {
+    const sel = adhocList[j];
+    await emitStructuralEvent(db, runId, {
+      type: "space_opened",
+      spaceKey: `${runId}:${sel.spec.axis_id}`,
+      // SpaceOpenedEvent.axis is typed ProbabilitySpaceAxis. Cast via
+      // string — the rail UI reads the `axis` field as a display key,
+      // not a strict union member, and tolerates ad-hoc ids since
+      // we also pass label + accent explicitly.
+      axis: sel.spec.axis_id as ProbabilitySpaceAxis,
+      label: sel.spec.label,
+      tagline: sel.spec.tagline,
+      accent: sel.spec.accent,
+      orderIndex: frame.frame.length + j,
       rationale: sel.rationale,
     });
   }
@@ -275,11 +744,33 @@ export async function POST(request: Request) {
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
     .join("; ");
-  const axesToGenerate = frame.frame.map((sel) => sel.axis);
+  const catalogAxesToGenerate = frame.frame.map((sel) => ({
+    axis: sel.axis,
+    variant: sel.variant,
+  }));
+  const adhocAxesToGenerate = (frame.adhoc_frame ?? []).map((sel) => ({
+    spec: sel.spec,
+    variant: sel.variant,
+  }));
+
+  // Per-axis hard cap. An axis generator that hangs on an LLM call
+  // without a timeout stalls Promise.allSettled below forever, which
+  // means cross-space-linker never fires, which means space_merge_*
+  // events never emit, which means the canvas sits on "opening…"
+  // shells indefinitely. 120s covers the slowest legitimate axis
+  // (ad-hoc generation with large inputs) while still short-circuiting
+  // a truly stuck LLM call.
+  const AXIS_TIMEOUT_MS = 120_000;
 
   after(async () => {
-    await Promise.allSettled(
-      axesToGenerate.map(async (axis) => {
+    // Catalog + ad-hoc fire in a single Promise.allSettled so slow
+    // catalog axes don't block ad-hoc generation, and vice versa.
+    // Each call routes to a different URL (axis key vs `_adhoc`)
+    // so the route can pick the right prompt path.
+    const catalogKickoffs = catalogAxesToGenerate.map(
+      async ({ axis, variant }) => {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), AXIS_TIMEOUT_MS);
         try {
           await fetch(
             `${origin}/api/pipeline/probability-space/${axis}`,
@@ -300,17 +791,59 @@ export async function POST(request: Request) {
                 // it via the frame-extractor payload and we wire
                 // here.
                 intent: null,
+                variant,
               }),
+              signal: ac.signal,
             },
           );
         } catch (err) {
+          const aborted = ac.signal.aborted;
           console.warn(
-            `[frame-extractor] generator ${axis} kickoff failed (non-fatal):`,
+            `[frame-extractor] generator ${axis} kickoff ${aborted ? "TIMED OUT" : "failed"} (non-fatal):`,
             err,
           );
+        } finally {
+          clearTimeout(timer);
         }
-      }),
+      },
     );
+
+    const adhocKickoffs = adhocAxesToGenerate.map(async ({ spec, variant }) => {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), AXIS_TIMEOUT_MS);
+      try {
+        await fetch(
+          `${origin}/api/pipeline/probability-space/_adhoc`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              runId,
+              userInput: inputText,
+              questionType: qType.type,
+              domain: qType.domain,
+              intent: null,
+              variant,
+              spec,
+            }),
+            signal: ac.signal,
+          },
+        );
+      } catch (err) {
+        const aborted = ac.signal.aborted;
+        console.warn(
+          `[frame-extractor] ad-hoc generator ${spec.axis_id} kickoff ${aborted ? "TIMED OUT" : "failed"} (non-fatal):`,
+          err,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+
+    await Promise.allSettled([...catalogKickoffs, ...adhocKickoffs]);
 
     // ── Phase 2E · PR 4 — cross-space linker ──
     //
@@ -325,26 +858,52 @@ export async function POST(request: Request) {
     // Soft-fail: if the linker endpoint 500s we still want the run
     // row to settle, so we swallow the error here and log. The rail
     // will just not play the merge animation in that (rare) case.
-    try {
-      await fetch(`${origin}/api/pipeline/cross-space-linker`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: cookieHeader,
-        },
-        body: JSON.stringify({ runId }),
-      });
-    } catch (err) {
-      console.warn(
-        "[frame-extractor] cross-space-linker kickoff failed (non-fatal):",
-        err,
-      );
+    //
+    // Per-request timeout so a hung linker doesn't block downstream
+    // stages forever. 60s is generous — the linker is a single LLM
+    // call over lexically-matched candidates.
+    {
+      const linkerAc = new AbortController();
+      const linkerTimer = setTimeout(() => linkerAc.abort(), 60_000);
+      try {
+        await fetch(`${origin}/api/pipeline/cross-space-linker`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: cookieHeader,
+          },
+          body: JSON.stringify({ runId }),
+          signal: linkerAc.signal,
+        });
+      } catch (err) {
+        const aborted = linkerAc.signal.aborted;
+        console.warn(
+          `[frame-extractor] cross-space-linker kickoff ${aborted ? "TIMED OUT" : "failed"} (non-fatal):`,
+          err,
+        );
+      } finally {
+        clearTimeout(linkerTimer);
+      }
     }
   });
 
   return NextResponse.json({
     frame: frame.frame,
     count: frame.frame.length,
+    // Ad-hoc frame surfaced so downstream UI (and tests) can see what
+    // panel-minted dimensions were dispatched. Empty array when the
+    // panel didn't propose any ad-hoc axes.
+    adhoc_frame: (frame.adhoc_frame ?? []).map((sel) => ({
+      axis_id: sel.spec.axis_id,
+      label: sel.spec.label,
+      tagline: sel.spec.tagline,
+      dimension: sel.spec.dimension,
+      instrument_kind: sel.spec.instrument_kind,
+      output_shape: sel.spec.output_shape,
+      rationale: sel.rationale,
+      variant: sel.variant,
+    })),
+    adhoc_count: (frame.adhoc_frame ?? []).length,
     // PR 1.5 — expose the classification so downstream generators
     // can pass questionType through to getAxisPrompt without re-
     // running the classifier. Also useful for telemetry.
@@ -357,5 +916,16 @@ export async function POST(request: Request) {
       rationale: qType.rationale,
     },
     candidate_axes: candidateAxes,
+    // Piece 3 — panel surfacing. `frame_source` tells downstream what
+    // produced the axis list; `frame_divergences` is UI-friendly
+    // top-N; `frame_gate_status` lets the UI render the "needs user
+    // input" affordance even though Piece 3 doesn't gate on it yet
+    // (Piece 4 promotes the gate from metric to hard block).
+    frame_source: frameSource,
+    frame_temperature: frameTemperature,
+    frame_divergences: topDivergences(situationFrame, 3),
+    frame_gate_status: situationFrame?.gate_status ?? null,
+    frame_confidence: situationFrame?.framing_confidence ?? null,
+    frame_lens_count: situationFrame?.lenses_used.length ?? 0,
   });
 }

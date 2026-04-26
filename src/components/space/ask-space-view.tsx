@@ -41,9 +41,10 @@ interface AskAnswer {
 }
 
 export function AskSpaceView() {
-  const { data } = useSpaceData();
+  // useSpaceData returns SpaceContextValue (SpaceDataProps & SpaceUIState)
+  // — fields are flat on the context, not wrapped in a `data` object.
+  const { space, entities } = useSpaceData();
   const router = useRouter();
-  const { space, entities } = data;
 
   const question = space.input_text ?? "";
   const askPayload = readAskAnswer(space.synthesis_data);
@@ -62,7 +63,7 @@ export function AskSpaceView() {
 
   // Only reference entities are relevant on an ask whiteboard; filter
   // defensively in case the user drops non-ref entities onto this space.
-  const refs = entities.filter((e) => {
+  const refs = entities.filter((e: Entity) => {
     return (e as Entity & { is_reference?: boolean }).is_reference === true;
   });
 

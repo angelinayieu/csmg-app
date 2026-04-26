@@ -92,7 +92,7 @@ export function ToolboxSphere({ onOpenComment }: ToolboxSphereProps) {
     switch (tool.id) {
       case "chat":
         if (onSpacePage) dispatchToolboxEvent({ type: "open-chat" });
-        else router.push("/app/new");
+        else router.push("/app");
         break;
       case "comment":
         onOpenComment();

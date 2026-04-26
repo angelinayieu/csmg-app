@@ -37,13 +37,38 @@ export default async function StudioPage({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  const { data: spacesRaw } = await db
+  // Try the curated query first (relies on migration 20260527's
+  // `archived` + `pinned` columns). If that migration hasn't been
+  // applied to this Supabase yet, the query errors silently and the
+  // home reads as "0 whiteboards" even though spaces exist — fall
+  // back to a column-light query and filter/sort client-side.
+  const richSpacesRes = await db
     .from("spaces")
     .select("*")
     .is("parent_space_id", null)
+    .eq("archived", false)
+    .order("pinned", { ascending: false })
     .order("updated_at", { ascending: false })
     .limit(60);
-  const spaces = (spacesRaw ?? []) as Space[];
+
+  const spacesRes = richSpacesRes.error
+    ? await db
+        .from("spaces")
+        .select("*")
+        .is("parent_space_id", null)
+        .order("updated_at", { ascending: false })
+        .limit(60)
+    : richSpacesRes;
+
+  const profileRes = user
+    ? await db.from("profiles").select("credit_balance").eq("id", user.id).single()
+    : { data: null };
+  const rawSpaces = (spacesRes.data ?? []) as Space[];
+  // Client-side archived filter — covers both schemas: when the
+  // column is absent the field is undefined (falsy), when present
+  // we honor it.
+  const spaces = rawSpaces.filter((s) => !s.archived);
+  const creditBalance: number = profileRes?.data?.credit_balance ?? 0;
 
   const greetingName =
     user?.email?.split("@")[0] ?? "there";
@@ -67,6 +92,9 @@ export default async function StudioPage({
       templates={templates}
       spaces={spaces}
       mode={immersiveMode}
+      userEmail={user?.email ?? ""}
+      userId={user?.id ?? null}
+      creditBalance={creditBalance}
     />
   );
 }

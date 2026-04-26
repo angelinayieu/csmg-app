@@ -11,6 +11,8 @@ import { NextResponse } from "next/server";
 import { safeAuth, verifySpaceOwnership, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { runLayeredSynthesis } from "@/lib/pipeline/layered-synthesis";
 import type { Entity, Edge } from "@/types";
+import { checkLayerCoverageGate } from "@/lib/situation-frame/layer-coverage-gate";
+import { validateFrame as validateSituationFrame } from "@/lib/situation-frame/frame-helpers";
 
 export const maxDuration = 180; // 4 sequential LLM calls, bounded context each
 
@@ -22,9 +24,14 @@ export async function POST(request: Request) {
   const db = supabase as any;
 
   let spaceId: string;
+  let bypassLayerGate = false;
   try {
     const body = await request.json();
     spaceId = body.spaceId;
+    // Piece 4 — allow the client to proceed past a failed layer-
+    // coverage gate after the user has seen the gap report and
+    // confirmed. No-op when the gate passes.
+    bypassLayerGate = body.bypassLayerGate === true;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -40,7 +47,11 @@ export async function POST(request: Request) {
 
   try {
     const [spaceRes, entitiesRes, edgesRes] = await Promise.all([
-      db.from("spaces").select("name, input_text, synthesis_data").eq("id", spaceId).single(),
+      db
+        .from("spaces")
+        .select("name, input_text, synthesis_data, situation_frame")
+        .eq("id", spaceId)
+        .single(),
       db.from("entities").select("*").eq("space_id", spaceId),
       db.from("edges").select("*").eq("space_id", spaceId),
     ]);
@@ -55,6 +66,39 @@ export async function POST(request: Request) {
 
     if (entities.length === 0) {
       return NextResponse.json({ error: "No entities to synthesize" }, { status: 400 });
+    }
+
+    // ── Piece 4 · Layer coverage gate ─────────────────────────────────
+    //
+    // Short-circuit synthesis if the framing panel's `situation_frame`
+    // declared layers required that the KG never populated, or if the
+    // panel itself surfaced unresolved block-severity divergences.
+    //
+    // No situation_frame (legacy row, panel soft-failed) → gate passes
+    // silently — exact pre-Piece-4 behavior.
+    //
+    // Bypass: clients surface the gap to the user and re-POST with
+    // `bypassLayerGate: true` to proceed anyway. The bypass is recorded
+    // in the response for audit.
+    const situationFrame = space.situation_frame
+      ? validateSituationFrame(space.situation_frame)
+      : null;
+    const gateReport = checkLayerCoverageGate({
+      frame: situationFrame,
+      entities,
+      spaceId,
+    });
+    if (!gateReport.pass && !bypassLayerGate) {
+      return NextResponse.json(
+        {
+          error: gateReport.message,
+          gate: "layer_coverage",
+          report: gateReport,
+          bypass_hint:
+            "Re-POST with { bypassLayerGate: true } after acknowledging the gap report.",
+        },
+        { status: 409 },
+      );
     }
 
     // Validate hierarchical structure. Layered synthesis requires layer info.
@@ -142,6 +186,10 @@ export async function POST(request: Request) {
       },
       narrative: result.stages.final,
       stats: result.stats,
+      layer_coverage_gate: {
+        ...gateReport,
+        bypassed: bypassLayerGate && !gateReport.pass,
+      },
     });
   } catch (err) {
     console.error("[synthesize-layered] Error:", err);

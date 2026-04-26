@@ -58,17 +58,34 @@ function nameForMechanism(proposal: InfrastructureProposal, kind: MechanismHint)
   return `${proposal.name} · ${kindLabel}`;
 }
 
+/**
+ * Rationale strings are intentionally worded to describe what the
+ * materialized row DOES (routes a widget onto the app's manifest), not
+ * what the underlying capability does in the abstract. A row with
+ * `kind='simulation'` surfaces a simulation widget — it does not
+ * itself run simulations. The MC engine in src/lib/simulation/ runs
+ * simulations, invoked by the widget's action handlers. Keeping this
+ * language accurate prevents readers from thinking these rows are
+ * executable primitives. See migration 20260601_mechanisms_honest_comments.sql.
+ */
 function rationaleForMechanism(proposal: InfrastructureProposal, kind: MechanismHint): string {
   const kindReason: Record<MechanismHint, string> = {
-    simulation: "Run what-if scenarios against twin state.",
-    prediction: "Forward-model expected metric trajectories.",
-    validation: "Test hypotheses with structured experiments.",
-    baseline_tracking: "Capture baseline so progress is anchored, not absolute.",
-    deviation_capture: "Flag surprises from prediction as high-value learning.",
-    game: "Drive engagement with behavioral mechanics.",
-    ml_personalization: "Personalize behavior per user using prior interactions.",
+    simulation:
+      "Surfaces a simulation-lab widget on this app so the user can run what-if scenarios (backed by the Monte Carlo engine).",
+    prediction:
+      "Surfaces a prediction-panel widget so agent forecasts land in the prediction ledger with a resolution horizon.",
+    validation:
+      "Surfaces a validation-lab widget so hypotheses about this proposal can be tested against the KG's reality calibration.",
+    baseline_tracking:
+      "Surfaces a baseline-tracker widget so progress is anchored to a measured starting state instead of absolute numbers.",
+    deviation_capture:
+      "Surfaces a deviation-feed widget so surprises (actuals outside the predicted band) become high-value learning signals.",
+    game:
+      "Surfaces a game-mechanics widget so engagement loops can be composed from behavioral primitives.",
+    ml_personalization:
+      "Surfaces a personalization widget so per-user behavior can be learned from prior interactions.",
   };
-  return `${kindReason[kind]} Supports: ${proposal.description.slice(0, 140)}`;
+  return `${kindReason[kind]} Supports proposal: ${proposal.description.slice(0, 140)}`;
 }
 
 export async function materializeMechanismsFromStrategy(

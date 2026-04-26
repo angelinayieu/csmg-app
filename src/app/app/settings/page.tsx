@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { SettingsForm } from "@/components/settings/settings-form";
 import { SettingsBaselinePanel } from "@/components/settings/settings-baseline-panel";
 import { LearningPanel } from "@/components/learning/learning-panel";
+import { GlobalMemoryPanel } from "@/components/settings/global-memory-panel";
 import {
   completeConsentMap,
   type DataCategory,
@@ -59,6 +60,11 @@ export default async function SettingsPage() {
           citations). Empty state until the first run completes. */}
       <div className="mt-6">
         <LearningPanel userId={user.id} />
+      </div>
+
+      {/* Memory & Learning — global defaults + clear store */}
+      <div className="mt-6">
+        <GlobalMemoryPanel />
       </div>
 
       <SettingsForm

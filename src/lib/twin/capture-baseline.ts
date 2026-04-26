@@ -454,6 +454,32 @@ export async function captureBaseline(
     }
   }
 
+  // 7. Gap B — kick off reality calibration. Soft-fail: a calibration
+  //    crash must NEVER block baseline delivery. The lab UI falls back
+  //    to `status: "unknown"` (not a visible error — just an unlocked
+  //    but unverified state) if this step fails.
+  //
+  //    Synchronous on purpose: this function already runs in a
+  //    background capture trigger and the UI needs the row present
+  //    before the next SpaceLab render. A fire-and-forget here would
+  //    race against the user opening the lab.
+  try {
+    const { runRealityCalibration } = await import(
+      "@/lib/pipeline/reality-calibration"
+    );
+    const { calibration } = await runRealityCalibration(db, {
+      strategyBaselineId: baselineRow.id,
+      spaceId,
+      baselines: metricBaselines,
+      entities,
+      edges,
+    });
+    notes.push(`calibration:${calibration.status}`);
+  } catch (err) {
+    console.warn("[capture-baseline] reality-calibration failed (non-fatal):", err);
+    notes.push("calibration_failed");
+  }
+
   console.log(
     `[capture-baseline] wrote baseline ${baselineRow.id} + ${predictedOutcomes.length} predictions for snapshot ${strategySnapshotId}`,
   );

@@ -18,7 +18,7 @@
 // pauses. Flipping master on re-activates everything in its last
 // stored state.
 
-import { useCallback } from "react";
+import React, { useState } from "react";
 import {
   Sparkles,
   Zap,
@@ -29,6 +29,13 @@ import {
   Download,
   X,
   RotateCw,
+  Brain,
+  Globe,
+  Target,
+  Link2,
+  HelpCircle,
+  ChevronRight,
+  SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GlassPanel } from "@/components/ui/glass-panel";
@@ -39,12 +46,21 @@ import {
   TOGGLE_STATUS,
   type BrainstormSettings,
   type ToggleStatus,
+  type MemorySettings,
 } from "@/lib/brainstorm/brainstorm-settings";
+import type { HudRailContext, HudRailEntity } from "./canvas-hud-rail";
 
 export interface BrainstormPanelProps {
   open: boolean;
   onClose: () => void;
   settings: UseBrainstormSettings;
+  /** Live ambient context from the selected sticky / entity. When set,
+   *  an "Active context" section renders at the top of the panel before
+   *  the settings — keeping everything in one place. */
+  hudCtx?: HudRailContext;
+  onDecompose?: () => void;
+  onJumpToEntity?: (e: HudRailEntity) => void;
+  onAppendQuestion?: (q: string) => void;
 }
 
 const ACCENT = "#8B5CF6"; // Brainstorm's signature violet.
@@ -53,9 +69,24 @@ export function BrainstormPanel({
   open,
   onClose,
   settings: ctl,
+  hudCtx,
+  onDecompose,
+  onJumpToEntity,
+  onAppendQuestion,
 }: BrainstormPanelProps) {
   const { settings, update, applyPreset, activePresetId, resetToDefaults } =
     ctl;
+
+  // Settings section collapses when ambient context is active so the
+  // user's current context gets prime real estate at the top.
+  const [settingsExpanded, setSettingsExpanded] = useState(!hudCtx?.activeShape && !hudCtx?.selectedEntity);
+
+  const hasAmbient =
+    !!hudCtx &&
+    (hudCtx.activeShape ||
+      hudCtx.selectedEntity ||
+      hudCtx.relatedEntities.length > 0 ||
+      hudCtx.suggestedQuestions.length > 0);
 
   if (!open) return null;
 
@@ -63,8 +94,6 @@ export function BrainstormPanel({
     <div
       className="pointer-events-auto absolute right-4 z-30"
       style={{
-        // Sit just below the topbar, extend ~80vh so the footer
-        // stays in view without cutting off.
         top: 72,
         maxHeight: "calc(100vh - 88px)",
       }}
@@ -82,9 +111,7 @@ export function BrainstormPanel({
         >
           <div className="flex items-center gap-2">
             <div
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-lg transition-all",
-              )}
+              className="flex h-7 w-7 items-center justify-center rounded-lg transition-all"
               style={{
                 background: settings.enabled
                   ? `color-mix(in srgb, ${ACCENT} 18%, transparent)`
@@ -96,18 +123,22 @@ export function BrainstormPanel({
                   "h-3.5 w-3.5 transition-colors",
                   settings.enabled && "animate-pulse",
                 )}
-                style={{
-                  color: settings.enabled ? ACCENT : "#64748b",
-                }}
+                style={{ color: settings.enabled ? ACCENT : "#64748b" }}
                 strokeWidth={1.75}
               />
             </div>
             <div>
               <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-gray-900">
-                Brainstorm
+                AI Companion
               </div>
               <div className="text-[10px] font-medium text-gray-500">
-                {settings.enabled ? "AI partner active" : "AI partner paused"}
+                {hudCtx?.loading
+                  ? "Thinking…"
+                  : hasAmbient
+                    ? "Context active"
+                    : settings.enabled
+                      ? "Partner active"
+                      : "Partner paused"}
               </div>
             </div>
           </div>
@@ -127,7 +158,122 @@ export function BrainstormPanel({
           </div>
         </div>
 
-        {/* Body (scrolls if content exceeds height) */}
+        {/* ── Ambient context section (top, always visible when active) ── */}
+        {hasAmbient && (
+          <div
+            className="flex flex-col gap-2 overflow-y-auto px-3 py-3"
+            style={{
+              maxHeight: settingsExpanded ? "45vh" : "65vh",
+              borderBottom: "1px solid var(--glass-hairline)",
+            }}
+          >
+            {/* Active sticky preview */}
+            {hudCtx!.activeShape && (
+              <AmbientSection
+                icon={<Sparkles className="h-3 w-3" />}
+                label="Active sticky"
+                accent="from-blue-50 to-purple-50"
+              >
+                <div className="rounded-lg bg-white px-3 py-2 text-[12px] font-medium text-gray-800 shadow-sm">
+                  {hudCtx!.activeShape.props.text || (
+                    <span className="italic text-gray-400">Empty…</span>
+                  )}
+                </div>
+                {hudCtx!.canDecompose && (
+                  <button
+                    onClick={onDecompose}
+                    disabled={hudCtx!.loading}
+                    className={cn(
+                      "mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 py-2 text-[11.5px] font-semibold text-white shadow-sm transition-colors hover:bg-blue-700",
+                      hudCtx!.loading && "opacity-60",
+                    )}
+                  >
+                    <Zap className="h-3 w-3" />
+                    Decompose into nodes
+                  </button>
+                )}
+              </AmbientSection>
+            )}
+
+            {/* Related entities */}
+            {hudCtx!.relatedEntities.length > 0 && (
+              <AmbientSection
+                icon={<Link2 className="h-3 w-3" />}
+                label={`${hudCtx!.relatedEntities.length} related in KG`}
+                accent="from-emerald-50 to-teal-50"
+              >
+                <ul className="flex flex-col gap-1">
+                  {hudCtx!.relatedEntities.slice(0, 5).map((entity) => (
+                    <li key={entity.id}>
+                      <button
+                        onClick={() => onJumpToEntity?.(entity)}
+                        className="group flex w-full items-center gap-2 rounded-lg bg-white px-3 py-2 text-left shadow-sm transition-shadow hover:shadow"
+                      >
+                        <div className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[11.5px] font-semibold text-gray-900">
+                            {entity.name}
+                          </div>
+                          {entity.space_name && (
+                            <div className="truncate text-[9.5px] text-gray-400">
+                              {entity.space_name}
+                            </div>
+                          )}
+                        </div>
+                        <ChevronRight className="h-3 w-3 flex-shrink-0 text-gray-300 transition-transform group-hover:translate-x-0.5 group-hover:text-gray-500" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </AmbientSection>
+            )}
+
+            {/* Probe questions */}
+            {hudCtx!.suggestedQuestions.length > 0 && (
+              <AmbientSection
+                icon={<HelpCircle className="h-3 w-3" />}
+                label="Probe further"
+                accent="from-amber-50 to-orange-50"
+              >
+                <ul className="flex flex-col gap-1">
+                  {hudCtx!.suggestedQuestions.slice(0, 4).map((q, i) => (
+                    <li key={i}>
+                      <button
+                        onClick={() => onAppendQuestion?.(q)}
+                        className="w-full rounded-lg bg-white px-3 py-2 text-left text-[11.5px] text-gray-700 shadow-sm transition-all hover:shadow hover:text-gray-900 hover:bg-blue-50/40"
+                        title="Click to add this question to your sticky"
+                      >
+                        {q}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </AmbientSection>
+            )}
+          </div>
+        )}
+
+        {/* ── Settings section (collapsible) ─────────────────────────── */}
+        {/* Collapse toggle row — only shows when ambient content is present */}
+        {hasAmbient && (
+          <button
+            onClick={() => setSettingsExpanded((v) => !v)}
+            className="flex items-center justify-between px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400 hover:bg-gray-50 hover:text-gray-600 transition-colors"
+          >
+            <div className="flex items-center gap-1.5">
+              <SlidersHorizontal className="h-3 w-3" />
+              AI settings
+            </div>
+            <ChevronRight
+              className={cn(
+                "h-3 w-3 transition-transform",
+                settingsExpanded && "rotate-90",
+              )}
+            />
+          </button>
+        )}
+
+        {settingsExpanded && (
         <div
           className={cn(
             "flex flex-col gap-3 overflow-y-auto px-3 py-3 transition-opacity",
@@ -254,7 +400,16 @@ export function BrainstormPanel({
               disabled={!settings.enabled}
             />
           </div>
+
+          {/* Memory & Context */}
+          <MemorySection
+            memory={settings.memory}
+            onChange={(patch) => update({ memory: { ...settings.memory, ...patch } })}
+            disabled={!settings.enabled}
+            accent={ACCENT}
+          />
         </div>
+        )}
 
         {/* Footer — reset + activity hint */}
         <div
@@ -274,6 +429,39 @@ export function BrainstormPanel({
           </span>
         </div>
       </GlassPanel>
+    </div>
+  );
+}
+
+// ── Ambient section atom ───────────────────────────────────────────
+
+function AmbientSection({
+  icon,
+  label,
+  accent,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  accent: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1.5 px-1">
+        <div
+          className={cn(
+            "flex h-4 w-4 items-center justify-center rounded-md bg-gradient-to-br text-gray-600",
+            accent,
+          )}
+        >
+          {icon}
+        </div>
+        <div className="text-[9.5px] font-bold uppercase tracking-[0.12em] text-gray-500">
+          {label}
+        </div>
+      </div>
+      <div>{children}</div>
     </div>
   );
 }
@@ -409,6 +597,171 @@ function StatusBadge({ status }: { status: ToggleStatus }) {
     <AccentChip accent="#64748b" size="xs" variant="ghost">
       Needs Sources
     </AccentChip>
+  );
+}
+
+// ── Memory & Context Section ───────────────────────────────────────
+
+function MemorySection({
+  memory,
+  onChange,
+  disabled,
+  accent,
+}: {
+  memory: MemorySettings;
+  onChange: (patch: Partial<MemorySettings>) => void;
+  disabled: boolean;
+  accent: string;
+}) {
+  const effectivelyOn = memory.enabled && !disabled;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="px-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-gray-400">
+        Memory &amp; Context
+      </div>
+
+      {/* Master memory toggle */}
+      <div
+        className={cn(
+          "flex flex-col gap-2 rounded-lg px-2 py-2 transition-colors",
+          effectivelyOn && "bg-indigo-50/50",
+        )}
+      >
+        <div className="flex items-start gap-2">
+          <div
+            className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md transition-colors"
+            style={{
+              background: effectivelyOn
+                ? "color-mix(in srgb, #6366f1 16%, transparent)"
+                : "rgba(15,23,42,0.04)",
+            }}
+          >
+            <Brain
+              className="h-3 w-3"
+              strokeWidth={1.75}
+              style={{ color: effectivelyOn ? "#6366f1" : "#64748b" }}
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className={cn("text-[11.5px] font-semibold", effectivelyOn ? "text-gray-900" : "text-gray-700")}>
+                Draw on past work
+              </span>
+              {effectivelyOn && (
+                <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-semibold text-indigo-600">
+                  Active
+                </span>
+              )}
+            </div>
+            <div className="text-[10px] font-light leading-snug text-gray-500">
+              Retrieve relevant context from previous spaces before analysing.
+            </div>
+          </div>
+          <RowSwitch
+            checked={memory.enabled}
+            onChange={(v) => onChange({ enabled: v })}
+            disabled={disabled}
+            accent="#6366f1"
+          />
+        </div>
+
+        {/* Expanded settings when memory is on */}
+        {effectivelyOn && (
+          <div className="ml-8 flex flex-col gap-2">
+            {/* Scope */}
+            <div className="flex flex-col gap-1">
+              <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">
+                Scope
+              </div>
+              <div className="flex gap-1">
+                {(["this_space", "all_spaces"] as const).map((s) => {
+                  const active = memory.scope === s;
+                  return (
+                    <button
+                      key={s}
+                      onClick={() => onChange({ scope: s })}
+                      className={cn(
+                        "flex flex-1 items-center justify-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold transition-all",
+                        active
+                          ? "border-indigo-400 bg-indigo-50 text-indigo-700"
+                          : "border-gray-200 bg-white/60 text-gray-500 hover:bg-white",
+                      )}
+                    >
+                      {s === "all_spaces" ? (
+                        <Globe className="h-2.5 w-2.5" strokeWidth={1.75} />
+                      ) : (
+                        <Target className="h-2.5 w-2.5" strokeWidth={1.75} />
+                      )}
+                      {s === "all_spaces" ? "All spaces" : "This space"}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Sources */}
+            <div className="flex flex-col gap-1">
+              <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">
+                Sources
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {(
+                  [
+                    { key: "priorDecompositions", label: "Prior analyses" },
+                    { key: "synthesisInsights", label: "Synthesis insights" },
+                    { key: "journalHistory", label: "Journal entries" },
+                    { key: "objectives", label: "Objectives" },
+                  ] as const
+                ).map(({ key, label }) => (
+                  <label
+                    key={key}
+                    className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 hover:bg-indigo-50/50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={memory.sources[key]}
+                      onChange={(e) =>
+                        onChange({
+                          sources: { ...memory.sources, [key]: e.target.checked },
+                        })
+                      }
+                      className="h-3 w-3 rounded accent-indigo-500"
+                    />
+                    <span className="text-[10px] font-medium text-gray-600">
+                      {label}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Context limit */}
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[9.5px] font-medium text-gray-500">
+                Max items
+              </span>
+              <div className="flex items-center gap-1">
+                {[5, 10, 20].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => onChange({ maxContextItems: n })}
+                    className={cn(
+                      "rounded px-1.5 py-0.5 text-[10px] font-semibold transition-all",
+                      memory.maxContextItems === n
+                        ? "bg-indigo-500 text-white"
+                        : "bg-gray-100 text-gray-500 hover:bg-gray-200",
+                    )}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

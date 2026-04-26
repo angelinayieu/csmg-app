@@ -73,11 +73,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       return NextResponse.json({ dismissed: true, id });
     }
 
-    // Accept → create improvement_goals row
+    // Accept → create improvement_goals row.
+    // user_id is required by the RLS policy (auth.uid() = user_id) and the
+    // schema's NOT NULL constraint; forgetting it produces a misleading
+    // "new row violates row-level security policy" error.
     const { data: newGoal, error: insertError } = await db
       .from("improvement_goals")
       .insert({
         space_id: proposal.space_id,
+        user_id: user.id,
         title: proposal.suggested_title,
         objective_type: proposal.objective_type,
         description: proposal.rationale,

@@ -81,11 +81,17 @@ import { TopBar } from "./top-bar";
 import { LandingPromptPill } from "@/components/landing/landing-prompt-pill";
 import { RotatingWord } from "@/components/landing/rotating-word";
 import { stashPendingIntake } from "@/components/landing/pending-intake";
+import { ReasoningSettingsPanel } from "./reasoning-settings-panel";
+import { ClarifyingQuestionsStep } from "./clarifying-questions-step";
+import {
+  type ReasoningSettings,
+  DEFAULT_REASONING_SETTINGS,
+} from "@/types/reasoning-settings";
 
 const LANDING_ROTATING_WORDS = [
   "Methods",
   "Solutions",
-  "Life",
+  "Life Choices",
   "Decisions",
   "Research",
   "Analysis",
@@ -272,6 +278,20 @@ export function ImmersiveHome({
   const [depth, setDepth] = useState<ReasoningDepth>("standard");
   const [filesOpen, setFilesOpen] = useState(false);
   const [appsOpen, setAppsOpen] = useState(false);
+  // Reasoning settings — lenses, process toggles, baseline behavior.
+  // Depth is duplicated here (mirrored from `depth` state above) so
+  // the settings panel + the inline pill control stay in sync. The
+  // panel is closed by default; smart defaults mean first-time users
+  // never need to open it.
+  const [reasoningOpen, setReasoningOpen] = useState(false);
+  const [reasoningSettings, setReasoningSettings] = useState<ReasoningSettings>({
+    ...DEFAULT_REASONING_SETTINGS,
+  });
+  // Clarifying-questions flow state. When the user submits with the
+  // "ask me clarifying questions" toggle on, we flip into "clarifying"
+  // mode and render the Q&A step in place of the normal prompt UI.
+  // After they answer (or skip), we proceed with bootstrap.
+  const [clarifyingActive, setClarifyingActive] = useState(false);
   const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(
     null,
   );
@@ -336,53 +356,104 @@ export function ImmersiveHome({
   // Pick up to 7 templates; extra positions skip silently.
   const cards = useMemo(() => templates.slice(0, 7), [templates]);
 
-  // Create mode: submit directly to /api/intake/bootstrap — same
-  // wiring as /app/new, so the logic stays single-sourced. On success
+  // Underlying bootstrap call — accepts an optional answers payload
+  // appended by the clarifying-questions flow. Extracted so both the
+  // direct-submit path and the post-clarification path can share it.
+  const fireBootstrap = useCallback(
+    async (
+      finalText: string,
+      answers: Array<{ question: string; answer: string }> = [],
+    ) => {
+      setCreateSubmitting(true);
+      setCreateError(null);
+      try {
+        // Append the clarifier Q&A to the input_text so decompose +
+        // research see them as part of the user's intake. Format kept
+        // simple/readable since downstream LLMs read it as prose.
+        const augmented =
+          answers.length > 0
+            ? `${finalText}\n\n--- additional context (clarifier Q&A) ---\n${answers
+                .map((qa) => `Q: ${qa.question}\nA: ${qa.answer}`)
+                .join("\n\n")}`
+            : finalText;
+        // Settings keep their reasoning_depth in sync with the inline
+        // pill — pass both so the server has a single canonical bundle.
+        const settingsForServer: ReasoningSettings = {
+          ...reasoningSettings,
+          depth,
+        };
+        const res = await fetch("/api/intake/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: augmented,
+            reasoningDepth: depth,
+            reasoning_settings: settingsForServer,
+          }),
+        });
+        const raw = await res.text();
+        const asJson = (() => {
+          try {
+            return JSON.parse(raw) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        })();
+        if (!res.ok) {
+          throw new Error(
+            (asJson?.error as string) ?? `Bootstrap failed (${res.status})`,
+          );
+        }
+        const data = asJson as unknown as {
+          spaceId: string;
+          runId: string | null;
+        };
+        const destination = data.runId
+          ? `/app/space/${data.spaceId}/whiteboard?run=${data.runId}`
+          : `/app/space/${data.spaceId}/whiteboard`;
+        router.push(destination);
+      } catch (err) {
+        console.error("[ImmersiveHome] fireBootstrap failed:", err);
+        setCreateError(
+          err instanceof Error ? err.message : "Bootstrap failed",
+        );
+        setCreateSubmitting(false);
+        setClarifyingActive(false); // back to prompt edit
+      }
+    },
+    [reasoningSettings, depth, router],
+  );
+
+  // Create mode: submit directly to /api/intake/bootstrap. On success
   // navigate to the new whiteboard; the SSE subscription picks up the
   // pipeline run.
+  //
+  // When `reasoningSettings.askClarifyingQuestions` is true, we flip
+  // into the clarifier flow first — render the Q&A step, get answers,
+  // THEN call fireBootstrap with the augmented input.
   const submitCreate = useCallback(async () => {
     const trimmed = prompt.trim();
     if (trimmed.length < 4 || createSubmitting) return;
     if (demoMode) {
       stashPendingIntake({ kind: "create", prompt: trimmed, depth });
-      router.push("/auth/signup?next=/app");
+      window.location.hash = "signup";
       return;
     }
-    setCreateSubmitting(true);
-    setCreateError(null);
-    try {
-      const res = await fetch("/api/intake/bootstrap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: trimmed, reasoningDepth: depth }),
-      });
-      const raw = await res.text();
-      const asJson = (() => {
-        try {
-          return JSON.parse(raw) as Record<string, unknown>;
-        } catch {
-          return null;
-        }
-      })();
-      if (!res.ok) {
-        throw new Error(
-          (asJson?.error as string) ?? `Bootstrap failed (${res.status})`,
-        );
-      }
-      const data = asJson as unknown as {
-        spaceId: string;
-        runId: string | null;
-      };
-      const destination = data.runId
-        ? `/app/space/${data.spaceId}/whiteboard?run=${data.runId}`
-        : `/app/space/${data.spaceId}/whiteboard`;
-      router.push(destination);
-    } catch (err) {
-      console.error("[ImmersiveHome] submitCreate failed:", err);
-      setCreateError(err instanceof Error ? err.message : "Bootstrap failed");
-      setCreateSubmitting(false);
+    if (reasoningSettings.askClarifyingQuestions) {
+      // Defer bootstrap until clarifier returns. ClarifyingQuestionsStep
+      // calls onContinue with answers, which fires fireBootstrap.
+      setClarifyingActive(true);
+      return;
     }
-  }, [prompt, depth, createSubmitting, router, demoMode]);
+    await fireBootstrap(trimmed);
+  }, [
+    prompt,
+    depth,
+    createSubmitting,
+    demoMode,
+    reasoningSettings.askClarifyingQuestions,
+    fireBootstrap,
+  ]);
 
   // Ask mode: create an ask-kind whiteboard, trigger the cross-whiteboard
   // synthesis inngest job, navigate to the new space.
@@ -391,7 +462,7 @@ export function ImmersiveHome({
     if (!query || askSubmitting) return;
     if (demoMode) {
       stashPendingIntake({ kind: "ask", prompt: query });
-      router.push("/auth/signup?next=/app");
+      window.location.hash = "signup";
       return;
     }
     setAskSubmitting(true);
@@ -434,7 +505,7 @@ export function ImmersiveHome({
       if (pendingTemplateId) return;
       if (demoMode) {
         stashPendingIntake({ kind: "template", templateId });
-        router.push("/auth/signup?next=/app");
+        window.location.hash = "signup";
         return;
       }
       setPendingTemplateId(templateId);
@@ -566,8 +637,8 @@ export function ImmersiveHome({
 
           {!demoMode && (
             <>
-          {/* Ask | Create segmented toggle. Ask = cross-whiteboard synthesis
-              (new). Create = existing /app/new template + pipeline flow. */}
+          {/* Ask | Create segmented toggle. Ask = cross-whiteboard synthesis.
+              Create = inline intake → /api/intake/bootstrap → whiteboard. */}
           <div className="mb-4 flex justify-center">
             <div
               role="tablist"
@@ -595,6 +666,21 @@ export function ImmersiveHome({
             </div>
           </div>
 
+          {/* Clarifying-questions step — replaces the prompt panel
+              when the user submitted with the "ask me clarifying
+              questions" toggle on. Slides in over the same vertical
+              space the GlassPanel occupies so the layout doesn't
+              jump around. */}
+          {clarifyingActive ? (
+            <ClarifyingQuestionsStep
+              prompt={prompt}
+              lenses={reasoningSettings.lenses}
+              onCancel={() => setClarifyingActive(false)}
+              onContinue={(answers) => {
+                void fireBootstrap(prompt.trim(), answers);
+              }}
+            />
+          ) : (
           <GlassPanel
             tier="modal"
             radius={20}
@@ -854,6 +940,23 @@ export function ImmersiveHome({
               </div>
             )}
           </GlassPanel>
+          )}
+
+          {/* Reasoning settings panel — collapsed by default. Lets
+              users customize lenses + process toggles before submit.
+              Hidden during clarifier flow (the user has already
+              committed; toggling settings mid-clarify would race). */}
+          {promptMode === "create" && !clarifyingActive && (
+            <div className="mt-2">
+              <ReasoningSettingsPanel
+                open={reasoningOpen}
+                onToggle={() => setReasoningOpen((v) => !v)}
+                settings={reasoningSettings}
+                onChange={setReasoningSettings}
+                disabled={createSubmitting}
+              />
+            </div>
+          )}
 
           {/* Apps & Inputs popup — mirrors the reference design: all
               third-party integrations visible (even unlaunched) so the
