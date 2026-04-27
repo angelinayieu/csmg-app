@@ -876,6 +876,56 @@ ${enrichedPrompt}`;
       }
     }
 
+    // ── D9 · Glean defaults (docs/KG_DEPTH_CRITIQUE.md §3) ───────────
+    //
+    // Targeted single-pass cleanup of three under-filled fields the
+    // initial Pass-2 prompt reliably defaults: edge.dynamics ("linear"
+    // ~75% of the time), edge.conditions (null on most causal/enabling
+    // edges), and entity.measurement (null on D1 entities the LLM
+    // skipped). Each pass runs a cheap yes/no preflight first to
+    // avoid paying for the full glean when nothing's worth changing.
+    //
+    // Soft-fail throughout — gleaner errors leave the original arrays
+    // untouched. Mutations happen in place on dedupedEntities /
+    // dedupedEdges; downstream sanitizeEntity + sanitizedEdges paths
+    // pick the upgraded fields up automatically.
+    //
+    // Telemetry: counts logged + emitted as a stage_boundary event so
+    // canvas can surface "system upgraded N edges + M measurements".
+    try {
+      const { gleanDefaults } = await import("@/lib/pipeline/glean-defaults");
+      const gleanResult = await gleanDefaults(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        dedupedEntities as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        dedupedEdges as any,
+      );
+      const totalUpgrades =
+        gleanResult.dynamics_upgraded +
+        gleanResult.conditions_filled +
+        gleanResult.measurement_filled +
+        gleanResult.measurement_excused;
+      if (totalUpgrades > 0) {
+        console.log(
+          `[decompose] glean: dynamics=${gleanResult.dynamics_upgraded} conditions=${gleanResult.conditions_filled} measurement=${gleanResult.measurement_filled} excused=${gleanResult.measurement_excused} (${gleanResult.llm_calls} LLM calls)`,
+        );
+        if (runId) {
+          await emitStructuralEvent(db, runId, {
+            type: "stage_boundary",
+            stage: "kg",
+            phase: "enter",
+            message: `Gleaned defaults — ${gleanResult.dynamics_upgraded} dynamics, ${gleanResult.conditions_filled} conditions, ${gleanResult.measurement_filled} measurements (+${gleanResult.measurement_excused} excused)`,
+          });
+        }
+      } else {
+        console.log(
+          `[decompose] glean: no upgrades (preflight: dyn=${gleanResult.preflight.dynamics} cond=${gleanResult.preflight.conditions} meas=${gleanResult.preflight.measurement}, ${gleanResult.llm_calls} LLM calls)`,
+        );
+      }
+    } catch (gleanErr) {
+      console.warn("[decompose] glean-defaults failed (non-fatal):", gleanErr);
+    }
+
     // Create (or hydrate) space. When bootstrap pre-created a placeholder,
     // UPDATE it in place so the client's already-open whiteboard keeps its
     // URL + the pipeline_run row stays attached to the same space.
@@ -977,7 +1027,19 @@ ${enrichedPrompt}`;
     // ── Insert entities (sanitized + resilient) ──
     // Heartbeat: tell the canvas we're about to start persisting entities
     // so the HUD subtitle doesn't stall on "Extracting…" for minutes.
+    //
+    // CRITICAL: emit intake:exit BEFORE kg:enter. Without the explicit
+    // exit, the canvas-stage-indicator + run-context panel show intake
+    // as "active" forever (the live timer keeps growing past 20 minutes
+    // even after the run actually finishes). This was the root cause of
+    // the stuck-at-Intake symptom users were reporting.
     if (runId) {
+      await emitStructuralEvent(db, runId, {
+        type: "stage_boundary",
+        stage: "intake",
+        phase: "exit",
+        message: `Intake complete — ${dedupedEntities.length} entities ready to persist`,
+      });
       await emitStructuralEvent(db, runId, {
         type: "stage_boundary",
         stage: "kg",
@@ -1899,6 +1961,59 @@ ${enrichedPrompt}`;
         }
       });
     }
+
+    // ── D8 · Community detection + bottom-up summaries ───────────────
+    //
+    // Runs unconditionally in `after()` so EVERY decompose (auto-
+    // advance or direct user trigger) gets the operational layering
+    // substrate (docs/KG_DEPTH_CRITIQUE.md §9 D8).
+    //
+    // Async by design — clustering + summaries take 15-30s for typical
+    // spaces (one LLM call per detected community), and we don't want
+    // to hold the response. Soft-fail throughout: a detection or
+    // summarize failure logs but doesn't break anything else.
+    after(async () => {
+      try {
+        const { runCommunityDetectionAndSummarize } = await import(
+          "@/lib/pipeline/community-tail"
+        );
+        await runCommunityDetectionAndSummarize({
+          db,
+          spaceId,
+          runId,
+        });
+      } catch (commErr) {
+        console.warn(
+          "[decompose] community detection/summarize failed (non-fatal):",
+          commErr,
+        );
+      }
+    });
+
+    // ── D4 · Multi-way interaction discovery ─────────────────────────
+    //
+    // Activates the dormant `reactions` table (see §5 of the critique).
+    // Runs ANOVA-decomposition over candidate triples to find emergent
+    // 3-way interactions where joint(A,B,C) ≠ linear sum of marginals.
+    // See docs/KG_DEPTH_CRITIQUE.md §9 D4 + src/lib/pipeline/interaction-discovery.ts.
+    //
+    // Independent of D8 (community detection); both can run in parallel
+    // — they read from the same persisted entities/edges but neither
+    // depends on the other. Cost-bounded by MAX_TRIPLES=12 × 7 MC calls
+    // each at 300 iterations × 6 timesteps. Soft-fail throughout.
+    after(async () => {
+      try {
+        const { runInteractionDiscovery } = await import(
+          "@/lib/pipeline/interaction-discovery-tail"
+        );
+        await runInteractionDiscovery({ db, spaceId, runId });
+      } catch (intErr) {
+        console.warn(
+          "[decompose] interaction discovery failed (non-fatal):",
+          intErr,
+        );
+      }
+    });
 
     return NextResponse.json({
       spaceId,

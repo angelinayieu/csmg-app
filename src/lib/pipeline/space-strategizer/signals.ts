@@ -98,6 +98,62 @@ export interface SignalInputBundle {
       is_user_controllable: boolean;
     }
   >;
+  /** D3 (docs/KG_DEPTH_CRITIQUE.md §9): per-entity controllability
+   *  KIND derived from `entity.manifold.operational.controllability.kind`.
+   *  Populated by loadSignalBundle for every entity that has the
+   *  field set, regardless of whether the entity is a why-chain
+   *  driver. This map is the GRADIENT companion to driver_metadata
+   *  (which is binary): when an entity has both, driver_metadata
+   *  wins for back-compat; when only this map has signal, the
+   *  user_controllable_lever signal falls back to the kind enum
+   *  with full=1.0, partial=0.6, gated=0.4, observable_only=0.
+   *  Missing entries → no opinion (signal returns null). */
+  controllability_kind_by_entity: Map<
+    string,
+    "fully_controllable" | "partially_controllable" | "gated" | "observable_only"
+  >;
+  /** D3 phase 3 — per-entity cost summary derived from
+   *  `manifold.operational.controllability.intervention_cost` +
+   *  `opportunity_cost` + `cost_kind`. The cost-efficiency signal
+   *  consumes this; missing entries return null (no opinion).
+   *
+   *  `dominant_cost` chooses the relevant USD figure for ranking:
+   *    - opportunity_cost.estimate when cost_kind="opportunity_dominated"
+   *      AND opportunity_cost is set
+   *    - intervention_cost.estimate * 12 (annualized) when
+   *      recurrence="recurring_monthly", or *1 when "yearly", or *24
+   *      (rough multiplier) when "recurring_continuous"
+   *    - intervention_cost.estimate as-is for "one_time"
+   *
+   *  `is_sunk` short-circuits the signal to 1.0 (sunk costs don't
+   *  penalize future decisions). */
+  controllability_cost_by_entity: Map<
+    string,
+    {
+      dominant_cost: number;
+      is_sunk: boolean;
+      kind:
+        | "direct"
+        | "opportunity_dominated"
+        | "coordination_dominated"
+        | "risk_adjusted_dominated"
+        | "switching_dominated"
+        | "hidden_externalities";
+    }
+  >;
+  /** D3 phase 3 — user-set cost budget from
+   *  `spaces.reasoning_settings.costBudget`. When set, the
+   *  cost-efficiency signal scores levers RELATIVE to this ceiling
+   *  rather than the space's empirical cost distribution. Null when
+   *  the user hasn't specified a budget — signal falls back to
+   *  inverse-log normalized to space-wide max cost. */
+  cost_budget: number | null;
+  /** D3 phase 3 — strictness mode for cost_budget. When "hard",
+   *  candidates whose dominant_cost exceeds cost_budget are
+   *  excluded from enumeration entirely. When "soft" (default),
+   *  they get a low cost_efficiency score but stay in the ranker
+   *  pool — user always sees alternatives even when budget-tight. */
+  cost_budget_strictness: "soft" | "hard";
   /** Phase 3 §4.3 — entity id that the target-outcome extractor resolved
    *  the focal outcome to. Null when no outcome was extracted from the
    *  input text, OR when the extracted outcome couldn't be resolved to
@@ -141,6 +197,17 @@ export interface SignalInputBundle {
    *  the horizon was unspecified — the modulator is a no-op in that
    *  case. */
   outcome_horizon: "immediate" | "short_term" | "medium_term" | "long_term" | null;
+  /** D4 — Per-entity count of emergent interactions the entity
+   *  participates in (rows in `reactions` with reaction_type='emergent'
+   *  produced by src/lib/pipeline/interaction-discovery.ts). Populated
+   *  by loadSignalBundle scanning the `reactions` table once per plan
+   *  cycle.
+   *
+   *  Empty map = interaction discovery hasn't run yet OR no emergent
+   *  interactions detected. Missing entry for a specific entity = 0
+   *  interactions (signal returns null, not 0 — "no opinion" semantics
+   *  match the rest of the bundle's null-handling). */
+  interaction_counts: Map<string, number>;
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────
@@ -599,9 +666,114 @@ export function userControllableLeverSignal(
   entityId: string | null,
 ): number | null {
   if (!entityId) return null;
+
+  // Legacy why-chain driver metadata wins when present — preserves
+  // the original binary semantic (1 = user-controllable driver, 0 =
+  // external/continue/speculative driver). Returning early keeps
+  // back-compat with rankers + reports that asserted "value ≥ 1
+  // means actionable lever."
   const meta = bundle.driver_metadata.get(entityId);
-  if (!meta) return null;
-  return meta.is_user_controllable ? 1 : 0;
+  if (meta) return meta.is_user_controllable ? 1 : 0;
+
+  // D3 fallback (docs/KG_DEPTH_CRITIQUE.md §9): non-driver entities
+  // can still carry a controllability profile in
+  // manifold.operational.controllability. When `kind` is set, we
+  // emit a gradient score so the ranker can distinguish a fully-
+  // controllable lever from a partially-controllable one without
+  // needing the why-chain deepener to have run on this entity.
+  //
+  // Magnitudes:
+  //   fully_controllable      → 1.00 (parity with binary 1)
+  //   partially_controllable  → 0.60 (clearly actionable but
+  //                                   requires others)
+  //   gated                   → 0.40 (binary on/off only)
+  //   observable_only         → 0.00 (parity with binary 0)
+  //
+  // The 0/null distinction is preserved: 0 means "we evaluated and
+  // it's not actionable"; null means "we have no opinion."
+  const kind = bundle.controllability_kind_by_entity.get(entityId);
+  if (kind) {
+    switch (kind) {
+      case "fully_controllable":
+        return 1;
+      case "partially_controllable":
+        return 0.6;
+      case "gated":
+        return 0.4;
+      case "observable_only":
+        return 0;
+      default:
+        return null;
+    }
+  }
+
+  return null;
+}
+
+/** D3 phase 3 — Cost-efficiency signal.
+ *
+ *  Returns:
+ *    1.0     → cost is sunk (already paid; should not penalize future
+ *              decisions; explicit counter to sunk-cost fallacy)
+ *    1.0     → free (estimate = 0, not sunk — already-instrumented
+ *              levers like "post in #engineering Slack")
+ *    [0,1]   → relative to budget (when cost_budget set) OR inverse-log
+ *              of estimate normalized by space-wide max cost
+ *    0.0     → over budget by ≥ 2× (still in pool under soft strictness;
+ *              the ranker shows it but heavily de-prioritizes)
+ *    null    → no cost data on this entity (no opinion — ranker treats
+ *              null as "doesn't apply" rather than "expensive")
+ *
+ *  Why inverse-log: cost is a long-tailed distribution (orders-of-magnitude
+ *  variation between $50 levers and $5M strategic capex). Linear
+ *  normalization would make every cheap lever look identical (~1.0); log
+ *  spreads them out so a $500 lever scores higher than a $5k one even
+ *  when both are well under budget.
+ *
+ *  Opportunity-dominated case: when cost_kind="opportunity_dominated"
+ *  and opportunity_cost is set, we use opportunity_cost.estimate as the
+ *  dominant cost — honest accounting of the hidden alternative-foreclosed
+ *  cost rather than rewarding direct-dollar levers that look cheap on
+ *  paper but cost a lot in foregone alternatives.
+ */
+export function costEfficiencySignal(
+  bundle: SignalInputBundle,
+  entityId: string | null,
+): number | null {
+  if (!entityId) return null;
+  const cost = bundle.controllability_cost_by_entity.get(entityId);
+  if (!cost) return null;
+
+  // Sunk cost short-circuit — counter to sunk-cost fallacy bias.
+  if (cost.is_sunk) return 1;
+  // Truly free → top score.
+  if (cost.dominant_cost === 0) return 1;
+
+  const dollars = cost.dominant_cost;
+  const budget = bundle.cost_budget;
+
+  if (budget !== null && budget > 0) {
+    // Budget-relative scoring. Cheap relative to budget → high score;
+    // over-budget → trends to 0 quickly.
+    const ratio = dollars / budget;
+    if (ratio <= 0.1) return 1; // ≤ 10% of budget — clearly in-bounds
+    if (ratio >= 2) return 0;   // ≥ 2× budget — clearly out
+    // Smooth interp between 1.0 (at 10% of budget) and 0.0 (at 200%).
+    // Using 1 - sqrt(ratio/2) gives a gentle curve through the [0.1, 2]
+    // range that crosses 0.5 around the budget itself.
+    const t = (ratio - 0.1) / (2 - 0.1);
+    return Math.max(0, Math.min(1, 1 - Math.sqrt(t)));
+  }
+
+  // No budget set — score on absolute log-cost normalized to the
+  // space's empirical max. We don't know the max from this signal's
+  // perspective; use a reasonable baseline (1e6 — $1M caps the scale)
+  // since strategy levers above $1M are exotic and should saturate.
+  // log10($100) → 2, log10($1M) → 6. Normalize: (6 - log10(cost)) / 4
+  // gives [0,1] over [$100, $1M] with $100 → 1.0 and $1M → 0.
+  const logCost = Math.log10(Math.max(1, dollars));
+  const score = (6 - logCost) / 4;
+  return Math.max(0, Math.min(1, score));
 }
 
 /** Outcome alignment signal — proximity from candidate to the resolved
@@ -645,6 +817,38 @@ export function outcomeAlignmentSignal(
   return clamp01(1 / (d + 1));
 }
 
+/** Interaction density signal (D4) — normalized count of emergent
+ *  interactions involving the target entity. Reads from
+ *  `bundle.interaction_counts`, populated by loadSignalBundle scanning
+ *  the `reactions` table for rows with reaction_type='emergent'.
+ *
+ *  Returns:
+ *    1   → target entity participates in the most interactions seen
+ *          in the space (normalized by max count across entities)
+ *    >0  → fractional participation
+ *    null → entity has no interactions OR interaction discovery
+ *           hasn't run OR axis-level candidate (no entity attached)
+ *
+ *  Why null instead of 0 for zero interactions: matches the bundle's
+ *  null-aware semantics. A candidate with zero interactions ISN'T
+ *  evidence against picking it for joint-intervention reasoning —
+ *  it just means we haven't discovered any emergence touching it
+ *  (yet). The strategizer treats null as "no signal," which is
+ *  honest. */
+export function interactionDensitySignal(
+  bundle: SignalInputBundle,
+  targetEntityId: string | null,
+): number | null {
+  if (!targetEntityId) return null;
+  if (bundle.interaction_counts.size === 0) return null;
+  const v = bundle.interaction_counts.get(targetEntityId);
+  if (!v || v <= 0) return null;
+  let max = 0;
+  for (const n of bundle.interaction_counts.values()) if (n > max) max = n;
+  if (max === 0) return null;
+  return clamp01(v / max);
+}
+
 // ── One-shot: compute the full SignalProfile for a candidate ──────────
 
 export interface CandidateTarget {
@@ -677,5 +881,7 @@ export function computeSignalProfile(
     agent_convergence_count: agentConvergenceCountSignal(bundle, primaryId),
     user_controllable_lever: userControllableLeverSignal(bundle, primaryId),
     outcome_alignment: outcomeAlignmentSignal(bundle, primaryId),
+    interaction_density: interactionDensitySignal(bundle, primaryId),
+    cost_efficiency: costEfficiencySignal(bundle, primaryId),
   };
 }

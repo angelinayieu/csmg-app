@@ -180,8 +180,16 @@ export function CanvasRunContextPanel({
 
   return (
     <aside
+      // Slide right by the floating-glass-sidebar's width + the tool-dock's
+      // own clearance, so the panel never gets clipped when the sidebar
+      // is expanded. `--kg-rail-offset` is set by floating-glass-sidebar
+      // (0px collapsed, 156px expanded). We add another 64px to clear
+      // the canvas-tool-dock's own width on the rail's right edge.
+      style={{
+        left: "calc(1rem + var(--kg-rail-offset, 0px) + 64px)",
+      }}
       className={cn(
-        "pointer-events-auto absolute left-4 top-20 z-30 flex w-[320px] flex-col overflow-hidden rounded-xl border border-gray-200/80 bg-white/95 shadow-sm backdrop-blur",
+        "pointer-events-auto absolute top-20 z-30 flex w-[320px] flex-col overflow-hidden rounded-xl border border-gray-200/80 bg-white/95 shadow-sm backdrop-blur transition-[left] duration-[420ms] ease-[cubic-bezier(0.34,1.56,0.64,1)]",
       )}
       aria-label="Pipeline run context"
     >

@@ -14,7 +14,7 @@
 // proves the stream works end-to-end + gives a live count.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, CheckCircle2, AlertCircle, Check, StopCircle, Clock, Brain } from "lucide-react";
+import { Loader2, CheckCircle2, AlertCircle, AlertTriangle, Check, StopCircle, Clock, Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRunEventStore } from "../hooks/run-event-store";
 import type { PipelineStage } from "@/types/pipeline-events";
@@ -202,6 +202,24 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
   // don't flash an all-pending row for <100ms on connect.
   const hasAnyStage = Object.values(stageStateByName).some((s) => s !== "pending");
 
+  // Distinguish "the SSE connection died but artifacts were already
+  // produced" from "the pipeline genuinely failed". When counts are
+  // populated AND the run reached the kg or proposal stage, an SSE
+  // failure is almost certainly a stream-side timeout (e.g. Vercel
+  // disconnect after long quiet period), not a pipeline failure.
+  // Render an amber warning instead of the alarming red error so the
+  // user doesn't think their KG data was lost. The Stop button is
+  // still available if they want to cancel.
+  const hasMeaningfulData =
+    counts.entities > 0 || counts.edges > 0 || counts.cycles > 0;
+  const reachedLateStage =
+    stageStateByName.kg !== "pending" ||
+    stageStateByName.proposal !== "pending";
+  const isStreamDroppedNotFailed =
+    (status === "failed" || status === "timeout") &&
+    hasMeaningfulData &&
+    reachedLateStage;
+
   return (
     <div className="pointer-events-auto absolute bottom-[100px] left-1/2 z-20 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 px-4 py-2.5 shadow-[0_12px_36px_-12px_rgba(15,23,42,0.22)] backdrop-blur-md">
       <div className="flex items-center gap-3">
@@ -211,15 +229,22 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
             <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
           ) : status === "completed" ? (
             <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+          ) : isStreamDroppedNotFailed ? (
+            <AlertTriangle
+              className="h-3.5 w-3.5 text-amber-600"
+              aria-label="Stream disconnected — your KG data is safe"
+            />
           ) : status === "failed" || status === "timeout" ? (
             <AlertCircle className="h-3.5 w-3.5 text-red-600" />
           ) : null}
           <span className="text-[11.5px] font-semibold text-gray-700">
-            {currentStage
-              ? `${STAGE_LABELS[currentStage.stage] ?? currentStage.stage}${currentStage.phase === "enter" ? "…" : ""}`
-              : status === "completed"
-                ? "Complete"
-                : "Running…"}
+            {isStreamDroppedNotFailed
+              ? "Live updates paused · data saved"
+              : currentStage
+                ? `${STAGE_LABELS[currentStage.stage] ?? currentStage.stage}${currentStage.phase === "enter" ? "…" : ""}`
+                : status === "completed"
+                  ? "Complete"
+                  : "Running…"}
           </span>
         </div>
 

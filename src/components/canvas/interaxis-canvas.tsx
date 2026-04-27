@@ -63,6 +63,21 @@ import { SynthesisIntersectionCardShapeUtil } from "./shapes/synthesis-intersect
 // the user's CURRENT state from intake_text + assets.
 import { AssetCardShapeUtil } from "./shapes/asset-card-shape";
 import { SituationCardShapeUtil } from "./shapes/situation-card-shape";
+// Phase B (intake redesign) — persistent on-canvas hero card for the
+// user's #1 ranked strategy. Always-visible primary surface so the
+// strategy doesn't get lost behind the cascade of upstream artifacts.
+// Includes inline rank chips so the user can swap #2/#3 into the hero
+// slot without leaving the whiteboard.
+import { StrategyHeroCardShapeUtil } from "./shapes/strategy-hero-card-shape";
+// Phase C (cascade rooms) — wide translucent backdrops that group the
+// painter's shapes by pipeline stage. Spawned by the painter on
+// stage_boundary events; sent to back so subsequent shapes layer on
+// top naturally. Drives the top-down "rooms forking out" cascade UX.
+import { RoomShapeUtil } from "./shapes/room-shape";
+// Phase C — popover that opens when a room's (+) button is clicked.
+// Listens for `canvas-room:extend` window events; dispatches
+// `canvas-room:extend-verb` on selection.
+import { CanvasRoomExtendPopover } from "./chrome/canvas-room-extend-popover";
 import { ThreadNoteShapeUtil, THREAD_DEFAULT_W, THREAD_DEFAULT_H } from "./shapes/thread-note-shape";
 import type { StickyNoteShape, KGNodeShape, StrategyShape, ThreadNoteShape } from "./shapes/types";
 import { ThreadTethersOverlay } from "./chrome/thread-tethers-overlay";
@@ -269,6 +284,17 @@ const SHAPE_UTILS = [
   // Input layer — asset chips + situation/baseline card.
   AssetCardShapeUtil,
   SituationCardShapeUtil,
+  // Phase B (intake redesign) — persistent on-canvas hero card for the
+  // top-ranked strategy. Painter drops one when the first proposal_ready
+  // (is_primary) event lands, keeps it pinned through the run, and
+  // updates its preview props in place when the user swaps ranks via
+  // the inline chips. Click-to-detail navigates to /app/space/[id]/strategy.
+  StrategyHeroCardShapeUtil,
+  // Phase C (cascade rooms) — wide translucent stage backdrops. Painter
+  // spawns one per pipeline stage on stage_boundary(enter) and
+  // sends it to back so subsequent painted shapes (entities, axes,
+  // proposals) layer on top, reading as "inside" the room.
+  RoomShapeUtil,
 ];
 
 // Hide tldraw's stock UI — we supply our own chrome (top bar, left tool
@@ -2773,11 +2799,22 @@ export function InteraxisCanvas({
         originPromptText={
           (space as unknown as { input_text?: string | null }).input_text ?? null
         }
+        // Phase B (intake redesign) — pass spaceId so the painter can
+        // populate the strategy hero card's spaceId prop, which the
+        // shape needs for its swap-rank API call and detail-page link.
+        spaceId={space?.id ?? null}
         onCompleted={onPipelineRunCompleted}
         onSignatureProgress={onSignatureProgress}
       />
 
       <CanvasToolDock active={tool} libraryOpen={libraryOpen} onSelect={setTool} />
+
+      {/* Phase C — listens for `canvas-room:extend` window events fired
+          by each cascade-room's (+) button and opens an Apple-style
+          verb menu (add info / ask query / sub-objective / generate
+          more) at the click point. Verb dispatches `canvas-room:extend-verb`
+          for future endpoint wiring. */}
+      <CanvasRoomExtendPopover />
 
       {/* Phase 48 — quiet-mode restore chip. Tiny top-right affordance
           that lives outside the top bar so the canvas still feels

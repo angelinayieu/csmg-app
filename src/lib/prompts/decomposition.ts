@@ -97,6 +97,47 @@ Format: \`[EVIDENCE: claim="specific falsifiable statement" | type=mechanism/ass
 
 Provide 2-4 evidence items for fundamental/critical entities, 1-2 for important entities. This evidence chain will be extracted during structuring to create traceable, grounded entity profiles.
 
+**MANDATORY — Entity measurement spec:** For every entity marked **fundamental** or **critical** importance whose entity_category is **concrete**, **abstract**, or **process** (i.e. anything quantifiable — relational and epistemic entities are exempt), declare HOW IT IS MEASURED. This is the difference between a folk-vocabulary noun ("user engagement") and an actual variable ("weekly active users / monthly active users — fraction, continuous, observed via Mixpanel daily, ~$0 marginal cost").
+
+Format: \`[MEASUREMENT: unit="<unit>" | scale=continuous|ordinal|categorical|binary | protocol={instrument="<how observed>", frequency="<cadence>", sample_unit="<per-what>", error_bound?="±N%", latency?="<delay>"} | cost_estimate?=<USD-equivalent> | observability=directly_observable|proxy_required|inferred_only|unobservable]\`
+
+Rules:
+- **unit** is a real unit, not a vibe. "users/week" not "engagement". "%" not "high". "ms" not "fast". "USD/MAU" not "expensive". If you cannot name a unit, the entity is probably folk-vocabulary — either rename it to something measurable or downgrade its importance to "important" (the measurement requirement only fires on fundamental/critical).
+- **scale**: \`continuous\` for unbounded numerics (revenue, latency, percentage), \`ordinal\` for ranked categories (low/med/high), \`categorical\` for unordered categories (cohort A/B/C), \`binary\` for true/false gates.
+- **protocol** describes the actual instrument that yields observations. \`instrument\` is concrete ("Mixpanel event 'tutorial_complete'", "user survey question 'How likely…'", "server access log"). \`frequency\` is the cadence ("per-session", "daily rollup", "monthly cohort"). \`sample_unit\` is what each observation counts ("user", "request", "session", "team-week").
+- **cost_estimate** in USD-equivalent per observation. Use 0 for free/already-instrumented signals; positive values for survey responses, manual classification, or third-party API costs. If unknown, OMIT — don't guess.
+- **observability** is the categorical fallback for entities that resist clean numeric scaling. \`directly_observable\` = data flows in already; \`proxy_required\` = need to instrument something else and infer; \`inferred_only\` = LLM/expert judgement, no direct measurement; \`unobservable\` = latent variable, only knowable through downstream effects.
+
+If an entity is fundamental or critical but you cannot honestly produce a unit + scale, that is itself a finding — emit \`[MEASUREMENT: missing | reason="<why this resists measurement>"]\`. Do NOT fabricate units.
+
+**MANDATORY — Entity controllability profile (for fundamental/critical entities only):** Beyond *can the user act on this?* (boolean), strategy optimization needs **gradients** AND a real cost taxonomy — strategy decisions are zero-sum at the resource layer (time, attention, capital, runway), so the dominant cost is often invisible if you only ask for direct dollars. For every entity marked **fundamental** or **critical** that is NOT pure epistemic/relational scaffolding, declare:
+
+\`[CONTROLLABILITY:
+  kind=fully_controllable|partially_controllable|gated|observable_only |
+  intervention_cost={estimate=<USD-equivalent number>, confidence=high|moderate|low, recurrence?=one_time|recurring_monthly|recurring_yearly|recurring_continuous, is_sunk?=true|false, notes?="<caveat>"} |
+  opportunity_cost?={estimate=<USD-equivalent value of foregone alternative>, confidence=high|moderate|low, alternative?="<what's foreclosed>", notes?="<caveat>"} |
+  cost_kind?=direct|opportunity_dominated|coordination_dominated|risk_adjusted_dominated|switching_dominated|hidden_externalities |
+  time_to_effect={lag="<immediate|days|weeks|months|years OR a free-form duration>", confidence=high|moderate|low, notes?="<caveat>"} |
+  modulation_range?={min=<num>, max=<num>, unit?="<unit>"}
+]\`
+
+Rules:
+- **kind** answers "can the user pull this lever?" — \`fully_controllable\` (direct action: a button, a budget allocation, a hire), \`partially_controllable\` (requires negotiation / cooperation: customer behavior, team morale), \`gated\` (binary on/off only — policy, regulation toggle, no continuous knob), \`observable_only\` (external constraint the user can monitor but not move: weather, competitor moves).
+
+- **intervention_cost** is the DIRECT cost-to-MOVE the lever (USD-equivalent or USD-equivalent-of-engineering-hours). Distinct from the D1 \`measurement_cost_estimate\` which is cost-to-OBSERVE. If the user already paid (sunk cost), set \`is_sunk: true\` and \`estimate: 0\`. \`recurrence\` distinguishes one-time fixes from ongoing burdens — a $10k one-time cost and a $1k/month recurring cost have radically different NPVs even though they look similar at first glance. If you genuinely don't know the cost, OMIT the field — do NOT fabricate.
+
+- **opportunity_cost** is the value of the next-best alternative this lever forecloses ("what is seen and what is not seen," Bastiat 1850). Often the DOMINANT cost in strategy decisions but invisible in pure-direct-cost framings: a $50k intervention in a $500k-runway startup has dramatically higher opportunity cost than the same $50k in a $500M-cash corporation, identical direct cost. Set when the resource being spent is fungible (cash, senior leader time, prime-time attention) AND alternatives are abundant. Skip when no good alternatives exist (binding constraint regardless) or the resource has no other productive use.
+
+- **cost_kind** classifies WHICH cost type dominates this lever. Forces honest disclosure of when direct dollars *aren't* the load-bearing concern: \`opportunity_dominated\` for senior-leader-time and capital-allocation decisions, \`coordination_dominated\` for Brooks'-Law-territory levers (N people communicating = N(N-1)/2 channels, scaling superlinearly), \`risk_adjusted_dominated\` when failure-recovery cost × probability dwarfs direct cost, \`switching_dominated\` when the lever locks in path-dependent choices, \`hidden_externalities\` when compounding technical debt / cultural drag / trust erosion is the real story. Default to \`direct\` only when you've genuinely considered the others and dollars dominate.
+
+- **time_to_effect** is the median lag between intervention and observable downstream change. Per-lever, distinct from edge-level propagation_speed (which is per-relationship cascade lag and may differ across downstream targets). Use the canonical buckets when sensible (\`immediate\`, \`days\`, \`weeks\`, \`months\`, \`years\`) or a more specific phrase (\`"1-2 weeks"\`, \`"end of next quarter"\`) when warranted.
+
+- **modulation_range** describes the continuous adjustable range. Optional — most levers are categorical or discrete. Set it when the lever is genuinely continuous (e.g. ad spend, headcount, temperature setpoint) and you can name a meaningful min/max in the entity's measurement unit.
+
+- **Reversibility** is NOT in this block — it lives in the manifold.strategic block (\`reversibility ∈ {easily_reversible | costly_to_reverse | irreversible}\`). A future sanitizer pass mirrors it into the controllability echo for ergonomic single-branch reads.
+
+- Skip this block entirely for moderate/important entities and for relational/epistemic entities that don't represent levers — controllability gradients are most valuable on the few entities the user might actually act on.
+
 **MANDATORY — Entity causal role:** For every entity, classify its function in the system's causal chain:
 - **truth**: foundational fact, principle, or invariant the system rests on
 - **evidence**: observable data, measurement, or research finding validating a truth

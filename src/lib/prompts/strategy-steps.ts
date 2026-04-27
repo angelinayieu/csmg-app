@@ -185,9 +185,23 @@ export function getSynthesisPrompt(params: {
   }>;
   goal?: ImprovementGoal | null;
   confirmedStrategy?: StrategicRecommendation | null;
+  /** How many strategic options to generate. Sourced from
+   *  spaces.reasoning_settings.strategyCount (default 3, range 1-5).
+   *  When 1, the LLM produces a single best-effort recommendation
+   *  with no alternatives; when 5, a wider fan-out for users who
+   *  want more comparison surface. */
+  numOptions?: number;
 }): { system: string; user: string } {
 
-  const system = `You are a strategic architect. Given a structural diagnosis, your job is to design 2-3 strategic OPTIONS — not recommendations, but genuine alternatives the user must choose between.
+  // Clamp + default: matches STRATEGY_COUNT_MIN/MAX in
+  // src/types/reasoning-settings.ts so prompt content stays bounded.
+  const requestedCount = Math.min(5, Math.max(1, Math.floor(params.numOptions ?? 3)));
+  const optionsClause =
+    requestedCount === 1
+      ? "exactly 1 strategic recommendation (no alternatives)"
+      : `exactly ${requestedCount} strategic OPTIONS — not recommendations, but genuine alternatives the user must choose between`;
+
+  const system = `You are a strategic architect. Given a structural diagnosis, your job is to design ${optionsClause}.
 
 Each option must:
 1. DIRECTLY ADDRESS the core problem from the diagnosis (not symptoms)

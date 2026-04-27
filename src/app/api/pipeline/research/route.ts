@@ -1200,6 +1200,13 @@ These are NOT external landscape entities — these are entities the user SHOULD
                 // warning; manual re-runs (dashboard button) omit this
                 // flag and see the 409 as intended.
                 bypassLayerGate: true,
+                // D1 — same reasoning as bypassLayerGate above: the
+                // first-prompt pipeline shouldn't 409 on incomplete
+                // measurement coverage. The synthesize route still
+                // emits `measurement_coverage_gap` SSE events so the
+                // UI surfaces the warning; explicit re-runs see the
+                // 409 as intended.
+                bypassMeasurementGate: true,
               }),
               signal: ctrl.signal,
             });
@@ -2572,6 +2579,11 @@ These are NOT external landscape entities — these are entities the user SHOULD
               // warning; manual re-runs (dashboard button) omit this
               // flag and see the 409 as intended.
               bypassLayerGate: true,
+              // D1 — same reasoning as bypassLayerGate above: auto-
+              // advance chain should not 409 on incomplete measurement
+              // coverage. SSE events still surface the gap warning to
+              // the UI; explicit re-runs see the 409 as intended.
+              bypassMeasurementGate: true,
             }),
             signal: ctrl.signal,
           });

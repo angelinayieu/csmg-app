@@ -22,6 +22,14 @@ import { sanitizeEntity, resilientInsert } from "@/lib/sanitize";
 import { logKnowledgeEvent } from "@/lib/changelog/log-knowledge-event";
 import { emitBatchEvents } from "@/lib/events/structural-event-bus";
 import type { StructuralEvent } from "@/types/pipeline-events";
+import {
+  ABSOLUTE_MAX_DRILL_DEPTH,
+  computeParentQualityScore,
+  decideDrillContinuation,
+  extractDrillSignalsFromEntity,
+  findLateralSiblings,
+  type DrillRecord,
+} from "@/lib/pipeline/drill-confidence";
 
 export const maxDuration = 45;
 
@@ -88,6 +96,92 @@ export async function POST(request: Request) {
     if (!parent) {
       return NextResponse.json({ error: "Parent entity not found" }, { status: 404 });
     }
+
+    // ── D5b · Confidence inputs (drill-confidence.ts) ────────────────
+    //
+    // Load the small-but-cheap context the drill-confidence module
+    // needs to compute parent_quality_score: total goal count, total
+    // agent count (for normalization), the space's target outcome,
+    // and the max centrality_rank in the space.
+    //
+    // All four queries are no-ops if the relevant migrations haven't
+    // populated their fields yet — extractDrillSignalsFromEntity
+    // returns null for missing inputs, computeParentQualityScore
+    // weighted-averages over present signals only. Result: this code
+    // gracefully degrades on legacy spaces.
+    // Note: outcome_alignment is intentionally omitted from this
+    // lightweight API. Resolving target_outcome (on pipeline_runs)
+    // to a specific entity_id requires the strategizer's
+    // directed_outcome_hops BFS, which is too heavy for a per-drill
+    // call. Drill confidence falls back to centrality + convergence
+    // + agent_convergence + causal_depth + leverage_point (5 of 6
+    // signals). The weighted-average renormalizes over present
+    // signals only — see computeParentQualityScore.
+    const [goalCountRes, agentCountRes, centralityRes] = await Promise.all([
+      db
+        .from("entities")
+        .select("id", { count: "exact", head: true })
+        .eq("space_id", spaceId)
+        .eq("entity_type", "improvement_goal"),
+      db
+        .from("entities")
+        .select("proposing_agents")
+        .eq("space_id", spaceId)
+        .not("proposing_agents", "is", null),
+      db
+        .from("entities")
+        .select("centrality_rank")
+        .eq("space_id", spaceId)
+        .not("centrality_rank", "is", null)
+        .order("centrality_rank", { ascending: false })
+        .limit(1),
+    ]);
+
+    const total_goal_count = goalCountRes.count ?? 0;
+
+    // Total agent count = distinct proposing_agents seen across the
+    // space (matches signals.ts contract — "ensemble size active in
+    // this space," not the global registry length).
+    const distinctAgents = new Set<string>();
+    const agentRows = (agentCountRes.data ?? []) as Array<{
+      proposing_agents?: string[] | null;
+    }>;
+    for (const row of agentRows) {
+      if (Array.isArray(row.proposing_agents)) {
+        for (const a of row.proposing_agents) distinctAgents.add(a);
+      }
+    }
+    const total_agent_count = distinctAgents.size;
+
+    // Max centrality_rank in space (for normalization). Note the
+    // ordering: centrality_rank=1 is most-central, so the MAX rank is
+    // the LEAST-central entity's rank — which is what we want as the
+    // denominator.
+    const centralityRow = (centralityRes.data ?? [])[0] as
+      | { centrality_rank?: number | null }
+      | undefined;
+    const max_centrality_rank = centralityRow?.centrality_rank ?? 1;
+
+    // Parent's drill-quality score. Used to derive each child's
+    // confidence_to_continue at child_depth = parent_depth + 1.
+    const parentSignals = extractDrillSignalsFromEntity({
+      entity: {
+        id: parent.id,
+        causal_depth: parent.causal_depth ?? null,
+        converges_chains: parent.converges_chains ?? null,
+        proposing_agents: parent.proposing_agents ?? null,
+        centrality_rank: parent.centrality_rank ?? null,
+        is_leverage_point: parent.is_leverage_point ?? null,
+      },
+      total_goal_count,
+      total_agent_count,
+      // outcome_alignment intentionally omitted (see comment above on
+      // the parallel-load block). Will return null and be excluded
+      // from the weighted average.
+      target_outcome_entity_id: null,
+      max_centrality_rank,
+    });
+    const parent_quality_score = computeParentQualityScore(parentSignals);
 
     // Phase 10: depth-aware decomposition. Compute the child target depth
     // (parent + 1, capped at 4) and the canonical child layer name, then
@@ -286,6 +380,92 @@ must be MORE SPECIFIC than the parent, not a paraphrase of it.`;
       },
     });
 
+    // ── D5b · Confidence + lateral siblings + tree append ────────────
+    //
+    // For each just-inserted child, compute confidence_to_continue
+    // (parent_quality_score × DECAY^child_depth, gated by absolute
+    // max depth). If parent has converges_chains, look up lateral
+    // siblings — entities at the same depth with overlapping
+    // convergence — and attach to ONE drill record (the highest-
+    // confidence child) so the hook can drill them at the same depth
+    // before going to depth+1.
+    const childDepthFinal = childDepth; // (set earlier from parentDepth+1)
+    const continuation = decideDrillContinuation({
+      parent_quality_score,
+      child_depth: childDepthFinal,
+    });
+    const drilled_at = new Date().toISOString();
+
+    // Lateral siblings: only meaningful when parent has converges_chains.
+    let lateralSiblings: string[] = [];
+    if (
+      Array.isArray(parent.converges_chains) &&
+      parent.converges_chains.length > 0
+    ) {
+      const { data: peerRows } = await db
+        .from("entities")
+        .select("id, converges_chains")
+        .eq("space_id", spaceId)
+        .eq("depth", childDepthFinal)
+        .neq("id", parent.id)
+        .limit(50);
+      lateralSiblings = findLateralSiblings({
+        parent_converges_chains: parent.converges_chains as string[],
+        candidates: (peerRows ?? []) as Array<{
+          id: string;
+          converges_chains?: string[] | null;
+        }>,
+      });
+    }
+
+    const drillRecords: DrillRecord[] = inserted.map((row, i) => ({
+      parent_entity_id: parent.id,
+      child_entity_id: row.id,
+      child_entity_code: row.entity_id,
+      depth: childDepthFinal,
+      confidence_to_continue: continuation.confidence_to_continue,
+      parent_quality_score,
+      drilled_at,
+      stop_reason:
+        inserted.length === 0
+          ? "no_children_returned"
+          : continuation.stop_reason,
+      // Attach lateral siblings only to the first drill record so we
+      // don't fan them out N× in the tree.
+      ...(i === 0 && lateralSiblings.length > 0
+        ? { lateral_siblings: lateralSiblings }
+        : {}),
+    }));
+
+    // Append to pipeline_runs.decomposition_tree when we have a runId.
+    // Soft-fail: tree update failure must not break the canvas
+    // response. Read-modify-write is acceptable here because the
+    // pipeline_run is single-writer per run; we don't expect
+    // concurrent drills to step on each other.
+    if (existingRunId && drillRecords.length > 0) {
+      try {
+        const { data: runRow } = await db
+          .from("pipeline_runs")
+          .select("decomposition_tree")
+          .eq("id", existingRunId)
+          .single();
+        const existingTree = Array.isArray(runRow?.decomposition_tree)
+          ? (runRow.decomposition_tree as DrillRecord[])
+          : [];
+        await db
+          .from("pipeline_runs")
+          .update({
+            decomposition_tree: [...existingTree, ...drillRecords],
+          })
+          .eq("id", existingRunId);
+      } catch (treeErr) {
+        console.warn(
+          "[canvas/recursive-decompose] tree append failed (non-fatal):",
+          treeErr,
+        );
+      }
+    }
+
     return NextResponse.json({
       children: inserted.map((row) => ({
         id: row.id,
@@ -298,6 +478,18 @@ must be MORE SPECIFIC than the parent, not a paraphrase of it.`;
         confidence: row.confidence,
       })),
       edges: insertedEdges,
+      // D5b — drill decision payload. Hook reads this to decide
+      // whether to schedule the next drill, and if so for which
+      // children, and whether to drill any lateral siblings first.
+      drill: {
+        parent_quality_score,
+        confidence_to_continue: continuation.confidence_to_continue,
+        should_continue: continuation.should_continue,
+        stop_reason: continuation.stop_reason,
+        absolute_max_depth: ABSOLUTE_MAX_DRILL_DEPTH,
+        child_depth: childDepthFinal,
+        lateral_sibling_ids: lateralSiblings,
+      },
     });
   } catch (err) {
     console.warn("[canvas/recursive-decompose]", err);

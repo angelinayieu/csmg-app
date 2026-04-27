@@ -26,6 +26,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Sparkles, Layers, Telescope, Combine, FlaskConical, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
+  useEventsOfType,
   useLatestStageBoundary,
   useRunEventStoreOptional,
   useRunStatus,
@@ -96,6 +97,36 @@ export function CanvasStageIndicator() {
 function CanvasStageIndicatorInner() {
   const latest = useLatestStageBoundary();
   const status = useRunStatus();
+  const stageBoundaryEvents = useEventsOfType("stage_boundary");
+
+  // Per-stage event-driven status. A stage is "done" once we see its
+  // exit event; "active" on enter-but-no-exit; "pending" if neither.
+  // Exit always wins over enter (re-entered stages don't regress).
+  //
+  // This replaces the old POSITIONAL logic (`isComplete = i < activeIdx`)
+  // which marked any stage left of the current one as complete — that
+  // produced the contradiction where Intake showed "active" (its enter
+  // fired) AND Graph showed "complete" (it was left of the current
+  // stage by index) simultaneously. The fix: trust the event log.
+  const stageStateByName = useMemo(() => {
+    const state: Record<PipelineStage, "pending" | "active" | "done"> = {
+      intake: "pending",
+      landscape: "pending",
+      kg: "pending",
+      proposal: "pending",
+      lab: "pending",
+      results: "pending",
+    };
+    for (const s of stageBoundaryEvents) {
+      if (s.event.type !== "stage_boundary") continue;
+      if (s.event.phase === "enter") {
+        if (state[s.event.stage] === "pending") state[s.event.stage] = "active";
+      } else if (s.event.phase === "exit") {
+        state[s.event.stage] = "done";
+      }
+    }
+    return state;
+  }, [stageBoundaryEvents]);
 
   // Track when the stage transition happened so we can play a
   // one-shot pulse animation on the new stage's chip.
@@ -128,8 +159,7 @@ function CanvasStageIndicatorInner() {
   if (!activeStage) return null;
   if (hidden) return null;
 
-  // Determine which stages are "completed" (left of active), "active"
-  // (current), and "pending" (right of active).
+  // activeIdx kept only for aria-label below; no longer drives chip status.
   const activeIdx = STAGES.findIndex((s) => s.key === activeStage);
   const phaseHint =
     latest && latest.event.type === "stage_boundary"
@@ -154,9 +184,10 @@ function CanvasStageIndicatorInner() {
         }}
       >
         {STAGES.map((stage, i) => {
-          const isActive = stage.key === activeStage;
-          const isComplete = i < activeIdx;
-          const isPending = i > activeIdx;
+          const stageState = stageStateByName[stage.key];
+          const isActive = stageState === "active";
+          const isComplete = stageState === "done";
+          const isPending = stageState === "pending";
           const Icon = stage.Icon;
           return (
             <span

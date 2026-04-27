@@ -48,6 +48,53 @@ export interface ReasoningSettings {
    *  so users know it's on, and so a future "single proposal only"
    *  mode has a hook. */
   showAlternatives: boolean;
+  // ── Output-shape toggles (intake-prominent) ─────────────────────
+  // These three controls live ON THE CHATBOX ROW (not in the
+  // collapsed advanced panel) because they materially change the
+  // shape and cost of the pipeline output. Defaults are OFF for
+  // apps + lab so the strategy hero card is the single primary
+  // payload; users opt in to downstream materialization.
+  /** When true, materialize Apps (and their interventions) on
+   *  strategy confirm. Default false — strategy-only mode. Sourced
+   *  by /api/pipeline/strategy-refresh as the inverse of `deferApps`. */
+  generateApps: boolean;
+  /** When true, run inline Monte Carlo simulation during app
+   *  generation AND kick off the variant factory / writer-path
+   *  background work. Default false — no lab pre-runs unless asked. */
+  runLab: boolean;
+  /** How many ranked strategies to generate (1..5). Default 3.
+   *  Plumbs into getSynthesisPrompt's option count and a final
+   *  slice on ranked_strategies in strategy-engine. */
+  strategyCount: number;
+  // ── D3 · cost / time budget constraints ─────────────────────────
+  // Optional user-facing constraints the strategizer reads to
+  // hard-filter or down-rank candidates whose intervention_cost
+  // exceeds the budget or whose time_to_effect overshoots the
+  // deadline. Both fields default to undefined — when both are
+  // absent, the strategizer behaves identically to pre-D3.
+  //
+  // See docs/KG_DEPTH_CRITIQUE.md §9 D3 + the
+  // ControllabilityProfile schema in src/types/controllability.ts.
+  /** USD-equivalent ceiling on a single intervention's direct cost.
+   *  Levers whose `manifold.operational.controllability.intervention_cost.estimate`
+   *  exceeds this value get hard-filtered from the candidate pool
+   *  (or down-weighted, depending on the strategizer mode — see
+   *  cost_budget_strictness). Optional. */
+  costBudget?: number;
+  /** How aggressively to enforce costBudget. "soft" applies a
+   *  log-cost penalty to over-budget candidates; "hard" filters
+   *  them out entirely. Defaults to "soft" so the user always
+   *  sees alternatives even when budget-tight, with the
+   *  over-budget ones visibly de-prioritized. */
+  costBudgetStrictness?: "soft" | "hard";
+  /** Free-form deadline string interpreted as the user's solve-by
+   *  time horizon. Examples: "end of Q3", "2026-08-15", "this week",
+   *  "in two months". The strategizer maps it to the existing
+   *  outcome_horizon enum (immediate | short_term | medium_term |
+   *  long_term) so horizon-weights.ts already-shipped modulation
+   *  applies uniformly. When set, it OVERRIDES the LLM-inferred
+   *  outcome_horizon — explicit user constraint wins. */
+  solveBy?: string;
 }
 
 export const DEFAULT_REASONING_SETTINGS: ReasoningSettings = {
@@ -56,7 +103,17 @@ export const DEFAULT_REASONING_SETTINGS: ReasoningSettings = {
   askClarifyingQuestions: false,
   buildBaselineFirst: false,
   showAlternatives: true,
+  generateApps: false,
+  runLab: false,
+  strategyCount: 3,
 };
+
+/** Bounds for the strategyCount stepper. Keep tight so the LLM
+ *  doesn't fan out into low-quality alternatives; >5 strategies
+ *  is rarely actionable. */
+export const STRATEGY_COUNT_MIN = 1;
+export const STRATEGY_COUNT_MAX = 5;
+export const STRATEGY_COUNT_DEFAULT = 3;
 
 export const LENS_META: Record<
   ReasoningLens,
@@ -124,11 +181,92 @@ export function coerceReasoningSettings(raw: unknown): ReasoningSettings {
       ? r.depth
       : DEFAULT_REASONING_SETTINGS.depth;
 
+  // strategyCount: clamp to [MIN, MAX]; default to DEFAULT when missing
+  // or non-numeric. We intentionally floor non-integers (3.7 → 3).
+  let strategyCount = STRATEGY_COUNT_DEFAULT;
+  if (typeof r.strategyCount === "number" && Number.isFinite(r.strategyCount)) {
+    strategyCount = Math.min(
+      STRATEGY_COUNT_MAX,
+      Math.max(STRATEGY_COUNT_MIN, Math.floor(r.strategyCount)),
+    );
+  }
+
+  // ── D3 · cost budget + solve-by deadline ──────────────────────
+  let costBudget: number | undefined;
+  if (
+    typeof r.costBudget === "number" &&
+    Number.isFinite(r.costBudget) &&
+    r.costBudget >= 0
+  ) {
+    costBudget = r.costBudget;
+  }
+  const costBudgetStrictness =
+    r.costBudgetStrictness === "hard" || r.costBudgetStrictness === "soft"
+      ? (r.costBudgetStrictness as "hard" | "soft")
+      : undefined;
+  const solveBy =
+    typeof r.solveBy === "string" && r.solveBy.trim().length > 0
+      ? r.solveBy.trim().slice(0, 200)
+      : undefined;
+
   return {
     lenses: lenses.length > 0 ? lenses : DEFAULT_REASONING_SETTINGS.lenses,
     depth,
     askClarifyingQuestions: r.askClarifyingQuestions === true,
     buildBaselineFirst: r.buildBaselineFirst === true,
     showAlternatives: r.showAlternatives !== false, // default true
+    // generateApps + runLab default to FALSE (strategy-only mode is the
+    // new default flow; apps + lab are explicit user opt-in).
+    generateApps: r.generateApps === true,
+    runLab: r.runLab === true,
+    strategyCount,
+    ...(costBudget !== undefined ? { costBudget } : {}),
+    ...(costBudgetStrictness !== undefined ? { costBudgetStrictness } : {}),
+    ...(solveBy !== undefined ? { solveBy } : {}),
   };
+}
+
+// ── D3 · solve-by → horizon mapping ──────────────────────────────────
+//
+// Maps the user's free-form deadline string onto the existing
+// `outcome_horizon` enum that horizon-weights.ts already understands.
+// Conservative — when the string is ambiguous, returns null so the
+// strategizer falls back to the LLM-inferred horizon rather than
+// asserting a guess.
+
+export type SolveByHorizon =
+  | "immediate"
+  | "short_term"
+  | "medium_term"
+  | "long_term";
+
+const NOW_KEYWORDS = /\b(now|today|asap|urgent|tonight)\b/i;
+const SHORT_KEYWORDS =
+  /\b(this\s+week|next\s+week|days?|few days|in\s+\d+\s*days?|by\s+friday|by\s+monday)\b/i;
+const MEDIUM_KEYWORDS =
+  /\b(month|months|quarter|quarters|q[1-4]|by\s+(end\s+of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))\b/i;
+const LONG_KEYWORDS = /\b(year|years|annual|long-?term|fy\d{2,4})\b/i;
+
+export function mapSolveByToHorizon(
+  raw: string | null | undefined,
+): SolveByHorizon | null {
+  if (!raw || typeof raw !== "string") return null;
+  const s = raw.toLowerCase().trim();
+  if (s.length === 0) return null;
+  if (NOW_KEYWORDS.test(s)) return "immediate";
+  if (SHORT_KEYWORDS.test(s)) return "short_term";
+  if (MEDIUM_KEYWORDS.test(s)) return "medium_term";
+  if (LONG_KEYWORDS.test(s)) return "long_term";
+  // Try to detect explicit dates and bucket by distance from now.
+  // Cheap heuristic — don't try to parse every format. When parsing
+  // fails, return null so the LLM-inferred horizon wins.
+  const parsed = Date.parse(raw);
+  if (!Number.isNaN(parsed)) {
+    const daysOut = (parsed - Date.now()) / (1000 * 60 * 60 * 24);
+    if (daysOut <= 1) return "immediate";
+    if (daysOut <= 14) return "short_term";
+    if (daysOut <= 90) return "medium_term";
+    if (daysOut > 90) return "long_term";
+  }
+  return null;
 }

@@ -16,6 +16,12 @@ import type {
   StructuredScenario,
   StructuredActionItem,
 } from "@/types/analysis";
+import type {
+  MeasurementSpec,
+  MeasurementScale,
+  MeasurementObservability,
+} from "@/types/measurement";
+import { requiresMeasurement } from "@/types/measurement";
 
 export class ValidationError extends Error {
   constructor(
@@ -257,6 +263,116 @@ export const validators = {
 };
 
 // ────────────────────────────────────────────────────────────────────
+// Measurement Validators (D1 — docs/KG_DEPTH_CRITIQUE.md)
+// ────────────────────────────────────────────────────────────────────
+
+const MEASUREMENT_SCALES: MeasurementScale[] = [
+  "continuous",
+  "ordinal",
+  "categorical",
+  "binary",
+];
+
+const MEASUREMENT_OBSERVABILITIES: MeasurementObservability[] = [
+  "directly_observable",
+  "proxy_required",
+  "inferred_only",
+  "unobservable",
+];
+
+/**
+ * Parse a measurement spec out of an LLM-emitted object. Soft-fail:
+ * returns null on any malformation rather than throwing, so a single
+ * bad measurement spec never blocks the surrounding decomposition.
+ *
+ * Caller is responsible for the importance/category gate — see
+ * `validateEntity` below for the warn-and-null gate, and
+ * `entitiesMissingRequiredMeasurement()` for downstream coverage
+ * checks.
+ */
+export const validateMeasurementSpec = (
+  raw: unknown,
+  path: string,
+): MeasurementSpec | null => {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+
+  const unit =
+    typeof obj.unit === "string" && obj.unit.trim().length > 0
+      ? obj.unit.trim().slice(0, 200)
+      : null;
+  if (!unit) return null;
+
+  const scale =
+    typeof obj.scale === "string" &&
+    (MEASUREMENT_SCALES as string[]).includes(obj.scale)
+      ? (obj.scale as MeasurementScale)
+      : null;
+  if (!scale) {
+    // unit without scale is half-spec; treat as unspecified rather
+    // than half-applying. Soft-fail: warn and return null.
+    console.warn(
+      `[validateMeasurementSpec] ${path}: unit="${unit}" without valid scale — dropping spec`,
+    );
+    return null;
+  }
+
+  const spec: MeasurementSpec = { unit, scale };
+
+  // ── Optional protocol ──
+  if (typeof obj.protocol === "object" && obj.protocol !== null) {
+    const p = obj.protocol as Record<string, unknown>;
+    const instrument =
+      typeof p.instrument === "string" && p.instrument.trim().length > 0
+        ? p.instrument.trim().slice(0, 500)
+        : null;
+    const frequency =
+      typeof p.frequency === "string" && p.frequency.trim().length > 0
+        ? p.frequency.trim().slice(0, 100)
+        : null;
+    const sample_unit =
+      typeof p.sample_unit === "string" && p.sample_unit.trim().length > 0
+        ? p.sample_unit.trim().slice(0, 100)
+        : null;
+    if (instrument && frequency && sample_unit) {
+      spec.protocol = {
+        instrument,
+        frequency,
+        sample_unit,
+        ...(typeof p.error_bound === "string" && p.error_bound.trim()
+          ? { error_bound: p.error_bound.trim().slice(0, 100) }
+          : {}),
+        ...(typeof p.latency === "string" && p.latency.trim()
+          ? { latency: p.latency.trim().slice(0, 100) }
+          : {}),
+        ...(typeof p.owner === "string" && p.owner.trim()
+          ? { owner: p.owner.trim().slice(0, 200) }
+          : {}),
+        ...(typeof p.notes === "string" && p.notes.trim()
+          ? { notes: p.notes.trim().slice(0, 1000) }
+          : {}),
+      };
+    }
+  }
+
+  // ── Optional cost_estimate ──
+  if (typeof obj.cost_estimate === "number" && obj.cost_estimate >= 0) {
+    spec.cost_estimate = obj.cost_estimate;
+  }
+
+  // ── Optional observability ──
+  if (
+    typeof obj.observability === "string" &&
+    (MEASUREMENT_OBSERVABILITIES as string[]).includes(obj.observability)
+  ) {
+    spec.observability = obj.observability as MeasurementObservability;
+  }
+
+  return spec;
+};
+
+// ────────────────────────────────────────────────────────────────────
 // Entity Validators
 // ────────────────────────────────────────────────────────────────────
 
@@ -353,6 +469,31 @@ export const validateEntity = (
         ),
       undefined
     ),
+    // D1 · measurement spec. Soft-fail: when an entity in a measurable
+    // category at fundamental/critical importance lacks a usable spec,
+    // we warn and store null. Downstream consumers (D1 follow-up:
+    // measurement-coverage gate before synthesis) decide whether to
+    // surface this as a blocker. We do NOT throw here — that would
+    // sink an otherwise-valid decomposition over one missing unit.
+    measurement: (() => {
+      const spec = validateMeasurementSpec(
+        obj.measurement,
+        `${path}.measurement`,
+      );
+      const importance =
+        typeof obj.importance === "string" ? obj.importance : null;
+      const category =
+        typeof obj.entity_category === "string" ? obj.entity_category : null;
+      if (!spec && requiresMeasurement(importance, category)) {
+        const id =
+          typeof obj.entity_id === "string" ? obj.entity_id : "<unknown>";
+        const name = typeof obj.name === "string" ? obj.name : "<unnamed>";
+        console.warn(
+          `[validateEntity] ${path}: ${importance} ${category} entity "${name}" (${id}) is missing measurement spec — D1 coverage gate will surface this`,
+        );
+      }
+      return spec;
+    })(),
   };
 };
 

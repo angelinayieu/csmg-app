@@ -481,6 +481,22 @@ export type Database = {
             | "years"
             | "indefinite"
             | null;
+          // D1 · measurement spec. Migration 20260609_entity_measurability.sql.
+          measurement_unit: string | null;
+          measurement_scale:
+            | "continuous"
+            | "ordinal"
+            | "categorical"
+            | "binary"
+            | null;
+          measurement_protocol: Json | null;
+          measurement_cost_estimate: number | null;
+          measurement_observability:
+            | "directly_observable"
+            | "proxy_required"
+            | "inferred_only"
+            | "unobservable"
+            | null;
         };
         Insert: {
           id?: string;
@@ -545,6 +561,22 @@ export type Database = {
             | "years"
             | "indefinite"
             | null;
+          // D1 · measurement spec.
+          measurement_unit?: string | null;
+          measurement_scale?:
+            | "continuous"
+            | "ordinal"
+            | "categorical"
+            | "binary"
+            | null;
+          measurement_protocol?: Json | null;
+          measurement_cost_estimate?: number | null;
+          measurement_observability?:
+            | "directly_observable"
+            | "proxy_required"
+            | "inferred_only"
+            | "unobservable"
+            | null;
         };
         Update: {
           id?: string;
@@ -608,6 +640,22 @@ export type Database = {
             | "months"
             | "years"
             | "indefinite"
+            | null;
+          // D1 · measurement spec.
+          measurement_unit?: string | null;
+          measurement_scale?:
+            | "continuous"
+            | "ordinal"
+            | "categorical"
+            | "binary"
+            | null;
+          measurement_protocol?: Json | null;
+          measurement_cost_estimate?: number | null;
+          measurement_observability?:
+            | "directly_observable"
+            | "proxy_required"
+            | "inferred_only"
+            | "unobservable"
             | null;
         };
       };

@@ -9,7 +9,7 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { Zap, AlertTriangle, Focus, Cog, Share2, BookOpen, CircleDot, FileText, FlaskConical } from "lucide-react";
+import { Zap, AlertTriangle, Focus, Cog, Share2, BookOpen, CircleDot, FileText, FlaskConical, Ruler } from "lucide-react";
 import { LAYERS, type LayerId } from "@/lib/whiteboard/layer-config";
 import { useCanvasReactions } from "../canvas-reactions-context";
 import { useCanvasHierarchy } from "../canvas-hierarchy-context";
@@ -485,6 +485,41 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                     layerColor={layerCfg.color}
                   />
                 )}
+                {/* D1 — measurement spec badge. Either:
+                    • measured: small green pill showing "unit · scale"
+                      so you can see at a glance what variable the entity
+                      represents
+                    • unmeasured (only for fundamental/critical entities
+                      in measurable categories): orange "❓ unmeasured"
+                      pill flagging the gap
+                    • neither rendered for moderate/important entities or
+                      relational/epistemic categories — nothing to flag */}
+                {!isPeripheral && entity && (
+                  <MeasurementBadge
+                    measurementUnit={entity.measurement_unit ?? null}
+                    measurementScale={entity.measurement_scale ?? null}
+                    importance={entity.importance ?? null}
+                    entityCategory={entity.entity_category ?? null}
+                    isHero={isHero}
+                  />
+                )}
+                {/* D3 — controllability badge. Reads
+                    manifold.operational.controllability and renders
+                    a compact "kind · cost · lag · reversibility"
+                    pill so the user can see at a glance which
+                    levers are cheap-fast vs expensive-slow without
+                    opening any drawer. Silent when the manifold
+                    doesn't carry a controllability profile. */}
+                {!isPeripheral && entity && (
+                  <ControllabilityBadge
+                    manifold={
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      (entity as any).manifold ?? null
+                    }
+                    importance={entity.importance ?? null}
+                    isHero={isHero}
+                  />
+                )}
               </div>
               <div
                 style={{
@@ -893,6 +928,371 @@ function OpenLabPill({
       Lab
     </a>
   );
+}
+
+/**
+ * D1 — Measurement spec badge.
+ *
+ * Renders one of three states based on the entity's measurement_unit /
+ * measurement_scale columns plus its importance + category:
+ *
+ *   • measured   → green pill "unit · scale" (e.g. "users/wk · cont")
+ *   • unmeasured → orange pill "?? unmeasured" — only shown for
+ *                  fundamental/critical entities in measurable categories
+ *                  (concrete | abstract | process), matching the gate's
+ *                  requiresMeasurement() rule
+ *   • silent     → renders nothing for important/moderate entities OR for
+ *                  relational/epistemic categories (no unit expected)
+ *
+ * See docs/KG_DEPTH_CRITIQUE.md §9 D1, src/types/measurement.ts, and
+ * src/lib/validation/measurement-coverage-gate.ts.
+ */
+function MeasurementBadge({
+  measurementUnit,
+  measurementScale,
+  importance,
+  entityCategory,
+  isHero,
+}: {
+  measurementUnit: string | null;
+  measurementScale: string | null;
+  importance: string | null;
+  entityCategory: string | null;
+  isHero: boolean;
+}) {
+  const hasUnit =
+    typeof measurementUnit === "string" && measurementUnit.trim().length > 0;
+  const hasScale =
+    typeof measurementScale === "string" && measurementScale.trim().length > 0;
+  const measured = hasUnit && hasScale;
+
+  const REQUIRED_IMPORTANCE = ["fundamental", "critical"];
+  const MEASURABLE_CATEGORIES = ["concrete", "abstract", "process"];
+  const requires =
+    importance != null &&
+    entityCategory != null &&
+    REQUIRED_IMPORTANCE.includes(importance) &&
+    MEASURABLE_CATEGORIES.includes(entityCategory);
+
+  // Silent for non-measured, non-required entities — avoids visual clutter
+  // on the 80% of entities that legitimately don't need measurement (e.g.
+  // moderate-importance scaffolding, epistemic claims, relational tradeoffs).
+  if (!measured && !requires) return null;
+
+  const compactScale = measured
+    ? measurementScale === "continuous"
+      ? "cont"
+      : measurementScale === "categorical"
+        ? "cat"
+        : measurementScale === "ordinal"
+          ? "ord"
+          : measurementScale === "binary"
+            ? "bin"
+            : measurementScale
+    : null;
+
+  if (measured) {
+    return (
+      <span
+        title={`Measured · unit "${measurementUnit}", scale ${measurementScale}`}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
+          padding: "2px 6px",
+          borderRadius: 4,
+          background: isHero
+            ? "rgba(74,222,128,0.18)"
+            : "rgba(34,197,94,0.10)",
+          border: `1px solid ${isHero ? "rgba(74,222,128,0.45)" : "rgba(34,197,94,0.35)"}`,
+          color: isHero ? "rgba(220,252,231,0.95)" : "#15803d",
+          fontSize: 8,
+          fontWeight: 700,
+          letterSpacing: "0.06em",
+          lineHeight: 1,
+          maxWidth: 140,
+          overflow: "hidden",
+          whiteSpace: "nowrap",
+          textOverflow: "ellipsis",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        <Ruler style={{ width: 8, height: 8, flexShrink: 0 }} />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+          {measurementUnit}
+        </span>
+        <span
+          aria-hidden
+          style={{
+            opacity: 0.65,
+            fontWeight: 600,
+          }}
+        >
+          · {compactScale}
+        </span>
+      </span>
+    );
+  }
+
+  // requires === true and !measured: render the gap flag. This is the
+  // visual analog of the warn that the validator emits when a
+  // fundamental/critical quantifiable entity has no spec.
+  return (
+    <span
+      title={`Unmeasured — this ${importance} ${entityCategory} entity should have a unit + scale (D1 measurement gate). Run the backfill agent or add a [MEASUREMENT: ...] block in re-decomposition.`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        padding: "2px 6px",
+        borderRadius: 4,
+        background: isHero
+          ? "rgba(251,146,60,0.18)"
+          : "rgba(251,146,60,0.10)",
+        border: `1px solid ${isHero ? "rgba(251,146,60,0.5)" : "rgba(251,146,60,0.4)"}`,
+        color: isHero ? "rgba(254,243,199,0.95)" : "#c2410c",
+        fontSize: 8,
+        fontWeight: 700,
+        letterSpacing: "0.1em",
+        textTransform: "uppercase",
+        lineHeight: 1,
+      }}
+    >
+      <Ruler style={{ width: 8, height: 8, opacity: 0.7 }} />
+      Unmeasured
+    </span>
+  );
+}
+
+/**
+ * D3 — Controllability badge.
+ *
+ * Reads `entity.manifold.operational.controllability` (D3 schema —
+ * src/types/controllability.ts) and renders a compact pill summarizing
+ * the lever's cost / lag / reversibility profile so the user can scan
+ * the canvas and immediately see which levers are cheap-and-fast vs.
+ * expensive-and-slow without opening any drawer.
+ *
+ * Three states:
+ *   • full profile (kind set + cost or lag) → green/blue/amber pill
+ *     showing "kind · $cost · lag · rev"
+ *   • kind-only → small kind chip ("FULL", "PART", "GATED", "OBS")
+ *   • no profile → silent (no badge rendered)
+ *
+ * Color coding: green for fully-controllable + low-cost, blue for
+ * partially-controllable, amber for gated/high-cost, gray for
+ * observable_only. Opportunity-cost-dominated levers get a subtle
+ * yellow-orange to visually flag the hidden-cost framing.
+ *
+ * Defensive everywhere — manifold JSONB walking can hit malformed
+ * shapes; we silently degrade rather than throw.
+ */
+function ControllabilityBadge({
+  manifold,
+  importance,
+  isHero,
+}: {
+  manifold: Record<string, unknown> | null | undefined;
+  importance: string | null;
+  isHero: boolean;
+}) {
+  // Defensive walk: manifold → operational → controllability
+  if (!manifold || typeof manifold !== "object") return null;
+  const operational = (manifold as Record<string, unknown>).operational;
+  if (!operational || typeof operational !== "object") return null;
+  const ctrl = (operational as Record<string, unknown>).controllability;
+  if (!ctrl || typeof ctrl !== "object") return null;
+  const c = ctrl as Record<string, unknown>;
+
+  const kind = typeof c.kind === "string" ? c.kind : null;
+  const ic = (c.intervention_cost ?? null) as Record<string, unknown> | null;
+  const oc = (c.opportunity_cost ?? null) as Record<string, unknown> | null;
+  const tte = (c.time_to_effect ?? null) as Record<string, unknown> | null;
+  const rev = typeof c.reversibility === "string" ? c.reversibility : null;
+  const costKind = typeof c.cost_kind === "string" ? c.cost_kind : null;
+
+  // Silent when there's literally nothing to show.
+  if (!kind && !ic && !oc && !tte && !rev) return null;
+
+  // Pick the dominant color frame. Opportunity-dominated framings get
+  // a yellow-orange tint to visually distinguish the hidden-cost
+  // story from direct-cost levers. Otherwise, color follows kind.
+  const palette = (() => {
+    if (costKind === "opportunity_dominated") {
+      return {
+        bg: isHero ? "rgba(250,204,21,0.18)" : "rgba(250,204,21,0.10)",
+        border: isHero ? "rgba(250,204,21,0.5)" : "rgba(250,204,21,0.4)",
+        fg: isHero ? "rgba(254,249,195,0.95)" : "#a16207",
+      };
+    }
+    if (
+      costKind === "hidden_externalities" ||
+      costKind === "risk_adjusted_dominated" ||
+      kind === "gated"
+    ) {
+      return {
+        bg: isHero ? "rgba(251,146,60,0.18)" : "rgba(251,146,60,0.10)",
+        border: isHero ? "rgba(251,146,60,0.5)" : "rgba(251,146,60,0.4)",
+        fg: isHero ? "rgba(254,243,199,0.95)" : "#c2410c",
+      };
+    }
+    if (kind === "observable_only") {
+      return {
+        bg: isHero ? "rgba(148,163,184,0.18)" : "rgba(148,163,184,0.12)",
+        border: isHero ? "rgba(148,163,184,0.45)" : "rgba(148,163,184,0.35)",
+        fg: isHero ? "rgba(241,245,249,0.85)" : "#475569",
+      };
+    }
+    if (kind === "partially_controllable") {
+      return {
+        bg: isHero ? "rgba(96,165,250,0.18)" : "rgba(59,130,246,0.10)",
+        border: isHero ? "rgba(96,165,250,0.5)" : "rgba(59,130,246,0.35)",
+        fg: isHero ? "rgba(219,234,254,0.95)" : "#1d4ed8",
+      };
+    }
+    // fully_controllable + direct → green by default
+    return {
+      bg: isHero ? "rgba(74,222,128,0.18)" : "rgba(34,197,94,0.10)",
+      border: isHero ? "rgba(74,222,128,0.45)" : "rgba(34,197,94,0.35)",
+      fg: isHero ? "rgba(220,252,231,0.95)" : "#15803d",
+    };
+  })();
+
+  // Compose the visible parts. Order: kind chip → cost → lag →
+  // reversibility hint. Each is shown only when known; the badge
+  // gracefully shrinks when fields are missing.
+  const kindShort = (() => {
+    switch (kind) {
+      case "fully_controllable":
+        return "FULL";
+      case "partially_controllable":
+        return "PART";
+      case "gated":
+        return "GATE";
+      case "observable_only":
+        return "OBS";
+      default:
+        return null;
+    }
+  })();
+
+  const costStr = (() => {
+    if (!ic) return null;
+    const est = ic.estimate;
+    if (typeof est !== "number" || !Number.isFinite(est)) return null;
+    const recurrence =
+      typeof ic.recurrence === "string" ? ic.recurrence : null;
+    const formatted = formatUSD(est);
+    if (recurrence === "recurring_monthly") return `${formatted}/mo`;
+    if (recurrence === "recurring_yearly") return `${formatted}/yr`;
+    if (recurrence === "recurring_continuous") return `${formatted}+`;
+    return formatted;
+  })();
+
+  const oppCostStr = (() => {
+    if (!oc) return null;
+    const est = oc.estimate;
+    if (typeof est !== "number" || !Number.isFinite(est)) return null;
+    return `opp ${formatUSD(est)}`;
+  })();
+
+  const lagStr = (() => {
+    if (!tte) return null;
+    const lag = tte.lag;
+    return typeof lag === "string" && lag.trim().length > 0
+      ? lag.trim().slice(0, 14)
+      : null;
+  })();
+
+  const revStr = (() => {
+    if (!rev) return null;
+    if (rev === "easily_reversible") return "rev";
+    if (rev === "costly_to_reverse") return "↺costly";
+    if (rev === "irreversible") return "1-way";
+    return null;
+  })();
+
+  // Build the tooltip — full structured profile for hover details.
+  const tooltipParts: string[] = [];
+  if (kind) tooltipParts.push(`Kind: ${kind.replace(/_/g, " ")}`);
+  if (ic && typeof ic.estimate === "number") {
+    const conf = typeof ic.confidence === "string" ? ` (${ic.confidence})` : "";
+    const recur = typeof ic.recurrence === "string" ? ` ${ic.recurrence}` : "";
+    const sunk = ic.is_sunk ? " · sunk" : "";
+    tooltipParts.push(
+      `Cost: ${formatUSD(ic.estimate as number)}${recur}${conf}${sunk}`,
+    );
+  }
+  if (oc && typeof oc.estimate === "number") {
+    const alt =
+      typeof oc.alternative === "string" ? ` · alt: ${oc.alternative}` : "";
+    tooltipParts.push(
+      `Opportunity cost: ${formatUSD(oc.estimate as number)}${alt}`,
+    );
+  }
+  if (costKind) tooltipParts.push(`Dominant cost: ${costKind.replace(/_/g, " ")}`);
+  if (tte && typeof tte.lag === "string")
+    tooltipParts.push(`Time to effect: ${tte.lag}`);
+  if (rev) tooltipParts.push(`Reversibility: ${rev.replace(/_/g, " ")}`);
+  const tooltip = tooltipParts.join("\n") || "Controllability profile";
+
+  void importance; // available for future thresholding
+
+  return (
+    <span
+      title={tooltip}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "2px 6px",
+        borderRadius: 4,
+        background: palette.bg,
+        border: `1px solid ${palette.border}`,
+        color: palette.fg,
+        fontSize: 8,
+        fontWeight: 700,
+        letterSpacing: "0.06em",
+        lineHeight: 1,
+        maxWidth: 200,
+        overflow: "hidden",
+        whiteSpace: "nowrap",
+        textOverflow: "ellipsis",
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      <Cog style={{ width: 8, height: 8, flexShrink: 0 }} />
+      {kindShort && <span>{kindShort}</span>}
+      {costStr && (
+        <span style={{ opacity: 0.75 }}>
+          · {costStr}
+        </span>
+      )}
+      {oppCostStr && (
+        <span style={{ opacity: 0.75 }}>
+          · {oppCostStr}
+        </span>
+      )}
+      {lagStr && (
+        <span style={{ opacity: 0.65 }}>
+          · {lagStr}
+        </span>
+      )}
+      {revStr && (
+        <span style={{ opacity: 0.6, fontStyle: "italic" }}>
+          · {revStr}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function formatUSD(n: number): string {
+  if (!Number.isFinite(n)) return "?";
+  if (n === 0) return "$0";
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
+  return `$${Math.round(n)}`;
 }
 
 /**

@@ -33,6 +33,7 @@ import { useMemo, useState } from "react";
 import type { ProbabilitySpaceShellShape } from "./types";
 import { computeForceLayout } from "@/lib/graph/force-layout";
 import { useAxisActive, useCanvasFilter } from "../hooks/use-canvas-filter";
+import { canvasNavigate } from "@/lib/canvas/canvas-bus";
 
 export const SPACE_SHELL_DEFAULT_W = 280;
 export const SPACE_SHELL_DEFAULT_H = 200;
@@ -99,6 +100,20 @@ export class ProbabilitySpaceShellShapeUtil extends BaseBoxShapeUtil<Probability
     shape: ProbabilitySpaceShellShape,
     info: TLResizeInfo<ProbabilitySpaceShellShape>,
   ) => resizeBox(shape, info);
+
+  // Double-click to drill into the full probability-space view for
+  // this axis. The shell shape doesn't carry the parent space's UUID
+  // (only its axis identifier), so we extract it from the URL — the
+  // canvas is always mounted under /app/space/<id>/whiteboard.
+  override onDoubleClick = (shape: ProbabilitySpaceShellShape) => {
+    if (typeof window === "undefined") return;
+    const m = window.location.pathname.match(/\/app\/space\/([^/]+)/);
+    const spaceId = m?.[1];
+    if (!spaceId || !shape.props.axis) return;
+    canvasNavigate(
+      `/app/space/${spaceId}/probability-space/${encodeURIComponent(shape.props.axis)}`,
+    );
+  };
 
   getDefaultProps(): ProbabilitySpaceShellShape["props"] {
     return {
@@ -333,6 +348,50 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
             )}
           </div>
         </div>
+
+        {/* Core indicator — names what this lens centers on. Sits in
+            its own row between the header and the mini-graph so it
+            cannot collide with the title or count chip. (Was previously
+            absolutely-positioned inside the svg container which caused
+            the badge to visually overlap the header text.) */}
+        {entities.length > 0 && layout.coreId && (() => {
+          const coreName = idToName.get(layout.coreId);
+          if (!coreName) return null;
+          const coreNode = layout.nodes.find((n) => n.id === layout.coreId);
+          const coreDegree = coreNode?.degree ?? 0;
+          return (
+            <div
+              style={{
+                position: "relative",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                marginTop: -2,
+              }}
+            >
+              <span
+                style={{
+                  display: "inline-block",
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  background: `color-mix(in srgb, ${accent} 12%, transparent)`,
+                  border: `1px solid color-mix(in srgb, ${accent} 22%, transparent)`,
+                  fontSize: 9.5,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  color: accent,
+                  maxWidth: "100%",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+                title={`${coreName} · ${coreDegree} connection${coreDegree === 1 ? "" : "s"}`}
+              >
+                ⌖ {coreName}
+              </span>
+            </div>
+          );
+        })()}
 
         {/* Mini-graph (Phase 1 — replaces flat chip list) */}
         {entities.length > 0 && (
@@ -654,31 +713,16 @@ function ShellMiniGraph({
           );
         })}
       </svg>
-      {/* Core badge (corner) — names what the lens centers on */}
-      {coreName && (
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            padding: "2px 6px",
-            borderRadius: 4,
-            background: `color-mix(in srgb, ${accent} 14%, transparent)`,
-            border: `1px solid color-mix(in srgb, ${accent} 25%, transparent)`,
-            fontSize: 9,
-            fontWeight: 700,
-            letterSpacing: "0.04em",
-            color: accent,
-            maxWidth: viewportW * 0.55,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-          title={`${coreName} · ${coreDegree} connection${coreDegree === 1 ? "" : "s"}`}
-        >
-          ⌖ {coreName}
-        </div>
-      )}
+      {/* Core badge moved out — was absolutely-positioned at top:0 right:0
+          of this svg container which collided visually with the parent's
+          header (count chip + tagline). Parent now renders a dedicated
+          "core indicator" row between the header and the mini-graph so
+          there's no overlap regardless of card height.
+          coreName + coreDegree intentionally still computed above for
+          the title attribute on hover. */}
+      <span style={{ display: "none" }} aria-hidden>
+        {coreName ? `core:${coreName}/${coreDegree}` : null}
+      </span>
       {/* Overflow note */}
       {graphOverflow > 0 && (
         <div

@@ -84,6 +84,17 @@ export interface GenerateAppsInput {
    * case events are silently skipped — apps still land in the DB.
    */
   pipelineRunId?: string | null;
+  /**
+   * When true, skip the inline Monte Carlo simulation block that
+   * normally runs ~400 iterations per app to enrich
+   * `apps.state.simulation_distribution`. Sourced from
+   * spaces.reasoning_settings.runLab. Default behavior (undefined or
+   * false) preserves the legacy "always simulate" pipeline. When
+   * skipped, apps still materialize cleanly — they just don't carry a
+   * pre-computed distribution; the user can later run on-demand sims
+   * via the Lab UI.
+   */
+  skipLabSimulation?: boolean;
 }
 
 export interface GenerateAppsResult {
@@ -116,6 +127,7 @@ export async function generateAppsAndInterventions(
     db,
     triggeredBy,
     pipelineRunId,
+    skipLabSimulation,
   } = input;
 
   // Code (e.g. "C1", "X3") → entities table UUID lookup.
@@ -194,6 +206,7 @@ export async function generateAppsAndInterventions(
     db,
     triggeredBy,
     pipelineRunId: pipelineRunId ?? null,
+    skipLabSimulation,
   });
 
   // ── Step 2: materialize Interventions from micro_tactics ─────────────
@@ -286,6 +299,9 @@ export interface GenerateAppsForBatchInput {
   triggeredBy: string;
   /** Strategy version from strategy_snapshots.version, for provenance. */
   strategyVersion?: number;
+  /** Forwarded to each per-entry generateAppsAndInterventions call. See
+   *  field-level docs on GenerateAppsInput.skipLabSimulation. */
+  skipLabSimulation?: boolean;
 }
 
 export interface GenerateAppsForBatchResult {
@@ -330,6 +346,7 @@ export async function generateAppsForBatch(
       strategyVersion: input.strategyVersion,
       db: input.db,
       triggeredBy: input.triggeredBy,
+      skipLabSimulation: input.skipLabSimulation,
     });
 
     agg.apps_created += result.apps_created;
@@ -395,6 +412,13 @@ interface MaterializeAppsArgs {
   /** When present, emit `proposal_ready` per materialized app after the
    *  MC simulation enrichment lands on apps.state. */
   pipelineRunId: string | null;
+  /** When true, skip the inline ~400-iteration Monte Carlo enrichment.
+   *  Forwarded from GenerateAppsInput.skipLabSimulation (sourced from
+   *  spaces.reasoning_settings.runLab). When skipped, apps still
+   *  materialize cleanly but apps.state.simulation_distribution is
+   *  not populated; per-app proposal_ready events fire without
+   *  distribution data. */
+  skipLabSimulation?: boolean;
 }
 
 async function materializeApps(args: MaterializeAppsArgs) {
@@ -413,6 +437,7 @@ async function materializeApps(args: MaterializeAppsArgs) {
     db,
     triggeredBy,
     pipelineRunId,
+    skipLabSimulation,
   } = args;
 
   // Build a perspective → entities map so dominant factors can fall back
@@ -685,7 +710,12 @@ async function materializeApps(args: MaterializeAppsArgs) {
       targetEntityId: string;
     }
   >();
-  if (apps.length > 0) {
+  // Inline Monte Carlo enrichment is gated by the user's runLab toggle.
+  // When false (default for the new strategy-only flow), apps still
+  // materialize but skip the ~400-iteration sim that adds
+  // simulation_distribution to apps.state. The Lab UI can run on-demand
+  // sims later if the user wants them.
+  if (apps.length > 0 && !skipLabSimulation) {
     try {
       const { simulateEntityChain } = await import(
         "@/lib/simulation/simulate-entity-chain"

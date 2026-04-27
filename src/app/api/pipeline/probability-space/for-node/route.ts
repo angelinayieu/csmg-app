@@ -8,9 +8,10 @@
 // that one models mediators *inside* a single edge; this one enumerates *which*
 // edges/combinations are worth considering for a focal node.
 
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { safeAuth, verifySpaceOwnership, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { resilientInsert } from "@/lib/sanitize";
+import { proposeFromConvergentPointsBatch } from "@/lib/pipeline/discovery-materializer";
 import { extractRoles } from "@/lib/probability-space/role-extractor";
 import {
   generateInteractors,
@@ -278,6 +279,38 @@ export async function POST(request: Request) {
     } catch (aggErr) {
       console.warn("[probability-space/for-node] Pattern aggregation failed (non-critical):", aggErr);
     }
+
+    // ── Step 6c · D2: Auto-propose discoveries (post-response, fire-and-forget) ──
+    // docs/KG_DEPTH_CRITIQUE.md §9 D2 — closes the simulation→KG loop.
+    // For each freshly-persisted convergent_point above the propose
+    // threshold, the materializer creates a `twin_proposals` row in
+    // `proposed` status (discovery_source='convergent_point') with an
+    // action_list of add_edge mutations the user can approve in the
+    // existing twin proposal review UI.
+    //
+    // We use Next's `after()` so this never blocks the response — the
+    // user gets their convergent_points immediately; proposals appear
+    // in the queue moments later. Soft-fail: any error is logged and
+    // swallowed, the for-node route is unaffected.
+    after(async () => {
+      try {
+        const result = await proposeFromConvergentPointsBatch({
+          db,
+          spaceId: body.space_id,
+          userId: user.id,
+        });
+        if (result.proposed.length > 0) {
+          console.log(
+            `[probability-space/for-node] D2 auto-propose: ${result.proposed.length} new discoveries queued (${result.skipped.length} skipped of ${result.totalConsidered} considered)`,
+          );
+        }
+      } catch (propErr) {
+        console.warn(
+          "[probability-space/for-node] D2 auto-propose failed (non-critical):",
+          propErr,
+        );
+      }
+    });
 
     // Build response (ranked order)
     const rankedOutput = ranked.map((r) => {

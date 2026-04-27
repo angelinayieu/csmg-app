@@ -43,6 +43,8 @@ export type StructuralEvent =
   | WhyChainDeepenedEvent
   | StrategyConsensusReadyEvent
   | LayerCoverageGapEvent
+  | MeasurementCoverageGapEvent
+  | CommunityDetectedEvent
   // Sprint A — wrap-what-exists pass: downstream composite events that
   // the canvas painter uses to drop full widget-backed shapes during
   // the unfurl. Each maps 1-1 to a first-class tldraw shape and a DB
@@ -954,6 +956,69 @@ export interface LayerCoverageGapEvent {
    *  to the gate failing. Empty when the only cause was missing
    *  entities. */
   panel_block_divergences: string[];
+}
+
+// ── D1 · Measurement coverage gap event ───────────────────────────
+//
+// Companion to LayerCoverageGapEvent. Emitted when the measurement
+// coverage gate finds fundamental/critical entities in measurable
+// categories (concrete | abstract | process) lacking a unit + scale.
+// Soft-emit: gate passing with zero gaps → no event.
+//
+// See src/lib/validation/measurement-coverage-gate.ts for gate logic
+// and docs/KG_DEPTH_CRITIQUE.md §9 D1 for context.
+export interface MeasurementCoverageGapEvent {
+  type: "measurement_coverage_gap";
+  /** True iff the caller forced past a failing gate
+   *  (bypassMeasurementGate=true). */
+  bypassed: boolean;
+  spaceId: string;
+  /** Human-readable summary; UI may render verbatim. */
+  message: string;
+  /** Aggregate stats for the UI to render coverage badges. */
+  stats: {
+    gated_count: number;
+    measured_count: number;
+    missing_count: number;
+    coverage_ratio: number;
+    threshold_applied: number;
+  };
+  /** Per-entity gaps, capped to the most relevant for event payload size.
+   *  Full list available in the 409 response body when gate hard-blocks. */
+  gaps: Array<{
+    entity_id: string;
+    entity_name: string;
+    importance: "fundamental" | "critical";
+    entity_category: "concrete" | "abstract" | "process";
+    reason: "no_measurement_spec" | "partial_measurement_spec";
+  }>;
+}
+
+// ── D8 · Community detection event ─────────────────────────────────
+//
+// Emitted once per detection run after kg_communities rows persist.
+// Canvas listeners use this to render community boundaries + level
+// indicators + an aggregate "structure detected: N communities at
+// L levels, modularity X" badge. Soft-emit: a detection that found
+// no meaningful communities (e.g. a single connected component with
+// no internal density variation) emits the event with
+// total_communities=0 so the UI can clear stale boundaries from
+// previous runs.
+//
+// See src/lib/pipeline/community-detection.ts for the algorithm and
+// docs/KG_DEPTH_CRITIQUE.md §9 D8 for the architectural context.
+export interface CommunityDetectedEvent {
+  type: "community_detected";
+  spaceId: string;
+  detection_run_id: string;
+  /** Communities at every level. */
+  total_communities: number;
+  /** Maximum level depth reached. 0 = single-level partition only. */
+  max_level: number;
+  /** Aggregate modularity at level 0; 0..1 typical, < 0.3 = weak structure. */
+  level_0_modularity: number;
+  /** Per-level community counts for UI rendering. */
+  level_breakdown: Array<{ level: number; count: number }>;
 }
 
 // ── Sprint A downstream composite events ───────────────────────────

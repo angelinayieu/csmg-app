@@ -51,7 +51,34 @@ Schema:
         "operational": {
           "maturity": "proven | experimental | theoretical | unknown — how battle-tested is this?",
           "resource_intensity": "high | moderate | low — how much effort/money/time does this require?",
-          "dependency_count": number
+          "dependency_count": number,
+          "controllability": {
+            "kind": "fully_controllable | partially_controllable | gated | observable_only | null — D3: can the user pull this lever directly? Mirrors edge-level utility.actionability but answers it at the entity level. null when not applicable (epistemic entities, etc.)",
+            "intervention_cost": {
+              "estimate": "number — USD-equivalent DIRECT cost to MOVE the lever. Distinct from measurement_cost_estimate (cost to OBSERVE) AND from opportunity_cost (foregone alternatives). 0 = already paid / sunk cost (set is_sunk: true). OMIT the entire intervention_cost object if unknown — do NOT fabricate.",
+              "confidence": "high | moderate | low",
+              "recurrence": "one_time | recurring_monthly | recurring_yearly | recurring_continuous — strategically critical to disambiguate; a $10k one-time fix vs $1k/month recurring have radically different NPVs",
+              "is_sunk": "boolean — true iff this cost is already paid. Ranker discounts sunk-cost framings to counter the sunk-cost fallacy.",
+              "notes": "string — optional caveat"
+            },
+            "opportunity_cost": {
+              "estimate": "number — USD-equivalent value of next-best alternative foregone. May exceed intervention_cost.estimate; that's normal and meaningful. Set when resource is fungible AND alternatives are abundant; OMIT when no good alternatives exist or the resource has no other use.",
+              "confidence": "high | moderate | low",
+              "alternative": "string — optional, what's being foregone (surfaces in UI as \"if you pull this, you can't pursue X\")",
+              "notes": "string — optional caveat"
+            },
+            "cost_kind": "direct | opportunity_dominated | coordination_dominated | risk_adjusted_dominated | switching_dominated | hidden_externalities — which cost type DOMINATES this lever. Default to 'direct' only when you've genuinely considered the others and dollars dominate.",
+            "time_to_effect": {
+              "lag": "string — median lag between intervention and observable change. Use buckets (immediate, days, weeks, months, years) or a specific phrase (\"1-2 weeks\", \"end of Q3\")",
+              "confidence": "high | moderate | low",
+              "notes": "string — optional caveat"
+            },
+            "modulation_range": {
+              "min": "number — only set when the lever is genuinely continuous",
+              "max": "number",
+              "unit": "string — mirrors measurement_unit when applicable"
+            }
+          }
         },
         "epistemic": {
           "evidence_strength": "empirical | theoretical | anecdotal | assumed — what supports this entity's existence/importance?",
@@ -68,7 +95,22 @@ Schema:
           "reasoning": "string — 1-2 sentences tracing the logic chain. MUST reference either (a) specific text from the user input, (b) named domain frameworks/patterns, or (c) structural reasoning from the graph topology.",
           "source_quote": "string — MANDATORY. If the parent entity's source_tag is EXPLICIT, this MUST be a verbatim or near-verbatim quote from the user's input (≤200 chars, no paraphrasing). If IMPLICIT, MUST start with 'IMPLICIT: ' followed by a one-sentence reason (what in the input implies this). If ASSUMED, MUST start with 'ASSUMED: ' followed by a one-sentence reason (the domain pattern invoked). NEVER fabricate quotes — downgrade source_tag to IMPLICIT instead."
         }
-      ]
+      ],
+      "measurement": {
+        "unit": "string — concrete unit (e.g. 'users/week', '%', 'ms', 'USD/MAU'). REQUIRED for fundamental/critical entities of category concrete/abstract/process. null for relational/epistemic categories or when the Tier 2 [MEASUREMENT: missing] tag fired.",
+        "scale": "continuous | ordinal | categorical | binary | null — REQUIRED when unit is set. Drives downstream simulator dispatch.",
+        "protocol": {
+          "instrument": "string — e.g. 'Mixpanel event tutorial_complete', 'user survey Q3', 'server access log'",
+          "frequency": "string — e.g. 'per-session', 'daily', 'monthly'",
+          "sample_unit": "string — e.g. 'user', 'request', 'session', 'team-week'",
+          "error_bound": "string — optional, e.g. '±5%', '±2 events'",
+          "latency": "string — optional, e.g. 'real-time', 'T+24h'",
+          "owner": "string — optional team/role responsible",
+          "notes": "string — optional caveats or known biases"
+        },
+        "cost_estimate": "number — optional USD-equivalent cost per observation. 0 = already-instrumented, positive for survey/manual/external API costs. Omit when unknown — do NOT guess.",
+        "observability": "directly_observable | proxy_required | inferred_only | unobservable | null — categorical fallback when scale is hard to assign."
+      }
     }
   ],
   "edges": [
@@ -150,6 +192,27 @@ Schema:
   - "outcome" entities are measurable results from applying deliverables — metrics that change, behaviors that shift, errors that reduce.
   - "goal" entities are the master objectives that outcomes contribute to — the end states the user is trying to achieve.
   - Most entities in a typical analysis will be "truth" or "deliverable". Use the full spectrum when the input describes a complete system from principles to results.
+
+  CONTROLLABILITY RULES (D3):
+  - Populate manifold.operational.controllability ONLY for fundamental/critical entities that represent levers (something the user could act on). Skip for relational, epistemic, or pure-context entities.
+  - kind: "fully_controllable" = user has direct unilateral control. "partially_controllable" = requires negotiation / cooperation. "gated" = binary on/off only, no continuous knob. "observable_only" = external constraint the user monitors but cannot move. null when the entity doesn't fit any of these (and skip the block entirely in that case).
+  - intervention_cost is the DIRECT cost-to-MOVE (USD-equivalent), NOT cost-to-MEASURE (that's measurement_cost_estimate). It carries: estimate, confidence, recurrence (one_time | recurring_monthly | recurring_yearly | recurring_continuous — strategically critical), is_sunk (true iff already paid), notes. OMIT the entire intervention_cost object when unknown — do NOT pad with a guessed default.
+  - opportunity_cost is the value of the next-best alternative foregone by choosing this lever. Strategy decisions are zero-sum at the resource layer (time, attention, capital, runway), so opportunity cost is OFTEN the dominant cost even when direct cost is small. Set when the resource is fungible AND alternatives are abundant; OMIT when no good alternatives exist or the resource has no other use. May exceed intervention_cost.estimate; that's normal and meaningful.
+  - cost_kind classifies WHICH cost type dominates: "direct" (dollars dominate), "opportunity_dominated" (foregone alternatives dominate — common for senior-leader-time and capital-allocation), "coordination_dominated" (Brooks' Law — N people communicating = N(N-1)/2 channels, scales superlinearly), "risk_adjusted_dominated" (failure-recovery × probability dwarfs direct cost), "switching_dominated" (path-dependency lock-in is the real cost), "hidden_externalities" (compounding tech debt / cultural drag / trust erosion). Default to "direct" only when you've genuinely considered the others.
+  - time_to_effect is the median lag between intervention and observable downstream change. Per-lever (entity-level), DISTINCT from edge.utility.propagation_speed which is per-relationship cascade lag. The lag string can be a canonical bucket (immediate, days, weeks, months, years) OR a specific phrase ("1-2 weeks", "end of Q3"). The bucketLag() helper in src/types/controllability.ts handles both.
+  - modulation_range is OPTIONAL and frequently null — only meaningful for continuous levers (ad spend, headcount, temperature setpoint). Skip for binary or categorical levers. When set, unit should mirror the entity's measurement_unit (D1) when possible.
+  - Reversibility lives in manifold.strategic.reversibility (NOT in controllability) — the existing 3-tier enum (easily_reversible | costly_to_reverse | irreversible). The sanitizer mirrors that value into manifold.operational.controllability.reversibility for ergonomic single-branch reads; the strategic-side value remains authoritative.
+
+  MEASUREMENT RULES (D1):
+  - Every entity with importance "fundamental" or "critical" AND entity_category in {concrete, abstract, process} MUST have a measurement object with at minimum a non-null unit AND scale.
+  - Entities with category "relational" or "epistemic" should set measurement to null — tradeoffs and assumptions don't have units.
+  - Entities with importance "important" or "moderate" can set measurement to null OR include a partial spec when known. Do not fabricate units to satisfy the schema.
+  - unit MUST be a real, observable unit. "users/week" YES. "engagement level" NO. "%" YES. "high" NO. If you cannot honestly name a unit for a fundamental/critical entity, use measurement = null AND surface this in the entity description as "[MEASUREMENT MISSING: <one-sentence reason>]" — that is itself a finding the user needs to see.
+  - scale MUST be one of {continuous, ordinal, categorical, binary} or null. Continuous = unbounded numeric. Ordinal = ranked categories. Categorical = unordered. Binary = true/false gate.
+  - protocol is OPTIONAL but strongly preferred for fundamental/critical entities. Omit subfields you don't have signal for (don't invent an instrument or owner).
+  - cost_estimate is OPTIONAL. 0 = already instrumented, no marginal cost. Positive number = USD-equivalent per observation. OMIT when unknown — do NOT guess.
+  - observability is OPTIONAL fallback when scale doesn't cleanly apply. Use directly_observable when data already flows; proxy_required when you must instrument something else; inferred_only when only LLM/expert judgement is available; unobservable for true latents.
+  - Preserve [MEASUREMENT: ...] tags from Tier 2 of the decomposition. The structurer's job is faithful translation, not measurement invention. If Tier 2 didn't tag an entity, leave measurement null rather than back-filling with hallucinated units.
 
   EVIDENCE BASIS RULES:
   - Every entity with importance "fundamental" or "critical" MUST have 2-4 evidence_basis items.

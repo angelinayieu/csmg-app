@@ -277,9 +277,22 @@ export function CanvasEntityDetailDrawer() {
     });
   }, [payload, deepening]);
 
+  const entity = payload?.entity;
+  // Phase 6 — partner-name map populated from the Phase 6 detail
+  // API enrichment. Empty until detail loads; used by both the list
+  // and ego views to render real partner names instead of UUIDs.
+  // Must be declared before any early return to satisfy Rules of Hooks.
+  const idToNameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    if (entity?.id && entity?.name) m.set(entity.id, entity.name);
+    for (const p of payload?.partner_entities ?? []) {
+      if (p?.id && p?.name) m.set(p.id, p.name);
+    }
+    return m;
+  }, [entity?.id, entity?.name, payload?.partner_entities]);
+
   if (!open) return null;
 
-  const entity = payload?.entity;
   const edges = payload?.edges ?? [];
   const incomingEdges = entity
     ? edges.filter((e) => e.target_entity_id === entity.id)
@@ -295,17 +308,6 @@ export function CanvasEntityDetailDrawer() {
   const layerConfig = layerId ? LAYERS[layerId] ?? null : null;
   const signature =
     (entity?.node_signature as unknown as NodeSignature | null) ?? null;
-  // Phase 6 — partner-name map populated from the Phase 6 detail
-  // API enrichment. Empty until detail loads; used by both the list
-  // and ego views to render real partner names instead of UUIDs.
-  const idToNameMap = useMemo(() => {
-    const m = new Map<string, string>();
-    if (entity?.id && entity?.name) m.set(entity.id, entity.name);
-    for (const p of payload?.partner_entities ?? []) {
-      if (p?.id && p?.name) m.set(p.id, p.name);
-    }
-    return m;
-  }, [entity?.id, entity?.name, payload?.partner_entities]);
 
   return (
     <>

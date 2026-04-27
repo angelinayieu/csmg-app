@@ -130,6 +130,18 @@ export interface MultiStepStrategyParams {
     /** 0..1 — model's self-reported confidence in this driver */
     confidence: number;
   }>;
+  /**
+   * User-controlled fan-out for ranked strategies (1..5, default 3).
+   * Sourced from spaces.reasoning_settings.strategyCount via the
+   * caller (synthesize / strategy-refresh routes). Plumbed two
+   * places:
+   *   1. Into getSynthesisPrompt's `numOptions` so the LLM is told
+   *      to produce exactly N options.
+   *   2. As a final slice on `ranked_strategies` after the verification
+   *      + final-LLM pass, since the LLM doesn't always honor "exactly
+   *      N" in the prompt.
+   */
+  strategyCount?: number;
 }
 
 // ── Output ──
@@ -405,6 +417,10 @@ export async function generateMultiStepStrategy(
       intersections: serializedIntersections,
       goal: params.activeGoal,
       confirmedStrategy: params.confirmedStrategy,
+      // User-controlled fan-out (default 3). The prompt builder
+      // clamps to [1, 5]; default applied here so an undefined
+      // strategyCount falls back to the legacy "around 3" behavior.
+      numOptions: params.strategyCount,
     });
 
     synthesisResult = await llmJSON<StrategySynthesisResult>({
@@ -727,8 +743,16 @@ export async function generateMultiStepStrategy(
 
   if (stratResponse.ranked_strategies?.length) {
     const sorted = [...stratResponse.ranked_strategies].sort((a, b) => a.rank - b.rank);
-    rankedStrategies = sorted;
-    recommendation = sorted[0].recommendation;
+    // Honor user-selected strategyCount: the LLM doesn't always
+    // produce exactly N options even when the prompt asks for it,
+    // so we slice defensively here. Default 3, clamped to [1, 5]
+    // (matching STRATEGY_COUNT_MIN/MAX in reasoning-settings.ts).
+    const requestedCount = Math.min(
+      5,
+      Math.max(1, Math.floor(params.strategyCount ?? 3)),
+    );
+    rankedStrategies = sorted.slice(0, requestedCount);
+    recommendation = rankedStrategies[0].recommendation;
     changeProposals = stratResponse.change_proposals ?? null;
   } else {
     // Fallback

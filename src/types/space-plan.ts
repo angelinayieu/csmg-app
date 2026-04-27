@@ -113,6 +113,33 @@ export interface SignalProfile {
    *  heavily in the strategy_engine profile (intervention-planner lens)
    *  and moderately in causal_auditor (root-cause-first lens). */
   user_controllable_lever: number | null;
+  /** D3 phase 3 — cost-efficiency signal. Inverse-log-normalized from
+   *  `manifold.operational.controllability.intervention_cost.estimate`
+   *  (and `opportunity_cost.estimate` when set). Higher = cheaper relative
+   *  to the space's cost distribution OR to `reasoning_settings.costBudget`
+   *  when the user has set one.
+   *
+   *  Cheap levers (relative to budget) get scores near 1.0; over-budget
+   *  levers get scores near 0.0 (or are hard-filtered when
+   *  `costBudgetStrictness="hard"` — see strategizer enumerate path).
+   *
+   *  Special cases:
+   *    - `is_sunk: true` → score 1.0 regardless of estimate (the cost is
+   *      already paid and shouldn't penalize future decisions; explicit
+   *      counter to the sunk-cost fallacy bias).
+   *    - missing intervention_cost on a controllable lever → null (no
+   *      opinion). The ranker's null-aware weighted-aggregate handles this
+   *      correctly without penalizing unmeasured levers structurally.
+   *    - `cost_kind: "opportunity_dominated"` AND opportunity_cost.estimate
+   *      is set → use opportunity_cost as the dominant cost signal even
+   *      if intervention_cost.estimate is small. Honest accounting of
+   *      hidden costs.
+   *
+   *  Horizon-aware: weighted up to 1.5× under `immediate` horizon (cheap-
+   *  fast wins under tight deadlines) and down to 0.7× under `long_term`
+   *  (expensive root-cause investments are tolerable when the payoff
+   *  window is years). See horizon-weights.ts. */
+  cost_efficiency: number | null;
   /** Phase 3 §4.3 — proximity to the focal target outcome.
    *
    *  1 when the candidate IS the resolved outcome entity. 1/(hops+1)
@@ -129,6 +156,24 @@ export interface SignalProfile {
    *  outcome_alignment wins for THIS run because it reflects what the
    *  user actually asked about. */
   outcome_alignment: number | null;
+  /** Interaction density (D4) — count of detected n-way interactions
+   *  involving the candidate's primary entity, normalized to [0,1] by
+   *  the max count seen in the space.
+   *
+   *  Source: `reactions` table rows with reaction_type='emergent'
+   *  populated by src/lib/pipeline/interaction-discovery.ts. An entity
+   *  that participates in many emergent interactions is a high-leverage
+   *  joint-intervention candidate — moving it alone might not help, but
+   *  moving it together with co-participants produces super-additive
+   *  effect. The strategizer can use this signal to prefer candidates
+   *  whose joint-with-others impact the user couldn't otherwise see.
+   *
+   *  Null when interaction discovery hasn't run yet, when the entity
+   *  participates in zero emergent interactions, or for axis-level
+   *  candidates that don't attach to a specific entity. Weighted
+   *  modestly (~0.05) initially — the signal is new and we want to
+   *  see real-run telemetry before raising weight. */
+  interaction_density: number | null;
 }
 
 // ── One ranked candidate (pre-LLM) ────────────────────────────────────

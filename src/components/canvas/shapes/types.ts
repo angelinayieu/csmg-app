@@ -356,6 +356,49 @@ export type CycleLoopShape = TLBaseShape<
 // props needed to render a card + click through to the app dashboard.
 import type { AppType, AppStatus, AppStaleReason } from "@/types/app";
 
+// Phase C (cascade rooms) — stage room backdrop. See full doc on the
+// matching entry in tldraw-shapes.d.ts.
+export type RoomShape = TLBaseShape<
+  "room",
+  {
+    w: number;
+    h: number;
+    stage:
+      | "intake"
+      | "landscape"
+      | "kg"
+      | "proposal"
+      | "lab"
+      | "results";
+    state: "active" | "complete" | "pending";
+    subtitle: string;
+    pulse: number;
+    spawnedAt: number;
+    spaceId: string;
+  }
+>;
+
+// Phase B (intake redesign) — Strategy hero card.
+// See full doc on the matching entry in tldraw-shapes.d.ts. Lightweight
+// preview props; full StrategicRecommendation is fetched on mount via
+// /api/spaces/[id]/twin-proposal so the tldraw doc stays small and a
+// reload re-hydrates from the server.
+export type StrategyHeroCardShape = TLBaseShape<
+  "strategy-hero-card",
+  {
+    w: number;
+    h: number;
+    spaceId: string;
+    totalRanks: number;
+    activeRank: number;
+    activeTitle: string;
+    activeSummary: string;
+    activeConfidence: number | null;
+    activePosture: string;
+    pulse: number;
+  }
+>;
+
 export type AppCardShape = TLBaseShape<
   "app-card",
   {

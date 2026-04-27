@@ -34,9 +34,11 @@ import {
   ArrowRight,
   Brain,
   FileText,
+  FlaskConical,
   Image as ImageIcon,
   Link as LinkIcon,
   Loader2,
+  Minus,
   MessageCircleQuestion,
   Mic,
   Paperclip,
@@ -44,9 +46,11 @@ import {
   Send,
   Sparkles,
   Table,
+  Target,
   Video,
   Wand2,
   X,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GlassPanel } from "@/components/ui/glass-panel";
@@ -86,7 +90,10 @@ import { ClarifyingQuestionsStep } from "./clarifying-questions-step";
 import {
   type ReasoningSettings,
   DEFAULT_REASONING_SETTINGS,
+  STRATEGY_COUNT_MIN,
+  STRATEGY_COUNT_MAX,
 } from "@/types/reasoning-settings";
+import type { LucideIcon } from "lucide-react";
 
 const LANDING_ROTATING_WORDS = [
   "Methods",
@@ -815,6 +822,54 @@ export function ImmersiveHome({
                   </button>
 
                   <div className="ml-auto flex items-center gap-2">
+                    {/* ── Output-shape toggles (intake-prominent) ──
+                        Apps + Lab default OFF — strategy-only mode is the
+                        default flow. These three live in the chatbox row
+                        (not buried in the advanced panel) because they
+                        materially change what the pipeline produces. */}
+                    <OutputTogglePill
+                      label="Apps"
+                      Icon={Zap}
+                      active={reasoningSettings.generateApps}
+                      onClick={() =>
+                        setReasoningSettings((s) => ({
+                          ...s,
+                          generateApps: !s.generateApps,
+                        }))
+                      }
+                      activeBg="#7c3aed"
+                      title={
+                        reasoningSettings.generateApps
+                          ? "Materialize Apps after strategy approval"
+                          : "Apps OFF — strategy only"
+                      }
+                    />
+                    <OutputTogglePill
+                      label="Lab"
+                      Icon={FlaskConical}
+                      active={reasoningSettings.runLab}
+                      onClick={() =>
+                        setReasoningSettings((s) => ({
+                          ...s,
+                          runLab: !s.runLab,
+                        }))
+                      }
+                      activeBg="#d97706"
+                      title={
+                        reasoningSettings.runLab
+                          ? "Run Monte Carlo + variant factory"
+                          : "Lab OFF — no simulations"
+                      }
+                    />
+                    <StrategyCountStepper
+                      value={reasoningSettings.strategyCount}
+                      onChange={(n) =>
+                        setReasoningSettings((s) => ({
+                          ...s,
+                          strategyCount: n,
+                        }))
+                      }
+                    />
                     {/* Reasoning: Fast / Balanced / Deep */}
                     <div
                       className="inline-flex items-center gap-1 rounded-full p-[3px]"
@@ -1411,4 +1466,122 @@ function surfaceLabelFor(surface: string): string {
     default:
       return "Whiteboard";
   }
+}
+
+// ── Output toggle pill ──
+// Compact rounded-pill switch styled to match the depth pill row. Off
+// state is subdued (chrome stroke + faint text). Active state fills
+// with the supplied accent color so the user can see at a glance
+// which outputs they've opted into. Used for Apps + Lab toggles.
+function OutputTogglePill({
+  label,
+  Icon,
+  active,
+  onClick,
+  activeBg,
+  title,
+}: {
+  label: string;
+  Icon: LucideIcon;
+  active: boolean;
+  onClick: () => void;
+  activeBg: string;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold transition-colors"
+      style={
+        active
+          ? {
+              background: activeBg,
+              color: "#fff",
+              border: `1px solid ${activeBg}`,
+            }
+          : {
+              background: "var(--home-chrome-fill)",
+              color: "var(--home-text-mid)",
+              border: "1px solid var(--home-chrome-stroke)",
+            }
+      }
+    >
+      <Icon className="h-3 w-3" strokeWidth={2} />
+      <span>{label}</span>
+      <span
+        className="ml-0.5 text-[9px] font-bold uppercase tracking-wider"
+        style={{
+          opacity: active ? 0.85 : 0.55,
+        }}
+      >
+        {active ? "ON" : "OFF"}
+      </span>
+    </button>
+  );
+}
+
+// ── Strategy count stepper ──
+// Inline numeric control: shows current count with - / + buttons.
+// Bounded by STRATEGY_COUNT_MIN..STRATEGY_COUNT_MAX. Default 3. The
+// value plumbs into the synthesis prompt's option count + a final
+// slice on ranked_strategies (strategy-engine.ts).
+function StrategyCountStepper({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  const safeValue = Math.min(
+    STRATEGY_COUNT_MAX,
+    Math.max(STRATEGY_COUNT_MIN, value),
+  );
+  const dec = () => onChange(Math.max(STRATEGY_COUNT_MIN, safeValue - 1));
+  const inc = () => onChange(Math.min(STRATEGY_COUNT_MAX, safeValue + 1));
+  const decDisabled = safeValue <= STRATEGY_COUNT_MIN;
+  const incDisabled = safeValue >= STRATEGY_COUNT_MAX;
+  return (
+    <div
+      className="inline-flex items-center gap-0.5 rounded-full p-[3px]"
+      style={{
+        border: "1px solid var(--home-chrome-stroke)",
+        background: "var(--home-chrome-fill)",
+      }}
+      title={`Generate ${safeValue} ranked ${safeValue === 1 ? "strategy" : "strategies"} (${STRATEGY_COUNT_MIN}–${STRATEGY_COUNT_MAX})`}
+    >
+      <Target
+        className="ml-1 h-3 w-3 text-[color:var(--home-text-faint)]"
+        strokeWidth={1.75}
+      />
+      <button
+        type="button"
+        onClick={dec}
+        disabled={decDisabled}
+        className="flex h-5 w-5 items-center justify-center rounded-full transition-colors disabled:opacity-30"
+        style={{ color: "var(--home-text-mid)" }}
+        aria-label="Fewer strategies"
+      >
+        <Minus className="h-2.5 w-2.5" strokeWidth={2.5} />
+      </button>
+      <span
+        className="min-w-[14px] text-center text-[11px] font-bold tabular-nums"
+        style={{ color: "var(--home-text-strong, var(--home-text-mid))" }}
+      >
+        {safeValue}
+      </span>
+      <button
+        type="button"
+        onClick={inc}
+        disabled={incDisabled}
+        className="flex h-5 w-5 items-center justify-center rounded-full transition-colors disabled:opacity-30"
+        style={{ color: "var(--home-text-mid)" }}
+        aria-label="More strategies"
+      >
+        <Plus className="h-2.5 w-2.5" strokeWidth={2.5} />
+      </button>
+    </div>
+  );
 }

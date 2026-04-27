@@ -48,12 +48,14 @@ export const DEFAULT_WEIGHTS: Record<keyof SignalProfile, number> = {
   agent_convergence_count: 0.10,    // ← independent-proposer consensus (opinion fan-in)
   goal_proximity: 0.08,             // ← was 0.12, −0.04 for outcome_alignment (run-focal proximity is sharper)
   outcome_alignment: 0.08,          // ← Phase 3: this-run focal-outcome proximity from frame extractor
-  uncertainty: 0.07,                // ← was 0.09, −0.02 for outcome_alignment
   user_controllable_lever: 0.06,    // ← actionable driver — entity is a why-chain user-controllable root
-  centrality: 0.06,                 // ← structural, not causal
-  intersection_density: 0.04,       // ← was 0.05, −0.01 for outcome_alignment
+  centrality: 0.05,                 // ← was 0.06, −0.01 for D3 cost_efficiency (structural < causal)
+  interaction_density: 0.05,        // ← D4: candidate participates in emergent 3-way interactions
+  uncertainty: 0.04,                // ← was 0.07, −0.03 reallocated to interaction_density (D4)
   layer_crossing: 0.04,             // ← was 0.05, −0.01 for outcome_alignment
-  axis_calibration: 0.04,
+  cost_efficiency: 0.03,            // ← D3 phase 3: cheap-relative-to-budget levers; modulated up to 1.5× under immediate horizon
+  axis_calibration: 0.02,           // ← was 0.04, −0.02 for D3 cost_efficiency
+  intersection_density: 0.02,       // ← was 0.04, −0.02 reallocated to interaction_density (D4 — adjacent signal)
   controllability_spread: 0.02,
   novelty: 0.01,
 };
@@ -343,6 +345,8 @@ export function rankCandidates(input: RankerInput): RankerOutput {
     agent_convergence_count: 0,
     user_controllable_lever: 0,
     outcome_alignment: 0,
+    interaction_density: 0,
+    cost_efficiency: 0,
   };
   for (const { weights: w } of perProfileNormalized) {
     for (const key of Object.keys(meanWeights) as Array<keyof SignalProfile>) {

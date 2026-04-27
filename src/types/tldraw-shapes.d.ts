@@ -572,6 +572,90 @@ declare module "@tldraw/tlschema" {
       distributionSampleCount: number | null;
       accent: string;
     };
+    // Phase C (cascade rooms) — STAGE ROOM.
+    //
+    // A wide translucent backdrop that visually groups the painter's
+    // shapes into a top-down cascade by pipeline stage. Each room
+    // carries its stage identifier + cached counts so its header can
+    // render the live "X entities · Y edges so far" subtitle without
+    // re-deriving from the event log on every render.
+    //
+    // Spawned by the painter on `stage_boundary(enter)` events; their
+    // header subtitle updates live as artifacts land in their bands.
+    // Sent to back on creation so subsequent shapes naturally sit on
+    // top — the room reads as a container without us needing to
+    // explicitly nest tldraw children.
+    //
+    // The (+) extension button on each room fires a window event
+    // (`canvas-room:extend`) the parent canvas can listen on to open
+    // a popover with the four verbs (add info / ask query / sub-objective
+    // / generate more). Decoupled this way so the shape stays purely
+    // visual and the popover lives in chrome.
+    "room": {
+      w: number;
+      h: number;
+      /** PipelineStage enum value — drives title, accent, glyph. */
+      stage:
+        | "intake"
+        | "landscape"
+        | "kg"
+        | "proposal"
+        | "lab"
+        | "results";
+      /** Stage state — drives the active glow + completion checkmark. */
+      state: "active" | "complete" | "pending";
+      /** Live subtitle (e.g., "23 entities · 45 edges"). Painter
+       *  updates this in place as count-bumping events arrive. */
+      subtitle: string;
+      /** Bumped each time the room's contents change so the view
+       *  component can play a subtle pulse on count update. */
+      pulse: number;
+      /** Spawned-at timestamp (ms epoch) — drives the entrance
+       *  animation; the view component plays a one-shot fade+scale
+       *  transition for ~600ms after spawn. */
+      spawnedAt: number;
+      /** Space UUID for the (+) extension verbs that need a server
+       *  endpoint (add info, ask query, sub-objective). */
+      spaceId: string;
+    };
+    // Phase B (intake redesign) — STRATEGY HERO CARD.
+    //
+    // The single persistent on-canvas surface for the user's top-ranked
+    // strategy. Anchored bottom-center of the whiteboard during a run +
+    // remains pinned after the run completes so the strategy is always
+    // visible without scrolling.
+    //
+    // Data shape: lightweight summary (title, summary, posture,
+    // confidence + the rank chips for #2/#3 swap). The shape FETCHES
+    // its full strategy_batch from /api/spaces/[id]/twin-proposal on
+    // mount so a tldraw-document reload (which doesn't carry the full
+    // recommendation) can re-hydrate. This keeps the shape's tldraw
+    // props minimal — the full StrategicRecommendation lives in the DB
+    // (synthesis_data.strategy_batch).
+    //
+    // Click on a non-primary rank chip → POST swap-rank → re-fetch.
+    // Click "Open" → navigate to the existing /strategy detail page.
+    "strategy-hero-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      /** Total ranks generated this run (1..5). Drives the chip row count. */
+      totalRanks: number;
+      /** Currently displayed rank (1-indexed). 1 = primary. */
+      activeRank: number;
+      /** Cached preview — title of the active rank for instant render
+       *  before the on-mount fetch lands. Updated by the swap handler. */
+      activeTitle: string;
+      /** Cached one-line summary of the active rank. */
+      activeSummary: string;
+      /** Confidence 0-100 for the active rank, or null if not computed. */
+      activeConfidence: number | null;
+      /** Strategic posture label (cautious_validation / aggressive_growth / …). */
+      activePosture: string;
+      /** Monotonic counter — bumped on every successful swap or refresh
+       *  so the view component re-fetches the latest batch. */
+      pulse: number;
+    };
     // Phase A1.2 — universal asset catalog: app card.
     "app-card": {
       w: number;

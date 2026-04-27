@@ -4,6 +4,8 @@
 
 This file exists because the UI uses the same words ("confidence", "lift", "calibration", "simulation", "mechanism") for quantities produced by very different processes. Honest provenance tagging (migration `20260531_score_provenance.sql`) and UI badges are now live. This document tracks the remaining bridges from "Tier-N labeled as Tier-M" down to where they actually live, and what work ships each tier upward.
 
+> **Companion doc:** [`KG_DEPTH_CRITIQUE.md`](KG_DEPTH_CRITIQUE.md) covers the *structural* gaps (depth ceiling, cosmetic layering, broken simulation→KG loop, missing breadth-then-depth orchestration) that this Tier-upgrade roadmap doesn't address. The R-series here ships honest provenance for individual numbers; the D-series there ships the architectural changes needed to actually optimize strategies. Read both together.
+
 ## Current state (post-2026-04-24 provenance pass)
 
 | Component | Today | Wears label | Provenance tag |

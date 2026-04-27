@@ -147,6 +147,14 @@ export interface StructuredEntity {
       maturity?: "proven" | "experimental" | "theoretical" | "unknown";
       resource_intensity?: "high" | "moderate" | "low";
       dependency_count?: number;
+      // ── D3 (docs/KG_DEPTH_CRITIQUE.md §9): controllability gradients ──
+      // Lives under operational because cost / time-to-effect /
+      // modulation are operational concerns. Reversibility echoes the
+      // existing manifold.strategic.reversibility for ergonomic
+      // single-branch reads. All optional; missing fields stay absent
+      // rather than getting fabricated defaults — the LLM populates
+      // what it actually knows.
+      controllability?: import("./controllability").ControllabilityProfile;
     };
     epistemic?: {
       evidence_strength?: "empirical" | "theoretical" | "anecdotal" | "assumed";
@@ -162,6 +170,11 @@ export interface StructuredEntity {
     confidence: number;
     reasoning: string;
   }> | null;
+  // D1 (docs/KG_DEPTH_CRITIQUE.md): measurement spec. Required for
+  // fundamental/critical entities in concrete/abstract/process
+  // categories; null for relational/epistemic. The shape mirrors
+  // src/types/measurement.ts MeasurementSpec.
+  measurement?: import("./measurement").MeasurementSpec | null;
 }
 
 export interface StructuredEdge {

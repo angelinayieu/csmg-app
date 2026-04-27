@@ -227,6 +227,13 @@ export interface SanitizedEntity {
   authority_level: string | null;
   knowledge_layer: string | null;
   causal_role: string | null;
+  // D1 · measurement spec, flattened to match
+  // migration 20260609_entity_measurability.sql columns.
+  measurement_unit: string | null;
+  measurement_scale: string | null;
+  measurement_protocol: Record<string, unknown> | null;
+  measurement_cost_estimate: number | null;
+  measurement_observability: string | null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -288,6 +295,192 @@ export function sanitizeEntity(raw: any, spaceId: string): SanitizedEntity {
       if (typeof raw.marr_level === "string" && VALID_MARR_LEVEL.includes(raw.marr_level)) {
         base.marr_level = raw.marr_level;
       }
+      // ── D3 · controllability profile pack-through ──
+      // The structurer prompt nests controllability under
+      // manifold.operational.controllability. We extract it cleanly,
+      // dropping fabricated/malformed leaves rather than persisting
+      // junk. Reversibility is mirrored from manifold.strategic for
+      // ergonomic single-branch reads; the strategic-side value
+      // remains authoritative.
+      const VALID_CONTROLLABILITY_KIND = [
+        "fully_controllable",
+        "partially_controllable",
+        "gated",
+        "observable_only",
+      ];
+      const VALID_ESTIMATE_CONFIDENCE = ["high", "moderate", "low"];
+      const VALID_REVERSIBILITY = [
+        "easily_reversible",
+        "costly_to_reverse",
+        "irreversible",
+      ];
+      const VALID_COST_RECURRENCE = [
+        "one_time",
+        "recurring_monthly",
+        "recurring_yearly",
+        "recurring_continuous",
+      ];
+      const VALID_COST_KIND = [
+        "direct",
+        "opportunity_dominated",
+        "coordination_dominated",
+        "risk_adjusted_dominated",
+        "switching_dominated",
+        "hidden_externalities",
+      ];
+      const opIn =
+        typeof base.operational === "object" && base.operational !== null
+          ? (base.operational as Record<string, unknown>)
+          : null;
+      const stratIn =
+        typeof base.strategic === "object" && base.strategic !== null
+          ? (base.strategic as Record<string, unknown>)
+          : null;
+      const ctrlIn =
+        opIn && typeof opIn.controllability === "object" && opIn.controllability !== null
+          ? (opIn.controllability as Record<string, unknown>)
+          : null;
+      if (ctrlIn) {
+        const cleaned: Record<string, unknown> = {};
+        if (
+          typeof ctrlIn.kind === "string" &&
+          VALID_CONTROLLABILITY_KIND.includes(ctrlIn.kind)
+        ) {
+          cleaned.kind = ctrlIn.kind;
+        }
+        // intervention_cost: keep only if estimate is finite & non-negative
+        const ic =
+          typeof ctrlIn.intervention_cost === "object" &&
+          ctrlIn.intervention_cost !== null
+            ? (ctrlIn.intervention_cost as Record<string, unknown>)
+            : null;
+        if (
+          ic &&
+          typeof ic.estimate === "number" &&
+          Number.isFinite(ic.estimate) &&
+          ic.estimate >= 0 &&
+          typeof ic.confidence === "string" &&
+          VALID_ESTIMATE_CONFIDENCE.includes(ic.confidence)
+        ) {
+          const out: Record<string, unknown> = {
+            estimate: ic.estimate,
+            confidence: ic.confidence,
+          };
+          if (
+            typeof ic.recurrence === "string" &&
+            VALID_COST_RECURRENCE.includes(ic.recurrence)
+          ) {
+            out.recurrence = ic.recurrence;
+          }
+          if (typeof ic.is_sunk === "boolean") {
+            out.is_sunk = ic.is_sunk;
+          }
+          if (typeof ic.notes === "string" && ic.notes.trim()) {
+            out.notes = ic.notes.trim().slice(0, 500);
+          }
+          cleaned.intervention_cost = out;
+        }
+        // opportunity_cost: same shape rules as intervention_cost,
+        // plus optional `alternative` field describing what's
+        // foregone. Strategically often more important than direct
+        // cost — surfaced as a peer field, not nested under
+        // intervention_cost.
+        const oc =
+          typeof ctrlIn.opportunity_cost === "object" &&
+          ctrlIn.opportunity_cost !== null
+            ? (ctrlIn.opportunity_cost as Record<string, unknown>)
+            : null;
+        if (
+          oc &&
+          typeof oc.estimate === "number" &&
+          Number.isFinite(oc.estimate) &&
+          oc.estimate >= 0 &&
+          typeof oc.confidence === "string" &&
+          VALID_ESTIMATE_CONFIDENCE.includes(oc.confidence)
+        ) {
+          const out: Record<string, unknown> = {
+            estimate: oc.estimate,
+            confidence: oc.confidence,
+          };
+          if (typeof oc.alternative === "string" && oc.alternative.trim()) {
+            out.alternative = oc.alternative.trim().slice(0, 500);
+          }
+          if (typeof oc.notes === "string" && oc.notes.trim()) {
+            out.notes = oc.notes.trim().slice(0, 500);
+          }
+          cleaned.opportunity_cost = out;
+        }
+        // cost_kind: simple enum check
+        if (
+          typeof ctrlIn.cost_kind === "string" &&
+          VALID_COST_KIND.includes(ctrlIn.cost_kind)
+        ) {
+          cleaned.cost_kind = ctrlIn.cost_kind;
+        }
+        // time_to_effect: keep only if lag string is non-empty
+        const tte =
+          typeof ctrlIn.time_to_effect === "object" &&
+          ctrlIn.time_to_effect !== null
+            ? (ctrlIn.time_to_effect as Record<string, unknown>)
+            : null;
+        if (
+          tte &&
+          typeof tte.lag === "string" &&
+          tte.lag.trim().length > 0 &&
+          typeof tte.confidence === "string" &&
+          VALID_ESTIMATE_CONFIDENCE.includes(tte.confidence)
+        ) {
+          const out: Record<string, unknown> = {
+            lag: tte.lag.trim().slice(0, 100),
+            confidence: tte.confidence,
+          };
+          if (typeof tte.notes === "string" && tte.notes.trim()) {
+            out.notes = tte.notes.trim().slice(0, 500);
+          }
+          cleaned.time_to_effect = out;
+        }
+        // modulation_range: keep only if min/max are finite numbers and min < max
+        const mr =
+          typeof ctrlIn.modulation_range === "object" &&
+          ctrlIn.modulation_range !== null
+            ? (ctrlIn.modulation_range as Record<string, unknown>)
+            : null;
+        if (
+          mr &&
+          typeof mr.min === "number" &&
+          typeof mr.max === "number" &&
+          Number.isFinite(mr.min) &&
+          Number.isFinite(mr.max) &&
+          mr.min < mr.max
+        ) {
+          const out: Record<string, unknown> = { min: mr.min, max: mr.max };
+          if (typeof mr.unit === "string" && mr.unit.trim()) {
+            out.unit = mr.unit.trim().slice(0, 100);
+          }
+          cleaned.modulation_range = out;
+        }
+        // Mirror reversibility from manifold.strategic for ergonomic reads.
+        if (
+          stratIn &&
+          typeof stratIn.reversibility === "string" &&
+          VALID_REVERSIBILITY.includes(stratIn.reversibility)
+        ) {
+          cleaned.reversibility = stratIn.reversibility;
+        }
+        // Replace the input controllability with the cleaned version
+        // (or drop it entirely if empty).
+        if (Object.keys(cleaned).length > 0) {
+          (base.operational as Record<string, unknown>) = {
+            ...(opIn ?? {}),
+            controllability: cleaned,
+          };
+        } else if (opIn) {
+          // Drop the malformed controllability while keeping the rest of operational.
+          const { controllability: _drop, ...rest } = opIn;
+          void _drop;
+          base.operational = rest;
+        }
+      }
       return Object.keys(base).length > 0 ? base : null;
     })(),
     provenance: typeof raw.provenance === "object" && raw.provenance !== null
@@ -298,6 +491,69 @@ export function sanitizeEntity(raw: any, spaceId: string): SanitizedEntity {
     causal_role: typeof raw.causal_role === "string"
       ? coerce(raw.causal_role, CAUSAL_ROLES, "truth")
       : null,
+    // ── D1 · measurement spec extraction ──
+    // Accepts the canonical { unit, scale, protocol, cost_estimate,
+    // observability } shape from the structurer prompt, AND tolerates
+    // legacy/flat shapes from manual callers that pass measurement
+    // fields at the top level of `raw`. Soft-fail throughout: any
+    // missing or malformed leaf becomes null rather than blocking
+    // the insert.
+    ...(() => {
+      // Prefer the nested shape (what the structuring prompt emits).
+      const nested =
+        typeof raw.measurement === "object" && raw.measurement !== null
+          ? (raw.measurement as Record<string, unknown>)
+          : null;
+
+      const unitRaw = nested?.unit ?? raw.measurement_unit;
+      const scaleRaw = nested?.scale ?? raw.measurement_scale;
+      const protocolRaw = nested?.protocol ?? raw.measurement_protocol;
+      const costRaw = nested?.cost_estimate ?? raw.measurement_cost_estimate;
+      const obsRaw = nested?.observability ?? raw.measurement_observability;
+
+      const unit =
+        typeof unitRaw === "string" && unitRaw.trim().length > 0
+          ? unitRaw.trim().slice(0, 200)
+          : null;
+
+      const VALID_SCALES = ["continuous", "ordinal", "categorical", "binary"];
+      const scale =
+        typeof scaleRaw === "string" && VALID_SCALES.includes(scaleRaw)
+          ? scaleRaw
+          : null;
+
+      const protocol =
+        typeof protocolRaw === "object" && protocolRaw !== null
+          ? (protocolRaw as Record<string, unknown>)
+          : null;
+
+      const cost =
+        typeof costRaw === "number" && Number.isFinite(costRaw) && costRaw >= 0
+          ? costRaw
+          : null;
+
+      const VALID_OBS = [
+        "directly_observable",
+        "proxy_required",
+        "inferred_only",
+        "unobservable",
+      ];
+      const observability =
+        typeof obsRaw === "string" && VALID_OBS.includes(obsRaw)
+          ? obsRaw
+          : null;
+
+      return {
+        // unit + scale travel as a pair: dropping one drops the other,
+        // matching the validator's half-spec rejection. Avoids storing
+        // a unit with no scale (which would break simulator dispatch).
+        measurement_unit: unit && scale ? unit : null,
+        measurement_scale: unit && scale ? scale : null,
+        measurement_protocol: protocol,
+        measurement_cost_estimate: cost,
+        measurement_observability: observability,
+      };
+    })(),
   };
 }
 

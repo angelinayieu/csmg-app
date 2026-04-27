@@ -93,6 +93,7 @@ async function loadSignalBundle(
     { data: coverageRows },
     { data: calibrationRows },
     targetOutcomeRow,
+    spaceRow,
   ] = await Promise.all([
     db.from("entities").select("*").eq("space_id", spaceId),
     db.from("edges").select("*").eq("space_id", spaceId),
@@ -113,6 +114,11 @@ async function loadSignalBundle(
     runId
       ? db.from("pipeline_runs").select("target_outcome").eq("id", runId).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
+    // D3 — pull spaces.reasoning_settings so the strategizer can
+    // honor user-set cost budget + solve-by deadline. Soft-fail: a
+    // missing or malformed row returns null (and the strategizer
+    // falls back to LLM-inferred horizon + no cost cap).
+    db.from("spaces").select("reasoning_settings").eq("id", spaceId).maybeSingle(),
   ]);
 
   if (entErr || !entitiesRows || entitiesRows.length === 0) {
@@ -261,6 +267,162 @@ async function loadSignalBundle(
     });
   }
 
+  // ── D3 · Controllability kind map (docs/KG_DEPTH_CRITIQUE.md §9) ──
+  //
+  // Companion to driver_metadata above. Populated for ANY entity that
+  // carries `manifold.operational.controllability.kind` — not just
+  // why-chain drivers. Lets the userControllableLeverSignal emit a
+  // gradient score (full=1.0, partial=0.6, gated=0.4, observable=0)
+  // for non-driver entities the why-chain deepener never reached.
+  //
+  // Soft-fail on every defensive read: malformed JSONB or missing
+  // sub-fields silently skip the entity rather than throw.
+  const VALID_CONTROLLABILITY_KIND = new Set([
+    "fully_controllable",
+    "partially_controllable",
+    "gated",
+    "observable_only",
+  ]);
+  const VALID_COST_KIND = new Set([
+    "direct",
+    "opportunity_dominated",
+    "coordination_dominated",
+    "risk_adjusted_dominated",
+    "switching_dominated",
+    "hidden_externalities",
+  ]);
+  const controllabilityKindByEntity = new Map<
+    string,
+    | "fully_controllable"
+    | "partially_controllable"
+    | "gated"
+    | "observable_only"
+  >();
+  // D3 phase 3 — derive a per-entity dominant-cost summary alongside
+  // the kind map, walking the same manifold blob in one pass.
+  const controllabilityCostByEntity = new Map<
+    string,
+    {
+      dominant_cost: number;
+      is_sunk: boolean;
+      kind:
+        | "direct"
+        | "opportunity_dominated"
+        | "coordination_dominated"
+        | "risk_adjusted_dominated"
+        | "switching_dominated"
+        | "hidden_externalities";
+    }
+  >();
+  for (const e of entities) {
+    const row = e as unknown as {
+      id: string;
+      manifold?: Record<string, unknown> | null;
+    };
+    const manifold = row.manifold;
+    if (typeof manifold !== "object" || manifold === null) continue;
+    const op = (manifold as Record<string, unknown>).operational;
+    if (typeof op !== "object" || op === null) continue;
+    const ctrl = (op as Record<string, unknown>).controllability;
+    if (typeof ctrl !== "object" || ctrl === null) continue;
+    const ctrlObj = ctrl as Record<string, unknown>;
+    const kind = ctrlObj.kind;
+    if (typeof kind === "string" && VALID_CONTROLLABILITY_KIND.has(kind)) {
+      controllabilityKindByEntity.set(
+        row.id,
+        kind as
+          | "fully_controllable"
+          | "partially_controllable"
+          | "gated"
+          | "observable_only",
+      );
+    }
+
+    // ── Cost summary derivation (D3 phase 3) ──
+    // Pick the dominant cost figure for ranking. Rules:
+    //   - cost_kind="opportunity_dominated" + opportunity_cost set →
+    //     use opportunity_cost.estimate (honest accounting of hidden
+    //     foregone-alternative cost)
+    //   - else use intervention_cost.estimate, annualized when
+    //     recurring (×12 monthly, ×1 yearly, ×24 continuous)
+    //   - is_sunk=true → carry through as a flag; the cost-efficiency
+    //     signal short-circuits to 1.0 (sunk costs don't penalize
+    //     future decisions)
+    // Levers without ANY cost data are simply absent from this map;
+    // the cost-efficiency signal returns null for them (no opinion).
+    const costKindRaw = ctrlObj.cost_kind;
+    const costKind =
+      typeof costKindRaw === "string" && VALID_COST_KIND.has(costKindRaw)
+        ? (costKindRaw as
+            | "direct"
+            | "opportunity_dominated"
+            | "coordination_dominated"
+            | "risk_adjusted_dominated"
+            | "switching_dominated"
+            | "hidden_externalities")
+        : "direct";
+
+    const ic =
+      typeof ctrlObj.intervention_cost === "object" &&
+      ctrlObj.intervention_cost !== null
+        ? (ctrlObj.intervention_cost as Record<string, unknown>)
+        : null;
+    const oc =
+      typeof ctrlObj.opportunity_cost === "object" &&
+      ctrlObj.opportunity_cost !== null
+        ? (ctrlObj.opportunity_cost as Record<string, unknown>)
+        : null;
+
+    const icEstimate =
+      ic && typeof ic.estimate === "number" && Number.isFinite(ic.estimate)
+        ? ic.estimate
+        : null;
+    const ocEstimate =
+      oc && typeof oc.estimate === "number" && Number.isFinite(oc.estimate)
+        ? oc.estimate
+        : null;
+    const isSunk = ic && ic.is_sunk === true;
+    const recurrence =
+      ic && typeof ic.recurrence === "string" ? ic.recurrence : null;
+
+    // Opportunity-dominated: prefer the foregone-alternative figure.
+    let dominant: number | null = null;
+    if (costKind === "opportunity_dominated" && ocEstimate !== null) {
+      dominant = ocEstimate;
+    } else if (icEstimate !== null) {
+      // Annualize recurring costs so monthly $1k and yearly $12k
+      // rank similarly. Continuous gets a rough ×24 multiplier as
+      // a conservative "ongoing burden" bump.
+      switch (recurrence) {
+        case "recurring_monthly":
+          dominant = icEstimate * 12;
+          break;
+        case "recurring_yearly":
+          dominant = icEstimate;
+          break;
+        case "recurring_continuous":
+          dominant = icEstimate * 24;
+          break;
+        case "one_time":
+        default:
+          dominant = icEstimate;
+      }
+    } else if (ocEstimate !== null) {
+      // No intervention_cost but opportunity_cost present (rare but
+      // valid — e.g. levers where the only cost is what you're
+      // choosing not to do).
+      dominant = ocEstimate;
+    }
+
+    if (dominant !== null) {
+      controllabilityCostByEntity.set(row.id, {
+        dominant_cost: Math.max(0, dominant),
+        is_sunk: !!isSunk,
+        kind: costKind,
+      });
+    }
+  }
+
   // ── Target-outcome resolution — Phase 3 §4.3 ─────────────────────
   //
   // Decode pipeline_runs.target_outcome jsonb (written by frame-extractor)
@@ -301,11 +463,85 @@ async function loadSignalBundle(
     }
   }
 
+  // ── D3 · reasoning_settings.solveBy → horizon override ───────────
+  //
+  // Explicit user constraint wins over LLM-inferred outcome.horizon.
+  // When the user has typed "this week" or "by end of Q3" into
+  // reasoning settings, the strategizer must respect that — pulling
+  // a different horizon despite the user's stated deadline is exactly
+  // the kind of LLM drift that erodes trust. mapSolveByToHorizon
+  // returns null on ambiguous strings; in that case the LLM-inferred
+  // value stands.
+  const reasoningSettingsRaw = (spaceRow as { data?: { reasoning_settings?: unknown } | null } | null)
+    ?.data?.reasoning_settings ?? null;
+  let costBudget: number | null = null;
+  let costBudgetStrictness: "soft" | "hard" = "soft";
+  if (reasoningSettingsRaw && typeof reasoningSettingsRaw === "object") {
+    const rs = reasoningSettingsRaw as Record<string, unknown>;
+    if (typeof rs.solveBy === "string" && rs.solveBy.trim().length > 0) {
+      try {
+        const { mapSolveByToHorizon } = await import(
+          "@/types/reasoning-settings"
+        );
+        const userHorizon = mapSolveByToHorizon(rs.solveBy);
+        if (userHorizon) {
+          outcomeHorizon = userHorizon;
+        }
+      } catch (err) {
+        console.warn(
+          "[strategizer] solveBy → horizon mapping failed (non-fatal):",
+          err,
+        );
+      }
+    }
+    if (
+      typeof rs.costBudget === "number" &&
+      Number.isFinite(rs.costBudget) &&
+      rs.costBudget >= 0
+    ) {
+      costBudget = rs.costBudget;
+    }
+    if (rs.costBudgetStrictness === "hard") {
+      costBudgetStrictness = "hard";
+    }
+  }
+  // costBudget + costBudgetStrictness flow into the bundle below and
+  // are consumed by costEfficiencySignal (D3 phase 3). Hard-strictness
+  // candidate filtering happens at enumeration time in this file —
+  // see the over-budget filter wired into the candidate post-pass.
+
   // Phase 4 §5.2 — precompute directed upstream hops to the resolved
   // outcome (one reverse-BFS sweep, O(V+E)). Empty map when no outcome
   // resolved; outcomeAlignmentSignal handles that case via the bundle's
   // target_outcome_entity_id null-guard.
   const directedOutcomeHops = computeUpstreamHops(edges, resolvedOutcomeEntityId);
+
+  // ── D4 · interaction counts per entity ─────────────────────────────
+  //
+  // Single query against `reactions` for emergent rows; bucket count
+  // by entity via the GIN-indexed entity_ids[] column. Soft-fail on
+  // query error — interactionDensitySignal handles empty map cleanly.
+  const interactionCounts = new Map<string, number>();
+  try {
+    const { data: emergentRows } = await db
+      .from("reactions")
+      .select("entity_ids")
+      .eq("space_id", spaceId)
+      .eq("reaction_type", "emergent");
+    const rows =
+      (emergentRows as Array<{ entity_ids?: string[] | null }> | null) ?? [];
+    for (const row of rows) {
+      if (!Array.isArray(row.entity_ids)) continue;
+      for (const id of row.entity_ids) {
+        interactionCounts.set(id, (interactionCounts.get(id) ?? 0) + 1);
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[strategizer] loadSignalBundle: reactions query failed (non-fatal):",
+      err,
+    );
+  }
 
   return {
     entities,
@@ -324,10 +560,15 @@ async function loadSignalBundle(
     agent_proposed_entities: proposedMap,
     total_agent_count: activeAgents.size,
     driver_metadata: driverMetadata,
+    controllability_kind_by_entity: controllabilityKindByEntity,
+    controllability_cost_by_entity: controllabilityCostByEntity,
+    cost_budget: costBudget,
+    cost_budget_strictness: costBudgetStrictness,
     target_outcome_entity_id: resolvedOutcomeEntityId,
     outcome_direction: outcomeDirection,
     directed_outcome_hops: directedOutcomeHops,
     outcome_horizon: outcomeHorizon,
+    interaction_counts: interactionCounts,
   };
 }
 
@@ -779,11 +1020,38 @@ export async function runSpaceStrategizer(
   const bundle = await loadSignalBundle(db, request.space_id, request.run_id ?? null);
   if (!bundle) return null;
 
-  const candidates = enumerateCandidates(
+  const allCandidates = enumerateCandidates(
     bundle,
     DEFAULT_CAPS,
     request.focal_goal_entity_id ?? null,
   );
+
+  // ── D3 phase 3 · cost-budget hard filter ─────────────────────────
+  //
+  // When the user has set `reasoning_settings.costBudgetStrictness =
+  // "hard"` AND a `costBudget`, we exclude candidates whose dominant
+  // cost exceeds the budget BEFORE ranking — they're not even
+  // considered. Soft strictness (default) keeps over-budget
+  // candidates in the pool but they get a low cost_efficiency
+  // signal score so the ranker visibly de-prioritizes them.
+  //
+  // Filter is applied per-candidate by walking up to the candidate's
+  // target_entity_id and checking the cost map. Axis-level
+  // candidates (no target_entity_id) are never filtered out — they
+  // describe *which lens* to use, not a specific lever.
+  const candidates =
+    bundle.cost_budget_strictness === "hard" &&
+    bundle.cost_budget !== null &&
+    bundle.cost_budget > 0
+      ? allCandidates.filter((c) => {
+          const id = c.target.target_entity_id ?? c.target.source_entity_id;
+          if (!id) return true;
+          const cost = bundle.controllability_cost_by_entity.get(id);
+          if (!cost) return true;
+          if (cost.is_sunk) return true; // sunk costs don't count against budget
+          return cost.dominant_cost <= (bundle.cost_budget as number);
+        })
+      : allCandidates;
   if (candidates.length === 0) {
     // Still return a valid (empty) plan — honest report of "nothing to do."
     const emptyWeights: Record<keyof SignalProfile, number> = {
@@ -792,7 +1060,8 @@ export async function runSpaceStrategizer(
       novelty: 0, axis_calibration: 0, controllability_spread: 0,
       causal_depth_normalized: 0, convergence_count: 0,
       agent_convergence_count: 0, user_controllable_lever: 0,
-      outcome_alignment: 0,
+      outcome_alignment: 0, interaction_density: 0,
+      cost_efficiency: 0,
     };
     const plan: SpacePlan = {
       id: randomUUID(),

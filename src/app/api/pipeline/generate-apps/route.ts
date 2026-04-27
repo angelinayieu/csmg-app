@@ -47,7 +47,7 @@ export async function POST(request: Request) {
   // Verify ownership + pull synthesis_data
   const { data: spaceRow } = await db
     .from("spaces")
-    .select("id, user_id, synthesis_data")
+    .select("id, user_id, synthesis_data, reasoning_settings")
     .eq("id", spaceId)
     .single();
 
@@ -56,6 +56,16 @@ export async function POST(request: Request) {
   }
 
   const synthData = spaceRow.synthesis_data as Record<string, unknown> | null;
+
+  // Load user-controlled output toggles. Used here to gate:
+  //   - inline Monte Carlo enrichment in app-generator (skipLabSimulation)
+  //   - the writer-path / variant-factory background kickoff below
+  const { coerceReasoningSettings } = await import(
+    "@/types/reasoning-settings"
+  );
+  const reasoningSettings = coerceReasoningSettings(
+    (spaceRow as { reasoning_settings?: unknown }).reasoning_settings,
+  );
   const stratRec = synthData?.strategic_recommendation as
     | Record<string, unknown>
     | undefined;
@@ -151,6 +161,10 @@ export async function POST(request: Request) {
       // that version emitted distribution-less events and could fire
       // before the enrichment had completed the DB write.
       pipelineRunId,
+      // Skip the inline Monte Carlo enrichment when the user opted out
+      // of Lab in intake. Apps still materialize cleanly; the per-app
+      // proposal_ready events fire without simulation_distribution.
+      skipLabSimulation: !reasoningSettings.runLab,
     });
 
     // Changelog — soft-fail.
@@ -189,6 +203,16 @@ export async function POST(request: Request) {
     // generate-apps; the app detail page's carousel just stays empty
     // until the user re-triggers. Skipped entirely when no taxonomy
     // exists yet (the domain-inferrer didn't run or soft-failed).
+    //
+    // Gate (intake-time): skip the entire writer-path background work
+    // when the user opted out of Lab. Variants are a "Lab" output in
+    // the user's mental model; if Lab is off, no variants either.
+    if (!reasoningSettings.runLab) {
+      console.log(
+        "[generate-apps] runLab=false — skipping writer-path / variant-factory kickoff",
+      );
+      return NextResponse.json({ success: true, runId: pipelineRunId, ...result });
+    }
     const cookieHeader = request.headers.get("cookie") ?? "";
     const origin = new URL(request.url).origin;
     after(async () => {

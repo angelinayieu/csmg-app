@@ -226,6 +226,8 @@ const ZERO_WEIGHTS: Record<keyof SignalProfile, number> = {
   agent_convergence_count: 0,
   user_controllable_lever: 0,
   outcome_alignment: 0,
+  interaction_density: 0,
+  cost_efficiency: 0,
 };
 
 function mergeWeights(
@@ -315,8 +317,9 @@ export const AGENT_WEIGHT_PROFILES: AgentWeightProfile[] = [
       coverage_gap: 0.08,
       causal_depth_normalized: 0.08,
       agent_convergence_count: 0.08,
-      controllability_spread: 0.07, // was 0.10 — shaved 0.03
-      centrality: 0.06,           // was 0.08 — shaved 0.02
+      controllability_spread: 0.05, // was 0.07 — shaved 0.02 for D3 cost_efficiency
+      centrality: 0.04,           // was 0.06 — shaved 0.02 for D3 cost_efficiency
+      cost_efficiency: 0.04,      // D3 phase 3: intervention-planner cares about cost — cheap-vs-expensive levers
       uncertainty: 0.05,
       intersection_density: 0.04, // was 0.05 — shaved 0.01
       axis_calibration: 0.03,

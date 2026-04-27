@@ -49,6 +49,8 @@ import type {
   SynthesisIntersectionCardShape,
   AssetCardShape,
   SituationCardShape,
+  StrategyHeroCardShape,
+  RoomShape,
   TaxonomyCardShape,
   VariantCardShape,
   RootCauseTreeShape,
@@ -65,6 +67,18 @@ import {
   SPACE_SHELL_DEFAULT_H,
   SPACE_SHELL_DEFAULT_W,
 } from "./shapes/probability-space-shell-shape";
+import {
+  STRATEGY_HERO_DEFAULT_W,
+  STRATEGY_HERO_DEFAULT_H,
+} from "./shapes/strategy-hero-card-shape";
+import {
+  STAGE_ROOMS,
+  computeRoomBounds,
+  buildRoomSubtitle,
+  roomForEventType,
+  EMPTY_ROOM_COUNTS,
+  type RoomCounts,
+} from "@/lib/whiteboard/room-layout";
 import { normalizeName as normalizeEntityName } from "@/lib/decomposition/extract-candidate-names";
 import { HubTracker } from "@/lib/graph/hub-discovery";
 
@@ -220,6 +234,30 @@ interface PainterState {
   /** Counter used to alternate left/right side placement of
    *  proposals anchored to the same entity. */
   proposalCount: number;
+  // ── Strategy hero card (Phase B intake redesign) ─────────────────
+  /** tldraw id of the persistent strategy hero card. Spawned by the
+   *  first proposal_ready event of the run, then updated in-place as
+   *  subsequent ranks materialize. The shape's preview props live on
+   *  the tldraw doc; the full StrategyBatch is fetched on-demand from
+   *  /api/spaces/[id]/twin-proposal so deep details (mechanisms,
+   *  causal chains, infra proposals) stay fresh. Null until first
+   *  proposal_ready arrives. */
+  strategyHeroShapeId: TLShapeId | null;
+  /** Cached space id for the active hero; needed by the swap handler
+   *  and the on-mount fetch URL. Captured from the first proposal's
+   *  context (event.spaceId is not on every proposal_ready, so we
+   *  derive from the painter's existing anchor logic). */
+  strategyHeroSpaceId: string | null;
+  // ── Cascade rooms (Phase C) ─────────────────────────────────────
+  /** stage → room shape id. Spawned on stage_boundary(enter); kept
+   *  pinned for the run; pulse-updated as artifact-count events
+   *  arrive within that stage's band. */
+  roomShapeIds: Map<string, TLShapeId>;
+  /** stage → live counts. Drives the room subtitle (e.g.
+   *  "23 entities · 45 edges so far"). Mirrored on the room shape's
+   *  `subtitle` prop on every change so the canvas re-renders
+   *  without an extra DB read. */
+  roomCounts: Map<string, RoomCounts>;
   // ── Origin prompt (lineage root) ───────────────────────────────
   /** tldraw id of the origin-prompt card. Created on the first event
    *  once the anchor lands so every downstream painter shape can
@@ -474,6 +512,10 @@ function makeInitialState(): PainterState {
     assetCardShapeIds: new Map(),
     situationCardShapeId: null,
     proposalCount: 0,
+    strategyHeroShapeId: null,
+    strategyHeroSpaceId: null,
+    roomShapeIds: new Map(),
+    roomCounts: new Map(),
     originPromptShapeId: null,
     spaceShellShapeIds: new Map(),
     spaceShellState: new Map(),
@@ -1338,6 +1380,15 @@ interface PipelineEventPainterProps {
    */
   disabled?: boolean;
   /**
+   * Phase B (intake redesign) — current space UUID. Required by the
+   * strategy hero card painter so the spawned shape can construct its
+   * swap-rank API URL and "Open detail" navigation. The painter is
+   * rendered inside /app/space/[id]/whiteboard so the parent always
+   * knows this; passed in explicitly rather than scraped from
+   * window.location to keep the painter testable.
+   */
+  spaceId?: string | null;
+  /**
    * Fires once when the run's SSE stream reports a terminal status
    * (completed OR failed). InteraxisCanvas wires this to
    * `useSpaceData().refreshEntities()` so the authoritative kg-nodes
@@ -1377,6 +1428,7 @@ export function PipelineEventPainter({
   runId,
   originPromptText,
   disabled,
+  spaceId,
   onCompleted,
   onSignatureProgress,
 }: PipelineEventPainterProps) {
@@ -1404,6 +1456,14 @@ export function PipelineEventPainter({
   useEffect(() => {
     originPromptTextRef.current = originPromptText;
   }, [originPromptText]);
+  // Same pattern for spaceId — the strategy hero card spawn needs it
+  // to populate its prop, and the painter receives spaceId from the
+  // canvas mount which only changes on space switch. We mirror it
+  // into PainterState on every render so the proposal_ready handler
+  // (deeply nested + not React-aware) always reads the latest value.
+  useEffect(() => {
+    stateRef.current.strategyHeroSpaceId = spaceId ?? null;
+  }, [spaceId]);
 
   // Enqueue newly-arrived events onto the stagger queue + ensure the
   // drain loop is running. The ACTUAL paint happens in the drain
@@ -2594,6 +2654,13 @@ function paintEvent(
   state: PainterState,
   hooks: PaintHooks = {},
 ) {
+  // Phase C (cascade rooms) — bump the room count for whichever
+  // stage this event belongs to BEFORE the actual paint runs. This
+  // way the room subtitle ("23 entities · 45 edges so far") stays
+  // in sync with what's visible on the canvas. Soft no-op when the
+  // event type doesn't have a clear room home.
+  bumpRoomCountFor(editor, event, state);
+
   switch (event.type) {
     case "entity_added":
       paintEntity(editor, event, state);
@@ -2734,8 +2801,14 @@ function paintEvent(
       paintCausalStageReady(editor, event, state);
       return;
     case "stage_boundary":
-      // P0 #2 — cinematic re-frame.
-      //
+      // Phase C (cascade rooms) — spawn / update the room for this
+      // stage. On phase=enter we ensure the room exists (idempotent)
+      // and mark it active. On phase=exit we mark it complete. The
+      // room is sent to back so subsequent painted shapes layer
+      // visually on top of it.
+      upsertRoomForStage(editor, event.stage, event.phase, state);
+
+      // P0 #2 — cinematic re-frame (existing behavior, preserved).
       // Every time the pipeline crosses a stage boundary, re-fit the
       // viewport to the bounding box of everything the painter has
       // placed so far. Gives the user a "breath" moment — camera
@@ -3411,6 +3484,262 @@ function ensureSynthesisCard(
   }
 }
 
+// ── Cascade rooms (Phase C) ──
+//
+// Spawn (or refresh) the room shape for `stage`. Idempotent — re-emits
+// of the same stage_boundary phase update the existing shape's state
+// in place rather than spawning duplicates.
+//
+// Rooms sit BEHIND every other painter shape so the existing painted
+// content reads as "inside" the room without us needing to actually
+// nest tldraw children. Achieved with `editor.sendToBack` immediately
+// after creation.
+
+function upsertRoomForStage(
+  editor: Editor,
+  stage: string,
+  phase: "enter" | "exit",
+  state: PainterState,
+) {
+  if (!state.anchor) return;
+  const meta = STAGE_ROOMS[stage as keyof typeof STAGE_ROOMS];
+  if (!meta) return; // unknown / sub-stage — no room
+
+  const existingId = state.roomShapeIds.get(stage);
+  const newState = phase === "exit" ? "complete" : "active";
+
+  // Initialize counts if this is the first time we've seen this stage.
+  if (!state.roomCounts.has(stage)) {
+    state.roomCounts.set(stage, { ...EMPTY_ROOM_COUNTS });
+  }
+  const counts = state.roomCounts.get(stage)!;
+  const subtitle = buildRoomSubtitle(
+    stage as keyof typeof STAGE_ROOMS,
+    counts,
+  );
+
+  if (existingId) {
+    try {
+      editor.updateShape<RoomShape>({
+        id: existingId,
+        type: "room",
+        props: {
+          state: newState,
+          subtitle,
+          pulse: Date.now() % 1_000_000,
+        },
+      });
+    } catch (err) {
+      console.warn("[pipeline-painter] room update failed:", err);
+    }
+    return;
+  }
+
+  // First spawn for this stage. Compute deterministic bounds from
+  // the room layout helper so rooms always land in the same vertical
+  // slot regardless of arrival order.
+  const bounds = computeRoomBounds(
+    stage as keyof typeof STAGE_ROOMS,
+    state.anchor,
+  );
+  const shapeId = createShapeId();
+  try {
+    const room: TLShapePartial<RoomShape> = {
+      id: shapeId,
+      type: "room",
+      x: bounds.x,
+      y: bounds.y,
+      props: {
+        w: bounds.w,
+        h: bounds.h,
+        stage: stage as RoomShape["props"]["stage"],
+        state: newState,
+        subtitle,
+        pulse: 0,
+        spawnedAt: Date.now(),
+        spaceId: state.strategyHeroSpaceId ?? "",
+      },
+      meta: { source: "pipeline-event:room" },
+    };
+    editor.createShapes([room]);
+    state.roomShapeIds.set(stage, shapeId);
+    // Send to back so subsequent painted shapes layer visually on top
+    // of the room — gives the "shapes inside the room" reading without
+    // actual tldraw nesting.
+    editor.sendToBack([shapeId]);
+  } catch (err) {
+    console.warn("[pipeline-painter] room create failed:", err);
+  }
+}
+
+/**
+ * Mutate the live counts for whichever room owns this event's stage,
+ * then re-render the room subtitle. Cheap — no shape lookup unless
+ * the event maps to a known room stage AND the room actually exists.
+ */
+function bumpRoomCountFor(
+  editor: Editor,
+  event: StructuralEvent,
+  state: PainterState,
+) {
+  const stage = roomForEventType(event.type);
+  if (!stage) return;
+  if (!state.roomCounts.has(stage)) {
+    state.roomCounts.set(stage, { ...EMPTY_ROOM_COUNTS });
+  }
+  const counts = state.roomCounts.get(stage)!;
+
+  switch (event.type) {
+    case "entity_added":
+      counts.entities += 1;
+      break;
+    case "edge_added":
+      counts.edges += 1;
+      break;
+    case "cycle_detected":
+      counts.cycles += 1;
+      break;
+    case "bridge_formed":
+      counts.bridges += 1;
+      break;
+    case "asset_added":
+      counts.assets += 1;
+      break;
+    case "space_opened":
+      counts.axes += 1;
+      break;
+    case "axis_scored":
+    case "axis_failed":
+      counts.axesScored += 1;
+      break;
+    case "proposal_ready":
+      counts.proposals += 1;
+      break;
+    case "variant_proposed":
+      counts.variants += 1;
+      break;
+    case "prediction_recorded":
+      counts.predictions += 1;
+      break;
+    default:
+      return;
+  }
+
+  const roomId = state.roomShapeIds.get(stage);
+  if (!roomId) return;
+  try {
+    editor.updateShape<RoomShape>({
+      id: roomId,
+      type: "room",
+      props: {
+        subtitle: buildRoomSubtitle(stage, counts),
+        pulse: Date.now() % 1_000_000,
+      },
+    });
+  } catch (err) {
+    console.warn("[pipeline-painter] room subtitle update failed:", err);
+  }
+}
+
+// ── Strategy hero card (Phase B intake redesign) ──
+//
+// The persistent on-canvas surface for the user's #1 strategy.
+// Anchored bottom-center of the unfurl so it stays visible regardless
+// of which axis lens or proposal the user is inspecting. Spawned
+// idempotently on the first strategy-kind proposal_ready event;
+// subsequent events refresh the preview props in place.
+//
+// This intentionally does NOT fork off the synthesis card or any
+// individual entity ghost. The strategy is the OUTPUT of the whole
+// pipeline; it deserves its own pinned surface, not a place in the
+// arrow tree.
+
+function upsertStrategyHero(
+  editor: Editor,
+  event: Extract<StructuralEvent, { type: "proposal_ready" }>,
+  state: PainterState,
+) {
+  const spaceId = state.strategyHeroSpaceId;
+  if (!spaceId || !state.anchor) return;
+
+  // Confidence: proposal_ready doesn't carry a confidence field,
+  // so leave it null on the initial render. The shape's on-mount
+  // fetch of the full StrategyBatch hydrates the real
+  // recommendation.confidence value, and the shape will re-render
+  // with the % chip visible at that point.
+  const confidence: number | null = null;
+
+  // Headline → summary (the rigorous "reasoning" lives behind a
+  // detail click in the existing strategy page; the hero card just
+  // shows the one-liner).
+  const summary = (event.headline ?? "").trim();
+  const title = (event.title ?? "").trim() || "Strategy generating…";
+
+  // Posture: not on the event payload either; use a sensible default
+  // so the accent color can be derived. The shape will override this
+  // once it fetches the full StrategyBatch (which has posture per
+  // ranked entry).
+  const posture = "cautious_validation";
+
+  // Bottom-center anchor. We compute relative to the painter's anchor
+  // (canvas center-ish) — placed below the synthesis row so it sits
+  // at the visual end of the unfurl.
+  const heroX = state.anchor.x - STRATEGY_HERO_DEFAULT_W / 2;
+  const heroY = state.anchor.y + 1080; // below proposal row + ribbons
+
+  if (state.strategyHeroShapeId) {
+    // Refresh preview props in place — no shape duplication.
+    try {
+      editor.updateShape<StrategyHeroCardShape>({
+        id: state.strategyHeroShapeId,
+        type: "strategy-hero-card",
+        props: {
+          activeTitle: title,
+          activeSummary: summary,
+          activeConfidence: confidence,
+          activePosture: posture,
+          // Bump pulse so the view component knows to refetch.
+          pulse: (Date.now() % 1_000_000),
+        },
+      });
+    } catch (err) {
+      console.warn("[pipeline-painter] strategy-hero refresh failed:", err);
+    }
+    return;
+  }
+
+  // First strategy proposal — create the hero shape.
+  const heroShapeId = createShapeId();
+  try {
+    const hero: TLShapePartial<StrategyHeroCardShape> = {
+      id: heroShapeId,
+      type: "strategy-hero-card",
+      x: heroX,
+      y: heroY,
+      props: {
+        w: STRATEGY_HERO_DEFAULT_W,
+        h: STRATEGY_HERO_DEFAULT_H,
+        spaceId,
+        // totalRanks: we don't know yet from a single proposal_ready;
+        // start with 3 (the default strategyCount) and let the shape's
+        // on-mount fetch correct it from the actual batch length.
+        totalRanks: 3,
+        activeRank: 1,
+        activeTitle: title,
+        activeSummary: summary,
+        activeConfidence: confidence,
+        activePosture: posture,
+        pulse: 0,
+      },
+      meta: { source: "pipeline-event:strategy-hero" },
+    };
+    editor.createShapes([hero]);
+    state.strategyHeroShapeId = heroShapeId;
+  } catch (err) {
+    console.warn("[pipeline-painter] strategy-hero create failed:", err);
+  }
+}
+
 // ── Forked proposal snapshots ──
 //
 // A `proposal_ready` event becomes a "proposal-snapshot" shape docked
@@ -3431,6 +3760,22 @@ function paintProposal(
 ) {
   if (state.proposalsById.has(event.proposalId)) return;
   if (!state.anchor) return;
+
+  // ── Phase B (intake redesign) — STRATEGY HERO CARD ─────────────
+  // The first strategy-kind proposal of the run spawns a persistent
+  // hero card anchored bottom-center of the unfurl. Subsequent
+  // proposals do NOT spawn new heros — instead the existing card's
+  // preview props (title/summary/confidence/posture) get refreshed
+  // in-place. The shape itself fetches the full StrategyBatch on
+  // mount via /api/spaces/[id]/twin-proposal so deep details stay
+  // fresh without inflating the tldraw doc.
+  //
+  // Skip when:
+  //   - kind isn't "strategy" (experiments + variants don't get heros)
+  //   - spaceId isn't known (canvas mounted outside /app/space/[id]/)
+  if (event.kind === "strategy" && state.strategyHeroSpaceId) {
+    upsertStrategyHero(editor, event, state);
+  }
 
   // Ensure synthesis card exists. We pass through the event's space
   // context implicitly — proposal_ready always belongs to the run's

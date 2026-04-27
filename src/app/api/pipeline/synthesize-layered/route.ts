@@ -12,6 +12,7 @@ import { safeAuth, verifySpaceOwnership, sanitizeErrorMessage } from "@/lib/api-
 import { runLayeredSynthesis } from "@/lib/pipeline/layered-synthesis";
 import type { Entity, Edge } from "@/types";
 import { checkLayerCoverageGate } from "@/lib/situation-frame/layer-coverage-gate";
+import { checkMeasurementCoverageGate } from "@/lib/validation/measurement-coverage-gate";
 import { validateFrame as validateSituationFrame } from "@/lib/situation-frame/frame-helpers";
 
 export const maxDuration = 180; // 4 sequential LLM calls, bounded context each
@@ -25,6 +26,7 @@ export async function POST(request: Request) {
 
   let spaceId: string;
   let bypassLayerGate = false;
+  let bypassMeasurementGate = false;
   try {
     const body = await request.json();
     spaceId = body.spaceId;
@@ -32,6 +34,10 @@ export async function POST(request: Request) {
     // coverage gate after the user has seen the gap report and
     // confirmed. No-op when the gate passes.
     bypassLayerGate = body.bypassLayerGate === true;
+    // D1 — same pattern for the measurement-coverage gate. Client
+    // surfaces the gap report to the user, then re-POSTs with
+    // bypassMeasurementGate: true to proceed past unmeasured entities.
+    bypassMeasurementGate = body.bypassMeasurementGate === true;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -96,6 +102,34 @@ export async function POST(request: Request) {
           report: gateReport,
           bypass_hint:
             "Re-POST with { bypassLayerGate: true } after acknowledging the gap report.",
+        },
+        { status: 409 },
+      );
+    }
+
+    // ── D1 · Measurement coverage gate ────────────────────────────────
+    //
+    // Companion to the layer-coverage gate above. Where layer-coverage
+    // ensures the right *kinds* of entities are present, measurement-
+    // coverage ensures the high-importance ones are *measurable* —
+    // i.e. carry a unit + scale so downstream simulation /
+    // calibration / controllability ranking has something concrete to
+    // operate on. See docs/KG_DEPTH_CRITIQUE.md §9 D1.
+    //
+    // Same pass/fail/bypass conventions: 409 with structured report,
+    // re-POST with { bypassMeasurementGate: true } to proceed.
+    const measurementGateReport = checkMeasurementCoverageGate({
+      entities,
+      spaceId,
+    });
+    if (!measurementGateReport.pass && !bypassMeasurementGate) {
+      return NextResponse.json(
+        {
+          error: measurementGateReport.message,
+          gate: "measurement_coverage",
+          report: measurementGateReport,
+          bypass_hint:
+            "Re-POST with { bypassMeasurementGate: true } after acknowledging the gap report, or run the measurement backfill agent to fill missing specs.",
         },
         { status: 409 },
       );
@@ -189,6 +223,10 @@ export async function POST(request: Request) {
       layer_coverage_gate: {
         ...gateReport,
         bypassed: bypassLayerGate && !gateReport.pass,
+      },
+      measurement_coverage_gate: {
+        ...measurementGateReport,
+        bypassed: bypassMeasurementGate && !measurementGateReport.pass,
       },
     });
   } catch (err) {

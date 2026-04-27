@@ -48,6 +48,7 @@ export function deriveHorizonOverrides(
         user_controllable_lever: 1.5,
         goal_proximity: 1.3,
         outcome_alignment: 1.3,
+        cost_efficiency: 1.5,         // D3 phase 3: cheap-fast wins for tight deadlines
         intersection_density: 1.1,    // already-productive regions
         causal_depth_normalized: 0.6, // root-cause work doesn't help today
         convergence_count: 0.7,
@@ -60,6 +61,7 @@ export function deriveHorizonOverrides(
         user_controllable_lever: 1.3,
         goal_proximity: 1.2,
         outcome_alignment: 1.2,
+        cost_efficiency: 1.2,          // D3 phase 3: cost still matters at weeks-scale
         causal_depth_normalized: 0.85,
         novelty: 0.9,
       };
@@ -75,6 +77,7 @@ export function deriveHorizonOverrides(
         layer_crossing: 1.15,
         user_controllable_lever: 0.85, // not zero — still want some actionable anchor
         goal_proximity: 0.9,
+        cost_efficiency: 0.7,          // D3 phase 3: expensive root-cause investments are tolerable when the payoff window is years
       };
     case "medium_term":
     case null:

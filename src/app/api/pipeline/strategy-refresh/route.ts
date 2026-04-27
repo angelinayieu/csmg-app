@@ -98,7 +98,17 @@ export async function POST(request: Request) {
     deferApps?: boolean;
     userConstraint?: string;
   };
-  const deferApps = bodyDeferApps === true;
+  // Resolution order for `deferApps`:
+  //   1. Explicit body param (legacy clients can still pin behavior)
+  //   2. Inverse of spaces.reasoning_settings.generateApps (the user's
+  //      intake-time toggle — default false, meaning DEFER apps unless
+  //      they explicitly opted in)
+  //
+  // Note: reasoningSettings is loaded later in this function (right
+  // after the spaceRow fetch). We re-evaluate `deferApps` after that
+  // load so the toggle wins over the legacy default. The explicit
+  // body param still wins over both.
+  let deferApps = bodyDeferApps === true;
   // Phase 1 Step 14 — when the auto-advance chain (bootstrap →
   // decompose → research → synthesize → here) threads its shared
   // run_id, strategy-refresh reuses it as its pipelineRunId so all
@@ -142,7 +152,7 @@ export async function POST(request: Request) {
   // Verify ownership
   const { data: spaceRow } = await db
     .from("spaces")
-    .select("id, user_id, synthesis_data")
+    .select("id, user_id, synthesis_data, reasoning_settings")
     .eq("id", spaceId)
     .single();
 
@@ -151,6 +161,25 @@ export async function POST(request: Request) {
   }
 
   const synthData = spaceRow.synthesis_data as Record<string, unknown> | null;
+
+  // Load user-controlled output toggles. These were captured at intake
+  // and persisted to spaces.reasoning_settings; we read them here so
+  // (a) ranked-strategy fan-out honors strategyCount, and (b) the
+  // app-materialization branch can be skipped when generateApps=false.
+  const { coerceReasoningSettings } = await import(
+    "@/types/reasoning-settings"
+  );
+  const reasoningSettings = coerceReasoningSettings(
+    (spaceRow as { reasoning_settings?: unknown }).reasoning_settings,
+  );
+
+  // If the body did NOT explicitly pin deferApps, source from the
+  // intake-time toggle: generateApps=true → deferApps=false (run apps),
+  // generateApps=false (default) → deferApps=true (skip app materialization
+  // and let the user opt in later via a separate "generate apps" call).
+  if (bodyDeferApps === undefined) {
+    deferApps = !reasoningSettings.generateApps;
+  }
 
   // ── Action: confirm strategy ──
   // Full commitment event:
@@ -497,6 +526,10 @@ export async function POST(request: Request) {
           entities: entRows ?? [],
           db,
           triggeredBy: `user:${user.id}:confirm`,
+          // When user opted out of Lab in intake, skip the inline MC
+          // enrichment per app. Apps still materialize; on-demand sims
+          // remain available from the Lab UI.
+          skipLabSimulation: !reasoningSettings.runLab,
         });
         confirmAppsResult = {
           apps_created: batchResult.apps_created,
@@ -569,6 +602,8 @@ export async function POST(request: Request) {
           // still land in the DB; they just don't fire per-app
           // proposal_ready events (nothing to listen on).
           pipelineRunId: null,
+          // Skip inline MC if user opted out of Lab. See note above.
+          skipLabSimulation: !reasoningSettings.runLab,
         });
         confirmAppsResult = {
           apps_created: result.apps_created,
@@ -1814,6 +1849,10 @@ export async function POST(request: Request) {
             // converge through multiple goal chains. Shared across
             // all objectives in this refresh (space-level signal).
             interventionCandidates,
+            // User-selected fan-out (default 3). Bounds enforced
+            // inside strategy-engine; honored both at prompt time
+            // and as a final slice on ranked_strategies.
+            strategyCount: reasoningSettings.strategyCount,
           });
           return { objective, goal, result };
         }),

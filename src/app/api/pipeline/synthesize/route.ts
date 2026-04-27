@@ -54,6 +54,10 @@ import {
   rollupLayerCoverageGates,
   type LayerCoverageGateInput,
 } from "@/lib/situation-frame/layer-coverage-gate";
+import {
+  rollupMeasurementCoverageGates,
+  type MeasurementCoverageGateInput,
+} from "@/lib/validation/measurement-coverage-gate";
 import { validateFrame as validateSituationFrame } from "@/lib/situation-frame/frame-helpers";
 
 export const maxDuration = 300; // Multi-step strategy needs more time
@@ -86,6 +90,9 @@ export async function POST(request: Request) {
   // passes. Captured separately so the main body destructure above stays
   // readable.
   const bypassLayerGate = body.bypassLayerGate === true;
+  // D1 — same pattern for the measurement-coverage gate. See
+  // docs/KG_DEPTH_CRITIQUE.md §9 D1 + src/lib/validation/measurement-coverage-gate.ts.
+  const bypassMeasurementGate = body.bypassMeasurementGate === true;
 
   // Phase 1 Step 13 — auto-advance chain flag. When true, the
   // completion path kicks /api/pipeline/strategy-refresh via after().
@@ -182,6 +189,7 @@ export async function POST(request: Request) {
     // Piece 4 — collect per-space gate inputs as we load entities so
     // the rollup check runs once after the loop without re-querying.
     const gateInputs: LayerCoverageGateInput[] = [];
+    const measurementGateInputs: MeasurementCoverageGateInput[] = [];
 
     for (const spaceId of spaceIds) {
       const [entRes, edgRes, cycRes, spaceRes] = await Promise.all([
@@ -325,6 +333,14 @@ export async function POST(request: Request) {
         entities: allEntities,
         spaceId,
       });
+
+      // D1 — per-space measurement-coverage gate input. The gate filters
+      // to fundamental/critical entities in measurable categories
+      // internally, so we pass the full entity set unfiltered.
+      measurementGateInputs.push({
+        entities: allEntities,
+        spaceId,
+      });
     }
 
     // ── Piece 4 · Layer coverage gate (multi-space rollup) ────────────
@@ -378,6 +394,61 @@ export async function POST(request: Request) {
           reports: gateRollup.reports,
           bypass_hint:
             "Re-POST with { bypassLayerGate: true } after acknowledging the gap reports.",
+        },
+        { status: 409 },
+      );
+    }
+
+    // ── D1 · Measurement coverage gate (multi-space rollup) ───────────
+    //
+    // Mirrors the layer-coverage rollup above. Runs once after all
+    // spaces are loaded; any single space failing fails the rollup.
+    // bypassMeasurementGate=true forces past failure; the bypass is
+    // echoed into the terminal response.
+    //
+    // Soft-emit `measurement_coverage_gap` event per report with gaps,
+    // matching the layer-coverage event pattern: keeps the canvas SSE
+    // stream informed even when the auto-advance chain bypasses.
+    const measurementRollup = rollupMeasurementCoverageGates(
+      measurementGateInputs,
+    );
+
+    for (const report of measurementRollup.reports) {
+      if (report.gaps.length === 0) continue;
+      await emitStructuralEvent(db, pipelineRunId, {
+        type: "measurement_coverage_gap",
+        bypassed: !report.pass && bypassMeasurementGate,
+        spaceId: report.space_id ?? "",
+        message: report.message,
+        stats: {
+          gated_count: report.stats.gated_count,
+          measured_count: report.stats.measured_count,
+          missing_count: report.stats.missing_count,
+          coverage_ratio: report.stats.coverage_ratio,
+          threshold_applied: report.stats.threshold_applied,
+        },
+        // Cap to first 20 gaps in the event payload — the full list
+        // remains available in the 409 response body when blocked.
+        gaps: report.gaps.slice(0, 20).map((g) => ({
+          entity_id: g.entity_id,
+          entity_name: g.entity_name,
+          importance: g.importance,
+          entity_category: g.entity_category,
+          reason: g.reason,
+        })),
+      });
+    }
+
+    if (!measurementRollup.pass && !bypassMeasurementGate) {
+      return NextResponse.json(
+        {
+          error:
+            measurementRollup.reports.find((r) => !r.pass)?.message ??
+            "Measurement coverage gate failed.",
+          gate: "measurement_coverage",
+          reports: measurementRollup.reports,
+          bypass_hint:
+            "Re-POST with { bypassMeasurementGate: true } after acknowledging the gap reports, or run the measurement backfill agent.",
         },
         { status: 409 },
       );
@@ -445,10 +516,20 @@ export async function POST(request: Request) {
     // every consumer — one round-trip instead of nine.
     const { data: rootSynthRow } = await db
       .from("spaces")
-      .select("synthesis_data")
+      .select("synthesis_data, reasoning_settings")
       .eq("id", rootSpaceId)
       .single();
     const cachedRootSynthData = (rootSynthRow?.synthesis_data ?? {}) as Record<string, unknown>;
+    // Coerce + load user-controlled output toggles (strategyCount, etc.).
+    // Read once here so every consumer in this route sees the same
+    // settings; downstream calls (generateMultiStepStrategy) read from
+    // this object instead of re-querying.
+    const { coerceReasoningSettings } = await import(
+      "@/types/reasoning-settings"
+    );
+    const cachedReasoningSettings = coerceReasoningSettings(
+      (rootSynthRow as { reasoning_settings?: unknown } | null)?.reasoning_settings,
+    );
 
     if (useLazyGuard && !force) {
       const preflightData = cachedRootSynthData;
@@ -1314,6 +1395,10 @@ REQUIREMENTS FOR THIS PASS:
           suggestedObjectives: suggestedObjs,
           benchmark: stratBenchmark,
           expansionsMap,
+          // User-selected fan-out from intake (default 3, range 1-5).
+          // Plumbs into both the synthesis prompt's option count and
+          // the final ranked_strategies slice in strategy-engine.
+          strategyCount: cachedReasoningSettings.strategyCount,
         });
 
         strategicRecommendation = multiStepResult.recommendation;
@@ -2665,6 +2750,13 @@ REQUIREMENTS FOR THIS PASS:
         pass: gateRollup.pass,
         bypassed: bypassLayerGate && !gateRollup.pass,
         reports: gateRollup.reports,
+      },
+      // D1 — measurement gate echo for telemetry. `bypassed` true iff
+      // caller forced through a failing gate.
+      measurement_coverage_gate: {
+        pass: measurementRollup.pass,
+        bypassed: bypassMeasurementGate && !measurementRollup.pass,
+        reports: measurementRollup.reports,
       },
     });
   } catch (err) {
