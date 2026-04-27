@@ -79,7 +79,7 @@ import { RoomShapeUtil } from "./shapes/room-shape";
 // `canvas-room:extend-verb` on selection.
 import { CanvasRoomExtendPopover } from "./chrome/canvas-room-extend-popover";
 import { ThreadNoteShapeUtil, THREAD_DEFAULT_W, THREAD_DEFAULT_H } from "./shapes/thread-note-shape";
-import type { StickyNoteShape, KGNodeShape, StrategyShape, ThreadNoteShape } from "./shapes/types";
+import type { StickyNoteShape, KGNodeShape, StrategyShape, ThreadNoteShape, AssetCardShape } from "./shapes/types";
 import { ThreadTethersOverlay } from "./chrome/thread-tethers-overlay";
 // Phase 3 — legend / filter sidebar. Reads kind + layer counts from
 // the entity catalog API; reads axis chips live from the tldraw store
@@ -96,6 +96,7 @@ import { CanvasStageIndicator } from "./chrome/canvas-stage-indicator";
 // card; click → POSTs the union of their entity ids as a new
 // System with source_kind="user_lasso".
 import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
+import { RelaxLayoutButton } from "./chrome/relax-layout-button";
 import { useThreadPersistence } from "./hooks/use-thread-persistence";
 import { CardSidecar } from "./sidecar/card-sidecar";
 import { toast } from "@/lib/hooks/use-toast";
@@ -107,6 +108,8 @@ import { useCanvasPersistence } from "./hooks/use-canvas-persistence";
 import { useCanvasAmbient } from "./hooks/use-canvas-ambient";
 import { useMaterialize, type MaterializeResponse } from "./hooks/use-materialize";
 import { useIngest, looksLikeUrl } from "./hooks/use-ingest";
+import { useExtractionReview } from "./hooks/use-extraction-review";
+import { ExtractionChecklistDrawer } from "./chrome/extraction-checklist-drawer";
 import { useSynthesisSeeder } from "./hooks/use-synthesis-seeder";
 import { useClusterNudges } from "./hooks/use-cluster-nudges";
 import { useCanvasAcceptReject } from "./hooks/use-canvas-accept-reject";
@@ -163,6 +166,7 @@ import { useRouter as useNextRouter } from "next/navigation";
 import {
   setCanvasNavigator,
   setCanvasDispatcher,
+  setCanvasExtractionReviewer,
 } from "@/lib/canvas/canvas-bus";
 import { useAIReceipts } from "./hooks/use-ai-receipts";
 import {
@@ -189,6 +193,7 @@ import { CanvasRunContextPanel } from "./chrome/canvas-run-context-panel";
 import { CanvasChainCompletionBanner } from "./chrome/canvas-chain-completion-banner";
 import { CanvasCreditExhaustionBanner } from "./chrome/canvas-credit-exhaustion-banner";
 import { CanvasReasoningTracePanel } from "./chrome/canvas-reasoning-trace-panel";
+import { StrategyHeroBar } from "./chrome/strategy-hero-bar";
 import { CanvasLayerToggle } from "./chrome/canvas-layer-toggle";
 import { CanvasProbabilityBadge } from "./chrome/canvas-probability-badge";
 import { useLayerFilterState } from "./drawers/use-layer-filter-state";
@@ -338,6 +343,17 @@ function makeCanvasOverlays(spaceId: string) {
         <CanvasLegendSidebar spaceId={spaceId} />
         <CanvasStageIndicator />
         <CanvasLassoSystemButton spaceId={spaceId} />
+        {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
+            user-triggered force-directed reflow over the main KG.
+            Lives in CanvasOverlays so it has the tldraw editor context
+            it needs to read shapes + bindings. Bottom-right above the
+            bottom dock so it's discoverable without dominating. */}
+        <div
+          className="pointer-events-none absolute bottom-20 right-6 z-30"
+          aria-label="Layout controls"
+        >
+          <RelaxLayoutButton />
+        </div>
       </>
     );
   };
@@ -897,7 +913,32 @@ export function InteraxisCanvas({
 
   // ── Real materialize + ingest + accept/reject ──
   const { materialize } = useMaterialize(space.id);
-  const { ingestUrl, ingestFile } = useIngest();
+  // Pass spaceId so /api/ingest attaches uploaded files to this
+  // space — required for the HITL extraction-review flow which
+  // pivots on space ownership at /preview + /extract auth checks.
+  const { ingestUrl, ingestFile } = useIngest(space.id);
+  // HITL extraction-review state machine (drawer open, current
+  // preview, extract/skip actions). Mounted at canvas root so
+  // asset-card shapes can fire it via canvas-bus regardless of
+  // their position in the tldraw tree.
+  const extractionReview = useExtractionReview();
+
+  // When the preview loads, flip the asset card's badge from
+  // "Awaiting review" to "N candidates ready" so the user sees
+  // progress without needing to keep the drawer open. Watches
+  // both preview presence and assetId so we don't write stale
+  // counts onto a card if the user closed and re-opened a
+  // different asset's drawer.
+  useEffect(() => {
+    if (!editor) return;
+    const aId = extractionReview.assetId;
+    const preview = extractionReview.preview;
+    if (!aId || !preview) return;
+    updateAssetCardStatus(editor, aId, {
+      extractionStatus: "previewed",
+      previewCandidateCount: preview.total_count,
+    });
+  }, [editor, extractionReview.assetId, extractionReview.preview]);
   const { accept: acceptGhost, reject: rejectGhost, pending: ghostPending } =
     useCanvasAcceptReject(space.id);
 
@@ -1420,6 +1461,13 @@ export function InteraxisCanvas({
     const unregisterNav = setCanvasNavigator((href) => {
       nextRouter.push(href);
     });
+    // HITL extraction-review trigger — asset-card shapes call
+    // canvasOpenExtractionReview() to open the drawer for review.
+    // Registered alongside nav + dispatch so the canvas-bus contract
+    // stays single-host. Cleanup on unmount in the same return below.
+    const unregisterReviewer = setCanvasExtractionReviewer((input) => {
+      void extractionReview.open(input);
+    });
     const unregisterDispatch = setCanvasDispatcher(async (call) => {
       const { actionKey, payload, spaceId, appId } = call;
       if (actionKey === "activate") {
@@ -1458,7 +1506,12 @@ export function InteraxisCanvas({
     return () => {
       unregisterNav();
       unregisterDispatch();
+      unregisterReviewer();
     };
+    // extractionReview.open is stable across renders (useCallback in
+    // the hook); intentionally NOT in deps so we don't re-register on
+    // every render. nextRouter is stable per Next 16's app router.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nextRouter]);
 
   // Phase 31: return-from-lab focus. The lab's Exit button writes
@@ -1992,6 +2045,42 @@ export function InteraxisCanvas({
           const dropAt = { x: origin.x + idx * 340, y: origin.y };
           const ingested = await ingestFile(f);
           if (!ingested) return;
+
+          // ── HITL auto-open for research-class assets ─────────
+          //
+          // Research PDFs and internal docs benefit most from the
+          // user controlling extraction (effect sizes vs methods
+          // vs claims). For these classes we SKIP the auto-
+          // materialize call and open the review drawer instead;
+          // the drawer's commit produces the entities. For other
+          // classes (image, dataset, web_article, pasted_text,
+          // spec_sheet) we keep the legacy auto-materialize
+          // behavior — those are usually one-shot context drops
+          // that don't need granular review.
+          //
+          // Only fires when the asset persisted with an
+          // ingested_file_id (without it the /preview route can't
+          // target the row). Falls back to legacy materialize if
+          // ingestedFileId is null.
+          const shouldReview =
+            ingested.ingestedFileId &&
+            (ingested.assetClass === "research_pdf" ||
+              ingested.assetClass === "internal_doc");
+
+          if (shouldReview) {
+            // Defer to the extraction-review drawer. The asset card
+            // will be painted by pipeline-event-painter on
+            // asset_added (already fires from /api/ingest).
+            // Open the drawer so the user can review.
+            void extractionReview.open({
+              assetId: ingested.ingestedFileId!,
+              assetName: ingested.sourceName,
+              assetClass: ingested.assetClass ?? null,
+            });
+            sourceNames.push(ingested.sourceName);
+            return; // Skip the legacy materialize path below.
+          }
+
           const response = await materialize(
             `${ingested.sourceName}\n\n${ingested.text.slice(0, 4000)}`,
             dropAt,
@@ -2033,7 +2122,7 @@ export function InteraxisCanvas({
         });
       }
     },
-    [editor, ingestFile, materialize, placeMaterializedEntity, aiReceipts],
+    [editor, ingestFile, materialize, placeMaterializedEntity, aiReceipts, extractionReview],
   );
 
   // ── Bottom dock submit: text/URL/files → materialize ──
@@ -2663,6 +2752,80 @@ export function InteraxisCanvas({
         activeTab={drawerState.tab}
         onTabChange={drawerState.setTab}
       />
+      {/* HITL extraction-review drawer. Opened by asset-card shapes
+          via canvas-bus when the user clicks "Review extraction" on
+          an asset whose extraction_status is 'previewed' or
+          'pending_preview'. Closes on extract success / skip /
+          backdrop click. Only renders when a preview is loaded —
+          while the /preview POST is in flight (previewLoading=true)
+          we render a minimal placeholder so the drawer doesn't pop
+          into existence with empty content. */}
+      {extractionReview.isOpen && extractionReview.preview && (
+        <ExtractionChecklistDrawer
+          preview={extractionReview.preview}
+          assetName={extractionReview.assetName ?? "Asset"}
+          assetClass={extractionReview.assetClass}
+          open={extractionReview.isOpen}
+          onClose={extractionReview.close}
+          onExtract={async (selected, focus) => {
+            // Reflect the in-flight commit visibly on the asset
+            // card before the network roundtrip completes — pulls
+            // the badge into the "Extracting…" state immediately.
+            const aId = extractionReview.assetId;
+            if (editor && aId) {
+              updateAssetCardStatus(editor, aId, {
+                extractionStatus: "extracting",
+              });
+            }
+            const result = await extractionReview.extract(selected, focus);
+            // On success, paint the final state. The result carries
+            // entity_ids[] (already-deduped) — we display its
+            // length as the entity count.
+            if (editor && aId && result) {
+              updateAssetCardStatus(editor, aId, {
+                extractionStatus: "extracted",
+                extractedEntityCount: result.entity_ids.length,
+              });
+              // Pull the freshly-committed entities into the canvas
+              // state so use-sync-entities paints them as real KG
+              // nodes. Without this the drawer closes and the user
+              // sees the asset card flip to "✓ extracted" but no new
+              // nodes until next page reload — confusing.
+              if (refreshSpaceEntities) {
+                refreshSpaceEntities().catch((err) =>
+                  console.warn(
+                    "[extraction-review] refreshEntities failed:",
+                    err,
+                  ),
+                );
+              }
+            }
+          }}
+          onSkip={async () => {
+            const aId = extractionReview.assetId;
+            await extractionReview.skip();
+            if (editor && aId) {
+              updateAssetCardStatus(editor, aId, {
+                extractionStatus: "skipped",
+              });
+            }
+          }}
+        />
+      )}
+      {extractionReview.isOpen && extractionReview.previewLoading && (
+        <div
+          className="fixed right-0 top-0 z-[70] flex h-screen w-[520px] max-w-full flex-col items-center justify-center border-l border-slate-200 bg-white shadow-2xl"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="text-[12px] font-semibold text-slate-500">
+            Generating extraction preview…
+          </div>
+          <div className="mt-1 text-[11px] text-slate-400">
+            Reading {extractionReview.assetName ?? "asset"}
+          </div>
+        </div>
+      )}
 
       {/* Phase 1 Step 2 — live pipeline-run HUD. Mounts only when the
           URL carries ?run=<uuid>; connects to the SSE stream and shows
@@ -2675,6 +2838,16 @@ export function InteraxisCanvas({
           (sticky warning until dismissed). Both events used to be
           silently dropped because no consumer listened. */}
       <CanvasRunSignalsBanner runId={activeRunId} />
+
+      {/* T1.1 — Strategy hero bar (docs/KG_DEPTH_CRITIQUE.md):
+          surfaces the synthesized strategy(ies) at the TOP of the
+          canvas viewport so users don't have to scroll past 90s of
+          KG unfurl to find them. Renders top-N side-by-side cards
+          (not chip-swapped) so users can compare at a glance. The
+          existing in-canvas strategy-hero-card-shape continues to
+          paint at y=1080 as a draggable canvas anchor — this bar is
+          the always-visible promo, the shape is the canvas tether. */}
+      <StrategyHeroBar spaceId={space.id} runId={activeRunId} />
 
       {/* Origin prompt card is now a real tldraw shape (`origin-prompt`,
           painted by PipelineEventPainter at the top of the canvas) so
@@ -3144,6 +3317,55 @@ export function InteraxisCanvas({
 }
 
 // ── helpers ──
+
+/**
+ * Update an asset-card shape's HITL extraction status props.
+ * Looks up the shape by `assetId` (not by tldraw id, since the
+ * caller usually only knows the asset row id, not the shape id).
+ * Soft-fails if no matching shape is on the canvas — the asset may
+ * have been uploaded outside the canvas (settings panel, library
+ * view) and have no card to update.
+ *
+ * Called by the extraction-review drawer's onExtract / onSkip
+ * callbacks so the card visibly transitions through the states:
+ * pending_preview → previewed (when preview returns) → extracting
+ * (during commit) → extracted | skipped (terminal).
+ */
+function updateAssetCardStatus(
+  editor: Editor,
+  assetId: string,
+  patch: {
+    extractionStatus?: string;
+    extractedEntityCount?: number;
+    previewCandidateCount?: number;
+  },
+): void {
+  if (!assetId) return;
+  // Find every asset-card shape with the matching assetId. Usually 1
+  // — but if the user dragged multiple cards for the same asset
+  // (rare; possible via copy/paste) we update all of them.
+  const allShapes = editor.getCurrentPageShapes();
+  for (const shape of allShapes) {
+    if (shape.type !== "asset-card") continue;
+    const props = (shape as AssetCardShape).props;
+    if (props.assetId !== assetId) continue;
+    editor.updateShape<AssetCardShape>({
+      id: shape.id,
+      type: "asset-card",
+      props: {
+        ...(patch.extractionStatus !== undefined
+          ? { extractionStatus: patch.extractionStatus }
+          : {}),
+        ...(patch.extractedEntityCount !== undefined
+          ? { extractedEntityCount: patch.extractedEntityCount }
+          : {}),
+        ...(patch.previewCandidateCount !== undefined
+          ? { previewCandidateCount: patch.previewCandidateCount }
+          : {}),
+      },
+    });
+  }
+}
 
 function createStickyAtCenter(
   editor: Editor,

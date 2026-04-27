@@ -252,6 +252,50 @@ These are the architectural changes (not just number-tier upgrades). For per-num
 1. Apply migration to live Supabase (not yet run — local-only until verified)
 2. Backfill agent: for pre-D1 entities marked fundamental/critical, propose measurement specs in batch and write to a `measurement_proposals` queue for user review (same pattern as `concept_proposals`)
 
+---
+
+### HITL extraction checklist (input-side gap) — **🟢 LANDED**
+
+**Status (2026-04-26):** First pass shipped. The "auto-extract 3-8 entities from every uploaded asset" path now has a HITL alternative: a review drawer showing 15-30 candidates with rich categories + evidence quotes + suggested flags, with bulk actions (select all / select none / select suggested) + focus slider before commit.
+
+**Why this matters:** the input-side audit flagged this as the highest-leverage research-workflow fix. Researchers uploading PDFs need to control WHAT gets extracted (effect sizes vs methodology vs concepts) — not auto-extraction.
+
+**10-category taxonomy:** `concept | effect_size | method | finding | actor | metric | mechanism | condition | outcome | tool` — richer than the entities table's coarser `entity_category` enum. The commit path collapses to entity_category via `CATEGORY_TO_ENTITY_CATEGORY`.
+
+**Files landed:**
+- [`supabase/migrations/20260612_ingested_files_extraction_preview.sql`](../supabase/migrations/20260612_ingested_files_extraction_preview.sql) — adds `extraction_status` (pending_preview | previewed | extracting | extracted | skipped | auto_extracted), `extraction_preview` jsonb, `extraction_target_count` int. Two partial indexes
+- [`src/types/extraction-preview.ts`](../src/types/extraction-preview.ts) — `ExtractionCategory` (10 values), `FocusLevel` (shallow/moderate/deep/exhaustive → 5/12/25/999 targets), `ExtractionCandidate`, `ExtractionPreview`, `ExtractionCommitInput`, `ExtractionCommitResult`, `ExtractionStatus` + `CATEGORY_TO_ENTITY_CATEGORY` map
+- [`src/lib/pipeline/asset-preextractor.ts`](../src/lib/pipeline/asset-preextractor.ts) — added `previewCandidatesFromAsset()` (richer prompt: 15-30 candidates with categories + evidence quotes + suggested flags) and `commitSelectedCandidates()` (filters preview → entity_category collapse → existing persistPreExtractedEntities). Original `extractEntitiesFromAsset` retained for back-compat
+- [`src/app/api/ingest/[assetId]/preview/route.ts`](../src/app/api/ingest/[assetId]/preview/route.ts) — POST. Cache-aware (returns existing extraction_preview unless `force: true`)
+- [`src/app/api/ingest/[assetId]/extract/route.ts`](../src/app/api/ingest/[assetId]/extract/route.ts) — POST { selected_candidate_ids, focus_level }. Status-locked against double-commit
+- [`src/app/api/ingest/[assetId]/skip/route.ts`](../src/app/api/ingest/[assetId]/skip/route.ts) — POST flips status to 'skipped'. Idempotent
+- [`src/components/canvas/hooks/use-ingest.ts`](../src/components/canvas/hooks/use-ingest.ts) — accepts optional `spaceId`, surfaces `ingestedFileId` + `assetClass`
+- [`src/components/canvas/hooks/use-extraction-review.ts`](../src/components/canvas/hooks/use-extraction-review.ts) — drawer state machine (open/extract/skip/close, preview cache, error surface)
+- [`src/components/canvas/chrome/extraction-checklist-drawer.tsx`](../src/components/canvas/chrome/extraction-checklist-drawer.tsx) — 520px right-side drawer. 10-category color palette. Focus slider. Category filter chips. **[Select all] [Select none] [Select suggested (N)]** bulk actions. Per-candidate checkbox + confidence pill + evidence quote. Footer [Skip] / [Extract N entities]
+- [`src/lib/canvas/canvas-bus.ts`](../src/lib/canvas/canvas-bus.ts) — added `setCanvasExtractionReviewer` + `canvasOpenExtractionReview`
+- [`src/components/canvas/interaxis-canvas.tsx`](../src/components/canvas/interaxis-canvas.tsx) — mounts `useExtractionReview`, registers reviewer with canvas-bus, renders `<ExtractionChecklistDrawer>` + a loading-placeholder while preview is in flight
+- [`src/components/canvas/shapes/asset-card-shape.tsx`](../src/components/canvas/shapes/asset-card-shape.tsx) — adds "Review extract →" pill button on every asset card with a real `assetId`
+
+**End-to-end flow:** drop PDF → asset card paints → click "Review extract →" → drawer renders 15–30 candidates → toggle / focus / select-all-or-suggested → click [Extract N entities] → entities live in KG with `source_tag='asset:<assetId>'`.
+
+**HITL extraction phase 2 (this session):**
+- **Asset-card status badge** — `AssetCardShape` extended with `extractionStatus`, `extractedEntityCount`, `previewCandidateCount` props. Card renders a colored pill below the filename:
+  - amber "Awaiting review" (pending_preview)
+  - blue "N candidates ready" (previewed)
+  - gray "Extracting…" (extracting, with disabled pill)
+  - green "✓ N entities extracted" (extracted)
+  - gray "Skipped" (skipped)
+  - amber "Auto-extracted · N" (legacy auto path)
+- **Status-aware pill label** — "Review extract →" / "Re-review →" / "Review again →" / "Extracting…" depending on status. Re-review passes `force: true` to regenerate the preview from scratch.
+- **`updateAssetCardStatus()` helper** in interaxis-canvas wraps `editor.updateShape` to flip the badge through states. Wired into the drawer's onExtract / onSkip / preview-loaded effects.
+- **Auto-refresh entities** — after a successful /extract, calls `refreshSpaceEntities()` so the freshly-committed entities appear on canvas without page reload.
+- **Auto-open for research-class assets** — `ingestAndMaterialize` now branches: when `assetClass ∈ {research_pdf, internal_doc}` AND ingest persisted with a real `ingested_file_id`, the drawer opens automatically and the legacy `materialize()` call is skipped (the drawer's commit produces the entities). Other classes (image, dataset, web_article, pasted_text, spec_sheet) keep the legacy auto-materialize behavior — those are usually one-shot context drops.
+
+**Still to do for HITL extraction:**
+1. Multi-asset batch review (today: one drawer per asset; for a 5-PDF dump the user clicks 5 times)
+2. Drawer header re-preview button for stale-content refresh (currently only the asset-card pill triggers force=true)
+3. Settings-panel UI for the focus-level default (today: hardcoded "moderate"; should be user-configurable in reasoning_settings)
+
 **Why first:** Every property below depends on entities being **variables, not nouns**. Without this, "controllability gradient on entity X" is meaningless because X has no scale to control.
 
 **Effort:** Originally estimated ~3 days; first-pass code shipped in one session. Remaining gate + UI + backfill = ~2 more days.
@@ -308,6 +352,80 @@ These are the architectural changes (not just number-tier upgrades). For per-num
 **Effort:** ~5 days. **Priority:** Highest. **Touches:** `src/lib/pipeline/`, `src/lib/twin/`, `supabase/migrations/`, `src/app/api/lab/what-if/route.ts`, `src/app/api/pipeline/probability-space/for-node/route.ts`.
 
 ---
+
+### T1.3 — Promote "Open Lab" pill to primary affordance — **🟢 LANDED**
+
+The audit flagged `OpenLabPill` ([`kg-node-shape.tsx`](../src/components/canvas/shapes/kg-node-shape.tsx)) as buried at 2.5mm font in the badge row, indistinguishable from secondary metadata chips (layer, category, depth, measurement, controllability). Drill-down ergonomics scored 3/10 partly because users couldn't find the entry point to the interactive lab page.
+
+**Files modified:**
+- [`src/components/canvas/shapes/kg-node-shape.tsx`](../src/components/canvas/shapes/kg-node-shape.tsx):
+  - **OpenLabPill redesigned** — fontSize 8 → 9.5, padding bumped, filled background (layer-color or white-on-hero) instead of ghost outline so it reads as a button not a label, ArrowUpRight chevron added next to "Lab" text, drop shadow with layer-color tint, scale-on-hover (1.04) so the affordance physically responds to interaction
+  - Title attribute upgraded from "Open in lab" to "Open in lab — sliders, what-if, convergent points" so users hovering get a description of what they'll find
+  - `ArrowUpRight` added to lucide-react imports
+- [`docs/KG_DEPTH_CRITIQUE.md`](KG_DEPTH_CRITIQUE.md) — T1.3 status block
+
+**Visual hierarchy intent:** the pill is now visually distinct from secondary badges. Layer/category/depth/measurement/controllability all use ghost-outline styling (`background: transparent + 1px border`); OpenLabPill uses filled-button styling (`background: layer-color + drop shadow`). Users immediately read the contrast as "click here to explore."
+
+**Remaining T-series leverage moves:**
+- T2.2 — inline card expansion (cards expand in place instead of route-navigating; eliminates the 3-route drill-down maze; 5–7 days)
+
+### T2.1 — Force-directed relaxation on main canvas — **🟢 LANDED**
+
+The biggest "still photograph → living network" perception fix. The audit scored canvas physics 3/10 because [`use-sync-entities.ts`](../src/components/canvas/hooks/use-sync-entities.ts) places nodes in a deterministic 5-layer grid and never moves them — connected nodes can sit on opposite ends of the canvas, clusters never form. This adds user-triggered Eades spring relaxation that reuses the existing [`force-layout.ts`](../src/lib/graph/force-layout.ts) module (previously only used inside probability-space-shell mini-graphs).
+
+**Files landed:**
+- [`src/components/canvas/hooks/use-force-relaxation.ts`](../src/components/canvas/hooks/use-force-relaxation.ts) — `useForceRelaxation()` hook. Snapshots all kg-node-shapes + arrow-shape bindings from the editor, runs `computeForceLayout` with main-canvas-tuned params (springLength=360px to match key-tier card width, 80 iterations for 20+ node graphs, tier-aware node weights so hero/key shapes repel neighbors more strongly), animates from current → target via `requestAnimationFrame` interpolation over 700ms with `easeOutCubic`. Idempotent — calling `relax()` while an animation is in flight cancels and starts fresh
+- [`src/components/canvas/chrome/relax-layout-button.tsx`](../src/components/canvas/chrome/relax-layout-button.tsx) — UI affordance with three states: `idle` (Magnet icon, hover-rotate), `relaxing` (Loader2 spin + "Settling…"), `complete` (Check + count of relaxed nodes for ~1.5s). Disabled while animating
+- [`src/components/canvas/interaxis-canvas.tsx`](../src/components/canvas/interaxis-canvas.tsx) — mounted in `makeCanvasOverlays` (the `InFrontOfTheCanvas` slot, where `useEditor()` is available) at bottom-right above the bottom dock
+
+**Design choice — user-triggered, not auto-fire:** auto-reflowing a canvas the user has been interacting with would be jarring (nodes the user moved would snap to algorithm positions). The button gives explicit control. After the user drags a node manually, clicking Relax re-converges from the new starting state — useful workflow for "I moved this one node where I want it; reflow everything else around it."
+
+**Tuning rationale:**
+- `springLength = 360px` — matches the visual gap of "key"-tier kg-node cards (260px wide + small clear gap), so connected nodes settle one card-width apart
+- `iterations = 80` — bumped from the mini-graph default (30) since main canvas often has 20–50 nodes; the existing damping (0.78) + max-velocity (8) keeps convergence stable
+- `padding = 80` — generous so edge nodes don't end up partially clipped
+- Bounding box anchoring: simulation viewport is sized to the current node bounding box, and target positions are translated back to that origin. This keeps the relaxed graph in roughly the same on-canvas region — no global teleport on click
+- Tier-derived node weights (hero=0.95, key=0.7, support=0.5, peripheral=0.3) — hubs visually larger AND mathematically repel neighbors more strongly, mirroring physical intuition
+
+**Animation feel:** 700ms is long enough that the eye registers the motion as deliberate (not a snap) and short enough that the user doesn't lose patience. `easeOutCubic` is gentler at the end of the animation, where the human eye is most sensitive to settle.
+
+**Future T2.1+ work:**
+- Drag-with-momentum: when user drags a node, ripple force through connected neighbors so they pull toward the dragged node (live physics, not just on-button-click)
+- Auto-fire on run completion (gated on "user hasn't moved any nodes yet" sentinel)
+- Cluster-aware pre-pass: detect connected components and lay each out in its own region before global relaxation, reducing cross-cluster edge tangles
+
+### T1 — Strategy hero bar + reasoning panel persistence — **🟢 LANDED**
+
+The two highest-leverage UX fixes from the strategy-flow audit. Together they reframe the experience: instead of users scrolling past 90 seconds of KG unfurl to find a strategy hero buried at y=1080, the strategy(ies) now render as a sticky top bar from the moment the first proposal_ready event arrives. The reasoning panel no longer auto-collapses on terminal status — users can scrub between stages (intake/landscape/kg/proposal/lab) post-run via tab affordance.
+
+**T1.1 — Strategy hero bar (`src/components/canvas/chrome/strategy-hero-bar.tsx`):**
+- New chrome component pinned to `inset-x-0 top-0 z-30` — always visible above all canvas pan/zoom
+- Subscribes to `useRunEventStore` for `proposal_ready` events with `kind="strategy"`. On detection, fetches full batch from `/api/spaces/[id]/twin-proposal` and renders top-N strategies SIDE-BY-SIDE as 340px-wide cards in a horizontally-scrollable row (NOT chip-swapped one-at-a-time as the in-canvas hero shape did)
+- Each card: rank badge (#1 ⭐ Crown for active), 1-line title, 2-line summary clamp, posture chip (color-coded), confidence %, "Set active" button (POST `/swap-rank` with optimistic UI update + refresh), per-card "Open detail" arrow
+- Active card gets thicker border + soft accent shadow matching the strategic posture color
+- Collapsible — click "Strategy" brand button to fold to compact pill row showing just rank + title; expand restores full card grid
+- "Strategy synthesizing…" placeholder pill shown while a run is active but no strategies have arrived yet
+- Mounted in [`interaxis-canvas.tsx`](../src/components/canvas/interaxis-canvas.tsx) right after CanvasRunSignalsBanner so z-ordering puts it above coverage-gap warnings without overlapping
+- The existing in-canvas `strategy-hero-card-shape` continues to paint at y=1080 as a draggable canvas anchor — this bar is the always-visible promo, the shape is the canvas tether
+
+**T1.2 — Reasoning panel persistence + per-stage tabs (`src/components/canvas/chrome/canvas-reasoning-trace-panel.tsx`):**
+- Removed the `useEffect` that auto-collapsed on `status === "completed" | "failed" | "timeout"`. The chevron remains user-controllable; the panel now stays open by default through every stage AND post-run
+- Added per-stage tab row: one tab per pipeline stage that has emitted `reasoning_chunk` events, in canonical order (intake → landscape → kg → proposal → lab → results). Stages with no chunks are filtered out (no empty tabs)
+- Tabs show Loader2 spinner for the stage currently emitting; Check icon for completed stages
+- Default-selected tab is the most-recently-active stage (follows live reasoning); user can click another tab to scrub through stage history without losing the live tail
+- Header label updated to show current stage: "AI reasoning · KG · live" / "AI reasoning · Proposal · done"
+- Snapshots tracked per-stage rather than as a single `latest` — uses `s.sequence` (StreamedEvent.sequence, the structural-event SSE field) to compare freshness within and across stages
+- Critical fix: this surfaces reasoning during PROPOSAL + SYNTHESIS — the stages where strategy quality is determined. Pre-T1.2 the panel auto-hid right when those stages started, hiding the most important reasoning
+
+**Verification:**
+- `tsc --noEmit -p tsconfig.json` clean: 0 errors across all touched files
+- Next dev server reachable on `:3000`, home page returns HTTP 200 with full HTML render — no broken imports or runtime crashes from the new chrome components
+- Full visual verification (hero bar with real strategies, panel with multi-stage tabs) requires an authenticated session + a completed pipeline run. Honest disclosure: those interaction paths cannot be verified from a fresh dev-server boot without seed data; the components type-check, mount cleanly, and gate their visibility on data conditions (`runId` + `proposal_ready` for the bar; `reasoning_chunk` events for the tabs)
+
+**Remaining T1+ work** (separate sessions):
+- T2.1 — post-run force-directed layout on main canvas (the bigger "feel alive" change)
+- T2.2 — inline expansion pattern for cards instead of route navigation (eliminates the 3-route maze)
+- T1.3 — promote the "Open Lab" pill on kg-node-shape to a primary card affordance (small, visible win)
 
 ### D3 — Controllability profiles — **🟢 PHASE 3 LANDED (cost-aware ranker + budget-strict filter)**
 

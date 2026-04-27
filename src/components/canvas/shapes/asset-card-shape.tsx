@@ -33,6 +33,7 @@ import {
   ScrollText,
   Pencil,
   Paperclip,
+  CheckSquare,
 } from "lucide-react";
 import type { AssetCardShape } from "./types";
 import {
@@ -40,6 +41,7 @@ import {
   ASSET_CLASS_ACCENT,
   type AssetClass,
 } from "@/types/asset";
+import { canvasOpenExtractionReview } from "@/lib/canvas/canvas-bus";
 
 export const ASSET_CARD_DEFAULT_W = 200;
 export const ASSET_CARD_DEFAULT_H = 88;
@@ -77,6 +79,9 @@ export class AssetCardShapeUtil extends BaseBoxShapeUtil<AssetCardShape> {
     charCount: T.number,
     accent: T.string,
     uploadedAt: T.string,
+    extractionStatus: T.string,
+    extractedEntityCount: T.number,
+    previewCandidateCount: T.number,
   };
 
   override getDefaultProps(): AssetCardShape["props"] {
@@ -90,6 +95,9 @@ export class AssetCardShapeUtil extends BaseBoxShapeUtil<AssetCardShape> {
       charCount: 0,
       accent: ASSET_CLASS_ACCENT.internal_doc,
       uploadedAt: new Date().toISOString(),
+      extractionStatus: "pending_preview",
+      extractedEntityCount: 0,
+      previewCandidateCount: 0,
     };
   }
 
@@ -102,10 +110,95 @@ export class AssetCardShapeUtil extends BaseBoxShapeUtil<AssetCardShape> {
   ) => resizeBox(shape, info);
 
   override component(shape: AssetCardShape) {
-    const { w, h, sourceName, assetClass, charCount, accent } = shape.props;
+    const {
+      w,
+      h,
+      sourceName,
+      assetClass,
+      charCount,
+      accent,
+      extractionStatus,
+      extractedEntityCount,
+      previewCandidateCount,
+    } = shape.props;
     const Icon =
       ICON_FOR_CLASS[assetClass as AssetClass] ?? Paperclip;
     const label = ASSET_CLASS_LABEL[assetClass as AssetClass] ?? "Asset";
+
+    // Status badge — shows the HITL extraction lifecycle visibly on
+    // the card so the user can scan a row of assets and immediately
+    // see which need review vs which are done. Falls through to
+    // "pending_preview" for shapes that predate the extraction-status
+    // prop (back-compat with pre-2026-04-26 painted cards).
+    const status = extractionStatus || "pending_preview";
+    const statusBadge = (() => {
+      switch (status) {
+        case "previewed":
+          return {
+            label:
+              previewCandidateCount > 0
+                ? `${previewCandidateCount} candidate${previewCandidateCount === 1 ? "" : "s"} ready`
+                : "Preview ready",
+            bg: "rgba(37,99,235,0.10)",
+            border: "rgba(37,99,235,0.35)",
+            color: "#1d4ed8",
+          };
+        case "extracting":
+          return {
+            label: "Extracting…",
+            bg: "rgba(15,23,42,0.06)",
+            border: "rgba(15,23,42,0.18)",
+            color: "#334155",
+          };
+        case "extracted":
+          return {
+            label:
+              extractedEntityCount > 0
+                ? `✓ ${extractedEntityCount} entit${extractedEntityCount === 1 ? "y" : "ies"} extracted`
+                : "✓ Extracted",
+            bg: "rgba(34,197,94,0.10)",
+            border: "rgba(34,197,94,0.35)",
+            color: "#15803d",
+          };
+        case "skipped":
+          return {
+            label: "Skipped",
+            bg: "rgba(148,163,184,0.14)",
+            border: "rgba(148,163,184,0.30)",
+            color: "#475569",
+          };
+        case "auto_extracted":
+          return {
+            label:
+              extractedEntityCount > 0
+                ? `Auto-extracted · ${extractedEntityCount}`
+                : "Auto-extracted",
+            bg: "rgba(217,119,6,0.10)",
+            border: "rgba(217,119,6,0.32)",
+            color: "#b45309",
+          };
+        case "pending_preview":
+        default:
+          return {
+            label: "Awaiting review",
+            bg: "rgba(245,158,11,0.10)",
+            border: "rgba(245,158,11,0.35)",
+            color: "#b45309",
+          };
+      }
+    })();
+
+    // Pill label adapts to status. "Re-review →" appears when the
+    // asset is already extracted/skipped — clicking it reopens the
+    // drawer (the cached preview is reused; the user can change
+    // their selection and re-commit).
+    const pillLabel = (() => {
+      if (status === "extracted") return "Re-review →";
+      if (status === "skipped") return "Review again →";
+      if (status === "extracting") return "Extracting…";
+      return "Review extract →";
+    })();
+    const pillDisabled = status === "extracting";
 
     return (
       <HTMLContainer
@@ -203,6 +296,101 @@ export class AssetCardShapeUtil extends BaseBoxShapeUtil<AssetCardShape> {
           >
             {sourceName}
           </div>
+          {/* Row 2.5: extraction status badge.
+              Shows the asset's HITL lifecycle so the user can scan
+              a row of cards and immediately see which still need
+              review. Status transitions are driven by post-extract
+              shape updates (interaxis-canvas wires editor.updateShape
+              from the drawer's onExtract / onSkip callbacks). */}
+          <div
+            style={{
+              display: "inline-flex",
+              alignSelf: "flex-start",
+              alignItems: "center",
+              gap: 3,
+              padding: "2px 6px",
+              borderRadius: 999,
+              background: statusBadge.bg,
+              border: `1px solid ${statusBadge.border}`,
+              color: statusBadge.color,
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: "0.04em",
+              lineHeight: 1,
+            }}
+          >
+            {statusBadge.label}
+          </div>
+          {/* Row 3: HITL extraction-review affordance.
+              Fires canvas-bus → useExtractionReview.open() in the
+              host (interaxis-canvas) which POSTs /api/ingest/[id]/preview
+              and renders the ExtractionChecklistDrawer. Only meaningful
+              when shape has a real assetId; defaults to a no-op for
+              unwired shapes. The button stops propagation so clicking
+              it doesn't trigger tldraw shape selection. */}
+          {shape.props.assetId && (
+            <button
+              type="button"
+              disabled={pillDisabled}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (pillDisabled) return;
+                // For already-extracted/skipped assets, force=true
+                // regenerates the preview (otherwise the cached one
+                // is reused and may reflect stale content).
+                const force =
+                  status === "extracted" || status === "skipped";
+                canvasOpenExtractionReview({
+                  assetId: shape.props.assetId,
+                  assetName: sourceName,
+                  assetClass,
+                  force,
+                });
+              }}
+              style={{
+                marginTop: "auto",
+                alignSelf: "flex-start",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "3px 7px",
+                borderRadius: 999,
+                border: `1px solid color-mix(in srgb, ${accent} 35%, transparent)`,
+                background: `color-mix(in srgb, ${accent} 12%, transparent)`,
+                color: accent,
+                fontSize: 9.5,
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                lineHeight: 1,
+                cursor: pillDisabled ? "not-allowed" : "pointer",
+                opacity: pillDisabled ? 0.55 : 1,
+                fontFamily: "inherit",
+                transition:
+                  "transform 140ms ease, box-shadow 140ms ease, background 140ms ease",
+              }}
+              onMouseEnter={(e) => {
+                if (pillDisabled) return;
+                e.currentTarget.style.transform = "translateY(-1px)";
+                e.currentTarget.style.background = `color-mix(in srgb, ${accent} 22%, transparent)`;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = "";
+                e.currentTarget.style.background = `color-mix(in srgb, ${accent} 12%, transparent)`;
+              }}
+              title={
+                pillDisabled
+                  ? "Extraction in progress"
+                  : status === "extracted" || status === "skipped"
+                    ? "Re-review what to extract from this asset"
+                    : "Review what to extract from this asset"
+              }
+              aria-label={pillLabel}
+            >
+              <CheckSquare style={{ width: 9, height: 9 }} />
+              {pillLabel}
+            </button>
+          )}
         </div>
         <style jsx>{`
           .asset-card-enter {

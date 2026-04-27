@@ -9,7 +9,7 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { Zap, AlertTriangle, Focus, Cog, Share2, BookOpen, CircleDot, FileText, FlaskConical, Ruler } from "lucide-react";
+import { Zap, AlertTriangle, Focus, Cog, Share2, BookOpen, CircleDot, FileText, FlaskConical, Ruler, ArrowUpRight } from "lucide-react";
 import { LAYERS, type LayerId } from "@/lib/whiteboard/layer-config";
 import { useCanvasReactions } from "../canvas-reactions-context";
 import { useCanvasHierarchy } from "../canvas-hierarchy-context";
@@ -869,11 +869,21 @@ function DepthGlyph({
 }
 
 /**
- * Card-level "Open Lab" affordance. Sits in the header chip row alongside
- * the layer badge / category / depth glyph so it's always discoverable —
- * not gated on the entity having saved reactions (that's the
- * ReactionBadge's job in the bottom-right). Navigates to the same NodeLab
- * route the rings + reaction badge already use.
+ * Card-level "Open Lab" affordance — primary action surface for
+ * drilling into the per-entity interactive lab page (sliders,
+ * what-if, convergent points).
+ *
+ * T1.3 (docs/KG_DEPTH_CRITIQUE.md): the audit flagged this affordance
+ * as "buried at 2.5mm font size in the badge row, no user discovers
+ * it without being told." Promoted to a real button-shaped affordance:
+ * filled background, larger font, ArrowRight chevron, scale-on-hover.
+ * Visually distinct from secondary badges (layer / category / depth /
+ * measurement / controllability) so users immediately read it as
+ * "click here to explore."
+ *
+ * Sits in the header chip row alongside the secondary badges. Always
+ * discoverable — not gated on the entity having saved reactions
+ * (that's the ReactionBadge's job in the bottom-right).
  */
 function OpenLabPill({
   spaceId,
@@ -887,45 +897,68 @@ function OpenLabPill({
   layerColor: string;
 }) {
   const href = `/app/space/${spaceId}/entity/${entityId}/lab`;
+  // Filled background (not the ghost outline of secondary badges) so
+  // the pill reads as a button. Color-matched to the entity's layer
+  // for visual harmony with the rest of the card.
+  const baseBg = isHero ? "rgba(255,255,255,0.22)" : layerColor;
+  const baseFg = isHero ? "rgba(255,255,255,0.98)" : "#ffffff";
+  const hoverBg = isHero ? "rgba(255,255,255,0.32)" : layerColor;
   return (
     <a
       href={href}
-      title="Open in lab"
+      title="Open in lab — sliders, what-if, convergent points"
       aria-label="Open in lab"
       onPointerDown={(e) => e.stopPropagation()}
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 3,
-        padding: "2px 6px 2px 5px",
-        borderRadius: 4,
-        background: isHero ? "rgba(255,255,255,0.14)" : `${layerColor}14`,
-        border: `1px solid ${isHero ? "rgba(255,255,255,0.3)" : `${layerColor}33`}`,
-        color: isHero ? "rgba(255,255,255,0.95)" : layerColor,
-        fontSize: 8,
+        gap: 4,
+        padding: "3px 8px 3px 7px",
+        borderRadius: 999,
+        background: baseBg,
+        border: isHero
+          ? "1px solid rgba(255,255,255,0.35)"
+          : `1px solid ${layerColor}`,
+        color: baseFg,
+        fontSize: 9.5,
         fontWeight: 700,
-        letterSpacing: "0.1em",
+        letterSpacing: "0.08em",
         textTransform: "uppercase",
         textDecoration: "none",
         lineHeight: 1,
         cursor: "pointer",
-        transition: "transform 140ms ease, background 140ms ease",
+        boxShadow: isHero
+          ? "0 1px 2px rgba(0,0,0,0.15)"
+          : `0 1px 3px ${layerColor}55, 0 1px 2px rgba(0,0,0,0.08)`,
+        transition:
+          "transform 140ms ease, background 140ms ease, box-shadow 140ms ease",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.transform = "translateY(-0.5px)";
-        e.currentTarget.style.background = isHero
-          ? "rgba(255,255,255,0.22)"
-          : `${layerColor}22`;
+        e.currentTarget.style.transform = "translateY(-0.5px) scale(1.04)";
+        e.currentTarget.style.background = hoverBg;
+        e.currentTarget.style.boxShadow = isHero
+          ? "0 2px 4px rgba(0,0,0,0.2)"
+          : `0 2px 6px ${layerColor}77, 0 1px 2px rgba(0,0,0,0.1)`;
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.transform = "";
-        e.currentTarget.style.background = isHero
-          ? "rgba(255,255,255,0.14)"
-          : `${layerColor}14`;
+        e.currentTarget.style.background = baseBg;
+        e.currentTarget.style.boxShadow = isHero
+          ? "0 1px 2px rgba(0,0,0,0.15)"
+          : `0 1px 3px ${layerColor}55, 0 1px 2px rgba(0,0,0,0.08)`;
       }}
     >
-      <FlaskConical style={{ width: 8, height: 8 }} />
-      Lab
+      <FlaskConical style={{ width: 10, height: 10 }} />
+      <span>Lab</span>
+      <ArrowUpRight
+        style={{
+          width: 9,
+          height: 9,
+          marginLeft: -1,
+          opacity: 0.85,
+        }}
+        aria-hidden
+      />
     </a>
   );
 }

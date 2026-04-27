@@ -988,6 +988,28 @@ export type AssetCardShape = TLBaseShape<
     /** ISO timestamp when uploaded. Surfaces as relative time on the
      *  card ("2m ago" / "uploaded just now"). */
     uploadedAt: string;
+    /** HITL extraction lifecycle (mirrors
+     *  ingested_files.extraction_status). Drives the badge below the
+     *  filename:
+     *    - "pending_preview" / null → "Awaiting review" pill
+     *    - "previewed"               → "N candidates ready" pill
+     *    - "extracting"              → "Extracting…" pill (loading)
+     *    - "extracted"               → "✓ N entities extracted" pill
+     *    - "skipped"                 → "Skipped" pill (gray)
+     *    - "auto_extracted"          → "Auto-extracted" pill (legacy
+     *                                  path; user didn't review)
+     *  See src/components/canvas/chrome/extraction-checklist-drawer.tsx
+     *  for the corresponding drawer + src/types/extraction-preview.ts
+     *  for the canonical status enum. */
+    extractionStatus: string;
+    /** Number of entities materialized into the KG from this asset.
+     *  Used by the badge when status="extracted" or "auto_extracted"
+     *  to show "✓ 12 entities extracted". 0 when none committed yet. */
+    extractedEntityCount: number;
+    /** Number of candidates the preview surfaced. Used by the badge
+     *  when status="previewed" to show "12 candidates ready". 0 when
+     *  no preview has run yet. */
+    previewCandidateCount: number;
   }
 >;
 

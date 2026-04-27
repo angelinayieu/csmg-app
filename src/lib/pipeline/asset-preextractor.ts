@@ -26,6 +26,16 @@
 
 import { llmJSON } from "@/lib/llm";
 import type { AssetClass } from "@/types/asset";
+import { randomUUID } from "crypto";
+import {
+  CATEGORY_TO_ENTITY_CATEGORY,
+  EXTRACTION_CATEGORIES,
+  FOCUS_LEVEL_TARGETS,
+  type ExtractionCandidate,
+  type ExtractionCategory,
+  type ExtractionPreview,
+  type FocusLevel,
+} from "@/types/extraction-preview";
 
 export interface PreExtractedEntity {
   name: string;
@@ -297,4 +307,336 @@ export async function persistPreExtractedEntities(
   }
 
   return newIds;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// HITL extraction-checklist flow (docs/KG_DEPTH_CRITIQUE.md input-side)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Two-phase variant of the auto-extract flow above. Insert a user
+// review step between "ingest succeeded" and "entities live in the KG":
+//
+//   Phase 1: previewCandidatesFromAsset()
+//     Calls the LLM with a RICHER prompt — 15-30 candidates with
+//     ExtractionCategory tags + evidence quotes + suggested flags.
+//     Returns ExtractionPreview WITHOUT writing to the entities table.
+//     The caller persists the preview JSONB to
+//     ingested_files.extraction_preview so the drawer can be reopened
+//     without re-paying the LLM cost.
+//
+//   Phase 2: commitSelectedCandidates()
+//     Takes the preview JSONB + the user's selected_candidate_ids[],
+//     filters to the chosen subset, and reuses
+//     persistPreExtractedEntities() to write to entities.
+//
+// Honest defaults: when the user just hits "Extract" without filtering,
+// the suggested=true subset is auto-selected (matches the
+// auto-extract behavior the system had before the HITL flow).
+
+const PREVIEW_SYSTEM_PROMPT = `You are an entity extractor producing a candidate
+list for HUMAN REVIEW. Read the asset content + user's intake context
+and propose 15-30 candidate entities the user MIGHT want represented in
+their knowledge graph. The user will then check off the ones they
+actually want and discard the rest.
+
+Discipline:
+1. Be GENEROUS but GROUNDED. Propose more than auto-extract would —
+   the user is the filter, not you. But every candidate must be
+   anchored in a sentence you can quote from the asset. No
+   fabrication.
+2. Categorize each candidate using this rich taxonomy:
+   - concept       — theory, framework, principle, abstract idea
+   - effect_size   — quantitative finding with magnitude
+                     (e.g. "intervention raised retention 12pp")
+   - method        — methodology, technique, approach, protocol
+   - finding       — qualitative observation/claim without specific magnitude
+   - actor         — person, organization, role, team
+   - metric        — measurable variable / KPI (the THING measured)
+   - mechanism     — causal explanation ("X causes Y because Z mediates")
+   - condition     — boundary condition, qualifier, when applies
+   - outcome       — goal, target, desired result
+   - tool          — concrete artifact, instrument, dataset reference
+3. Confidence: 0.7+ for entities the asset explicitly defines /
+   measures / specifies; 0.4-0.6 for entities the asset references
+   without depth; below 0.4 → skip entirely.
+4. evidence_quote: a verbatim short quote (≤200 chars) from the
+   asset content that grounds the candidate. If you can't point to
+   one, set evidence_quote: null and lower confidence.
+5. suggested: TRUE for candidates that meet ALL of:
+   - confidence ≥ 0.7
+   - clearly relevant to the user's intake_text (when provided)
+   - load-bearing (the asset would lose meaning without this entity)
+   FALSE otherwise. Aim for ~30-50% of candidates marked suggested
+   so "Select suggested" is a meaningful default.
+6. description: ONE short sentence per candidate, in your own words,
+   summarizing what the entity IS as evidenced by the asset. Distinct
+   from evidence_quote (which is verbatim).
+
+Output strict JSON:
+{
+  "summary": "string — 1-2 sentences describing what this asset is and why it matters to the user's task. ≤500 chars. Surfaced at top of review drawer.",
+  "candidates": [
+    {
+      "name": "string",
+      "description": "string",
+      "category": "concept|effect_size|method|finding|actor|metric|mechanism|condition|outcome|tool",
+      "confidence": 0.0..1.0,
+      "evidence_quote": "string or null",
+      "suggested": true|false
+    }
+  ]
+}`;
+
+const PREVIEW_RESPONSE_SCHEMA = {
+  name: "asset_extraction_preview",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      summary: { type: ["string", "null"] },
+      candidates: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: { type: "string" },
+            description: { type: ["string", "null"] },
+            category: {
+              type: "string",
+              enum: [...EXTRACTION_CATEGORIES],
+            },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            evidence_quote: { type: ["string", "null"] },
+            suggested: { type: "boolean" },
+          },
+          required: [
+            "name",
+            "description",
+            "category",
+            "confidence",
+            "evidence_quote",
+            "suggested",
+          ],
+        },
+      },
+    },
+    required: ["summary", "candidates"],
+  },
+} as const;
+
+function buildPreviewPrompt(opts: PreExtractAssetOpts): string {
+  const lines: string[] = [];
+  if (opts.intakeText) {
+    lines.push(
+      "USER INTAKE CONTEXT (so you anchor extraction in the user's task — and so 'suggested' candidates are the ones that connect to this context):",
+    );
+    lines.push(opts.intakeText.slice(0, 800));
+    lines.push("");
+  }
+  lines.push(`ASSET TYPE: ${opts.assetClass}`);
+  lines.push(`ASSET NAME: ${opts.sourceName}`);
+  lines.push("");
+  lines.push("ASSET CONTENT:");
+  // Wider window than auto-extract — preview gets the user's
+  // attention, so the LLM can afford to scan more text. Cap at 4000
+  // chars (vs 1800 for auto-extract). The full normalized_text
+  // remains in DB if a future re-preview needs more.
+  const trimmed =
+    opts.contentSnippet.length > 4000
+      ? opts.contentSnippet.slice(0, 4000) + "\n[truncated]"
+      : opts.contentSnippet;
+  lines.push(trimmed);
+  lines.push("");
+  lines.push(
+    "Propose 15-30 candidate entities per the system instructions. The user will review and check off which to keep.",
+  );
+  return lines.join("\n");
+}
+
+/**
+ * Phase 1 — preview pass. Generates 15-30 candidates with rich
+ * categories + evidence quotes + suggested flags, but DOES NOT write
+ * to the entities table. Caller persists the result to
+ * ingested_files.extraction_preview so the drawer can be reopened
+ * idempotently. Soft-fails: returns a minimal-empty preview on any
+ * LLM error (caller can surface this as "preview unavailable" and
+ * fall back to auto-extract).
+ */
+export async function previewCandidatesFromAsset(
+  opts: PreExtractAssetOpts,
+): Promise<ExtractionPreview> {
+  const generatedAt = new Date().toISOString();
+  const emptyPreview: ExtractionPreview = {
+    asset_id: opts.assetId,
+    candidates: [],
+    category_counts: {},
+    suggested_count: 0,
+    total_count: 0,
+    generated_at: generatedAt,
+    summary: null,
+  };
+
+  if (!opts.contentSnippet || opts.contentSnippet.length < 80) {
+    // Too short to extract anything meaningful — return empty
+    // preview. The drawer will show "no candidates found; this
+    // asset may be too short to extract from."
+    return emptyPreview;
+  }
+
+  let raw: unknown;
+  try {
+    raw = await llmJSON<unknown>({
+      system: PREVIEW_SYSTEM_PROMPT,
+      user: buildPreviewPrompt(opts),
+      responseSchema: PREVIEW_RESPONSE_SCHEMA,
+      temperature: 0.2,
+      maxTokens: 3500,
+    });
+  } catch (err) {
+    console.warn(
+      `[asset-preextractor:preview] LLM call failed for ${opts.sourceName}:`,
+      err,
+    );
+    return emptyPreview;
+  }
+
+  if (!raw || typeof raw !== "object") return emptyPreview;
+  const r = raw as Record<string, unknown>;
+  const summaryRaw = r.summary;
+  const summary =
+    typeof summaryRaw === "string" && summaryRaw.trim().length > 0
+      ? summaryRaw.trim().slice(0, 500)
+      : null;
+
+  const rawCandidates = Array.isArray(r.candidates) ? r.candidates : [];
+  const candidates: ExtractionCandidate[] = [];
+  const categoryCounts: Partial<Record<ExtractionCategory, number>> = {};
+  let suggestedCount = 0;
+
+  for (const item of rawCandidates as Array<Record<string, unknown>>) {
+    const name = String(item.name ?? "").trim();
+    if (!name) continue;
+    const conf =
+      typeof item.confidence === "number" && Number.isFinite(item.confidence)
+        ? Math.max(0, Math.min(1, item.confidence))
+        : 0.5;
+    if (conf < 0.4) continue; // discipline rule from prompt
+
+    const categoryRaw = item.category;
+    if (
+      typeof categoryRaw !== "string" ||
+      !(EXTRACTION_CATEGORIES as readonly string[]).includes(categoryRaw)
+    ) {
+      continue;
+    }
+    const category = categoryRaw as ExtractionCategory;
+
+    const desc =
+      item.description == null
+        ? null
+        : String(item.description).trim().slice(0, 1000);
+    const evidence =
+      item.evidence_quote == null
+        ? null
+        : String(item.evidence_quote).trim().slice(0, 200);
+    const suggested = item.suggested === true;
+    if (suggested) suggestedCount += 1;
+    categoryCounts[category] = (categoryCounts[category] ?? 0) + 1;
+
+    candidates.push({
+      id: randomUUID(),
+      name: name.slice(0, 200),
+      description: desc,
+      category,
+      confidence: conf,
+      evidence_quote: evidence,
+      suggested,
+    });
+  }
+
+  return {
+    asset_id: opts.assetId,
+    candidates,
+    category_counts: categoryCounts,
+    suggested_count: suggestedCount,
+    total_count: candidates.length,
+    generated_at: generatedAt,
+    summary,
+  };
+}
+
+/**
+ * Phase 2 — commit pass. Takes a previously-cached ExtractionPreview
+ * and the user's selected_candidate_ids[], filters to the chosen
+ * subset, and writes them to the entities table via the existing
+ * persistPreExtractedEntities() path. Returns the inserted entity
+ * ids + a skipped count (candidates that deduped against existing
+ * entities in the same space + asset combo).
+ *
+ * Selection precedence:
+ *   1. If selectedCandidateIds is non-empty: use exactly those
+ *      candidates, ignoring focusLevel.
+ *   2. If selectedCandidateIds is empty AND focusLevel is set:
+ *      auto-select top-N suggested candidates where N =
+ *      FOCUS_LEVEL_TARGETS[focusLevel].
+ *   3. If both are empty: fall back to all suggested candidates
+ *      (matches auto-extract behavior).
+ */
+export async function commitSelectedCandidates(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  opts: {
+    spaceId: string;
+    userId: string;
+    assetId: string;
+    preview: ExtractionPreview;
+    selectedCandidateIds: string[];
+    focusLevel?: FocusLevel;
+  },
+): Promise<{ insertedIds: string[]; skippedCount: number }> {
+  const { preview, selectedCandidateIds, focusLevel } = opts;
+
+  // Pick the candidates to commit per the selection precedence above.
+  let chosen: ExtractionCandidate[];
+  if (selectedCandidateIds.length > 0) {
+    const idSet = new Set(selectedCandidateIds);
+    chosen = preview.candidates.filter((c) => idSet.has(c.id));
+  } else if (focusLevel) {
+    const target = FOCUS_LEVEL_TARGETS[focusLevel];
+    chosen = preview.candidates
+      .filter((c) => c.suggested)
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, target);
+  } else {
+    chosen = preview.candidates.filter((c) => c.suggested);
+  }
+
+  if (chosen.length === 0) {
+    return { insertedIds: [], skippedCount: 0 };
+  }
+
+  // Collapse rich category back onto the coarser entity_category enum
+  // the entities table accepts. Reuses the existing
+  // persistPreExtractedEntities() path so dedup + source_tag
+  // ("asset:<assetId>") + preextracted_entity_ids update all work
+  // unchanged.
+  const asEntities = chosen.map((c) => ({
+    name: c.name,
+    description: c.description,
+    entity_category: CATEGORY_TO_ENTITY_CATEGORY[c.category],
+    confidence: c.confidence,
+  }));
+
+  const insertedIds = await persistPreExtractedEntities(db, {
+    spaceId: opts.spaceId,
+    userId: opts.userId,
+    assetId: opts.assetId,
+    extracted: asEntities,
+  });
+
+  // skipped = chosen we asked to commit minus those that actually
+  // landed (the rest were deduped by name against existing entities).
+  const skippedCount = Math.max(0, chosen.length - insertedIds.length);
+  return { insertedIds, skippedCount };
 }

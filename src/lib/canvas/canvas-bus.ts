@@ -43,6 +43,23 @@ type Dispatcher = (
 
 let registeredNavigator: Navigator | null = null;
 let registeredDispatcher: Dispatcher | null = null;
+let registeredExtractionReviewer: ExtractionReviewer | null = null;
+
+/**
+ * HITL extraction-review trigger registered by the canvas host.
+ * Asset-card shapes call canvasOpenExtractionReview() on user
+ * interaction (click / dedicated button) and the host's hook
+ * (useExtractionReview) opens the drawer + drives the /preview
+ * route.
+ *
+ * See src/components/canvas/hooks/use-extraction-review.ts.
+ */
+type ExtractionReviewer = (input: {
+  assetId: string;
+  assetName: string;
+  assetClass?: string | null;
+  force?: boolean;
+}) => void;
 
 /**
  * Register (or replace) the canvas navigator. Typical usage from a
@@ -115,6 +132,55 @@ export async function canvasDispatch(
       reason:
         err instanceof Error ? err.message : "canvas-dispatcher-threw",
     };
+  }
+}
+
+/**
+ * Register (or replace) the extraction-review trigger. Typical usage
+ * from a React host:
+ *
+ *   const review = useExtractionReview();
+ *   useEffect(() => {
+ *     const unregister = setCanvasExtractionReviewer((input) => {
+ *       void review.open(input);
+ *     });
+ *     return unregister;
+ *   }, [review.open]);
+ */
+export function setCanvasExtractionReviewer(
+  fn: ExtractionReviewer,
+): () => void {
+  registeredExtractionReviewer = fn;
+  return () => {
+    if (registeredExtractionReviewer === fn) {
+      registeredExtractionReviewer = null;
+    }
+  };
+}
+
+/**
+ * Fire the extraction-review drawer for an asset. Silent no-op if no
+ * reviewer is registered (e.g. shape util rendered in a context
+ * without the host hook). Called from asset-card shape utils on
+ * double-click / dedicated review button.
+ */
+export function canvasOpenExtractionReview(input: {
+  assetId: string;
+  assetName: string;
+  assetClass?: string | null;
+  force?: boolean;
+}): void {
+  if (!input.assetId) return;
+  if (!registeredExtractionReviewer) {
+    console.warn(
+      "[canvas-bus] canvasOpenExtractionReview called but no reviewer registered",
+    );
+    return;
+  }
+  try {
+    registeredExtractionReviewer(input);
+  } catch (err) {
+    console.warn("[canvas-bus] extraction reviewer threw:", err);
   }
 }
 
