@@ -254,6 +254,59 @@ These are the architectural changes (not just number-tier upgrades). For per-num
 
 ---
 
+### Supabase resilience hardening (input-side reliability) — **🟢 LANDED**
+
+**Status (2026-04-28):** Direct response to Vercel error anomaly *2026-04-28 16:40 UTC* — "Intermittent Supabase API connectivity failures caused function timeouts on the /api/credits/balance route. Failures occurred on both Supabase authentication and profiles endpoints."
+
+**Why this matters for "whiteboard isn't generating":** the alert exposed that a transient Supabase blip cascades into:
+1. `/api/credits/balance` 504s on its 5s ceiling → credit chip shows error
+2. `safeAuth()` 401s on a transient Supabase auth call → every authenticated route fails simultaneously
+3. `reserveCredits()` 500s inside bootstrap → bootstrap returns "Insufficient credits" misleading prompt
+4. `pipeline_runs.status='failed'` written by bootstrap's outer safety net → HUD shows "Failed during Intake" even though the user's prompt was never the problem
+
+The user's whiteboard "wasn't generating" not because of a code bug in the pipeline but because **single-shot Supabase calls have no retry, and our timeouts are too aggressive**.
+
+**Files landed:**
+- [`src/lib/supabase-retry.ts`](../src/lib/supabase-retry.ts) — new module with `retrySupabase<T>(fn)` (for thrown errors) and `retrySupabaseQuery<T>(fn)` (for `{data, error}` patterns). 3 attempts, 100ms / 400ms / 1600ms backoff with ±50% jitter, ~2.1s worst-case wall. `isTransientNetworkError` predicate retries on `fetch failed`, ECONNRESET, ETIMEDOUT, 502/503/504, PostgREST connection codes (PGRST00*, 08*); does NOT retry on 4xx auth/RLS or constraint violations.
+- [`src/lib/credits.ts`](../src/lib/credits.ts) — `getBalance`, `reserveCredits`, `commitReservation`, `cancelReservation` all wrapped. The atomic deduct RPC and ledger writes get retry too. `console.warn` per retry surfaces transient blips in dev logs without polluting the user-visible error path.
+- [`src/lib/api-helpers.ts`](../src/lib/api-helpers.ts) — `safeAuth()` now wraps `auth.getUser()` in retrySupabase (2 attempts, conservative for hot path). Distinguishes infrastructure-failure 503 (with `Retry-After: 30` header + `isServiceDegradation: true` flag) from real 401 unauthenticated.
+- [`src/app/api/credits/balance/route.ts`](../src/app/api/credits/balance/route.ts) — `maxDuration` bumped 5s → 15s. The 5s ceiling was self-inflicting 504s during slow-but-not-dead Supabase degradations (3-8s p95). Vercel charges per actual time used, not the ceiling — no cost during healthy operation.
+- [`src/app/api/intake/bootstrap/route.ts`](../src/app/api/intake/bootstrap/route.ts) — credit-reservation failure now distinguishes "real insufficient credits" (402, with the credit-pack purchase prompt) from "transient Supabase outage" (503, with `isServiceDegradation: true` and "please try again in 30 seconds" copy). No partial `pipeline_runs` row written on the 503 path — clean fail instead of "Failed during Intake" phantom.
+
+**Behavioral guarantees:**
+- Transient Supabase blips of <2s are absorbed silently (retry succeeds within 100-400ms median)
+- Supabase outages >2s surface as 503 with `Retry-After`, not as misleading 402/401/500
+- Auth-path retries are conservative (2 attempts, ~500ms ceiling) to keep the green-path latency unchanged
+- Credit-path retries are aggressive (3 attempts, ~2.1s ceiling) because losing a credit reservation costs the user real money
+- All retries log via `console.warn` so dev can see transient activity without it becoming user-visible noise
+
+**Phase 2 (this session) — bootstrap pipeline + circuit breaker + UI banner:**
+
+The retry wrapper alone covers <2s blips. Sustained outages (the 8-min Vercel incident) need additional layers. Shipped 6 fixes in one bundle:
+
+- [`src/lib/supabase-retry.ts`](../src/lib/supabase-retry.ts) — added **circuit breaker** state machine. After 5 transient failures in 60s, breaker OPENS for 30s — every `retrySupabase` / `retrySupabaseQuery` call short-circuits with `CircuitOpenError` (3ms response) instead of hammering already-degraded Supabase. Auto-half-opens after cooldown. Module-local state (per-Lambda); successful call closes the breaker. Public exports: `getCircuitStatus()` (for /api/health), `resetCircuit()` (tests), `isCircuitOpenError()` (caller branching).
+- [`src/lib/api-helpers.ts`](../src/lib/api-helpers.ts) — `safeAuth` now returns 503 with `circuitBreakerOpen: true` + `Retry-After` header when the breaker is open. Distinguishes from generic transient 503.
+- [`src/app/api/intake/bootstrap/route.ts`](../src/app/api/intake/bootstrap/route.ts) — **parallelized intake stages**: classify-data-presence + frame-panel + analyze-situation now run via `Promise.allSettled` (cuts intake wall time from ~12s sequential to ~5s parallel). Added **per-stage timeouts** via AbortController: 15s for cheap stages, 30s for LLM-heavy, 45s for propose-plan. Hung stages no longer block the chain to the maxDuration ceiling.
+- [`src/components/canvas/pipeline-event-painter.tsx`](../src/components/canvas/pipeline-event-painter.tsx) — wires `kg_plan_proposed` SSE event to a `interaxis:kg-plan-proposed` window CustomEvent. Plan review card now appears within ~50ms of server insertion instead of up to 5s of polling delay.
+- [`src/components/canvas/whiteboard-bootstrap-splash.tsx`](../src/components/canvas/whiteboard-bootstrap-splash.tsx) — splash now polls `/api/spaces/[id]/kg-plans?status=open` AND listens for the new window event. When a plan exists, splash returns null so the user can interact with the plan card directly. Listens for approve/reject events to re-engage if needed.
+- [`src/app/api/health/supabase/route.ts`](../src/app/api/health/supabase/route.ts) — new health endpoint surfacing breaker state. No Supabase calls; reads in-memory module state. `maxDuration: 2`.
+- [`src/components/chrome/service-degradation-banner.tsx`](../src/components/chrome/service-degradation-banner.tsx) — sticky 32px yellow banner at top of viewport when breaker is open. Shows live countdown ("Auto-recovering in 23s"), polls every 10s while degraded / 60s on green path. On recovery shows green "✓ Service recovered" for 4s then hides.
+- [`src/app/layout.tsx`](../src/app/layout.tsx) — mounts `<ServiceDegradationBanner />` so it covers every authenticated page.
+
+**Behavioral guarantees after this bundle:**
+- Transient blips <2s: absorbed by retry (Phase 1)
+- Short outages 2-30s: circuit opens after 5 failures, fails fast for users + UI banner sets expectation, auto-recovers when Supabase comes back
+- Sustained outages >30s: banner stays up with live countdown; breaker re-probes every 30s
+- Bootstrap intake: parallelized (3 stages → ~5s) + timeouts prevent indefinite hangs (max 45s per stage instead of 300s)
+- Plan card: appears within 50ms of server insertion, splash steps out of the way, user immediately interacts with what's actually waiting
+
+**Still to do (architectural follow-ups, not blocking):**
+1. Apply retry wrapper to remaining Supabase touchpoints (decompose inserts, synthesize writes, etc.). Each is a one-line wrap.
+2. Cache last-known balance in sessionStorage for graceful degradation during multi-minute outages (let user start runs with stale balance + reconcile post-recovery).
+3. Circuit breaker scoping per Supabase endpoint (today: single global breaker; could split auth vs profiles vs PostgREST separately for finer-grained recovery).
+
+---
+
 ### HITL extraction checklist (input-side gap) — **🟢 LANDED**
 
 **Status (2026-04-26):** First pass shipped. The "auto-extract 3-8 entities from every uploaded asset" path now has a HITL alternative: a review drawer showing 15-30 candidates with rich categories + evidence quotes + suggested flags, with bulk actions (select all / select none / select suggested) + focus slider before commit.

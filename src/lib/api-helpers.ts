@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
+import {
+  retrySupabase,
+  isTransientNetworkError,
+  isCircuitOpenError,
+} from "@/lib/supabase-retry";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnySupabase = SupabaseClient<any>;
@@ -8,6 +13,20 @@ type AnySupabase = SupabaseClient<any>;
 /**
  * Safe auth: creates Supabase client + gets user, wrapped in try-catch.
  * Returns JSON error responses instead of throwing raw exceptions.
+ *
+ * Hardened against the Vercel error anomaly 2026-04-28 16:40 UTC
+ * ("Failures occurred on both Supabase authentication and profiles
+ * endpoints"). The auth.getUser() call is the single most-trafficked
+ * Supabase endpoint in the app — every authenticated route calls it
+ * via this function. Wrapping it in retrySupabase absorbs short
+ * transient blips before they cascade into 401/503 responses across
+ * every page mount + every credit chip + every bootstrap submission.
+ *
+ * Distinguishes:
+ *   - 401 when auth.getUser() returns a real auth error or no user
+ *     (intentional — actual unauthenticated request)
+ *   - 503 when the call throws after retries exhausted (transient
+ *     Supabase outage — caller should retry in 30s)
  */
 export async function safeAuth(): Promise<
   | { supabase: AnySupabase; user: { id: string; email?: string }; error: null }
@@ -15,10 +34,27 @@ export async function safeAuth(): Promise<
 > {
   try {
     const supabase = await createClient();
-    const {
-      data: { user },
-      error,
-    } = await supabase.auth.getUser();
+    // Wrap auth.getUser in retrySupabase. The SDK throws on network
+    // failures (handled here); 401-shaped responses come through as
+    // `{ error: { message: "..." } }` and are NOT retried (the
+    // isTransientNetworkError predicate rejects auth-shaped errors
+    // by returning false on 4xx status codes).
+    const result = await retrySupabase(
+      () => supabase.auth.getUser(),
+      {
+        // Conservative: only 2 attempts total to keep the auth path
+        // fast on the green path. Total worst-case ~500ms wall vs
+        // 3-attempt's ~2s. Auth is on the hot path of every request.
+        maxAttempts: 2,
+        baseMs: 200,
+        onRetry: (err, attempt, delayMs) =>
+          console.warn(
+            `[safeAuth] auth.getUser retry ${attempt} after ${delayMs}ms:`,
+            err instanceof Error ? err.message : err,
+          ),
+      },
+    );
+    const { data: { user }, error } = result;
 
     if (error || !user) {
       return {
@@ -30,13 +66,56 @@ export async function safeAuth(): Promise<
 
     return { supabase: supabase as AnySupabase, user, error: null };
   } catch (err) {
-    console.error("[safeAuth] Supabase connection failed:", err);
+    // Three distinguishable failure modes:
+    //   1. CircuitOpenError — breaker tripped from upstream sustained
+    //      outage. Fast-fail with a clean 503 + Retry-After. The
+    //      breaker auto-recovers after CIRCUIT_COOLDOWN_MS so the
+    //      client retrying after that window will succeed.
+    //   2. Transient network error after retries exhausted — same 503
+    //      with Retry-After: 30, but explicit "auth temporarily
+    //      unavailable" copy.
+    //   3. Other thrown error — generic 503.
+    if (isCircuitOpenError(err)) {
+      const retryAfterSec = Math.ceil(err.retryAfterMs / 1000);
+      console.warn(
+        `[safeAuth] Circuit breaker open — fast-fail 503 (retry in ${retryAfterSec}s)`,
+      );
+      return {
+        supabase: null,
+        user: null,
+        error: NextResponse.json(
+          {
+            error: `Supabase service degraded. Auto-recovering in ${retryAfterSec}s.`,
+            isServiceDegradation: true,
+            circuitBreakerOpen: true,
+            retryAfterSeconds: retryAfterSec,
+          },
+          {
+            status: 503,
+            headers: { "Retry-After": String(retryAfterSec) },
+          },
+        ),
+      };
+    }
+    const isInfra = isTransientNetworkError(err);
+    console.error(
+      `[safeAuth] Supabase connection failed (infra=${isInfra}):`,
+      err,
+    );
     return {
       supabase: null,
       user: null,
       error: NextResponse.json(
-        { error: "Service temporarily unavailable. Please try again." },
-        { status: 503 }
+        {
+          error: isInfra
+            ? "Supabase auth is temporarily unavailable. Please try again in a moment."
+            : "Service temporarily unavailable. Please try again.",
+          isServiceDegradation: isInfra,
+        },
+        {
+          status: 503,
+          headers: isInfra ? { "Retry-After": "30" } : {},
+        },
       ),
     };
   }

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { TIERS, type AnalysisTier } from "./tiers";
+import { retrySupabaseQuery } from "./supabase-retry";
 
 /**
  * When NEXT_PUBLIC_BYPASS_CREDITS=true, all credit checks pass and
@@ -9,6 +10,19 @@ const BYPASS =
   process.env.NEXT_PUBLIC_BYPASS_CREDITS === "true" ||
   process.env.BYPASS_CREDITS === "true";
 
+/**
+ * Retry-wrap for transient Supabase outages (Vercel alert
+ * 2026-04-28 16:40 UTC: profiles + auth endpoints intermittent).
+ * 3 attempts, 100ms / 400ms / 1600ms backoff with ±50% jitter —
+ * total worst-case wall time ~2.1s. Retries on:
+ *   - "fetch failed" / ECONNRESET / ETIMEDOUT
+ *   - PostgREST connection errors (PGRST00*, 08*)
+ *   - 502 / 503 / 504 responses
+ * Does NOT retry on auth/RLS denials or constraint violations.
+ *
+ * See src/lib/supabase-retry.ts for the predicate.
+ */
+
 export async function getBalance(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: SupabaseClient<any>,
@@ -16,13 +30,23 @@ export async function getBalance(
 ): Promise<number> {
   if (BYPASS) return 9999;
 
-  const { data } = await supabase
-    .from("profiles")
-    .select("credit_balance")
-    .eq("id", userId)
-    .single();
+  const { data } = await retrySupabaseQuery<{ credit_balance?: number }>(
+    () =>
+      supabase
+        .from("profiles")
+        .select("credit_balance")
+        .eq("id", userId)
+        .single(),
+    {
+      onRetry: (err, attempt, delayMs) =>
+        console.warn(
+          `[credits.getBalance] retry ${attempt} after ${delayMs}ms (transient Supabase error):`,
+          err instanceof Error ? err.message : err,
+        ),
+    },
+  );
 
-  return (data as { credit_balance?: number } | null)?.credit_balance ?? 0;
+  return data?.credit_balance ?? 0;
 }
 
 export async function checkCredits(
@@ -65,23 +89,36 @@ export async function reserveCredits(
   }
 
   try {
-    const { data, error } = await supabase
-      .from("credit_reservations")
-      .insert({
-        user_id: userId,
-        tier,
-        amount: cost,
-        status: "reserved",
-      })
-      .select("id")
-      .single();
+    const { data, error } = await retrySupabaseQuery<{ id: string }>(
+      () =>
+        supabase
+          .from("credit_reservations")
+          .insert({
+            user_id: userId,
+            tier,
+            amount: cost,
+            status: "reserved",
+          })
+          .select("id")
+          .single(),
+      {
+        onRetry: (err, attempt, delayMs) =>
+          console.warn(
+            `[credits.reserveCredits] retry ${attempt} after ${delayMs}ms (transient Supabase error):`,
+            err instanceof Error ? err.message : err,
+          ),
+      },
+    );
 
     if (error) {
-      return { success: false, reservationId: "", error: error.message };
+      return { success: false, reservationId: "", error: error.message ?? "reservation failed" };
     }
 
-    const reservationId = (data as { id: string }).id;
-    return { reservationId, success: true };
+    if (!data) {
+      return { success: false, reservationId: "", error: "reservation insert returned no row" };
+    }
+
+    return { reservationId: data.id, success: true };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     return { success: false, reservationId: "", error: errMsg };
@@ -104,12 +141,26 @@ export async function commitReservation(
 
   try {
     // Get reservation details
-    const { data: reservation, error: fetchErr } = await supabase
-      .from("credit_reservations")
-      .select("*")
-      .eq("id", reservationId)
-      .eq("status", "reserved")
-      .single();
+    const { data: reservation, error: fetchErr } = await retrySupabaseQuery<{
+      user_id: string;
+      amount: number;
+      tier: string;
+    }>(
+      () =>
+        supabase
+          .from("credit_reservations")
+          .select("*")
+          .eq("id", reservationId)
+          .eq("status", "reserved")
+          .single(),
+      {
+        onRetry: (err, attempt, delayMs) =>
+          console.warn(
+            `[credits.commitReservation:fetch] retry ${attempt} after ${delayMs}ms:`,
+            err instanceof Error ? err.message : err,
+          ),
+      },
+    );
 
     if (fetchErr || !reservation) {
       const errMsg = fetchErr?.message ?? "Reservation not found or already processed";
@@ -117,13 +168,23 @@ export async function commitReservation(
     }
 
     // Atomic decrement: prevents race conditions
-    const { data: updated, error: updateErr } = await supabase.rpc(
-      "deduct_credits",
-      { p_user_id: reservation.user_id, p_amount: reservation.amount }
+    const { data: updated, error: updateErr } = await retrySupabaseQuery<number>(
+      () =>
+        supabase.rpc("deduct_credits", {
+          p_user_id: reservation.user_id,
+          p_amount: reservation.amount,
+        }),
+      {
+        onRetry: (err, attempt, delayMs) =>
+          console.warn(
+            `[credits.commitReservation:rpc] retry ${attempt} after ${delayMs}ms:`,
+            err instanceof Error ? err.message : err,
+          ),
+      },
     );
 
     if (updateErr) {
-      return { newBalance: 0, success: false, error: updateErr.message };
+      return { newBalance: 0, success: false, error: updateErr.message ?? "deduct_credits failed" };
     }
 
     const newBalance = typeof updated === "number" ? updated : 0;
@@ -133,20 +194,28 @@ export async function commitReservation(
       return { newBalance: 0, success: false, error: "Insufficient credits" };
     }
 
-    // Log the transaction
-    await supabase.from("credit_ledger").insert({
-      user_id: reservation.user_id,
-      amount: -reservation.amount,
-      reason: `analysis_${reservation.tier}`,
-      space_id: rootSpaceId ?? null,
-      balance_after: newBalance,
-    });
+    // Log the transaction. Ledger writes are best-effort — we already
+    // deducted credits via the atomic RPC above, so a ledger blip
+    // shouldn't roll back the user's debit.
+    await retrySupabaseQuery(
+      () =>
+        supabase.from("credit_ledger").insert({
+          user_id: reservation.user_id,
+          amount: -reservation.amount,
+          reason: `analysis_${reservation.tier}`,
+          space_id: rootSpaceId ?? null,
+          balance_after: newBalance,
+        }),
+    ).catch(() => {});
 
     // Mark reservation as committed
-    await supabase
-      .from("credit_reservations")
-      .update({ status: "committed", committed_at: new Date().toISOString() })
-      .eq("id", reservationId);
+    await retrySupabaseQuery(
+      () =>
+        supabase
+          .from("credit_reservations")
+          .update({ status: "committed", committed_at: new Date().toISOString() })
+          .eq("id", reservationId),
+    ).catch(() => {});
 
     return { newBalance, success: true };
   } catch (err) {
@@ -168,13 +237,26 @@ export async function cancelReservation(
   }
 
   try {
-    const { error } = await supabase
-      .from("credit_reservations")
-      .update({ status: "cancelled", cancelled_at: new Date().toISOString() })
-      .eq("id", reservationId);
+    // Cancellation is critical — if it fails, the user's reservation
+    // hangs in 'reserved' state and they can't retry without
+    // appearing to be double-charged. Retry on transient failures.
+    const { error } = await retrySupabaseQuery(
+      () =>
+        supabase
+          .from("credit_reservations")
+          .update({ status: "cancelled", cancelled_at: new Date().toISOString() })
+          .eq("id", reservationId),
+      {
+        onRetry: (err, attempt, delayMs) =>
+          console.warn(
+            `[credits.cancelReservation] retry ${attempt} after ${delayMs}ms:`,
+            err instanceof Error ? err.message : err,
+          ),
+      },
+    );
 
     if (error) {
-      return { success: false, error: error.message };
+      return { success: false, error: error.message ?? "cancellation failed" };
     }
 
     return { success: true };

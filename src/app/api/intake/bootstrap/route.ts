@@ -140,6 +140,43 @@ export async function POST(request: Request) {
         : "standard";
   const reservation = await reserveCredits(db, user.id, tier);
   if (!reservation.success) {
+    // Distinguish real "insufficient credits" (402) from transient
+    // Supabase outages (503). Without this, the Vercel error anomaly
+    // 2026-04-28 16:40 UTC would have surfaced as "buy more credits"
+    // popups for users whose balance was actually fine — Supabase
+    // was just down. The retry wrapper in src/lib/supabase-retry.ts
+    // already absorbs short blips; this handles the case where
+    // retries were exhausted.
+    const errMsg = (reservation.error ?? "").toLowerCase();
+    const isInsufficient =
+      errMsg.includes("insufficient credits") || errMsg.includes("need ");
+    if (!isInsufficient) {
+      // Service degradation — return 503 with a clear message + a
+      // Retry-After hint so the client can show "Service temporarily
+      // unavailable, please try again in a moment" instead of a
+      // misleading credit prompt. We deliberately do NOT write a
+      // partial pipeline_runs row here — the caller never even got
+      // past credit reservation, so there's no in-flight state to
+      // surface as "Failed during Intake" later.
+      console.warn(
+        "[intake/bootstrap] credit reservation failed (likely transient Supabase):",
+        reservation.error,
+      );
+      return NextResponse.json(
+        {
+          isServiceDegradation: true,
+          error:
+            "Service temporarily unavailable — Supabase connectivity is degraded. Please try again in a moment.",
+          retryAfterSeconds: 30,
+        },
+        {
+          status: 503,
+          headers: { "Retry-After": "30" },
+        },
+      );
+    }
+    // Real insufficient-credits path. getBalance is also retry-wrapped,
+    // so this read is robust.
     const balance = await getBalance(db, user.id);
     return NextResponse.json(
       {
@@ -358,128 +395,106 @@ export async function POST(request: Request) {
     // rejection) would otherwise leave the run in `running` with no
     // terminal event. Catch, mark failed, cancel the reservation.
     try {
-    // ── Data-presence classification (migration 20260425) ──────────
+    // ── Per-stage timeout helper ──────────────────────────────────
     //
-    // Run BEFORE frame-extractor, awaited synchronously, so the tags
-    // are persisted on spaces.data_presence by the time frame-extractor
-    // re-reads them. Classifier is cheap (~0.5-2s, keyword fast-path
-    // skips the LLM entirely for obvious cases) so this adds ~nothing
-    // to total latency vs. running it in parallel and then requiring
-    // frame-extractor to wait on it anyway.
+    // Each intake sub-stage now runs through fetchWithTimeout so a
+    // hung LLM call (Anthropic latency spike, 429 retry loop) can't
+    // block the entire bootstrap chain. Without this, frame-panel's
+    // 3 parallel LLM calls could hang for the full maxDuration=300s
+    // ceiling — making the user think their whiteboard is dead.
     //
-    // Soft-fail: if classification 500s or the UPDATE fails, the column
-    // stays null and frame-extractor falls back to the legacy all-8-axis
-    // behavior. No regression vs. pre-migration.
-    try {
-      await fetch(`${origin}/api/pipeline/classify-data-presence`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: cookieHeader,
-        },
-        body: JSON.stringify({
-          space_id: spaceId,
-          input_text: trimmed,
-          run_id: runId,
-        }),
-      });
-    } catch (err) {
-      console.warn(
-        "[intake/bootstrap] classify-data-presence kickoff failed (non-fatal):",
-        err,
+    // 30s ceiling for LLM-heavy stages (frame-panel,
+    // analyze-situation, frame-extractor, propose-plan), 15s for
+    // cheaper stages (classify-data-presence, domain-inferrer).
+    // Conservative: most stages finish in 3-8s on the green path.
+    const fetchWithTimeout = (
+      url: string,
+      init: RequestInit,
+      timeoutMs: number,
+    ): Promise<Response> => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      return fetch(url, { ...init, signal: ctrl.signal }).finally(() =>
+        clearTimeout(t),
       );
-    }
+    };
 
-    // ── Framing panel (migration 20260528_situation_frame) ─────────
+    const stageHeaders = {
+      "Content-Type": "application/json",
+      Cookie: cookieHeader,
+    } as const;
+    const stageBody = JSON.stringify({
+      space_id: spaceId,
+      input_text: trimmed,
+      run_id: runId,
+    });
+
+    // ── Phase 1 · parallel intake-context stages ─────────────────
     //
-    // Runs 3 parallel lens LLM calls (systems_analyst, skeptic,
-    // operator), merges via consensus, persists to
-    // spaces.situation_frame. Awaited BEFORE frame-extractor so the
-    // latter can consume the frame to pick axes instead of falling
-    // back to the legacy (type, domain, data_presence) path.
+    // PRIOR to this refactor, classify-data-presence, frame-panel,
+    // and analyze-situation ran sequentially with `await` (~12s
+    // wall time + serial dev-server route hops). They have NO
+    // inter-dependencies at the bootstrap layer:
+    //   - classify writes spaces.data_presence
+    //   - frame-panel writes spaces.situation_frame
+    //   - analyze writes spaces.situation_baseline
     //
-    // Budget: 3 parallel ~500-token calls → ~1.5-3s wall time.
-    // Happens after data-presence completes so the lenses receive
-    // the presence tags in their prompts and can calibrate (operator
-    // lens down-weights external × concrete when has_telemetry is
-    // false, etc).
+    // Each is an independent UPDATE on a different column. Frame-
+    // extractor below DOES depend on all three, so we await this
+    // Promise.allSettled before firing it.
     //
-    // Soft-fail: if frame-panel 500s or all lenses degrade, the
-    // column stays null and frame-extractor falls back to legacy
-    // behavior. No regression vs. pre-migration.
+    // Net wall-time saving: ~12s sequential → ~5s parallel
+    // (bottlenecked by frame-panel's 3-lens LLM calls).
+    //
+    // Soft-fail discipline: Promise.allSettled captures rejections
+    // per-stage. A failed sub-stage logs but doesn't take down the
+    // chain — frame-extractor + decompose still proceed with
+    // whatever columns DID get written.
+    const phase1 = await Promise.allSettled([
+      fetchWithTimeout(
+        `${origin}/api/pipeline/classify-data-presence`,
+        { method: "POST", headers: stageHeaders, body: stageBody },
+        15_000, // cheaper stage
+      ),
+      fetchWithTimeout(
+        `${origin}/api/pipeline/frame-panel`,
+        { method: "POST", headers: stageHeaders, body: stageBody },
+        30_000, // 3 parallel LLM calls
+      ),
+      fetchWithTimeout(
+        `${origin}/api/pipeline/analyze-situation`,
+        { method: "POST", headers: stageHeaders, body: stageBody },
+        30_000, // single structured-output LLM
+      ),
+    ]);
+    // Surface any phase-1 failures so dev/prod logs show which
+    // stage degraded. Production behavior is unchanged — soft-fail
+    // semantics preserved.
+    const PHASE_1_NAMES = ["classify-data-presence", "frame-panel", "analyze-situation"];
+    phase1.forEach((res, i) => {
+      if (res.status === "rejected") {
+        console.warn(
+          `[intake/bootstrap] phase1.${PHASE_1_NAMES[i]} failed (non-fatal):`,
+          res.reason,
+        );
+      }
+    });
+
+    // ── Phase 2 · frame-extractor (depends on phase 1 writes) ────
+    //
+    // Reads data_presence + situation_frame from spaces (written by
+    // phase 1). Opens probability_space_runs rows so shells start
+    // appearing on the canvas in parallel with decompose Pass 1.
     try {
-      await fetch(`${origin}/api/pipeline/frame-panel`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: cookieHeader,
+      await fetchWithTimeout(
+        `${origin}/api/pipeline/frame-extractor`,
+        {
+          method: "POST",
+          headers: stageHeaders,
+          body: JSON.stringify({ runId, spaceId, inputText: trimmed }),
         },
-        body: JSON.stringify({
-          space_id: spaceId,
-          input_text: trimmed,
-          run_id: runId,
-        }),
-      });
-    } catch (err) {
-      console.warn(
-        "[intake/bootstrap] frame-panel kickoff failed (non-fatal):",
-        err,
+        30_000,
       );
-    }
-
-    // ── Situation analyzer (migration 20260605) ────────────────────
-    //
-    // NEW layer between data-presence/frame-panel and frame-extractor.
-    // Builds a structured "current state" snapshot from intake_text +
-    // attached assets so the canvas has a top-of-flow baseline twin
-    // card. Branches by twin_mode:
-    //   - structural (idea-only) + no assets → SKIPPED (cheap no-op)
-    //   - observational / simulation OR assets present → RUNS (~2-5s
-    //     LLM call, single structured-output JSON)
-    //
-    // Soft-fails: if the analyzer 500s or times out, the column stays
-    // null and frame-extractor proceeds with the legacy flow.
-    // Awaited so frame-extractor can later read situation_baseline
-    // off the space row (a future iteration of frame-extractor will
-    // use the unknowns list to scope axis selection).
-    try {
-      await fetch(`${origin}/api/pipeline/analyze-situation`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: cookieHeader,
-        },
-        body: JSON.stringify({
-          space_id: spaceId,
-          input_text: trimmed,
-          run_id: runId,
-        }),
-      });
-    } catch (err) {
-      console.warn(
-        "[intake/bootstrap] analyze-situation kickoff failed (non-fatal):",
-        err,
-      );
-    }
-
-    // Phase 2E · Tier 2 — fire the frame extractor BEFORE decompose
-    // so probability-space shells appear on canvas in the first ~2s
-    // while decompose is still warming up. Fully async + soft-fail:
-    // if the classifier errors, decompose still runs and the user
-    // just sees a shell-less flow (the existing path).
-    try {
-      await fetch(`${origin}/api/pipeline/frame-extractor`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: cookieHeader,
-        },
-        body: JSON.stringify({
-          runId,
-          spaceId,
-          inputText: trimmed,
-        }),
-      });
     } catch (err) {
       console.warn(
         "[intake/bootstrap] frame-extractor kickoff failed (non-fatal):",
@@ -547,32 +562,40 @@ export async function POST(request: Request) {
     let planGateBlocked = false;
     if (!skipPlanGate) {
       try {
-        const planRes = await fetch(`${origin}/api/pipeline/propose-plan`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Cookie: cookieHeader,
-          },
-          body: JSON.stringify({
-            space_id: spaceId,
-            prompt: trimmed,
-            mode: planMode,
-            prefer_starter_when_match: true,
-            // Capture everything the approve route needs to fire
-            // decompose with the original bootstrap context. Without
-            // this the approve route can't rehydrate (no reservation,
-            // no run linkage).
-            pipeline_handoff_context: {
-              reservation_id: reservationId,
-              intake_run_id: runId,
-              decompose_input: {
-                text: trimmed,
-                reasoningDepth,
-                autoAdvance: true,
-              },
+        // Plan generation runs a single big LLM call inside
+        // propose-plan. 45s is the conservative ceiling — we'd
+        // rather time out and let the user watch decompose run
+        // directly than block the chain on a hung LLM call.
+        const planRes = await fetchWithTimeout(
+          `${origin}/api/pipeline/propose-plan`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
             },
-          }),
-        });
+            body: JSON.stringify({
+              space_id: spaceId,
+              prompt: trimmed,
+              mode: planMode,
+              prefer_starter_when_match: true,
+              // Capture everything the approve route needs to fire
+              // decompose with the original bootstrap context. Without
+              // this the approve route can't rehydrate (no reservation,
+              // no run linkage).
+              pipeline_handoff_context: {
+                reservation_id: reservationId,
+                intake_run_id: runId,
+                decompose_input: {
+                  text: trimmed,
+                  reasoningDepth,
+                  autoAdvance: true,
+                },
+              },
+            }),
+          },
+          45_000,
+        );
         if (planRes.ok) {
           planGateBlocked = true;
           console.log(

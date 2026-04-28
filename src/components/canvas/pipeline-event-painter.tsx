@@ -2825,6 +2825,38 @@ function paintEvent(
         fitViewportToUnfurl(editor, state);
       }
       return;
+    case "kg_plan_proposed":
+      // The propose-plan route emits this SSE event the moment the
+      // plan row lands in DB. Translate it into a window-level
+      // CustomEvent so KgPlanReviewGate can pop the review card up
+      // immediately instead of waiting up to 5s for its polling
+      // fallback to discover the new plan.
+      //
+      // No tldraw shape painted — the plan card is a chrome overlay,
+      // not a canvas object. The gate listens for this exact event
+      // name in src/components/canvas/chrome/kg-plan-review-gate.tsx.
+      if (typeof window !== "undefined") {
+        try {
+          const planEvent = event as Extract<
+            StructuralEvent,
+            { type: "kg_plan_proposed" }
+          > & { spaceId?: string };
+          window.dispatchEvent(
+            new CustomEvent("interaxis:kg-plan-proposed", {
+              detail: {
+                spaceId: planEvent.spaceId ?? null,
+                planId: planEvent.planId,
+              },
+            }),
+          );
+        } catch (err) {
+          console.warn(
+            "[painter] kg_plan_proposed window event dispatch failed:",
+            err,
+          );
+        }
+      }
+      return;
     default:
       // Audit fix (docs/KG_DEPTH_CRITIQUE.md): the prior default
       // silently swallowed every unhandled event type. That created

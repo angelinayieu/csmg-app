@@ -43,7 +43,7 @@ Rules:
 - If the card is a reply in a conversation, build on the thread — don't restart the conversation.
 - Do NOT include preamble, numbering, or closing remarks.
 
-Return exactly: { "questions": ["…", "…", "…"] }`;
+Return JSON exactly in this shape: { "questions": ["…", "…", "…"] }`;
 
 export async function POST(request: Request) {
   const { supabase, user, error: authError } = await safeAuth();

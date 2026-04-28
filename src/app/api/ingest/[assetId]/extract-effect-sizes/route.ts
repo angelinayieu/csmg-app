@@ -149,12 +149,37 @@ export async function POST(
     inserted.push(insRow as EvidenceRegistryRow);
   }
 
+  // Auto-attach pass — resolve `outcome_label` against existing
+  // entities in the space and set `attached_entity_id` for high-
+  // confidence matches. Runs BEFORE the pool recompute so the
+  // pooling step sees freshly-attached rows in the same call.
+  // Mutates the in-memory `inserted` array's flags so the response
+  // reflects the auto-attach decision without a re-fetch.
+  let auto_attach_summary = null;
+  if (inserted.length > 0) {
+    try {
+      const { autoAttachEvidence } = await import(
+        "@/lib/evidence/auto-attach"
+      );
+      auto_attach_summary = await autoAttachEvidence(
+        db,
+        asset.space_id,
+        inserted,
+      );
+    } catch (err) {
+      console.warn(
+        "[extract-effect-sizes] auto-attach soft-failed:",
+        err,
+      );
+    }
+  }
+
   // Phase 6A — auto-recompute edge strengths now that new evidence
-  // has landed. Soft-fail discipline: pooling errors must never
-  // propagate to the user (they got the evidence rows; pooling is
-  // a downstream rigor pass). The recompute is bounded (one query
-  // per edge in the space) so we run it inline; future scale
-  // would move it to a background job.
+  // has landed (and possibly been auto-attached). Soft-fail discipline:
+  // pooling errors must never propagate to the user (they got the
+  // evidence rows; pooling is a downstream rigor pass). The recompute
+  // is bounded (one query per edge in the space) so we run it inline;
+  // future scale would move it to a background job.
   let edge_repool_summary = null;
   if (inserted.length > 0) {
     try {
@@ -181,6 +206,7 @@ export async function POST(
     insert_errors: insertErrors,
     rows: inserted,
     generated_at: result.generated_at,
+    auto_attach_summary,
     edge_repool_summary,
   });
 }

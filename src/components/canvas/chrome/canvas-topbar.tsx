@@ -13,6 +13,7 @@ import {
   ListTree,
   Cog,
   FlaskConical,
+  ArrowRightLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -97,6 +98,14 @@ export function CanvasTopBar({
           >
             <ListTree className="h-3 w-3" />
             Entities
+          </Link>
+          <Link
+            href={`/app/space/${spaceId}/edges`}
+            className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[10.5px] font-semibold text-gray-500 transition hover:bg-gray-100 hover:text-gray-800"
+            title="Edges browser — every connection sortable by pooled effect size, CI, τ², heterogeneity, evidence count."
+          >
+            <ArrowRightLeft className="h-3 w-3" />
+            Edges
           </Link>
           <Link
             href={`/app/space/${spaceId}/systems`}

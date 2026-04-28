@@ -282,14 +282,36 @@ export async function llmJSON<T = unknown>(opts: {
     const openai = getOpenAI();
     const model = opts.model ?? MODEL;
 
-    // Build the API request
+    // Build the API request.
+    //
+    // OpenAI guardrail: when response_format = { type: "json_object" },
+    // the messages array MUST contain the literal substring "json"
+    // (case-insensitive) somewhere — otherwise the API rejects with:
+    //   400 'messages' must contain the word 'json' in some form,
+    //   to use 'response_format' of type 'json_object'.
+    //
+    // We hit this in production via /api/canvas/card-insights whose
+    // system prompt asked for "{ questions: [...] }" without using
+    // the word "json". Rather than fixing each of the 30+ call sites
+    // individually, we self-protect here: in the json_object path,
+    // detect the missing keyword and inject a short guard line into
+    // the system prompt. The json_schema path is unaffected — that
+    // mode does NOT have this requirement.
+    let systemContent = opts.system;
+    if (!opts.responseSchema) {
+      const combined = `${opts.system}\n${opts.user}`;
+      if (!/json/i.test(combined)) {
+        systemContent = `${opts.system}\n\nReturn JSON only.`;
+      }
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const params: any = {
       model,
       max_tokens: opts.maxTokens ?? 8192,
       temperature: opts.temperature ?? 0.3,
       messages: [
-        { role: "system", content: opts.system },
+        { role: "system", content: systemContent },
         { role: "user", content: opts.user },
       ],
     };
@@ -305,7 +327,9 @@ export async function llmJSON<T = unknown>(opts: {
         },
       };
     } else {
-      // Fallback: request JSON mode (less strict but better than text)
+      // Fallback: request JSON mode (less strict but better than text).
+      // Guarded above by the json-keyword auto-injection so OpenAI's
+      // "messages must contain 'json'" check never trips.
       params.response_format = { type: "json_object" };
     }
 

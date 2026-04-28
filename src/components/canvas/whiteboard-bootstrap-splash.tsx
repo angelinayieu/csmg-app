@@ -88,6 +88,13 @@ export function WhiteboardBootstrapSplash({
   const [runStatus, setRunStatus] = useState<RunStatus>("unknown");
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  // Tracks whether the plan gate is engaged. When a "proposed" or
+  // "edited" plan exists for this space, the splash should step out
+  // of the way so the user can interact with the plan card. Without
+  // this, the splash overlays the canvas saying "Pipeline taking
+  // longer than usual…" while the user is actually waiting on
+  // themselves to approve the plan — confusing.
+  const [planPending, setPlanPending] = useState(false);
 
   useEffect(() => {
     if (!shouldShow) return;
@@ -170,6 +177,83 @@ export function WhiteboardBootstrapSplash({
     };
   }, [shouldShow, runId]);
 
+  // ── Plan-pending poll ──────────────────────────────────────────
+  //
+  // When propose-plan succeeds, bootstrap returns early without
+  // firing decompose — the chain pauses for user approval. Splash
+  // needs to know about that state so it can step out of the way
+  // (the plan review card lives at z-100, above our z-60 veil, but
+  // visual focus on the splash makes users miss the card).
+  //
+  // Three signals can flip planPending:
+  //   1. `interaxis:kg-plan-proposed` window event from the painter
+  //      (fires within ~50ms of the SSE event landing — fastest path)
+  //   2. 5-second poll on /api/spaces/[id]/kg-plans?status=open
+  //      (catches the case where the SSE event missed us due to
+  //      hydration race)
+  //   3. `interaxis:kg-plan-approved` / `kg-plan-rejected` window
+  //      events flip planPending=false so the splash can re-engage
+  //      if approval doesn't immediately produce entities
+  useEffect(() => {
+    if (!shouldShow || !spaceId) return;
+    let cancelled = false;
+
+    const checkForPlan = async () => {
+      try {
+        const res = await fetch(
+          `/api/spaces/${spaceId}/kg-plans?status=open`,
+          { credentials: "include", cache: "no-store" },
+        );
+        if (!res.ok) return;
+        const j = (await res.json()) as {
+          plans?: Array<{ status?: string }>;
+        };
+        if (cancelled) return;
+        const open = (j.plans ?? []).find(
+          (p) => p?.status === "proposed" || p?.status === "edited",
+        );
+        setPlanPending(!!open);
+      } catch {
+        // network blip — try again next tick
+      }
+    };
+
+    const onProposed = () => {
+      // Fast path: SSE-translated event from the painter. Skip the
+      // poll since we already know a plan exists.
+      setPlanPending(true);
+    };
+    const onApprovedOrRejected = () => {
+      setPlanPending(false);
+    };
+
+    void checkForPlan();
+    const interval = window.setInterval(checkForPlan, 5000);
+    window.addEventListener("interaxis:kg-plan-proposed", onProposed);
+    window.addEventListener(
+      "interaxis:kg-plan-approved",
+      onApprovedOrRejected,
+    );
+    window.addEventListener(
+      "interaxis:kg-plan-rejected",
+      onApprovedOrRejected,
+    );
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("interaxis:kg-plan-proposed", onProposed);
+      window.removeEventListener(
+        "interaxis:kg-plan-approved",
+        onApprovedOrRejected,
+      );
+      window.removeEventListener(
+        "interaxis:kg-plan-rejected",
+        onApprovedOrRejected,
+      );
+    };
+  }, [shouldShow, spaceId]);
+
   const handleResume = async () => {
     if (resuming || !spaceId || !runId) return;
     setResuming(true);
@@ -206,6 +290,13 @@ export function WhiteboardBootstrapSplash({
   };
 
   if (!shouldShow) return null;
+
+  // When the plan gate is engaged, step out of the way. The
+  // KgPlanReviewGate renders the review card at z-100 above us;
+  // showing the splash on top of it confuses users (they read the
+  // splash's "Pipeline taking longer than usual" copy as a failure
+  // when the actual state is "waiting on you to approve").
+  if (planPending) return null;
 
   const currentStage =
     [...STAGES].reverse().find((s) => now >= s.atMs) ?? STAGES[0];

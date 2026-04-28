@@ -115,7 +115,13 @@
       "Bash(wait b4ogq7zk7 *)",
       "Bash(tee /tmp/sprint1-tsc.log)",
       "Bash(wait bf9iovjs9 *)",
-      "Bash(wait bnt2q9chr *)"
+      "Bash(wait bnt2q9chr *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
 }

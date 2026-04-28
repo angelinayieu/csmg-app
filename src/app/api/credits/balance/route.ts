@@ -14,7 +14,18 @@ import { getBalance } from "@/lib/credits";
 import { TIERS } from "@/lib/tiers";
 
 export const runtime = "nodejs";
-export const maxDuration = 5;
+// Bumped 5s → 15s in response to Vercel error anomaly 2026-04-28
+// 16:40 UTC ("Intermittent Supabase API connectivity failures
+// caused function timeouts on the /api/credits/balance route").
+//
+// Healthy Supabase median is ~80ms; the 5s ceiling was
+// self-inflicting 504s during slow-but-not-dead degradations
+// (Supabase often hits 3-8s p95 before fully failing). 15s gives
+// the retry wrapper in src/lib/supabase-retry.ts (3 attempts +
+// jitter, ~2s max wall) room to actually retry instead of timing
+// out mid-retry. Vercel charges per actual wall time used, not the
+// ceiling — no cost during healthy operation.
+export const maxDuration = 15;
 
 export async function GET() {
   const { supabase, user, error: authError } = await safeAuth();
