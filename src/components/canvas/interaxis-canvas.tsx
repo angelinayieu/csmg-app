@@ -159,6 +159,8 @@ import { useCanvasBridges } from "./hooks/use-canvas-bridges";
 import { useCanvasCombination } from "./hooks/use-canvas-combination";
 import { useReactionLookup, useSaveReaction } from "./hooks/use-reactions";
 import { useSpaceReactions } from "./hooks/use-space-reactions";
+import { useSpaceSubjectScopes } from "./hooks/use-space-subject-scopes";
+import { CanvasSubjectScopesContext } from "./canvas-subject-scopes-context";
 import { CanvasReactionsContext } from "./canvas-reactions-context";
 import {
   CanvasHierarchyContext,
@@ -1431,6 +1433,19 @@ export function InteraxisCanvas({
     [space.id, reactionsIndex],
   );
 
+  // F2 / D14 — subject-scope index. Per-entity map of "which Twins
+  // (Subjects) scope this entity?" so kg-node-shape can render scope
+  // rings indicating Twin participation. Mirrors the reactions pattern.
+  const [subjectScopesRefreshKey] = useState(0);
+  const subjectScopesIndex = useSpaceSubjectScopes(
+    space.id,
+    subjectScopesRefreshKey,
+  );
+  const subjectScopesContextValue = useMemo(
+    () => ({ spaceId: space.id, index: subjectScopesIndex }),
+    [space.id, subjectScopesIndex],
+  );
+
   // Phase 32: per-entity hierarchy index. Lets every KG node card show a
   // depth glyph indicating how many decomposed proxy indicators live
   // inside it — so the "every entity is an opening into a probability
@@ -2517,6 +2532,7 @@ export function InteraxisCanvas({
     <CanvasAssetCatalogProvider spaceId={space.id}>
     <CanvasHierarchyContext.Provider value={hierarchyContextValue}>
     <CanvasReactionsContext.Provider value={reactionsContextValue}>
+    <CanvasSubjectScopesContext.Provider value={subjectScopesContextValue}>
     <div
       ref={rootRef}
       className="relative h-full w-full"
@@ -3430,6 +3446,7 @@ export function InteraxisCanvas({
       />
       </RunEventStoreProvider>
     </div>
+    </CanvasSubjectScopesContext.Provider>
     </CanvasReactionsContext.Provider>
     </CanvasHierarchyContext.Provider>
     </CanvasAssetCatalogProvider>

@@ -307,6 +307,10 @@ function ExperimentTwinMount({
       last_updated_by: null,
       priority: 1,
       complexity: null,
+      // F3 / D14 — pseudo-App used for widget context only; not a real
+      // downstream-application, so no domain intent or pairings.
+      application_type: null,
+      complementary_app_ids: [],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       config: {},

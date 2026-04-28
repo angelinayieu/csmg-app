@@ -259,7 +259,7 @@ function SubjectCardShapeView({ shape }: { shape: SubjectCardShape }) {
               letterSpacing: "0.08em",
               textTransform: "uppercase",
             }}
-            title={`Subject artifact state: ${artifactState}`}
+            title={`Twin artifact state: ${artifactState}`}
           >
             {ARTIFACT_STATE_LABEL[artifactState] ?? artifactState}
           </span>

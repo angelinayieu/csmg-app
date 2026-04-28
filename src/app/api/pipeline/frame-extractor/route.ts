@@ -942,10 +942,31 @@ export async function POST(request: Request) {
           // explicitly so a 500 from the axis route doesn't get
           // counted as success.
           if (!res.ok) {
+            // Try to read the response body so we surface the actual
+            // upstream exception (e.g. "OpenAI API quota exhausted",
+            // "Rate limit reached", "axis output not an object") in
+            // the user-visible failure summary. The axis route
+            // returns `{ error: string, axis: string }` on hard_fail.
+            let bodyDetail = "";
+            try {
+              const text = await res.text();
+              if (text) {
+                try {
+                  const parsed = JSON.parse(text) as { error?: string };
+                  bodyDetail = parsed.error ?? text.slice(0, 240);
+                } catch {
+                  bodyDetail = text.slice(0, 240);
+                }
+              }
+            } catch {
+              /* body read failed — non-fatal */
+            }
             await recordAxisFailure(
               axis,
               "hard_fail",
-              `Generator returned HTTP ${res.status}`,
+              bodyDetail
+                ? `HTTP ${res.status}: ${bodyDetail}`
+                : `Generator returned HTTP ${res.status}`,
             );
             return;
           }
@@ -997,10 +1018,28 @@ export async function POST(request: Request) {
           },
         );
         if (!res.ok) {
+          // Same body-detail extraction as the catalog branch — see
+          // explanatory comment above.
+          let bodyDetail = "";
+          try {
+            const text = await res.text();
+            if (text) {
+              try {
+                const parsed = JSON.parse(text) as { error?: string };
+                bodyDetail = parsed.error ?? text.slice(0, 240);
+              } catch {
+                bodyDetail = text.slice(0, 240);
+              }
+            }
+          } catch {
+            /* body read failed — non-fatal */
+          }
           await recordAxisFailure(
             axis,
             "hard_fail",
-            `Ad-hoc generator returned HTTP ${res.status}`,
+            bodyDetail
+              ? `HTTP ${res.status}: ${bodyDetail}`
+              : `Ad-hoc generator returned HTTP ${res.status}`,
           );
           return;
         }
@@ -1038,7 +1077,32 @@ export async function POST(request: Request) {
       const reasonsCsv = outcomes
         .map((o) => `${o.axis}:${o.reason ?? "unknown"}`)
         .join(", ");
-      const message = `All ${totalDispatched} axes failed during landscape generation (${reasonsCsv})`;
+      // Surface the actual exception message from the most-recent
+      // failure so the canvas HUD shows e.g. "Rate limit reached" or
+      // "OpenAI API quota exhausted" instead of just "hard_fail".
+      // Without this, every axis failure looks identical to the user
+      // and we can't tell quota outage from a flaky LLM response from
+      // the canvas alone. We pick the FIRST non-empty errorMessage so
+      // a transient last-axis error doesn't mask a load-bearing first
+      // failure.
+      const firstWithMessage = outcomes.find((o) => o.errorMessage);
+      const detail = firstWithMessage?.errorMessage
+        ? ` — ${firstWithMessage.errorMessage}`
+        : "";
+      const message =
+        `All ${totalDispatched} axes failed during landscape generation` +
+        ` (${reasonsCsv})${detail}`;
+      // Dump every per-axis errorMessage to logs so we can
+      // post-mortem the run from Vercel logs even when the user
+      // didn't screenshot the canvas. allSettled discarded the
+      // original throws; this is our only record.
+      for (const o of outcomes) {
+        if (!o.ok) {
+          console.warn(
+            `[frame-extractor]   axis=${o.axis} reason=${o.reason ?? "unknown"} message=${o.errorMessage ?? "(none)"}`,
+          );
+        }
+      }
       console.warn(`[frame-extractor] ${message}`);
       try {
         await completePipelineRun(db, runId, "failed", message);

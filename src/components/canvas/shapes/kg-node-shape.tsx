@@ -12,6 +12,7 @@ import {
 import { Zap, AlertTriangle, Focus, Cog, Share2, BookOpen, CircleDot, FileText, FlaskConical, Ruler, ArrowUpRight } from "lucide-react";
 import { LAYERS, type LayerId } from "@/lib/whiteboard/layer-config";
 import { useCanvasReactions } from "../canvas-reactions-context";
+import { useCanvasSubjectScopes } from "../canvas-subject-scopes-context";
 import { useCanvasHierarchy } from "../canvas-hierarchy-context";
 import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
 import { ReactionHoverPreview } from "@/components/shared/reaction-preview";
@@ -140,6 +141,13 @@ function KGNodeAnimationStyles() {
         45%  { filter: saturate(1.35) brightness(1.08); transform: scale(1.035); }
         100% { filter: saturate(1) brightness(1); transform: scale(1); }
       }
+      /* D5b — drill-confidence halo pulse. Soft outer glow that breathes
+         to signal the inherited drill confidence from the parent's
+         decision (high confidence = breath visible at rest). */
+      @keyframes kg-drill-halo-pulse {
+        0%, 100% { opacity: 0.85; }
+        50%      { opacity: 1; }
+      }
     `}</style>
   );
 }
@@ -168,6 +176,14 @@ export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
     // the user sees a subtle pulse marking the moment a tentative
     // entity becomes real. Default 0 for never-upgraded shapes.
     confirmedPulse: T.number,
+    // D5b — inherited drill confidence from the parent's drill decision.
+    // Range 0..1. Set by use-recursive-decompose when a ghost child is
+    // spawned: confidence_to_continue = parent_quality_score × DECAY^depth.
+    // Renders as an outer halo whose opacity scales with confidence
+    // (high-confidence drills get a visible glow; low-confidence ones
+    // render as plain ghosts). Default 0 = no halo, identical to
+    // pre-D5b ghost rendering. See docs/KG_DEPTH_CRITIQUE.md §9 D5b.
+    drillConfidence: T.number,
   };
 
   override canResize = () => true;
@@ -195,6 +211,7 @@ export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
       isConvergence: false,
       isGhost: false,
       confirmedPulse: 0,
+      drillConfidence: 0,
     };
   }
 
@@ -208,7 +225,7 @@ export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
 }
 
 function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
-  const { name, description, layer, category, tier, weight, isLeverage, isRisk, isBottleneck, isConvergence, isGhost, entityId, confirmedPulse } =
+  const { name, description, layer, category, tier, weight, isLeverage, isRisk, isBottleneck, isConvergence, isGhost, entityId, confirmedPulse, drillConfidence } =
     shape.props;
 
   // P1 #5 — one-shot enter animation. Tldraw keeps the same React
@@ -253,6 +270,16 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
   // entity participates in any saved reactions, render a badge that deep-
   // links into the lab with that reaction pre-focused.
   const { spaceId, index } = useCanvasReactions();
+
+  // F2 / D14: read the space-wide subject-scope index. When this entity
+  // is inside one or more Twin (Subject) scopes, render a small color-
+  // dotted ring at the corner indicating Twin participation. Hover the
+  // ring → tooltip lists which Twins scope this entity. Empty Map
+  // (no scopes) → renders nothing, identical pre-F2 behavior.
+  const { index: subjectScopesIndex } = useCanvasSubjectScopes();
+  const scopingSubjects = entityId
+    ? (subjectScopesIndex.byEntity.get(entityId) ?? [])
+    : [];
   const summary = entityId ? index.byEntity.get(entityId) : undefined;
 
   // Phase 32: hierarchy index — how many decomposed proxy indicators does
@@ -314,6 +341,23 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
     .filter(Boolean)
     .join(" ");
 
+  // D5b — drill-confidence halo for ghost nodes. When this ghost child
+  // came from a high-confidence drill (parent_quality_score × DECAY^depth
+  // above DRILL_CONFIDENCE_THRESHOLD = 0.4), render an outer halo whose
+  // glow opacity scales with the inherited confidence. Visually matches
+  // GraphRAG DRIFT's confidence-glyph pattern (paper §3 Figure 1) — high
+  // confidence = pronounced halo, low confidence = quiet glow, no
+  // confidence (or non-ghost) = no halo. layerColor reuses the entity's
+  // assigned layer hue so the halo reads as "yes, this is part of THIS
+  // chain" rather than a generic decoration.
+  const showDrillHalo =
+    isGhost &&
+    typeof drillConfidence === "number" &&
+    drillConfidence > 0;
+  const haloOpacity = showDrillHalo
+    ? Math.max(0.18, Math.min(0.55, drillConfidence * 0.6))
+    : 0;
+
   return (
       <HTMLContainer
         className={containerClasses || undefined}
@@ -327,6 +371,26 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
         }}
       >
         <KGNodeAnimationStyles />
+        {/* D5b confidence halo — sits behind the card, polarity-neutral
+            color (uses layer hue), opacity proportional to confidence. */}
+        {showDrillHalo && (
+          <div
+            aria-hidden
+            title={`Drill confidence ${(drillConfidence * 100).toFixed(0)}% (inherited from parent)`}
+            style={{
+              position: "absolute",
+              inset: -8,
+              borderRadius: 24,
+              pointerEvents: "none",
+              boxShadow: `0 0 0 2px ${layerColor}33, 0 0 24px ${layerColor}${Math.round(
+                haloOpacity * 255,
+              )
+                .toString(16)
+                .padStart(2, "0")}`,
+              animation: "kg-drill-halo-pulse 2400ms ease-in-out infinite",
+            }}
+          />
+        )}
         <div
           style={{
             position: "relative",
@@ -514,6 +578,16 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                     measurementScale={entity.measurement_scale ?? null}
                     importance={entity.importance ?? null}
                     entityCategory={entity.entity_category ?? null}
+                    isHero={isHero}
+                  />
+                )}
+                {/* F2 / D14 — subject-scope ring. Tiny stack of color
+                    dots at the upper-left corner showing which Twins
+                    (Subjects) scope this entity. Tooltip lists names
+                    on hover. Silent when no Twin scopes this entity. */}
+                {!isPeripheral && scopingSubjects.length > 0 && (
+                  <SubjectScopeRing
+                    scopingSubjects={scopingSubjects}
                     isHero={isHero}
                   />
                 )}
@@ -974,6 +1048,108 @@ function OpenLabPill({
         aria-hidden
       />
     </a>
+  );
+}
+
+/**
+ * F2 / D14 — Subject scope ring.
+ *
+ * Renders a tiny stack of color dots at the upper-left of the KG node
+ * card when one or more Twins (Subjects) scope this entity. Each dot
+ * is a different focus_kind hue (person=cyan, document=purple,
+ * product=amber, etc., matching subject-card-shape's accent rail).
+ * Hovering surfaces a tooltip listing the Twin names.
+ *
+ * This is the visible Twin↔KG link on the canvas — without it, a user
+ * has no way to know "this entity is part of MyCognitiveGame's scope"
+ * at rest. With it, every KG node becomes self-documenting about
+ * which Twins it participates in.
+ *
+ * Silent when scopingSubjects is empty.
+ */
+const SUBJECT_FOCUS_DOT_COLOR: Record<string, string> = {
+  person: "#06b6d4",
+  document: "#a855f7",
+  product: "#f59e0b",
+  topic: "#10b981",
+  environment: "#3b82f6",
+  system: "#64748b",
+  data: "#ef4444",
+  reaction: "#8b5cf6",
+  other: "#94a3b8",
+};
+
+function SubjectScopeRing({
+  scopingSubjects,
+  isHero,
+}: {
+  scopingSubjects: ReadonlyArray<{
+    subject_id: string;
+    subject_name: string;
+    focus_kind: string;
+  }>;
+  isHero: boolean;
+}) {
+  const visible = scopingSubjects.slice(0, 3); // cap; "+N" if overflow
+  const overflow = scopingSubjects.length - visible.length;
+  const tooltipLines = scopingSubjects
+    .map((s) => `• ${s.subject_name} (${s.focus_kind})`)
+    .join("\n");
+  const tooltip = `Inside ${scopingSubjects.length} Twin scope${scopingSubjects.length === 1 ? "" : "s"}:\n${tooltipLines}`;
+
+  return (
+    <div
+      title={tooltip}
+      style={{
+        position: "absolute",
+        top: 8,
+        left: 8,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        padding: "3px 6px",
+        borderRadius: 999,
+        background: isHero
+          ? "rgba(255,255,255,0.12)"
+          : "rgba(10,30,80,0.04)",
+        border: `1px solid ${
+          isHero ? "rgba(255,255,255,0.25)" : "rgba(10,30,80,0.10)"
+        }`,
+        cursor: "default",
+      }}
+    >
+      {visible.map((s) => (
+        <span
+          key={s.subject_id}
+          aria-hidden
+          style={{
+            display: "inline-block",
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background:
+              SUBJECT_FOCUS_DOT_COLOR[s.focus_kind] ??
+              SUBJECT_FOCUS_DOT_COLOR.other,
+            boxShadow: isHero
+              ? "0 0 0 1px rgba(255,255,255,0.45)"
+              : "0 0 0 1px rgba(255,255,255,0.85)",
+          }}
+        />
+      ))}
+      {overflow > 0 && (
+        <span
+          style={{
+            fontSize: 8.5,
+            fontWeight: 700,
+            color: isHero ? "#ffffff" : "#0a1020",
+            letterSpacing: "0.04em",
+            marginLeft: 2,
+          }}
+        >
+          +{overflow}
+        </span>
+      )}
+    </div>
   );
 }
 

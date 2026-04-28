@@ -176,6 +176,50 @@ export interface ResearchSeedIntervention {
 // ── Seed instruments (measurement tools) ──────────────────────────
 
 /** A measurement instrument entity. Surfaces in the lab's task picker. */
+// ── Seed app — paired downstream applications (F3 / D14) ─────────────
+//
+// A template can ship with PAIRED downstream applications that the
+// twin (subject) feeds into. Cognition template ships with two:
+//
+//   • "Cognitive Game Development" (application_type='game')
+//   • "Cognitive Measurement"      (application_type='measurement')
+//
+// Each is bidirectionally linked via `complementary_seed_ids` — the
+// materializer resolves seed_ids to real UUIDs after both apps are
+// inserted, then populates `apps.complementary_app_ids[]` on each.
+//
+// See supabase/migrations/20260618_apps_application_pairing.sql.
+export interface ResearchSeedApp {
+  /** Stable seed id (e.g. "app_cognitive_game") so other seeds can
+   *  reference this one before DB UUIDs exist. */
+  seed_id: string;
+  name: string;
+  description: string;
+  /** UI shell type — matches existing `apps.app_type` enum. */
+  app_type: "dashboard" | "workflow" | "tool" | "monitor" | "integration";
+  /** Domain intent — matches `apps.application_type` enum from the
+   *  20260618 migration. Drives canvas tether color + lab affordances. */
+  application_type:
+    | "game"
+    | "measurement"
+    | "intervention"
+    | "analysis"
+    | "educational"
+    | "clinical"
+    | "other";
+  /** seed_ids of OTHER apps in the same template this one is paired
+   *  with. Materializer resolves to UUIDs. */
+  complementary_seed_ids: string[];
+  /** Optional: which template-seeded entities this app primarily acts
+   *  on (becomes `apps.dominant_entity_codes[]`). */
+  dominant_entity_codes?: string[];
+  /** Optional: tagline shown in the app card. */
+  tagline?: string;
+  /** Optional rationale for why this app exists in the template (shown
+   *  in lab proposal wizard). */
+  rationale?: string;
+}
+
 export interface ResearchSeedInstrument {
   seed_id: string;
   name: string;
@@ -228,6 +272,10 @@ export interface ResearchTemplate {
   seed_subjects: ResearchSeedSubject[];
   seed_interventions: ResearchSeedIntervention[];
   seed_instruments: ResearchSeedInstrument[];
+  /** Optional — paired downstream applications this template proposes
+   *  (F3 / D14). Cognition template ships with cognitive-game ↔
+   *  cognitive-measurement pair. Older templates omit this. */
+  seed_apps?: ResearchSeedApp[];
 }
 
 // ── Materialization summary ───────────────────────────────────────

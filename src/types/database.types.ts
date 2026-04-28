@@ -2044,6 +2044,17 @@ export type Database = {
           last_updated_by: string | null;
           priority: number;
           complexity: "low" | "medium" | "high" | null;
+          // F3 (D14) — application_type + complementary_app_ids for paired downstream applications.
+          application_type:
+            | "game"
+            | "measurement"
+            | "intervention"
+            | "analysis"
+            | "educational"
+            | "clinical"
+            | "other"
+            | null;
+          complementary_app_ids: string[];
           created_at: string;
           updated_at: string;
         };
@@ -2079,6 +2090,16 @@ export type Database = {
           last_updated_by?: string | null;
           priority?: number;
           complexity?: "low" | "medium" | "high" | null;
+          application_type?:
+            | "game"
+            | "measurement"
+            | "intervention"
+            | "analysis"
+            | "educational"
+            | "clinical"
+            | "other"
+            | null;
+          complementary_app_ids?: string[];
           created_at?: string;
           updated_at?: string;
         };
@@ -2114,6 +2135,16 @@ export type Database = {
           last_updated_by?: string | null;
           priority?: number;
           complexity?: "low" | "medium" | "high" | null;
+          application_type?:
+            | "game"
+            | "measurement"
+            | "intervention"
+            | "analysis"
+            | "educational"
+            | "clinical"
+            | "other"
+            | null;
+          complementary_app_ids?: string[];
           created_at?: string;
           updated_at?: string;
         };

@@ -350,6 +350,96 @@ export async function POST(request: Request) {
       }
     }
 
+    // ── Step 5b — paired downstream apps (F3 / D14) ─────────────
+    //
+    // Templates can ship with seed_apps — paired downstream
+    // applications the twin feeds into. Cognition template ships
+    // with cognitive-game ↔ cognitive-measurement.
+    //
+    // Two-pass insert because complementary_app_ids[] needs the
+    // OTHER app's UUID:
+    //   pass 1: insert all seed_apps, capture seed_id → uuid map
+    //   pass 2: for each app, resolve its complementary_seed_ids
+    //           to UUIDs and update its complementary_app_ids[]
+    //
+    // Soft-fail: any insert/update error is non-fatal; the template
+    // still ships with subjects + KG. Apps are additive value.
+    let appsInserted = 0;
+    const seedAppIdToAppUuid = new Map<string, string>();
+
+    if (Array.isArray(template.seed_apps) && template.seed_apps.length > 0) {
+      // Map seed_id → row for pass 2 resolution.
+      const appRows = template.seed_apps.map((seed) => ({
+        space_id: spaceId,
+        user_id: user.id,
+        name: seed.name,
+        description: seed.description,
+        app_type: seed.app_type,
+        application_type: seed.application_type,
+        // Resolve dominant_entity_codes to entity UUIDs via the
+        // template's entity-id-to-UUID map. Codes that didn't seed
+        // are silently dropped.
+        dominant_entity_codes: seed.dominant_entity_codes ?? [],
+        dominant_entity_ids: (seed.dominant_entity_codes ?? [])
+          .map((code) => seedIdToEntityUuid.get(code))
+          .filter((id): id is string => typeof id === "string"),
+        // Pass 1: complementary_app_ids stays empty; pass 2 fills it.
+        complementary_app_ids: [],
+        config: {
+          tagline: seed.tagline ?? null,
+          rationale: seed.rationale ?? null,
+          template_slug: template.slug,
+          seed_id: seed.seed_id,
+        },
+        state: {},
+        status: "proposed",
+        priority: 0,
+      }));
+
+      const { data: appData, error: appErr } = await db
+        .from("apps")
+        .insert(appRows)
+        .select("id, config");
+
+      if (appErr) {
+        const msg = `apps insert: ${appErr.message ?? "unknown"}`;
+        console.warn("[explore/create]", msg);
+        warnings.push(msg);
+      } else if (Array.isArray(appData)) {
+        appsInserted = appData.length;
+        // Map seed_id → real UUID via the config.seed_id we stamped.
+        for (const row of appData as Array<{
+          id: string;
+          config: { seed_id?: string } | null;
+        }>) {
+          const sid = row.config?.seed_id;
+          if (typeof sid === "string") seedAppIdToAppUuid.set(sid, row.id);
+        }
+
+        // Pass 2: bidirectional complementary_app_ids resolution.
+        // Run all updates in parallel; soft-fail per row.
+        await Promise.allSettled(
+          template.seed_apps.map(async (seed) => {
+            const appUuid = seedAppIdToAppUuid.get(seed.seed_id);
+            if (!appUuid) return;
+            const compUuids = seed.complementary_seed_ids
+              .map((sid) => seedAppIdToAppUuid.get(sid))
+              .filter((u): u is string => typeof u === "string");
+            if (compUuids.length === 0) return;
+            const { error: updErr } = await db
+              .from("apps")
+              .update({ complementary_app_ids: compUuids })
+              .eq("id", appUuid);
+            if (updErr) {
+              warnings.push(
+                `apps complementary update for ${seed.seed_id}: ${updErr.message ?? "unknown"}`,
+              );
+            }
+          }),
+        );
+      }
+    }
+
     // ── Step 6 — lab scaffolds ───────────────────────────────────
     // One scaffold row carrying the proposed_subjects + features +
     // status='scaffolded'. This satisfies the lab proposal wizard
@@ -422,7 +512,7 @@ export async function POST(request: Request) {
       .insert({
         space_id: spaceId,
         change_type: "research_template_seed",
-        summary: `Created from research template: ${template.title} (${seedIdToEntityUuid.size} entities, ${edgesInserted} edges, ${evidenceInserted} evidence, ${subjectsInserted} subjects)`,
+        summary: `Created from research template: ${template.title} (${seedIdToEntityUuid.size} entities, ${edgesInserted} edges, ${evidenceInserted} evidence, ${subjectsInserted} twins, ${appsInserted} downstream apps)`,
         details: {
           template_slug: template.slug,
           counts: {
@@ -433,6 +523,7 @@ export async function POST(request: Request) {
             interventions: template.seed_interventions.length,
             instruments: template.seed_instruments.length,
             lab_scaffolds: scaffoldsInserted,
+            apps: appsInserted,
           },
         },
       })

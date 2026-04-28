@@ -81,7 +81,7 @@ export function CanvasAddButtons({
       {open && (
         <div className="flex flex-col gap-1.5">
           <AddButton
-            label="Subject"
+            label="Twin"
             icon={<FlaskConical className="h-3.5 w-3.5" />}
             onClick={() => setActiveForm("subject")}
             color="from-blue-500 to-cyan-500"
@@ -120,7 +120,7 @@ export function CanvasAddButtons({
           setActiveForm(null);
         }}
         className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3.5 py-2 text-[11.5px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
-        title="Add intervention / variable / subject / paper to this space"
+        title="Add intervention / variable / twin / paper to this space"
       >
         {open ? (
           <X className="h-3.5 w-3.5 text-gray-500" />
@@ -256,7 +256,7 @@ function SubjectForm({
   }, [name, focusKind, spaceId, onClose]);
 
   return (
-    <FormShell title="New subject" onClose={onClose} error={err}>
+    <FormShell title="New twin" onClose={onClose} error={err}>
       <input
         ref={inputRef}
         autoFocus
@@ -266,7 +266,7 @@ function SubjectForm({
           if (e.key === "Enter" && !busy) submit();
           if (e.key === "Escape") onClose();
         }}
-        placeholder="Subject name (e.g. Healthy young adult, Working memory cohort)"
+        placeholder="Twin name (e.g. Healthy young adult, Working memory cohort, MyCognitiveGame)"
         className="w-full rounded-md border border-gray-200 px-3 py-2 text-[12.5px] focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-200"
       />
       <div className="flex items-center gap-2">

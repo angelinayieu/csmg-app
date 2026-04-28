@@ -52,6 +52,13 @@ export type KGNodeShape = TLBaseShape<
     // "identity-confirm" pulse when this increments, signaling the
     // moment the tentative card becomes real without moving it.
     confirmedPulse: number;
+    // D5b — inherited drill confidence [0..1] from the parent's drill
+    // decision (parent_quality_score × DECAY^child_depth). Set on
+    // ghost-child creation by use-recursive-decompose; defaults to 0
+    // for non-drilled shapes (legacy + manually-placed). The view
+    // renders a confidence halo whose opacity scales with this value
+    // when isGhost && drillConfidence > 0. See KG_DEPTH_CRITIQUE §9 D5b.
+    drillConfidence: number;
   }
 >;
 

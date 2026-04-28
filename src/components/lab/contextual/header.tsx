@@ -89,7 +89,7 @@ export function ContextualLabHeader({
 
       {/* Config chips */}
       <div className="flex flex-1 items-center gap-2.5">
-        <ConfigChip label="Subject" value={`${subject.icon} ${subject.name}`} />
+        <ConfigChip label="Twin" value={`${subject.icon} ${subject.name}`} />
         <ConfigChip label="Task" value={task.name} />
         <ConfigChip label="Sleep" value={`${sleep.toFixed(1)}h`} variant={sleepCls} />
         <ConfigChip

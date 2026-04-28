@@ -127,7 +127,7 @@ export function ChamberCenter({
       {/* Top-left info strip — always visible */}
       <div className="pointer-events-none absolute left-5 top-5 z-[5] flex flex-col gap-1">
         <ChamberInfoRow
-          k="Subject"
+          k="Twin"
           v={
             <>
               <span className="mr-1">{subject.icon}</span>

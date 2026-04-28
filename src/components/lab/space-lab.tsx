@@ -925,7 +925,7 @@ function SubjectStrip({
     <div className="border-b border-[rgba(255,255,255,0.08)] bg-[rgba(124,58,237,0.10)]">
       {/* Header bar */}
       <div className="flex items-center gap-2 px-4 py-1.5 text-[11px] text-violet-200">
-        <span className="font-bold uppercase tracking-[0.14em]">Subject</span>
+        <span className="font-bold uppercase tracking-[0.14em]">Twin</span>
         <span className="text-violet-300">·</span>
         <span className="font-medium text-violet-100">{subject.name}</span>
         <span className="text-violet-400">·</span>
@@ -953,14 +953,14 @@ function SubjectStrip({
           <a
             href={`/app/space/${spaceId}/subjects/${subject.id}`}
             className="rounded border border-violet-300/30 px-2 py-0.5 text-[10px] font-medium text-violet-100 transition hover:bg-violet-500/20"
-            title="Open subject detail page"
+            title="Open twin detail page"
           >
             Inspect
           </a>
           <a
             href={`/app/space/${spaceId}/lab`}
             className="rounded border border-violet-300/30 px-2 py-0.5 text-[10px] font-medium text-violet-100 transition hover:bg-violet-500/20"
-            title="Exit subject mode — return to whole-space lab"
+            title="Exit twin mode — return to whole-space lab"
           >
             Whole space
           </a>

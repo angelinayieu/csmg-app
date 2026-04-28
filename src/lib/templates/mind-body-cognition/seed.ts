@@ -35,6 +35,7 @@ import type {
   ResearchSeedSubject,
   ResearchSeedIntervention,
   ResearchSeedInstrument,
+  ResearchSeedApp,
   EntityCategory,
   EntityImportance,
 } from "@/types/research-template";
@@ -377,6 +378,69 @@ const SEED_INSTRUMENTS: ResearchSeedInstrument[] = [
   },
 ];
 
+// ── Seed apps — paired downstream applications (F3 / D14) ────────
+//
+// The cognition template ships with TWO complementary downstream
+// applications that the user's twin (subject) feeds into:
+//
+//   • Cognitive Game Development — the game/training app the user
+//     designs to MOVE the cognitive variables (working memory, attention,
+//     processing speed) the twin's KG models.
+//   • Cognitive Measurement      — the assessment app that scores
+//     the twin against the instrument set (Digit Span, N-Back, Corsi,
+//     etc.) on a baseline + post-intervention cycle.
+//
+// They form a pair because each generates work for the other:
+//   - The Game produces play-data → Measurement quantifies its impact
+//   - Measurement reveals gaps → Game iterates difficulty / mechanics
+//
+// Both apps materialize in /api/explore/create as `apps` table rows
+// with bidirectional `complementary_app_ids` populated (resolved from
+// `complementary_seed_ids` after both apps insert).
+
+const SEED_APPS: ResearchSeedApp[] = [
+  {
+    seed_id: "app_cognitive_game",
+    name: "Cognitive Game Development",
+    description:
+      "Design + iterate a cognitive game targeting working memory, attention, or executive function. The KG provides mechanism evidence (which biology a mechanic targets, expected effect sizes, study counts), the twin lets you simulate before-after cohorts, and the paired Measurement app feeds back actual outcomes.",
+    app_type: "tool",
+    application_type: "game",
+    complementary_seed_ids: ["app_cognitive_measurement"],
+    dominant_entity_codes: [
+      // Targets the cognitive layer — the variables the game tries to move.
+      "n_working_memory",
+      "n_attention",
+      "n_executive_function",
+      "n_processing_speed",
+    ],
+    tagline: "Design a game that moves working memory, evidence-grounded.",
+    rationale:
+      "Cognitive games fail when the mechanic doesn't target the right cognitive variable, or when difficulty curves don't track capacity. The KG provides mechanism-to-variable evidence; the paired Measurement app validates the design with real instrument scores.",
+  },
+  {
+    seed_id: "app_cognitive_measurement",
+    name: "Cognitive Measurement",
+    description:
+      "Run baseline + post-intervention cognitive assessments using the instrument set (Digit Span, N-Back, Corsi, Mental Rotation, Reading Span, FACT-Cog). Captures objective cognitive scores per twin per condition, feeds back into the Game app for iteration, and surfaces meta-analyses of effect-size confidence intervals.",
+    app_type: "monitor",
+    application_type: "measurement",
+    complementary_seed_ids: ["app_cognitive_game"],
+    dominant_entity_codes: [
+      // Targets the instrument set — the measurement tools.
+      "inst_digit_span",
+      "inst_nback_verbal",
+      "inst_corsi_block",
+      "inst_mental_rotation",
+      "inst_reading_span",
+      "inst_fact_cog",
+    ],
+    tagline: "Quantify cognitive change with validated instruments.",
+    rationale:
+      "Without measurement, game-design iteration is vibes. The Measurement app runs the instrument battery on a defined twin, captures pre-post deltas with confidence intervals (effect sizes pulled from the KG's CRCI evidence pool), and routes findings back into the Game app's design parameters.",
+  },
+];
+
 // ── The template object ───────────────────────────────────────────
 
 export const MIND_BODY_COGNITION_TEMPLATE: ResearchTemplate = {
@@ -418,6 +482,8 @@ export const MIND_BODY_COGNITION_TEMPLATE: ResearchTemplate = {
   seed_subjects: SEED_SUBJECTS,
   seed_interventions: SEED_INTERVENTIONS,
   seed_instruments: SEED_INSTRUMENTS,
+  // F3 / D14 — paired downstream applications (game ↔ measurement).
+  seed_apps: SEED_APPS,
 };
 
 // ── Registry ──────────────────────────────────────────────────────

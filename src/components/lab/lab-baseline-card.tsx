@@ -84,7 +84,7 @@ export function LabBaselineCard({
         <div className="flex flex-col items-end gap-1">
           <span
             className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[9.5px] font-semibold text-emerald-300"
-            title={`${subject.artifact_state} — drives KG-growth aggression for this subject`}
+            title={`${subject.artifact_state} — drives KG-growth aggression for this twin`}
           >
             {subject.artifact_state.replace(/_/g, " ")}
           </span>

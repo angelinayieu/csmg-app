@@ -176,6 +176,11 @@ export function useRecursiveDecompose({
               isConvergence: false,
               isGhost: true,
               confirmedPulse: 0,
+              // D5b — pass the inherited drill confidence to the shape
+              // so kg-node-shape can render the confidence halo. The
+              // shape clamps + scales internally; we just forward the
+              // raw [0,1] confidence the API computed.
+              drillConfidence: inheritedConfidence,
             },
           });
         });

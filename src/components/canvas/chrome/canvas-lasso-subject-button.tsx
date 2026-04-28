@@ -171,13 +171,13 @@ export function CanvasLassoSubjectButton({ spaceId }: Props) {
       // they stack visibly. Editor's lasso selection drives both.
       className="pointer-events-none absolute right-12 top-[3.4rem] z-[45]"
       role="region"
-      aria-label="Save selection as subject"
+      aria-label="Save selection as twin"
     >
       {state === "open" ? (
         <div className="pointer-events-auto w-[300px] rounded-xl border border-blue-200 bg-white p-3 shadow-xl">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-500">
-              New subject from lasso
+              New twin from lasso
             </span>
             <button
               type="button"
@@ -196,7 +196,7 @@ export function CanvasLassoSubjectButton({ spaceId }: Props) {
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Subject name"
+            placeholder="Twin name"
             className="mb-2 w-full rounded-md border border-gray-200 px-3 py-2 text-[12.5px] focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-200"
             onKeyDown={(e) => {
               if (e.key === "Enter") onSave();

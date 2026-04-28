@@ -323,8 +323,14 @@ export async function POST(request: Request, ctx: Ctx) {
           emitErr,
         );
       }
+      // Surface the actual exception message so the upstream
+      // frame-extractor (which slurps this body in the !res.ok
+      // branch) can include it in the user-visible failure summary.
+      // Previously this was the literal string "generation failed",
+      // which collapsed every distinct cause (quota exhausted, rate
+      // limited, validator threw, OpenAI 5xx) into one opaque label.
       return NextResponse.json(
-        { error: "generation failed", axis: axisId },
+        { error: errorMessage, axis: axisId },
         { status: 500 },
       );
     }
