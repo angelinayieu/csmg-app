@@ -114,7 +114,14 @@ export function CanvasEvidenceDrawer({
       if (statusParam) url.searchParams.set("status", statusParam);
       url.searchParams.set("limit", "200");
       const res = await fetch(url.toString(), { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        // Try to surface the underlying DB error message instead of
+        // a bare "HTTP 500" — gives the user (and us) something
+        // actionable when the route fails for a real reason.
+        const body = await res.json().catch(() => ({}));
+        const reason = body?.error ?? body?.db_error ?? `HTTP ${res.status}`;
+        throw new Error(`${reason} (HTTP ${res.status})`);
+      }
       const json = (await res.json()) as {
         rows: EvidenceRegistryRow[];
         counts: Partial<Record<EvidenceStatus, number>>;

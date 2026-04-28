@@ -68,6 +68,10 @@ export async function POST(request: Request) {
     );
   }
 
+  // Per-step warnings collected so the response surfaces what
+  // actually failed instead of silently zeroing counts.
+  const warnings: string[] = [];
+
   try {
     // ── Step 1 — create space ────────────────────────────────────
     const spaceName = template.default_space_name.replace(
@@ -152,10 +156,9 @@ export async function POST(request: Request) {
       if (layerErr) {
         // Non-fatal — we'll still insert entities; they just won't have
         // layer_ontology_id set (knowledge_layer enum acts as fallback).
-        console.warn(
-          "[explore/create] layer_ontology insert failed (continuing without ontology FKs):",
-          layerErr.message,
-        );
+        const msg = `layer_ontology insert failed: ${layerErr.message ?? "unknown"}`;
+        console.warn("[explore/create]", msg);
+        warnings.push(msg);
       } else if (Array.isArray(insertedLayers)) {
         for (const row of insertedLayers as Array<{
           id: string;
@@ -200,6 +203,14 @@ export async function POST(request: Request) {
       for (const row of insertedEntities) {
         seedIdToEntityUuid.set(row.entity_id, row.id);
       }
+
+      if (insertedEntities.length < allSeedEntities.length) {
+        warnings.push(
+          `entities insert: ${insertedEntities.length}/${allSeedEntities.length} succeeded — ${
+            allSeedEntities.length - insertedEntities.length
+          } rows dropped (likely schema mismatch)`,
+        );
+      }
     }
 
     // ── Step 4 — seed edges ──────────────────────────────────────
@@ -232,6 +243,18 @@ export async function POST(request: Request) {
           "id",
         );
         edgesInserted = inserted;
+        if (inserted < edgePairs.length) {
+          warnings.push(
+            `edges insert: ${inserted}/${edgePairs.length} succeeded`,
+          );
+        }
+      }
+      if (edgePairs.length < template.seed_edges.length) {
+        warnings.push(
+          `edges sanitize: ${edgePairs.length}/${template.seed_edges.length} survived sanitize (entity-ref filter)`,
+        );
+      }
+      if (edgePairs.length > 0) {
 
         // Build evidence rows from the surviving seed→sanitized pairs.
         // Edge UUIDs are not threaded through (they're only useful for
@@ -253,13 +276,34 @@ export async function POST(request: Request) {
           .filter((r): r is NonNullable<typeof r> => r !== null);
 
         if (evidenceRows.length > 0) {
-          const { inserted: evi } = await resilientInsert(
-            db,
-            "evidence_registries",
-            evidenceRows,
-            "id",
-          );
-          evidenceInserted = evi;
+          // Use a probing insert first so we capture the underlying
+          // DB error (resilientInsert retries silently on schema-cache
+          // misses but won't surface other failures).
+          const probe = await db
+            .from("evidence_registries")
+            .insert(evidenceRows[0])
+            .select("id");
+          if (probe.error) {
+            warnings.push(
+              `evidence_registries insert: ${probe.error.message ?? "unknown"}`,
+            );
+          } else {
+            evidenceInserted += 1;
+            if (evidenceRows.length > 1) {
+              const { inserted: evi } = await resilientInsert(
+                db,
+                "evidence_registries",
+                evidenceRows.slice(1),
+                "id",
+              );
+              evidenceInserted += evi;
+              if (evi < evidenceRows.length - 1) {
+                warnings.push(
+                  `evidence_registries: ${evi + 1}/${evidenceRows.length} inserted`,
+                );
+              }
+            }
+          }
         }
       }
     }
@@ -280,10 +324,9 @@ export async function POST(request: Request) {
         .select("id");
 
       if (subjErr) {
-        console.warn(
-          "[explore/create] subjects insert failed (non-fatal):",
-          subjErr.message,
-        );
+        const msg = `subjects insert: ${subjErr.message ?? "unknown"}`;
+        console.warn("[explore/create]", msg);
+        warnings.push(msg);
       } else if (Array.isArray(subjData)) {
         subjectsInserted = subjData.length;
         for (const row of subjData as Array<{ id: string }>) {
@@ -342,10 +385,9 @@ export async function POST(request: Request) {
         .insert(scaffoldInsert);
 
       if (scaffErr) {
-        console.warn(
-          "[explore/create] lab_scaffolds insert failed (non-fatal):",
-          scaffErr.message,
-        );
+        const msg = `lab_scaffolds insert: ${scaffErr.message ?? "unknown"}`;
+        console.warn("[explore/create]", msg);
+        warnings.push(msg);
       } else {
         scaffoldsInserted = 1;
       }
@@ -402,6 +444,7 @@ export async function POST(request: Request) {
         lab_scaffolds: scaffoldsInserted,
       },
       primary_subject_id: firstSubjectId,
+      warnings: warnings.length > 0 ? warnings : undefined,
     };
 
     return NextResponse.json(response);

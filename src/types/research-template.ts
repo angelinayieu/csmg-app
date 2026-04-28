@@ -251,4 +251,9 @@ export interface ExploreCreateResponse {
   };
   /** First subject id — UI uses this to focus the canvas after redirect. */
   primary_subject_id: string | null;
+  /** Per-step DB error messages when sub-inserts soft-failed. The
+   *  space + counts still reflect what DID succeed; these warnings let
+   *  the gallery UI surface "subjects didn't materialize because of X"
+   *  instead of silently routing to a half-empty whiteboard. */
+  warnings?: string[];
 }

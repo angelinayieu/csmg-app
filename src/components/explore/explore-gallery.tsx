@@ -46,6 +46,18 @@ export function ExploreGallery() {
   const [creatingSlug, setCreatingSlug] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progressStage, setProgressStage] = useState<number>(0);
+  // When the server returns warnings (e.g. a sub-insert failed), we
+  // pause the redirect and surface them so the user understands what
+  // partially succeeded before clicking through to the workspace.
+  const [pendingResult, setPendingResult] = useState<
+    | null
+    | {
+        space_id: string;
+        target: string;
+        warnings: string[];
+        counts: ExploreCreateResponse["counts"];
+      }
+  >(null);
 
   const handleUseTemplate = useCallback(
     async (template: ResearchTemplate) => {
@@ -87,11 +99,25 @@ export function ExploreGallery() {
         }
 
         const json = (await res.json()) as ExploreCreateResponse;
-        // Route to the populated whiteboard. The first subject (if
-        // any) can be focused via query param if the canvas honors it.
         const target = json.primary_subject_id
           ? `/app/space/${json.space.id}/whiteboard?subject=${json.primary_subject_id}`
           : `/app/space/${json.space.id}/whiteboard`;
+
+        // If the server reported partial-success warnings, pause and
+        // surface them so the user sees exactly what failed (e.g.
+        // "subjects insert: relation 'subjects' does not exist") and
+        // can decide whether to continue. Otherwise route immediately.
+        if (json.warnings && json.warnings.length > 0) {
+          setCreatingSlug(null);
+          setPendingResult({
+            space_id: json.space.id,
+            target,
+            warnings: json.warnings,
+            counts: json.counts,
+          });
+          return;
+        }
+
         router.push(target);
       } catch (err) {
         console.error("[ExploreGallery] create failed:", err);
@@ -168,6 +194,122 @@ export function ExploreGallery() {
           stage={progressStage}
         />
       )}
+
+      {/* Partial-success modal — server reported the space materialized
+          but with warnings (e.g. subjects didn't insert). Show what
+          succeeded vs what failed so the user can act before routing. */}
+      {pendingResult && (
+        <PartialSuccessOverlay
+          warnings={pendingResult.warnings}
+          counts={pendingResult.counts}
+          onContinue={() => {
+            const target = pendingResult.target;
+            setPendingResult(null);
+            router.push(target);
+          }}
+          onDismiss={() => setPendingResult(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Partial-success overlay ───────────────────────────────────────
+
+function PartialSuccessOverlay({
+  warnings,
+  counts,
+  onContinue,
+  onDismiss,
+}: {
+  warnings: string[];
+  counts: ExploreCreateResponse["counts"];
+  onContinue: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-sm">
+      <div className="w-[520px] max-h-[80vh] overflow-y-auto rounded-2xl border border-amber-200 bg-white p-7 shadow-xl">
+        <div className="mb-4 flex items-start gap-3">
+          <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <h3 className="text-[15px] font-bold text-gray-900">
+              Space created with warnings
+            </h3>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-gray-600">
+              The materialization endpoint reported sub-step failures. Most
+              likely cause: a Supabase migration hasn't been applied to the
+              target environment (subjects / lab_scaffolds / evidence_registries
+              tables). The space + entities + edges are still usable.
+            </p>
+          </div>
+        </div>
+
+        <div className="mb-4 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 text-[12px]">
+          <div className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+            What materialized
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-gray-700">
+            <div>
+              <span className="font-semibold tabular-nums">{counts.layers}</span>{" "}
+              layers
+            </div>
+            <div>
+              <span className="font-semibold tabular-nums">{counts.entities}</span>{" "}
+              entities
+            </div>
+            <div>
+              <span className="font-semibold tabular-nums">{counts.edges}</span>{" "}
+              edges
+            </div>
+            <div>
+              <span className="font-semibold tabular-nums">{counts.evidence}</span>{" "}
+              evidence
+            </div>
+            <div>
+              <span className="font-semibold tabular-nums">{counts.subjects}</span>{" "}
+              subjects
+            </div>
+            <div>
+              <span className="font-semibold tabular-nums">
+                {counts.lab_scaffolds}
+              </span>{" "}
+              lab scaffolds
+            </div>
+          </div>
+        </div>
+
+        <div className="mb-5">
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-amber-600">
+            Warnings ({warnings.length})
+          </div>
+          <ul className="space-y-1.5">
+            {warnings.map((w, idx) => (
+              <li
+                key={idx}
+                className="rounded border border-amber-200 bg-amber-50 px-3 py-1.5 text-[11.5px] font-mono leading-snug text-amber-900"
+              >
+                {w}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <button
+            onClick={onDismiss}
+            className="text-[12px] font-medium text-gray-500 hover:text-gray-800"
+          >
+            Stay on this page
+          </button>
+          <button
+            onClick={onContinue}
+            className="rounded-lg bg-gradient-to-br from-purple-600 to-blue-600 px-4 py-2 text-[12.5px] font-semibold text-white shadow-sm hover:-translate-y-px hover:shadow-md"
+          >
+            Continue to whiteboard →
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
