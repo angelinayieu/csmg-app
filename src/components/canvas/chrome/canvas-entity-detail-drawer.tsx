@@ -32,15 +32,21 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Check,
+  ChevronDown,
+  ChevronRight,
+  FileBarChart,
   Layers,
   Loader2,
   Network,
+  ShieldCheck,
   Sparkles,
   X,
   Zap,
 } from "lucide-react";
 import type { Entity, Edge } from "@/types";
 import type { NodeSignature } from "@/types/node-signature";
+import type { EvidenceRegistryRow } from "@/types/evidence-registry";
+import type { LayerOntologyRow } from "@/types/layer-ontology";
 import {
   ENTITY_KIND_ACCENT,
   ENTITY_KIND_LABEL,
@@ -66,6 +72,13 @@ interface DetailPayload {
     name: string;
     entity_category: string | null;
   }>;
+  /** Phase 3 — L2M evidence rows attached to this entity. Drives
+   *  the rigor strip badge count + the Evidence section. Empty when
+   *  no extracted evidence is bound. */
+  evidence?: EvidenceRegistryRow[];
+  /** Phase 3 — per-space layer_ontology row for entity.layer_ontology_id.
+   *  Null when the entity uses the legacy knowledge_layer enum. */
+  layer_ontology_row?: LayerOntologyRow | null;
 }
 
 /** Which view of the entity is currently active in the body of the
@@ -434,7 +447,34 @@ export function CanvasEntityDetailDrawer() {
                     <Zap className="h-3 w-3" /> Leverage
                   </span>
                 )}
+                {/* Phase 3 — per-space layer ontology chip overrides
+                    the legacy depth-based layer chip when an active
+                    plan materialized a topic-adaptive ontology. */}
+                {payload?.layer_ontology_row && (
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                    style={{
+                      background: `color-mix(in srgb, ${payload.layer_ontology_row.color ?? "#94a3b8"} 14%, transparent)`,
+                      color: payload.layer_ontology_row.color ?? "#475569",
+                    }}
+                    title={`Per-space layer ${payload.layer_ontology_row.ordinal}: ${payload.layer_ontology_row.description ?? ""}`}
+                  >
+                    <Layers className="h-3 w-3" />
+                    {payload.layer_ontology_row.label}
+                  </span>
+                )}
               </div>
+            )}
+            {/* Phase 3 — Rigor strip. At-a-glance answer to "is this
+                a trustworthy node?" Surfaces authority_level (trust
+                tier), causal_role, source_tag, and the count of
+                evidence rows attached to this entity. Each badge is
+                title-tooltipped with its meaning. */}
+            {entity && (
+              <RigorStrip
+                entity={entity}
+                evidenceCount={payload?.evidence?.length ?? 0}
+              />
             )}
           </header>
 
@@ -522,6 +562,21 @@ export function CanvasEntityDetailDrawer() {
                     </div>
                   )}
                 </section>
+
+                {/* Phase 3 — Evidence section. L2M-style provenance:
+                    each row carries effect_size + CI + study design +
+                    the LLM-half / parser-half trust boundary so the
+                    user can audit "what backs this claim". */}
+                <EvidenceSection rows={payload?.evidence ?? []} />
+
+                {/* Phase 3 — Provenance section. Origin metadata: who
+                    extracted the entity, from which source, with what
+                    confidence. Renders entities.provenance JSONB and
+                    related fields cleanly. */}
+                <ProvenanceSection
+                  entity={entity}
+                  ontologyRow={payload?.layer_ontology_row ?? null}
+                />
 
                 {/* Connections section — Phase 6 tabbed: list vs ego */}
                 <section className="border-b border-slate-100 px-5 py-4">
@@ -656,6 +711,55 @@ export function CanvasEntityDetailDrawer() {
   );
 }
 
+// ── Edge row with inline dynamics picker (Phase 6B) ──────────────
+//
+// Each row shows: polarity dot + direction + partner name +
+// relationship type + dynamics badge. Clicking the dynamics badge
+// opens an inline select with the 10-value enum. Save → PATCH
+// /api/edges/[id]. When the edge has pooled metadata (Phase 6A),
+// a tiny "pooled" badge appears next to the dynamics chip.
+
+const EDGE_DYNAMICS_OPTIONS: Array<{
+  value: string;
+  label: string;
+  hint: string;
+}> = [
+  { value: "linear", label: "Linear", hint: "Effect scales 1:1 with input." },
+  { value: "hill", label: "Hill", hint: "Saturating S-curve (Hill / sigmoid)." },
+  { value: "emax", label: "Emax", hint: "Hyperbolic saturation (E_max model)." },
+  {
+    value: "threshold",
+    label: "Threshold",
+    hint: "Step at a critical input level.",
+  },
+  {
+    value: "compounding",
+    label: "Compounding",
+    hint: "Multiplicative / exponential gain.",
+  },
+  {
+    value: "exponential",
+    label: "Exponential",
+    hint: "Exponential growth in input.",
+  },
+  {
+    value: "logarithmic",
+    label: "Logarithmic",
+    hint: "Diminishing log returns.",
+  },
+  {
+    value: "decay",
+    label: "Decay",
+    hint: "Effect fades over time / dose.",
+  },
+  {
+    value: "step_function",
+    label: "Step",
+    hint: "Discrete step at a boundary.",
+  },
+  { value: "delayed", label: "Delayed", hint: "Lag before onset." },
+];
+
 function EdgeRow({
   edge,
   otherId,
@@ -677,6 +781,45 @@ function EdgeRow({
           ? "#d97706"
           : "#94a3b8";
   const fallbackName = idToNameMap.get(otherId) ?? `${otherId.slice(0, 8)}…`;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ee = edge as any;
+  const initialDynamics = (ee.dynamics as string | null) ?? "linear";
+  const dynProps = (ee.dynamics_properties as Record<string, unknown> | null) ?? null;
+  const isPooled =
+    dynProps &&
+    typeof dynProps === "object" &&
+    Object.prototype.hasOwnProperty.call(dynProps, "pooling_metadata");
+  const [dynamics, setDynamics] = useState<string>(initialDynamics);
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const onSave = async (newValue: string) => {
+    if (newValue === dynamics) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/edges/${edge.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ dynamics: newValue }),
+      });
+      if (res.ok) {
+        setDynamics(newValue);
+      } else {
+        console.warn("[edge dynamics] PATCH failed:", await res.text());
+      }
+    } catch (err) {
+      console.warn("[edge dynamics] fetch failed:", err);
+    } finally {
+      setBusy(false);
+      setEditing(false);
+    }
+  };
+
   return (
     <li className="flex items-center gap-2 rounded px-1 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50">
       <span
@@ -701,6 +844,40 @@ function EdgeRow({
       >
         {fallbackName}
       </button>
+      {isPooled && (
+        <span
+          className="flex-shrink-0 rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-700"
+          title="Edge strength pooled from evidence (REML τ²). See dynamics_properties.pooling_metadata for the full audit."
+        >
+          pooled
+        </span>
+      )}
+      {editing ? (
+        <select
+          autoFocus
+          disabled={busy}
+          value={dynamics}
+          onChange={(e) => onSave(e.target.value)}
+          onBlur={() => setEditing(false)}
+          className="flex-shrink-0 rounded border border-violet-300 bg-white px-1 py-0.5 text-[10px] font-semibold text-slate-700 focus:border-violet-500 focus:outline-none"
+        >
+          {EDGE_DYNAMICS_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value} title={o.hint}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="flex-shrink-0 rounded bg-violet-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-violet-700 transition hover:bg-violet-100"
+          title="Edit response model (linear / hill / emax / …)"
+        >
+          {EDGE_DYNAMICS_OPTIONS.find((o) => o.value === dynamics)?.label ??
+            dynamics}
+        </button>
+      )}
       <span className="flex-shrink-0 text-[9.5px] italic text-slate-400">
         {edge.relationship_type ?? "related"}
       </span>
@@ -988,4 +1165,424 @@ function EgoNetworkView({
 function truncateLabel(s: string, n: number): string {
   if (!s) return "—";
   return s.length <= n ? s : s.slice(0, n - 1) + "…";
+}
+
+// ── Rigor strip ───────────────────────────────────────────────────
+//
+// Phase 3 — at-a-glance trust + provenance metadata for a node.
+// Renders below the kind/layer chips in the drawer header. Each
+// badge is omitted when its underlying field is null so the row
+// stays compact for sparse entities.
+
+const AUTHORITY_BADGE: Record<
+  string,
+  { label: string; bg: string; fg: string; tip: string }
+> = {
+  high: {
+    label: "Verified",
+    bg: "bg-emerald-50",
+    fg: "text-emerald-700",
+    tip: "Authority: high — corroborated by reviewed evidence or expert sources.",
+  },
+  moderate: {
+    label: "Likely",
+    bg: "bg-blue-50",
+    fg: "text-blue-700",
+    tip: "Authority: moderate — plausible but not yet corroborated by reviewed evidence.",
+  },
+  low: {
+    label: "Untested",
+    bg: "bg-slate-100",
+    fg: "text-slate-600",
+    tip: "Authority: low — sourced from training-data prior, not from reviewed evidence.",
+  },
+  unverified: {
+    label: "Unverified",
+    bg: "bg-amber-50",
+    fg: "text-amber-700",
+    tip: "Authority: unverified — no source has substantiated this entity yet.",
+  },
+};
+
+const CAUSAL_ROLE_BADGE: Record<string, { label: string; tip: string }> = {
+  truth: { label: "Truth", tip: "Causal role: truth — a load-bearing claim." },
+  evidence: {
+    label: "Evidence",
+    tip: "Causal role: evidence — supports or refutes other entities.",
+  },
+  deliverable: {
+    label: "Deliverable",
+    tip: "Causal role: deliverable — a buildable / shippable artifact.",
+  },
+  application: {
+    label: "Application",
+    tip: "Causal role: application — an intervention or capability deployed.",
+  },
+  outcome: {
+    label: "Outcome",
+    tip: "Causal role: outcome — a measurable result the user wants to change.",
+  },
+  goal: {
+    label: "Goal",
+    tip: "Causal role: goal — a stated objective for the system.",
+  },
+};
+
+const SOURCE_TAG_BADGE: Record<string, { label: string; tip: string }> = {
+  explicit: {
+    label: "Explicit",
+    tip: "Source tag: explicit — directly stated in the user's input or evidence.",
+  },
+  implicit: {
+    label: "Implicit",
+    tip: "Source tag: implicit — inferred from context but not stated.",
+  },
+  assumed: {
+    label: "Assumed",
+    tip: "Source tag: assumed — placeholder until corroborating evidence lands.",
+  },
+  stated: {
+    label: "Stated",
+    tip: "Source tag: stated.",
+  },
+  inferred: {
+    label: "Inferred",
+    tip: "Source tag: inferred.",
+  },
+  predicted: {
+    label: "Predicted",
+    tip: "Source tag: predicted.",
+  },
+};
+
+function RigorStrip({
+  entity,
+  evidenceCount,
+}: {
+  entity: Entity;
+  evidenceCount: number;
+}) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const e = entity as any;
+  const authority = (e.authority_level as string | null) ?? null;
+  const causalRole = (e.causal_role as string | null) ?? null;
+  const sourceTag = (e.source_tag as string | null) ?? null;
+  const confidence =
+    typeof e.confidence === "number" && Number.isFinite(e.confidence)
+      ? e.confidence
+      : null;
+
+  const authBadge = authority ? AUTHORITY_BADGE[authority] : null;
+  const roleBadge = causalRole ? CAUSAL_ROLE_BADGE[causalRole] : null;
+  const sourceBadge = sourceTag ? SOURCE_TAG_BADGE[sourceTag] : null;
+
+  // Skip the row entirely when nothing to show — avoids an empty
+  // strip on minimal entities.
+  if (
+    !authBadge &&
+    !roleBadge &&
+    !sourceBadge &&
+    confidence === null &&
+    evidenceCount === 0
+  ) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {authBadge && (
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+            authBadge.bg,
+            authBadge.fg,
+          )}
+          title={authBadge.tip}
+        >
+          <ShieldCheck className="h-3 w-3" />
+          {authBadge.label}
+        </span>
+      )}
+      {roleBadge && (
+        <span
+          className="inline-flex items-center rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
+          title={roleBadge.tip}
+        >
+          {roleBadge.label}
+        </span>
+      )}
+      {sourceBadge && (
+        <span
+          className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+          title={sourceBadge.tip}
+        >
+          {sourceBadge.label}
+        </span>
+      )}
+      {confidence !== null && (
+        <span
+          className="inline-flex items-center rounded-full bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+          title={`Confidence ${(confidence * 100).toFixed(0)}% — derived from extraction or LLM self-report.`}
+        >
+          {(confidence * 100).toFixed(0)}%
+        </span>
+      )}
+      {evidenceCount > 0 && (
+        <span
+          className="inline-flex items-center gap-1 rounded-full bg-cyan-50 px-2 py-0.5 text-[10px] font-semibold text-cyan-700"
+          title={`${evidenceCount} evidence row${evidenceCount === 1 ? "" : "s"} attached. See Evidence section below.`}
+        >
+          <FileBarChart className="h-3 w-3" />
+          {evidenceCount}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── Evidence section ─────────────────────────────────────────────
+//
+// Per-entity rollup of evidence_registries rows where
+// attached_entity_id = entity.id. Each row carries L2M-style full
+// provenance: effect size + CI + study design + LLM label + parser
+// extraction (the trust boundary). For v1 we render a compact row
+// per evidence; clicking expands to show the verbatim source quote
+// + parser provenance.
+
+function EvidenceSection({ rows }: { rows: EvidenceRegistryRow[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  if (rows.length === 0) {
+    return (
+      <section className="border-b border-slate-100 px-5 py-4">
+        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+          Evidence
+        </h3>
+        <div className="rounded-md border border-dashed border-slate-200 px-3 py-3 text-center text-[11px] text-slate-500">
+          No evidence rows attached. Drop a paper on the canvas + run
+          extraction to bind evidence to this entity.
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="border-b border-slate-100 px-5 py-4">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+          Evidence ({rows.length})
+        </h3>
+      </div>
+      <ul className="space-y-1.5">
+        {rows.slice(0, 8).map((row) => {
+          const isExpanded = expanded === row.id;
+          const ci =
+            row.ci_lower !== null && row.ci_upper !== null
+              ? `[${row.ci_lower}, ${row.ci_upper}]`
+              : null;
+          const reviewBadge =
+            row.status === "reviewed" ? (
+              <span className="rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-700">
+                reviewed
+              </span>
+            ) : row.status === "rejected" ? (
+              <span className="rounded bg-red-50 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-red-700">
+                rejected
+              </span>
+            ) : (
+              <span className="rounded bg-amber-50 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-700">
+                needs review
+              </span>
+            );
+          return (
+            <li
+              key={row.id}
+              className="rounded-md border border-slate-100 bg-slate-50/50 px-3 py-2"
+            >
+              <button
+                type="button"
+                onClick={() => setExpanded(isExpanded ? null : row.id)}
+                className="flex w-full items-start justify-between gap-2 text-left"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="font-mono text-[11.5px] font-semibold text-slate-800">
+                      {row.effect_metric ?? "effect"}{" "}
+                      {row.effect_size !== null ? row.effect_size : "—"}
+                    </span>
+                    {ci && (
+                      <span className="font-mono text-[10.5px] text-slate-500">
+                        {ci}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-slate-600">
+                    {row.outcome_label ?? row.intervention_label ?? "Untitled effect"}
+                  </div>
+                  {row.study_design && (
+                    <div className="mt-0.5 text-[10px] text-slate-500">
+                      {row.study_design}
+                      {row.population_label ? ` · ${row.population_label}` : ""}
+                      {row.followup_label ? ` · ${row.followup_label}` : ""}
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-shrink-0 flex-col items-end gap-1">
+                  {reviewBadge}
+                  {isExpanded ? (
+                    <ChevronDown className="h-3 w-3 text-slate-400" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 text-slate-400" />
+                  )}
+                </div>
+              </button>
+              {isExpanded && (
+                <div className="mt-2 space-y-1.5 border-t border-slate-200 pt-2">
+                  {row.source_quote && (
+                    <div>
+                      <div className="text-[9.5px] font-semibold uppercase tracking-wider text-slate-500">
+                        Source quote
+                      </div>
+                      <div className="mt-0.5 text-[11px] italic text-slate-700">
+                        “{truncateLabel(row.source_quote, 220)}”
+                      </div>
+                    </div>
+                  )}
+                  {Array.isArray(row.flags) && row.flags.length > 0 && (
+                    <div>
+                      <div className="text-[9.5px] font-semibold uppercase tracking-wider text-slate-500">
+                        Parser flags
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap gap-1">
+                        {row.flags.map((f) => (
+                          <span
+                            key={f}
+                            className="rounded bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-amber-700"
+                          >
+                            {f}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {row.parser_provenance && (
+                    <div>
+                      <div className="text-[9.5px] font-semibold uppercase tracking-wider text-slate-500">
+                        Parser
+                      </div>
+                      <div className="mt-0.5 font-mono text-[10.5px] text-slate-600">
+                        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                        {(row.parser_provenance as any).module ?? "(none)"}@
+                        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                        {(row.parser_provenance as any).version ?? "?"}
+                      </div>
+                    </div>
+                  )}
+                  {typeof row.extraction_confidence === "number" && (
+                    <div className="text-[10.5px] text-slate-600">
+                      Extraction confidence ·{" "}
+                      {(row.extraction_confidence * 100).toFixed(0)}%
+                    </div>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+        {rows.length > 8 && (
+          <li className="px-1 text-[10px] italic text-slate-400">
+            +{rows.length - 8} more — open the global Evidence drawer to review.
+          </li>
+        )}
+      </ul>
+    </section>
+  );
+}
+
+// ── Provenance section ───────────────────────────────────────────
+//
+// Origin metadata: which agent/pass added the entity, what space it
+// belongs to, what its layer in the per-space ontology is. Renders
+// entities.provenance JSONB cleanly when present.
+
+function ProvenanceSection({
+  entity,
+  ontologyRow,
+}: {
+  entity: Entity;
+  ontologyRow: LayerOntologyRow | null;
+}) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const e = entity as any;
+  const provenance = (e.provenance as Record<string, unknown> | null) ?? null;
+  const provenanceEntries = provenance ? Object.entries(provenance) : [];
+
+  // Skip the section entirely if there's nothing to show — avoids a
+  // sparse "Provenance: —" rectangle on minimal entities.
+  if (provenanceEntries.length === 0 && !ontologyRow) return null;
+
+  return (
+    <section className="border-b border-slate-100 px-5 py-4">
+      <h3 className="mb-2 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+        Provenance
+      </h3>
+      <div className="space-y-2">
+        {ontologyRow && (
+          <div className="rounded-md border border-slate-100 bg-slate-50/50 px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              Layer ontology
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              <span
+                className="inline-block h-2 w-2 flex-shrink-0 rounded-full"
+                style={{ background: ontologyRow.color ?? "#94a3b8" }}
+              />
+              <span className="text-[11.5px] font-semibold text-slate-800">
+                {ontologyRow.ordinal}. {ontologyRow.label}
+              </span>
+              <span className="font-mono text-[10px] text-slate-400">
+                {ontologyRow.slug}
+              </span>
+            </div>
+            {ontologyRow.description && (
+              <div className="mt-1 text-[11px] text-slate-600">
+                {ontologyRow.description}
+              </div>
+            )}
+            <div className="mt-1 text-[10px] text-slate-500">
+              Source · {ontologyRow.ontology_source}
+            </div>
+          </div>
+        )}
+        {provenanceEntries.length > 0 && (
+          <div className="rounded-md border border-slate-100 bg-slate-50/50 px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              Origin metadata
+            </div>
+            <dl className="mt-1 space-y-1">
+              {provenanceEntries.slice(0, 8).map(([k, v]) => (
+                <div key={k} className="flex items-baseline gap-2">
+                  <dt className="flex-shrink-0 text-[10.5px] font-semibold text-slate-500">
+                    {k.replace(/_/g, " ")}
+                  </dt>
+                  <dd className="min-w-0 flex-1 truncate text-[10.5px] text-slate-700">
+                    {typeof v === "string"
+                      ? v
+                      : typeof v === "number" || typeof v === "boolean"
+                        ? String(v)
+                        : JSON.stringify(v).slice(0, 120)}
+                  </dd>
+                </div>
+              ))}
+              {provenanceEntries.length > 8 && (
+                <div className="text-[10px] italic text-slate-400">
+                  +{provenanceEntries.length - 8} more fields
+                </div>
+              )}
+            </dl>
+          </div>
+        )}
+      </div>
+    </section>
+  );
 }

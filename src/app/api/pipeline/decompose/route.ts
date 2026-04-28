@@ -44,6 +44,15 @@ import {
   completePipelineRun,
 } from "@/lib/events/structural-event-bus";
 import { materializeAndEmitSignatures } from "@/lib/pipeline/materialize-signatures";
+import {
+  loadActivePlan,
+  loadLayerOntology,
+  buildLayerSlugToIdMap,
+  resolveLayerOntologyId,
+  formatAxisGuidanceBlock,
+  formatLayerOntologyBlock,
+} from "@/lib/pipeline/active-plan-loader";
+import type { LayerOntologyRow } from "@/types/layer-ontology";
 import type { StructuralEvent } from "@/types/pipeline-events";
 
 export const maxDuration = 300; // Deep tier: 2 large LLM passes, up to 50 entities + full manifold
@@ -299,11 +308,56 @@ ${text}`;
       }
     }
 
+    // ── Active KG generation plan (Phase 2) ─────────────────────────
+    //
+    // When the bootstrap chain landed an approved plan on this space
+    // (spaces.active_plan_id is set), load the plan + the per-space
+    // layer_ontology rows. The plan's adaptive axes + the ontology's
+    // layer slugs become contract guidance for the LLM — the
+    // decompose system prompt is augmented so entities get tagged
+    // with the right layer slugs and edges populate the right axes.
+    //
+    // Soft-fail discipline: if there's no approved plan (legacy
+    // spaces / skipPlanGate=true / brand-new space) the loaders
+    // return null/[] and we proceed with the current behavior.
+    let activePlanAxes: ReturnType<typeof formatAxisGuidanceBlock> = "";
+    let activePlanOntologyBlock: ReturnType<typeof formatLayerOntologyBlock> = "";
+    let layerOntologyForInsert: LayerOntologyRow[] = [];
+    let layerSlugToOntologyId = new Map<string, string>();
+    if (existingSpaceId) {
+      try {
+        const [plan, ontology] = await Promise.all([
+          loadActivePlan(db, existingSpaceId),
+          loadLayerOntology(db, existingSpaceId),
+        ]);
+        if (plan?.axis_proposals?.axes?.length) {
+          activePlanAxes = formatAxisGuidanceBlock(plan.axis_proposals.axes);
+        }
+        if (ontology.length > 0) {
+          activePlanOntologyBlock = formatLayerOntologyBlock(ontology);
+          layerOntologyForInsert = ontology;
+          layerSlugToOntologyId = buildLayerSlugToIdMap(ontology);
+        }
+      } catch (err) {
+        console.warn(
+          "[decompose] active-plan load soft-failed; falling back to legacy decomposition behavior:",
+          err,
+        );
+      }
+    }
+    const planGuidanceSuffix =
+      activePlanOntologyBlock || activePlanAxes
+        ? `\n\n${[activePlanOntologyBlock, activePlanAxes].filter(Boolean).join("\n\n")}`
+        : "";
+
     // Build Pass 1 system prompt — base decomposition prompt optionally
-    // extended with the memory context block when memory is enabled.
-    const pass1SystemPrompt = memoryPromptBlock
-      ? `${getDecompositionPrompt(reasoningDepth)}\n\n${memoryPromptBlock}`
-      : getDecompositionPrompt(reasoningDepth);
+    // extended with the memory context block when memory is enabled,
+    // plus the active-plan guidance block when an approved plan exists.
+    const pass1SystemPrompt = `${
+      memoryPromptBlock
+        ? `${getDecompositionPrompt(reasoningDepth)}\n\n${memoryPromptBlock}`
+        : getDecompositionPrompt(reasoningDepth)
+    }${planGuidanceSuffix}`;
 
     // Pass 1: Decomposition (free-form reasoning). STREAMED so the
     // user sees the AI's reasoning as it arrives instead of a 45-90s
@@ -794,7 +848,10 @@ INPUT:
 ${enrichedPrompt}`;
 
         const retryDecomp = await llmGenerate({
-          system: getDecompositionPrompt(reasoningDepth),
+          // Append the same plan guidance as Pass 1 so the retry
+          // pass keeps the contract — using the per-space ontology
+          // slugs + adaptive axes the user approved.
+          system: `${getDecompositionPrompt(reasoningDepth)}${planGuidanceSuffix}`,
           user: retryPrompt,
           maxTokens: decompTokens,
           temperature: 0.3,
@@ -1049,7 +1106,35 @@ ${enrichedPrompt}`;
     }
 
     const entityIdMap = new Map<string, string>();
-    const sanitizedEntities = dedupedEntities.map((e) => sanitizeEntity(e, spaceId));
+    // Phase 2 — resolve layer_ontology_id from the per-space layer
+    // ontology BEFORE sanitization. The LLM was prompted with
+    // ontology slugs (via planGuidanceSuffix), so it should have
+    // tagged entities with matching slugs in the `layer` /
+    // `knowledge_layer` field. Lookup is in-memory (slug → id Map),
+    // so this is essentially free per entity. When the entity's
+    // layer doesn't match any per-space slug (or when no ontology
+    // exists), we leave layer_ontology_id null and fall back to the
+    // legacy knowledge_layer enum.
+    const sanitizedEntities = dedupedEntities.map((e) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw = e as any;
+      if (layerOntologyForInsert.length > 0) {
+        const candidateSlug =
+          (typeof raw.layer === "string" && raw.layer) ||
+          (typeof raw.knowledge_layer === "string" && raw.knowledge_layer) ||
+          null;
+        const resolvedId = resolveLayerOntologyId(
+          layerOntologyForInsert,
+          candidateSlug,
+        );
+        if (resolvedId) {
+          raw.layer_ontology_id = resolvedId;
+        }
+      }
+      return sanitizeEntity(raw, spaceId);
+    });
+    // Suppress unused-warning when no plan/ontology is active.
+    void layerSlugToOntologyId;
 
     if (sanitizedEntities.length > 0) {
       const { data: entityData } = await resilientInsert(db, "entities", sanitizedEntities, "id, entity_id");

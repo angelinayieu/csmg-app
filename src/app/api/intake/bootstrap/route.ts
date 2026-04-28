@@ -77,11 +77,27 @@ export async function POST(request: Request) {
     text,
     reasoningDepth: rawDepth,
     reasoning_settings: rawReasoningSettings,
+    skipPlanGate: rawSkipPlanGate,
+    planMode: rawPlanMode,
   } = (body ?? {}) as {
     text?: string;
     reasoningDepth?: string;
     reasoning_settings?: unknown;
+    /** When true, bypass the KG plan review gate and fire decompose
+     *  immediately (legacy behavior). Default false → propose-plan
+     *  runs and the user must approve in the canvas Plan Review Card
+     *  before downstream stages execute. */
+    skipPlanGate?: boolean;
+    /** Mode for the plan card UI ("consumer" | "clinician" |
+     *  "researcher"). Drives which sections render. Default "researcher". */
+    planMode?: "consumer" | "clinician" | "researcher";
   };
+
+  const skipPlanGate = rawSkipPlanGate === true;
+  const planMode: "consumer" | "clinician" | "researcher" =
+    rawPlanMode === "consumer" || rawPlanMode === "clinician"
+      ? rawPlanMode
+      : "researcher";
 
   if (typeof text !== "string" || text.trim().length < 4) {
     return NextResponse.json(
@@ -510,6 +526,79 @@ export async function POST(request: Request) {
         "[intake/bootstrap] domain-inferrer failed (non-fatal):",
         err,
       );
+    }
+
+    // ── KG Generation Plan gate ────────────────────────────────────
+    //
+    // When skipPlanGate is false (default), call propose-plan so the
+    // user gets a Plan Review Card on the canvas BEFORE decompose
+    // fires. The plan captures every silent decision the pipeline
+    // would otherwise make (custom axes, layer ontology, methodology,
+    // research plan) for user review.
+    //
+    // The reservation we hold stays open across the review. The
+    // approve route fires decompose with the same reservationId on
+    // user approval; the reject route cancels it.
+    //
+    // Soft-fail discipline: if propose-plan fails, fall back to
+    // firing decompose immediately (legacy behavior). The user gets
+    // their KG; they just don't get the gate. Better than a stuck
+    // run with no terminal event.
+    let planGateBlocked = false;
+    if (!skipPlanGate) {
+      try {
+        const planRes = await fetch(`${origin}/api/pipeline/propose-plan`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: cookieHeader,
+          },
+          body: JSON.stringify({
+            space_id: spaceId,
+            prompt: trimmed,
+            mode: planMode,
+            prefer_starter_when_match: true,
+            // Capture everything the approve route needs to fire
+            // decompose with the original bootstrap context. Without
+            // this the approve route can't rehydrate (no reservation,
+            // no run linkage).
+            pipeline_handoff_context: {
+              reservation_id: reservationId,
+              intake_run_id: runId,
+              decompose_input: {
+                text: trimmed,
+                reasoningDepth,
+                autoAdvance: true,
+              },
+            },
+          }),
+        });
+        if (planRes.ok) {
+          planGateBlocked = true;
+          console.log(
+            `[intake/bootstrap] plan gate engaged for space=${spaceId} — decompose handoff deferred until user approval`,
+          );
+        } else {
+          console.warn(
+            `[intake/bootstrap] propose-plan returned ${planRes.status} — falling back to direct decompose handoff`,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          "[intake/bootstrap] propose-plan failed — falling back to direct decompose handoff:",
+          err,
+        );
+      }
+    }
+
+    // When the plan gate is engaged, the bootstrap is done — the
+    // approve route owns the rest of the chain. The intake_bootstrap
+    // run stays open (no terminal event yet) so the SSE stream stays
+    // subscribed; the approve route emits stage_boundary{exit} on the
+    // bootstrap run when it fires decompose. If the user rejects, the
+    // reject route closes the bootstrap run + cancels the reservation.
+    if (planGateBlocked) {
+      return;
     }
 
     const ctrl = new AbortController();

@@ -59,12 +59,25 @@ interface WhatIfPanelProps {
   entities: Array<Pick<Entity, "id" | "name" | "description" | "entity_category">>;
   onClose: () => void;
   onImpactOverlay?: (entityIds: string[] | null) => void;
+  /** Subject phase — when present, every successful what-if / MC /
+   *  bootstrap run POSTs to /api/subjects/[subjectId]/experiments
+   *  with the live conditions snapshot. The append-only audit log
+   *  is what powers the Subject detail page's experiment history.
+   *  Soft-fails silently — log failures don't block the user from
+   *  seeing the simulation result. */
+  subjectId?: string | null;
+  /** Current live conditions from the lab's SubjectStrip (lifted
+   *  state). Frozen into the experiment row at log time so later
+   *  slider edits don't rewrite history. */
+  currentConditions?: Record<string, number>;
 }
 
 export function WhatIfPanel({
   entities,
   onClose,
   onImpactOverlay,
+  subjectId,
+  currentConditions,
 }: WhatIfPanelProps) {
   const [query, setQuery] = useState("");
   const [targetId, setTargetId] = useState<string | null>(null);
@@ -206,6 +219,36 @@ export function WhatIfPanel({
     [targetId, entities],
   );
 
+  /** Subject experiment logging — POSTs to
+   *  /api/subjects/[subjectId]/experiments after each successful
+   *  what-if / MC / bootstrap run. Soft-fails — log failures don't
+   *  block the user from seeing the simulation result. No-op when
+   *  no subject is in scope. */
+  async function logExperiment(opts: {
+    run_kind: "what_if" | "monte_carlo" | "bootstrap";
+    run_params: Record<string, unknown>;
+    outcome_summary: Record<string, unknown>;
+    outcome_distribution?: Record<string, unknown>;
+  }) {
+    if (!subjectId) return;
+    try {
+      await fetch(`/api/subjects/${subjectId}/experiments`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          run_kind: opts.run_kind,
+          conditions_at_run: currentConditions ?? {},
+          run_params: opts.run_params,
+          outcome_summary: opts.outcome_summary,
+          outcome_distribution: opts.outcome_distribution ?? null,
+        }),
+      });
+    } catch (err) {
+      console.warn("[what-if-panel] experiment log failed:", err);
+    }
+  }
+
   async function run() {
     if (!targetId) return;
     setRunning(true);
@@ -244,6 +287,17 @@ export function WhatIfPanel({
         setMcResult(r);
         setMcBridgeCount(r.cross_space_bridges_included ?? 0);
         onImpactOverlay?.(r.affected_entities.map((a) => a.entity_id));
+        // Subject phase — log the experiment (no-op when no subject).
+        void logExperiment({
+          run_kind: "monte_carlo",
+          run_params: { target_entity_id: targetId, direction, magnitude },
+          outcome_summary: {
+            ...r.aggregate_distribution,
+            iterations: r.iterations,
+            cross_space_bridges_included: r.cross_space_bridges_included ?? 0,
+            affected_entity_count: r.affected_entities.length,
+          },
+        });
         return;
       }
 
@@ -279,6 +333,18 @@ export function WhatIfPanel({
           setBsMatchedTrackerScore(body.matched_tracker_score);
         }
         onImpactOverlay?.(r.affected_entities.map((a) => a.entity_id));
+        // Subject phase — log bootstrap experiment.
+        void logExperiment({
+          run_kind: "bootstrap",
+          run_params: { target_entity_id: targetId, direction, magnitude },
+          outcome_summary: {
+            ...(r as unknown as { aggregate_distribution?: object })
+              .aggregate_distribution ?? {},
+            cross_space_bridges_included: r.cross_space_bridges_included ?? 0,
+            affected_entity_count: r.affected_entities.length,
+            matched_tracker: body.matched_tracker ?? null,
+          },
+        });
         return;
       }
 
@@ -299,6 +365,22 @@ export function WhatIfPanel({
       const r = body.result as WhatIfResponse;
       setResult(r);
       onImpactOverlay?.(r.affected_entities.map((a) => a.entity_id));
+      // Subject phase — log narrative-walk experiment.
+      void logExperiment({
+        run_kind: "what_if",
+        run_params: { target_entity_id: targetId, direction, magnitude },
+        outcome_summary: {
+          // narrative walks return a derived distribution + a verdict-y narrative
+          ...((r as unknown as { derived_distribution?: object })
+            .derived_distribution ?? {}),
+          affected_entity_count: r.affected_entities.length,
+          // Don't bloat the row with a long narrative — store a short summary.
+          narrative_preview:
+            typeof (r as { narrative?: string }).narrative === "string"
+              ? (r as { narrative: string }).narrative.slice(0, 240)
+              : null,
+        },
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "What-if failed");
     } finally {

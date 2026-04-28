@@ -24,6 +24,7 @@ import { safeAuth, safeJsonParse } from "@/lib/api-helpers";
 import { llmJSON } from "@/lib/llm";
 import {
   emitStructuralEvent,
+  completePipelineRun,
 } from "@/lib/events/structural-event-bus";
 import {
   ALWAYS_APPLICABLE_AXES,
@@ -57,6 +58,8 @@ import type {
   SituationFrame,
 } from "@/types/situation-frame";
 import type { SituationBaseline } from "@/types/situation";
+import { loadActivePlan } from "@/lib/pipeline/active-plan-loader";
+import type { KgPlanAxisProposal } from "@/types/kg-generation-plan";
 
 export const maxDuration = 30;
 export const runtime = "nodejs";
@@ -247,6 +250,78 @@ function deriveFrameFromPanel(
 
   // Backstop — guarantee assumptions is present (every situation has
   // load-bearing beliefs; legacy validator enforces this too).
+  for (const alwaysAxis of ALWAYS_APPLICABLE_AXES) {
+    if (!catalogOut.some((f) => f.axis === alwaysAxis)) {
+      catalogOut.push({
+        axis: alwaysAxis,
+        rationale:
+          "Surfaces the load-bearing assumptions underlying the situation.",
+      });
+    }
+  }
+  return { frame: catalogOut, adhoc: adhocOut };
+}
+
+// ── Derive frame from active KG generation plan (Phase 2) ───────────
+//
+// When a user approved a plan and its `axis_proposals.axes[]` is
+// non-empty, the plan TAKES PRECEDENCE over both the panel-frame
+// and the legacy LLM classifier. The plan's axes are topic-adaptive
+// (e.g. "Cognitive Domains", "Bell-Curve Dynamics") and almost
+// always non-catalog → they flow through as AdHocSelection[] using
+// the same buildAdHocSpec machinery the panel uses.
+//
+// On collision with a canonical catalog axis (slug matches one of
+// the 8) we prefer the catalog spec — preserves prompt-variant
+// machinery and proven generators. Plan-minted axes are exclusively
+// AdHoc.
+//
+// Returns empty arrays when the plan has no axes (caller falls
+// through to panel/legacy path).
+
+function deriveFrameFromActivePlan(
+  axes: KgPlanAxisProposal[] | undefined | null,
+): { frame: FrameSelection[]; adhoc: AdHocSelection[] } {
+  if (!axes || axes.length === 0) return { frame: [], adhoc: [] };
+  const catalogOut: FrameSelection[] = [];
+  const adhocOut: AdHocSelection[] = [];
+  const seenCatalog = new Set<ProbabilitySpaceAxis>();
+  const seenAdhoc = new Set<string>();
+
+  for (const a of axes) {
+    if (isValidAxis(a.slug)) {
+      if (seenCatalog.has(a.slug)) continue;
+      seenCatalog.add(a.slug);
+      catalogOut.push({
+        axis: a.slug,
+        rationale:
+          (a.rationale || a.definition || "").slice(0, 220) ||
+          "Plan-selected canonical axis.",
+      });
+    } else {
+      if (seenAdhoc.has(a.slug)) continue;
+      seenAdhoc.add(a.slug);
+      const spec = buildAdHocSpec({
+        axis_id: a.slug,
+        label: a.name,
+        tagline: (a.definition || "").slice(0, 140),
+        rationale: a.rationale,
+        dimension: asDimension(a.dimension_hint),
+        instrument_kind: asInstrumentKind(a.instrument_kind_hint),
+        output_shape: asOutputShape(a.output_shape_hint),
+      });
+      adhocOut.push({
+        spec,
+        rationale:
+          (a.rationale || a.definition || "").slice(0, 220) ||
+          "Plan-minted topic-adaptive axis.",
+      });
+    }
+  }
+
+  // Backstop — if neither the plan nor the canonical set yielded
+  // an "assumptions" axis, append it (every situation has
+  // load-bearing beliefs worth surfacing).
   for (const alwaysAxis of ALWAYS_APPLICABLE_AXES) {
     if (!catalogOut.some((f) => f.axis === alwaysAxis)) {
       catalogOut.push({
@@ -474,6 +549,25 @@ export async function POST(request: Request) {
       ? `\n\nCANDIDATE AXES (derived from question type "${qType.type}" + domain "${qType.domain}"): ${candidateAxes.join(", ")}.\nPrefer these axes. Only include a non-candidate axis if there's a specific, input-grounded reason.${presenceHintBlock}${baselineHintBlock}`
       : presenceHintBlock + baselineHintBlock;
 
+  // ── Plan-first path (Phase 2) ────────────────────────────────────
+  //
+  // When the user approved a KG generation plan and it carries
+  // topic-adaptive axes, those TAKE PRECEDENCE over both the panel
+  // and the legacy LLM classifier. The plan was reviewed + approved
+  // by the user; respecting it is what makes the plan a contract.
+  //
+  // Soft-fails: if the plan loader hiccups, we fall through to the
+  // existing panel-first path with no behavior change.
+  let planAxes: KgPlanAxisProposal[] = [];
+  try {
+    const activePlan = await loadActivePlan(db, spaceId);
+    if (activePlan?.axis_proposals?.axes?.length) {
+      planAxes = activePlan.axis_proposals.axes;
+    }
+  } catch (err) {
+    console.warn("[frame-extractor] active-plan load soft-failed:", err);
+  }
+
   // ── Panel-first path (Piece 3 of the 2026-04-23 review) ──────────
   //
   // If the framing panel ran upstream and produced a usable frame —
@@ -488,9 +582,14 @@ export async function POST(request: Request) {
   // fall through to the legacy LLM classifier path below — exact
   // pre-Piece-3 behavior.
   let frame: FrameResponse;
-  let frameSource: "panel" | "legacy_classifier" | "fallback" = "fallback";
+  let frameSource:
+    | "active_plan"
+    | "panel"
+    | "legacy_classifier"
+    | "fallback" = "fallback";
   let frameTemperature = 0.2;
   const panelFrame = deriveFrameFromPanel(situationFrame);
+  const planFrame = deriveFrameFromActivePlan(planAxes);
 
   // Boost temperature when the panel surfaced divergences — the LLM
   // downstream (if we do call it) should explore more, not less, when
@@ -500,7 +599,10 @@ export async function POST(request: Request) {
     frameTemperature = temperatureForDivergence(situationFrame.divergences);
   }
 
-  if (panelFrame.frame.length > 0 || panelFrame.adhoc.length > 0) {
+  if (planFrame.frame.length > 0 || planFrame.adhoc.length > 0) {
+    frame = { frame: planFrame.frame, adhoc_frame: planFrame.adhoc };
+    frameSource = "active_plan";
+  } else if (panelFrame.frame.length > 0 || panelFrame.adhoc.length > 0) {
     frame = { frame: panelFrame.frame, adhoc_frame: panelFrame.adhoc };
     frameSource = "panel";
   } else {
@@ -763,6 +865,46 @@ export async function POST(request: Request) {
   const AXIS_TIMEOUT_MS = 120_000;
 
   after(async () => {
+    // B1+B2 (docs/KG_DEPTH_CRITIQUE.md audit): track per-axis
+    // success/failure so we can (a) emit `axis_failed` events on
+    // every per-axis error, and (b) call completePipelineRun(failed)
+    // when 100% of dispatched axes fail. Without this the run hangs
+    // for 15min until the watchdog cron sweeps it, and the canvas
+    // shows a blank screen with zero diagnostic signal.
+    type AxisOutcome = {
+      axis: string;
+      spaceKey: string;
+      ok: boolean;
+      reason?: "timeout" | "hard_fail";
+      errorMessage?: string;
+    };
+    const outcomes: AxisOutcome[] = [];
+
+    // Helper: emit axis_failed AND record outcome. Soft-fails on
+    // emit error so a wedged event bus doesn't block the catch path.
+    async function recordAxisFailure(
+      axis: string,
+      reason: "timeout" | "hard_fail",
+      errorMessage: string,
+    ) {
+      const spaceKey = `${runId}:${axis}`;
+      outcomes.push({ axis, spaceKey, ok: false, reason, errorMessage });
+      try {
+        await emitStructuralEvent(db, runId, {
+          type: "axis_failed",
+          spaceKey,
+          axis,
+          reason,
+          errorMessage,
+        });
+      } catch (emitErr) {
+        console.warn(
+          `[frame-extractor] axis_failed emit failed for ${axis} (non-fatal):`,
+          emitErr,
+        );
+      }
+    }
+
     // Catalog + ad-hoc fire in a single Promise.allSettled so slow
     // catalog axes don't block ad-hoc generation, and vice versa.
     // Each call routes to a different URL (axis key vs `_adhoc`)
@@ -772,7 +914,7 @@ export async function POST(request: Request) {
         const ac = new AbortController();
         const timer = setTimeout(() => ac.abort(), AXIS_TIMEOUT_MS);
         try {
-          await fetch(
+          const res = await fetch(
             `${origin}/api/pipeline/probability-space/${axis}`,
             {
               method: "POST",
@@ -796,8 +938,29 @@ export async function POST(request: Request) {
               signal: ac.signal,
             },
           );
+          // fetch() doesn't throw on HTTP errors — check ok flag
+          // explicitly so a 500 from the axis route doesn't get
+          // counted as success.
+          if (!res.ok) {
+            await recordAxisFailure(
+              axis,
+              "hard_fail",
+              `Generator returned HTTP ${res.status}`,
+            );
+            return;
+          }
+          outcomes.push({ axis, spaceKey: `${runId}:${axis}`, ok: true });
         } catch (err) {
           const aborted = ac.signal.aborted;
+          const errorMessage =
+            err instanceof Error ? err.message : String(err);
+          await recordAxisFailure(
+            axis,
+            aborted ? "timeout" : "hard_fail",
+            aborted
+              ? `Generator timed out after ${AXIS_TIMEOUT_MS}ms`
+              : errorMessage,
+          );
           console.warn(
             `[frame-extractor] generator ${axis} kickoff ${aborted ? "TIMED OUT" : "failed"} (non-fatal):`,
             err,
@@ -811,8 +974,9 @@ export async function POST(request: Request) {
     const adhocKickoffs = adhocAxesToGenerate.map(async ({ spec, variant }) => {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), AXIS_TIMEOUT_MS);
+      const axis = spec.axis_id;
       try {
-        await fetch(
+        const res = await fetch(
           `${origin}/api/pipeline/probability-space/_adhoc`,
           {
             method: "POST",
@@ -832,10 +996,28 @@ export async function POST(request: Request) {
             signal: ac.signal,
           },
         );
+        if (!res.ok) {
+          await recordAxisFailure(
+            axis,
+            "hard_fail",
+            `Ad-hoc generator returned HTTP ${res.status}`,
+          );
+          return;
+        }
+        outcomes.push({ axis, spaceKey: `${runId}:${axis}`, ok: true });
       } catch (err) {
         const aborted = ac.signal.aborted;
+        const errorMessage =
+          err instanceof Error ? err.message : String(err);
+        await recordAxisFailure(
+          axis,
+          aborted ? "timeout" : "hard_fail",
+          aborted
+            ? `Ad-hoc generator timed out after ${AXIS_TIMEOUT_MS}ms`
+            : errorMessage,
+        );
         console.warn(
-          `[frame-extractor] ad-hoc generator ${spec.axis_id} kickoff ${aborted ? "TIMED OUT" : "failed"} (non-fatal):`,
+          `[frame-extractor] ad-hoc generator ${axis} kickoff ${aborted ? "TIMED OUT" : "failed"} (non-fatal):`,
           err,
         );
       } finally {
@@ -844,6 +1026,32 @@ export async function POST(request: Request) {
     });
 
     await Promise.allSettled([...catalogKickoffs, ...adhocKickoffs]);
+
+    // B2 — if every dispatched axis failed, the run can't recover on
+    // its own. Mark it failed immediately rather than letting it
+    // dangle for ~15min until the watchdog sweeps. The canvas HUD
+    // will pick up status=failed via SSE, render the U2 error label
+    // and offer the U4 Retry button.
+    const totalDispatched = outcomes.length;
+    const totalFailed = outcomes.filter((o) => !o.ok).length;
+    if (totalDispatched > 0 && totalFailed === totalDispatched) {
+      const reasonsCsv = outcomes
+        .map((o) => `${o.axis}:${o.reason ?? "unknown"}`)
+        .join(", ");
+      const message = `All ${totalDispatched} axes failed during landscape generation (${reasonsCsv})`;
+      console.warn(`[frame-extractor] ${message}`);
+      try {
+        await completePipelineRun(db, runId, "failed", message);
+      } catch (completeErr) {
+        console.warn(
+          "[frame-extractor] completePipelineRun on full-axis-fail emit failed (non-fatal — watchdog will sweep):",
+          completeErr,
+        );
+      }
+      // Skip the cross-space linker + downstream stages — they have
+      // nothing to work with when zero axes produced output.
+      return;
+    }
 
     // ── Phase 2E · PR 4 — cross-space linker ──
     //

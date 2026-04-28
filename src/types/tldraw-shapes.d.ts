@@ -678,6 +678,35 @@ declare module "@tldraw/tlschema" {
       accent: string;
       expanded: boolean;
     };
+    // Phase 4 — Subject card primitive. First-class whiteboard
+    // representation of a subjects row. Created via the +Subject
+    // manual-authoring button or accepted from the lab proposal
+    // wizard. "Open Lab" footer routes to /lab?subjectId=X.
+    "subject-card": {
+      w: number;
+      h: number;
+      subjectId: string;
+      spaceId: string;
+      name: string;
+      focusKind:
+        | "person"
+        | "document"
+        | "product"
+        | "topic"
+        | "environment"
+        | "system"
+        | "data"
+        | "reaction"
+        | "other";
+      focusLabel: string;
+      scopeSummary: string | null;
+      conditionCount: number;
+      artifactState:
+        | "bare_topic"
+        | "partial_artifact"
+        | "complete_artifact";
+      needsReview: boolean;
+    };
   }
 }
 

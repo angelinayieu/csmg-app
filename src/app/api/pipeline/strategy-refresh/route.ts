@@ -3075,6 +3075,40 @@ export async function POST(request: Request) {
       }
     });
 
+    // ── Lab proposal — fire after strategy completes ──────────────
+    //
+    // Generates a `lab_scaffolds` row with status='proposed' so the
+    // whiteboard can surface a "lab proposal ready — review" chip.
+    // User opens the wizard, edits/approves, and the approve
+    // endpoint materializes subjects + emits stage_boundary{lab}.
+    //
+    // Soft-fail: a missing proposal blocks zero strategy output.
+    // Parallel with generate-apps (no ordering dependency).
+    after(async () => {
+      try {
+        const cookieHeader = request.headers.get("cookie") ?? "";
+        const proposalOrigin = new URL(request.url).origin;
+        await fetch(
+          `${proposalOrigin}/api/spaces/${spaceId}/lab-scaffolds`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              pipeline_run_id: pipelineRunId,
+            }),
+          },
+        );
+      } catch (propErr) {
+        console.warn(
+          "[strategy-refresh] lab proposal kickoff failed (non-critical):",
+          propErr,
+        );
+      }
+    });
+
     // ── TERMINAL COMMIT ── Strategy-refresh is the last hop of the
     // auto-advance chain. The full pipeline succeeded: deduct the
     // reserved credits from the user's balance. Soft-fail so a

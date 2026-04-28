@@ -37,6 +37,7 @@ import { ArrowUpRight, Crown, Loader2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { canvasNavigate } from "@/lib/canvas/canvas-bus";
 import { useRunEventStore } from "../hooks/run-event-store";
+import type { PipelineStage } from "@/types/pipeline-events";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -83,6 +84,32 @@ function postureLabel(posture: string): string {
   return POSTURE_LABEL[posture] ?? posture.replace(/_/g, " ");
 }
 
+/**
+ * Stage-aware placeholder copy. The bar only shows the placeholder
+ * during proposal/lab/results stages (gated upstream); this maps
+ * each of those to a tight one-liner the user can read at a glance.
+ *
+ * Earlier stages (intake/landscape/kg) hide the bar entirely so the
+ * StageIndicator strip remains the canonical progress signal during
+ * those phases — no duplicated "AI is working" surfaces, no risk of
+ * the bar lying about what's happening.
+ */
+function stagePlaceholderCopy(stage: PipelineStage | null): string {
+  switch (stage) {
+    case "proposal":
+      return "Synthesizing strategy…";
+    case "lab":
+      return "Running simulations…";
+    case "results":
+      return "Finalizing strategy…";
+    default:
+      // Defensive — shouldn't be reached given the upstream gate, but
+      // a stable fallback prevents a flash of empty content if the
+      // stage_boundary event arrives between renders.
+      return "Strategy synthesizing…";
+  }
+}
+
 // ── Public component ─────────────────────────────────────────────────
 
 export interface StrategyHeroBarProps {
@@ -91,7 +118,7 @@ export interface StrategyHeroBarProps {
 }
 
 export function StrategyHeroBar({ spaceId, runId }: StrategyHeroBarProps) {
-  const { events } = useRunEventStore();
+  const { events, status } = useRunEventStore();
   const [entries, setEntries] = useState<HeroEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [swapPending, setSwapPending] = useState<number | null>(null);
@@ -110,6 +137,26 @@ export function StrategyHeroBar({ spaceId, runId }: StrategyHeroBarProps) {
     return n;
   }, [events]);
 
+  // Track the current pipeline stage from the most recent
+  // stage_boundary event. Drives the placeholder copy so the bar
+  // never lies — during intake it says "Decomposing your prompt…",
+  // during proposal it says "Synthesizing strategy…", etc. Without
+  // this the bar would flash "Strategy synthesizing…" the moment
+  // bootstrap fires (long before any strategy work begins), which
+  // is misleading.
+  const currentStage = useMemo<PipelineStage | null>(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i].event;
+      if (e.type === "stage_boundary") {
+        // phase="exit" on a stage means we're transitioning out;
+        // we still treat it as "the most recently active stage"
+        // until a new stage's enter event arrives.
+        return e.stage;
+      }
+    }
+    return null;
+  }, [events]);
+
   const fetchBatch = useCallback(async () => {
     if (!spaceId) return;
     setLoading(true);
@@ -122,55 +169,60 @@ export function StrategyHeroBar({ spaceId, runId }: StrategyHeroBarProps) {
         setLoading(false);
         return;
       }
+      // Audit fix (docs/KG_DEPTH_CRITIQUE.md): the canonical source
+      // for ranked strategies is now the top-level `ranked_strategies`
+      // field on the response. The route extracts it from
+      // `space.synthesis_data.strategic_recommendation.ranked_strategies`
+      // (the only place strategy-engine actually writes it) and
+      // flattens to a hero-bar-friendly shape. We previously read
+      // `proposal.justification.ranked` — a field that doesn't exist
+      // in TwinProposalJustification, so the bar always fell through
+      // to single-strategy mode and the T1.1 "top-N side-by-side"
+      // feature never rendered as designed.
       const data = (await res.json()) as {
+        ranked_strategies?: Array<{
+          rank: number;
+          title: string;
+          summary: string;
+          confidence: number | null;
+          posture: string;
+        }>;
         proposal?: {
           justification?: {
-            ranked?: Array<{
-              rank: number;
-              title?: string;
-              summary?: string;
-              chosen_approach?: string;
-              confidence?: number;
-              posture?: string;
-            }>;
             chosen_approach?: string;
             confidence?: number;
           };
-          user_status?: string;
         } | null;
       };
-      const ranked = data?.proposal?.justification?.ranked;
-      const baseConfidence =
-        typeof data?.proposal?.justification?.confidence === "number"
-          ? data.proposal.justification.confidence
-          : null;
-      if (Array.isArray(ranked) && ranked.length > 0) {
-        const next: HeroEntry[] = ranked.map((r, i) => ({
+      const rankedFromResponse = data?.ranked_strategies;
+      if (Array.isArray(rankedFromResponse) && rankedFromResponse.length > 0) {
+        const next: HeroEntry[] = rankedFromResponse.map((r, i) => ({
           rank: typeof r.rank === "number" ? r.rank : i + 1,
-          is_active: i === 0, // server returns ranked[0] as active
-          title: typeof r.title === "string" ? r.title : "Untitled strategy",
-          summary:
-            typeof r.summary === "string"
-              ? r.summary
-              : typeof r.chosen_approach === "string"
-                ? r.chosen_approach
-                : "",
-          confidence:
-            typeof r.confidence === "number"
-              ? r.confidence
-              : baseConfidence,
-          posture: typeof r.posture === "string" ? r.posture : "exploratory_discovery",
+          // Server sorts by rank ascending — first entry is the active
+          // (top-ranked) strategy. The user can click "Set active" on
+          // any other to swap-rank.
+          is_active: i === 0,
+          title: r.title,
+          summary: r.summary,
+          confidence: r.confidence,
+          posture: r.posture,
         }));
         setEntries(next);
       } else if (data?.proposal?.justification?.chosen_approach) {
-        // Fallback: single-strategy proposal without ranked list.
+        // Final fallback: legacy persisted proposal where the route
+        // produced no ranked_strategies (synthesis_data may be
+        // missing on very old runs). Render as a single card so the
+        // user still sees their strategy.
         setEntries([
           {
             rank: 1,
             is_active: true,
             title: "Recommended strategy",
             summary: data.proposal.justification.chosen_approach,
-            confidence: baseConfidence,
+            confidence:
+              typeof data.proposal.justification.confidence === "number"
+                ? data.proposal.justification.confidence
+                : null,
             posture: "exploratory_discovery",
           },
         ]);
@@ -230,15 +282,35 @@ export function StrategyHeroBar({ spaceId, runId }: StrategyHeroBarProps) {
     canvasNavigate(`/app/space/${spaceId}/strategy`);
   }, [spaceId]);
 
+  // U3 (docs/KG_DEPTH_CRITIQUE.md audit) — also gate on status. A
+  // failed / timed-out run with no strategies should NOT show this
+  // bar (the prior version showed "Finalizing strategy…" or fetched
+  // garbage from the API when cancel emitted a fake results-exit).
+  // When the run errored, the HUD's error pill is the canonical
+  // surface — the bar should disappear so it doesn't compete.
+  const runFailed =
+    status === "failed" || status === "timeout";
+
   // Hidden until at least one strategy is known. After that, persists
   // even when the run terminates — the user can come back and see the
-  // bar on canvas reload.
+  // bar on canvas reload (legitimate post-success state).
   if (!runId && entries.length === 0) return null;
   if (entries.length === 0) {
-    // Run is active but no strategies yet — show a slim placeholder so
-    // the user knows the bar is "warming up" and where the strategy
-    // will land.
     if (!runId) return null;
+    // If the run failed without ever producing a strategy, hide.
+    if (runFailed) return null;
+    // Run is active but no strategies yet. Hide the bar entirely
+    // during pre-proposal stages — the StageIndicator already shows
+    // intake/landscape/kg progress, and the StrategyHeroBar showing
+    // "synthesizing strategy" during decompose/intake is misleading
+    // (no strategy work is happening yet). Show the warming-up
+    // placeholder ONLY when we're actually at the proposal stage
+    // or later.
+    const inStrategyStage =
+      currentStage === "proposal" ||
+      currentStage === "lab" ||
+      currentStage === "results";
+    if (!inStrategyStage) return null;
     return (
       <div
         className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-center px-6 py-2"
@@ -246,7 +318,7 @@ export function StrategyHeroBar({ spaceId, runId }: StrategyHeroBarProps) {
       >
         <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-indigo-200/60 bg-white/80 px-3 py-1 text-[10.5px] font-medium text-indigo-700 shadow-sm backdrop-blur-md">
           <Loader2 className="h-3 w-3 animate-spin" />
-          <span>Strategy synthesizing…</span>
+          <span>{stagePlaceholderCopy(currentStage)}</span>
         </div>
       </div>
     );

@@ -68,7 +68,17 @@ export type StructuralEvent =
   // memory_items were queried and relevant prior context was injected
   // into the Pass 1 system prompt. Canvas HUD displays a subtle
   // "Drawing on N memories" chip while the LLM is reasoning.
-  | MemoryContextLoadedEvent;
+  | MemoryContextLoadedEvent
+  // ── KG Generation Plan events ──
+  // The planner-agent stage (`plan_propose`) gates downstream
+  // pipeline stages on user approval. These events drive the
+  // Plan Review Card surface on the whiteboard. See
+  // src/types/kg-generation-plan.ts + the 20260614 migration.
+  | KgPlanProposedEvent
+  | KgPlanEditedEvent
+  | KgPlanApprovedEvent
+  | KgPlanRejectedEvent
+  | LayerOntologyMaterializedEvent;
 
 // ── Phase 2E · Tier 2 — probability space axes ──
 //
@@ -1213,4 +1223,85 @@ export interface PipelineRunEventRow {
   event_type: StructuralEvent["type"];
   payload: StructuralEvent;
   emitted_at: string;
+}
+
+// ── KG Generation Plan events ────────────────────────────────────
+//
+// These five events drive the Plan Review Card surface on the
+// whiteboard. The `plan_propose` pipeline stage emits
+// kg_plan_proposed; user interaction emits kg_plan_edited /
+// kg_plan_approved / kg_plan_rejected from the API routes; and
+// layer_ontology_materialized fires once on approval as the
+// per-space layer rows are inserted from the approved plan.
+//
+// The full plan body is too large for an event payload — these
+// events carry just the planId + summary fields. Consumers fetch
+// the full body via /api/spaces/[id]/kg-plans/[planId].
+
+export interface KgPlanProposedEvent {
+  type: "kg_plan_proposed";
+  planId: string;
+  /** Plan version. v1 is the initial proposal; iterative re-plans
+   *  bump version + chain via supersedes_id. */
+  version: number;
+  /** Mode the plan was generated for ("consumer" | "clinician" |
+   *  "researcher"). Drives which Plan Review Card sections render. */
+  mode: string;
+  /** 0..1 planner self-rating. UI surfaces this so users know
+   *  whether to scrutinize the plan harder. */
+  plannerConfidence: number | null;
+  /** Summary counts for the Plan Review Card chip badges. */
+  summary: {
+    proposedLayerCount: number;
+    proposedAxisCount: number;
+    paperCount: number;
+    coverageGapCount: number;
+    estimatedNodeCount: number;
+    estimatedEdgeCount: number;
+    estimatedTokenCost: number;
+    estimatedWallClockSeconds: number;
+  };
+}
+
+export interface KgPlanEditedEvent {
+  type: "kg_plan_edited";
+  planId: string;
+  /** Which section was edited. Drives the audit history list in
+   *  the Plan Review Card. */
+  section: string;
+  /** Free-text reason the user gave for the edit (optional). */
+  reason: string | null;
+}
+
+export interface KgPlanApprovedEvent {
+  type: "kg_plan_approved";
+  planId: string;
+  approvedBy: string;
+  /** Final plan body counts after any user edits. Lets downstream
+   *  stages emit a "running plan vN with M layers, K axes" header. */
+  summary: {
+    layerCount: number;
+    axisCount: number;
+    paperCount: number;
+  };
+}
+
+export interface KgPlanRejectedEvent {
+  type: "kg_plan_rejected";
+  planId: string;
+  rejectionReason: string | null;
+}
+
+export interface LayerOntologyMaterializedEvent {
+  type: "layer_ontology_materialized";
+  /** The plan whose approval triggered the materialization. */
+  planId: string;
+  /** Number of layer_ontology rows inserted. */
+  layerCount: number;
+  /** Where the ontology came from — "starter" | "research_agent" |
+   *  "user_authored" | "hybrid". */
+  ontologySource: string;
+  /** Slug of the starter template if ontologySource includes
+   *  "starter"; null otherwise. */
+  starterSlug: string | null;
 }

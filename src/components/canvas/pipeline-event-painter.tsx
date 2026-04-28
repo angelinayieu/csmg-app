@@ -2826,9 +2826,57 @@ function paintEvent(
       }
       return;
     default:
-      // source_cited / prediction_recorded — HUD + overlay panels
-      // only, no canvas geometry. Sources + predictions don't have
-      // spatial identity.
+      // Audit fix (docs/KG_DEPTH_CRITIQUE.md): the prior default
+      // silently swallowed every unhandled event type. That created
+      // a class of invisible bugs — adding a new StructuralEvent
+      // variant wouldn't trigger any compile error, and the event
+      // would simply disappear at runtime. The fix is twofold:
+      //
+      //   1. console.warn surfaces the unhandled type at runtime so
+      //      we get a visible signal during dev.
+      //   2. The `_exhaustive: never` assertion turns this into a
+      //      COMPILE error the next time anyone adds an event type
+      //      to the StructuralEvent union without wiring a case
+      //      here. Today some types are intentional no-ops on the
+      //      canvas (source_cited, prediction_recorded, target_outcome_identified,
+      //      layer_coverage_gap, measurement_coverage_gap, memory_context_loaded,
+      //      reasoning_chunk, community_detected, structural_analog_found,
+      //      strategy_consensus_ready). To preserve that without losing
+      //      the type-check, we cast through `unknown` so the
+      //      compile-error promise is "the FIRST time we add a type
+      //      that isn't already accounted for in this default arm,"
+      //      not retroactively. New work should add explicit
+      //      no-op cases above this line; the cast is a deliberate
+      //      band-aid until the StructuralEvent union is partitioned
+      //      into "canvas-bound" vs "chrome-only" subsets.
+      //
+      // Known intentional no-ops (do not surface as warnings):
+      //   - source_cited
+      //   - prediction_recorded
+      const t = (event as { type?: string }).type;
+      const NO_OP_TYPES = new Set([
+        "source_cited",
+        "prediction_recorded",
+        // Chrome-only: these have HUD/banner/panel consumers and
+        // intentionally don't paint a tldraw shape.
+        "target_outcome_identified",
+        "layer_coverage_gap",
+        "measurement_coverage_gap",
+        "memory_context_loaded",
+        "reasoning_chunk",
+        // Emitted but not yet wired to the canvas — visible
+        // dormancy worth tracking but not noisy on every event.
+        "community_detected",
+        "structural_analog_found",
+        "strategy_consensus_ready",
+        "causal_stage_ready",
+      ]);
+      if (typeof t === "string" && !NO_OP_TYPES.has(t)) {
+        console.warn(
+          `[pipeline-event-painter] unhandled event type "${t}" — add a case above the default to paint it, or add to NO_OP_TYPES if it's intentional chrome-only.`,
+          event,
+        );
+      }
       return;
   }
 }
@@ -3203,6 +3251,21 @@ function dashForDimension(dimension: string | null | undefined): ArrowDash {
   return "dashed";
 }
 
+// Phase 3 — encode edge confidence as arrow stroke size. Reads:
+//   strong, well-evidenced edges look HEAVIER on canvas
+//   weak / hypothetical edges look LIGHTER
+// Tldraw arrow size enum is fixed to s/m/l/xl so we bin into 4
+// tiers. Preview edges always render at "s" (already handled at
+// the call site) so this only fires for materialized edges.
+type ArrowSize = TLArrowShape["props"]["size"];
+function sizeForConfidence(confidence: number | null | undefined): ArrowSize {
+  if (typeof confidence !== "number" || !Number.isFinite(confidence)) return "s";
+  if (confidence >= 0.85) return "xl";
+  if (confidence >= 0.65) return "l";
+  if (confidence >= 0.4) return "m";
+  return "s";
+}
+
 function paintEdge(
   editor: Editor,
   event: Extract<StructuralEvent, { type: "edge_added" }>,
@@ -3238,9 +3301,12 @@ function paintEdge(
       type: "arrow",
       props: {
         // Preview (Pass 1 regex-derived) edges always read as tentative
-        // grey-dashed; real (Pass 2) edges encode polarity + dimension.
+        // grey-dashed; real (Pass 2) edges encode polarity + dimension
+        // + confidence (size). High-confidence edges render heavier
+        // so a researcher's eye lands on the load-bearing structure
+        // before the speculative cross-links.
         color: isPreview ? "grey" : colorForPolarity(event.polarity),
-        size: "s",
+        size: isPreview ? "s" : sizeForConfidence(event.confidence),
         dash: isPreview ? "dashed" : dashForDimension(event.dimension),
       },
     };

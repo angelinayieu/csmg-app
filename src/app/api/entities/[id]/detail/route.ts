@@ -66,7 +66,9 @@ export async function GET(
     ? `source_entity_id.eq.${id},target_entity_id.eq.${id},source_entity_id.eq.${entityCode},target_entity_id.eq.${entityCode}`
     : `source_entity_id.eq.${id},target_entity_id.eq.${id}`;
 
-  const [edgesRes, claimsRes] = await Promise.all([
+  const layerOntologyId = entity.layer_ontology_id as string | null;
+
+  const [edgesRes, claimsRes, evidenceRes, ontologyRowRes] = await Promise.all([
     db
       .from("edges")
       .select("*")
@@ -78,6 +80,28 @@ export async function GET(
       .select("*")
       .eq("space_id", spaceId)
       .eq("source_entity_id", id),
+    // Phase 3 — per-entity evidence rollup. Surfaces the L2M
+    // extracted effect-size rows that attach to this entity. The
+    // drawer uses these to render the "Evidence" section + a count
+    // badge in the rigor strip.
+    db
+      .from("evidence_registries")
+      .select("*")
+      .eq("space_id", spaceId)
+      .eq("attached_entity_id", id)
+      .order("created_at", { ascending: false })
+      .limit(50),
+    // Phase 3 — fetch the per-space layer_ontology row this entity
+    // belongs to (when active plan materialized one). Lets the
+    // drawer show the topic-adaptive layer label + color instead of
+    // the legacy 4-value enum fallback.
+    layerOntologyId
+      ? db
+          .from("layer_ontology")
+          .select("*")
+          .eq("id", layerOntologyId)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ]);
 
   if (edgesRes.error) {
@@ -85,6 +109,9 @@ export async function GET(
   }
   if (claimsRes.error) {
     console.warn("[entities/detail] claims fetch failed (non-fatal):", claimsRes.error);
+  }
+  if (evidenceRes.error) {
+    console.warn("[entities/detail] evidence fetch failed (non-fatal):", evidenceRes.error);
   }
 
   // Phase 6 — partner-entity hydration for the ego-network view.
@@ -119,5 +146,7 @@ export async function GET(
     edges: edgesRes.data ?? [],
     claims: claimsRes.data ?? [],
     partner_entities,
+    evidence: evidenceRes.data ?? [],
+    layer_ontology_row: ontologyRowRes?.data ?? null,
   });
 }

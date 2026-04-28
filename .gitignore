@@ -42,3 +42,7 @@ next-env.d.ts
 # Claude Code agent worktrees — full repo copies created by background agents,
 # typically hundreds of MB. Never commit these to source control.
 .claude/worktrees/
+
+# Personal MCP server config — points at the developer's own Supabase
+# project ref. OAuth is per-user, so each contributor adds their own.
+.mcp.json

@@ -28,6 +28,7 @@ import { AppCardShapeUtil } from "./shapes/app-card-shape";
 import { BridgeLinkShapeUtil } from "./shapes/bridge-link-shape";
 import { CycleLoopShapeUtil } from "./shapes/cycle-loop-shape";
 import { ClaimChipShapeUtil } from "./shapes/claim-chip-shape";
+import { SubjectCardShapeUtil } from "./shapes/subject-card-shape";
 import { AxiomStoneShapeUtil } from "./shapes/axiom-stone-shape";
 import { ConvergentFanShapeUtil } from "./shapes/convergent-fan-shape";
 import { SignalFlagShapeUtil } from "./shapes/signal-flag-shape";
@@ -96,6 +97,8 @@ import { CanvasStageIndicator } from "./chrome/canvas-stage-indicator";
 // card; click → POSTs the union of their entity ids as a new
 // System with source_kind="user_lasso".
 import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
+import { CanvasLassoSubjectButton } from "./chrome/canvas-lasso-subject-button";
+import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
 import { RelaxLayoutButton } from "./chrome/relax-layout-button";
 import { useThreadPersistence } from "./hooks/use-thread-persistence";
 import { CardSidecar } from "./sidecar/card-sidecar";
@@ -239,6 +242,10 @@ const SHAPE_UTILS = [
   // Phase A1.4a — universal asset catalog: claim + axiom
   ClaimChipShapeUtil,
   AxiomStoneShapeUtil,
+  // Phase 4 — Subject card primitive (manual authoring + lab bridge).
+  // Created via the +Subject button or accepted from the lab proposal
+  // wizard. "Open Lab" footer routes to /lab?subjectId=X.
+  SubjectCardShapeUtil,
   // Phase A1.4b — universal asset catalog: convergent + signal
   ConvergentFanShapeUtil,
   SignalFlagShapeUtil,
@@ -343,6 +350,16 @@ function makeCanvasOverlays(spaceId: string) {
         <CanvasLegendSidebar spaceId={spaceId} />
         <CanvasStageIndicator />
         <CanvasLassoSystemButton spaceId={spaceId} />
+        {/* Phase 6C — sibling button: lasso → save-as-subject. Same
+            extractor, atomic /from-lasso endpoint creates both the
+            scoping System and the Subject in one POST. Spawns the
+            SubjectCard via the same window-event bridge. */}
+        <CanvasLassoSubjectButton spaceId={spaceId} />
+        {/* Phase 4 — bridges the chrome-layer +Subject button (which
+            lives outside the editor tree) to editor.createShapes
+            inside the tree. Listens for the
+            interaxis:spawn-subject-card window event. */}
+        <CanvasSubjectCardSpawner spaceId={spaceId} />
         {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
             user-triggered force-directed reflow over the main KG.
             Lives in CanvasOverlays so it has the tldraw editor context
@@ -2831,7 +2848,55 @@ export function InteraxisCanvas({
           URL carries ?run=<uuid>; connects to the SSE stream and shows
           the current stage + counts of persisted artifacts as the
           pipeline emits structural events. */}
-      <CanvasEventHud runId={activeRunId} onClose={dismissRun} />
+      <CanvasEventHud
+        runId={activeRunId}
+        onClose={dismissRun}
+        onRetry={
+          // U4 (docs/KG_DEPTH_CRITIQUE.md audit) — re-fire the
+          // bootstrap with the same prompt + reasoning_settings.
+          // Bootstrap creates a NEW space (existing spaceId is not
+          // reusable — see route signature); we navigate the user to
+          // the new run on success. Disabled when there's no input
+          // text on this space (legacy data, manually-created
+          // workspaces).
+          space?.input_text
+            ? async () => {
+                try {
+                  const res = await fetch("/api/intake/bootstrap", {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      text: space.input_text,
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      reasoning_settings: (space as any).reasoning_settings ?? null,
+                    }),
+                  });
+                  if (!res.ok) {
+                    console.warn(
+                      "[retry] bootstrap returned",
+                      res.status,
+                    );
+                    return;
+                  }
+                  const data = (await res.json()) as {
+                    spaceId?: string;
+                    runId?: string;
+                  };
+                  if (data.spaceId && data.runId) {
+                    // Navigate via Next router so the canvas re-mounts
+                    // with the new run/space context.
+                    nextRouter.push(
+                      `/app/space/${data.spaceId}/whiteboard?run=${data.runId}`,
+                    );
+                  }
+                } catch (err) {
+                  console.warn("[retry] failed (non-fatal):", err);
+                }
+              }
+            : undefined
+        }
+      />
 
       {/* Run-level signal pills — surfaces target_outcome_identified
           (once per run, 20s auto-fade pill) and layer_coverage_gap

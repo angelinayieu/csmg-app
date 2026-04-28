@@ -33,6 +33,17 @@ const STALL_AUTOFAIL_HINT_MS = 300_000;
 export interface CanvasEventHudProps {
   runId: string | null;
   onClose?: () => void;
+  /**
+   * U4 (docs/KG_DEPTH_CRITIQUE.md audit) — callback fired when the
+   * user clicks "Retry" on a failed/timed-out run. Parent owns the
+   * actual retry logic (re-firing /api/intake/bootstrap with the
+   * same prompt + reasoning_settings + spaceId) since the HUD
+   * doesn't have access to that state. When omitted, the Retry
+   * button is hidden — useful for surfaces that legitimately
+   * shouldn't offer retry (e.g. read-only canvas reload of an
+   * old run).
+   */
+  onRetry?: () => void;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -62,7 +73,7 @@ const STAGE_SHORT: Record<PipelineStage, string> = {
   results: "Results",
 };
 
-export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
+export function CanvasEventHud({ runId, onClose, onRetry }: CanvasEventHudProps) {
   const { events, status, error, latest, lastEventAtMs } = useRunEventStore();
   const [cancelPending, setCancelPending] = useState(false);
   // `now` ticks every second so the stall badge updates live. Cheap:
@@ -238,13 +249,41 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
             <AlertCircle className="h-3.5 w-3.5 text-red-600" />
           ) : null}
           <span className="text-[11.5px] font-semibold text-gray-700">
+            {/* U2 (docs/KG_DEPTH_CRITIQUE.md audit) — when status is
+                failed/timeout, surface the stage where it failed
+                rather than just echoing the latest stage_boundary
+                event (which could be a legitimate "exit" for an
+                already-completed earlier stage and read like
+                success). */}
             {isStreamDroppedNotFailed
               ? "Live updates paused · data saved"
-              : currentStage
-                ? `${STAGE_LABELS[currentStage.stage] ?? currentStage.stage}${currentStage.phase === "enter" ? "…" : ""}`
-                : status === "completed"
-                  ? "Complete"
-                  : "Running…"}
+              : status === "failed" || status === "timeout"
+                ? (() => {
+                    // Find the most-recently-active stage in the per-
+                    // stage state map. That's the failure point.
+                    let failedStage: PipelineStage | null = null;
+                    for (const stageKey of [...STAGE_ORDER].reverse()) {
+                      if (stageStateByName[stageKey] === "active") {
+                        failedStage = stageKey;
+                        break;
+                      }
+                    }
+                    if (!failedStage) {
+                      // No active stage — failure happened before any
+                      // stage_boundary fired (e.g. credit reservation,
+                      // bootstrap auth) or after every stage exited.
+                      // Generic message.
+                      return error
+                        ? `Failed · ${error}`
+                        : "Run failed";
+                    }
+                    return `Failed during ${STAGE_LABELS[failedStage] ?? failedStage}`;
+                  })()
+                : currentStage
+                  ? `${STAGE_LABELS[currentStage.stage] ?? currentStage.stage}${currentStage.phase === "enter" ? "…" : ""}`
+                  : status === "completed"
+                    ? "Complete"
+                    : "Running…"}
           </span>
         </div>
 
@@ -322,9 +361,14 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
           </span>
         )}
 
-        {error && (
-          <span className="text-[10.5px] text-red-500" title={error}>
-            error
+        {/* error chip suppressed when status is failed — the U2 stage
+            label already says "Failed during X" with the error in the
+            tooltip on the AlertCircle. Keeping a minimal tooltip-only
+            chip on amber stream-dropped state so the message is
+            preserved without visual redundancy. */}
+        {error && isStreamDroppedNotFailed && (
+          <span className="text-[10.5px] text-amber-700" title={error}>
+            stream dropped
           </span>
         )}
 
@@ -342,6 +386,22 @@ export function CanvasEventHud({ runId, onClose }: CanvasEventHudProps) {
           <span className="ml-1 text-[10px] font-semibold text-amber-600">
             Stopping…
           </span>
+        )}
+
+        {/* U4 (docs/KG_DEPTH_CRITIQUE.md audit) — Retry affordance for
+            failed/timed-out runs. Visible only when the parent has
+            wired an onRetry callback (it owns the prompt + settings).
+            Sits before Dismiss so users see the recovery path before
+            the dismissal path. */}
+        {onRetry && (status === "failed" || status === "timeout") && !isStreamDroppedNotFailed && (
+          <button
+            onClick={onRetry}
+            className="ml-1 inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100"
+            title="Re-run this prompt with the same reasoning settings"
+          >
+            <Loader2 className="h-2.5 w-2.5" />
+            Retry
+          </button>
         )}
 
         {onClose && (status === "completed" || status === "failed" || status === "timeout") && (

@@ -19,18 +19,35 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Loader2, GitBranch, Camera, Activity } from "lucide-react";
+import { Loader2, GitBranch, Camera, Activity, Beaker } from "lucide-react";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { ConnectPanel } from "@/components/whiteboard/connect-panel";
 import { CanvasSnapshotsDrawer } from "@/components/canvas/chrome/canvas-snapshots-drawer";
 import { CanvasScenarioPanel } from "@/components/canvas/chrome/canvas-scenario-panel";
 import { CanvasSituationDrawer } from "@/components/canvas/chrome/canvas-situation-drawer";
+import { CanvasEvidenceDrawer } from "@/components/canvas/chrome/canvas-evidence-drawer";
 import { WhiteboardBootstrapSplash } from "@/components/canvas/whiteboard-bootstrap-splash";
 // Phase 2 — entity-detail drawer. Listens for `shell-graph:focus`
 // and `root-cause-tree:focus` window events; hydrates entity from
 // /api/entities/[id]/detail and surfaces the canonical signature
 // with a Deepen button.
 import { CanvasEntityDetailDrawer } from "@/components/canvas/chrome/canvas-entity-detail-drawer";
+// Subject phase — surfaces a chip when a `lab_scaffolds` row with
+// status='proposed' exists for this space; chip → wizard → approve
+// → subjects materialize → navigate to lab.
+import { CanvasLabProposalChip } from "@/components/canvas/chrome/canvas-lab-proposal-chip";
+// KG Generation Plan gate — blocking overlay surfaced when a plan
+// is in 'proposed' or 'edited' state for this space. User must
+// approve (or reject + re-plan) before downstream pipeline stages
+// run. See src/components/canvas/chrome/kg-plan-review-gate.tsx
+// and supabase/migrations/20260614_kg_generation_plans.sql.
+import { KgPlanReviewGate } from "@/components/canvas/chrome/kg-plan-review-gate";
+// Phase 4 — manual authoring add buttons (+Subject, +Intervention,
+// +Variable, +Paper). Gated by spaces.manual_authoring_enabled so
+// the default LLM-driven mode stays uncluttered. Bridges to the
+// in-canvas spawner via window events for shape creation.
+import { CanvasAddButtons } from "@/components/canvas/chrome/canvas-add-buttons";
+import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
 
 // Dynamic-import the canvas so tldraw (~600KB + Three.js neighbours)
 // ships only with the whiteboard route, not with the space dashboard.
@@ -59,6 +76,7 @@ export default function WhiteboardPage() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [situationOpen, setSituationOpen] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   // Scenario panel mode — null when closed, { kind: "new" } when
   // composing against a snapshot, { kind: "detail" } when viewing an
   // existing scenario.
@@ -116,6 +134,27 @@ export default function WhiteboardPage() {
           fires; then slides in from the right. */}
       <CanvasEntityDetailDrawer />
 
+      {/* Subject phase — lab proposal chip + wizard. Polls for a
+          status='proposed' lab_scaffolds row; when found, surfaces
+          a floating chip that opens the wizard. After approval the
+          wizard navigates to the lab pre-loaded with the first
+          new subject. */}
+      <CanvasLabProposalChip spaceId={space.id} />
+
+      {/* KG Generation Plan gate — blocking overlay when a plan is
+          in 'proposed' or 'edited' state for this space. The card
+          surfaces every silent decision the pipeline would otherwise
+          make (custom axes, layer ontology, methodology, research
+          plan) for user review/approval. Renders nothing when no
+          open plan exists. Listens for `interaxis:kg-plan-proposed`
+          window events so it pops up immediately when the bootstrap
+          splash fires propose-plan. */}
+      <KgPlanReviewGate
+        spaceId={space.id}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        initialPrompt={((space as any).input_text as string | undefined) ?? null}
+      />
+
       {/* Fresh-run splash — bridges the visual gap from "submit prompt"
           → "first entity paints". Only shows when `?run=` is present
           AND no entities exist yet. Auto-fades after a short window
@@ -133,6 +172,13 @@ export default function WhiteboardPage() {
         }
       />
 
+      {/* Phase 4 — manual authoring add buttons. Renders nothing
+          unless spaces.manual_authoring_enabled is true (researcher
+          opt-in). Bottom-left anchor so it doesn't crowd the
+          existing Connect / Snapshots / Baseline / Evidence stack
+          on the bottom-right. */}
+      <CanvasAddButtonsMount spaceId={space.id} space={space} />
+
       {/* Baseline launcher — opens the situation drawer. Stacked above
           Snapshots so all three bottom-right anchors are visible. */}
       <button
@@ -142,6 +188,20 @@ export default function WhiteboardPage() {
       >
         <Activity className="h-3.5 w-3.5 text-cyan-600" />
         Baseline
+      </button>
+
+      {/* Evidence launcher — opens the evidence_registries drawer
+          (rigorous mode). Stacked above Baseline. Surfaces the L2M-
+          style effect-size extractions from research artifacts the
+          user has attached, with full LLM × parser provenance and
+          approve/reject review actions. */}
+      <button
+        onClick={() => setEvidenceOpen(true)}
+        className="fixed bottom-[11rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-purple-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+        title="Evidence registry — review effect sizes extracted from research artifacts (rigorous mode)"
+      >
+        <Beaker className="h-3.5 w-3.5 text-purple-600" />
+        Evidence
       </button>
 
       {/* R5 Phase A — Snapshots launcher, stacked above Connect so
@@ -188,6 +248,12 @@ export default function WhiteboardPage() {
         onRerun={handleRerunSituation}
       />
 
+      <CanvasEvidenceDrawer
+        open={evidenceOpen}
+        onClose={() => setEvidenceOpen(false)}
+        spaceId={space.id}
+      />
+
       {scenarioMode && (
         <CanvasScenarioPanel
           open
@@ -197,5 +263,26 @@ export default function WhiteboardPage() {
         />
       )}
     </div>
+  );
+}
+
+// ── Phase 4 — manual authoring add buttons mount ────────────────
+//
+// Reads spaces.manual_authoring_enabled (off by default, opt-in via
+// per-space toggle) and the per-space layer ontology (so the
+// +Variable form can offer a layer dropdown). When the flag is
+// false this renders nothing — zero UI cost for the LLM-driven
+// default mode.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function CanvasAddButtonsMount({ spaceId, space }: { spaceId: string; space: any }) {
+  const enabled = Boolean(space?.manual_authoring_enabled);
+  const { rows: layerOntology } = useLayerOntology(enabled ? spaceId : null);
+  return (
+    <CanvasAddButtons
+      spaceId={spaceId}
+      enabled={enabled}
+      layerOntology={layerOntology}
+    />
   );
 }

@@ -6,11 +6,26 @@ import { Loader2 } from "lucide-react";
 import type { Entity, Edge, Bridge, Space } from "@/types";
 import type { Reaction } from "@/types/reactions";
 import type { System } from "@/types/system";
+import type { Subject } from "@/types/subject";
+import { ConditionModulatorsPanel } from "@/components/canvas/chrome/condition-modulators-panel";
 import { LabHeader } from "./lab-header";
 import { LabReagentBay } from "./lab-reagent-bay";
 import { LabChamberReact } from "./lab-chamber-react";
 import { LabChamberSpectrum } from "./lab-chamber-spectrum";
 import { LabAnalysis } from "./lab-analysis";
+// Phase 5A — right-rail rigor cards (matches photo's PREDICTED
+// PERFORMANCE / COMPOSITION / EFFECT BREAKDOWN panels) + top-left
+// subject baseline card. All read existing props; no math added.
+import { LabBaselineCard } from "./lab-baseline-card";
+import { LabPredictedPerformanceCard } from "./lab-predicted-performance-card";
+import { LabCompositionPanel } from "./lab-composition-panel";
+import { LabEffectBreakdown } from "./lab-effect-breakdown";
+// Phase 5B/5C — intervention list + evidence basis + scenario library
+import { LabInterventionList } from "./lab-intervention-list";
+import { LabEvidenceBasis } from "./lab-evidence-basis";
+import { LabScenarioLibrary } from "./lab-scenario-library";
+// Phase 6D — methodology disclosure overlay (researcher mode).
+import { LabMethodologyDisclosure } from "./lab-methodology-disclosure";
 import { LabReactionNetwork } from "./lab-reaction-network";
 import { LabControlPanel } from "./lab-control-panel";
 import { LabDistribution } from "./lab-distribution";
@@ -66,6 +81,20 @@ export interface SpaceLabProps {
    * pong between the two without re-navigating.
    */
   comparedSystem?: System | null;
+  /**
+   * Subject scope — when present, the lab is in "subject mode":
+   *   - A subject pill appears above the chamber identifying the
+   *     center of focus.
+   *   - The condition-modulators panel renders, letting the user
+   *     slide sleep/stress/etc. The conditions are persisted to
+   *     /api/subjects/[id] (debounced).
+   *   - Future: experiments fired from the lab will POST to
+   *     /api/subjects/[id]/experiments with the live conditions
+   *     snapshot. (Today, lab modes still write their own
+   *     `scenarios` rows; the subject log will fold in once the
+   *     what-if/MC client paths are extended.)
+   */
+  subject?: Subject | null;
 }
 
 /**
@@ -210,7 +239,22 @@ export function SpaceLab({
   partnerEntities,
   scopedSystem,
   comparedSystem,
+  subject,
 }: SpaceLabProps) {
+  // ── Subject conditions (lifted state) ──────────────────────────
+  // Owned at SpaceLab level so the SubjectStrip's slider edits are
+  // visible to BOTH the modulators panel UI AND the
+  // `useEntityParameters` hook (so the chamber + throughput readout
+  // re-derive when the user moves a slider). When no subject is in
+  // scope, this stays an empty object — getEntityParameters short-
+  // circuits and returns raw entity values.
+  const [liveConditions, setLiveConditions] = useState<
+    Record<string, number>
+  >(() => subject?.conditions ?? {});
+  // Re-sync if the subject prop changes (e.g., URL navigation).
+  useEffect(() => {
+    setLiveConditions(subject?.conditions ?? {});
+  }, [subject?.id, subject?.conditions]);
   const focal = useMemo(() => synthesizeSpaceAsEntity(space, entities), [space, entities]);
 
   // For the reagent bay, "subunits" = hero entities. They're the visible
@@ -362,6 +406,8 @@ export function SpaceLab({
   // Gap B — review gaps drawer visibility. The drawer fetches its own
   // data; this flag just opens/closes it.
   const [reviewGapsOpen, setReviewGapsOpen] = useState(false);
+  // Phase 6D — methodology disclosure overlay (researcher mode).
+  const [methodologyOpen, setMethodologyOpen] = useState(false);
   // Phase 27: URL-backed lab state (shareable `?rxn=...&tune=...`).
   const {
     focusedReactionId,
@@ -379,6 +425,26 @@ export function SpaceLab({
   }, [selectedSubunitId, subunits, focal]);
   const tuningRemote = selectedSubunitId !== null;
 
+  // Subject context for the parameter hook. When a Subject is in
+  // scope, this provides:
+  //   1. The subject's per-entity override for the tuning entity
+  //      (looked up by id; null when subject doesn't override this
+  //      specific entity)
+  //   2. The LIVE conditions slider state (not subject.conditions
+  //      directly — so moving a slider re-derives chamber params
+  //      immediately, before the debounced PATCH lands)
+  // Memoized on the keys that actually drive composition so the
+  // parameter hook doesn't recompute on every render.
+  const subjectContext = useMemo(() => {
+    if (!subject) return null;
+    const overrides = subject.entity_param_overrides ?? {};
+    const entityOverride = overrides[tuningEntity.id] ?? null;
+    return {
+      entityOverride,
+      conditions: liveConditions,
+    };
+  }, [subject, tuningEntity.id, liveConditions]);
+
   // Phase 18: instrument parameters.
   const { parameters, set: setParameters, saveStatus: paramSaveStatus } =
     useEntityParameters({
@@ -391,6 +457,7 @@ export function SpaceLab({
           unknown
         >) ?? null,
       initialCategory: tuningEntity.entity_category as string | null,
+      subjectContext,
     });
   const liveThroughput = useMemo(() => computeThroughput(parameters), [parameters]);
 
@@ -452,6 +519,48 @@ export function SpaceLab({
             : `/app/space/${space.id}/whiteboard`
         }
       />
+
+      {/* Subject pill — when a subject is in scope, the lab is in
+          "subject mode": pill identifies the center of focus + opens
+          the modulators panel below. Subject takes precedence over
+          system scope (see lab page narrowing logic).
+          Conditions are lifted state at SpaceLab so they also drive
+          the parameter hook's modulation. */}
+      {subject && (
+        <SubjectStrip
+          subject={subject}
+          spaceId={space.id}
+          conditions={liveConditions}
+          onConditionsChange={setLiveConditions}
+        />
+      )}
+
+      {/* Phase 5A — subject baseline card. Mirrors the photo's top-left
+          SUBJECT panel: focus icon + name + artifact-state badge +
+          condition count + (optional) source citation footer. Pure
+          presentation; reads liveConditions for the count. */}
+      {subject && (
+        <LabBaselineCard
+          subject={subject}
+          conditions={liveConditions}
+          // Source citation: prefer the subject's source_ref hint
+          // (often a paper title or identifier or {title, …} object);
+          // coerce object form to a readable label, fall through
+          // to null when absent.
+          sourceCitation={(() => {
+            const ref = subject.source_ref;
+            if (typeof ref === "string") return ref;
+            if (ref && typeof ref === "object") {
+              const o = ref as Record<string, unknown>;
+              const title = (o.title ?? o.label ?? o.name) as
+                | string
+                | undefined;
+              return title ?? null;
+            }
+            return null;
+          })()}
+        />
+      )}
 
       {/* Phase 5 — scoped-to-system pill. Tells users why the chamber
           may look smaller than the whole-space lab and offers a
@@ -632,14 +741,46 @@ export function SpaceLab({
           <LabChamberSpectrum focal={focal} subunits={subunits} edges={edges} />
         )}
 
-        <LabAnalysis focal={focal} subunits={subunits} />
+        {/* Phase 5A — right rail: predicted performance + composition
+            + effect breakdown stack above the existing LabAnalysis.
+            All read existing props (parameters, liveThroughput,
+            liveConditions, ghostParams) so this is purely additive. */}
+        <div className="flex flex-col overflow-y-auto">
+          <LabPredictedPerformanceCard
+            parameters={parameters}
+            liveThroughput={liveThroughput}
+          />
+          <LabCompositionPanel
+            parameters={parameters}
+            ghostParameters={ghostParams}
+          />
+          {subject && (
+            <LabEffectBreakdown conditions={liveConditions} parameters={parameters} />
+          )}
+          <LabInterventionList
+            entities={entities}
+            onSelect={(id) => setSelectedSubunitId(id)}
+          />
+          <LabEvidenceBasis
+            spaceId={space.id}
+            entityIds={[
+              focal.id,
+              ...subunits.map((s) => s.id),
+            ].filter((s) => typeof s === "string" && s.length > 0)}
+          />
+          <LabAnalysis focal={focal} subunits={subunits} />
+        </div>
       </div>
 
       <div
         className="grid border-t border-[var(--lab-border)]"
         style={{
           height: 220,
-          gridTemplateColumns: "1fr 340px 280px",
+          // Phase 5C — added a 4th column (220px) for the scenario
+          // library. Existing 3 columns unchanged: reactions network
+          // (1fr) + outcome distribution (340px) + control panel
+          // (280px) + scenarios (220px).
+          gridTemplateColumns: "1fr 340px 280px 220px",
           gap: "1px",
           background: "rgba(148,163,184,0.08)",
         }}
@@ -663,6 +804,7 @@ export function SpaceLab({
           ghostParams={ghostParams}
           onGhostParamsChange={setGhostParams}
         />
+        <LabScenarioLibrary spaceId={space.id} />
       </div>
 
       {/* Gap B — review gaps drawer. Mounted last so it overlays the lab
@@ -690,6 +832,26 @@ export function SpaceLab({
         }}
       />
 
+      {/* Phase 6D — methodology disclosure overlay launcher + panel.
+          Floating bottom-left button opens the disclosure modal where
+          researchers can audit pooling stats, active parsers, prior
+          selection, and edge response models. Honest disclosure
+          builds trust; the button itself is unobtrusive. */}
+      <button
+        type="button"
+        onClick={() => setMethodologyOpen(true)}
+        className="absolute bottom-[238px] left-4 z-40 flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-[rgba(8,12,22,0.85)] px-3 py-1.5 text-[10.5px] font-semibold text-cyan-300 backdrop-blur-md transition-all hover:-translate-y-px hover:border-cyan-400/60 hover:bg-cyan-500/10"
+        title="Open the methodology disclosure — pooling stats, active parsers, prior selection strategy, edge response models. Researcher-mode audit panel."
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
+        Methodology
+      </button>
+      <LabMethodologyDisclosure
+        spaceId={space.id}
+        open={methodologyOpen}
+        onClose={() => setMethodologyOpen(false)}
+      />
+
       <style jsx global>{`
         @keyframes lab-spin {
           to {
@@ -697,6 +859,124 @@ export function SpaceLab({
           }
         }
       `}</style>
+    </div>
+  );
+}
+
+// ── Subject strip ───────────────────────────────────────────────
+//
+// When the lab is scoped to a Subject, this strip renders below the
+// LabHeader. Two parts:
+//   1. Header bar — focus chip + name + counts + nav links
+//   2. Collapsible modulators panel — the slider stack that edits
+//      subject.conditions live (PATCH debounced 600ms)
+//
+// Mounted inline (not as an overlay) so it doesn't occlude the
+// chamber. The modulators panel collapses by default to keep
+// vertical real estate for the chamber.
+
+function SubjectStrip({
+  subject,
+  spaceId,
+  conditions,
+  onConditionsChange,
+}: {
+  subject: Subject;
+  spaceId: string;
+  /** Lifted state — owned by SpaceLab so the same conditions
+   *  drive both the slider UI and the parameter hook's modulation. */
+  conditions: Record<string, number>;
+  onConditionsChange: (next: Record<string, number>) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(true);
+
+  // Debounced PATCH — 600ms after the last change. Compares against
+  // the subject row's stored conditions so a subject just loaded
+  // from the server doesn't re-PATCH itself.
+  useEffect(() => {
+    const same =
+      JSON.stringify(conditions) === JSON.stringify(subject.conditions);
+    if (same) return;
+    setSaving(true);
+    const t = window.setTimeout(async () => {
+      try {
+        await fetch(`/api/subjects/${subject.id}`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conditions }),
+        });
+      } catch (err) {
+        console.warn("[lab subject strip] conditions save failed:", err);
+      } finally {
+        setSaving(false);
+      }
+    }, 600);
+    return () => {
+      window.clearTimeout(t);
+      setSaving(false);
+    };
+  }, [conditions, subject.id, subject.conditions]);
+
+  const conditionCount = Object.keys(conditions).length;
+
+  return (
+    <div className="border-b border-[rgba(255,255,255,0.08)] bg-[rgba(124,58,237,0.10)]">
+      {/* Header bar */}
+      <div className="flex items-center gap-2 px-4 py-1.5 text-[11px] text-violet-200">
+        <span className="font-bold uppercase tracking-[0.14em]">Subject</span>
+        <span className="text-violet-300">·</span>
+        <span className="font-medium text-violet-100">{subject.name}</span>
+        <span className="text-violet-400">·</span>
+        <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[9.5px] uppercase tracking-wider">
+          {subject.focus_kind}
+        </span>
+        <span className="font-mono tabular-nums text-violet-300">
+          {conditionCount} condition{conditionCount === 1 ? "" : "s"}
+        </span>
+        {saving && (
+          <span className="inline-flex items-center gap-1 text-[10px] text-violet-300">
+            <span className="lab-spinner-dot inline-block h-1.5 w-1.5 rounded-full bg-violet-300" />
+            saving…
+          </span>
+        )}
+        <span className="ml-auto inline-flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="rounded border border-violet-300/30 px-2 py-0.5 text-[10px] font-medium text-violet-100 transition hover:bg-violet-500/20"
+            title={open ? "Collapse modulators" : "Show modulators"}
+          >
+            {open ? "Hide conditions" : "Show conditions"}
+          </button>
+          <a
+            href={`/app/space/${spaceId}/subjects/${subject.id}`}
+            className="rounded border border-violet-300/30 px-2 py-0.5 text-[10px] font-medium text-violet-100 transition hover:bg-violet-500/20"
+            title="Open subject detail page"
+          >
+            Inspect
+          </a>
+          <a
+            href={`/app/space/${spaceId}/lab`}
+            className="rounded border border-violet-300/30 px-2 py-0.5 text-[10px] font-medium text-violet-100 transition hover:bg-violet-500/20"
+            title="Exit subject mode — return to whole-space lab"
+          >
+            Whole space
+          </a>
+        </span>
+      </div>
+
+      {/* Modulators panel — light-on-dark variant via CSS scope */}
+      {open && (
+        <div className="border-t border-[rgba(255,255,255,0.08)] bg-white px-4 py-3 text-slate-900">
+          <ConditionModulatorsPanel
+            conditions={conditions}
+            onChange={onConditionsChange}
+            dense
+          />
+        </div>
+      )}
     </div>
   );
 }

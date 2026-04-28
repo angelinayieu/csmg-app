@@ -9,10 +9,18 @@
 // flight (they run to completion but their trailing events simply
 // land after the stream has closed). A follow-up will add cancel-
 // check gates in the long routes so the background work truly halts.
+//
+// B3 (docs/KG_DEPTH_CRITIQUE.md audit): the prior implementation
+// emitted a `stage_boundary { stage: "results", phase: "exit" }`
+// event before flipping status. That made the stage indicator paint
+// a green ✓ on Results — even when the run failed during intake!
+// The status flip + SSE "done" payload IS the cancellation signal;
+// the indicator and HUD now react to status directly. No fake
+// stage_boundary event is needed.
 
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
-import { completePipelineRun, emitStructuralEvent } from "@/lib/events/structural-event-bus";
+import { completePipelineRun } from "@/lib/events/structural-event-bus";
 import type { PipelineRunRow } from "@/types/pipeline-events";
 
 export const runtime = "nodejs";
@@ -52,17 +60,10 @@ export async function POST(
     return NextResponse.json({ ok: true, alreadyEnded: true, status: run.status });
   }
 
-  try {
-    await emitStructuralEvent(db, runId, {
-      type: "stage_boundary",
-      stage: "results",
-      phase: "exit",
-      message: "Cancelled by user",
-    });
-  } catch {
-    // Non-fatal — final status update below is the source of truth.
-  }
-
+  // No structural event emitted on cancel — the status flip below
+  // is the canonical signal. The SSE stream's `done` payload carries
+  // status + errorMessage to the canvas, which the HUD + stage
+  // indicator now read for cancellation/error rendering.
   await completePipelineRun(db, runId, "failed", "Cancelled by user");
 
   return NextResponse.json({ ok: true });

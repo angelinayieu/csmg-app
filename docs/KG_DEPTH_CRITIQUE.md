@@ -353,6 +353,42 @@ These are the architectural changes (not just number-tier upgrades). For per-num
 
 ---
 
+### Pipeline failure-mode hardening — **🟢 LANDED (B1 + B2 + B3 + U1 + U2 + U3 + U4)**
+
+After a user reported a wedged run that showed contradictory state (run-context red X icon + stage indicator green ✓ on Results + "0/4 axes · error" pill + StrategyHeroBar still mounted) — the audit traced this to seven distinct bugs. All seven shipped in this batch.
+
+**Backend fixes (silent-failure → loud, immediate, diagnosable):**
+
+- **B1 — `axis_failed` events.** [`frame-extractor/route.ts`](../src/app/api/pipeline/frame-extractor/route.ts) — the per-axis kickoff catch blocks previously swallowed every rejection with `console.warn` only. Zero structural events emitted. Now `recordAxisFailure()` helper emits `axis_failed { spaceKey, axis, reason: "timeout"|"hard_fail", errorMessage }` for every per-axis error AND for HTTP-non-OK responses (fetch doesn't throw on 500, prior code missed those entirely). HUD's axis counter now ticks `4/4 settled` instead of perpetually stuck on `0/4`.
+
+- **B2 — Immediate fail when all axes die.** [`frame-extractor/route.ts`](../src/app/api/pipeline/frame-extractor/route.ts) — after `Promise.allSettled`, count outcomes. If `totalFailed === totalDispatched > 0`, call `completePipelineRun(runId, "failed", "All N axes failed during landscape generation (axis:reason, ...)")` and skip the cross-space-linker tail (nothing to link). Run flips to failed in <2 minutes instead of dangling for 15min until the watchdog cron sweeps.
+
+- **B3 — Cancel route stops lying.** [`runs/[runId]/cancel/route.ts`](../src/app/api/pipeline/runs/[runId]/cancel/route.ts) — removed the hardcoded `emitStructuralEvent({ stage: "results", phase: "exit" })` that fired on cancel regardless of which stage was actually active. That fake event was tricking the stage indicator into marking Results as complete (green ✓) even when the run failed during Intake. Status flip via `completePipelineRun` is the canonical cancellation signal — the SSE stream carries it via the `done` payload.
+
+**UI surfacing fixes (read state honestly, give the user a path forward):**
+
+- **U1 — Stage indicator: `error` state.** [`canvas-stage-indicator.tsx`](../src/components/canvas/chrome/canvas-stage-indicator.tsx) — added a fourth state (`pending | active | done | error`). When `status === "failed"|"timeout"`, any `active` stage re-maps to `"error"` (red AlertCircle icon, red ring). Stages already `done` (genuinely exited before failure) stay green; stages still `pending` stay gray (un-reached, not auto-promoted). Connector line goes red into the failed stage.
+
+- **U2 — HUD label cross-checks status.** [`canvas-event-hud.tsx`](../src/components/canvas/chrome/canvas-event-hud.tsx) — when status is failed/timeout, the label says `"Failed during {stage}"` (computed from the `stageStateByName` active stage) instead of echoing the latest `stage_boundary` event (which could be a successful exit reading like progress). Falls back to `"Run failed · {error}"` when no stage_boundary fired (e.g. failure pre-intake during credit reservation).
+
+- **U3 — StrategyHeroBar gates on status.** [`strategy-hero-bar.tsx`](../src/components/canvas/chrome/strategy-hero-bar.tsx) — bar now consumes `status` from `useRunEventStore`. When run failed/timed-out and no strategies materialized, bar is hidden entirely. The HUD's error label is the canonical surface for failure; bar would only compete and confuse.
+
+- **U4 — Retry button.** [`canvas-event-hud.tsx`](../src/components/canvas/chrome/canvas-event-hud.tsx) + [`interaxis-canvas.tsx`](../src/components/canvas/interaxis-canvas.tsx) — new `onRetry?: () => void` prop on the HUD. Parent (interaxis-canvas) wires a handler that POSTs to `/api/intake/bootstrap` with the same `input_text` + `reasoning_settings`, then navigates to the new spaceId/runId. Retry button appears between Stop and Dismiss when status is failed/timeout. Disabled when the space has no input_text (legacy or manually-created workspaces).
+
+**End-to-end behavior** when all 4 axes fail in the new system:
+
+1. Frame-extractor dispatches 4 axes in parallel; all 4 timeout/error
+2. `recordAxisFailure` emits 4 `axis_failed` SSE events → HUD shows `4/4 settled` (visible failure signal)
+3. `Promise.allSettled` returns; B2 detects `totalFailed === 4 === totalDispatched`
+4. `completePipelineRun("failed", "All 4 axes failed during landscape generation (financial:timeout, timeline:timeout, ...)")` fires
+5. SSE `done` payload reaches canvas in <500ms with status=failed + the structured error message
+6. Stage indicator: only the active stage (Intake or Landscape) shown red; downstream stages stay gray pending
+7. HUD label: `"Failed during Landscape"` with full error in the AlertCircle tooltip
+8. StrategyHeroBar: hidden
+9. Retry button visible next to Dismiss; click re-fires bootstrap with the same prompt and navigates to the fresh run
+
+This eliminates the lying-UI failure mode and cuts time-to-recovery from 15min (watchdog sweep) to <2min (immediate `completePipelineRun` from frame-extractor) plus a one-click retry.
+
 ### T1.3 — Promote "Open Lab" pill to primary affordance — **🟢 LANDED**
 
 The audit flagged `OpenLabPill` ([`kg-node-shape.tsx`](../src/components/canvas/shapes/kg-node-shape.tsx)) as buried at 2.5mm font in the badge row, indistinguishable from secondary metadata chips (layer, category, depth, measurement, controllability). Drill-down ergonomics scored 3/10 partly because users couldn't find the entry point to the interactive lab page.

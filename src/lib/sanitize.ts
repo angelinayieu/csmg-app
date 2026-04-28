@@ -234,6 +234,11 @@ export interface SanitizedEntity {
   measurement_protocol: Record<string, unknown> | null;
   measurement_cost_estimate: number | null;
   measurement_observability: string | null;
+  // Phase 2 — per-space layer ontology FK. Resolved by callers that
+  // have the space's layer_ontology rows in hand (typically via
+  // active-plan-loader). Null for legacy spaces / unmapped layers.
+  // Migration 20260615_layer_ontology.sql.
+  layer_ontology_id: string | null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -554,6 +559,16 @@ export function sanitizeEntity(raw: any, spaceId: string): SanitizedEntity {
         measurement_observability: observability,
       };
     })(),
+    // Phase 2 — layer_ontology_id is resolved by the caller (see
+    // active-plan-loader.ts). sanitizeEntity stays pure / DB-free,
+    // so we accept a pre-resolved value via raw.layer_ontology_id
+    // when present and otherwise null. Decompose route resolves the
+    // map once per batch and stamps the field on each raw entity
+    // before calling sanitizeEntity.
+    layer_ontology_id:
+      typeof raw.layer_ontology_id === "string" && raw.layer_ontology_id.length > 0
+        ? raw.layer_ontology_id
+        : null,
   };
 }
 

@@ -13,6 +13,7 @@ import { Zap, AlertTriangle, Focus, Cog, Share2, BookOpen, CircleDot, FileText, 
 import { LAYERS, type LayerId } from "@/lib/whiteboard/layer-config";
 import { useCanvasReactions } from "../canvas-reactions-context";
 import { useCanvasHierarchy } from "../canvas-hierarchy-context";
+import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
 import { ReactionHoverPreview } from "@/components/shared/reaction-preview";
 import type { ReactionType, Reaction } from "@/types/reactions";
 import type { Entity } from "@/types";
@@ -245,7 +246,6 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
   const gaugeR = gauge * 0.41;
   const circ = 2 * Math.PI * gaugeR;
   const offset = circ * (1 - weight / 100);
-  const gaugeColor = weight >= 85 ? "#24c36e" : weight >= 65 ? layerCfg.color : "#ff9500";
   const textColor = isHero ? "#ffffff" : "#0a1020";
   const subColor = isHero ? "rgba(255,255,255,0.7)" : "#556479";
 
@@ -266,6 +266,20 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
   // for provenance + analysis metadata. Missing gracefully to sensible
   // defaults so the card still renders when the entity hasn't hydrated.
   const entity = entityId ? entityLookup.get(entityId) : undefined;
+
+  // Phase 2 (KG plan) — when this space has a per-space layer ontology
+  // and the entity carries a layer_ontology_id FK, prefer the
+  // ontology row's color over the legacy LAYERS[layer].color. Lets
+  // mind-body / sleep / nutrition / etc. spaces visually differentiate
+  // their custom layer hierarchies without the 4-value enum's
+  // limited palette.
+  const { byId: layerOntologyById } = useLayerOntology(spaceId ?? null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ontologyId = (entity as any)?.layer_ontology_id as string | undefined;
+  const ontologyRow = ontologyId ? layerOntologyById.get(ontologyId) : null;
+  const layerColor = ontologyRow?.color ?? layerCfg.color;
+  const gaugeColor =
+    weight >= 85 ? "#24c36e" : weight >= 65 ? layerColor : "#ff9500";
   // Leave ~72px of right-side clearance for the reaction badge when it's
   // present; otherwise stretch to normal card padding.
   const hasReactionBadge = !!summary && !!spaceId && !!entityId && !isPeripheral;
@@ -290,8 +304,8 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
       : entity?.source_tag ?? "InterAxis");
   const showFooter = !isPeripheral;
   const showSparkline = isHero || isKey;
-  const sparkColor = isHero ? "rgba(255,255,255,0.85)" : layerCfg.color;
-  const sparkFill = isHero ? "rgba(255,255,255,0.18)" : `${layerCfg.color}22`;
+  const sparkColor = isHero ? "rgba(255,255,255,0.85)" : layerColor;
+  const sparkFill = isHero ? "rgba(255,255,255,0.18)" : `${layerColor}22`;
 
   const containerClasses = [
     showEnter ? "kg-node-enter" : "",
@@ -327,18 +341,18 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                 : "rgba(255,255,255,0.92)",
             backdropFilter: "blur(12px)",
             border: isGhost
-              ? `1.5px dashed ${layerCfg.color}`
+              ? `1.5px dashed ${layerColor}`
               : isHero
                 ? "1.5px solid rgba(255,255,255,0.3)"
                 : isKey
-                  ? `2px solid ${layerCfg.color}`
+                  ? `2px solid ${layerColor}`
                   : "1px solid rgba(10,30,80,0.08)",
             boxShadow: isGhost
-              ? `0 0 0 1px ${layerCfg.color}22, 0 6px 18px -8px ${layerCfg.color}55`
+              ? `0 0 0 1px ${layerColor}22, 0 6px 18px -8px ${layerColor}55`
               : isHero
-                ? `0 0 0 1px ${layerCfg.color}44, 0 18px 48px -10px ${layerCfg.color}66, 0 4px 14px rgba(8,60,180,0.1)`
+                ? `0 0 0 1px ${layerColor}44, 0 18px 48px -10px ${layerColor}66, 0 4px 14px rgba(8,60,180,0.1)`
                 : isKey
-                  ? `0 8px 22px -8px ${layerCfg.color}55, 0 3px 10px rgba(8,60,180,0.08)`
+                  ? `0 8px 22px -8px ${layerColor}55, 0 3px 10px rgba(8,60,180,0.08)`
                   : "0 1px 3px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.06)",
             padding: isPeripheral ? "10px 12px" : "14px 16px",
             color: textColor,
@@ -355,7 +369,7 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                 fontSize: 8.5,
                 fontWeight: 700,
                 letterSpacing: "0.14em",
-                color: layerCfg.color,
+                color: layerColor,
                 background: layerCfg.bg,
                 border: `1px solid ${layerCfg.border}`,
                 padding: "2px 6px",
@@ -372,7 +386,7 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                 position: "absolute",
                 inset: -4,
                 borderRadius: 22,
-                outline: `2px dashed ${isHero ? "rgba(255,255,255,0.5)" : layerCfg.color}`,
+                outline: `2px dashed ${isHero ? "rgba(255,255,255,0.5)" : layerColor}`,
                 outlineOffset: 4,
                 opacity: 0.45,
                 animation: "pulse 2.4s ease-in-out infinite",
@@ -445,7 +459,7 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                     padding: "2px 6px",
                     borderRadius: 4,
                     background: isHero ? "rgba(255,255,255,0.18)" : layerCfg.bg,
-                    color: isHero ? "#fff" : layerCfg.color,
+                    color: isHero ? "#fff" : layerColor,
                     border: `1px solid ${isHero ? "rgba(255,255,255,0.3)" : layerCfg.border}`,
                   }}
                 >
@@ -475,14 +489,14 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                     entity's decomposed subunits — signals "probability
                     space inside" before the user clicks to expand. */}
                 {subunitCount > 0 && (
-                  <DepthGlyph count={subunitCount} isHero={isHero} layerColor={layerCfg.color} />
+                  <DepthGlyph count={subunitCount} isHero={isHero} layerColor={layerColor} />
                 )}
                 {spaceId && entityId && !isPeripheral && (
                   <OpenLabPill
                     spaceId={spaceId}
                     entityId={entityId}
                     isHero={isHero}
-                    layerColor={layerCfg.color}
+                    layerColor={layerColor}
                   />
                 )}
                 {/* D1 — measurement spec badge. Either:
@@ -621,7 +635,7 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                       fontWeight: 700,
                       color: isHero
                         ? "rgba(255,255,255,0.9)"
-                        : layerCfg.color,
+                        : layerColor,
                       fontFamily:
                         "ui-monospace, SFMono-Regular, Menlo, monospace",
                       letterSpacing: "0.02em",

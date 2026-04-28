@@ -12,6 +12,7 @@ import {
   Network,
   ListTree,
   Cog,
+  FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -112,6 +113,14 @@ export function CanvasTopBar({
           >
             <Cog className="h-3 w-3" />
             Mechanisms
+          </Link>
+          <Link
+            href={`/app/space/${spaceId}/subjects`}
+            className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[10.5px] font-semibold text-gray-500 transition hover:bg-gray-100 hover:text-gray-800"
+            title="Subjects — sandbox configurations (baseline + scope + conditions) ready to experiment against in the lab."
+          >
+            <FlaskConical className="h-3 w-3" />
+            Subjects
           </Link>
         </div>
       </div>

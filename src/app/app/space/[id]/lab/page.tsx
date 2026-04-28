@@ -15,6 +15,7 @@ import { SplitLab } from "@/components/lab/split-lab";
 import type { Entity, Edge, Bridge, Space } from "@/types";
 import type { Reaction } from "@/types/reactions";
 import type { System } from "@/types/system";
+import type { Subject } from "@/types/subject";
 
 export const dynamic = "force-dynamic";
 
@@ -87,10 +88,25 @@ export default async function SpaceLabPage({
   searchParams: Promise<{
     systemId?: string | string[];
     systemB?: string | string[];
+    /** Subject scope — when present, takes precedence over systemId.
+     *  Subject's own scope_system_id (if any) drives entity narrowing;
+     *  subject's conditions + entity_param_overrides flow through to
+     *  the lab's modulators panel. */
+    subjectId?: string | string[];
   }>;
 }) {
   const { id: spaceId } = await params;
-  const { systemId: rawSystemId, systemB: rawSystemB } = await searchParams;
+  const {
+    systemId: rawSystemId,
+    systemB: rawSystemB,
+    subjectId: rawSubjectId,
+  } = await searchParams;
+  const subjectId =
+    typeof rawSubjectId === "string"
+      ? rawSubjectId
+      : Array.isArray(rawSubjectId)
+        ? rawSubjectId[0]
+        : null;
   const systemId =
     typeof rawSystemId === "string"
       ? rawSystemId
@@ -190,6 +206,44 @@ export default async function SpaceLabPage({
     }
   }
 
+  // ── Subject loading — takes precedence over ?systemId= ───────
+  // When a Subject is in scope, its own scope_system_id drives the
+  // narrowing (overrides whatever ?systemId= was passed). The
+  // subject's conditions + entity_param_overrides flow to the lab
+  // via the `subject` prop on SpaceLab.
+  let activeSubject: Subject | null = null;
+  if (subjectId) {
+    const { data: subRow } = await db
+      .from("subjects")
+      .select("*")
+      .eq("id", subjectId)
+      .eq("space_id", spaceId)
+      .maybeSingle();
+    if (subRow && (subRow as Subject).user_id === user.id) {
+      activeSubject = subRow as Subject;
+      // Override scope when subject defines one. Loaded fresh so
+      // a stale scopedSystem from the systemId path doesn't leak.
+      if (activeSubject.scope_system_id) {
+        const { data: subjScopeSys } = await db
+          .from("systems")
+          .select("*")
+          .eq("id", activeSubject.scope_system_id)
+          .eq("space_id", spaceId)
+          .maybeSingle();
+        if (
+          subjScopeSys &&
+          (subjScopeSys as System).user_id === user.id
+        ) {
+          scopedSystem = subjScopeSys as System;
+        }
+      } else {
+        // Subject without scope = whole-space subject. Drop any
+        // ?systemId= scoping so the lab shows the full pool.
+        scopedSystem = null;
+      }
+    }
+  }
+
   // Per-side narrowing for split mode. Computed up-front so we can
   // also use side A's narrowed pool as the single-mode `entities`
   // when only one system is in scope (no double work).
@@ -268,6 +322,7 @@ export default async function SpaceLabPage({
         partnerEntities={partnerEntities}
         scopedSystem={scopedSystem}
         comparedSystem={comparedSystem}
+        subject={activeSubject}
       />
     </div>
   );

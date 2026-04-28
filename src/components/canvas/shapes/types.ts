@@ -1300,4 +1300,53 @@ export type CanvasCustomShape =
   | ExperimentDesignCardShape
   | SynthesisIntersectionCardShape
   | AssetCardShape
-  | SituationCardShape;
+  | SituationCardShape
+  | SubjectCardShape;
+
+// ── Subject card (Phase 4 — manual authoring + lab bridge) ──────────
+//
+// First-class whiteboard primitive for the Subject sandbox composition.
+// Renders a researcher-authored / LLM-proposed Subject as a draggable
+// card on the canvas with: focus_kind icon + name + scope summary +
+// active conditions strip + "Open Lab" CTA. Clicking the CTA routes
+// to /app/space/[spaceId]/lab?subjectId=X (the existing scoped-lab
+// route from earlier phases).
+//
+// Created via the +Subject manual-authoring button (gated by
+// spaces.manual_authoring_enabled) or by the lab proposal wizard
+// when the user accepts an AI-proposed subject.
+export type SubjectCardShape = TLBaseShape<
+  "subject-card",
+  {
+    w: number;
+    h: number;
+    /** subjects.id — FK back to the persisted row. */
+    subjectId: string;
+    spaceId: string;
+    name: string;
+    /** subjects.focus_kind — drives the icon + accent color. Must
+     *  match the literal union in tldraw-shapes.d.ts. */
+    focusKind:
+      | "person"
+      | "document"
+      | "product"
+      | "topic"
+      | "environment"
+      | "system"
+      | "data"
+      | "reaction"
+      | "other";
+    focusLabel: string;
+    /** Optional system scope label (e.g. "Working memory subgraph · 12 entities"). */
+    scopeSummary: string | null;
+    /** Number of conditions / modulators currently set. Drives a
+     *  small chip count in the card footer. */
+    conditionCount: number;
+    /** subjects.artifact_state — bare_topic | partial_artifact |
+     *  complete_artifact. Drives a soft badge on the card. */
+    artifactState: "bare_topic" | "partial_artifact" | "complete_artifact";
+    /** When true, the card renders with a "needs review" treatment
+     *  (e.g. unsaved local edits). Optional; defaults to false. */
+    needsReview: boolean;
+  }
+>;

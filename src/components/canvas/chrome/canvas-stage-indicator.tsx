@@ -23,7 +23,7 @@
 // it lives inside the canvas chrome stack.
 
 import { useEffect, useMemo, useState } from "react";
-import { Sparkles, Layers, Telescope, Combine, FlaskConical, CheckCircle2 } from "lucide-react";
+import { Sparkles, Layers, Telescope, Combine, FlaskConical, CheckCircle2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   useEventsOfType,
@@ -103,13 +103,26 @@ function CanvasStageIndicatorInner() {
   // exit event; "active" on enter-but-no-exit; "pending" if neither.
   // Exit always wins over enter (re-entered stages don't regress).
   //
+  // U1 (docs/KG_DEPTH_CRITIQUE.md audit) — added "error" state. When
+  // run.status flips to failed/timeout, any stage that's "active" gets
+  // re-mapped to "error" (red), and stages still "pending" stay
+  // pending (un-reached, NOT auto-promoted to done). Earlier stages
+  // that exited cleanly stay "done" — they really did succeed before
+  // the failure cascade. This replaces the prior bug where the cancel
+  // route emitted a fake `stage: "results", phase: "exit"` event that
+  // tricked the indicator into painting a green ✓ on Results despite
+  // a fail-during-intake.
+  //
   // This replaces the old POSITIONAL logic (`isComplete = i < activeIdx`)
   // which marked any stage left of the current one as complete — that
   // produced the contradiction where Intake showed "active" (its enter
   // fired) AND Graph showed "complete" (it was left of the current
   // stage by index) simultaneously. The fix: trust the event log.
   const stageStateByName = useMemo(() => {
-    const state: Record<PipelineStage, "pending" | "active" | "done"> = {
+    const state: Record<
+      PipelineStage,
+      "pending" | "active" | "done" | "error"
+    > = {
       intake: "pending",
       landscape: "pending",
       kg: "pending",
@@ -125,8 +138,14 @@ function CanvasStageIndicatorInner() {
         state[s.event.stage] = "done";
       }
     }
+    // Apply U1 — re-map active stages to error on terminal failure.
+    if (status === "failed" || status === "timeout") {
+      for (const k of Object.keys(state) as PipelineStage[]) {
+        if (state[k] === "active") state[k] = "error";
+      }
+    }
     return state;
-  }, [stageBoundaryEvents]);
+  }, [stageBoundaryEvents, status]);
 
   // Track when the stage transition happened so we can play a
   // one-shot pulse animation on the new stage's chip.
@@ -187,23 +206,35 @@ function CanvasStageIndicatorInner() {
           const stageState = stageStateByName[stage.key];
           const isActive = stageState === "active";
           const isComplete = stageState === "done";
-          const isPending = stageState === "pending";
-          const Icon = stage.Icon;
+          const isError = stageState === "error";
+          const Icon = isError ? AlertCircle : stage.Icon;
+          // Title hint mirrors the visible state so screen readers and
+          // hover tooltips match what the user sees.
+          const stateLabel = isError
+            ? `${stage.label} — error`
+            : isComplete
+              ? `${stage.label} — complete`
+              : isActive
+                ? `${stage.label} — in progress`
+                : `${stage.label} — pending`;
           return (
             <span
               key={stage.key}
               className="contents"
               data-stage={stage.key}
+              data-stage-state={stageState}
             >
               <span
-                title={stage.description}
+                title={`${stateLabel} · ${stage.description}`}
                 className={cn(
                   "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-all",
-                  isActive
-                    ? "bg-violet-100 text-violet-700 ring-1 ring-violet-300"
-                    : isComplete
-                      ? "text-emerald-600"
-                      : "text-slate-400",
+                  isError
+                    ? "bg-red-50 text-red-600 ring-1 ring-red-200"
+                    : isActive
+                      ? "bg-violet-100 text-violet-700 ring-1 ring-violet-300"
+                      : isComplete
+                        ? "text-emerald-600"
+                        : "text-slate-400",
                   isActive &&
                     pulseStage === stage.key &&
                     "stage-chip-pulse",
@@ -218,13 +249,18 @@ function CanvasStageIndicatorInner() {
                 />
                 {stage.label}
               </span>
-              {/* Connector tick between chips */}
+              {/* Connector tick between chips. Red when the right side
+                  is the error stage so the visual cascade reads clearly. */}
               {i < STAGES.length - 1 && (
                 <span
                   aria-hidden
                   className={cn(
                     "h-px w-2 transition-colors",
-                    isComplete ? "bg-emerald-300" : "bg-slate-200",
+                    isComplete
+                      ? "bg-emerald-300"
+                      : stageStateByName[STAGES[i + 1].key] === "error"
+                        ? "bg-red-200"
+                        : "bg-slate-200",
                   )}
                 />
               )}

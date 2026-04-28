@@ -99,22 +99,97 @@ export function defaultsForCategory(
  * `parameters` stored, use them (with bounds-clamping). Otherwise return
  * the category default.
  */
-export function getEntityParameters(entity: {
-  parameters?: Record<string, unknown> | null;
-  entity_category?: string | null;
-}): InstrumentParameters {
+/** Optional subject context that layers per-subject overrides + a
+ *  conditions modulator bag on top of the entity's stored params.
+ *
+ *  When a Subject is in scope (e.g. lab loaded with `?subjectId=`),
+ *  every consumer of `getEntityParameters(entity, ctx)` automatically
+ *  sees the modulated effective params. The entity row's
+ *  `parameters` JSONB stays UNCHANGED — the override + modulation
+ *  layer is read-only and recomputed on each call. Two subjects can
+ *  test the same entity with different conditions without clobbering
+ *  each other.
+ *
+ *  Composition order:
+ *    1. category default (DEFAULTS_BY_CATEGORY[entity_category])
+ *    2. entity row's own `parameters` JSONB
+ *    3. subject's `entity_param_overrides[entityId]` (when present)
+ *    4. apply subject's `conditions` via `applyModulators` (when present)
+ *
+ *  Result is always clamped to PARAMETER_SPECS bounds. */
+export interface SubjectLabContext {
+  entityOverride?: Partial<InstrumentParameters> | null;
+  conditions?: Record<string, number> | null;
+  /** When provided, used instead of STARTER_MODULATORS — lets future
+   *  per-space modulator vocabularies override the global default
+   *  without forcing every call site to import the constant. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  modulators?: any;
+}
+
+export function getEntityParameters(
+  entity: {
+    parameters?: Record<string, unknown> | null;
+    entity_category?: string | null;
+  },
+  ctx?: SubjectLabContext | null,
+): InstrumentParameters {
   const cat = (entity.entity_category as string | null) ?? "default";
   const def = DEFAULTS_BY_CATEGORY[cat] ?? DEFAULTS_BY_CATEGORY.default;
   const raw = entity.parameters && typeof entity.parameters === "object"
     ? (entity.parameters as Record<string, unknown>)
     : null;
-  if (!raw) return def;
-  return clampParameters({
-    K: typeof raw.K === "number" ? raw.K : def.K,
-    tau: typeof raw.tau === "number" ? raw.tau : def.tau,
-    rho: typeof raw.rho === "number" ? raw.rho : def.rho,
-    alpha: typeof raw.alpha === "number" ? raw.alpha : def.alpha,
+  // Layer 1+2: entity row over category default.
+  const baseParams: InstrumentParameters = clampParameters({
+    K: typeof raw?.K === "number" ? raw.K : def.K,
+    tau: typeof raw?.tau === "number" ? raw.tau : def.tau,
+    rho: typeof raw?.rho === "number" ? raw.rho : def.rho,
+    alpha: typeof raw?.alpha === "number" ? raw.alpha : def.alpha,
   });
+
+  // Fast path — no subject context, no further composition.
+  if (!ctx) return baseParams;
+
+  // Layer 3: per-subject entity override.
+  const withOverride: InstrumentParameters = ctx.entityOverride
+    ? clampParameters({
+        K:
+          typeof ctx.entityOverride.K === "number"
+            ? ctx.entityOverride.K
+            : baseParams.K,
+        tau:
+          typeof ctx.entityOverride.tau === "number"
+            ? ctx.entityOverride.tau
+            : baseParams.tau,
+        rho:
+          typeof ctx.entityOverride.rho === "number"
+            ? ctx.entityOverride.rho
+            : baseParams.rho,
+        alpha:
+          typeof ctx.entityOverride.alpha === "number"
+            ? ctx.entityOverride.alpha
+            : baseParams.alpha,
+      })
+    : baseParams;
+
+  // Layer 4: condition modulators (sleep / stress / caffeine / ...).
+  // Lazy-import to avoid a circular at module load (modulators.ts
+  // doesn't depend on lab-formulas, but keeping this import dynamic
+  // makes it trivially shake-able if a non-lab caller ever pulls in
+  // lab-formulas and we don't want the modulator vocabulary along).
+  if (ctx.conditions && Object.keys(ctx.conditions).length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { applyModulators, STARTER_MODULATORS } = require("@/lib/subjects/modulators");
+    return clampParameters(
+      applyModulators(
+        ctx.conditions,
+        withOverride,
+        ctx.modulators ?? STARTER_MODULATORS,
+      ),
+    );
+  }
+
+  return withOverride;
 }
 
 /** Bounds-clamp + round to spec granularity. Used at read AND write. */

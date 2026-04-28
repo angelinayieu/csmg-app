@@ -16,9 +16,28 @@ import type {
   TwinProposalJustification,
   StrategicRecommendation,
   MechanismRow,
+  RankedStrategy,
 } from "@/types/strategy";
 
 export const maxDuration = 15;
+
+/**
+ * Flattened hero-bar-friendly shape. The full `RankedStrategy` carries
+ * the entire StrategicRecommendation; the hero bar only needs five
+ * fields to render a 340px card. Extracting here on the server avoids
+ * shipping ~10kb of strategy detail to the client per row, and keeps
+ * the bar's render logic narrow.
+ */
+export interface RankedStrategyEntry {
+  rank: number;
+  title: string;
+  summary: string;
+  confidence: number | null;
+  /** Raw posture value from StrategicRecommendation.strategic_posture.
+   *  Hero bar's POSTURE_LABEL/POSTURE_ACCENT maps fall back gracefully
+   *  for vocabulary not in their tables. */
+  posture: string;
+}
 
 interface TwinProposalRow {
   id: string;
@@ -46,6 +65,24 @@ interface TwinProposalResponse {
   mechanisms: MechanismRow[];
   /** True when the response is built from extracted (non-persisted) data. */
   is_extracted: boolean;
+  /**
+   * Top-N ranked strategies, flattened to hero-bar-friendly shape.
+   *
+   * Read from `space.synthesis_data.strategic_recommendation.ranked_strategies`
+   * — the canonical source. The audit
+   * (docs/KG_DEPTH_CRITIQUE.md) found that strategy-hero-bar previously
+   * read `proposal.justification.ranked`, a field that DOES NOT EXIST
+   * in TwinProposalJustification. As a result the bar always fell
+   * through to single-strategy mode, breaking the T1.1 "top-N
+   * side-by-side" feature. Extracting here at the route level (rather
+   * than in extractTwinProposalFromStrategy) keeps the persisted
+   * justification shape unchanged while giving the bar a stable read.
+   *
+   * Empty array when no synthesis_data exists yet OR when the
+   * recommendation has no ranked_strategies field (single-strategy
+   * runs — the bar's fallback handles those by rendering one card).
+   */
+  ranked_strategies: RankedStrategyEntry[];
 }
 
 export async function GET(
@@ -91,26 +128,89 @@ export async function GET(
     mechanisms = mechs ?? [];
   }
 
+  // ALWAYS fetch synthesis_data — needed for both the legacy
+  // extraction-when-no-proposal path AND for the new
+  // ranked_strategies extraction (which the strategy-hero-bar reads
+  // regardless of whether a persisted proposal exists). Single read
+  // covers both.
+  const { data: spaceRow } = (await db
+    .from("spaces")
+    .select("synthesis_data")
+    .eq("id", spaceId)
+    .eq("user_id", user.id)
+    .maybeSingle()) as {
+    data: { synthesis_data: Record<string, unknown> | null } | null;
+  };
+  const stratWrap = spaceRow?.synthesis_data?.strategic_recommendation as
+    | { recommendation?: StrategicRecommendation; ranked_strategies?: RankedStrategy[] }
+    | StrategicRecommendation
+    | undefined;
+  const strategy =
+    (stratWrap as { recommendation?: StrategicRecommendation })?.recommendation
+    ?? (stratWrap as StrategicRecommendation | undefined);
+  const rawRanked =
+    (stratWrap as { ranked_strategies?: RankedStrategy[] })?.ranked_strategies
+    ?? null;
+
+  // Flatten to hero-bar-friendly entries. Sort by rank ascending so
+  // #1 is always first (defensive — strategy-engine sorts already
+  // but the data path crosses JSONB serialization which doesn't
+  // preserve order guarantees).
+  let ranked_strategies: RankedStrategyEntry[] = [];
+  if (Array.isArray(rawRanked) && rawRanked.length > 0) {
+    ranked_strategies = [...rawRanked]
+      .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))
+      .map((entry) => {
+        const rec = entry.recommendation;
+        return {
+          rank: typeof entry.rank === "number" ? entry.rank : 1,
+          title:
+            typeof rec?.title === "string" && rec.title.trim().length > 0
+              ? rec.title
+              : "Untitled strategy",
+          summary:
+            typeof rec?.summary === "string" && rec.summary.trim().length > 0
+              ? rec.summary
+              : entry.ranking_rationale ?? "",
+          confidence:
+            typeof rec?.confidence === "number" ? rec.confidence : null,
+          posture:
+            typeof rec?.strategic_posture === "string"
+              ? rec.strategic_posture
+              : "exploratory_discovery",
+        };
+      });
+  } else if (strategy) {
+    // Single-strategy fallback: synthesize wrote a recommendation but
+    // didn't produce a ranked_strategies array (e.g. strategyCount=1
+    // runs). Render as a one-entry batch so the hero bar still shows
+    // the strategy in a card.
+    ranked_strategies = [
+      {
+        rank: 1,
+        title:
+          typeof strategy.title === "string" && strategy.title.trim().length > 0
+            ? strategy.title
+            : "Recommended strategy",
+        summary:
+          typeof strategy.summary === "string" && strategy.summary.trim().length > 0
+            ? strategy.summary
+            : "",
+        confidence:
+          typeof strategy.confidence === "number" ? strategy.confidence : null,
+        posture:
+          typeof strategy.strategic_posture === "string"
+            ? strategy.strategic_posture
+            : "exploratory_discovery",
+      },
+    ];
+  }
+
   // Fallback extraction when no persisted proposal exists. Reads
   // synthesis_data.strategic_recommendation and produces a structured shape
   // so the UI has something to display today.
   let extracted: TwinProposalJustification | null = null;
   if (!proposal) {
-    const { data: spaceRow } = (await db
-      .from("spaces")
-      .select("synthesis_data")
-      .eq("id", spaceId)
-      .eq("user_id", user.id)
-      .maybeSingle()) as {
-      data: { synthesis_data: Record<string, unknown> | null } | null;
-    };
-    const stratWrap = spaceRow?.synthesis_data?.strategic_recommendation as
-      | { recommendation?: StrategicRecommendation }
-      | StrategicRecommendation
-      | undefined;
-    const strategy =
-      (stratWrap as { recommendation?: StrategicRecommendation })?.recommendation
-      ?? (stratWrap as StrategicRecommendation | undefined);
     extracted = extractTwinProposalFromStrategy(strategy ?? null);
   }
 
@@ -119,6 +219,7 @@ export async function GET(
     proposal_extracted: extracted,
     mechanisms,
     is_extracted: !proposal && extracted !== null,
+    ranked_strategies,
   };
   return NextResponse.json(payload);
 }

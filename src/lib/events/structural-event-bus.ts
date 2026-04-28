@@ -28,7 +28,13 @@ export type Pipeline =
   | "intake_bootstrap"
   // VP Project report (Phase 3) — writer-path run that produces
   // variant flashcards via variant_factory + iv_scorer.
-  | "writer_path";
+  | "writer_path"
+  // KG Generation Plan stage — proposes the user-reviewable plan
+  // before downstream pipeline stages run. Blocking gate: the
+  // pipeline waits for kg_plan_approved before kicking off
+  // decompose/research/synthesize. See
+  // src/lib/pipeline/plan-generator.ts and the 20260614 migration.
+  | "plan_propose";
 
 export interface StartPipelineRunOpts {
   spaceId: string;

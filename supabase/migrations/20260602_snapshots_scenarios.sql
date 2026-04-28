@@ -19,14 +19,21 @@
 --      diverge without touching the live tables. Every row has a
 --      stable `root_hash` so two snapshots of the same state dedupe.
 --
---   2. `scenarios` — a fork off a snapshot with an ordered
+--   2. `twin_scenarios` — a fork off a snapshot with an ordered
 --      `action_list` applied transactionally. Status lifecycle
 --      matches Palantir's pattern: draft → testing → applied → rejected.
---      Only stores deltas (via `scenario_deltas`), not a full snapshot
---      copy. Applying a scenario = replay `action_list` against
---      parent_snapshot's entities/edges.
+--      Only stores deltas (via `twin_scenario_deltas`), not a full
+--      snapshot copy. Applying a scenario = replay `action_list`
+--      against parent_snapshot's entities/edges.
 --
---   3. `scenario_deltas` — per-action delta rows. Every mutation
+--      NAMING NOTE: this Palantir-style table is `twin_scenarios`,
+--      NOT `scenarios`, to avoid colliding with the pre-R5
+--      synthesis-output `scenarios` table (id, space_id, name,
+--      conditions text, outcome_label, outcome_value, probability)
+--      which is owned by the analyze pipeline + synthesis prompts.
+--      Both tables coexist; they're disjoint surfaces.
+--
+--   3. `twin_scenario_deltas` — per-action delta rows. Every mutation
 --      (entity/edge create/update/delete + field-level diff for
 --      updates) gets one row. Lets the UI render a diff without
 --      re-running the action list, and lets the MC engine load
@@ -108,9 +115,9 @@ create index if not exists idx_twin_snapshots_hash
 create index if not exists idx_twin_snapshots_run
   on public.twin_snapshots(pipeline_run_id) where pipeline_run_id is not null;
 
--- ── 2. scenarios ─────────────────────────────────────────────────────
+-- ── 2. twin_scenarios ────────────────────────────────────────────────
 
-create table if not exists public.scenarios (
+create table if not exists public.twin_scenarios (
   id uuid primary key default gen_random_uuid(),
   space_id uuid not null references public.spaces(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -159,24 +166,24 @@ create table if not exists public.scenarios (
   -- the old version moves to `superseded` and the new row points at
   -- the old via `supersedes_id`. Lets the UI show history without
   -- losing the delta chain.
-  supersedes_id uuid references public.scenarios(id) on delete set null,
+  supersedes_id uuid references public.twin_scenarios(id) on delete set null,
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
-create index if not exists idx_scenarios_space
-  on public.scenarios(space_id, created_at desc);
-create index if not exists idx_scenarios_parent_snapshot
-  on public.scenarios(parent_snapshot_id);
-create index if not exists idx_scenarios_status
-  on public.scenarios(space_id, status) where status in ('draft', 'testing');
+create index if not exists idx_twin_scenarios_space
+  on public.twin_scenarios(space_id, created_at desc);
+create index if not exists idx_twin_scenarios_parent_snapshot
+  on public.twin_scenarios(parent_snapshot_id);
+create index if not exists idx_twin_scenarios_status
+  on public.twin_scenarios(space_id, status) where status in ('draft', 'testing');
 
--- ── 3. scenario_deltas ───────────────────────────────────────────────
+-- ── 3. twin_scenario_deltas ──────────────────────────────────────────
 
-create table if not exists public.scenario_deltas (
+create table if not exists public.twin_scenario_deltas (
   id uuid primary key default gen_random_uuid(),
-  scenario_id uuid not null references public.scenarios(id) on delete cascade,
+  scenario_id uuid not null references public.twin_scenarios(id) on delete cascade,
 
   -- Target of the delta. `entity` / `edge` / `cycle` / `bridge` match
   -- the four shape types a snapshot stores. Target id is the primary
@@ -210,10 +217,10 @@ create table if not exists public.scenario_deltas (
   created_at timestamptz not null default now()
 );
 
-create index if not exists idx_scenario_deltas_scenario
-  on public.scenario_deltas(scenario_id, action_index);
-create index if not exists idx_scenario_deltas_target
-  on public.scenario_deltas(target_kind, target_id);
+create index if not exists idx_twin_scenario_deltas_scenario
+  on public.twin_scenario_deltas(scenario_id, action_index);
+create index if not exists idx_twin_scenario_deltas_target
+  on public.twin_scenario_deltas(target_kind, target_id);
 
 -- ── 4. pipeline_runs reproducibility metadata ────────────────────────
 --
@@ -244,10 +251,10 @@ comment on column public.pipeline_runs.snapshot_id is
   'Snapshot this run read from. When set, the run is a test ON A FROZEN state, not the live KG. MC + twin reads go to the snapshot JSONB instead of live entities/edges.';
 
 alter table public.pipeline_runs
-  add column if not exists scenario_id uuid references public.scenarios(id) on delete set null;
+  add column if not exists twin_scenario_id uuid references public.twin_scenarios(id) on delete set null;
 
-comment on column public.pipeline_runs.scenario_id is
-  'Scenario this run was testing. When set, deltas are applied on top of snapshot_id before reading. Null = read snapshot (or live KG) as-is.';
+comment on column public.pipeline_runs.twin_scenario_id is
+  'twin_scenarios row this run was testing. When set, deltas are applied on top of snapshot_id before reading. Null = read snapshot (or live KG) as-is. Disambiguated from the legacy synthesis-output scenarios table.';
 
 alter table public.pipeline_runs
   add column if not exists parent_run_id uuid references public.pipeline_runs(id) on delete set null;
@@ -257,34 +264,34 @@ comment on column public.pipeline_runs.parent_run_id is
 
 create index if not exists idx_pipeline_runs_snapshot
   on public.pipeline_runs(snapshot_id) where snapshot_id is not null;
-create index if not exists idx_pipeline_runs_scenario
-  on public.pipeline_runs(scenario_id) where scenario_id is not null;
+create index if not exists idx_pipeline_runs_twin_scenario
+  on public.pipeline_runs(twin_scenario_id) where twin_scenario_id is not null;
 create index if not exists idx_pipeline_runs_parent
   on public.pipeline_runs(parent_run_id) where parent_run_id is not null;
 
 -- ── 5. Row-level security ────────────────────────────────────────────
 
 alter table public.twin_snapshots enable row level security;
-alter table public.scenarios enable row level security;
-alter table public.scenario_deltas enable row level security;
+alter table public.twin_scenarios enable row level security;
+alter table public.twin_scenario_deltas enable row level security;
 
 drop policy if exists "twin_snapshots_owner" on public.twin_snapshots;
 create policy "twin_snapshots_owner" on public.twin_snapshots
   for all using (auth.uid() = user_id);
 
-drop policy if exists "scenarios_owner" on public.scenarios;
-create policy "scenarios_owner" on public.scenarios
+drop policy if exists "twin_scenarios_owner" on public.twin_scenarios;
+create policy "twin_scenarios_owner" on public.twin_scenarios
   for all using (auth.uid() = user_id);
 
-drop policy if exists "scenario_deltas_via_scenario" on public.scenario_deltas;
-create policy "scenario_deltas_via_scenario" on public.scenario_deltas
+drop policy if exists "twin_scenario_deltas_via_scenario" on public.twin_scenario_deltas;
+create policy "twin_scenario_deltas_via_scenario" on public.twin_scenario_deltas
   for all using (
-    scenario_id in (select id from public.scenarios where user_id = auth.uid())
+    scenario_id in (select id from public.twin_scenarios where user_id = auth.uid())
   );
 
--- ── 6. updated_at trigger for scenarios ──────────────────────────────
+-- ── 6. updated_at trigger for twin_scenarios ─────────────────────────
 
-create or replace function public.set_scenarios_updated_at()
+create or replace function public.set_twin_scenarios_updated_at()
 returns trigger language plpgsql as $$
 begin
   new.updated_at = now();
@@ -292,7 +299,7 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_scenarios_updated_at on public.scenarios;
-create trigger trg_scenarios_updated_at
-  before update on public.scenarios
-  for each row execute function public.set_scenarios_updated_at();
+drop trigger if exists trg_twin_scenarios_updated_at on public.twin_scenarios;
+create trigger trg_twin_scenarios_updated_at
+  before update on public.twin_scenarios
+  for each row execute function public.set_twin_scenarios_updated_at();
