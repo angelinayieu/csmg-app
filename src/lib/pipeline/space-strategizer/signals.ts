@@ -208,6 +208,19 @@ export interface SignalInputBundle {
    *  interactions (signal returns null, not 0 — "no opinion" semantics
    *  match the rest of the bundle's null-handling). */
   interaction_counts: Map<string, number>;
+  /** D6 phase 2 — per-entity sum of |delta_strength| + |delta_confidence|
+   *  across recent edge_calibrations rows on edges incident to the
+   *  entity. Populated by loadSignalBundle scanning the
+   *  edge_calibrations table for rows applied within
+   *  `calibration_drift_window_days` (default 30).
+   *
+   *  Higher values = the local model around this entity has been
+   *  actively recalibrated by reality-checks (predictions resolving).
+   *  The strategizer can use this to surface "stale model regions" —
+   *  entities whose model has been actively shifting and may benefit
+   *  from fresh decomposition or user review. Null when no recent
+   *  calibrations affect the entity (clean signal, not penalty). */
+  calibration_drift_by_entity: Map<string, number>;
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────
@@ -817,6 +830,37 @@ export function outcomeAlignmentSignal(
   return clamp01(1 / (d + 1));
 }
 
+/** Calibration drift signal (D6 phase 2) — recent prediction-driven
+ *  calibration activity on edges incident to the target entity.
+ *  Reads from `bundle.calibration_drift_by_entity`, populated by
+ *  loadSignalBundle scanning the edge_calibrations table for rows
+ *  within the recent window (default 30 days).
+ *
+ *  Returns:
+ *    1   → entity has the most recent calibration activity in the
+ *          space (most "stale" model region)
+ *    >0  → fractional activity
+ *    null → no recent calibrations OR no edge_calibrations rows
+ *           OR axis-level candidate
+ *
+ *  Why null instead of 0: matches the bundle's null-aware semantics.
+ *  Zero calibration activity isn't evidence against picking the
+ *  candidate — it just means we have no fresh reality-check signal
+ *  on this entity yet. The strategizer treats null as "no opinion." */
+export function calibrationDriftSignal(
+  bundle: SignalInputBundle,
+  targetEntityId: string | null,
+): number | null {
+  if (!targetEntityId) return null;
+  if (bundle.calibration_drift_by_entity.size === 0) return null;
+  const v = bundle.calibration_drift_by_entity.get(targetEntityId);
+  if (!v || v <= 0) return null;
+  let max = 0;
+  for (const n of bundle.calibration_drift_by_entity.values()) if (n > max) max = n;
+  if (max === 0) return null;
+  return clamp01(v / max);
+}
+
 /** Interaction density signal (D4) — normalized count of emergent
  *  interactions involving the target entity. Reads from
  *  `bundle.interaction_counts`, populated by loadSignalBundle scanning
@@ -847,6 +891,54 @@ export function interactionDensitySignal(
   for (const n of bundle.interaction_counts.values()) if (n > max) max = n;
   if (max === 0) return null;
   return clamp01(v / max);
+}
+
+/** Consequence breadth signal (D13a) — fraction-of-max distinct
+ *  downstream consequences this entity carries in its
+ *  `node_signature.consequence_surface`, normalized by the max
+ *  surface size seen across the space.
+ *
+ *  Reads `bundle.signatures.get(entityId).consequence_surface.length`
+ *  and divides by the per-space max. Returns null when:
+ *    - entity has no signature at all (signature pass hasn't run)
+ *    - signature has empty consequence_surface (no outgoing edges,
+ *      or D13a backfill hasn't run on a legacy space)
+ *    - candidate is axis-level (no attached entity)
+ *
+ *  Why null instead of 0 for empty surface: matches the bundle's
+ *  null-aware semantics. An entity with zero downstream consequences
+ *  ISN'T evidence against picking it — it might just be a leaf node
+ *  in the decomposition. The strategizer treats null as "no signal,"
+ *  which is honest.
+ *
+ *  Companion to `convergence_count` (upstream fan-in) — together they
+ *  give the strategizer bidirectional reach signal per entity. The
+ *  ranker weights this modestly (~0.03) initially because the field
+ *  was just-activated and we want telemetry before raising weight. */
+export function consequenceBreadthSignal(
+  bundle: SignalInputBundle,
+  targetEntityId: string | null,
+): number | null {
+  if (!targetEntityId) return null;
+  const sig = bundle.signatures.get(targetEntityId);
+  if (!sig) return null;
+  const surface = sig.consequence_surface;
+  if (!Array.isArray(surface) || surface.length === 0) return null;
+
+  // Compute per-space max once. We don't cache this on the bundle
+  // because the function is called per-candidate inside the same plan
+  // cycle — recomputing the max is O(|signatures|) which is small
+  // (typically 50-100), and avoiding bundle pollution keeps the
+  // bundle interface stable.
+  let max = 0;
+  for (const other of bundle.signatures.values()) {
+    const len = Array.isArray(other.consequence_surface)
+      ? other.consequence_surface.length
+      : 0;
+    if (len > max) max = len;
+  }
+  if (max === 0) return null;
+  return clamp01(surface.length / max);
 }
 
 // ── One-shot: compute the full SignalProfile for a candidate ──────────
@@ -883,5 +975,7 @@ export function computeSignalProfile(
     outcome_alignment: outcomeAlignmentSignal(bundle, primaryId),
     interaction_density: interactionDensitySignal(bundle, primaryId),
     cost_efficiency: costEfficiencySignal(bundle, primaryId),
+    calibration_drift: calibrationDriftSignal(bundle, primaryId),
+    consequence_breadth: consequenceBreadthSignal(bundle, primaryId),
   };
 }

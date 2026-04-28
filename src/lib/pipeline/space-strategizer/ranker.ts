@@ -51,12 +51,14 @@ export const DEFAULT_WEIGHTS: Record<keyof SignalProfile, number> = {
   user_controllable_lever: 0.06,    // ← actionable driver — entity is a why-chain user-controllable root
   centrality: 0.05,                 // ← was 0.06, −0.01 for D3 cost_efficiency (structural < causal)
   interaction_density: 0.05,        // ← D4: candidate participates in emergent 3-way interactions
-  uncertainty: 0.04,                // ← was 0.07, −0.03 reallocated to interaction_density (D4)
-  layer_crossing: 0.04,             // ← was 0.05, −0.01 for outcome_alignment
   cost_efficiency: 0.03,            // ← D3 phase 3: cheap-relative-to-budget levers; modulated up to 1.5× under immediate horizon
-  axis_calibration: 0.02,           // ← was 0.04, −0.02 for D3 cost_efficiency
-  intersection_density: 0.02,       // ← was 0.04, −0.02 reallocated to interaction_density (D4 — adjacent signal)
+  calibration_drift: 0.03,          // ← D6 phase 2: stale model regions (recent prediction-error-driven recalibration)
+  consequence_breadth: 0.03,        // ← D13a: divergence (downstream-reach) twin of convergence_count; companion to causal_depth/convergence
+  uncertainty: 0.02,                // ← was 0.04, −0.02 for D13a consequence_breadth (uncertainty + breadth measure adjacent "what we know about this node")
+  layer_crossing: 0.02,             // ← was 0.04, −0.02 for D6 calibration_drift
+  intersection_density: 0.01,       // ← was 0.02, −0.01 for D13a consequence_breadth (both reach-adjacent signals)
   controllability_spread: 0.02,
+  axis_calibration: 0.01,           // ← was 0.02, −0.01 for D6 calibration_drift
   novelty: 0.01,
 };
 
@@ -347,6 +349,8 @@ export function rankCandidates(input: RankerInput): RankerOutput {
     outcome_alignment: 0,
     interaction_density: 0,
     cost_efficiency: 0,
+    calibration_drift: 0,
+    consequence_breadth: 0,
   };
   for (const { weights: w } of perProfileNormalized) {
     for (const key of Object.keys(meanWeights) as Array<keyof SignalProfile>) {

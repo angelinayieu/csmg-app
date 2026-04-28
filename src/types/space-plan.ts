@@ -156,6 +156,29 @@ export interface SignalProfile {
    *  outcome_alignment wins for THIS run because it reflects what the
    *  user actually asked about. */
   outcome_alignment: number | null;
+  /** Calibration drift (D6 phase 2) — recent prediction-driven
+   *  calibration activity on edges incident to the entity, normalized
+   *  to [0,1] by the max activity seen in the space.
+   *
+   *  Source: `edge_calibrations` rows (path-aware updates produced by
+   *  src/lib/kg/path-aware-calibration.ts when a prediction in
+   *  prediction_ledger resolves with a measurable deviation). High
+   *  values mean the entity's local model has been actively
+   *  recalibrated by recent reality-checks — either it's near a
+   *  surprise zone (de-rating happening) or near a confirmed-prediction
+   *  zone (reinforcement happening).
+   *
+   *  The strategizer can use this to surface "stale model regions" —
+   *  entities whose local model the system has been actively updating,
+   *  which may benefit from fresh decomposition / human review.
+   *
+   *  Null when no calibrations have happened yet, when the entity
+   *  has zero incident calibrated edges, or for axis-level candidates
+   *  that don't attach to a specific entity. Weighted modestly (~0.03)
+   *  initially — the signal is new and we want telemetry before
+   *  raising weight.
+   */
+  calibration_drift: number | null;
   /** Interaction density (D4) — count of detected n-way interactions
    *  involving the candidate's primary entity, normalized to [0,1] by
    *  the max count seen in the space.
@@ -174,6 +197,36 @@ export interface SignalProfile {
    *  modestly (~0.05) initially — the signal is new and we want to
    *  see real-run telemetry before raising weight. */
   interaction_density: number | null;
+  /** Consequence breadth (D13a) — count of distinct downstream
+   *  consequences carried in this entity's
+   *  `node_signature.consequence_surface`, normalized by the max
+   *  breadth seen in the space.
+   *
+   *  Source: populated by src/lib/pipeline/signature-materializer.ts
+   *  computeConsequenceSurface(). The field captures the DIVERGENCE
+   *  half of bidirectional signature reasoning — where this entity
+   *  flows OUTWARD toward, complementary to the upstream-convergence
+   *  signal `convergence_count` (which captures fan-IN from goals).
+   *
+   *  Why useful: the strategizer previously had only convergence (root-
+   *  cause-fan-in) and centrality (undirected reach) as "this node
+   *  matters because it touches many things" signals. consequence_breadth
+   *  adds DIRECTED downstream reach scoped by polarity + probability,
+   *  helping the planner prefer entities whose intervention will
+   *  cascade through multiple consequences vs entities that merely
+   *  sit on shortest paths.
+   *
+   *  Null when:
+   *    - signature is missing (root-trace / signature materializer
+   *      hasn't run for this entity yet)
+   *    - signature exists but consequence_surface is empty (entity
+   *      has no outgoing edges, or all polarities/probabilities
+   *      collapsed to nothing)
+   *    - candidate is axis-level (no attached entity)
+   *
+   *  Weighted modestly (~0.03) initially. Tunable from real-run
+   *  telemetry once the field has had time to populate. */
+  consequence_breadth: number | null;
 }
 
 // ── One ranked candidate (pre-LLM) ────────────────────────────────────

@@ -197,6 +197,110 @@ export function planResolution(
   return { zoom, horizon, pinned_because };
 }
 
+// ── Consequence surface helper (D13a — docs/KG_DEPTH_CRITIQUE.md §13a) ─
+//
+// Populates the previously-dormant `NodeSignature.consequence_surface`
+// field. Deterministic, no LLM. Walks outgoing edges from this entity
+// and projects them as downstream consequences with probability +
+// polarity. Capped at MAX_CONSEQUENCE_SURFACE entries; ties resolved by
+// (probability desc, target_entity_id asc) for stable ordering.
+//
+// Why this matters: the field was DESIGNED for divergence/manifestation
+// tracking but never had a writer. With this populated, the strategizer
+// gains a "downstream reach" view per entity (complement to the existing
+// `converges_chains` upstream-reach view), enabling true bidirectional
+// signature reasoning. See docs/KG_DEPTH_CRITIQUE.md §13a.
+
+const MAX_CONSEQUENCE_SURFACE = 8; // matches type docstring cap
+
+export interface ConsequenceSurfaceEdgeInput {
+  source_entity_id: string;
+  target_entity_id: string;
+  polarity?: string | null;
+  strength?: number | null;
+  confidence?: number | null;
+}
+
+/**
+ * Compute the consequence_surface entries for a given entity from a
+ * list of edges (which may include both incoming and outgoing — we
+ * filter to outgoing internally).
+ *
+ * Probability formula: `confidence × strength` clamped to [0, 1], with
+ * sensible fallbacks (0.7 for missing strength, 0.7 for missing
+ * confidence). The product is honest about compounding uncertainty —
+ * a low-strength edge with high confidence still gets a low
+ * consequence probability, which is correct.
+ *
+ * Polarity passes through verbatim (positive | negative | neutral |
+ * conditional). Unknown polarities coerce to "neutral".
+ */
+export function computeConsequenceSurface(
+  entityId: string,
+  edges: ReadonlyArray<ConsequenceSurfaceEdgeInput>,
+): Array<{
+  target_entity_id: string;
+  probability: number;
+  polarity: "positive" | "negative" | "neutral" | "conditional";
+}> {
+  const VALID_POLARITY = ["positive", "negative", "neutral", "conditional"] as const;
+  const items: Array<{
+    target_entity_id: string;
+    probability: number;
+    polarity: "positive" | "negative" | "neutral" | "conditional";
+  }> = [];
+
+  // Track best probability per target — multiple edges to the same
+  // target collapse to the highest-probability one. This keeps the
+  // surface compact and avoids double-counting parallel edges.
+  const bestByTarget = new Map<
+    string,
+    { probability: number; polarity: typeof VALID_POLARITY[number] }
+  >();
+
+  for (const edge of edges) {
+    if (edge.source_entity_id !== entityId) continue;
+    if (edge.target_entity_id === entityId) continue; // skip self-loops
+    if (!edge.target_entity_id) continue;
+
+    const strength =
+      typeof edge.strength === "number" && edge.strength >= 0 && edge.strength <= 1
+        ? edge.strength
+        : 0.7;
+    const confidence =
+      typeof edge.confidence === "number" &&
+      edge.confidence >= 0 &&
+      edge.confidence <= 1
+        ? edge.confidence
+        : 0.7;
+    const probability = Math.max(0, Math.min(1, strength * confidence));
+
+    const polarityRaw = (edge.polarity ?? "neutral").toString().toLowerCase();
+    const polarity = (
+      VALID_POLARITY as readonly string[]
+    ).includes(polarityRaw)
+      ? (polarityRaw as typeof VALID_POLARITY[number])
+      : "neutral";
+
+    const existing = bestByTarget.get(edge.target_entity_id);
+    if (!existing || probability > existing.probability) {
+      bestByTarget.set(edge.target_entity_id, { probability, polarity });
+    }
+  }
+
+  for (const [target_entity_id, v] of bestByTarget) {
+    items.push({ target_entity_id, probability: v.probability, polarity: v.polarity });
+  }
+
+  // Sort by probability desc, then target_entity_id asc for stability.
+  items.sort((a, b) => {
+    if (b.probability !== a.probability) return b.probability - a.probability;
+    return a.target_entity_id < b.target_entity_id ? -1 : 1;
+  });
+
+  return items.slice(0, MAX_CONSEQUENCE_SURFACE);
+}
+
 // ── Structured input path (decompose-stage batch wiring) ─────────────
 //
 // MaterializerContext is the richer narrowed shape used by the
@@ -415,7 +519,13 @@ export function materializeFromContext(ctx: MaterializerContext): NodeSignature 
     ),
     residual_uncertainty,
     composes_with: [],
-    consequence_surface: [],
+    // D13a — populate consequence_surface from outgoing edges.
+    // incidentEdges contains both directions; computeConsequenceSurface
+    // filters internally to source_entity_id === entity.id.
+    consequence_surface: computeConsequenceSurface(
+      ctx.entity.id,
+      ctx.incidentEdges,
+    ),
     materialized_at: new Date().toISOString(),
     version: 1,
   };
@@ -594,7 +704,10 @@ export function seedNodeSignature(input: SeedInput): NodeSignature {
     resolution,
     residual_uncertainty: residual,
     composes_with: [],
-    consequence_surface: [],
+    // D13a — populate consequence_surface from outgoing edges.
+    // The seed input's `edges` array contains BOTH in + out; the
+    // helper filters to source_entity_id === entity.id internally.
+    consequence_surface: computeConsequenceSurface(entity.id, edges),
     materialized_at: new Date().toISOString(),
     version: 1,
   };

@@ -26,7 +26,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { Space } from "@/types";
 import { ARCHETYPES, getArchetype } from "./lib/archetypes";
 import { TASKS, getTask } from "./lib/tasks";
-import { SCENARIOS, getScenario } from "./lib/scenarios";
+import { getScenario } from "./lib/scenarios";
 import { defaultStateBag } from "./lib/state-defs";
 import { predict } from "./lib/predict";
 import type { StateBag, StateKey } from "./lib/types";
@@ -35,6 +35,13 @@ import { SubjectPicker } from "./left/subject-picker";
 import { BaselineState } from "./left/baseline-state";
 import { TaskPicker } from "./left/task-picker";
 import { ChamberCenter } from "./center/chamber-center";
+import { EffectBreakdown } from "./right/effect-breakdown";
+import { CompositionPanel } from "./right/composition-panel";
+import { EvidenceBasis } from "./right/evidence-basis";
+import { InterventionList } from "./right/intervention-list";
+import { ReactionNetwork } from "./bottom/reaction-network";
+import { OutcomeDistribution } from "./bottom/outcome-distribution";
+import { ScenarioLibrary } from "./bottom/scenario-library";
 
 export type LabMode = "structure" | "compare" | "population";
 
@@ -140,22 +147,23 @@ export function ContextualLab({
         />
       </main>
 
-      {/* Right rail — placeholder; day 2 will fill these */}
+      {/* Right rail */}
       <aside
         className="overflow-y-auto border-l border-black/[0.08] bg-white"
         style={{ gridArea: "right" }}
       >
-        <div className="p-5">
+        {/* Predicted Performance card */}
+        <div className="px-[18px] py-[14px]">
           <div className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#6e6e73]">
             Predicted Performance
           </div>
           <div className="rounded-[10px] border border-black/[0.05] bg-[#fbfbfd] p-3.5">
-            <div className="flex items-baseline justify-between mb-2">
+            <div className="mb-2 flex items-baseline justify-between">
               <div>
-                <div className="text-[10px] font-semibold uppercase tracking-[0.04em] text-[#6e6e73] mb-0.5">
+                <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-[#6e6e73]">
                   Success Probability
                 </div>
-                <div className="text-[28px] font-bold tracking-[-0.025em] text-[#1d1d1f] tabular-nums leading-none">
+                <div className="text-[28px] font-bold leading-none tracking-[-0.025em] tabular-nums text-[#1d1d1f]">
                   {Math.round(prediction.successRate * 100)}
                   <span className="ml-0.5 text-[13px] font-medium text-[#6e6e73]">
                     %
@@ -163,10 +171,10 @@ export function ContextualLab({
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.04em] text-[#6e6e73] mb-0.5">
+                <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-[#6e6e73]">
                   Effective K
                 </div>
-                <div className="text-[22px] font-bold tracking-[-0.025em] text-[#1d1d1f] tabular-nums leading-none">
+                <div className="text-[22px] font-bold leading-none tracking-[-0.025em] tabular-nums text-[#1d1d1f]">
                   {prediction.K.toFixed(1)}
                 </div>
               </div>
@@ -210,57 +218,47 @@ export function ContextualLab({
             </div>
           </div>
         </div>
-        <div className="border-t border-black/[0.05] p-5 text-[11px] text-[#86868b]">
-          Effect Breakdown · Composition · Evidence Basis · Intervention list →
-          coming day 2
-        </div>
+
+        {/* Effect Breakdown */}
+        <EffectBreakdown effects={prediction.effects} />
+
+        {/* Composition */}
+        <CompositionPanel prediction={prediction} />
+
+        {/* Evidence Basis */}
+        <EvidenceBasis
+          subject={subject}
+          task={task}
+          state={{ sleep: stateBag.sleep }}
+        />
+
+        {/* Intervention list (ranked alternative tasks) */}
+        <InterventionList
+          tasks={TASKS}
+          activeTaskId={taskId}
+          subject={subject}
+          prediction={prediction}
+          onSelect={setTaskId}
+        />
       </aside>
 
-      {/* Bottom — placeholder; day 3 will fill these */}
+      {/* Bottom panels */}
       <footer
         className="grid grid-cols-3 gap-px bg-black/[0.08]"
         style={{ gridArea: "bot" }}
       >
-        <div className="bg-white p-3 text-[11px] text-[#86868b]">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#6e6e73]">
-            Reaction Network
-          </div>
-          {SCENARIOS.length} scenarios available · 8 reactions defined ·
-          rendering pending
-        </div>
-        <div className="bg-white p-3 text-[11px] text-[#86868b]">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#6e6e73]">
-            Outcome Distribution
-          </div>
-          Monte Carlo histogram · pending
-        </div>
-        <div className="bg-white p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-[#6e6e73]">
-              Scenario Library
-            </div>
-            <div className="text-[11px] font-medium text-[#86868b]">
-              {SCENARIOS.length} presets
-            </div>
-          </div>
-          <div className="space-y-1 overflow-y-auto pr-1" style={{ maxHeight: 140 }}>
-            {SCENARIOS.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => loadScenario(s.id)}
-                className="w-full rounded-lg border border-transparent px-2.5 py-2 text-left transition-colors hover:border-black/[0.05] hover:bg-[#fbfbfd]"
-              >
-                <div className="text-[12px] font-semibold tracking-[-0.01em] text-[#1d1d1f]">
-                  {s.name}
-                </div>
-                <div className="mt-0.5 text-[10px] leading-[1.3] text-[#6e6e73]">
-                  {s.desc}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
+        <ReactionNetwork prediction={prediction} />
+        <OutcomeDistribution
+          subject={subject}
+          state={stateBag}
+          task={task}
+        />
+        <ScenarioLibrary
+          subjectId={subjectId}
+          taskId={taskId}
+          stateBag={stateBag}
+          onLoad={loadScenario}
+        />
       </footer>
     </div>
   );

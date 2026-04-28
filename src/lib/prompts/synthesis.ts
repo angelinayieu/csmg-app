@@ -47,7 +47,20 @@ Return ONLY valid JSON matching this exact schema. No markdown fencing, no expla
       {"situation": "string", "impact": "string", "intensity": "high"},
       {"situation": "string", "impact": "string", "intensity": "mid"},
       {"situation": "string", "impact": "string", "intensity": "low"}
-    ]
+    ],
+    "mechanism_grounding": {
+      "phenomenology": "string — what is OBSERVED about the bottleneck. Surface-layer description of the symptom, not the cause. (e.g. 'users drop off after day 7'). REQUIRED.",
+      "mechanism_explanation": "string — the CAUSAL mechanism producing the phenomenology. Reaches past folk-vocabulary toward a named process. (e.g. 'habit consolidation requires neurological strengthening of cue-routine-reward loops; without consistent rehearsal in the first 30 days the routine doesn't reach automaticity, and ad-hoc engagement decays at the rate of effortful action — Ouellette & Wood 1998 found ~30%/week decay for non-automated behaviors'). REQUIRED.",
+      "literature_grounding": [
+        {
+          "author": "string — author surname or org",
+          "year": "number or short text — e.g. 2009 or 'meta-analysis 2021'",
+          "claim": "string — the specific claim from this source that supports the mechanism"
+        }
+      ],
+      "evidence_strength": "empirical | theoretical | inferred | anecdotal — empirical = peer-reviewed data; theoretical = formal model widely accepted; inferred = domain pattern with reasonable support; anecdotal = single case or pattern from practice. REQUIRED.",
+      "falsifiable_prediction": "string — a CONCRETE testable claim that would refute the mechanism if it failed (e.g. 'extending free trial to 14 days should reduce day-7 dropoff by 20-30%'). REQUIRED — if you can't write one, the mechanism is too vague."
+    }
   },
   "leverage_points": [
     {
@@ -77,7 +90,16 @@ Return ONLY valid JSON matching this exact schema. No markdown fencing, no expla
       },
       "connections": [
         "string — how this connects to another area of the analysis"
-      ]
+      ],
+      "mechanism_grounding": {
+        "phenomenology": "string — what is OBSERVED about this leverage point. Surface-layer description, not the underlying mechanism. (e.g. 'engagement spikes 3× when users cross day-21'). REQUIRED.",
+        "mechanism_explanation": "string — the CAUSAL mechanism producing the phenomenology. Reaches past folk-vocabulary toward a named process with a stated theory of action. (e.g. 'habit automation reduces effortful self-control demand below the abandonment threshold T per Lally et al. 2009; the day-21 spike reflects the median crossing of automaticity'). REQUIRED.",
+        "literature_grounding": [
+          {"author": "string", "year": "number or short text", "claim": "string — the specific supporting claim from this source"}
+        ],
+        "evidence_strength": "empirical | theoretical | inferred | anecdotal — REQUIRED. empirical = peer-reviewed data; theoretical = formal model widely accepted; inferred = domain pattern with reasonable support; anecdotal = single case from practice.",
+        "falsifiable_prediction": "string — a CONCRETE testable prediction the user could observe to confirm or refute the mechanism. Must be SPECIFIC: name the metric, the magnitude, and the timeframe. (e.g. 'a 14-day extension of free trial should reduce day-7 churn by 20-30% within one cohort cycle'). If you cannot write one, the mechanism is too vague — rewrite the mechanism, don't omit the prediction. REQUIRED."
+      }
     }
   ],
   "risk_points": [
@@ -106,7 +128,16 @@ Return ONLY valid JSON matching this exact schema. No markdown fencing, no expla
           {"when": "string", "approach": "string", "tradeoff": "string"}
         ]
       },
-      "connections": ["string"]
+      "connections": ["string"],
+      "mechanism_grounding": {
+        "phenomenology": "string — what is OBSERVED about this risk surfacing. Surface-layer description of the failure pattern, not its underlying cause. (e.g. 'user trust collapses after their first hallucinated answer'). REQUIRED.",
+        "failure_mechanism": "string — the CAUSAL mechanism producing the failure mode. Names the process, not just the symptom. (e.g. 'a single confidently-wrong answer triggers Bayesian updating: prior trust × likelihood ratio of incompetence collapses posterior trust below the actionable threshold; recovery costs ~3-7× the original trust-build per de Liver et al. 2007'). REQUIRED.",
+        "literature_grounding": [
+          {"author": "string", "year": "number or short text", "claim": "string"}
+        ],
+        "evidence_strength": "empirical | theoretical | inferred | anecdotal — REQUIRED.",
+        "falsifiable_prediction": "string — a CONCRETE prediction the user could observe to confirm the mechanism. (e.g. 'in a hallucination event with users <30 days tenure, NPS should drop ≥15 points within 48h'). REQUIRED."
+      }
     }
   ],
   "feedback_loops": [
@@ -282,6 +313,21 @@ RULES:
 - POTENTIAL BRIDGES → WORTH CONSIDERING: When POTENTIAL BRIDGES are present in the input, evaluate each bridge. If a bridge has high strategic value (validates a leverage point, challenges a risk, or reveals a blind spot), elevate it to a worth_considering item with source_origin="bridge_analysis".
 - ANTI-GENERIC CHECK: Before finalizing, re-read every finding. If any finding could apply to a random business/problem by swapping out entity names, it's too generic. Rewrite with specific details, numbers, frameworks, or domain knowledge.
 - ANTI-PARROTING CHECK (CRITICAL): The user already knows what they wrote. Your job is to tell them what they DON'T know. For every insight, ask: "Could the user have written this themselves without any analysis?" If yes → DELETE IT and replace with something from your domain expertise. Examples of parroting (NEVER DO THIS): "Hallucinations are a risk in legal AI" (user already said this), "You need to decide between small firms and enterprise" (user already said this), "Running out of money is a concern" (user already said this). Examples of ACTUAL insights: "Legal AI accuracy benchmarks show that 78% clause extraction puts you below the 92% threshold where law firms trust AI enough to reduce manual review — you're in the 'interesting demo but not deployable' zone", "Ironclad started with 3 pilot firms doing NDAs only before expanding to complex contracts — narrowing your contract type could get accuracy above 95% on a subset", "SOC 2 Type II takes 6-9 months minimum, but SOC 2 Type I takes ~3 months and many mid-market legal teams accept it for initial pilots."
+
+MECHANISM GROUNDING RULES (D7 — distinguishes phenomenology from mechanism):
+- master_bottleneck, EVERY leverage_point, and EVERY risk_point MUST include a mechanism_grounding block.
+- "phenomenology" describes what is OBSERVED — the symptom, the surface pattern. Not the cause. (e.g. "users drop off after day 7", "engagement spikes 3× when users cross day-21", "trust collapses after first hallucinated answer")
+- "mechanism_explanation" / "failure_mechanism" describes the CAUSAL process that PRODUCES the phenomenology. This must reach past folk-vocabulary toward a NAMED process or theory of action. The test: can you state a mechanism specific enough that disproving it would require disproving a concrete claim about how the world works?
+  - WEAK (folk): "users churn because they lose interest"
+  - STRONG (mechanism): "habit consolidation requires neurological strengthening of cue-routine-reward loops via repeated rehearsal in the first 30 days; without consistent rehearsal the routine doesn't reach automaticity, and ad-hoc engagement decays at the rate of effortful action — Lally et al. 2009 documented median 66 days to automaticity with high variance"
+- "literature_grounding" is REQUIRED to have ≥1 entry when evidence_strength is "empirical" or "theoretical". For "inferred" or "anecdotal", the array can be empty. Each entry must name a specific source (author, year, claim) — not "research suggests" or "studies show."
+- "evidence_strength" — be HONEST. If the mechanism is your domain expertise without citable backing, mark "inferred" or "anecdotal" rather than fabricating citations. Fabricated citations are worse than no citations.
+- "falsifiable_prediction" must specify metric + magnitude + timeframe. "engagement should improve" is NOT acceptable. "day-7 churn should drop 20-30% within one cohort cycle" IS acceptable. If you cannot write a falsifiable prediction, the mechanism is too vague — REWRITE the mechanism more specifically, don't omit the prediction.
+- The entire point of mechanism_grounding is honest separation: PHENOMENOLOGY is what you see; MECHANISM is your theory of why; LITERATURE_GROUNDING is the public evidence backing that theory; FALSIFIABLE_PREDICTION is the bet you'd make if you trusted the theory. A reader should be able to:
+  (a) act on the phenomenology even if they reject your mechanism
+  (b) test your mechanism via the falsifiable_prediction
+  (c) trace your mechanism's evidence via literature_grounding
+- DO NOT confuse these layers. "Users drop off because they don't form habits" mixes phenomenology with mechanism — it's still folk. The mechanism layer must reach the NAMED process (habit consolidation), the NAMED constraint (working memory, automaticity threshold, etc.), or the NAMED dynamic (Bayesian trust collapse, regression to mean, network-effect exhaustion).
 
 UTILITY-DRIVEN PRIORITIZATION:
 When edges carry utility annotations (actionability, failure_consequence, propagation_speed, information_value), use them to sharpen your findings:

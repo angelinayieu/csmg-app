@@ -98,6 +98,9 @@ export default async function SpaceLabPage({
      *  subject's conditions + entity_param_overrides flow through to
      *  the lab's modulators panel. */
     subjectId?: string | string[];
+    /** Force the ContextualLab regardless of detection.
+     *  Use ?lab=contextual to override; ?lab=legacy to force the old. */
+    lab?: string | string[];
   }>;
 }) {
   const { id: spaceId } = await params;
@@ -105,7 +108,14 @@ export default async function SpaceLabPage({
     systemId: rawSystemId,
     systemB: rawSystemB,
     subjectId: rawSubjectId,
+    lab: rawLabOverride,
   } = await searchParams;
+  const labOverride =
+    typeof rawLabOverride === "string"
+      ? rawLabOverride
+      : Array.isArray(rawLabOverride)
+        ? rawLabOverride[0]
+        : null;
   const subjectId =
     typeof rawSubjectId === "string"
       ? rawSubjectId
@@ -150,15 +160,61 @@ export default async function SpaceLabPage({
   // ── ContextualLab dispatch ──────────────────────────────────
   // Spaces created from research templates (e.g. mind_body_cognition)
   // get the Subject × State × Task lab instead of the legacy
-  // whole-space SpaceLab. Read template marker from the space row;
-  // tolerate both `use_case_template_id` (column added by migration
-  // 20260426) and a fallback to the column being absent.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const templateSlug = (space as any).use_case_template_id as
-    | string
-    | null
-    | undefined;
-  if (templateSlug && CONTEXTUAL_LAB_TEMPLATES.has(templateSlug)) {
+  // whole-space SpaceLab.
+  //
+  // Detection has THREE signals — any one promotes to ContextualLab:
+  //   1. URL override `?lab=contextual` (always wins; for forcing
+  //      legacy spaces into the new UI)
+  //   2. `space.use_case_template_id` matches a known slug (the
+  //      explicit primary signal, set by /api/explore/create)
+  //   3. Layer ontology rows with cognition slugs exist for this
+  //      space (fallback for older spaces created before the stamp
+  //      shipped, OR when the column was stripped by the schema-
+  //      cache-miss tolerance path).
+  //
+  // `?lab=legacy` forces the old SpaceLab even on cognition spaces
+  // (escape hatch).
+  let useContextualLab = false;
+
+  if (labOverride === "contextual") {
+    useContextualLab = true;
+  } else if (labOverride === "legacy") {
+    useContextualLab = false;
+  } else {
+    // Signal 2 — explicit template stamp.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const templateSlug = (space as any).use_case_template_id as
+      | string
+      | null
+      | undefined;
+    if (templateSlug && CONTEXTUAL_LAB_TEMPLATES.has(templateSlug)) {
+      useContextualLab = true;
+    } else {
+      // Signal 3 — fallback: cognition-shaped layer ontology.
+      const COGNITION_LAYER_SLUGS = [
+        "exogenous",
+        "behaviors",
+        "biomarkers",
+        "pathways",
+        "symptoms",
+        "cognitive",
+        "composite",
+        "molecular",
+        "circuit",
+      ];
+      const { data: layerCheck } = await db
+        .from("layer_ontology")
+        .select("slug")
+        .eq("space_id", spaceId)
+        .in("slug", COGNITION_LAYER_SLUGS)
+        .limit(1);
+      if (Array.isArray(layerCheck) && layerCheck.length > 0) {
+        useContextualLab = true;
+      }
+    }
+  }
+
+  if (useContextualLab) {
     return (
       <div className="fixed inset-0 z-50 overflow-hidden bg-white">
         <ContextualLab space={space} initialSubjectId={subjectId ?? null} />

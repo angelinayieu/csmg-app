@@ -719,18 +719,54 @@ where `E(...)` is the target's p50 deviation under the labeled perturbation set.
 
 ---
 
-### D6 — Calibration from prediction error
+### D6 — Calibration from prediction error — **🟢 PHASE 2 LANDED (path-aware + auditable)**
 
-**What:** When `prediction_ledger` records actuals against predictions, run a Bayesian update on the relevant edge strengths:
+**Phase 1 status (already shipped, pre-existing):** [`src/lib/kg/apply-confidence-from-deviation.ts`](../src/lib/kg/apply-confidence-from-deviation.ts) implements a small heuristic confidence nudge. When a prediction resolves with a deviation_tag, it applies a fixed delta (+0.01 expected, -0.02 regime_shift, -0.05 surprise) to all entities flagged as leverage/risk/bottleneck and edges between them. The code itself documents the limits: diffuse, path-blind, only updates `confidence` (not `strength` which is what MC propagates).
 
-1. Identify edges in the causal path used by the prediction
-2. Compute prediction error = (actual - predicted_p50) / predicted_stddev
-3. Bayesian update on edge_strength priors based on cumulative prediction-error history
-4. Tag updated edges with `score_provenance="calibrated_from_prediction_error"` and `last_calibrated_at`
+**Phase 2 status (2026-04-26, this session):** Path-aware, magnitude-weighted, strength-updating, audit-logged calibration. Runs AFTER phase 1 as a second pass — phase 1 is the safety-net for non-resolvable predictions; phase 2 is the rigorous pass for predictions where tracker→entity resolution succeeds.
 
-**Why this matters:** Closes the online learning loop. Without it, the KG is a one-shot model that never improves from real-world feedback.
+**The phase 2 algorithm:**
+1. Compute relative_error = |actual - predicted| / max(|predicted|, ε)
+2. Resolve the SINK entity from the prediction's tracker_id (via `metric_trackers.target_entity_id` if present, fallback to fuzzy token-overlap matching of `metric_label` against entity names with Jaccard ≥ 0.5)
+3. Reverse-BFS along directed-causal edges (dimension ∈ {causal, functional, temporal} OR relationship_type ∈ {causes, contributes-to, enables, inhibits, mediates, ...}) from the sink to find the contributing path, capped at MAX_PATH_DEPTH=4
+4. Per-edge delta with hop-distance decay: `dS_at_hop_N = base × DECAY^(N-1)` (DECAY=0.7)
+5. Magnitude-weighted base: surprise tag with relative_error=2.0 produces base≈-0.15 strength; expected with rel_err=0.05 produces base≈+0.02
+6. Updates BOTH `edges.strength` (what MC propagates) AND `edges.confidence` (epistemic), each clamped to its [0.05, 0.99]/[0.05, 0.98] range
+7. Persists every change to `edge_calibrations` with full provenance: edge_id, prediction_id, strategy_snapshot_id, delta_strength, delta_confidence, pre_strength, pre_confidence, deviation_tag, relative_error, path_position, rationale, method='path_aware_v1'
 
-**Effort:** ~3 days. **Priority:** Medium. **Touches:** `src/lib/pipeline/`, new module `src/lib/calibration/bayesian-edge-update.ts`.
+**Files landed:**
+- [`supabase/migrations/20260612_edge_calibrations.sql`](../supabase/migrations/20260612_edge_calibrations.sql) — new audit table with 4 indexes (space+applied_at, edge+applied_at, prediction_id, surprises) + RLS policies
+- [`src/lib/kg/path-aware-calibration.ts`](../src/lib/kg/path-aware-calibration.ts) — pure-function calibrator. ~340 LOC. Soft-fails throughout — qualitative predictions / no_numeric_actual / no_sink_entity / no_causal_path / db_error all return cleanly without breaking the resolver
+- [`src/lib/twin/resolve-predictions.ts`](../src/lib/twin/resolve-predictions.ts) — wired phase-2 pass right after the phase-1 heuristic in the resolver loop. Same soft-fail wrapper.
+- [`src/types/space-plan.ts`](../src/types/space-plan.ts) — new `calibration_drift` field on `SignalProfile`
+- [`src/lib/pipeline/space-strategizer/signals.ts`](../src/lib/pipeline/space-strategizer/signals.ts) — new `calibration_drift_by_entity` field on `SignalInputBundle`; new `calibrationDriftSignal()` extractor; wired into `computeSignalProfile`
+- [`src/lib/pipeline/space-strategizer/index.ts`](../src/lib/pipeline/space-strategizer/index.ts) — `loadSignalBundle` queries `edge_calibrations` for the last 30 days, sums |delta_strength|+|delta_confidence| per edge, attributes to both endpoints (calibration on the edge means BOTH the source's outgoing and target's incoming signal moved)
+- [`src/lib/pipeline/space-strategizer/ranker.ts`](../src/lib/pipeline/space-strategizer/ranker.ts) — `DEFAULT_WEIGHTS` rebalanced: `calibration_drift: 0.03` (took 0.02 from layer_crossing + 0.01 from axis_calibration). Sum stays at 1.00. + updated `meanWeights`
+- [`src/lib/agents/registry.ts`](../src/lib/agents/registry.ts) — updated `ZERO_WEIGHTS` baseline
+
+**What changes operationally:**
+- Predictions that resolve with `surprise` tag now drive **strength** updates (not just confidence) on the actual causal path that produced them — Monte Carlo simulation in future runs sees those updated strengths and produces different forecasts
+- `edge_calibrations` audit table: every (prediction × edge) update is queryable. UI can render *"this edge's strength was 0.7, calibrated down to 0.55 after surprise on prediction X about metric Y"*. Drift attribution per strategy. Rollback via compensating insert.
+- New strategizer signal `calibration_drift` (weight 0.03): surfaces entities whose local model has been recalibrated significantly recently. Higher = stale model region — strategizer can prefer drilling into these for fresh decomposition.
+- Phase 1 still runs as fallback — non-resolvable predictions (no tracker, no sink entity, no causal path) get the heuristic safety-net. Phase 2 only fires on the rigorous path.
+
+**Honesty contract:**
+- `path_position` column captures hop distance from sink — UI can show *"this update came from a hop-3 edge, contribution decayed by 0.49×"*
+- `pre_strength` and `pre_confidence` snapshots let us reconstruct any post-update value even if intermediate updates intervene
+- `method` column distinguishes `path_aware_v1` (D6 phase 2) from `heuristic_v1` (D6 phase 1) from `manual_correction` (future user-driven UI corrections)
+- Below-threshold deltas (where rounding would produce a no-op) are skipped — no spam in the audit log
+
+**Effort:** ~3 days originally estimated; phase 2 shipped in one session. Phase 1 was already in place.
+
+**Touches:** `supabase/migrations/`, `src/lib/kg/path-aware-calibration.ts` (new), `src/lib/twin/resolve-predictions.ts`, `src/types/space-plan.ts`, `src/lib/pipeline/space-strategizer/signals.ts`, `src/lib/pipeline/space-strategizer/index.ts`, `src/lib/pipeline/space-strategizer/ranker.ts`, `src/lib/agents/registry.ts`.
+
+**Still to do:**
+1. Apply migration to live Supabase
+2. UI to render edge_calibrations as a per-edge audit drawer (*"this edge's strength changed from 0.7→0.55 because…"*)
+3. Tune base delta magnitudes + DECAY from real-run telemetry
+4. Surface `calibration_drift` signal in strategy planner explanations (*"recommending to re-decompose entity X — its local model has been actively recalibrating"*)
+5. User-driven manual correction route (writes `method='manual_correction'` rows for UI-triggered edge updates)
+6. Strategy-snapshot drift attribution: when a strategy regenerates, sum drift on edges since prior snapshot to surface *"model has shifted by Δ since last regen"*
 
 ---
 
@@ -812,26 +848,131 @@ where `E(...)` is the target's p50 deviation under the labeled perturbation set.
 
 ---
 
-### D7 — Mechanism-grounded synthesis
+### D11 — Template edge augmenter — **🟡 FIRST PASS LANDED**
 
-**What:** Update synthesis prompt to require dual output per leverage point:
-```json
-{
-  "phenomenology": "users drop off after day 7",
-  "mechanism": {
-    "explanation": "Habit formation incomplete before week-2",
-    "literature_grounding": [
-      {"author": "Lally", "year": 2009, "claim": "median time-to-habit = 66 days"}
-    ],
-    "evidence_strength": "medium",
-    "falsifiable_prediction": "extending free trial to 14 days reduces day-7 dropoff by 20-30%"
-  }
-}
-```
+**What:** Closes the orphan-density gap that template-seeded spaces produce. Templates ship with curated entities + curated edges, but heterogeneous additions (interventions, instruments, leaves never wired in the seed graph) land isolated because the user-text decompose pipeline's prompt-level orphan-detection rules don't fire on the template path. After investigation of a real cognition-template space (76 entities, 23 edges = 0.30× density vs. the prompt's 1.5× target), we found `/api/explore/create` skips Pass 2 / structuring / auto-connect entirely — only persisting pre-defined `seed_edges`.
 
-UI badges: `🔬 Mechanism grounded` vs. `📊 Phenomenological observation`.
+**The catch-up pass:**
+1. Load just-persisted entities + edges in the new space
+2. Compute degree per entity; identify isolated entities (degree ≤ 1)
+3. Density gate — only run when edges/entities < 0.8 (well-seeded templates skipped)
+4. Pick anchor candidates (top-degree, well-connected entities) and sample a small set of existing edges so the LLM learns the template's relationship vocabulary
+5. Single LLM call: *"Wire these isolated entities to the most-related anchors. Decline rather than fabricate."*
+6. Persist proposed edges with `source_tag="predicted"`, `requires_user_approval=true`, `provenance.source_type="template_augment"` — user reviews them before they become first-class structure
+7. Persist `declined` entries to `entities.provenance.template_augment_declined.reason` so the UI can explain *why* an entity stays isolated
 
-**Effort:** ~2 days. **Priority:** Medium. **Touches:** `src/lib/prompts/`, synthesis renderers in `src/components/strategy/`.
+**Status (2026-04-26):** First-pass implementation shipped. Soft-fail throughout. Cost-bounded — 1 LLM call per template-create, capped at MAX_AUGMENT_EDGES=60 new edges, MAX_ISOLATED_PER_CALL=25, MAX_ANCHORS_PER_CALL=25.
+
+**Files landed:**
+- [`src/lib/prompts/template-edge-augment.ts`](../src/lib/prompts/template-edge-augment.ts) — system prompt with explicit honesty contract (decline > fabricate), failure-mode warnings ("don't wire instruments to every cognitive entity"), JSON output schema, lenient validator
+- [`src/lib/templates/template-edge-augmenter.ts`](../src/lib/templates/template-edge-augmenter.ts) — orchestrator. Loads graph state, identifies isolated entities sorted by importance (fundamental/critical first so they get wired before moderate orphans), picks anchors by degree, samples existing edges for vocabulary, calls LLM, validates response, builds edge rows directly (bypassing `sanitizeEdge` so we keep `requires_user_approval` + `provenance` fields), persists to `edges` table, updates `spaces.edge_count`, stamps decline reasons on entity provenance
+- [`src/app/api/explore/create/route.ts`](../src/app/api/explore/create/route.ts) — wired in via `after()` block right before the response return. Imports `after` from `next/server`. Soft-fail wrapper.
+
+**Density gate philosophy:**
+- 0.8× target (vs. user-text prompt's 1.5× target) is intentionally lower — templates ship with curated edges and we don't want to pollute well-seeded graphs with LLM-inferred ones
+- Below 0.8×, the augmenter assumes there's genuine missing connectivity worth proposing
+- Above 0.8×, skip — the template seeded enough density that further LLM proposals would be noise
+
+**Honest fallback path:** when no honest connection exists (e.g. a totally-orphan instrument with no plausible related anchor), the LLM puts the entity in `declined` instead of fabricating. That gets stamped on `entities.provenance.template_augment_declined.reason` so the UI can render *"system declined to wire X because: <one-sentence reason>"* rather than the user wondering why it's isolated.
+
+**Expected effect on the cognition template** (76 entities, 23 edges):
+- Augmenter detects ~12 isolated entities (6 interventions + 6 instruments) plus a few biology leaves
+- LLM proposes ~15–25 wiring edges (e.g. instrument→cognitive-domain, intervention→biomarker)
+- After persistence: ~38–48 edges total, density rises from 0.30× to ~0.55× — still under user-text decompose target (1.5×) but a meaningful improvement on visible orphans
+
+**Effort:** Originally estimated ~1 day; first-pass shipped in one session.
+
+**Touches:** `src/lib/prompts/template-edge-augment.ts` (new), `src/lib/templates/template-edge-augmenter.ts` (new), `src/app/api/explore/create/route.ts`.
+
+**Still to do:**
+1. UI to surface the `requires_user_approval=true` augmented edges as pending proposals (the user explicitly approves/rejects each — pattern mirrors recursive-decompose ghost children)
+2. UI badge on entities with `provenance.template_augment_declined.reason` so users see "couldn't wire this — here's why"
+3. Tune the 0.8× density gate from real-run telemetry (template-specific thresholds may emerge)
+4. Per-template `vocabulary_hints` (the prompt currently learns vocabulary from edge samples; templates with very small seed-edge sets give the LLM a thin reference)
+5. Eventually generalize to user-text spaces — same orphan-augmenter logic with stricter precondition gates
+
+---
+
+### D13a — Populate `consequence_surface` (divergence half of bidirectional signatures) — **🟢 FIRST PASS LANDED**
+
+**What:** Activates the `NodeSignature.consequence_surface` field that has been schema-defined since the original signature design but **never had a writer**. Each entity's signature now carries up to 8 downstream consequences as `{target_entity_id, probability, polarity}` — the divergence half of the bidirectional signature reasoning the user's architectural vision proposed.
+
+**Method:** Pure-function deterministic computation from outgoing edges. No LLM. `probability = clamp01(strength × confidence)`; multiple parallel edges to the same target collapse to the highest-probability one; sorted by probability desc + target_id asc for stable output; capped at 8 entries (matches the type docstring cap).
+
+**Why this matters for layering:** the existing system tracks **upstream convergence** via `entities.causal_depth` + `entities.converges_chains` (root-tracer output). It had **zero downstream divergence tracking** despite the schema being designed for it. D13a closes that gap with the cheapest possible implementation — activates a dormant column rather than introducing new schema.
+
+**Status (2026-04-26):** First pass shipped. Idempotent; soft-fail throughout.
+
+**Files landed:**
+- [`src/lib/pipeline/signature-materializer.ts`](../src/lib/pipeline/signature-materializer.ts) — new exported `computeConsequenceSurface()` pure function + `ConsequenceSurfaceEdgeInput` type. Wired into both `materializeFromContext()` and `seedNodeSignature()` so every NEW signature gets `consequence_surface` populated inline at creation.
+- [`src/lib/pipeline/consequence-surface-tail.ts`](../src/lib/pipeline/consequence-surface-tail.ts) — new idempotent backfill. Scans entities with non-null `node_signature` whose `consequence_surface` is empty, computes from outgoing edges, writes back. Single fan-out query; soft-fail per row. Won't clobber an already-populated surface.
+- [`src/app/api/pipeline/decompose/route.ts`](../src/app/api/pipeline/decompose/route.ts) — wired via unconditional `after()` block alongside D8 community detection + D4 interaction discovery tails. No-op on green-path runs; works for legacy spaces and template-seeded paths.
+
+**Idempotency contract:** ONLY writes when computed surface is non-empty AND existing surface is empty/missing. Calling twice is a no-op on the second call.
+
+**Cost profile:** O(entities + edges) deterministic compute. No LLM. Two SELECTs + per-entity UPDATE only when needed. Typical 76-entity space: ~1–3 seconds.
+
+**What changes for users:**
+- Every entity's signature now exposes its top-8 downstream consequences with probability + polarity
+- Bidirectional signature reasoning becomes possible: convergence (existing `converges_chains`) + divergence (new `consequence_surface`)
+- Future signal extractors can read the surface (`consequence_breadth`, polarity-volatility, etc.)
+
+**Connection to existing layering systems** (per the user's architectural mapping question):
+- **Inter-entity layering** (`entities.depth` 0–4: system→domain→thread→claim→atom) — UNCHANGED, still tracks where the entity sits in the hierarchy
+- **Intra-entity layering** (signature rings, accretion-ordered) — UNCHANGED, tracks how deeply the entity's dimensions have been analyzed
+- **NEW — divergence tracking** (consequence_surface) — fills the bidirectional gap; outward complement to upstream `converges_chains`
+- **CRCI 7-layer ontology** remains the gold-standard concrete instance; D13a generalizes the divergence side of that pattern
+
+**Effort:** ~1 day estimated; first-pass code shipped in one session.
+
+**Touches:** `src/lib/pipeline/signature-materializer.ts`, `src/lib/pipeline/consequence-surface-tail.ts` (new), `src/app/api/pipeline/decompose/route.ts`.
+
+**Still to do (D13b/c follow-ups):**
+1. ~~Wire `consequence_surface` into a strategizer signal~~ ✅ **D13a-signal landed (2026-04-26):** new `consequence_breadth` field on `SignalProfile` ([space-plan.ts](../src/types/space-plan.ts)); new `consequenceBreadthSignal()` extractor in [signals.ts](../src/lib/pipeline/space-strategizer/signals.ts) that reads `bundle.signatures[entityId].consequence_surface.length` normalized by per-space max. Wired into `computeSignalProfile`. `DEFAULT_WEIGHTS` rebalanced — added `consequence_breadth: 0.03` (took 0.02 from `uncertainty` 4→2 + 0.01 from `intersection_density` 2→1, sum still 1.00 — `assertWeightsSum` runtime check passes). All four exhaustive `Record<keyof SignalProfile, number>` literals updated (DEFAULT_WEIGHTS, ZERO_WEIGHTS, emptyWeights, meanWeights). Now the strategizer ranks candidates with bidirectional signal: `convergence_count` (upstream fan-in toward goals) + `consequence_breadth` (downstream divergence breadth) — first time the planner sees the divergence dimension since the schema was authored.
+2. Render consequence_surface on the canvas — polarity-colored divergence rays per KG node
+3. D13b: add `depth_category` enum to BasisElement (surface | mechanism | first_principle); revise deepen prompt to push toward fundamentals
+4. D13c: per-axis ring weighting (financial-context queries weight financial rings heavier)
+5. Multi-hop downstream walking with decay (currently 1-hop only)
+
+---
+
+### D7 — Mechanism-grounded synthesis — **🟡 FIRST PASS LANDED**
+
+**What:** Synthesis output now distinguishes **phenomenology** (what we observe) from **mechanism** (why we think it happens) — with explicit literature grounding and a falsifiable prediction. Attached to `master_bottleneck`, every `leverage_point`, and every `risk_point`. The split lets a reader (a) act on the phenomenology even if they reject the mechanism, (b) test the mechanism via the falsifiable_prediction, (c) trace its evidence via literature_grounding.
+
+**Honesty contract** (enforced by the prompt):
+- `phenomenology` describes the surface symptom — *"users drop off after day 7"*, *"engagement spikes 3× when users cross day-21"*. NOT the cause.
+- `mechanism_explanation` (or `failure_mechanism` for risks) reaches past folk-vocabulary toward a NAMED process. The test: can you state a mechanism specific enough that disproving it would require disproving a concrete claim about how the world works?
+- `literature_grounding` REQUIRED to have ≥1 entry when `evidence_strength` is `empirical` or `theoretical`. Empty array allowed for `inferred` / `anecdotal` — but only when the strength tag is honestly set. Fabricated citations are explicitly worse than no citations.
+- `falsifiable_prediction` must specify metric + magnitude + timeframe. *"engagement should improve"* is **not acceptable**. *"day-7 churn should drop 20-30% within one cohort cycle"* IS. If the LLM can't write one, the prompt instructs to rewrite the mechanism more specifically rather than omit the prediction.
+
+**Files landed:**
+- [`src/types/mechanism-grounding.ts`](../src/types/mechanism-grounding.ts) — new canonical `MechanismGrounding` type + `EvidenceStrength` enum + `LiteratureCitation` shape + lenient `validateMechanismGrounding()` (returns null when phenomenology missing or both mechanism fields absent; otherwise normalized + length-capped + enum-coerced)
+- [`src/types/analysis.ts`](../src/types/analysis.ts) — added `mechanism_grounding?: MechanismGrounding | null` to `StructuredDecomposition`'s `leverage_points`, `risk_points`, and `master_bottleneck` shapes. Optional during rollout (pre-D7 synthesis runs lack the field).
+- [`src/lib/prompts/synthesis.ts`](../src/lib/prompts/synthesis.ts) — three things: (1) `mechanism_grounding` block added to the JSON schema for master_bottleneck + each leverage_point + each risk_point; (2) new `MECHANISM GROUNDING RULES` section in the RULES block that explicitly forbids folk-vocabulary mechanisms ("users churn because they lose interest" → REWRITE), forbids fabricated citations, and requires falsifiable_prediction specificity; (3) examples showing weak vs strong mechanisms
+
+**Domain examples in the prompt** (worked-through, not abstract):
+- WEAK: *"users churn because they lose interest"*
+- STRONG: *"habit consolidation requires neurological strengthening of cue-routine-reward loops via repeated rehearsal in the first 30 days; without consistent rehearsal the routine doesn't reach automaticity, and ad-hoc engagement decays at the rate of effortful action — Lally et al. 2009 documented median 66 days to automaticity with high variance"*
+- The risk_points variant uses `failure_mechanism` semantically: *"a single confidently-wrong answer triggers Bayesian updating: prior trust × likelihood ratio of incompetence collapses posterior trust below the actionable threshold; recovery costs ~3-7× the original trust-build per de Liver et al. 2007"*
+
+**What changes for users:**
+- Strategy synthesis output now has a phenomenology/mechanism split that the UI can render distinctly (badges deferred to UI follow-up: `🔬 Mechanism grounded` vs `📊 Phenomenological observation` per the original sketch)
+- Each leverage and risk carries a falsifiable prediction the user could actually run as a test, validating the mechanism before committing to actions that depend on it
+- Literature grounding makes the citation chain visible — when the system claims "research shows X," the user sees the named source rather than vague hand-waving
+
+**Honesty fallback path:** when the LLM honestly has no citation backing, it sets `evidence_strength="inferred"` (or `anecdotal`) and the literature_grounding array is empty. This is the right answer. The prompt explicitly instructs that fabricated citations are worse than no citations.
+
+**Effort:** ~2 days originally estimated; first-pass code shipped in one session (~2–3 hours).
+
+**Touches:** `src/types/mechanism-grounding.ts` (new), `src/types/analysis.ts`, `src/lib/prompts/synthesis.ts`. No migrations, no schema changes, no new pipeline stages — pure prompt + type extension.
+
+**Still to do:**
+1. UI badges in [`src/components/strategy/`](../src/components/strategy/) — `🔬 Mechanism grounded` vs `📊 Phenomenological observation` chip per finding
+2. Mechanism-grounding renderer in the leverage/risk drawer (literature_grounding citations rendered as expandable; falsifiable_prediction surfaced as a one-click "test this" CTA)
+3. `validateMechanismGrounding` integration into the synthesis route's response validation (currently the prompt guides; no hard gate on missing mechanism_grounding)
+4. Apply the same dual-output structure to `feedback_loops`, `worth_considering`, and `cross_context_insights` (currently leverage/risk/bottleneck only)
+5. Quality metric: count of literature_grounding entries per synthesis run as a synthesis_quality_metric (rises = system stops fabricating, falls = signal of weak strength tag honesty)
 
 ---
 

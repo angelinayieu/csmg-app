@@ -20,7 +20,7 @@
 // The whole thing is best-effort: each step soft-fails so a partial
 // schema still produces a usable space rather than blocking creation.
 
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { safeAuth, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { sanitizeEntity, sanitizeEdge, resilientInsert } from "@/lib/sanitize";
 import {
@@ -440,6 +440,39 @@ export async function POST(request: Request) {
         () => {},
         () => {},
       );
+
+    // ── D11 · Template edge augmentation ─────────────────────────────
+    //
+    // Templates ship with curated entities + curated edges; heterogeneous
+    // additions (interventions, instruments) often land isolated because
+    // the seed graph wasn't designed for them. The user-text decompose
+    // pipeline enforces orphan-detection in its prompt; this template
+    // path bypasses that. The augmenter is the catch-up pass — it loads
+    // the just-persisted graph, identifies isolated entities, and asks
+    // an LLM to wire them to the most-related anchors. Soft-fail; runs
+    // in `after()` so the response ships first. See
+    // src/lib/templates/template-edge-augmenter.ts and
+    // docs/KG_DEPTH_CRITIQUE.md §9 D11.
+    after(async () => {
+      try {
+        const { runTemplateEdgeAugmenter } = await import(
+          "@/lib/templates/template-edge-augmenter"
+        );
+        const augmentResult = await runTemplateEdgeAugmenter({
+          db,
+          spaceId,
+          templateSlug: template.slug,
+        });
+        console.log(
+          `[explore/create] augment: status=${augmentResult.status} isolated=${augmentResult.isolated_count} proposed=${augmentResult.edges_proposed} persisted=${augmentResult.edges_persisted} declined=${augmentResult.declined_count} (${augmentResult.duration_ms}ms)`,
+        );
+      } catch (augmentErr) {
+        console.warn(
+          "[explore/create] template-edge-augmenter failed (non-fatal):",
+          augmentErr,
+        );
+      }
+    });
 
     const response: ExploreCreateResponse = {
       space: {

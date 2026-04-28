@@ -2075,6 +2075,33 @@ ${enrichedPrompt}`;
       }
     });
 
+    // ── D13a · Consequence-surface backfill ──────────────────────────
+    //
+    // Idempotent post-decompose pass that populates the dormant
+    // `node_signature.consequence_surface` field for any entity whose
+    // signature lacks it (legacy spaces, template-seeded spaces, or
+    // edge-cases where seedNodeSignature wasn't called inline).
+    //
+    // For fresh decompose runs the seed/materialize paths already
+    // populate the field inline (see signature-materializer.ts), so
+    // this backfill is a no-op on green-path runs. The cost is
+    // bounded by entity-count + a single edges fetch.
+    //
+    // See docs/KG_DEPTH_CRITIQUE.md §13a for context.
+    after(async () => {
+      try {
+        const { backfillConsequenceSurfaces } = await import(
+          "@/lib/pipeline/consequence-surface-tail"
+        );
+        await backfillConsequenceSurfaces({ db, spaceId });
+      } catch (csErr) {
+        console.warn(
+          "[decompose] consequence-surface backfill failed (non-fatal):",
+          csErr,
+        );
+      }
+    });
+
     // ── D4 · Multi-way interaction discovery ─────────────────────────
     //
     // Activates the dormant `reactions` table (see §5 of the critique).

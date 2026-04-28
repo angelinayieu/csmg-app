@@ -228,6 +228,8 @@ const ZERO_WEIGHTS: Record<keyof SignalProfile, number> = {
   outcome_alignment: 0,
   interaction_density: 0,
   cost_efficiency: 0,
+  calibration_drift: 0,
+  consequence_breadth: 0,
 };
 
 function mergeWeights(

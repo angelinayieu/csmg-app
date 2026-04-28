@@ -74,6 +74,12 @@ export interface StructuredDecomposition {
     action?: string | { primary: string; alternatives?: { when: string; approach: string; tradeoff: string }[] };
     connections?: string[];
     reason?: string;
+    // D7 — mechanism_grounding: phenomenology + mechanism_explanation +
+    // literature_grounding + evidence_strength + falsifiable_prediction.
+    // See src/types/mechanism-grounding.ts. Optional during rollout —
+    // pre-D7 synthesis runs lack the field; the synthesis prompt now
+    // requires it for new runs.
+    mechanism_grounding?: import("./mechanism-grounding").MechanismGrounding | null;
   }[];
   risk_points: {
     entity_id: string;
@@ -85,6 +91,9 @@ export interface StructuredDecomposition {
     mitigation?: string | { primary: string; alternatives?: { when: string; approach: string; tradeoff: string }[] };
     connections?: string[];
     reason?: string;
+    // D7 — mechanism_grounding using `failure_mechanism` instead of
+    // `mechanism_explanation`. Same shape, semantic distinction.
+    mechanism_grounding?: import("./mechanism-grounding").MechanismGrounding | null;
   }[];
   master_bottleneck: {
     entity_id: string;
@@ -93,6 +102,8 @@ export interface StructuredDecomposition {
     reasoning?: string[];
     when_matters?: { situation: string; impact: string; intensity: string }[];
     reason?: string;
+    // D7 — same mechanism_grounding shape as leverage_points.
+    mechanism_grounding?: import("./mechanism-grounding").MechanismGrounding | null;
   } | null;
   shared_variables: {
     entity_id: string;

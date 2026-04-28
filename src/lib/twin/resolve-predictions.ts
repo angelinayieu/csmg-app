@@ -268,6 +268,58 @@ export async function resolvePredictions(
           fbErr,
         );
       }
+
+      // ── D6 phase 2 · Path-aware calibration ─────────────────────────
+      //
+      // Runs AFTER the heuristic above as the rigorous pass. Where the
+      // heuristic fans the same fixed delta across all leverage/risk/
+      // bottleneck entities, this resolver finds the actual causal
+      // path that produced the prediction (tracker → sink entity →
+      // reverse-BFS along causal edges) and applies magnitude-weighted
+      // updates ONLY to edges on that path, with hop-distance decay.
+      // Updates BOTH strength (what MC propagates) and confidence
+      // (epistemic). Persists every update to edge_calibrations as
+      // an audit row. See docs/KG_DEPTH_CRITIQUE.md §9 D6 phase 2.
+      //
+      // Soft-fail: skipped silently when tracker→entity resolution
+      // misses or no causal path exists. The heuristic above already
+      // did its job — we don't need this to also succeed.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const r = row as any;
+      try {
+        const { runPathAwareCalibration } = await import(
+          "@/lib/kg/path-aware-calibration"
+        );
+        const pathFb = await runPathAwareCalibration(db, {
+          id: row.id,
+          space_id: spaceIdForFeedback,
+          strategy_snapshot_id: r.strategy_snapshot_id ?? null,
+          tracker_id: row.tracker_id,
+          metric_label: row.metric_label,
+          predicted_value: predicted,
+          resolved_actual: actual,
+          deviation,
+          deviation_tag: tag,
+        });
+        if (pathFb.applied) {
+          console.log(
+            `[resolve-predictions] ${row.id} ${tag} path-aware: ` +
+              `dS=${pathFb.base_delta_strength.toFixed(3)} dC=${pathFb.base_delta_confidence.toFixed(3)} ` +
+              `relErr=${pathFb.relative_error?.toFixed(2) ?? "?"} ` +
+              `${pathFb.edges_updated} edges updated, ${pathFb.audit_rows_inserted} audit rows ` +
+              `(depth ${pathFb.path_depth})`,
+          );
+        } else if (pathFb.reason !== "tag_skipped" && pathFb.reason !== "qualitative_no_score") {
+          console.log(
+            `[resolve-predictions] ${row.id} path-aware skipped: ${pathFb.reason}`,
+          );
+        }
+      } catch (pathErr) {
+        console.warn(
+          `[resolve-predictions] ${row.id} path-aware calibration failed (non-fatal):`,
+          pathErr,
+        );
+      }
     }
 
     // Wave D — surprise cascade. When the resolved prediction deviated

@@ -671,7 +671,13 @@ export function InteraxisCanvas({
   useSynthesisSeeder(editor, { space, entities, enabled: true });
 
   // ── Server-backed autosave ──
-  const { status: saveStatus } = useCanvasPersistence(editor, { spaceId: space.id });
+  // Memoize the opts object so the hook's restore-effect doesn't see a
+  // brand-new object reference on every render (which would re-fire
+  // the effect's cleanup → setup cycle). The internal restoredRef
+  // guard already prevents re-restore, but stabilizing the dep is
+  // cleaner and avoids any future foot-gun.
+  const persistenceOpts = useMemo(() => ({ spaceId: space.id }), [space.id]);
+  const { status: saveStatus } = useCanvasPersistence(editor, persistenceOpts);
 
   // ── Per-ghost predicted edge IDs (for accept/reject) ──
   // Kept in a ref so we don't trigger re-renders on update. Keyed by
@@ -2538,11 +2544,23 @@ export function InteraxisCanvas({
             white-screen failure mode where a single bad shape-util
             event would tear down the whole whiteboard view. */}
         <CanvasErrorBoundary>
+          {/* IMPORTANT: do NOT set tldraw's built-in `persistenceKey`
+              here. We own persistence via useCanvasPersistence
+              (server-backed via /api/canvas/[spaceId], with a
+              localStorage offline mirror). tldraw's persistenceKey
+              activates a SECOND persistence layer on IndexedDB plus a
+              cross-tab BroadcastChannel — and the two layers race.
+              On pan/zoom/edit, tldraw's reactor reconciles the store
+              against its IndexedDB snapshot, which (on a fresh
+              browser, after a cache clear, or across tabs) is empty
+              or stale → it WIPES every shape that loadSnapshot()
+              placed from the server. That's the "everything
+              disappears when I move the canvas" bug. One source of
+              truth: the server. Do not re-add this prop. */}
           <Tldraw
             shapeUtils={SHAPE_UTILS}
             components={canvasTldrawComponents}
             onMount={(e) => setEditor(e)}
-            persistenceKey={`interaxis-canvas-${space.id}`}
           />
         </CanvasErrorBoundary>
       </BrainstormContextProvider>

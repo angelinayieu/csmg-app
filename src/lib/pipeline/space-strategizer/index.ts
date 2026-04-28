@@ -543,6 +543,65 @@ async function loadSignalBundle(
     );
   }
 
+  // ── D6 phase 2 · calibration drift per entity ──────────────────────
+  //
+  // Sum |delta_strength| + |delta_confidence| across recent
+  // edge_calibrations rows, then bucket by entity via the
+  // edge.source/target. We do this as TWO queries:
+  //   1. edge_calibrations rows in the recent window for this space
+  //   2. edges referenced by those rows (to map edge_id → entities)
+  // Soft-fail on either; calibrationDriftSignal handles empty map.
+  const calibrationDriftByEntity = new Map<string, number>();
+  const CALIBRATION_DRIFT_WINDOW_DAYS = 30;
+  try {
+    const cutoff = new Date(
+      Date.now() - CALIBRATION_DRIFT_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const { data: calibRows } = await db
+      .from("edge_calibrations")
+      .select("edge_id, delta_strength, delta_confidence")
+      .eq("space_id", spaceId)
+      .gte("applied_at", cutoff);
+    type CalibRow = {
+      edge_id: string;
+      delta_strength: number;
+      delta_confidence: number;
+    };
+    const rows = (calibRows as CalibRow[] | null) ?? [];
+    if (rows.length > 0) {
+      // Sum magnitudes per edge_id
+      const magByEdge = new Map<string, number>();
+      for (const r of rows) {
+        const mag =
+          Math.abs(r.delta_strength ?? 0) + Math.abs(r.delta_confidence ?? 0);
+        magByEdge.set(r.edge_id, (magByEdge.get(r.edge_id) ?? 0) + mag);
+      }
+      // Look up edges to bucket by entity. We already loaded the
+      // space's edges into the local `edges` variable above; reuse it.
+      const edgeById = new Map(edges.map((e) => [e.id, e]));
+      for (const [edgeId, mag] of magByEdge) {
+        const e = edgeById.get(edgeId);
+        if (!e) continue;
+        // Attribute drift to BOTH endpoints — calibration on the edge
+        // means BOTH the source's outgoing and target's incoming
+        // signal moved.
+        calibrationDriftByEntity.set(
+          e.source_entity_id,
+          (calibrationDriftByEntity.get(e.source_entity_id) ?? 0) + mag,
+        );
+        calibrationDriftByEntity.set(
+          e.target_entity_id,
+          (calibrationDriftByEntity.get(e.target_entity_id) ?? 0) + mag,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[strategizer] loadSignalBundle: edge_calibrations query failed (non-fatal):",
+      err,
+    );
+  }
+
   return {
     entities,
     edges,
@@ -569,6 +628,7 @@ async function loadSignalBundle(
     directed_outcome_hops: directedOutcomeHops,
     outcome_horizon: outcomeHorizon,
     interaction_counts: interactionCounts,
+    calibration_drift_by_entity: calibrationDriftByEntity,
   };
 }
 
@@ -1062,6 +1122,8 @@ export async function runSpaceStrategizer(
       agent_convergence_count: 0, user_controllable_lever: 0,
       outcome_alignment: 0, interaction_density: 0,
       cost_efficiency: 0,
+      calibration_drift: 0,
+      consequence_breadth: 0,
     };
     const plan: SpacePlan = {
       id: randomUUID(),
