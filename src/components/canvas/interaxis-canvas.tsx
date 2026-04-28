@@ -100,6 +100,7 @@ import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
 import { CanvasLassoSubjectButton } from "./chrome/canvas-lasso-subject-button";
 import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
 import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
+import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
 import { RelaxLayoutButton } from "./chrome/relax-layout-button";
 import { useThreadPersistence } from "./hooks/use-thread-persistence";
 import { CardSidecar } from "./sidecar/card-sidecar";
@@ -343,7 +344,10 @@ const HIDDEN_TLDRAW_COMPONENTS = {
 // The factory takes `spaceId` so the legend sidebar can fetch the
 // per-space entity catalog. Memoized at call site to avoid re-mounts
 // when other props change.
-function makeCanvasOverlays(spaceId: string) {
+function makeCanvasOverlays(
+  spaceId: string,
+  kgOverviewProps: { entities: Entity[]; edges: Edge[] },
+) {
   const Overlays = function CanvasOverlays() {
     return (
       <>
@@ -368,6 +372,19 @@ function makeCanvasOverlays(spaceId: string) {
             before the canvas is ever opened) and lab-proposal-wizard
             approvals (same situation). Idempotent + filters dupes. */}
         <CanvasSubjectCardHydrator spaceId={spaceId} />
+        {/* KG overview — for template-seeded spaces, paints a single
+            compact mini-graph (KGFormationShape) summarizing the
+            seeded entities + edges with the top-6 hubs and their
+            real connecting edges. Replaces the old approach of
+            painting every entity as a flat row of cards. Renders
+            nothing for non-template spaces (where useSyncEntities
+            stays disabled and the pipeline produces shells/synthesis
+            cards). Idempotent. */}
+        <CanvasKgOverviewSpawner
+          spaceId={spaceId}
+          entities={kgOverviewProps.entities}
+          edges={kgOverviewProps.edges}
+        />
         {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
             user-triggered force-directed reflow over the main KG.
             Lives in CanvasOverlays so it has the tldraw editor context
@@ -411,9 +428,16 @@ export function InteraxisCanvas({
   const canvasTldrawComponents = useMemo(
     () => ({
       ...HIDDEN_TLDRAW_COMPONENTS,
-      InFrontOfTheCanvas: makeCanvasOverlays(space.id),
+      InFrontOfTheCanvas: makeCanvasOverlays(space.id, {
+        entities,
+        edges,
+      }),
     }),
-    [space.id],
+    // Memoize on entity/edge length so the overlay updates when the
+    // KG composition changes (template materialization, manual
+    // entity adds) without thrashing on every prop reference change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [space.id, entities.length, edges.length],
   );
   const [tool, setTool] = useState<CanvasTool>("select");
 
@@ -627,26 +651,17 @@ export function InteraxisCanvas({
   );
 
   // ── Sync KG entities + edges into tldraw on first mount ──
-  // Architecture redesign — disabled on the main whiteboard for
-  // pipeline-driven spaces. Previous behavior seeded every entity
-  // onto the canvas as a kg-node shape, producing a 25-40-card cloud
-  // that competed with the axis-shell row + synthesis card for
-  // attention. Pipeline-driven spaces surface entities inside their
-  // owning probability-space-shells; the whiteboard surfaces only
-  // major outputs (shells, synthesis card, proposal cards).
-  //
-  // BUT: research-template-seeded spaces (manual_authoring_enabled =
-  // true) need the KG painted on the whiteboard. They have no
-  // probability-space-shells (no pipeline ran) and no synthesis card
-  // — without entity-sync enabled, the canvas reads as empty even
-  // when 60+ entities exist in the DB. The flag is the cleanest
-  // discriminator: spaces that opt into manual authoring also opt
-  // into seeing their KG laid out in layer bands with edges as
-  // arrows. useSyncEntities's idempotent guards (existing kg-node
-  // shapes short-circuit the seed) keep this safe across re-renders.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const enableEntitySync = !!(space as any).manual_authoring_enabled;
-  useSyncEntities(editor, { entities, edges, enabled: enableEntitySync });
+  // Disabled on the main whiteboard. Previous behavior seeded every
+  // entity onto the canvas as a kg-node shape, producing a flat row
+  // of 25-76 cards that crashes tldraw on pan/zoom. Pipeline-driven
+  // spaces surface entities inside their owning probability-space-
+  // shells; template-seeded spaces surface a single KG-formation
+  // card (a compact mini-graph viz with hub circles + connector
+  // lines) spawned by canvas-kg-overview-spawner. For full entity
+  // browsing, users navigate to /app/space/[id]/entities via the
+  // topbar Entities chip, OR open a subject's lab to see the
+  // connected KG inside the chamber.
+  useSyncEntities(editor, { entities, edges, enabled: false });
 
   // ── Auto-surface synthesis insights as cards on the canvas ──
   useSynthesisSeeder(editor, { space, entities, enabled: true });

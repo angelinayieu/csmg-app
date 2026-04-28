@@ -73,24 +73,21 @@ export function CanvasSubjectCardHydrator({ spaceId }: { spaceId: string }) {
         );
         if (toSpawn.length === 0) return;
 
-        // Position cards in a horizontal row ABOVE the KG layered
-        // layout (which starts at y=0 going down by BAND_HEIGHT=280
-        // per layer; entities centered around x=0). Putting cards at
-        // y=-360 keeps them clear of the KG and visible when the user
-        // pans up. Cards spread horizontally so all 4 fit on a
-        // typical viewport without overlap.
+        // Position cards in a horizontal row BELOW the KG overview
+        // card. KG overview lives at y=0 with h=300; subject cards
+        // start at y=350 to leave a 50px gap. Both rails fit in the
+        // user's initial viewport (camera defaults to origin).
         //
         // We use FIXED page coordinates (not viewport-derived) so the
-        // cards land in a stable, predictable spot regardless of
-        // where tldraw centers the camera at hydration time. This
-        // also avoids race conditions with useSyncEntities's
-        // centerOnPoint() call.
+        // cards land in a stable, predictable spot. Cards centered
+        // horizontally on origin, matching the KG overview's
+        // horizontal centering.
         const cardW = 320;
         const cardH = 180;
         const gap = 28;
         const totalW = toSpawn.length * cardW + (toSpawn.length - 1) * gap;
         const startX = -totalW / 2;
-        const cardY = -360;
+        const cardY = 350;
 
         const shapes = toSpawn.map((subj, idx) => ({
           id: createShapeId(`subject-${subj.id}`),
