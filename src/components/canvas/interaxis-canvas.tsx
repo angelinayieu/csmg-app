@@ -16,6 +16,7 @@ import "tldraw/tldraw.css";
 import type { Entity, Edge, Space } from "@/types";
 import { KGNodeShapeUtil, KG_NODE_TIER_SIZE } from "./shapes/kg-node-shape";
 import { KGFormationShapeUtil } from "./shapes/kg-formation-shape";
+import { KgOverviewCardShapeUtil } from "./shapes/kg-overview-card-shape";
 import { OriginPromptShapeUtil } from "./shapes/origin-prompt-shape";
 import { ProbabilitySpaceShellShapeUtil } from "./shapes/probability-space-shell-shape";
 import { RunEventStoreProvider } from "./hooks/run-event-store";
@@ -218,6 +219,9 @@ const SHAPE_UTILS = [
   KGNodeShapeUtil,
   // Project-Overview design pass — live landscape overview during a run
   KGFormationShapeUtil,
+  // Persistent companion — spawned once for template-seeded spaces;
+  // survives sessions; clickable Browse-entities / Edges CTAs.
+  KgOverviewCardShapeUtil,
   // Lineage root — the user's intake prompt as a real tldraw shape so
   // kg-formation (and everything below it) can tether UP to it,
   // turning the canvas into a readable "thought → landscape →

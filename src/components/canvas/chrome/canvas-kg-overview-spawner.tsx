@@ -2,22 +2,18 @@
 
 // ── Canvas KG-overview spawner ──────────────────────────────────
 //
-// For research-template-seeded spaces (manual_authoring_enabled),
-// spawns ONE compact KGFormationShape on the whiteboard summarizing
-// the seeded knowledge graph. Replaces the previous approach of
-// painting every entity as a kg-node card — which produced a 76-card
-// flat row that crashed tldraw on pan/zoom and hid the actual graph
-// structure.
+// For research-template-seeded spaces, spawns ONE compact
+// KgOverviewCardShape on the whiteboard summarizing the seeded
+// knowledge graph. Replaces the previous approaches of:
+//   - Painting every entity as a kg-node card (76 shapes → tldraw
+//     crashes on pan/zoom + ugly overflow)
+//   - Reusing the ephemeral KGFormationShape (no click-through; click
+//     did nothing visible from the user's perspective)
 //
-// The KGFormationShape renders:
-//   • Header: "Knowledge Graph formation" + count chip
-//   • Mini SVG graph: top 6 hub circles connected by REAL edges
-//   • Footer: "N entities · M edges"
-//
-// One shape, one connected mini-graph, no overflow. Users browse the
-// full entity list via /app/space/[id]/entities; they explore
-// connected structure inside a subject's lab chamber. The whiteboard
-// surfaces a single visual summary, not the entire KG.
+// KgOverviewCardShape is a permanent shape with explicit click-through
+// CTAs ("Browse all entities" → /app/space/[id]/entities, "Edges" →
+// /app/space/[id]/edges). The button lives inside the card so the
+// user sees an obvious affordance, not just a passive visualization.
 //
 // Idempotent: shape id is deterministic per space; existing-shape
 // check skips re-spawning if user already has one. Wrapped in a
@@ -33,8 +29,8 @@ import {
 import type { Entity, Edge } from "@/types";
 
 const POLL_DELAY_MS = 600;
-const SHAPE_W = 380;
-const SHAPE_H = 300;
+const SHAPE_W = 420;
+const SHAPE_H = 360;
 
 // Position: top-center of the workspace at y=0 so the default
 // tldraw camera (centered on origin) lands the user directly on
@@ -65,11 +61,11 @@ export function CanvasKgOverviewSpawner({
     const t = setTimeout(() => {
       if (cancelled) return;
       try {
-        // Skip if a kg-formation shape already exists on this canvas
+        // Skip if a kg-overview-card shape already exists on this canvas
         // (from a previous mount or tldraw persistence restoration).
         const existing = editor
           .getCurrentPageShapes()
-          .filter((s) => s.type === "kg-formation");
+          .filter((s) => s.type === "kg-overview-card");
         if (existing.length > 0) return;
 
         // Compute hubs deterministically from the seed entities/edges.
@@ -112,15 +108,17 @@ export function CanvasKgOverviewSpawner({
         editor.createShapes([
           {
             id: shapeId,
-            type: "kg-formation",
+            type: "kg-overview-card",
             x: -SHAPE_W / 2, // center horizontally on origin
             y: KG_OVERVIEW_Y,
             props: {
               w: SHAPE_W,
               h: SHAPE_H,
+              spaceId,
               entityCount: result.entityCount,
               edgeCount: result.edgeCount,
               hubCount: result.hubCount,
+              layerCount: 0, // populated downstream once layer ontology row count is known
               hubsJson: JSON.stringify(
                 result.hubs.map((h: Hub) => ({
                   name: h.name,
@@ -128,7 +126,7 @@ export function CanvasKgOverviewSpawner({
                 })),
               ),
               hubEdgesJson: JSON.stringify(hubEdgePairs),
-              pulse: 0,
+              title: "Knowledge Graph",
               accent: "#7C3AED", // purple, matches cognition template
             },
           },

@@ -364,6 +364,24 @@ declare module "@tldraw/tlschema" {
       pulse: number;
       accent: string;
     };
+    // Persistent KG overview card — spawned once for template-seeded
+    // spaces (no pipeline run needed). Same mini-graph viz as
+    // kg-formation but with explicit click-through CTAs to the entity
+    // browser + edges browser. Carries spaceId for the buttons to
+    // build their hrefs.
+    "kg-overview-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      entityCount: number;
+      edgeCount: number;
+      hubCount: number;
+      layerCount: number;
+      hubsJson: string;
+      hubEdgesJson: string;
+      title: string;
+      accent: string;
+    };
     // VP Project report (Phase 3, Batch 2e) — variant flashcard painted
     // live by the pipeline-event-painter when a `variant_proposed` event
     // fires from the writer-path run. Run-scoped ghost; canonical row

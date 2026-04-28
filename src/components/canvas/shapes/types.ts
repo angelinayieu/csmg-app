@@ -1301,7 +1301,44 @@ export type CanvasCustomShape =
   | SynthesisIntersectionCardShape
   | AssetCardShape
   | SituationCardShape
-  | SubjectCardShape;
+  | SubjectCardShape
+  | KgOverviewCardShape;
+
+// ── KG Overview card (template-seeded spaces) ──────────────────────
+//
+// Persistent companion to KGFormationShape. The formation shape is
+// ephemeral (live painter mutates + deletes during pipeline runs);
+// this one is permanent (template materialization spawns it once
+// per space; survives sessions). Same visual vocabulary, plus
+// explicit click-through CTAs to the entity / edge browsers.
+//
+// Spawner: src/components/canvas/chrome/canvas-kg-overview-spawner.tsx
+// Shape util: src/components/canvas/shapes/kg-overview-card-shape.tsx
+export type KgOverviewCardShape = TLBaseShape<
+  "kg-overview-card",
+  {
+    w: number;
+    h: number;
+    /** Drives the "Browse all entities" / "Edges" CTA hrefs. */
+    spaceId: string;
+    entityCount: number;
+    edgeCount: number;
+    hubCount: number;
+    /** Layer-ontology row count for the space. Surfaced in the
+     *  stat strip when > 0. */
+    layerCount: number;
+    /** JSON-encoded Array<{ name: string; degree: number }>, max 6. */
+    hubsJson: string;
+    /** JSON-encoded Array<{ a: string; b: string }> — REAL edges
+     *  among the visible top hubs. */
+    hubEdgesJson: string;
+    /** Header label. Defaults to "Knowledge Graph"; templates may
+     *  override (e.g. "Cognitive Performance KG"). */
+    title: string;
+    /** Hex accent color for header chip + CTA + connector lines. */
+    accent: string;
+  }
+>;
 
 // ── Subject card (Phase 4 — manual authoring + lab bridge) ──────────
 //
