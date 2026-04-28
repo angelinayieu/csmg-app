@@ -627,16 +627,26 @@ export function InteraxisCanvas({
   );
 
   // ── Sync KG entities + edges into tldraw on first mount ──
-  // Architecture redesign — disabled on the main whiteboard. Previous
-  // behavior seeded every entity in the space onto the canvas as a
-  // kg-node shape, producing a 25-40-card cloud that competed with
-  // the axis-shell row + synthesis card for attention. Entities now
-  // live inside their owning probability-space-shells (as entity
-  // chips) and are browseable via the entity-library route at
-  // /app/space/[id]/entities. The whiteboard surfaces only major
-  // outputs: shells (per-axis landscapes), synthesis card (cross-
-  // axis intersection), and proposal cards (apps + experiments).
-  useSyncEntities(editor, { entities, edges, enabled: false });
+  // Architecture redesign — disabled on the main whiteboard for
+  // pipeline-driven spaces. Previous behavior seeded every entity
+  // onto the canvas as a kg-node shape, producing a 25-40-card cloud
+  // that competed with the axis-shell row + synthesis card for
+  // attention. Pipeline-driven spaces surface entities inside their
+  // owning probability-space-shells; the whiteboard surfaces only
+  // major outputs (shells, synthesis card, proposal cards).
+  //
+  // BUT: research-template-seeded spaces (manual_authoring_enabled =
+  // true) need the KG painted on the whiteboard. They have no
+  // probability-space-shells (no pipeline ran) and no synthesis card
+  // — without entity-sync enabled, the canvas reads as empty even
+  // when 60+ entities exist in the DB. The flag is the cleanest
+  // discriminator: spaces that opt into manual authoring also opt
+  // into seeing their KG laid out in layer bands with edges as
+  // arrows. useSyncEntities's idempotent guards (existing kg-node
+  // shapes short-circuit the seed) keep this safe across re-renders.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const enableEntitySync = !!(space as any).manual_authoring_enabled;
+  useSyncEntities(editor, { entities, edges, enabled: enableEntitySync });
 
   // ── Auto-surface synthesis insights as cards on the canvas ──
   useSynthesisSeeder(editor, { space, entities, enabled: true });

@@ -73,21 +73,30 @@ export function CanvasSubjectCardHydrator({ spaceId }: { spaceId: string }) {
         );
         if (toSpawn.length === 0) return;
 
-        // Position cards in a vertical column on the right side of
-        // the viewport. Spaces them with a small gap so all are
-        // visible without scrolling on a typical desktop viewport.
-        const bounds = editor.getViewportPageBounds();
+        // Position cards in a horizontal row ABOVE the KG layered
+        // layout (which starts at y=0 going down by BAND_HEIGHT=280
+        // per layer; entities centered around x=0). Putting cards at
+        // y=-360 keeps them clear of the KG and visible when the user
+        // pans up. Cards spread horizontally so all 4 fit on a
+        // typical viewport without overlap.
+        //
+        // We use FIXED page coordinates (not viewport-derived) so the
+        // cards land in a stable, predictable spot regardless of
+        // where tldraw centers the camera at hydration time. This
+        // also avoids race conditions with useSyncEntities's
+        // centerOnPoint() call.
         const cardW = 320;
         const cardH = 180;
-        const gap = 24;
-        const colX = bounds.maxX - cardW - 32;
-        const startY = bounds.minY + 96;
+        const gap = 28;
+        const totalW = toSpawn.length * cardW + (toSpawn.length - 1) * gap;
+        const startX = -totalW / 2;
+        const cardY = -360;
 
         const shapes = toSpawn.map((subj, idx) => ({
           id: createShapeId(`subject-${subj.id}`),
           type: "subject-card" as const,
-          x: colX,
-          y: startY + idx * (cardH + gap),
+          x: startX + idx * (cardW + gap),
+          y: cardY,
           props: {
             w: cardW,
             h: cardH,
@@ -103,7 +112,19 @@ export function CanvasSubjectCardHydrator({ spaceId }: { spaceId: string }) {
           },
         }));
 
-        editor.createShapes(shapes);
+        // Defensive: tldraw will throw if a shape ID already exists
+        // (e.g., race with persistence restoration completing AFTER
+        // our existence check). Wrap the whole call so a failure
+        // doesn't tank the canvas — a missing subject card is
+        // recoverable; a crashed editor isn't.
+        try {
+          editor.createShapes(shapes);
+        } catch (createErr) {
+          console.warn(
+            "[subject-card-hydrator] createShapes failed (likely race with persistence):",
+            createErr,
+          );
+        }
       } catch (err) {
         console.warn("[subject-card-hydrator] hydration failed:", err);
       }
