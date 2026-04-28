@@ -133,9 +133,9 @@ export function TopBar({
         </ChromeLink>
 
         <ChromeLink
-          href="/app/use-cases"
+          href="/app/explore"
           icon={<Sparkles className="h-3 w-3" strokeWidth={1.75} />}
-          title="Explore use cases"
+          title="Explore — research-grade templates with pre-built KG, evidence-backed edges, starter subjects, and configured labs"
         >
           Explore
         </ChromeLink>

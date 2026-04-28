@@ -99,6 +99,7 @@ import { CanvasStageIndicator } from "./chrome/canvas-stage-indicator";
 import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
 import { CanvasLassoSubjectButton } from "./chrome/canvas-lasso-subject-button";
 import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
+import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
 import { RelaxLayoutButton } from "./chrome/relax-layout-button";
 import { useThreadPersistence } from "./hooks/use-thread-persistence";
 import { CardSidecar } from "./sidecar/card-sidecar";
@@ -360,6 +361,13 @@ function makeCanvasOverlays(spaceId: string) {
             inside the tree. Listens for the
             interaxis:spawn-subject-card window event. */}
         <CanvasSubjectCardSpawner spaceId={spaceId} />
+        {/* Hydrator counterpart — fetches pre-existing subjects from
+            the DB on mount and paints SubjectCard shapes for any that
+            aren't already on the canvas. Required for template-
+            materialized spaces (where subjects exist as DB rows
+            before the canvas is ever opened) and lab-proposal-wizard
+            approvals (same situation). Idempotent + filters dupes. */}
+        <CanvasSubjectCardHydrator spaceId={spaceId} />
         {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
             user-triggered force-directed reflow over the main KG.
             Lives in CanvasOverlays so it has the tldraw editor context
