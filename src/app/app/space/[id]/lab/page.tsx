@@ -12,10 +12,15 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SpaceLab } from "@/components/lab/space-lab";
 import { SplitLab } from "@/components/lab/split-lab";
+import { ContextualLab } from "@/components/lab/contextual/contextual-lab";
 import type { Entity, Edge, Bridge, Space } from "@/types";
 import type { Reaction } from "@/types/reactions";
 import type { System } from "@/types/system";
 import type { Subject } from "@/types/subject";
+
+/** Slugs that should render the Subject × State × Task ContextualLab
+ *  instead of the legacy whole-space SpaceLab. Matches `spaces.use_case_template_id`. */
+const CONTEXTUAL_LAB_TEMPLATES = new Set(["mind_body_cognition"]);
 
 export const dynamic = "force-dynamic";
 
@@ -141,6 +146,25 @@ export default async function SpaceLabPage({
   if (!spaceData) redirect("/app");
 
   const space = spaceData as Space;
+
+  // ── ContextualLab dispatch ──────────────────────────────────
+  // Spaces created from research templates (e.g. mind_body_cognition)
+  // get the Subject × State × Task lab instead of the legacy
+  // whole-space SpaceLab. Read template marker from the space row;
+  // tolerate both `use_case_template_id` (column added by migration
+  // 20260426) and a fallback to the column being absent.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const templateSlug = (space as any).use_case_template_id as
+    | string
+    | null
+    | undefined;
+  if (templateSlug && CONTEXTUAL_LAB_TEMPLATES.has(templateSlug)) {
+    return (
+      <div className="fixed inset-0 z-50 overflow-hidden bg-white">
+        <ContextualLab space={space} initialSubjectId={subjectId ?? null} />
+      </div>
+    );
+  }
 
   // Parallel fetch: all entities, all edges, all reactions, cross-space bridges
   const [entitiesRes, edgesRes, reactionsRes, bridgesRes] = await Promise.all([

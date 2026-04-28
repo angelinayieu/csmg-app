@@ -48,6 +48,7 @@ This means:
 3. NO INVENTION. If the artifact does not report (say) the comparator, leave comparator_label NULL. Do not infer "vs placebo" because it's a drug trial.
 4. SCOPE. Skip narrative summary, theoretical framing, citations to OTHER studies' results (those belong in their own extraction from those source articles, not this one), and reporting of safety/adverse-events unless the user asked for them.
 5. ONE FINDING PER EXTRACTION. If a sentence reports two endpoints (e.g. "improved memory (d=0.4) and attention (d=0.3)"), that's TWO extractions — same span, different outcome_label.
+6. NO CODE LABELS. If the only label you can find for outcome / intervention / comparator is a study code or row id (e.g. "CRCI N20", "study_42", "S1", "Trial A"), that is NOT a usable outcome label — it tells the user nothing about WHAT was measured. In that case, READ THE SURROUNDING CONTEXT for the construct (e.g. "verbal memory deficits", "fatigue self-report", "sleep efficiency"). If you genuinely cannot determine the construct from context, set the field to null — never fall back to the code. A null label that prompts a reviewer to investigate is far more useful than a code that pretends to be meaningful.
 
 ## Categories (open vocabulary — these are HINTS, not enums)
 

@@ -404,9 +404,26 @@ function EvidenceRow({
           <button
             onClick={onToggleExpand}
             className="mt-1 block w-full text-left"
+            title="Click to see the source quote, LLM extraction provenance, and parsing details"
           >
-            <div className="text-[13px] font-semibold text-slate-900">
-              {row.outcome_label ?? "(outcome unspecified)"}
+            <div className="flex items-center gap-1.5">
+              <div className="text-[13px] font-semibold text-slate-900">
+                {row.outcome_label ?? "(outcome unspecified)"}
+              </div>
+              {/* Detect code-shaped labels (e.g. "crci_n20", "study_42",
+                  "S1") that were extracted verbatim instead of being
+                  expanded to a human concept. Surface a warning glyph
+                  so the user knows the label needs review — much more
+                  honest than showing "crci_n20" as if it were the
+                  outcome being measured. */}
+              {row.outcome_label && /^[a-z]+[_-]?[a-z0-9]*\d+$/i.test(row.outcome_label) && (
+                <span
+                  title="This label looks like a study code rather than a measured outcome. Click to see the source quote and verify."
+                  className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide text-amber-800"
+                >
+                  code?
+                </span>
+              )}
             </div>
             <div className="mt-0.5 text-[12px] tabular-nums text-slate-700">
               {effectStr}
@@ -427,6 +444,24 @@ function EvidenceRow({
                 ]
                   .filter(Boolean)
                   .join(" · ")}
+              </div>
+            )}
+            {/* Source-quote preview directly in the collapsed row.
+                Without this, the row looks like "slop of random useless
+                things" — bare codes with no context. Showing the first
+                ~120 chars of the source quote makes the row immediately
+                readable as "this is what the paper actually said." */}
+            {row.source_quote && !expanded && (
+              <p className="mt-1.5 border-l-2 border-slate-200 pl-2 text-[10.5px] italic leading-snug text-slate-500 line-clamp-2">
+                &ldquo;{row.source_quote.slice(0, 160)}
+                {row.source_quote.length > 160 ? "…" : ""}&rdquo;
+              </p>
+            )}
+            {/* Tiny "click to expand" affordance so user knows there's
+                more behind the row. */}
+            {!expanded && (row.source_quote || row.source_page) && (
+              <div className="mt-1 text-[9.5px] font-medium uppercase tracking-wide text-slate-400">
+                Click for full provenance →
               </div>
             )}
           </button>

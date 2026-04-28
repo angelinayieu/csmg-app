@@ -94,6 +94,10 @@ export async function POST(request: Request) {
       maturity: "actionable_now",
       // Critical for explore-flow: surface add buttons on the canvas.
       manual_authoring_enabled: true,
+      // Stamps the template slug so the lab page knows to render the
+      // ContextualLab (Subject × State × Task) instead of the legacy
+      // whole-space SpaceLab.
+      use_case_template_id: template.slug,
     };
 
     let { data: spaceRow, error: spaceErr } = await db
@@ -102,12 +106,22 @@ export async function POST(request: Request) {
       .select("id")
       .single();
 
-    // Tolerate the manual_authoring_enabled column being absent (older
-    // schema) — strip and retry. Same pattern as use-cases/create.
+    // Tolerate either of the two newer columns being absent (older
+    // schema). Strip the offending one and retry. We do this in two
+    // passes because we don't know which column was the problem
+    // without re-parsing the error.
     if (spaceErr) {
       const errText = (spaceErr.message ?? "").toLowerCase();
+      let stripped = false;
       if (errText.includes("manual_authoring_enabled")) {
         delete spaceInsert.manual_authoring_enabled;
+        stripped = true;
+      }
+      if (errText.includes("use_case_template_id")) {
+        delete spaceInsert.use_case_template_id;
+        stripped = true;
+      }
+      if (stripped) {
         const retry = await db
           .from("spaces")
           .insert(spaceInsert)

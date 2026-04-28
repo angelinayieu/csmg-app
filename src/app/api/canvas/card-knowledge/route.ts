@@ -36,6 +36,16 @@ interface CardKnowledgeEntity {
   description: string;
   entity_category: string | null;
   score: number;
+  /** Variant count — when this entry collapses N near-duplicates,
+   *  variantCount = N+1. UI surfaces this as a "(N variants)" pill so
+   *  the user can see that the underlying KG has multiple slightly-
+   *  different rows (e.g. "habit stack" + "habit stacks" + "Habit
+   *  Stacks") that we collapsed into one display row. Click-through
+   *  could expand the variants. */
+  variantCount?: number;
+  /** Names of the collapsed variants (excluding the canonical one).
+   *  Surfaced in hover/tooltip so the user knows what was merged. */
+  variantNames?: string[];
 }
 
 interface CardKnowledgeAxiom {
@@ -55,6 +65,124 @@ interface CardKnowledgeResponse {
   relatedEntities: CardKnowledgeEntity[];
   axioms: CardKnowledgeAxiom[];
   convergences: CardKnowledgeConvergence[];
+}
+
+/**
+ * Normalize an entity name for variant clustering. Aggressive on
+ * surface-level differences (case, plural -s/-es, whitespace,
+ * leading articles, possessives) but preserves semantic distinctness
+ * (different roots remain distinct).
+ *
+ * Examples:
+ *   "Habit stacks" / "Habit Stacks" / "habit stack" / "habit-stacks"
+ *     → all collapse to "habit stack"
+ *   "Habits" → "habit" (collapses with "habit")
+ *   "Optimization of habit stacks" → stays distinct (different root noun)
+ *   "User engagement" / "User engagements" → both → "user engagement"
+ */
+function normalizeNameForVariant(name: string): string {
+  let s = name.toLowerCase().trim();
+  // Strip leading articles
+  s = s.replace(/^(the|a|an)\s+/i, "");
+  // Collapse whitespace + non-alphanumeric to single space
+  s = s.replace(/[^a-z0-9]+/g, " ").trim();
+  // Strip simple plural endings on each word
+  const words = s.split(" ").map((w) => {
+    if (w.length < 4) return w; // too short to safely de-pluralize
+    if (w.endsWith("ies") && w.length > 4) return w.slice(0, -3) + "y";
+    if (w.endsWith("es") && w.length > 4) return w.slice(0, -2);
+    if (w.endsWith("s") && !w.endsWith("ss")) return w.slice(0, -1);
+    return w;
+  });
+  return words.join(" ");
+}
+
+/**
+ * Collapse near-duplicate entity rows by normalized name. Keeps
+ * the highest-scoring entry as canonical, attaches the others as
+ * `variantNames`. Designed so the user sees ONE row per concept
+ * with a clear count of how many surface variants the underlying
+ * KG has — instead of 4 rows of "Habit stacks / Habit Stacks /
+ * habit stack / habits" cluttering the UI.
+ *
+ * IMPORTANT: only merges entries whose NORMALIZED name AND whose
+ * description start similarly. If two entries share a normalized
+ * name but have meaningfully different descriptions, we keep them
+ * separate — that's the "different contextual behaviors" case the
+ * user explicitly called out (e.g. "habit stack" the user-defined
+ * concept vs "habit stack" used in a workplace context).
+ */
+function collapseNearDuplicates<
+  T extends {
+    name: string;
+    description: string;
+    score: number;
+  },
+>(entries: T[]): Array<T & { variantCount: number; variantNames: string[] }> {
+  const groups = new Map<
+    string,
+    Array<T & { _normName: string }>
+  >();
+  for (const e of entries) {
+    const norm = normalizeNameForVariant(e.name);
+    if (!norm) continue;
+    const existing = groups.get(norm);
+    if (existing) {
+      existing.push({ ...e, _normName: norm });
+    } else {
+      groups.set(norm, [{ ...e, _normName: norm }]);
+    }
+  }
+
+  const result: Array<T & { variantCount: number; variantNames: string[] }> =
+    [];
+  for (const [, items] of groups) {
+    // Within each name-group, sub-cluster by description similarity.
+    // Items with descriptions starting with the same first 60 chars
+    // collapse together; items with meaningfully different
+    // descriptions stay separate.
+    const subClusters: Array<typeof items> = [];
+    for (const item of items) {
+      const descKey = (item.description || "").trim().toLowerCase().slice(0, 60);
+      let placed = false;
+      for (const cluster of subClusters) {
+        const clusterDescKey = (cluster[0].description || "")
+          .trim()
+          .toLowerCase()
+          .slice(0, 60);
+        // Empty-vs-empty descriptions cluster together
+        if (descKey === clusterDescKey) {
+          cluster.push(item);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) subClusters.push([item]);
+    }
+
+    for (const cluster of subClusters) {
+      cluster.sort((a, b) => b.score - a.score);
+      const canonical = cluster[0];
+      const variants = cluster.slice(1);
+      // Drop the internal _normName field before returning. Cast
+      // through `unknown` per TS's compositional rule — Omit<T & X, K>
+      // is structurally narrower than T but TS can't prove the
+      // overlap without an explicit unknown intermediate.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { _normName, ...canonicalEntry } = canonical;
+      const canonicalAsT = canonicalEntry as unknown as T;
+      result.push({
+        ...canonicalAsT,
+        variantCount: cluster.length,
+        variantNames: variants.map((v) => v.name),
+      });
+    }
+  }
+
+  // Re-sort the deduped list by score so the top-scoring entries
+  // surface first (regardless of which name-group they came from).
+  result.sort((a, b) => b.score - a.score);
+  return result;
 }
 
 /** Cheap keyword-match scorer: counts shared lowercase words (>3 chars). */
@@ -142,7 +270,7 @@ export async function POST(request: Request) {
     }
     const byId = new Map(entityRows.map((e) => [e.id, e]));
 
-    const relatedEntities: CardKnowledgeEntity[] = hits
+    const rawRelated: CardKnowledgeEntity[] = hits
       .map((h) => {
         const row = byId.get(h.item.ref_id);
         if (!row) return null;
@@ -156,6 +284,16 @@ export async function POST(request: Request) {
         };
       })
       .filter((e): e is CardKnowledgeEntity => e !== null);
+
+    // Variant collapse — without this the UI shows surface duplicates
+    // like "Habit stacks / Habit Stacks / habit stack / Habits" as
+    // separate rows. We collapse by normalized name (case-/plural-
+    // /article-insensitive) AND description-prefix similarity, so
+    // genuinely different concepts that happen to share a name stay
+    // separate. Each collapsed group surfaces a `variantCount` +
+    // `variantNames[]` so the UI can render "(3 variants)" and
+    // tooltip the merged surface forms.
+    const relatedEntities = collapseNearDuplicates(rawRelated);
 
     // ── Axioms + convergences from synthesis_data JSONB ───────────────
     const { data: spaceRow } = await db

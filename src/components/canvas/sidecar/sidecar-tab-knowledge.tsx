@@ -33,6 +33,13 @@ interface Payload {
     description: string;
     entity_category: string | null;
     score: number;
+    /** D-side dedup: when the underlying KG has multiple surface
+     *  variants of the same concept (e.g. "Habit stack" + "Habit
+     *  Stacks" + "habit stacks"), the route collapses them into one
+     *  display row with this count. UI surfaces "(N variants)" pill
+     *  + tooltips the merged names. */
+    variantCount?: number;
+    variantNames?: string[];
   }>;
   axioms: Array<{
     id: string;
@@ -151,6 +158,16 @@ export function SidecarTabKnowledge({ context, spaceId }: Props) {
               const tint =
                 (e.entity_category && CATEGORY_TINT[e.entity_category]) ||
                 "bg-slate-50 text-slate-700 ring-slate-200";
+              const hasVariants =
+                typeof e.variantCount === "number" && e.variantCount > 1;
+              const variantsHint =
+                hasVariants && e.variantNames && e.variantNames.length > 0
+                  ? `Also surfaced as: ${e.variantNames.slice(0, 4).join(", ")}${
+                      e.variantNames.length > 4
+                        ? ` +${e.variantNames.length - 4} more`
+                        : ""
+                    }`
+                  : null;
               return (
                 <li
                   key={e.id}
@@ -158,9 +175,21 @@ export function SidecarTabKnowledge({ context, spaceId }: Props) {
                     "inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10.5px] font-semibold ring-1",
                     tint,
                   )}
-                  title={e.description || e.name}
+                  title={
+                    variantsHint
+                      ? `${e.description || e.name}\n\n${variantsHint}`
+                      : e.description || e.name
+                  }
                 >
                   <span className="truncate max-w-[140px]">{e.name}</span>
+                  {hasVariants && (
+                    <span
+                      className="ml-0.5 rounded-full bg-white/70 px-1 py-0.5 text-[8.5px] font-bold tabular-nums opacity-80"
+                      aria-label={`${e.variantCount} variants merged`}
+                    >
+                      ×{e.variantCount}
+                    </span>
+                  )}
                 </li>
               );
             })}
