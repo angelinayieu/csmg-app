@@ -790,6 +790,13 @@ function EdgeRow({
     dynProps &&
     typeof dynProps === "object" &&
     Object.prototype.hasOwnProperty.call(dynProps, "pooling_metadata");
+  // P2 · D14 follow-up: literature_sources is text[] of asset ids that
+  // support this edge. Empty for legacy edges; surfaces a paper count
+  // badge when populated by the asset pipeline.
+  const litSources = Array.isArray(edge.literature_sources)
+    ? edge.literature_sources.filter((s) => typeof s === "string" && s.length > 0)
+    : [];
+  const litCount = litSources.length;
   const [dynamics, setDynamics] = useState<string>(initialDynamics);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -850,6 +857,14 @@ function EdgeRow({
           title="Edge strength pooled from evidence (REML τ²). See dynamics_properties.pooling_metadata for the full audit."
         >
           pooled
+        </span>
+      )}
+      {litCount > 0 && (
+        <span
+          className="flex-shrink-0 rounded bg-violet-50 px-1 py-0.5 text-[9px] font-semibold text-violet-700"
+          title={`Supported by ${litCount} ingested paper${litCount === 1 ? "" : "s"} (asset id${litCount === 1 ? "" : "s"}: ${litSources.slice(0, 3).join(", ")}${litCount > 3 ? ", …" : ""})`}
+        >
+          📚 {litCount}
         </span>
       )}
       {editing ? (

@@ -35,10 +35,10 @@ export function BrainstormToggleButton({
         open && "shadow-md",
       )}
       style={{
-        // Sit below the topbar (which ends around y=52) so the button
-        // no longer overlaps with the right-side Auto-AI/Snap/Receipts
-        // pill that shares the same `right-4` anchor.
-        top: 68,
+        // Sits below the topbar AND below the CanvasLayerToggle (which
+        // anchors at top:68, right-4). Stacking vertically at the right
+        // edge keeps both visible without depending on either's width.
+        top: 112,
         background: active
           ? `color-mix(in srgb, ${ACCENT} 14%, rgba(255,255,255,0.9))`
           : "rgba(255,255,255,0.85)",

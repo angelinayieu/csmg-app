@@ -10,10 +10,15 @@
 //   - evidence count attached to either endpoint
 //   - source_tag ("inferred" implies evidence-pooled in our schema;
 //     "stated" / "predicted" are LLM-only)
-//   - timestamps for sorting "recently updated"
+//   - recomputed_at on the pooling block for "recently updated" sort
 //
-// One round-trip to the DB (3 parallel queries: edges, entities,
-// evidence_count groupby). Joins in memory. Filters via RLS already.
+// One round-trip to the DB (4 parallel queries: edges, entities,
+// layer_ontology, evidence_registries groupby). Joins in memory.
+// Filters via RLS already.
+//
+// Note: edges has no created_at/updated_at columns in our schema —
+// only `dynamics_properties.pooling_metadata.recomputed_at` is exposed
+// for time-based sorting.
 //
 // Used by /app/space/[id]/edges page (the edges-catalog browser).
 
@@ -49,8 +54,6 @@ export interface EdgeCatalogEntry {
   evidence_row_count: number;
   is_evidence_backed: boolean;
   recomputed_at: string | null;
-  created_at: string | null;
-  updated_at: string | null;
 }
 
 export interface EdgeCatalogResponse {
@@ -84,7 +87,7 @@ export async function GET(
     db
       .from("edges")
       .select(
-        "id, source_entity_id, target_entity_id, relationship_type, dimension, polarity, strength, confidence, source_tag, dynamics_properties, created_at, updated_at",
+        "id, source_entity_id, target_entity_id, relationship_type, dimension, polarity, strength, confidence, source_tag, dynamics_properties",
       )
       .eq("space_id", spaceId),
     db
@@ -122,8 +125,6 @@ export async function GET(
     confidence: number | null;
     source_tag: string | null;
     dynamics_properties: Record<string, unknown> | null;
-    created_at: string | null;
-    updated_at: string | null;
   };
   type EntityRowDB = {
     id: string;
@@ -204,8 +205,6 @@ export async function GET(
       evidence_row_count: evCount,
       is_evidence_backed: isEvidenceBacked,
       recomputed_at: pool?.recomputed_at ?? null,
-      created_at: e.created_at,
-      updated_at: e.updated_at,
     };
   });
 

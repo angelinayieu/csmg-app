@@ -37,6 +37,7 @@ import { TaskPicker } from "./left/task-picker";
 import { ChamberCenter } from "./center/chamber-center";
 import { EffectBreakdown } from "./right/effect-breakdown";
 import { CompositionPanel } from "./right/composition-panel";
+import { DownstreamAppsPanel } from "./right/downstream-apps-panel";
 import { EvidenceBasis } from "./right/evidence-basis";
 import { InterventionList } from "./right/intervention-list";
 import { ReactionNetwork } from "./bottom/reaction-network";
@@ -222,8 +223,24 @@ export function ContextualLab({
         {/* Effect Breakdown */}
         <EffectBreakdown effects={prediction.effects} />
 
-        {/* Composition */}
-        <CompositionPanel prediction={prediction} />
+        {/* Composition · Working-Memory Model
+            L1 first-pass (D14 follow-up): pass subject name + scope
+            label so the panel header reads "for [Twin] · scope: …".
+            Working-memory model is hard-coded for now (Subject schema
+            ties to K/decay/refresh/attn directly); future L1b refactor
+            will derive from KG entities scoped by the Twin. */}
+        <CompositionPanel
+          prediction={prediction}
+          subjectName={subject.name}
+          scopeSummary={{
+            // Archetypes don't carry a real scope_system_id today; the
+            // label here surfaces the WM-model assumption. When real
+            // KG-backed Subjects flow through this view, replace with
+            // the actual scoped entity count from the Subject's system.
+            entity_count: 4,
+            label: "working-memory primitives",
+          }}
+        />
 
         {/* Evidence Basis */}
         <EvidenceBasis
@@ -239,6 +256,19 @@ export function ContextualLab({
           subject={subject}
           prediction={prediction}
           onSelect={setTaskId}
+        />
+
+        {/* L3 — Downstream apps panel ("Lab feeds")
+            Shows the paired downstream applications the Lab informs
+            (Cognitive Game ↔ Cognitive Measurement). Reads from real
+            `apps` rows in this space; renders nothing when no apps
+            exist yet. Instrument selection on measurement apps is
+            ephemeral first-pass; future L3b persists to Subject
+            experiment_log so the what-if run carries the battery
+            into its scoring. See docs/KG_DEPTH_CRITIQUE.md. */}
+        <DownstreamAppsPanel
+          spaceId={space.id}
+          subjectName={subject.name}
         />
       </aside>
 

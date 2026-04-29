@@ -98,6 +98,15 @@ export async function POST(request: Request) {
       // ContextualLab (Subject × State × Task) instead of the legacy
       // whole-space SpaceLab.
       use_case_template_id: template.slug,
+      // Phase C demo bake — when the template ships with pre-baked
+      // synthesis_data, write it directly so all 6 side panels
+      // (Convergence, Intelligence, Radar, Agents, Reflexive, multi-
+      // layer view) populate the moment the space loads. Real
+      // research+synthesize chain in `after()` overwrites this with
+      // LLM-generated content within 30-90s.
+      ...(template.seed_synthesis_data
+        ? { synthesis_data: template.seed_synthesis_data }
+        : {}),
     };
 
     let { data: spaceRow, error: spaceErr } = await db
@@ -119,6 +128,12 @@ export async function POST(request: Request) {
       }
       if (errText.includes("use_case_template_id")) {
         delete spaceInsert.use_case_template_id;
+        stripped = true;
+      }
+      if (errText.includes("synthesis_data")) {
+        // Older schema without synthesis_data column on spaces — strip
+        // and let the after() research/synthesize chain populate it.
+        delete spaceInsert.synthesis_data;
         stripped = true;
       }
       if (stripped) {
@@ -532,19 +547,36 @@ export async function POST(request: Request) {
         () => {},
       );
 
-    // ── D11 · Template edge augmentation ─────────────────────────────
+    // ── Post-template tail · augment + backfill + synthesize ────────
     //
-    // Templates ship with curated entities + curated edges; heterogeneous
-    // additions (interventions, instruments) often land isolated because
-    // the seed graph wasn't designed for them. The user-text decompose
-    // pipeline enforces orphan-detection in its prompt; this template
-    // path bypasses that. The augmenter is the catch-up pass — it loads
-    // the just-persisted graph, identifies isolated entities, and asks
-    // an LLM to wire them to the most-related anchors. Soft-fail; runs
-    // in `after()` so the response ships first. See
-    // src/lib/templates/template-edge-augmenter.ts and
-    // docs/KG_DEPTH_CRITIQUE.md §9 D11.
+    // Templates ship with curated entities + curated edges, but the
+    // path historically stopped after seeding — synthesis never ran,
+    // so leverage_points / risk_points / mechanism_grounding (D7) /
+    // chain insights stayed empty, and the layer-view popup blocked
+    // on `space.synthesis_data IS NULL`. This single after() block
+    // chains the three substrate fills the user-text decompose path
+    // already runs:
+    //
+    //   1. D11 · template-edge-augmenter — wires isolated entities
+    //      (interventions, instruments) to the seed graph
+    //   2. D13a · consequence_surface backfill — populates the
+    //      dormant signature field for template entities (no-op today
+    //      because seeded entities lack node_signature; harmless when
+    //      that's the case, ready for future signature seeding on
+    //      template entities)
+    //   3. /api/pipeline/synthesize — produces leverage_points,
+    //      risk_points, master_bottleneck, mechanism_grounding,
+    //      feedback_loops. Bypasses both layer-coverage and
+    //      measurement-coverage gates because templates lack the
+    //      situation_frame + measurement specs those gates check;
+    //      explicit user-initiated synthesizes still see the gates.
+    //
+    // Sequential within ONE after() block so synthesize sees augment's
+    // edges, not pre-augment state. Each step soft-fails independently.
+    // See docs/KG_DEPTH_CRITIQUE.md §9 D11 + D13a + the explore/create
+    // synthesis-gap diagnosis.
     after(async () => {
+      // 1. Augment isolated entities with predicted edges
       try {
         const { runTemplateEdgeAugmenter } = await import(
           "@/lib/templates/template-edge-augmenter"
@@ -561,6 +593,101 @@ export async function POST(request: Request) {
         console.warn(
           "[explore/create] template-edge-augmenter failed (non-fatal):",
           augmentErr,
+        );
+      }
+
+      // 2. Backfill consequence_surface (D13a) on entities that have
+      //    signatures. No-op for fresh template spaces (no signatures
+      //    seeded yet) but cheap and idempotent.
+      try {
+        const { backfillConsequenceSurfaces } = await import(
+          "@/lib/pipeline/consequence-surface-tail"
+        );
+        const csResult = await backfillConsequenceSurfaces({ db, spaceId });
+        if (csResult && csResult.updated > 0) {
+          console.log(
+            `[explore/create] consequence_surface: scanned=${csResult.scanned} updated=${csResult.updated} (${csResult.duration_ms}ms)`,
+          );
+        }
+      } catch (csErr) {
+        console.warn(
+          "[explore/create] consequence_surface backfill failed (non-fatal):",
+          csErr,
+        );
+      }
+
+      // 3. Fire RESEARCH with autoAdvance=true. Research's own after()
+      //    block then fires synthesize (it already bypasses both gates
+      //    for the autoAdvance path — see decompose→research handoff
+      //    pattern). One trigger here populates ALL of:
+      //      - synthesis_data.intelligence_radar.signals (Radar tab)
+      //      - synthesis_data.leverage_points / risk_points / master_bottleneck (Convergence + side-panel sections)
+      //      - synthesis_data.mechanism_grounding (D7 phenomenology vs mechanism)
+      //      - synthesis_data.suggested_objectives (Agents fallback fleet)
+      //      - synthesis_data.feedback_loops, action_plan, etc.
+      //    Without research firing, Radar/Agents/Reflexive stay empty
+      //    even after synthesize succeeds. With it, all 6 side-panel
+      //    sections populate within ~30-90s of template create.
+      //
+      //    Same internal-fetch + cookie pass-through + 10s abort pattern
+      //    as the decompose→research handoff in
+      //    /api/pipeline/decompose/route.ts. Soft-fail wrapper.
+      try {
+        const cookieHeader = request.headers.get("cookie") ?? "";
+        const origin = new URL(request.url).origin;
+        // Build a research input summary from the template's metadata
+        // so research has something concrete to focus on (it normally
+        // takes user-text input).
+        const inputSummary = [
+          template.title,
+          template.tagline,
+          template.description,
+        ]
+          .filter(Boolean)
+          .join(" — ")
+          .slice(0, 2000);
+
+        const ctrl = new AbortController();
+        const handoffTimeout = setTimeout(() => ctrl.abort(), 10000);
+        try {
+          await fetch(`${origin}/api/pipeline/research`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              spaceIds: [spaceId],
+              inputSummary,
+              researchDepth: "standard",
+              triggeredBy: "explore_template_create",
+              // autoAdvance=true tells research's own after() block to
+              // fire synthesize when research completes. Research's
+              // synthesize-handoff already bypasses both layer + measurement
+              // gates for templates (see research/route.ts). One trigger
+              // here = both research AND synthesize populate.
+              autoAdvance: true,
+            }),
+            signal: ctrl.signal,
+          });
+          clearTimeout(handoffTimeout);
+        } catch (researchErr) {
+          clearTimeout(handoffTimeout);
+          const name = (researchErr as { name?: string })?.name;
+          // AbortError is expected — we hang up once research's Lambda
+          // has the request so this Lambda can terminate without holding
+          // for research's full 30-60s run.
+          if (name !== "AbortError") {
+            console.warn(
+              "[explore/create] research handoff threw (non-fatal):",
+              researchErr,
+            );
+          }
+        }
+      } catch (researchOuterErr) {
+        console.warn(
+          "[explore/create] research trigger setup failed (non-fatal):",
+          researchOuterErr,
         );
       }
     });

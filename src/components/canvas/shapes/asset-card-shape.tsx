@@ -19,8 +19,10 @@ import {
   BaseBoxShapeUtil,
   HTMLContainer,
   T,
+  useEditor,
   type RecordProps,
   type TLResizeInfo,
+  type TLShapeId,
   resizeBox,
 } from "tldraw";
 import {
@@ -34,7 +36,9 @@ import {
   Pencil,
   Paperclip,
   CheckSquare,
+  Eye,
 } from "lucide-react";
+import { useCanvasAssetDerivedEntities } from "../canvas-asset-derived-entities-context";
 import type { AssetCardShape } from "./types";
 import {
   ASSET_CLASS_LABEL,
@@ -329,6 +333,15 @@ export class AssetCardShapeUtil extends BaseBoxShapeUtil<AssetCardShape> {
               unwired shapes. The button stops propagation so clicking
               it doesn't trigger tldraw shape selection. */}
           {shape.props.assetId && (
+            <div
+              style={{
+                marginTop: "auto",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                flexWrap: "wrap",
+              }}
+            >
             <button
               type="button"
               disabled={pillDisabled}
@@ -390,6 +403,14 @@ export class AssetCardShapeUtil extends BaseBoxShapeUtil<AssetCardShape> {
               <CheckSquare style={{ width: 9, height: 9 }} />
               {pillLabel}
             </button>
+            {/* P1 / D14 — sister affordance: highlight the entities
+                this asset produced on the canvas. Renders nothing
+                when zero derived entities (e.g. status=skipped). */}
+            <AssetHighlightButton
+              assetId={shape.props.assetId}
+              accent={accent}
+            />
+            </div>
           )}
         </div>
         <style jsx>{`
@@ -424,4 +445,94 @@ function formatCount(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1000000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1000000).toFixed(1)}M`;
+}
+
+// ── P1 / D14 — Asset highlight button ────────────────────────────────
+//
+// Small "👁 N on canvas" affordance that, on click, finds every
+// kg-node-shape whose `entityId` matches an entity derived from this
+// asset and selects + zooms to them. Makes the paper-to-KG link
+// spatially visible — clicking a paper highlights the entities it
+// produced.
+//
+// Renders nothing when the asset has no derived entities (e.g.
+// status=skipped, or pre-extraction failed). Uses useEditor() inside
+// so it can read shape state + drive the camera; uses the canvas-
+// wide derived-entities context so it doesn't fetch per-card.
+
+function AssetHighlightButton({
+  assetId,
+  accent,
+}: {
+  assetId: string;
+  accent: string;
+}) {
+  const editor = useEditor();
+  const { index } = useCanvasAssetDerivedEntities();
+  const derived = index.byAssetId.get(assetId) ?? [];
+
+  if (derived.length === 0 || index.loading) return null;
+
+  const handleClick = (e: React.MouseEvent | React.PointerEvent) => {
+    e.stopPropagation();
+    // Walk all shapes once, collect the kg-node-shapes whose
+    // entityId matches one of our derived entities. O(shapes ×
+    // derived) — typical: ~200 × ~5 = 1000 ops. Cheap.
+    const derivedIds = new Set(derived.map((d) => d.id));
+    const matched: TLShapeId[] = [];
+    for (const s of editor.getCurrentPageShapes()) {
+      if (s.type !== "kg-node") continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const eid = (s.props as any)?.entityId;
+      if (typeof eid === "string" && derivedIds.has(eid)) {
+        matched.push(s.id);
+      }
+    }
+    if (matched.length === 0) return;
+    editor.select(...matched);
+    // Animate the camera to fit the selection so even off-screen
+    // entities come into view. tldraw's zoomToSelection is
+    // selection-aware and respects existing animation prefs.
+    editor.zoomToSelection({ animation: { duration: 380 } });
+  };
+
+  return (
+    <button
+      type="button"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={handleClick}
+      title={`Highlight the ${derived.length} ${
+        derived.length === 1 ? "entity" : "entities"
+      } extracted from this asset on the canvas`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        padding: "3px 7px",
+        borderRadius: 999,
+        border: `1px solid color-mix(in srgb, ${accent} 35%, transparent)`,
+        background: `color-mix(in srgb, ${accent} 8%, transparent)`,
+        color: accent,
+        fontSize: 9.5,
+        fontWeight: 700,
+        letterSpacing: "0.04em",
+        lineHeight: 1,
+        cursor: "pointer",
+        fontFamily: "inherit",
+        transition:
+          "transform 140ms ease, box-shadow 140ms ease, background 140ms ease",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = "translateY(-1px)";
+        e.currentTarget.style.background = `color-mix(in srgb, ${accent} 18%, transparent)`;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "";
+        e.currentTarget.style.background = `color-mix(in srgb, ${accent} 8%, transparent)`;
+      }}
+    >
+      <Eye style={{ width: 9, height: 9 }} />
+      {derived.length} on canvas
+    </button>
+  );
 }

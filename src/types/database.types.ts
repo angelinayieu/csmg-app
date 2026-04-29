@@ -756,6 +756,10 @@ export type Database = {
             | "temporally_precedes"
             | "relates_to"
             | null;
+          // P2 · D14 follow-up: asset ids supporting this edge (matches
+          // ingested_files.id; entity source_tag convention "asset:<id>"
+          // unwrapped). Empty array = unattributed.
+          literature_sources: string[];
         };
         Insert: {
           id?: string;
@@ -806,6 +810,8 @@ export type Database = {
             | "temporally_precedes"
             | "relates_to"
             | null;
+          // P2 · asset ids supporting this edge.
+          literature_sources?: string[];
         };
         Update: {
           id?: string;
@@ -856,6 +862,8 @@ export type Database = {
             | "temporally_precedes"
             | "relates_to"
             | null;
+          // P2 · asset ids supporting this edge.
+          literature_sources?: string[];
         };
       };
       cycles: {

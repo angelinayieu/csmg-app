@@ -83,6 +83,7 @@ import { CanvasRoomExtendPopover } from "./chrome/canvas-room-extend-popover";
 import { ThreadNoteShapeUtil, THREAD_DEFAULT_W, THREAD_DEFAULT_H } from "./shapes/thread-note-shape";
 import type { StickyNoteShape, KGNodeShape, StrategyShape, ThreadNoteShape, AssetCardShape } from "./shapes/types";
 import { ThreadTethersOverlay } from "./chrome/thread-tethers-overlay";
+import { AppPairTetherOverlay } from "./chrome/app-pair-tether-overlay";
 // Phase 3 — legend / filter sidebar. Reads kind + layer counts from
 // the entity catalog API; reads axis chips live from the tldraw store
 // (every probability-space-shell shape exposes its axis as a prop).
@@ -161,6 +162,8 @@ import { useReactionLookup, useSaveReaction } from "./hooks/use-reactions";
 import { useSpaceReactions } from "./hooks/use-space-reactions";
 import { useSpaceSubjectScopes } from "./hooks/use-space-subject-scopes";
 import { CanvasSubjectScopesContext } from "./canvas-subject-scopes-context";
+import { useAssetDerivedEntities } from "./hooks/use-asset-derived-entities";
+import { CanvasAssetDerivedEntitiesContext } from "./canvas-asset-derived-entities-context";
 import { CanvasReactionsContext } from "./canvas-reactions-context";
 import {
   CanvasHierarchyContext,
@@ -358,6 +361,13 @@ function makeCanvasOverlays(
     return (
       <>
         <ThreadTethersOverlay />
+        {/* F4 / D14 — orthogonal flowchart tethers between paired
+            downstream apps (Cognitive Game ↔ Cognitive Measurement).
+            Mirrors the ThreadTethers pattern but renders solid +
+            right-angle paths with rounded corners rather than dashed
+            beziers. Solid stroke conveys structural relationship; the
+            mid-pill label communicates pair semantics. */}
+        <AppPairTetherOverlay spaceId={spaceId} />
         <CanvasLegendSidebar spaceId={spaceId} />
         <CanvasStageIndicator />
         <CanvasLassoSystemButton spaceId={spaceId} />
@@ -1444,6 +1454,19 @@ export function InteraxisCanvas({
   const subjectScopesContextValue = useMemo(
     () => ({ spaceId: space.id, index: subjectScopesIndex }),
     [space.id, subjectScopesIndex],
+  );
+
+  // P1 / D14 — asset-derived-entities index. Per-asset list of
+  // entities extracted from each asset (PDF, dataset, etc.). Consumed
+  // by AssetCardShape's "👁 highlight on canvas" button.
+  const [assetDerivedRefreshKey] = useState(0);
+  const assetDerivedIndex = useAssetDerivedEntities(
+    space.id,
+    assetDerivedRefreshKey,
+  );
+  const assetDerivedContextValue = useMemo(
+    () => ({ spaceId: space.id, index: assetDerivedIndex }),
+    [space.id, assetDerivedIndex],
   );
 
   // Phase 32: per-entity hierarchy index. Lets every KG node card show a
@@ -2533,6 +2556,7 @@ export function InteraxisCanvas({
     <CanvasHierarchyContext.Provider value={hierarchyContextValue}>
     <CanvasReactionsContext.Provider value={reactionsContextValue}>
     <CanvasSubjectScopesContext.Provider value={subjectScopesContextValue}>
+    <CanvasAssetDerivedEntitiesContext.Provider value={assetDerivedContextValue}>
     <div
       ref={rootRef}
       className="relative h-full w-full"
@@ -3446,6 +3470,7 @@ export function InteraxisCanvas({
       />
       </RunEventStoreProvider>
     </div>
+    </CanvasAssetDerivedEntitiesContext.Provider>
     </CanvasSubjectScopesContext.Provider>
     </CanvasReactionsContext.Provider>
     </CanvasHierarchyContext.Provider>

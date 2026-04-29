@@ -118,7 +118,8 @@
       "Bash(wait bnt2q9chr *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(curl -sS -o /tmp/edges_resp.txt -w \"HTTPSTATUS:%{http_code}\\\\n\" \"http://localhost:3000/api/spaces/test/edges/catalog\")"
     ]
   },
   "enabledMcpjsonServers": [

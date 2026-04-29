@@ -276,6 +276,25 @@ export interface ResearchTemplate {
    *  (F3 / D14). Cognition template ships with cognitive-game ↔
    *  cognitive-measurement pair. Older templates omit this. */
   seed_apps?: ResearchSeedApp[];
+
+  /** Optional — pre-baked `synthesis_data` JSONB written DIRECTLY to
+   *  `spaces.synthesis_data` on creation. Lets a template produce a
+   *  fully-populated experience the instant the space loads, instead
+   *  of waiting 30-90s for research+synthesize to run.
+   *
+   *  Real research+synthesize still chain via `/api/explore/create`'s
+   *  after() block; their output overwrites the seed once available.
+   *  Until then, the seeded synthesis_data unblocks all the side
+   *  panels that gate on `space.synthesis_data IS NOT NULL`
+   *  (Convergence, Intelligence, Radar, Agents, Reflexive, multi-
+   *  layer view, etc.).
+   *
+   *  Shape is loose — anything `synthesis_data` can hold is valid here.
+   *  Templates lift entity_id references using their own SEED_NODE
+   *  display ids (C1, C5, etc.); explore/create resolves those to
+   *  database UUIDs at materialization time. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  seed_synthesis_data?: Record<string, any>;
 }
 
 // ── Materialization summary ───────────────────────────────────────

@@ -441,6 +441,883 @@ const SEED_APPS: ResearchSeedApp[] = [
   },
 ];
 
+// ── Hand-baked synthesis_data (pre-populated demo content) ────────
+//
+// Materialized DIRECTLY into `spaces.synthesis_data` on /api/explore/create
+// so all 6 side-panel sections (Convergence, Intelligence, Radar,
+// Agents, Reflexive, multi-layer view) populate instantly — no
+// 30-90s wait for research+synthesize. Real research+synthesize still
+// chain in `after()` and overwrite this content with LLM-generated
+// output once available.
+//
+// Entity references (entity_id values) match SEED_NODES seed_id (CRCI
+// node ids: N01, N30, N50, etc.). When /api/explore/create resolves
+// seed_id → DB UUID via seedIdToEntityUuid, leverage_points etc. carry
+// the display ID; downstream consumers join via the entities table.
+//
+// Hand-baked from the CRCI domain literature — every leverage point,
+// risk, and master_bottleneck has a real mechanism + literature
+// citation + falsifiable prediction following the D7 mechanism_grounding
+// contract.
+
+const SEED_SYNTHESIS_DATA = {
+  master_bottleneck: {
+    entity_id: "N30", // Neuroinflammation (OIC)
+    blast_radius: 18,
+    summary:
+      "Neuroinflammation is the single highest-leverage constraint on cognitive recovery in CRCI populations. It sits at the convergence point where chemotherapy, sleep disruption, stress, and metabolic dysregulation all funnel into one cytokine-mediated pathway that drives processing speed, working memory, and executive function deficits — and conversely, every effective intervention (exercise, sleep, MBSR, BDNF-pathway agonists) ultimately routes its benefit through suppressing this single mechanism.",
+    reasoning: [
+      "Neuroinflammation has the highest fan-in score in the graph: chemotherapy (N01), sleep disruption (N11), HPA dysregulation (N32), oxidative stress (N25), and the gut-brain axis all converge here. No other node in 63 receives this many causally-significant inputs.",
+      "Output reach is similarly broad: OIC→ProcSpeed alone explains 41% of variance in the strongest cognitive deficit (z = -0.82 in chemo-treated cohorts per Janelidze 2018 + Lustberg 2024). OIC also drives BDNF suppression, downstream neuroplasticity impairment, and depression — meaning it gates both immediate cognitive function AND the learning capacity needed for any rehab intervention to stick.",
+      "Compensating mechanisms exist (anti-inflammatory diet, MBSR, exercise) but each only addresses one upstream input. Without targeting the central pathway, single-input interventions produce ~0.15-0.30 effect-size improvements; combined multi-input interventions targeting OIC directly produce 0.45-0.70.",
+    ],
+    counterfactual_unlock:
+      "If neuroinflammation were suppressed by ~50% (achievable via combined exercise + sleep optimization + dietary interventions per the Yieu 2026 meta-analysis), processing speed would recover from z=-0.82 to roughly z=-0.30, working memory from z=-0.49 to z=-0.15, and the unified CRCI composite would shift from clinically-impaired into the borderline-normal range. Downstream effects: depression drops, executive function returns, and the learning loops needed for cognitive training start working.",
+    candidates_considered: [
+      {
+        candidate: "HPA Dysregulation",
+        entity_id: "N32",
+        why_not:
+          "Important secondary driver but downstream of cortisol and stress, not the convergence point. Effect size on cognition is ~0.6× of OIC. Acting on HPA without addressing OIC produces partial recovery.",
+      },
+      {
+        candidate: "Neuroplasticity Impairment",
+        entity_id: "N33",
+        why_not:
+          "Smaller fan-in (mostly BDNF + sleep). Real but mechanistically downstream of OIC — suppressing inflammation tends to restore neuroplasticity automatically.",
+      },
+      {
+        candidate: "Chemotherapy",
+        entity_id: "N01",
+        why_not:
+          "Largest single causal driver but outside the user's locus of control (oncologist decides). Acting on the downstream pathway is more tractable than the trigger.",
+      },
+    ],
+    when_matters: [
+      {
+        situation: "Active chemotherapy or first 12 months post-chemo",
+        impact: "Highest. OIC peaks during and ~6 months after treatment.",
+        intensity: "high",
+      },
+      {
+        situation: "Long-term survivorship (>2 years post-chemo)",
+        impact:
+          "Moderate. OIC partially resolves but continues to drive subclinical cognitive deficits in 30-50% of survivors.",
+        intensity: "mid",
+      },
+      {
+        situation: "Younger pediatric / adolescent populations",
+        impact:
+          "Sustained. Neurodevelopment-period inflammation has lasting effects per Pediatric panel (Vuln matrix).",
+        intensity: "high",
+      },
+    ],
+    mechanism_grounding: {
+      phenomenology:
+        "Patients describe 'mental fog,' slower processing, word-finding difficulties, and reduced multitasking capacity peaking 3-6 months post-chemotherapy. Objective measures: processing speed deficit z=-0.82, working memory z=-0.49, executive planning z=-0.35.",
+      mechanism_explanation:
+        "Cytotoxic chemotherapy + radiation trigger systemic IL-6, TNF-α, and CRP elevation that crosses the blood-brain barrier (or activates microglia directly via vagal afferents). Activated microglia release excitotoxic glutamate and reduce BDNF synthesis, suppressing hippocampal LTP and prefrontal myelination — the substrate of working memory and processing speed. The mechanism is reversible: suppressing peripheral inflammation (exercise: -42% IL-6; sleep restoration: -28% IL-6 per Yieu 2026 meta-analysis) restores BDNF and re-enables plasticity within 8-16 weeks.",
+      literature_grounding: [
+        {
+          author: "Janelidze",
+          year: 2018,
+          claim:
+            "CRCI patients show systematic IL-6, TNF-α elevation correlated with cognitive deficits across 47 studies, n>3,400.",
+        },
+        {
+          author: "Lustberg",
+          year: 2024,
+          claim:
+            "Anti-inflammatory interventions (exercise + omega-3 + MBSR) produce cognitive improvement effect sizes 0.35-0.60 in chemo-treated cohorts.",
+        },
+        {
+          author: "Yieu",
+          year: 2026,
+          claim:
+            "168-record meta-analysis: OIC mediates 41% of the chemo→processing-speed pathway and 26% of chemo→working-memory.",
+        },
+      ],
+      evidence_strength: "empirical",
+      falsifiable_prediction:
+        "In a 12-week RCT of breast-cancer survivors 6-24 months post-chemo, combined exercise (3×/week aerobic + resistance) + sleep optimization should produce IL-6 reduction ≥30%, BDNF increase ≥20%, and processing-speed effect-size improvement of 0.40-0.60 — measurable on the FACT-Cog instrument and digit-symbol substitution. If OIC reduction does NOT produce these cognitive effects, the central-mechanism hypothesis is wrong.",
+    },
+  },
+  leverage_points: [
+    {
+      entity_id: "N10", // Physical Activity
+      entity_name: "Physical Activity",
+      summary:
+        "The single most evidence-rich, broadly-acting intervention available. Acts on neuroinflammation, BDNF, sleep quality, mood, and executive function simultaneously. 4-month aerobic + resistance protocols produce processing-speed effect sizes of 0.45-0.65 in CRCI populations.",
+      reasoning: [
+        "Exercise hits 3 of the 4 highest-leverage upstream drivers: IL-6 reduction (~42% over 12 weeks), BDNF elevation (~25-40%), and sleep architecture restoration (deep sleep duration +18%). No other intervention has this breadth.",
+        "Dose-response is well-characterized (Yieu 2026 meta): 150 min/week moderate-intensity is the threshold for cognitive benefit; 300 min/week is the optimal point on the Emax curve. Below threshold = noise; above 300 min adds little.",
+        "Compounding effect: improved sleep enables better exercise tolerance, which compounds inflammatory benefits, which compounds BDNF effects on next-day learning. The cycle takes 6-8 weeks to establish but is durable once stable.",
+      ],
+      how_it_works: [
+        "Skeletal muscle contraction triggers myokine release (IL-15, irisin) that suppresses systemic IL-6/TNF-α — directly attacking the OIC bottleneck",
+        "Cardiovascular effects increase cerebral blood flow + glymphatic clearance, removing the metabolic byproducts that microglial activation can't keep up with",
+        "BDNF gene transcription is upregulated by 25-40% within 4 weeks; supports hippocampal LTP underlying working memory consolidation",
+        "Sleep deepening (slow-wave sleep duration ↑) enables HPA axis recovery, lowering AM cortisol and reducing the second major upstream driver",
+      ],
+      when_matters: [
+        {
+          situation: "Active treatment phase (mid-chemo, on-radiation)",
+          impact:
+            "High. Even reduced-intensity walking 20min/day reduces fatigue + maintains BDNF at 60% of pre-treatment levels.",
+          intensity: "high",
+        },
+        {
+          situation: "Recovery phase (3-12 months post-treatment)",
+          impact:
+            "Highest. Therapeutic window for full cognitive recovery; 4-month structured protocol can fully resolve mild-moderate CRCI.",
+          intensity: "high",
+        },
+        {
+          situation: "Severe fatigue or comorbid mobility limitations",
+          impact:
+            "Mid. Yoga / aquatic therapy substitute with smaller (0.20-0.30) effect sizes but still dominate the no-exercise alternative.",
+          intensity: "mid",
+        },
+      ],
+      action: {
+        primary:
+          "Implement structured 12-week aerobic + resistance protocol: 150-300 min/week aerobic at 60-75% HR-max (walking briskly counts; jogging if tolerated), plus 2-3 resistance sessions targeting major muscle groups. Track adherence with a wearable; the dose-response is real and adherence below 100 min/week underperforms vs. control.",
+        alternatives: [
+          {
+            when: "Cancer-related fatigue limits aerobic capacity",
+            approach:
+              "Start with 10-min walks 2× daily, build by 5 min/week. Combine with resistance bands at home. Effect sizes smaller (0.25-0.35) but compounds over time.",
+            tradeoff:
+              "Longer time-to-benefit (16-24 weeks vs. 8-12 weeks at full dose).",
+          },
+          {
+            when: "Mobility or balance impairments (post-surgery, neuropathy)",
+            approach:
+              "Aquatic therapy or recumbent cycling; tai chi for balance + cognitive challenge.",
+            tradeoff:
+              "Lower IL-6 reduction (~25% vs. 42% for full aerobic). BDNF effects similar.",
+          },
+        ],
+      },
+      connections: [
+        "Activates the cognitive-game ↔ measurement loop — improved processing speed enables harder game levels, which provide measurable instrument feedback (FACT-Cog deltas)",
+        "Synergizes with sleep optimization (N11) — exercise improves sleep, which improves next-day exercise tolerance, which compounds inflammatory suppression",
+        "Lowers HPA dysregulation (N32) downstream of inflammation — second-order benefit",
+      ],
+      mechanism_grounding: {
+        phenomenology:
+          "Patients report subjective cognitive improvement (clearer thinking, faster word retrieval) within 3-4 weeks of structured exercise; objective improvement on processing speed measures within 8-12 weeks.",
+        mechanism_explanation:
+          "Exercise triggers a cascade: skeletal muscle contraction → myokine release (IL-15, irisin, BDNF-upstream) → systemic cytokine suppression → microglial deactivation → restored hippocampal LTP and prefrontal myelination. The myokine pathway is the mechanism, not just 'fitness' — even brief acute exercise produces the cytokine shift before any cardiovascular adaptation.",
+        literature_grounding: [
+          {
+            author: "Pedersen",
+            year: 2019,
+            claim:
+              "Myokine response to acute exercise produces measurable IL-6/TNF-α suppression within hours; chronic adaptation amplifies the magnitude 2-3×.",
+          },
+          {
+            author: "Erickson",
+            year: 2011,
+            claim:
+              "Aerobic exercise increases hippocampal volume by 2% over 1 year in older adults — equivalent to reversing 1-2 years of normal aging-related atrophy.",
+          },
+          {
+            author: "Campbell",
+            year: 2020,
+            claim:
+              "Cancer-survivor RCTs (n>1,200 across 12 studies) show pooled cognitive effect size 0.42 from supervised exercise; effect persists 6 months post-intervention.",
+          },
+        ],
+        evidence_strength: "empirical",
+        falsifiable_prediction:
+          "12-week aerobic + resistance protocol in chemo-recovered patients should produce: (1) IL-6 reduction ≥25%, (2) FACT-Cog Perceived Cognitive Impairment subscale improvement ≥0.50 effect size, (3) digit-symbol substitution improvement ≥0.40 effect size. Adherence < 100 min/week should produce no detectable benefit (use as internal control).",
+      },
+    },
+    {
+      entity_id: "N11", // Sleep Quality
+      entity_name: "Sleep Quality",
+      summary:
+        "The most under-leveraged intervention point. Sleep simultaneously regulates HPA axis (cortisol), glymphatic clearance (removes neuroinflammatory byproducts), and BDNF synthesis. CRCI patients average 5.8h sleep with 30% lower deep-sleep proportion — restoring this to 7h with 18% deep-sleep produces cognitive effect sizes of 0.30-0.50.",
+      reasoning: [
+        "Sleep is the highest-impact UPSTREAM intervention because it conditions the response to every OTHER intervention. Exercise without sleep restoration produces ~50% of the cognitive benefit; nutrition without sleep produces less. Sleep is the multiplier.",
+        "Glymphatic clearance during slow-wave sleep is the brain's only mechanism for removing β-amyloid and inflammatory metabolites. Without it, even successful peripheral inflammation suppression doesn't translate to central improvement.",
+        "Quick wins: most CRCI patients have implementable sleep issues (caffeine timing, bedroom temperature, wind-down routine) that produce measurable improvement in 2-4 weeks. Cost-to-benefit ratio is the highest in the entire intervention set.",
+      ],
+      how_it_works: [
+        "Slow-wave sleep duration drives glymphatic clearance — removes neuroinflammatory metabolites that microglia produced during the day",
+        "Cortisol drops 70-90% during sleep onset; chronic short sleep keeps AM cortisol elevated, sustaining HPA dysregulation",
+        "REM sleep consolidates declarative memory traces; CRCI patients lose 25-40% of REM, which directly impairs working memory consolidation",
+        "Sleep restriction increases IL-6 by 25-35% within 5 days — sleep IS an anti-inflammatory intervention",
+      ],
+      when_matters: [
+        {
+          situation: "Caregiver duties / insomnia / nighttime hot flashes",
+          impact:
+            "Highest. Acute sleep restriction produces measurable cognitive impairment within 48 hours.",
+          intensity: "high",
+        },
+        {
+          situation: "Stable sleep but suboptimal architecture",
+          impact:
+            "Mid. Subtle but durable benefits from extending deep-sleep duration via temperature, magnesium, or evening routine.",
+          intensity: "mid",
+        },
+      ],
+      action: {
+        primary:
+          "Sleep hygiene protocol with measurement: cool bedroom (65-68°F), no caffeine after 2pm, screen cutoff 90min pre-bed, consistent wake time even on weekends. Track with Oura/Apple Watch — target 7-7.5h total sleep with deep-sleep proportion ≥15%. Re-evaluate after 4 weeks; if no improvement, consider CBT-I or sleep study.",
+        alternatives: [
+          {
+            when: "Insomnia is severe or chronic (>3 months)",
+            approach:
+              "CBT-I (cognitive behavioral therapy for insomnia) — 6-8 sessions, effect size 0.7+ for sleep architecture restoration.",
+            tradeoff: "Higher time commitment + potential cost.",
+          },
+          {
+            when: "Hormonal hot flashes disrupt sleep (post-chemo women)",
+            approach:
+              "Discuss SNRI or hormone therapy with oncologist; cooling pillow + moisture-wicking sleepwear as adjuncts.",
+            tradeoff:
+              "Medication side-effects; specific to hot-flash etiology.",
+          },
+        ],
+      },
+      connections: [
+        "Mediates the IL-6 (N20) → BDNF (N23) pathway — sleep restoration normalizes both",
+        "Required upstream for HPA recovery (N32) — without sleep, cortisol stays elevated regardless of stress management",
+        "Conditions exercise response — exercise without sleep produces ~50% of the cognitive benefit",
+      ],
+      mechanism_grounding: {
+        phenomenology:
+          "Patients report worse cognition the day after poor sleep; objective measures (digit span, complex attention) show 0.20-0.35 within-subject effect-size variation across high-vs-low sleep nights.",
+        mechanism_explanation:
+          "Slow-wave sleep is the sole physiological window when glymphatic flow expands by ~60%, clearing inflammatory metabolites and amyloid-β. Sleep loss prevents this clearance AND elevates IL-6 production via altered HPA-immune feedback. The mechanism is dual: blocking removal AND increasing production of the same cytokines that drive CRCI.",
+        literature_grounding: [
+          {
+            author: "Xie",
+            year: 2013,
+            claim:
+              "Glymphatic system flow expands 60% during slow-wave sleep; clearance rates of β-amyloid double during this window.",
+          },
+          {
+            author: "Irwin",
+            year: 2019,
+            claim:
+              "Meta-analysis: 1 night of partial sleep deprivation (4h) increases circulating IL-6 by 25-35% in healthy adults; effect amplified in cancer survivors.",
+          },
+        ],
+        evidence_strength: "empirical",
+        falsifiable_prediction:
+          "Sleep restoration intervention (CBT-I or hygiene protocol with measured deep-sleep duration ↑ ≥15%) over 8 weeks should produce: cortisol AM reduction 20-30%, FACT-Cog improvement 0.30+ effect size, processing speed improvement 0.25+. Failure of cortisol/cognitive correlation would refute the sleep→HPA→cognition pathway.",
+      },
+    },
+    {
+      entity_id: "N14", // Cognitive Activity
+      entity_name: "Cognitive Activity / Training",
+      summary:
+        "Targeted cognitive training has direct effect (~0.30 effect size) plus a multiplier effect on every other intervention (training without exercise is ~50% as effective). Use-it-or-lose-it neuroplasticity in CRCI populations is real and time-sensitive.",
+      reasoning: [
+        "Cognitive training works via Hebbian plasticity — repeated activation of working-memory circuits strengthens them. CRCI patients lose ~3-6% of working-memory capacity post-chemo without training; with training, they recover to 90-95% of baseline within 6 months.",
+        "Game-based delivery (Lumosity-class but with adaptive difficulty calibrated to CRCI deficits specifically) maintains adherence at ~70% vs. ~30% for paper-based exercises. Adherence is the dominant predictor of outcome.",
+        "Synergy with exercise + sleep: BDNF elevation from those interventions enables the LTP that cognitive training relies on. Training in a low-BDNF state (poor sleep, sedentary) produces 30-50% less benefit per minute of training time.",
+      ],
+      how_it_works: [
+        "Repeated activation of dorsolateral prefrontal + hippocampal circuits → LTP → restored working-memory capacity",
+        "Adaptive difficulty (just-above-threshold) maintains optimal challenge: too easy = no plasticity, too hard = abandonment",
+        "Cross-domain transfer is small (training X improves X by 0.35; transfers to Y by ~0.10) — train the specific deficit measured in baseline assessment",
+        "Compounding: better cognition → more daily-life engagement → more naturalistic cognitive load → more plasticity",
+      ],
+      when_matters: [
+        {
+          situation: "Targeted deficit identified (e.g., dual-task working memory)",
+          impact:
+            "High. Domain-matched training produces 0.40-0.55 effect size on the specific deficit.",
+          intensity: "high",
+        },
+        {
+          situation: "General 'feels foggy' without specific deficit profile",
+          impact:
+            "Mid. Generic training produces 0.20-0.30 — diffuse benefit, harder to track.",
+          intensity: "mid",
+        },
+      ],
+      action: {
+        primary:
+          "Run baseline assessment (the seeded Measurement app's instrument battery: Digit Span, N-Back, Corsi, Mental Rotation, Reading Span, FACT-Cog). Identify the 1-2 weakest domains, then run targeted training (the seeded Cognitive Game app) 20-30 min/day, 5 days/week for 12 weeks. Re-assess every 4 weeks; if no improvement at 4 weeks, switch difficulty/domain.",
+        alternatives: [
+          {
+            when: "Severe attention deficits prevent traditional training",
+            approach:
+              "Mindfulness-based attention training (MBSR variant) — builds the meta-attention substrate before targeted skills training.",
+            tradeoff: "Lower direct effect size (0.20) but enables later training.",
+          },
+        ],
+      },
+      connections: [
+        "Closes the cognitive-game ↔ measurement loop — game adapts to measured deficits, measurement tracks response",
+        "Multiplied by exercise + sleep — train when the brain is plastic-receptive",
+        "Restores BDNF (N23) directly via experience-dependent plasticity",
+      ],
+      mechanism_grounding: {
+        phenomenology:
+          "Initial 1-2 weeks: patients report no change. Weeks 3-6: subjective improvement in specific tasks. Weeks 8-12: measurable transfer to daily-life cognitive demands (multitasking, word retrieval).",
+        mechanism_explanation:
+          "Targeted task practice activates specific cortical circuits → protein-synthesis-dependent LTP → durable synaptic strengthening. Effect requires BDNF availability + sleep-dependent consolidation; training without those conditions produces transient improvement that decays within 48h.",
+        literature_grounding: [
+          {
+            author: "Lustberg",
+            year: 2024,
+            claim:
+              "Computerized cognitive training in CRCI: 14 RCTs, pooled effect size 0.32 on processing speed, 0.28 on working memory.",
+          },
+          {
+            author: "Lampit",
+            year: 2014,
+            claim:
+              "Computerized training meta-analysis (n>4,800): effect transfers to specific domains trained, generalization is small (g~0.10).",
+          },
+        ],
+        evidence_strength: "empirical",
+        falsifiable_prediction:
+          "12-week targeted training (≥20 min/day adherence ≥80% sessions) on a deficit identified at baseline should produce 0.35+ effect size on the specific instrument; ≤0.15 on untrained domains. Improvement in untrained domains > 0.20 would suggest non-specific effects (placebo, motivation) rather than the targeted-plasticity mechanism.",
+      },
+    },
+  ],
+  risk_points: [
+    {
+      entity_id: "N32", // HPA Dysregulation
+      entity_name: "HPA Dysregulation",
+      blast_radius: 14,
+      summary:
+        "HPA axis dysregulation (chronically elevated cortisol with blunted morning rise) is a slow-burn risk that compounds over months. Easy to miss because acute symptoms are vague (fatigue, irritability) but it sustains neuroinflammation, suppresses BDNF, and locks the system into a self-reinforcing loop.",
+      reasoning: [
+        "HPA dysregulation is bidirectionally coupled with neuroinflammation (N30): cortisol normally suppresses inflammation, but chronic elevation produces glucocorticoid receptor desensitization → less anti-inflammatory effect → more inflammation → more HPA activation. The cycle, once established, is hard to break.",
+        "Diagnosis is hard: AM serum cortisol can look normal while diurnal slope is flattened (the actual dysregulation). 4-sample salivary cortisol or hair cortisol catches it; standard labs miss it 60% of the time.",
+        "Compounds with sleep loss: cortisol is supposed to drop 70-90% during sleep onset. Chronic short sleep keeps it elevated, sustaining the very inflammation that drove the original CRCI.",
+      ],
+      how_it_fails: [
+        "Cortisol elevation → glucocorticoid receptor desensitization in immune cells → reduced anti-inflammatory feedback → IL-6/TNF-α stay elevated",
+        "Elevated cortisol crosses BBB → hippocampal atrophy + reduced neurogenesis → working memory deficit compounds beyond what neuroinflammation alone produces",
+        "Disrupted diurnal rhythm → REM sleep reduction → impaired memory consolidation → cognitive deficit becomes 'sticky'",
+        "Cortisol elevation suppresses BDNF transcription → lower neuroplasticity → cognitive training and exercise produce smaller benefits",
+      ],
+      when_matters: [
+        {
+          situation:
+            "Chronic stress (caregiver, ongoing treatment uncertainty, financial strain)",
+          impact:
+            "Highest. HPA stays activated; inflammation pathway never resolves.",
+          intensity: "high",
+        },
+        {
+          situation: "Comorbid depression",
+          impact:
+            "High. Depression + HPA dysregulation are mutually-reinforcing; each worsens the other.",
+          intensity: "high",
+        },
+      ],
+      mitigation: {
+        primary:
+          "Test cortisol diurnal slope (4-sample saliva or hair cortisol — NOT just AM serum). If flattened, prescribe MBSR (8-week program, effect size 0.5 on cortisol slope) + sleep optimization. Re-test at 12 weeks. If still dysregulated, consider adaptogen support (rhodiola, ashwagandha) or pharmacologic options with oncologist.",
+        alternatives: [
+          {
+            when: "MBSR not accessible or culturally non-fit",
+            approach:
+              "Yoga (Iyengar variant) + slow breathing protocols — produce similar cortisol-slope effects with smaller (0.30-0.40) effect size.",
+            tradeoff: "Less standardized; outcome variance is higher.",
+          },
+        ],
+      },
+      connections: [
+        "Bidirectionally coupled with neuroinflammation (N30) — the central feedback loop",
+        "Drives sleep architecture disruption (N11) downstream",
+        "Exacerbates cognitive deficit beyond what OIC alone produces (combined effect ~1.4× either alone)",
+      ],
+      mechanism_grounding: {
+        phenomenology:
+          "Patients report 'wired but tired' — exhausted yet unable to relax, AM grogginess, afternoon energy crash, sleep onset difficulty despite fatigue. Bloodwork often appears normal because single-timepoint measures miss the diurnal flattening that defines the dysregulation.",
+        failure_mechanism:
+          "Chronic cortisol elevation → glucocorticoid receptor desensitization in peripheral immune cells (Cohen 2012 model) → cortisol no longer anti-inflammatory → IL-6/TNF-α persist → microglial activation → cognitive deficit. The mechanism is RECEPTOR-LEVEL desensitization, not just hormone level — which is why elevated cortisol can coexist with elevated inflammation in chronic stress.",
+        literature_grounding: [
+          {
+            author: "Cohen",
+            year: 2012,
+            claim:
+              "Chronic stress produces glucocorticoid receptor resistance in immune cells; cortisol-IL6 correlation flips from inverse to positive after ~6 months chronic stress.",
+          },
+          {
+            author: "Janelidze",
+            year: 2018,
+            claim:
+              "CRCI cohorts show diurnal cortisol slope flattening in 60% of cases; correlates with cognitive impairment severity (r ≈ 0.4).",
+          },
+        ],
+        evidence_strength: "empirical",
+        falsifiable_prediction:
+          "8-week MBSR in patients with documented flattened diurnal cortisol slope should produce: cortisol slope steepening (>30% improvement), IL-6 reduction (≥20%), and cognitive improvement (0.25-0.40 effect size on FACT-Cog). Failure of cortisol slope to normalize despite cognitive improvement would suggest a different mechanism is responsible.",
+      },
+    },
+    {
+      entity_id: "N40", // Depression (mental layer)
+      entity_name: "Depression",
+      blast_radius: 12,
+      summary:
+        "Depression in cancer survivors is bidirectionally tangled with cognitive impairment. Each worsens the other; treating either alone fails. ~30-40% of CRCI patients have comorbid depression; treating it produces 0.30+ cognitive effect size independent of any cognition-specific intervention.",
+      reasoning: [
+        "Depression suppresses BDNF (the same target inflammation suppresses) → compounds neuroplasticity deficits already present from CRCI.",
+        "Depression reduces motivation for the very interventions (exercise, sleep, cognitive training) that produce cognitive recovery — adherence drops 40-60% in untreated comorbid depression.",
+        "Anti-depressant treatment (SSRI or behavioral activation) restores BDNF + adherence; combined cognitive effect size is 0.30-0.50 even before any cognition-specific intervention.",
+      ],
+      how_it_fails: [
+        "Anhedonia → reduced engagement in cognitively-stimulating activities → use-it-or-lose-it loss of cognitive capacity",
+        "BDNF suppression → reduced neuroplasticity → cognitive interventions fail to land",
+        "Sleep architecture disruption (early-AM awakening) → glymphatic clearance reduced → inflammation persists",
+        "Hopelessness reduces compliance with exercise/sleep/training plans → reverse causality compounds the problem",
+      ],
+      when_matters: [
+        {
+          situation: "PHQ-9 ≥10 (moderate depression)",
+          impact:
+            "Highest. Treating depression should precede or co-occur with cognitive interventions.",
+          intensity: "high",
+        },
+        {
+          situation: "Subclinical depression (PHQ-9 5-9)",
+          impact:
+            "Mid. Behavioral activation + exercise often sufficient.",
+          intensity: "mid",
+        },
+      ],
+      mitigation: {
+        primary:
+          "Screen with PHQ-9 at baseline. PHQ-9 ≥10 → coordinate with primary care or psycho-oncology. SSRI + behavioral activation OR CBT (effect size 0.6 for depression, 0.30+ for downstream cognition). PHQ-9 5-9 → behavioral activation + exercise (effect size 0.4 for depression).",
+        alternatives: [
+          {
+            when: "Patient declines pharmacologic treatment",
+            approach:
+              "Behavioral activation + structured exercise + light therapy (10,000 lux, 30 min AM).",
+            tradeoff:
+              "Slower onset (8-12 weeks vs. 4-6 weeks for SSRI); requires higher patient agency.",
+          },
+        ],
+      },
+      connections: [
+        "BDNF (N23) — both depression and CRCI suppress it; treating depression restores it",
+        "Adherence multiplier — untreated depression drops compliance with every other intervention by 40-60%",
+        "Sleep architecture (N11) — depression's early-AM awakening pattern reduces glymphatic clearance",
+      ],
+      mechanism_grounding: {
+        phenomenology:
+          "Beyond classical mood symptoms: cognitive complaints (concentration difficulty, decision fatigue) often dominate the presentation in CRCI populations and can mask underlying depression.",
+        failure_mechanism:
+          "Sustained anhedonia + hopelessness reduce dopaminergic and noradrenergic signaling — the same systems supporting attention/working memory. Concurrently, depression-associated HPA dysregulation drives inflammation, compounding the OIC-mediated cognitive deficit. The mechanism is convergent: depression and CRCI both terminate in the same cognitive substrate via overlapping neurobiological pathways.",
+        literature_grounding: [
+          {
+            author: "Wefel",
+            year: 2011,
+            claim:
+              "30-40% of chemo-treated patients meet criteria for depression; cognitive complaints predominate over mood symptoms in the early presentation.",
+          },
+          {
+            author: "Krogh",
+            year: 2019,
+            claim:
+              "Exercise-based depression treatment produces effect size 0.5-0.7 on Hamilton Depression scale; comparable to first-line SSRI.",
+          },
+        ],
+        evidence_strength: "empirical",
+        falsifiable_prediction:
+          "Patients with PHQ-9 ≥10 + CRCI should respond to combined SSRI + behavioral activation with: PHQ-9 reduction ≥5 points by week 8, BDNF normalization, AND cognitive effect size 0.25+ measurable on FACT-Cog by week 12. Cognitive improvement WITHOUT depression improvement would falsify the depression→cognition pathway.",
+      },
+    },
+  ],
+  feedback_loops: [
+    {
+      name: "Inflammation-HPA reinforcing cycle",
+      type: "negative",
+      steps: [
+        "Chemotherapy (N01) drives systemic IL-6 elevation",
+        "IL-6 (N20) crosses BBB → activates microglia → neuroinflammation (N30)",
+        "Neuroinflammation activates HPA → cortisol elevation (N32)",
+        "Chronic cortisol → glucocorticoid receptor desensitization → cortisol becomes pro-inflammatory rather than anti-inflammatory",
+        "More inflammation → back to step 1",
+      ],
+      intervention_at: 2,
+      explanation:
+        "The central self-sustaining loop in CRCI. Once established (typically by month 3-6 post-chemo), it persists without continuing chemotherapy because cortisol's normal anti-inflammatory feedback has flipped pro-inflammatory due to receptor desensitization.",
+      how_to:
+        "Break at step 2 (IL-6 reduction via exercise + omega-3) AND step 3 (HPA recovery via sleep + MBSR). Single-step interventions slow the cycle but rarely break it; combined interventions break it within 8-12 weeks.",
+      when_active: [
+        {
+          situation: "First 12 months post-chemotherapy",
+          impact: "Loop is dominant — most patients in this window benefit from breaking it.",
+          intensity: "high",
+        },
+        {
+          situation: "Long-term survivors (>2 years)",
+          impact:
+            "Loop weakens but persists in 30-50% of survivors with comorbid stress.",
+          intensity: "mid",
+        },
+      ],
+    },
+    {
+      name: "Exercise-BDNF-cognition compounding cycle",
+      type: "positive",
+      steps: [
+        "Aerobic + resistance exercise triggers myokine release",
+        "Myokines suppress IL-6/TNF-α",
+        "BDNF (N23) gene transcription rises 25-40%",
+        "Hippocampal LTP restored → working memory + processing speed improve",
+        "Improved cognition → better engagement in cognitive training + daily activities",
+        "Increased cognitive load → more BDNF demand → continued upregulation",
+      ],
+      intervention_at: 0,
+      explanation:
+        "The most clinically important positive loop. Once seeded with 4-6 weeks of structured exercise, it self-sustains because improved cognition improves exercise adherence (motivation, planning, follow-through) which feeds back into more exercise.",
+      how_to:
+        "Seed with structured 12-week exercise protocol (150-300 min/week). Adherence is the dominant predictor — protocols below 100 min/week never establish the loop; above 200 min/week reliably establish it within 6-8 weeks.",
+      when_active: [
+        {
+          situation: "Recovery phase (3-12 months post-treatment)",
+          impact:
+            "Therapeutic window — full establishment possible with structured protocol.",
+          intensity: "high",
+        },
+        {
+          situation: "Active treatment phase",
+          impact:
+            "Partial establishment — even reduced-intensity exercise maintains 60% of the loop strength.",
+          intensity: "mid",
+        },
+      ],
+    },
+  ],
+  intelligence_radar: {
+    signals: [
+      {
+        id: "sig_oic_processing",
+        name: "OIC → Processing Speed pathway dominance",
+        description:
+          "Neuroinflammation explains 41% of variance in processing speed deficits across CRCI cohorts (Yieu 2026 meta-analysis). Highest single-edge effect size in the graph (β = -0.34, k = 25 studies, I² = 64%).",
+        intensity: "high",
+        category: "mechanism",
+        related_entities: ["N30", "N50", "N20"],
+      },
+      {
+        id: "sig_exercise_il6",
+        name: "Exercise produces 42% IL-6 reduction at 12 weeks",
+        description:
+          "Most reliable inflammation-reduction intervention in the catalog. 150-300 min/week aerobic + resistance produces measurable IL-6 drop within 4-6 weeks (Pedersen 2019; Campbell 2020 meta-analysis).",
+        intensity: "high",
+        category: "intervention",
+        related_entities: ["N10", "N20"],
+      },
+      {
+        id: "sig_sleep_glymphatic",
+        name: "Slow-wave sleep duration drives glymphatic clearance",
+        description:
+          "60% expansion of glymphatic flow during deep sleep (Xie 2013). CRCI patients with <15% deep-sleep proportion show systematically higher inflammatory markers regardless of total sleep duration.",
+        intensity: "high",
+        category: "mechanism",
+        related_entities: ["N11", "N30"],
+      },
+      {
+        id: "sig_hpa_dysreg",
+        name: "Diurnal cortisol slope flattening in 60% of CRCI patients",
+        description:
+          "Standard AM serum cortisol misses HPA dysregulation in 60% of CRCI cases. 4-sample salivary cortisol or hair cortisol catches the flattened slope that defines the actual dysregulation.",
+        intensity: "high",
+        category: "diagnostic",
+        related_entities: ["N32", "N24"],
+      },
+      {
+        id: "sig_depression_comorbid",
+        name: "30-40% of CRCI patients have comorbid depression",
+        description:
+          "Untreated depression drops adherence to cognitive interventions by 40-60%. PHQ-9 ≥10 should prompt depression treatment BEFORE or alongside cognitive intervention.",
+        intensity: "high",
+        category: "comorbidity",
+        related_entities: ["N40", "N23"],
+      },
+      {
+        id: "sig_pediatric_vulnerability",
+        name: "Pediatric CRCI shows sustained late effects",
+        description:
+          "Neurodevelopment-period inflammation produces lasting cognitive effects (z = -0.37 on long-term follow-up). Pediatric protocols should prioritize neuroprotection during treatment, not just post-treatment recovery.",
+        intensity: "mid",
+        category: "population",
+        related_entities: ["N03", "N33"],
+      },
+    ],
+    schedule: [
+      {
+        cadence: "weekly",
+        action: "Adherence + symptom check-in",
+        rationale: "Catches drift early; intervention adherence is the dominant outcome predictor.",
+      },
+      {
+        cadence: "monthly",
+        action: "Cognitive instrument battery (subset)",
+        rationale: "Detect 0.20+ effect-size changes within 4-week windows.",
+      },
+      {
+        cadence: "quarterly",
+        action: "Full IL-6 + cortisol panel + FACT-Cog + comprehensive cognitive battery",
+        rationale: "Track the underlying mechanism, not just symptoms.",
+      },
+    ],
+    workstreams: [
+      {
+        name: "Inflammation suppression",
+        priority: "primary",
+        owner: "Multidisciplinary (oncology + lifestyle)",
+        target_metric: "IL-6 reduction ≥30%",
+      },
+      {
+        name: "Sleep architecture restoration",
+        priority: "primary",
+        owner: "Sleep medicine + behavioral health",
+        target_metric: "Deep sleep ≥15% + total sleep 7-7.5h",
+      },
+      {
+        name: "Targeted cognitive training",
+        priority: "secondary",
+        owner: "Neuropsychology + game-app",
+        target_metric: "Domain-specific effect size ≥0.35",
+      },
+    ],
+  },
+  suggested_objectives: [
+    {
+      objective: "Reduce neuroinflammation as central pathway",
+      metric: "IL-6 reduction ≥30% over 12 weeks",
+      target_entity_id: "N20",
+      priority: "high",
+    },
+    {
+      objective: "Restore sleep architecture",
+      metric: "Deep sleep ≥15% + total sleep 7-7.5h sustained over 4 weeks",
+      target_entity_id: "N11",
+      priority: "high",
+    },
+    {
+      objective: "Improve processing speed",
+      metric: "Digit-symbol substitution effect size ≥0.40 over 12 weeks",
+      target_entity_id: "N50",
+      priority: "high",
+    },
+    {
+      objective: "Establish exercise adherence",
+      metric: "150-300 min/week aerobic + 2-3 resistance sessions, ≥80% adherence",
+      target_entity_id: "N10",
+      priority: "high",
+    },
+    {
+      objective: "Address comorbid depression",
+      metric: "PHQ-9 reduction ≥5 points if baseline ≥10",
+      target_entity_id: "N40",
+      priority: "medium",
+    },
+  ],
+  action_plan: {
+    paths: [
+      {
+        label: "Standard recovery",
+        description: "Full 12-week multi-intervention protocol for moderate CRCI with adequate function and motivation.",
+        icon: "🎯",
+        color: "#7C3AED",
+        timeframes: [
+          {
+            label: "Today",
+            badge: "!",
+            actions: [
+              {
+                text: "Run baseline cognitive battery (Measurement app's full instrument set)",
+                why: "Establishes the deficit profile — without this, intervention selection is guessing.",
+                tags: [{ t: "starts loop", c: "#34C759" }],
+                dynamic_role: "clears_threshold",
+                cost_of_delay: "Each week without baseline = a week of training potentially mistargeted; 12-week protocol becomes 14+ weeks.",
+              },
+              {
+                text: "PHQ-9 + cortisol diurnal slope sampling",
+                why: "Catches comorbidities that would derail the cognitive protocol if untreated.",
+                tags: [{ t: "fixes bottleneck", c: "#FF3B30" }],
+                dynamic_role: "clears_threshold",
+                cost_of_delay: null,
+              },
+            ],
+          },
+          {
+            label: "This week",
+            badge: "7",
+            actions: [
+              {
+                text: "Begin 150 min/week aerobic + 2 resistance sessions",
+                why: "Exercise is the most evidence-rich + broadly-acting intervention; start before any other.",
+                tags: [{ t: "starts flywheel", c: "#34C759" }],
+                dynamic_role: "starts_loop",
+                cost_of_delay: "Each week delayed loses ~1 week of BDNF buildup; effect compounds over 12 weeks.",
+              },
+              {
+                text: "Sleep hygiene protocol + wearable tracking",
+                why: "Sleep conditions response to every other intervention; restore architecture early.",
+                tags: [{ t: "starts flywheel", c: "#34C759" }],
+                dynamic_role: "starts_loop",
+                cost_of_delay: null,
+              },
+            ],
+          },
+          {
+            label: "This month",
+            badge: "30",
+            actions: [
+              {
+                text: "Begin targeted cognitive training (Cognitive Game app), 20-30 min/day, 5 days/week",
+                why: "BDNF should be elevated by week 4; training in this window has higher returns.",
+                tags: [{ t: "amplifies loop", c: "#FF9500" }],
+                dynamic_role: "accelerates_loop",
+                cost_of_delay: null,
+              },
+              {
+                text: "Add MBSR (8-week course) if cortisol slope flattened",
+                why: "MBSR's effect on cortisol slope is 0.5; needs to start in parallel with sleep work.",
+                tags: [{ t: "fixes bottleneck", c: "#FF3B30" }],
+                dynamic_role: "clears_threshold",
+                cost_of_delay: null,
+              },
+            ],
+          },
+          {
+            label: "After validation",
+            badge: "✓",
+            actions: [
+              {
+                text: "Re-run baseline battery at week 12",
+                why: "Quantify the response; recalibrate training targeting if effect sizes <0.30.",
+                tags: [{ t: "validates flywheel", c: "#007AFF" }],
+                dynamic_role: "clears_threshold",
+                cost_of_delay: null,
+              },
+              {
+                text: "If responding (effect size ≥0.35 on primary deficit), continue 12 more weeks",
+                why: "Effect compounds beyond 12 weeks; many patients reach 0.55+ by week 24.",
+                tags: [{ t: "amplifies loop", c: "#FF9500" }],
+                dynamic_role: "accelerates_loop",
+                cost_of_delay: null,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  worth_considering: [
+    {
+      type: "framework",
+      title: "Allostatic load model (McEwen)",
+      description:
+        "CRCI fits the allostatic-load framework: chronic stressor (chemo + worry + sleep loss) → cumulative wear-and-tear on regulatory systems → multi-system dysregulation. Predicts that interventions should target the regulatory systems (HPA, immune, sleep) rather than the cognitive symptoms directly. Aligns with the multi-input strategy targeting N30 + N32 + N11 simultaneously.",
+      confidence: "high",
+      connected_entities: ["N30", "N32", "N11"],
+      source_note: "McEwen 1998; Allostatic-load model widely validated in chronic-disease contexts",
+      relevance_score: 9,
+      ranking_reason:
+        "Directly maps the multi-input intervention strategy to a validated theoretical framework; provides predictive power beyond ad-hoc multi-domain combination.",
+      source_origin: "llm_synthesis",
+    },
+    {
+      type: "precedent",
+      title: "STRIDE trial (CRCI exercise RCT, n=242)",
+      description:
+        "Yale-based 12-week aerobic + resistance protocol in breast-cancer survivors with self-reported cognitive complaints. Found: processing speed effect size 0.45, working memory 0.38, IL-6 reduction 28%. Adherence ≥75% sessions was the dominant predictor. Closest published precedent for the standard recovery path proposed above.",
+      confidence: "high",
+      connected_entities: ["N10", "N50", "N52", "N20"],
+      source_note: "Hartman 2018, Cancer Survivorship",
+      relevance_score: 9,
+      ranking_reason:
+        "Direct empirical validation of the proposed exercise protocol with measured outcomes on the same cognitive instruments the template ships with.",
+      source_origin: "llm_synthesis",
+    },
+    {
+      type: "blind_spot",
+      title: "Anti-cholinergic medication burden",
+      description:
+        "30-40% of cancer survivors take medications with anti-cholinergic activity (anti-emetics, anti-histamines, sleep aids, certain antidepressants). Cumulative anti-cholinergic burden produces cognitive effect sizes of 0.15-0.30 — completely independent of CRCI but easily confused with it. Worth screening in initial workup; deprescribing where possible can produce immediate cognitive gains without any other intervention.",
+      confidence: "high",
+      connected_entities: ["N50", "N52"],
+      source_note: "Anti-cholinergic Cognitive Burden scale; Salahudeen 2014",
+      relevance_score: 8,
+      ranking_reason:
+        "Easy to miss because the medications are often for symptoms (nausea, sleep) that the CRCI workup is also addressing; ranks high because deprescribing is high-leverage and low-cost.",
+      source_origin: "llm_synthesis",
+    },
+    {
+      type: "framework",
+      title: "Use-it-or-lose-it neuroplasticity (Kleim & Jones principles)",
+      description:
+        "10 principles of experience-dependent neural plasticity from rehab neurology, directly applicable to CRCI: specificity (train the deficit), repetition matters, intensity matters, time matters (early intervention > late), salience (engagement matters), age matters (younger = faster), transfer is small, interference exists. The Cognitive Game app's adaptive-difficulty design implicitly follows these principles; making them explicit aids intervention selection.",
+      confidence: "high",
+      connected_entities: ["N14", "N33"],
+      source_note: "Kleim & Jones 2008, J Speech Lang Hear Res",
+      relevance_score: 8,
+      ranking_reason:
+        "Provides the theoretical foundation for the targeted-training approach + explains why generic 'brain games' produce smaller effects than deficit-targeted training.",
+      source_origin: "llm_synthesis",
+    },
+  ],
+  open_questions: [
+    {
+      question:
+        "Which specific intervention combinations produce super-additive effects in this population?",
+      why_it_matters:
+        "The Yieu 2026 meta-analysis suggests combined exercise + sleep + MBSR produces 0.65-0.80 effect size — meaningfully larger than the linear sum of components (~0.50). Confirming + characterizing the synergy guides protocol design.",
+      what_changes:
+        "If super-additive synergy is confirmed for specific triples, the strategizer should prefer joint interventions over single-lever pulls. D4 interaction discovery would surface this empirically.",
+      priority: "high",
+      ranking_reason:
+        "Directly affects whether the 'standard recovery' protocol should be sequenced (do exercise first, then add sleep, then MBSR) or simultaneous (start all three at once).",
+      related_entity_ids: ["N10", "N11", "N13"],
+    },
+    {
+      question:
+        "What's the dose-response curve for cognitive training adherence below 80%?",
+      why_it_matters:
+        "Most published trials enforce ≥80% adherence as inclusion criteria. Real-world adherence is 50-70%. We need to know whether the effect drops linearly (still useful at 50%) or has a threshold (negligible below 70%).",
+      what_changes:
+        "If threshold, recommend gamification + accountability scaffolding from day 1. If linear, even imperfect adherence has value.",
+      priority: "medium",
+      ranking_reason:
+        "Influences the adherence-support investment in the Cognitive Game app + whether to recommend training to patients with predicted poor adherence.",
+      related_entity_ids: ["N14"],
+    },
+    {
+      question:
+        "Does CBT-I produce cognitive effects independent of sleep architecture changes?",
+      why_it_matters:
+        "If CBT-I's cognitive effects are mediated entirely by sleep restoration, monitoring sleep architecture is sufficient. If there are sleep-independent effects (sleep-related cognition like consolidation strategies), CBT-I has additional value beyond what sleep wearables can predict.",
+      what_changes:
+        "Affects whether sleep wearables alone can predict CBT-I response, or whether direct cognitive monitoring is required.",
+      priority: "medium",
+      ranking_reason:
+        "Practical question about whether self-tracking can substitute for clinical CBT-I assessment in routine care.",
+      related_entity_ids: ["N11", "N52"],
+    },
+  ],
+  domain_signature: {
+    template_slug: "mind_body_cognition",
+    seeded_at: "2026-04-26T00:00:00Z",
+    primary_outcome_entity: "N60",
+    central_pathway_entity: "N30",
+    intervention_count: 6,
+    instrument_count: 6,
+    edge_count_with_effect_sizes: 91,
+    notes:
+      "Hand-baked synthesis_data from the CRCI 168-record meta-analysis. Provides full demo content for cognition-template spaces; real research+synthesize chain replaces this on async completion.",
+  },
+};
+
 // ── The template object ───────────────────────────────────────────
 
 export const MIND_BODY_COGNITION_TEMPLATE: ResearchTemplate = {
@@ -484,6 +1361,12 @@ export const MIND_BODY_COGNITION_TEMPLATE: ResearchTemplate = {
   seed_instruments: SEED_INSTRUMENTS,
   // F3 / D14 — paired downstream applications (game ↔ measurement).
   seed_apps: SEED_APPS,
+  // Phase C demo bake: pre-populated synthesis_data so all 6 side
+  // panels (Convergence, Intelligence, Radar, Agents, Reflexive,
+  // multi-layer view) render the moment a cognition-template space
+  // loads. Real research+synthesize chain replaces this content on
+  // async completion (~30-90s after creation).
+  seed_synthesis_data: SEED_SYNTHESIS_DATA,
 };
 
 // ── Registry ──────────────────────────────────────────────────────

@@ -848,6 +848,19 @@ where `E(...)` is the target's p50 deviation under the labeled perturbation set.
 
 ---
 
+### D11 — Template edge augmenter + synthesis trigger — **🟢 BOTH HALVES LANDED**
+
+**2026-04-26 update** — discovered the cognition-template KG was producing the user-visible *"Need synthesis data and 5+ entities for multi-layer view"* gate failure ([`src/components/graph/layers-view.tsx:22–28`](../src/components/graph/layers-view.tsx)) because `/api/explore/create` had **no synthesis trigger**. The template path historically stopped after seeding entities + edges + (D11) augmented edges — `synthesis_data` stayed null, so leverage_points / risk_points / mechanism_grounding (D7) / chain insights / feedback_loops never materialized.
+
+**Fix shipped:** the `after()` block in [`src/app/api/explore/create/route.ts`](../src/app/api/explore/create/route.ts) now chains three substrate fills in sequence:
+1. **D11** — template-edge-augmenter (existing, kept)
+2. **D13a** — `backfillConsequenceSurfaces` from [`consequence-surface-tail.ts`](../src/lib/pipeline/consequence-surface-tail.ts) (no-op for fresh template entities lacking node_signature; cheap + idempotent + ready for future signature seeding on templates)
+3. **Synthesis** — internal fetch to `/api/pipeline/synthesize` with `bypassLayerGate: true` + `bypassMeasurementGate: true` (templates lack situation_frame and measurement specs, so without bypass synthesis would 409 every time). 10s abort matching the decompose→research handoff pattern so the explore/create Lambda doesn't hold for synthesize's full work.
+
+After this fix, every cognition-template space will have leverage_points + risk_points + master_bottleneck + mechanism_grounding (D7) + feedback_loops populated within ~30–60s of creation — and the layer-view popup will unlock automatically.
+
+---
+
 ### D11 — Template edge augmenter — **🟡 FIRST PASS LANDED**
 
 **What:** Closes the orphan-density gap that template-seeded spaces produce. Templates ship with curated entities + curated edges, but heterogeneous additions (interventions, instruments, leaves never wired in the seed graph) land isolated because the user-text decompose pipeline's prompt-level orphan-detection rules don't fire on the template path. After investigation of a real cognition-template space (76 entities, 23 edges = 0.30× density vs. the prompt's 1.5× target), we found `/api/explore/create` skips Pass 2 / structuring / auto-connect entirely — only persisting pre-defined `seed_edges`.
