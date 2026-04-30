@@ -134,6 +134,7 @@ import { ProbabilityDrawer } from "./drawers/probability-drawer";
 import { GraphDrawer } from "./drawers/graph-drawer";
 import { CanvasEventHud } from "./chrome/canvas-event-hud";
 import { WhileYouWaitChip } from "./chrome/while-you-wait-chip";
+import { PreliminaryInsightsPanel } from "./chrome/preliminary-insights-panel";
 import { CanvasRunSignalsBanner } from "./chrome/canvas-run-signals-banner";
 import { CanvasReasoningStream } from "./chrome/canvas-reasoning-stream";
 import { CanvasProposalRings } from "./chrome/canvas-proposal-rings";
@@ -2725,6 +2726,19 @@ export function InteraxisCanvas({
           canvas isn't blocked during research/synthesis: existing
           entities are interactive, brainstorm rail is open, etc. */}
       <WhileYouWaitChip />
+
+      {/* Preliminary topology insights — surfaces hubs, bridge
+          candidates, isolated clusters, and feedback loops the moment
+          Decompose finishes (no LLM cost, pure graph algorithms over
+          the entities + edges already in the DB). Auto-collapses
+          once synthesis_data lands and the richer LLM-synthesized
+          cards take over. */}
+      <PreliminaryInsightsPanel
+        editor={editor}
+        space={space}
+        entities={entities}
+        edges={edges}
+      />
 
       {/* Phase 1 Step 2 — live pipeline-run HUD. Mounts only when the
           URL carries ?run=<uuid>; connects to the SSE stream and shows
