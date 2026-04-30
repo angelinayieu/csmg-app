@@ -118,14 +118,16 @@ export function CanvasProposalRings({ runId }: CanvasProposalRingsProps) {
     return () => clearTimeout(timer);
   }, [status]);
 
-  if (!runId) return null;
-  if (proposals.length === 0) return null;
-  if (hiddenAfterComplete) return null;
-
   // Show the first N by sequence (lower rank = higher priority in the
   // strategy engine; earlier sequence = higher rank since emission
-  // order matches ranking order).
-  const visible = proposals.slice(0, MAX_VISIBLE);
+  // order matches ranking order). Memo runs unconditionally so the
+  // hook order stays stable across the early-return branches below —
+  // crashing on hook-count mismatch is worse than computing scale for
+  // a hidden ring strip.
+  const visible = useMemo(
+    () => proposals.slice(0, MAX_VISIBLE),
+    [proposals],
+  );
 
   // Global min/max across all shown distributions → share the bar's
   // x-scale so cards are comparable at a glance.
@@ -143,6 +145,10 @@ export function CanvasProposalRings({ runId }: CanvasProposalRingsProps) {
     const pad = (hi - lo) * 0.1;
     return [lo - pad, hi + pad];
   }, [visible]);
+
+  if (!runId) return null;
+  if (proposals.length === 0) return null;
+  if (hiddenAfterComplete) return null;
 
   return (
     <aside

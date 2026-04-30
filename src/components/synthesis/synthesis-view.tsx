@@ -532,6 +532,19 @@ export function SynthesisView({
     bridges.length > 0 ||
     synthData !== null;
 
+  const qualityScore: SynthesisQualityScore | undefined = synthData?.quality_score;
+  const goalFitness: GoalFitnessResult | undefined = synthData?.goal_fitness;
+
+  // All hooks must run before any conditional return — when hasContent
+  // flips between true/false across renders the hook count would mismatch
+  // and React would crash. Holding these states regardless costs nothing
+  // when the empty-state fallback renders.
+  const [qualityExpanded, setQualityExpanded] = useState(false);
+  // Insight action statuses (local state — future: persist to synthesis_data JSONB)
+  const [leverageStatuses, setLeverageStatuses] = useState<Record<string, InsightStatus>>({});
+  const [riskStatuses, setRiskStatuses] = useState<Record<string, InsightStatus>>({});
+  const [crossContextStatuses, setCrossContextStatuses] = useState<Record<number, InsightStatus>>({});
+
   if (!hasContent) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
@@ -546,16 +559,6 @@ export function SynthesisView({
       </div>
     );
   }
-
-  const qualityScore: SynthesisQualityScore | undefined = synthData?.quality_score;
-  const goalFitness: GoalFitnessResult | undefined = synthData?.goal_fitness;
-
-  const [qualityExpanded, setQualityExpanded] = useState(false);
-
-  // Insight action statuses (local state — future: persist to synthesis_data JSONB)
-  const [leverageStatuses, setLeverageStatuses] = useState<Record<string, InsightStatus>>({});
-  const [riskStatuses, setRiskStatuses] = useState<Record<string, InsightStatus>>({});
-  const [crossContextStatuses, setCrossContextStatuses] = useState<Record<number, InsightStatus>>({});
 
   return (
     <div className="space-y-6 pb-8">

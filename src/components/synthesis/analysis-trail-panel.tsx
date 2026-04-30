@@ -71,8 +71,9 @@ export function AnalysisTrailPanel({
     });
   }, [runs, pipelineFilter, impactFilter]);
 
-  if (runs.length === 0) return null;
-  const latest = runs[0];
+  // Hooks must run before any conditional return — moved above the
+  // empty-runs early return so the hook order stays stable when runs
+  // transitions between empty/non-empty.
   const stats = useMemo(() => {
     const totalRuns = runs.length;
     const cacheHits = runs.filter((r) => r.status === "skipped_cache").length;
@@ -86,6 +87,9 @@ export function AnalysisTrailPanel({
     for (const r of runs) set.add(r.pipeline);
     return Array.from(set);
   }, [runs]);
+
+  if (runs.length === 0) return null;
+  const latest = runs[0];
 
   return (
     <section className={cn(

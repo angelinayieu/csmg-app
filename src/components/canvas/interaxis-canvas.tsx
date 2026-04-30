@@ -178,69 +178,6 @@ export function InteraxisCanvas({
 }: InteraxisCanvasProps) {
   const [editor, setEditor] = useState<Editor | null>(null);
 
-  // ─── DIAGNOSTIC (TEMP) ─────────────────────────────────────────────
-  // Added 2026-04-30 to chase the "canvas goes grey, all cards vanish a
-  // few seconds after load even without panning" regression. The
-  // previous fix (no tldraw persistenceKey + memoized contexts +
-  // pointer-aware camera fits) didn't resolve it, which means
-  // something is actively removing shapes from the store after
-  // restore. This logger captures every store change with timing,
-  // source, and a stack trace on any removal — paste the console
-  // output back so we can pinpoint the caller. Remove once the bug
-  // is fixed.
-  useEffect(() => {
-    if (!editor) return;
-    const startedAt = Date.now();
-    const sinceMount = () => `+${Date.now() - startedAt}ms`;
-    const initialShapes = editor.getCurrentPageShapes().length;
-    console.warn(
-      `[CANVAS-DEBUG ${sinceMount()}] editor mounted, initial shape count: ${initialShapes}`,
-    );
-    let prevCount = initialShapes;
-    let prevDocCount = Object.keys(editor.store.allRecords()).length;
-    const unsub = editor.store.listen((entry) => {
-      const removedIds = Object.keys(entry.changes.removed ?? {});
-      const addedIds = Object.keys(entry.changes.added ?? {});
-      const updatedIds = Object.keys(entry.changes.updated ?? {});
-      const currentCount = editor.getCurrentPageShapes().length;
-      const currentDocCount = Object.keys(editor.store.allRecords()).length;
-      const delta = currentCount - prevCount;
-      const docDelta = currentDocCount - prevDocCount;
-      if (removedIds.length > 0 || addedIds.length > 0 || delta !== 0) {
-        console.warn(
-          `[CANVAS-DEBUG ${sinceMount()}] source=${entry.source} shapes=${prevCount}→${currentCount}(Δ${delta}) docRecords=${prevDocCount}→${currentDocCount}(Δ${docDelta}) added=${addedIds.length} removed=${removedIds.length} updated=${updatedIds.length}`,
-        );
-        if (removedIds.length > 0) {
-          const removedTypes: Record<string, number> = {};
-          for (const fullId of removedIds) {
-            const rec = (entry.changes.removed as Record<string, unknown>)[fullId] as
-              | { typeName?: string; type?: string }
-              | undefined;
-            const tag = rec?.type ?? rec?.typeName ?? "unknown";
-            removedTypes[tag] = (removedTypes[tag] ?? 0) + 1;
-          }
-          console.error(
-            `[CANVAS-DEBUG ${sinceMount()}] REMOVAL — types:`,
-            removedTypes,
-          );
-          // eslint-disable-next-line no-console
-          console.trace("[CANVAS-DEBUG] removal stack");
-        }
-        if (currentCount === 0 && prevCount > 0) {
-          console.error(
-            `[CANVAS-DEBUG ${sinceMount()}] CANVAS WIPED — went from ${prevCount} shapes to 0`,
-          );
-        }
-      }
-      prevCount = currentCount;
-      prevDocCount = currentDocCount;
-    });
-    return () => {
-      unsub();
-      console.warn(`[CANVAS-DEBUG ${sinceMount()}] editor effect cleanup`);
-    };
-  }, [editor]);
-
   // Stable context value for the InFrontOfTheCanvas overlay tree.
   // Re-creating the object only when entities/edges length changes is
   // enough — overlays consume length/array contents directly, not the
@@ -2427,6 +2364,19 @@ export function InteraxisCanvas({
               truth: the server. Do not re-add this prop. */}
           <CanvasOverlayPropsContext.Provider value={overlayPropsValue}>
             <Tldraw
+              // tldraw v3+ enforces production licensing: when no key is
+              // provided AND tldraw thinks it's running in production
+              // (https + non-localhost + NODE_ENV=production), it hides
+              // the entire editor surface after 5s via its LicenseGate
+              // component (returns <div style={{display:"none"}}/>). The
+              // shapes stay in the store but the canvas goes blank — same
+              // visual signature as "every card just disappeared" with
+              // sidebar chrome intact. Wire NEXT_PUBLIC_TLDRAW_LICENSE_KEY
+              // here so a free dev license (from tldraw.dev) keeps the
+              // editor visible in any deployment. Local dev usually
+              // bypasses the gate via the localhost check, but having this
+              // wired means we never fight the license-hide path again.
+              licenseKey={process.env.NEXT_PUBLIC_TLDRAW_LICENSE_KEY}
               shapeUtils={SHAPE_UTILS}
               components={CANVAS_TLDRAW_COMPONENTS}
               onMount={(e) => setEditor(e)}

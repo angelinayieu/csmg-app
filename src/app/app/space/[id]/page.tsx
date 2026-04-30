@@ -35,14 +35,11 @@ export default function SpaceDashboardPage() {
   const spaceId = space?.id;
   const kind = (space as unknown as { kind?: "analysis" | "ask" } | null)?.kind ?? "analysis";
 
-  // Ask-kind whiteboards render a single-purpose answer view — they skip the
-  // full analysis dashboard (production sequence, twin, apps). See AskSpaceView.
-  if (kind === "ask") {
-    return <AskSpaceView />;
-  }
-
   // Pending-apps + strategy status drive the conversational approval banner.
   // Refetched whenever the AppGenerationProgressChip transitions to complete.
+  // Hooks must run unconditionally — the ask-kind early return below would
+  // otherwise skip them and React would crash on the kind="analysis" → "ask"
+  // transition with a hook-count mismatch.
   const [appsPayload, setAppsPayload] = useState<AppListPayload | null>(null);
   const fetchApps = useCallback(async () => {
     if (!spaceId) return;
@@ -58,8 +55,15 @@ export default function SpaceDashboardPage() {
   }, [spaceId]);
 
   useEffect(() => {
+    if (kind !== "analysis") return; // ask kind doesn't need the apps payload
     void fetchApps();
-  }, [fetchApps]);
+  }, [fetchApps, kind]);
+
+  // Ask-kind whiteboards render a single-purpose answer view — they skip the
+  // full analysis dashboard (production sequence, twin, apps). See AskSpaceView.
+  if (kind === "ask") {
+    return <AskSpaceView />;
+  }
 
   return (
     <div className="flex flex-col gap-6 px-6 pt-6 pb-2">

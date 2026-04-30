@@ -1083,13 +1083,16 @@ function ActiveTabList({
 }) {
   const catalog = useCanvasAssetCatalog();
   const def = getAssetClass(activeTab);
-  if (!def) return null;
 
   const cs = catalog.state[activeTab];
   const items = cs?.items ?? [];
   const activeFilters = filterState[activeTab] ?? {};
 
+  // Hook must run unconditionally so the early `if (!def) return null;`
+  // below doesn't break hook order — when activeTab transitions from
+  // valid → invalid, React would crash with mismatched hook count.
   const rows = useMemo(() => {
+    if (!def) return [];
     const q = query.trim().toLowerCase();
     const built = items.map((item) => {
       const shapeId = def.shapeIdForItem
@@ -1133,6 +1136,8 @@ function ActiveTabList({
       })
       .map(({ row }) => row);
   }, [items, query, activeFilters, placedShapeIds, def, catalog.spaceId]);
+
+  if (!def) return null;
 
   if (cs?.loading && rows.length === 0) {
     return (

@@ -27,14 +27,37 @@
 
 import { useEffect } from "react";
 import { createShapeId, useEditor } from "tldraw";
+import {
+  VALID_FOCUS_KINDS,
+  VALID_ARTIFACT_STATES,
+  type FocusKind,
+  type ArtifactState,
+} from "../shapes/subject-card-shape";
 
 interface SubjectRow {
   id: string;
   name: string;
+  /** Server returns string; we narrow at the boundary below. */
   focus_kind: string;
   focus_label: string;
   artifact_state: string;
   conditions: Record<string, number>;
+}
+
+// Narrow API string → tldraw shape's literal union. Falls back to a
+// safe default rather than throwing — the shape util's defaults have
+// the same fallback behavior, so an unrecognized server value still
+// renders something sensible.
+function toFocusKind(s: string): FocusKind {
+  return (VALID_FOCUS_KINDS as readonly string[]).includes(s)
+    ? (s as FocusKind)
+    : "other";
+}
+function toArtifactState(s: string | null | undefined): ArtifactState {
+  if (s && (VALID_ARTIFACT_STATES as readonly string[]).includes(s)) {
+    return s as ArtifactState;
+  }
+  return "bare_topic";
 }
 
 const POLL_DELAY_MS = 700;
@@ -100,11 +123,11 @@ export function CanvasSubjectCardHydrator({ spaceId }: { spaceId: string }) {
             subjectId: subj.id,
             spaceId,
             name: subj.name,
-            focusKind: subj.focus_kind,
+            focusKind: toFocusKind(subj.focus_kind),
             focusLabel: subj.focus_label,
             scopeSummary: null,
             conditionCount: Object.keys(subj.conditions ?? {}).length,
-            artifactState: subj.artifact_state ?? "bare_topic",
+            artifactState: toArtifactState(subj.artifact_state),
             needsReview: false,
           },
         }));

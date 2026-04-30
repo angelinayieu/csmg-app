@@ -174,10 +174,10 @@ function LayerSection({
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const config = LAYER_CONFIGS[layer];
-  if (!config) return null;
 
-  const Icon = config.icon;
-
+  // Hooks must run before any conditional return — moved above the
+  // !config / empty-entities early returns so hook order stays stable
+  // when layer config or entity count toggles.
   const filtered = useMemo(() => {
     if (!searchQuery) return entities;
     const q = searchQuery.toLowerCase();
@@ -197,7 +197,10 @@ function LayerSection({
     ).length;
   }, [entities, edges]);
 
+  if (!config) return null;
   if (entities.length === 0) return null;
+
+  const Icon = config.icon;
 
   return (
     <div className={cn("rounded-lg border", config.borderColor)}>

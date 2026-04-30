@@ -226,12 +226,10 @@ function SubObjectivesProgress({
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  if (children.length === 0) return null;
-
-  const activeChildren = children.filter((c) => c.status === "active");
-  const completedCount = children.filter((c) => c.status === "achieved").length;
-
-  // Count total descendants for richer display
+  // useMemo runs unconditionally to keep hook order stable when
+  // children.length flips between zero/non-zero. Empty children means
+  // this whole block returns early below — but the memo cost is
+  // trivial (single check + return).
   const totalDescendants = useMemo(() => {
     if (!allGoals) return children.length;
     let count = 0;
@@ -246,6 +244,11 @@ function SubObjectivesProgress({
     }
     return count;
   }, [children, allGoals]);
+
+  if (children.length === 0) return null;
+
+  const activeChildren = children.filter((c) => c.status === "active");
+  const completedCount = children.filter((c) => c.status === "achieved").length;
 
   // Compute progress accounting for grandchildren
   const computeChildProgress = (child: ImprovementGoal): number => {

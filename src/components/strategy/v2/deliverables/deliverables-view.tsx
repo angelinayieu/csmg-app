@@ -483,7 +483,6 @@ function LoopDiagramCard({
   // entity_names is consulted to resolve them to readable labels.
   // intervention_at is an INDEX into steps, not an entity id.
   const steps = (loop.steps ?? []).filter(Boolean);
-  if (steps.length < 2) return null;
 
   const classification =
     loop.type === "negative"
@@ -499,6 +498,9 @@ function LoopDiagramCard({
       ? steps[loop.intervention_at]
       : null;
 
+  // useMemo runs unconditionally so the steps.length<2 early return
+  // below doesn't cause hook-count mismatch when a loop's steps array
+  // changes shape on re-render.
   const source = useMemo(
     () =>
       generateCycleDiagram({
@@ -510,6 +512,8 @@ function LoopDiagramCard({
       }),
     [classification, entityNames, interventionStep, loop.name, steps],
   );
+
+  if (steps.length < 2) return null;
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-3">

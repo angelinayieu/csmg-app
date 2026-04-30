@@ -1,16 +1,13 @@
-import { dirname } from "path";
-import { fileURLToPath } from "url";
-import { FlatCompat } from "@eslint/eslintrc";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-});
+// Direct flat-config import. Going through `FlatCompat.extends()`
+// crashed with "Converting circular structure to JSON" because the
+// modern eslint-config-next has circular references the legacy
+// eslintrc compat layer can't serialize. eslint-config-next/dist/
+// core-web-vitals already exports a flat-config array so we just
+// spread it directly.
+import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 
 const eslintConfig = [
-  ...compat.extends("next/core-web-vitals"),
+  ...nextCoreWebVitals,
   {
     rules: {
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],

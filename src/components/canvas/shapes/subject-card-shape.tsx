@@ -78,7 +78,7 @@ const ARTIFACT_STATE_LABEL: Record<string, string> = {
   complete_artifact: "Complete",
 };
 
-const VALID_FOCUS_KINDS = [
+export const VALID_FOCUS_KINDS = [
   "person",
   "document",
   "product",
@@ -89,12 +89,14 @@ const VALID_FOCUS_KINDS = [
   "reaction",
   "other",
 ] as const;
+export type FocusKind = (typeof VALID_FOCUS_KINDS)[number];
 
-const VALID_ARTIFACT_STATES = [
+export const VALID_ARTIFACT_STATES = [
   "bare_topic",
   "partial_artifact",
   "complete_artifact",
 ] as const;
+export type ArtifactState = (typeof VALID_ARTIFACT_STATES)[number];
 
 function metaForFocusKind(kind: string) {
   return FOCUS_META[kind] ?? FOCUS_META.other;

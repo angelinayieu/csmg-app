@@ -157,11 +157,6 @@ function DbActionItemWithBrief({
 }
 
 export function ConditionalActionPlan({ actionItems, richActionPlan, sequencingRationale, spaceId, onToggleActionDone }: ConditionalActionPlanProps) {
-  // If we have rich action plan from Pass 3, render that
-  if (richActionPlan?.paths?.length) {
-    return <RichActionPlanRenderer paths={richActionPlan.paths} sequencingRationale={sequencingRationale} spaceId={spaceId} />;
-  }
-
   // Otherwise fall back to DB action items
   // Determine which paths have action items
   const availablePaths = paths.filter(
@@ -173,7 +168,15 @@ export function ConditionalActionPlan({ actionItems, richActionPlan, sequencingR
     (a) => a.path_label && a.path_label !== "default"
   );
 
+  // useState must run before the rich-action-plan early return below
+  // — when richActionPlan transitions from null → present, skipping
+  // the hook here would crash React with a hook-count mismatch.
   const [activePath, setActivePath] = useState(availablePaths[0]?.key ?? "builder");
+
+  // If we have rich action plan from Pass 3, render that
+  if (richActionPlan?.paths?.length) {
+    return <RichActionPlanRenderer paths={richActionPlan.paths} sequencingRationale={sequencingRationale} spaceId={spaceId} />;
+  }
 
   // Filter items for active path
   const pathItems = actionItems.filter((a) => {
