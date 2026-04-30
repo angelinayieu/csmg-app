@@ -37,7 +37,7 @@ import type { ResearchTargetOutcome } from "@/lib/prompts/domain-expert";
 import type { ResearchDepth } from "@/lib/web-search";
 
 export const runtime = "nodejs";
-export const maxDuration = 900; // 15 min ceiling — single Lambda invocation owns the whole round
+export const maxDuration = 800; // Vercel Pro hard cap (was 900 — failed deploy)
 
 interface RequestBody {
   spaceId?: string;
