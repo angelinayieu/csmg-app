@@ -10,7 +10,7 @@
 // hierarchy-context — context lives at the canvas root, shape utils
 // read it via a hook.
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useState } from "react";
 
 export interface ConnectModeSource {
   entityId: string;     // entity UUID
@@ -76,10 +76,19 @@ export function CardConnectModeProvider({
 
   const consumePick = useCallback(() => setPendingPick(null), []);
 
+  // Stable value so consumers (every kg-node card calls this twice — in
+  // the shape view and again inside its CardActionMenu) don't re-render
+  // on every render of InteraxisCanvas. Without the memo, the value
+  // object is fresh each render → all cards re-render on any unrelated
+  // state change. With ~30+ cards on canvas the cascade dropped frames
+  // during pan/zoom.
+  const value = useMemo<ConnectModeContextValue>(
+    () => ({ active, start, cancel, pick, pendingPick, consumePick }),
+    [active, start, cancel, pick, pendingPick, consumePick],
+  );
+
   return (
-    <CardConnectModeContext.Provider
-      value={{ active, start, cancel, pick, pendingPick, consumePick }}
-    >
+    <CardConnectModeContext.Provider value={value}>
       {children}
     </CardConnectModeContext.Provider>
   );

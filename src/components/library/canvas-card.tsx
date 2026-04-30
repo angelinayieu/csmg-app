@@ -79,8 +79,16 @@ export function CanvasCard({
         style={{ background: color.dot }}
       />
 
+      {/* Whole-card click target. Sits above the card surface but below the
+          action buttons (which use `relative z-20`) so they keep their own clicks. */}
+      <Link
+        href={`/app/canvas/${canvas.id}`}
+        aria-label={`Open ${canvas.title}`}
+        className="absolute inset-0 z-10"
+      />
+
       {/* Header: scope chip + actions */}
-      <div className="flex items-start justify-between gap-2 pl-1.5">
+      <div className="relative z-20 flex items-start justify-between gap-2 pl-1.5">
         <div
           className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest"
           style={{
@@ -167,17 +175,12 @@ export function CanvasCard({
         </div>
       </div>
 
-      {/* Body: title + ref + ring */}
-      <div className="mt-3 flex items-start justify-between gap-3 pl-1.5">
+      {/* Body: title + ref + ring (purely presentational — overlay Link handles click) */}
+      <div className="pointer-events-none relative mt-3 flex items-start justify-between gap-3 pl-1.5">
         <div className="min-w-0 flex-1">
-          <Link
-            href={`/app/canvas/${canvas.id}`}
-            className="block min-w-0"
-          >
-            <h3 className="truncate text-[15px] font-semibold text-gray-900 group-hover:text-gray-700">
-              {canvas.title}
-            </h3>
-          </Link>
+          <h3 className="truncate text-[15px] font-semibold text-gray-900 group-hover:text-gray-700">
+            {canvas.title}
+          </h3>
           {canvas.scope_ref_name && (
             <p className="mt-0.5 truncate text-xs text-gray-500">
               <span className="text-gray-400">in</span> {canvas.scope_ref_name}
@@ -203,16 +206,13 @@ export function CanvasCard({
         ) : null}
       </div>
 
-      {/* Footer: updated + open */}
-      <div className="mt-4 flex items-center justify-between pl-1.5 text-xs text-gray-500">
+      {/* Footer: updated + open affordance (decorative — overlay Link handles click) */}
+      <div className="pointer-events-none relative mt-4 flex items-center justify-between pl-1.5 text-xs text-gray-500">
         <span>Updated {timeAgo(canvas.updated_at)}</span>
-        <Link
-          href={`/app/canvas/${canvas.id}`}
-          className="inline-flex items-center gap-1 font-medium text-gray-700 opacity-0 transition-opacity group-hover:opacity-100 hover:text-gray-900"
-        >
+        <span className="inline-flex items-center gap-1 font-medium text-gray-700 opacity-0 transition-opacity group-hover:opacity-100">
           Open
           <ArrowUpRight className="h-3 w-3" />
-        </Link>
+        </span>
       </div>
     </div>
   );

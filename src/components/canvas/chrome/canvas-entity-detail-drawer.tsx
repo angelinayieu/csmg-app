@@ -59,7 +59,7 @@ import {
   entityToLayerId,
   depthToLayerName,
 } from "@/lib/whiteboard/layer-config";
-import { NodeSignatureRing } from "@/components/signatures/node-signature-ring";
+import { NodeSignatureBlock } from "@/components/signatures/node-signature-block";
 import { cn } from "@/lib/utils";
 
 interface DetailPayload {
@@ -539,35 +539,12 @@ export function CanvasEntityDetailDrawer() {
                     </button>
                   </div>
                   {signature ? (
-                    <div className="flex items-start gap-3">
-                      <div className="flex-shrink-0">
-                        <NodeSignatureRing
-                          signature={signature}
-                          size={88}
-                          showCode={false}
-                        />
-                      </div>
-                      <div className="min-w-0 flex-1 space-y-1.5">
-                        <div className="font-mono text-[10.5px] text-slate-700">
-                          {signature.canonical_code}
-                        </div>
-                        <div className="text-[10.5px] text-slate-600">
-                          {signature.rings} ring
-                          {signature.rings === 1 ? "" : "s"} ·{" "}
-                          {Math.round(signature.residual_uncertainty * 100)}%
-                          residual uncertainty
-                        </div>
-                        <div className="text-[10px] text-slate-500">
-                          Resolution {signature.resolution.zoom} ·{" "}
-                          {signature.resolution.horizon}
-                          {signature.resolution.pinned_because && (
-                            <span className="ml-1 italic text-slate-400">
-                              (pinned: {signature.resolution.pinned_because})
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
+                    <NodeSignatureBlock
+                      variant="inline"
+                      signature={signature}
+                      size={88}
+                      showResolution
+                    />
                   ) : (
                     <div className="rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-[11px] text-slate-500">
                       No signature yet. Click <strong>Deepen</strong> to seed

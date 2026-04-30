@@ -2641,7 +2641,8 @@ export function InteraxisCanvas({
           (pipeline audit 2026-04-24). */}
       <RunEventStoreProvider runId={activeRunId}>
       <BrainstormContextProvider
-        value={{ settings: brainstorm.settings, spaceId: space.id }}
+        settings={brainstorm.settings}
+        spaceId={space.id}
       >
         {/* Phase 1 Step 23 — canvas error boundary. Catches any throw
             from tldraw, shape utils, the pipeline painter, or

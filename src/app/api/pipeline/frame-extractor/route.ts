@@ -19,7 +19,6 @@
 // fill each shell with entities/claims/distributions.
 
 import { NextResponse, after } from "next/server";
-import { cookies, headers } from "next/headers";
 import { safeAuth, safeJsonParse } from "@/lib/api-helpers";
 import { llmJSON } from "@/lib/llm";
 import {
@@ -837,15 +836,14 @@ export async function POST(request: Request) {
   // immediately — the client sees space_opened events animate in,
   // then the shells start filling 10-60s later as each generator
   // completes.
-  const cookieStore = await cookies();
-  const hdrs = await headers();
-  const origin =
-    hdrs.get("origin") ??
-    (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000");
-  const cookieHeader = cookieStore
-    .getAll()
-    .map((c) => `${c.name}=${c.value}`)
-    .join("; ");
+  // Self-fetch base URL must come from the actual request URL — server-
+  // to-server fetches from intake/bootstrap don't carry an Origin header,
+  // and NEXT_PUBLIC_APP_URL isn't reliably set everywhere. Falling back
+  // to localhost:3000 caused "fetch failed" on Vercel and on any dev
+  // server bumped off port 3000. Matches the pattern used by every other
+  // pipeline route (intake/bootstrap, decompose, research, etc.).
+  const origin = new URL(request.url).origin;
+  const cookieHeader = request.headers.get("cookie") ?? "";
   const catalogAxesToGenerate = frame.frame.map((sel) => ({
     axis: sel.axis,
     variant: sel.variant,

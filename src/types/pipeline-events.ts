@@ -429,6 +429,24 @@ export interface SpaceEntityAddedEvent {
     controllability: "direct" | "indirect" | "uncontrollable";
     cost: "low" | "med" | "high";
   } | null;
+  /**
+   * Phase 0 (research-strategy migration) — distinguishes how this
+   * entity was generated, so the canvas can render speculative LLM
+   * brainstorm differently from research-grounded entities. Today
+   * the per-axis route is one LLM call without grounding, so every
+   * catalog/ad-hoc axis emit lands as `llm_axis_brainstorm`.
+   * Optional for backward compat with replayed historical events.
+   *
+   *   • llm_axis_brainstorm — single LLM call, no sources, no search
+   *   • paper_extracted     — extracted from an uploaded paper
+   *   • research_grounded   — backed by ≥1 evidence_items source URL
+   *   • user_authored       — manually added or edited by the user
+   */
+  confidence_basis?:
+    | "llm_axis_brainstorm"
+    | "paper_extracted"
+    | "research_grounded"
+    | "user_authored";
 }
 
 /**

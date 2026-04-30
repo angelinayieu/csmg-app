@@ -13,7 +13,7 @@
 // so shapes still render safely in contexts without brainstorm
 // (exports, screenshots, etc.).
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { BrainstormSettings } from "@/lib/brainstorm/brainstorm-settings";
 
 export interface BrainstormContextValue {
@@ -23,13 +23,23 @@ export interface BrainstormContextValue {
 
 const BrainstormContext = createContext<BrainstormContextValue | null>(null);
 
+// Provider takes primitives instead of a pre-built value object so it
+// can memoize internally — saves every caller from having to remember
+// to wrap the value in useMemo. Every sticky-note on the canvas reads
+// this context, so an unstable value cascades to every sticky.
 export function BrainstormContextProvider({
-  value,
+  settings,
+  spaceId,
   children,
 }: {
-  value: BrainstormContextValue;
+  settings: BrainstormSettings;
+  spaceId: string;
   children: ReactNode;
 }) {
+  const value = useMemo<BrainstormContextValue>(
+    () => ({ settings, spaceId }),
+    [settings, spaceId],
+  );
   return (
     <BrainstormContext.Provider value={value}>
       {children}

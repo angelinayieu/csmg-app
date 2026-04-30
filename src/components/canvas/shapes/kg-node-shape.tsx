@@ -21,7 +21,7 @@ import { ReactionHoverPreview } from "@/components/shared/reaction-preview";
 import type { ReactionType, Reaction } from "@/types/reactions";
 import type { Entity } from "@/types";
 import type { KGNodeShape } from "./types";
-import { NodeSignatureRing } from "@/components/signatures/node-signature-ring";
+import { NodeSignatureBlock } from "@/components/signatures/node-signature-block";
 import type { NodeSignature } from "@/types/node-signature";
 
 // Phase 49 — deterministic seeded RNG for sparkline generation. We don't
@@ -320,6 +320,10 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
   // for provenance + analysis metadata. Missing gracefully to sensible
   // defaults so the card still renders when the entity hasn't hydrated.
   const entity = entityId ? entityLookup.get(entityId) : undefined;
+  const nodeSignature = entity?.node_signature as
+    | NodeSignature
+    | null
+    | undefined;
 
   // Phase 2 (KG plan) — when this space has a per-space layer ontology
   // and the entity carries a layer_ontology_id FK, prefer the
@@ -522,7 +526,14 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
               little real estate for a meaningful ring stack) and skip
               ghost cards (their dashed border already telegraphs
               "speculative — no resolved variables yet"). */}
-          <SignatureRingOverlay entity={entity} isHero={isHero} hidden={isPeripheral || isGhost} />
+          {!isPeripheral && !isGhost && nodeSignature && (
+            <NodeSignatureBlock
+              variant="compact"
+              signature={nodeSignature}
+              backdrop={isHero ? "dark" : "light"}
+              size={32}
+            />
+          )}
 
           <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
             {/* gauge */}
@@ -1584,70 +1595,6 @@ function formatUSD(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
   return `$${Math.round(n)}`;
-}
-
-/**
- * Canvas-side ring overlay. Reads the entity's persisted node_signature
- * (written by the signature_materializer pipeline) and renders the
- * NodeSignatureRing primitive at a tile-appropriate size in the top-
- * right corner of the card.
- *
- * Static for now — when a `signature_deepened` event lands and the
- * executor calls persistSignature(), the entity row updates and the
- * canvas's entity lookup re-fetches; React re-renders the card with
- * the new ring count. Ring-growth animation (motion-wrapped circles)
- * is a follow-up; the first move that earns the "movie unravel" feel
- * is just MAKING the rings visible at all.
- *
- * Click does NOT open the detail drawer here — that drawer is mounted
- * on the constellation widget / app detail page, not the canvas. The
- * overlay's hover title is the affordance: it shows the canonical_code
- * + ring count + residual_uncertainty so the user gets the headline
- * without navigating away.
- */
-function SignatureRingOverlay({
-  entity,
-  isHero,
-  hidden,
-}: {
-  entity: Entity | undefined;
-  isHero: boolean;
-  hidden: boolean;
-}) {
-  if (hidden) return null;
-  const sig = entity?.node_signature as NodeSignature | null | undefined;
-  if (!sig || !sig.basis || sig.basis.length === 0) return null;
-  return (
-    <div
-      style={{
-        position: "absolute",
-        top: 8,
-        right: 8,
-        width: 36,
-        height: 36,
-        pointerEvents: "auto",
-        // Hero cards have a saturated gradient background; lift the ring
-        // onto a translucent disc so the strokes stay legible against
-        // any color underneath.
-        borderRadius: "50%",
-        background: isHero ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.6)",
-        backdropFilter: "blur(4px)",
-        boxShadow: isHero
-          ? "0 0 0 1px rgba(255,255,255,0.18)"
-          : "0 0 0 1px rgba(10,30,80,0.06)",
-        display: "grid",
-        placeItems: "center",
-      }}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      <NodeSignatureRing
-        signature={sig}
-        size={32}
-        showCode={false}
-        showLabel={false}
-      />
-    </div>
-  );
 }
 
 export const KG_NODE_TIER_SIZE = { TIER_WIDTH, TIER_HEIGHT };

@@ -42,6 +42,16 @@ interface ShellEntity {
   entityId: string;
   name: string;
   weight: number;
+  /** Phase 0 — how the entity was generated. `llm_axis_brainstorm`
+   *  (the default for catalog axes) is rendered visually distinct
+   *  from research-grounded entities so users don't trust mechanism-
+   *  shaped LLM speculation as researched fact. Optional for legacy
+   *  shells persisted before the field existed. */
+  confidenceBasis?:
+    | "llm_axis_brainstorm"
+    | "paper_extracted"
+    | "research_grounded"
+    | "user_authored";
 }
 interface ShellEdge {
   sourceEntityId: string;
@@ -590,6 +600,17 @@ function ShellMiniGraph({
     for (const e of graphEntities) m.set(e.entityId, e.weight);
     return m;
   }, [graphEntities]);
+  // Phase 0 — speculative-vs-grounded lookup. Catalog/ad-hoc axis
+  // entities all currently land as `llm_axis_brainstorm` (one LLM call,
+  // no sources). Used below to render them with a dashed stroke so
+  // users don't read mechanism-shaped LLM speculation as researched fact.
+  const isSpeculativeById = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const e of graphEntities) {
+      m.set(e.entityId, e.confidenceBasis === "llm_axis_brainstorm");
+    }
+    return m;
+  }, [graphEntities]);
   const maxWeight = Math.max(
     0.001,
     ...graphEntities.map((e) => e.weight),
@@ -707,8 +728,17 @@ function ShellMiniGraph({
                 fill={fill}
                 stroke={isCore ? accent : `color-mix(in srgb, ${accent} 50%, white)`}
                 strokeWidth={isCore ? 1.6 : 1}
+                // Speculative entities (LLM brainstorm, no source) get a
+                // dashed outline so they're visibly distinct from
+                // research-grounded nodes. Phase 0.
+                strokeDasharray={isSpeculativeById.get(n.id) ? "2 2" : undefined}
               />
-              <title>{idToName.get(n.id) ?? n.id}</title>
+              <title>
+                {(idToName.get(n.id) ?? n.id) +
+                  (isSpeculativeById.get(n.id)
+                    ? "  ·  speculative (LLM brainstorm, no source)"
+                    : "")}
+              </title>
             </g>
           );
         })}

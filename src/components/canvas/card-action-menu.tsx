@@ -74,8 +74,13 @@ type ProspectStatus =
   | { kind: "done"; edgesProposed: number; pairsExamined: number }
   | { kind: "skipped"; reason: string };
 
+// Internal panel phase. There's no "closed" kind here — the panel
+// component itself is unmounted by the outer wrapper when the menu is
+// closed, which means the heavy state machine, fetch handlers, and
+// popover JSX never instantiate for closed menus. With many kg-node
+// cards on canvas, that's the difference between N×heavy components
+// and 0× when no menu is open.
 type MenuPhase =
-  | { kind: "closed" }
   | { kind: "root" }
   | { kind: "decompose-depths" }
   | { kind: "decompose-running"; depth: DeepenDepth }
@@ -114,25 +119,35 @@ interface CardActionMenuProps {
   subunitCount?: number;
 }
 
+interface BridgeDraft {
+  source_entity_id: string;
+  target_entity_id: string;
+  source_entity_name: string;
+  target_entity_name: string;
+}
+
+// Outer wrapper: light, always mounted on every kg-node card. Holds
+// the open/closed state and the bridge-draft listener that has to
+// survive the menu being closed (Connect → user closes menu → user
+// picks another card → that card's pick fires here, which is when
+// bridgeDraft gets set and the modal opens). The heavy popover panel
+// (~480 lines of state machine + fetch handlers + JSX) lives in
+// CardActionMenuPanel and only mounts when isOpen=true.
 export function CardActionMenu({
   entityId,
   entityName,
   isHero,
   subunitCount,
 }: CardActionMenuProps) {
-  const [phase, setPhase] = useState<MenuPhase>({ kind: "closed" });
-  const [bridgeDraft, setBridgeDraft] = useState<{
-    source_entity_id: string;
-    target_entity_id: string;
-    source_entity_name: string;
-    target_entity_name: string;
-  } | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [bridgeDraft, setBridgeDraft] = useState<BridgeDraft | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const connect = useCardConnectMode();
 
-  // Pick-up the target when the user has chosen another card. The
-  // context tracks { source, target } pairs; we only react when this
-  // card was the source.
+  // Pick-up the target when the user has chosen another card via the
+  // global connect-mode context. The pick can fire while this card's
+  // popover is closed — the bridge modal opens regardless because
+  // bridgeDraft state lives at this outer level.
   useEffect(() => {
     const pp = connect.pendingPick;
     if (!pp) return;
@@ -146,18 +161,151 @@ export function CardActionMenu({
     connect.consumePick();
   }, [connect, entityId]);
 
-  // Close menu on outside click.
+  // Close menu on outside click. Listener only attaches when the menu
+  // is open, so closed cards have zero document-listener overhead.
   useEffect(() => {
-    if (phase.kind === "closed") return;
+    if (!isOpen) return;
     function onDocClick(e: MouseEvent) {
       if (!containerRef.current) return;
       if (!containerRef.current.contains(e.target as Node)) {
-        setPhase({ kind: "closed" });
+        setIsOpen(false);
       }
     }
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
-  }, [phase.kind]);
+  }, [isOpen]);
+
+  async function confirmBridge(payload: {
+    bridge_type: BridgeType;
+    coupling_strength: CouplingStrength;
+    coupling_direction: CouplingDirection;
+    shared_variable_name: string;
+    description?: string;
+    rationale?: string;
+  }) {
+    if (!bridgeDraft) return;
+    const space_id = resolveSpaceIdFromUrl();
+    if (!space_id) throw new Error("Could not resolve space_id from URL");
+    const res = await fetch(`/api/edges/bridge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        space_id,
+        source_entity_id: bridgeDraft.source_entity_id,
+        target_entity_id: bridgeDraft.target_entity_id,
+        relationship_type: `${payload.bridge_type}: ${payload.shared_variable_name}`,
+      }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `HTTP ${res.status}`);
+    }
+    setBridgeDraft(null);
+    setIsOpen(false);
+  }
+
+  const buttonBg = isHero ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.98)";
+  const buttonBorder = isHero ? "rgba(255,255,255,0.55)" : "rgba(10,30,80,0.18)";
+  const buttonColor = isHero ? "#0a1020" : "#0a1020";
+
+  return (
+    <div
+      ref={containerRef}
+      className="card-action-menu"
+      style={{
+        position: "absolute",
+        top: -10,
+        right: -10,
+        zIndex: 20,
+        pointerEvents: "auto",
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onWheel={(e) => isOpen && e.stopPropagation()}
+    >
+      <button
+        type="button"
+        aria-label={isOpen ? "Close card actions" : "Card actions"}
+        title="Connect, decompose, or find related concepts"
+        className="card-action-menu-trigger"
+        data-open={isOpen ? "true" : "false"}
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen((o) => !o);
+        }}
+        style={{
+          display: "grid",
+          placeItems: "center",
+          width: 24,
+          height: 24,
+          borderRadius: "50%",
+          background: buttonBg,
+          border: `1px solid ${buttonBorder}`,
+          color: buttonColor,
+          boxShadow: "0 2px 8px rgba(8,30,80,0.18), 0 0 0 1px rgba(255,255,255,0.5) inset",
+          cursor: "pointer",
+          transition: "opacity 140ms ease, transform 140ms ease",
+          transform: isOpen ? "scale(1.06)" : "scale(1)",
+        }}
+      >
+        <Plus
+          style={{
+            width: 14,
+            height: 14,
+            transform: isOpen ? "rotate(45deg)" : "none",
+            transition: "transform 180ms ease",
+          }}
+        />
+      </button>
+
+      {isOpen && (
+        <CardActionMenuPanel
+          entityId={entityId}
+          entityName={entityName}
+          subunitCount={subunitCount}
+          onClose={() => setIsOpen(false)}
+        />
+      )}
+
+      {bridgeDraft && (
+        <ProposeBridgeModal
+          draft={bridgeDraft}
+          onCancel={() => setBridgeDraft(null)}
+          onConfirm={confirmBridge}
+        />
+      )}
+    </div>
+  );
+}
+
+// Resolves the current space UUID from the browser URL. Used by the
+// panel's deepen / research / bridge fetches as well as the outer's
+// confirmBridge handler. Standalone so both can share without
+// re-declaring inside each component.
+function resolveSpaceIdFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  const m = window.location.pathname.match(/\/space\/([^/]+)/);
+  return m ? m[1] : null;
+}
+
+interface CardActionMenuPanelProps {
+  entityId: string;
+  entityName: string;
+  subunitCount?: number;
+  onClose: () => void;
+}
+
+// Heavy state machine + popover JSX. Mounts only when the user opens
+// the menu via the (+) trigger; unmounts on close. Means the run*
+// fetch handlers, phase state allocations, and the popover DOM tree
+// only exist for the single open menu, not for every card on canvas.
+function CardActionMenuPanel({
+  entityId,
+  entityName,
+  subunitCount,
+  onClose,
+}: CardActionMenuPanelProps) {
+  const [phase, setPhase] = useState<MenuPhase>({ kind: "root" });
+  const connect = useCardConnectMode();
 
   async function runDeepen(depth: DeepenDepth) {
     setPhase({ kind: "decompose-running", depth });
@@ -270,11 +418,6 @@ export function CardActionMenu({
     }
   }
 
-  function resolveSpaceIdFromUrl(): string | null {
-    const m = window.location.pathname.match(/\/space\/([^/]+)/);
-    return m ? m[1] : null;
-  }
-
   async function runResearchSuggest() {
     setPhase({ kind: "research-suggesting" });
     try {
@@ -331,7 +474,7 @@ export function CardActionMenu({
       picking.selected.has(s.question),
     );
     if (picked.length === 0) {
-      setPhase({ kind: "closed" });
+      onClose();
       return;
     }
     setPhase({ kind: "research-kicking-off" });
@@ -412,7 +555,7 @@ export function CardActionMenu({
       picking.selected.has(s.entity_id),
     );
     if (accepted.length === 0) {
-      setPhase({ kind: "closed" });
+      onClose();
       return;
     }
     setPhase({ kind: "related-accepting" });
@@ -441,115 +584,30 @@ export function CardActionMenu({
     }
   }
 
-  async function confirmBridge(payload: {
-    bridge_type: BridgeType;
-    coupling_strength: CouplingStrength;
-    coupling_direction: CouplingDirection;
-    shared_variable_name: string;
-    description?: string;
-    rationale?: string;
-  }) {
-    if (!bridgeDraft) return;
-    const space_id = resolveSpaceIdFromUrl();
-    if (!space_id) throw new Error("Could not resolve space_id from URL");
-    const res = await fetch(`/api/edges/bridge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        space_id,
-        source_entity_id: bridgeDraft.source_entity_id,
-        target_entity_id: bridgeDraft.target_entity_id,
-        relationship_type: `${payload.bridge_type}: ${payload.shared_variable_name}`,
-      }),
-    });
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${res.status}`);
-    }
-    setBridgeDraft(null);
-    setPhase({ kind: "closed" });
-  }
-
-  const isOpen = phase.kind !== "closed";
-  const buttonBg = isHero ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.98)";
-  const buttonBorder = isHero ? "rgba(255,255,255,0.55)" : "rgba(10,30,80,0.18)";
-  const buttonColor = isHero ? "#0a1020" : "#0a1020";
-
   return (
     <div
-      ref={containerRef}
-      className="card-action-menu"
       style={{
         position: "absolute",
-        top: -10,
-        right: -10,
-        zIndex: 20,
-        pointerEvents: "auto",
+        top: 30,
+        right: 0,
+        minWidth: 240,
+        maxWidth: 340,
+        background: "white",
+        borderRadius: 12,
+        border: "1px solid rgba(10,30,80,0.12)",
+        boxShadow:
+          "0 18px 48px -12px rgba(8,30,80,0.28), 0 4px 16px rgba(0,0,0,0.08)",
+        padding: 6,
+        color: "#0a1020",
+        fontFamily:
+          '-apple-system, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif',
       }}
-      onPointerDown={(e) => e.stopPropagation()}
-      onWheel={(e) => isOpen && e.stopPropagation()}
     >
-      <button
-        type="button"
-        aria-label={isOpen ? "Close card actions" : "Card actions"}
-        title="Connect, decompose, or find related concepts"
-        className="card-action-menu-trigger"
-        data-open={isOpen ? "true" : "false"}
-        onClick={(e) => {
-          e.stopPropagation();
-          setPhase((p) =>
-            p.kind === "closed" ? { kind: "root" } : { kind: "closed" },
-          );
-        }}
-        style={{
-          display: "grid",
-          placeItems: "center",
-          width: 24,
-          height: 24,
-          borderRadius: "50%",
-          background: buttonBg,
-          border: `1px solid ${buttonBorder}`,
-          color: buttonColor,
-          boxShadow: "0 2px 8px rgba(8,30,80,0.18), 0 0 0 1px rgba(255,255,255,0.5) inset",
-          cursor: "pointer",
-          transition: "opacity 140ms ease, transform 140ms ease",
-          transform: isOpen ? "scale(1.06)" : "scale(1)",
-        }}
-      >
-        <Plus
-          style={{
-            width: 14,
-            height: 14,
-            transform: isOpen ? "rotate(45deg)" : "none",
-            transition: "transform 180ms ease",
-          }}
-        />
-      </button>
-
-      {isOpen && (
-        <div
-          style={{
-            position: "absolute",
-            top: 30,
-            right: 0,
-            minWidth: 240,
-            maxWidth: 340,
-            background: "white",
-            borderRadius: 12,
-            border: "1px solid rgba(10,30,80,0.12)",
-            boxShadow:
-              "0 18px 48px -12px rgba(8,30,80,0.28), 0 4px 16px rgba(0,0,0,0.08)",
-            padding: 6,
-            color: "#0a1020",
-            fontFamily:
-              '-apple-system, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif',
-          }}
-        >
-          {phase.kind === "root" && (
+      {phase.kind === "root" && (
             <RootMenu
               onConnect={() => {
                 connect.start({ entityId, entityName });
-                setPhase({ kind: "closed" });
+                onClose();
               }}
               onDecompose={() => setPhase({ kind: "decompose-depths" })}
               onRelated={runRelatedSuggest}
@@ -578,14 +636,14 @@ export function CardActionMenu({
               reached={phase.reached}
               budgetExhausted={phase.budgetExhausted}
               prospect={phase.prospect}
-              onClose={() => setPhase({ kind: "closed" })}
+              onClose={() => onClose()}
             />
           )}
 
           {phase.kind === "decompose-error" && (
             <ErrorRow
               message={phase.message}
-              onClose={() => setPhase({ kind: "closed" })}
+              onClose={() => onClose()}
             />
           )}
 
@@ -603,7 +661,7 @@ export function CardActionMenu({
                 else next.add(id);
                 setPhase({ ...phase, selected: next });
               }}
-              onCancel={() => setPhase({ kind: "closed" })}
+              onCancel={() => onClose()}
               onAccept={() => runRelatedAccept(phase)}
             />
           )}
@@ -616,14 +674,14 @@ export function CardActionMenu({
             <DoneRow
               title={`+${phase.created} related`}
               detail="Added with relates-to edges"
-              onClose={() => setPhase({ kind: "closed" })}
+              onClose={() => onClose()}
             />
           )}
 
           {phase.kind === "related-error" && (
             <ErrorRow
               message={phase.message}
-              onClose={() => setPhase({ kind: "closed" })}
+              onClose={() => onClose()}
             />
           )}
 
@@ -641,7 +699,7 @@ export function CardActionMenu({
                 else next.add(q);
                 setPhase({ ...phase, selected: next });
               }}
-              onCancel={() => setPhase({ kind: "closed" })}
+              onCancel={() => onClose()}
               onKickoff={() => runResearchKickoff(phase)}
             />
           )}
@@ -654,24 +712,14 @@ export function CardActionMenu({
             <DoneRow
               title="Research running"
               detail={`${phase.questionCount} question${phase.questionCount === 1 ? "" : "s"} dispatched · ~2-10 min · check the run panel`}
-              onClose={() => setPhase({ kind: "closed" })}
+              onClose={() => onClose()}
             />
           )}
 
-          {phase.kind === "research-error" && (
-            <ErrorRow
-              message={phase.message}
-              onClose={() => setPhase({ kind: "closed" })}
-            />
-          )}
-        </div>
-      )}
-
-      {bridgeDraft && (
-        <ProposeBridgeModal
-          draft={bridgeDraft}
-          onCancel={() => setBridgeDraft(null)}
-          onConfirm={confirmBridge}
+      {phase.kind === "research-error" && (
+        <ErrorRow
+          message={phase.message}
+          onClose={() => onClose()}
         />
       )}
     </div>

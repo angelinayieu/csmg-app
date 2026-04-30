@@ -119,6 +119,15 @@ const STAGGER_MS = 50;
 const BURST_THRESHOLD = 12;
 const BURST_STAGGER_MS = 10;
 
+// Camera-fit bounds sanity cap. zoomToBounds called with bounds wider
+// than the user's viewport zooms out proportionally — at ~50000px
+// that's roughly 3% zoom, every shape sub-pixel, canvas reads as
+// blank. This cap protects against stale state (leftover shape ids
+// from a prior run, anchor never reset, etc.) accidentally vanishing
+// the user's view. If your real graph genuinely needs more than this,
+// raise the constant; don't remove the check.
+const MAX_FIT_DIMENSION = 50000;
+
 const GHOST_TIER: KGNodeShape["props"]["tier"] = "support";
 const GHOST_W = 220;
 const GHOST_H = 112;
@@ -280,7 +289,19 @@ interface PainterState {
       accent: string;
       rationale: string;
       orderIndex: number;
-      entities: Array<{ entityId: string; name: string; weight: number }>;
+      entities: Array<{
+        entityId: string;
+        name: string;
+        weight: number;
+        // Phase 0 — origin tag mirrored from SpaceEntityAddedEvent.
+        // Lets the shell render speculative entities (LLM brainstorm
+        // with no source) visually distinct from research-grounded ones.
+        confidenceBasis?:
+          | "llm_axis_brainstorm"
+          | "paper_extracted"
+          | "research_grounded"
+          | "user_authored";
+      }>;
       edges: Array<{
         sourceEntityId: string;
         targetEntityId: string;
@@ -895,6 +916,7 @@ function paintSpaceEntityAdded(
     entityId: event.entityId,
     name: event.name,
     weight: event.weight,
+    confidenceBasis: event.confidence_basis,
   });
   updateShellShape(editor, state, event.spaceKey);
   // Synthesis card reflects cross-axis convergence — recompute when
@@ -1672,7 +1694,14 @@ export function PipelineEventPainter({
       ...(state.variantCarouselShapeId ? [state.variantCarouselShapeId] : []),
       ...state.stageNodeShapesByKey.values(),
     ];
-    if (fitShapeIds.length > 0) {
+    // Respect the user's pan: if they panned/zoomed away from the
+    // unfurl during the run, don't yank them back when it completes.
+    // Same gate fitViewportToUnfurl uses for incremental fits — was
+    // missing here, which is why a user who pans mid-run would still
+    // get their view torn out from under them at completion.
+    const userControllingCamera =
+      !state.followCamera || editor.inputs.isPointing;
+    if (fitShapeIds.length > 0 && !userControllingCamera) {
       const boundsList = fitShapeIds
         .map((id) => editor.getShapePageBounds(id))
         .filter((b): b is NonNullable<typeof b> => b !== null);
@@ -1685,13 +1714,21 @@ export function PipelineEventPainter({
           if (b.maxY > maxY) maxY = b.maxY;
         }
         const PAD = 140;
-        try {
-          editor.zoomToBounds(
-            { x: minX - PAD, y: minY - PAD, w: maxX - minX + PAD * 2, h: maxY - minY + PAD * 2 },
-            { animation: { duration: 700 }, inset: 40 },
+        const w = maxX - minX + PAD * 2;
+        const h = maxY - minY + PAD * 2;
+        if (w > MAX_FIT_DIMENSION || h > MAX_FIT_DIMENSION) {
+          console.warn(
+            `[pipeline-painter] skipping final fit — bounds ${Math.round(w)}×${Math.round(h)} exceeds cap ${MAX_FIT_DIMENSION}`,
           );
-        } catch (err) {
-          console.warn("[pipeline-painter] final fit failed:", err);
+        } else {
+          try {
+            editor.zoomToBounds(
+              { x: minX - PAD, y: minY - PAD, w, h },
+              { animation: { duration: 700 }, inset: 40 },
+            );
+          } catch (err) {
+            console.warn("[pipeline-painter] final fit failed:", err);
+          }
         }
       }
     }
@@ -1888,14 +1925,16 @@ export function PipelineEventPainter({
 
   // Sprint B.5 — user-pan detector. Runs only while a run is live
   // (status "connecting" | "open"). Samples editor.getCamera() every
-  // 180ms and compares against the last-seen snapshot. If the camera
+  // POLL_MS and compares against the last-seen snapshot. If the camera
   // moved AND the move didn't fall inside a programmatic window (set
   // by fitViewportToUnfurl around its own zoomToBounds calls), treat
   // it as user input → flip followCamera off.
   //
-  // 180ms is the sweet spot: fast enough to catch a deliberate pan
-  // before the next event's fit yanks the user back, slow enough to
-  // keep overhead minimal (≈5 getCamera calls/sec is trivial).
+  // 60ms keeps detection latency under one animation frame at 60Hz.
+  // The fit functions also synchronously check `editor.inputs.isPointing`
+  // so a fit can't fire while the user is mid-pan even if the detector
+  // hasn't yet flipped followCamera; the polling here just makes sure
+  // followCamera stays correct after the user releases the pointer.
   //
   // When the run ends or the component unmounts, we clear the
   // interval and RESET follow to true so the next run starts fresh.
@@ -1944,7 +1983,7 @@ export function PipelineEventPainter({
         setFollowCamera(false);
       }
       state.lastSeenCamera = { x: cam.x, y: cam.y, z: cam.z };
-    }, 180);
+    }, 60);
     return () => clearInterval(interval);
   }, [editor, status]);
 
@@ -2929,6 +2968,12 @@ function fitViewportToUnfurl(editor: Editor, state: PainterState) {
   // downstream" chip, which calls this with state.followCamera=true
   // and an explicit camera snapshot reset below.
   if (!state.followCamera) return;
+  // Synchronous pan-respect: if the user is actively pointing right now
+  // (mid-pan, mid-drag), skip even scheduling a fit. The 60ms poll
+  // detector below will flip followCamera off shortly, but any fit
+  // queued before that flip would yank the camera while the user is
+  // still touching the canvas.
+  if (editor.inputs.isPointing) return;
   if (state.cameraFitTimer !== null) {
     clearTimeout(state.cameraFitTimer);
   }
@@ -2937,6 +2982,7 @@ function fitViewportToUnfurl(editor: Editor, state: PainterState) {
     // Re-check follow here too — the 120ms debounce window could
     // include a user pan that just flipped us out of follow mode.
     if (!state.followCamera) return;
+    if (editor.inputs.isPointing) return;
     const shapeIds: TLShapeId[] = [
       ...state.ghostsByEntity.values(),
       ...state.proposalsById.values(),
@@ -2981,6 +3027,17 @@ function fitViewportToUnfurl(editor: Editor, state: PainterState) {
       w: maxX - minX + PAD * 2,
       h: maxY - minY + PAD * 2,
     };
+    // Sanity cap — if the bounds union has runaway dimensions (stale
+    // shape entries pointing across multiple anchors, leftover state
+    // from a previous run, etc.), zoomToBounds would zoom the user
+    // out to ~3% so every shape is sub-pixel and the canvas reads as
+    // empty. Bail rather than vanish the user's view.
+    if (bounds.w > MAX_FIT_DIMENSION || bounds.h > MAX_FIT_DIMENSION) {
+      console.warn(
+        `[pipeline-painter] skipping fit — bounds ${Math.round(bounds.w)}×${Math.round(bounds.h)} exceeds cap ${MAX_FIT_DIMENSION}`,
+      );
+      return;
+    }
     try {
       // Mark the next 700ms as programmatic (600ms anim + 100ms slack)
       // so the user-pan detector below doesn't mistake our own

@@ -3,6 +3,9 @@ import { getAnthropicClient } from "@/lib/anthropic";
 import { llmJSON } from "@/lib/llm";
 import { safeAuth, safeJsonParse, verifyMultiSpaceOwnership, refreshSpaceCounts, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { getDomainExpertPrompt, DOMAIN_EXPERT_PROMPT } from "@/lib/prompts/domain-expert";
+// Phase 1 — outcome-anchored research wire
+import { loadActivePlan } from "@/lib/pipeline/active-plan-loader";
+import type { KgGenerationPlan } from "@/types/kg-generation-plan";
 import { buildResearchIntentBlock } from "@/lib/prompts/intent-context";
 import {
   getResearchTools,

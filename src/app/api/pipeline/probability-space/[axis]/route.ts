@@ -364,6 +364,12 @@ export async function POST(request: Request, ctx: Ctx) {
         observables: e.observables,
         failureMode: e.failure_mode,
         interventionHandle: e.intervention_handle,
+        // Phase 0 — every per-axis entity is produced by a single
+        // ungrounded LLM call (no web_search, no citations, no source
+        // URLs). Tag it so the canvas can visually mark it as
+        // speculative; downstream stages can also filter or downweight
+        // these vs research_grounded entities.
+        confidence_basis: "llm_axis_brainstorm",
       };
       return event;
     });
