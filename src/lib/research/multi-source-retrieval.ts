@@ -50,6 +50,11 @@ export interface MultiSourceRetrievalOpts {
   targetEvidenceCount?: number;
   /** Override min reliability gate from the plan. */
   minReliability?: number;
+  /** Phase 2 — appended to the system prompt verbatim. Lets a caller
+   *  re-purpose the search backbone for non-default modes (e.g. the
+   *  adversarial pass appends counter-evidence framing here). When
+   *  omitted, the default corroborative behavior is unchanged. */
+  systemPromptAddendum?: string;
 }
 
 export interface MultiSourceRetrievalResult {
@@ -98,7 +103,7 @@ ${sourceTypeHint}
 ${scrapingHints}
 ${modifierHints}
 
-After performing the searches, produce ONLY a short summary (1-2 sentences) of what you found. The caller extracts citations from your search results directly — you don't need to repeat URLs in your summary.`;
+After performing the searches, produce ONLY a short summary (1-2 sentences) of what you found. The caller extracts citations from your search results directly — you don't need to repeat URLs in your summary.${opts.systemPromptAddendum ?? ""}`;
 
   const userPrompt = `Research query: ${opts.query}
 

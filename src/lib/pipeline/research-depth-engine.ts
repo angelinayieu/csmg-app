@@ -21,15 +21,90 @@ export interface ContinuationSignal {
     | "critical_bridge_found"
     | "contradiction_detected"
     | "high_impact_gap"
-    | "validation_needed";
+    | "validation_needed"
+    // Phase 3 — new signal types emitted by triangulation /
+    // adversarial passes so shouldContinueResearch can route the
+    // next pass intelligently instead of always defaulting to
+    // breadth.
+    | "triangulation_gap_detected"
+    | "contradiction_found_via_adversarial"
+    // Phase 4 — cycle_close + boundary_condition passes. Cycle
+    // closures rarely chain into more passes (the cycle is either
+    // closed or it isn't); boundary findings can chain into another
+    // adversarial sweep on the now-conditional claims.
+    | "cycle_closed"
+    | "boundary_condition_found";
   description: string;
   follow_up_queries: string[];
   priority: "critical" | "high" | "medium";
 }
 
+/**
+ * Phase 3 — first-class pass-kind enum. Each kind is a different
+ * research strategy, dispatched via pass-kind-dispatcher.ts.
+ *
+ *   • outcome_breadth — outcome-anchored landscape scan; one LLM call
+ *     with web_search; produces external entities + edges + signals.
+ *     Equivalent to the legacy "discovery"/"deepening" passes.
+ *
+ *   • triangulation   — post-hoc DB scan; flags claims with <N
+ *     independent supporters as gaps; emits triangulation_gap events.
+ *     No LLM, no DB writes; cheap.
+ *
+ *   • adversarial     — counter-evidence search on top-N supported
+ *     claims; persists support_type='contradicts' evidence; demotes
+ *     claim confidence via the existing posterior recompute.
+ *
+ *   • cycle_close     — Phase 4a. Detects 3-edge near-cycles in the
+ *     KG (A→B→C with no C→A) and runs targeted web search to find
+ *     literature evidence for the closing edge. Persists confirmed
+ *     edges + promotes complete cycles into the `cycles` table.
+ *
+ *   • boundary_condition — Phase 4b. For each top leverage point,
+ *     searches for peer-reviewed failure modes (specific conditions
+ *     under which the leverage point fails to produce its expected
+ *     effect). Persists each failure mode as an entity + conditional
+ *     edge.
+ *
+ * Future phases will add: drill. It is intentionally NOT in the union
+ * yet — adding it before an implementation exists would create
+ * dangling enum values that shouldContinueResearch couldn't return.
+ */
+export type PassKind =
+  | "outcome_breadth"
+  | "triangulation"
+  | "adversarial"
+  | "cycle_close"
+  | "boundary_condition";
+
+/**
+ * Map legacy `pass_type` to the new `pass_kind`. The 3-value legacy
+ * vocabulary collapses into the new vocabulary as follows:
+ *   - discovery / deepening → outcome_breadth (they're both "produce
+ *     entities anchored to a topic"; the new name is more honest about
+ *     the anchoring being outcome-driven)
+ *   - validation → triangulation (legacy validation chased contradictions
+ *     and uncertain findings; that's exactly what triangulation does
+ *     by checking source counts)
+ *
+ * Used during the transition period so the old `pass_type` field on
+ * persisted ResearchPass rows can still be read meaningfully.
+ */
+export function legacyPassTypeToKind(
+  pt: "discovery" | "validation" | "deepening",
+): PassKind {
+  if (pt === "validation") return "triangulation";
+  return "outcome_breadth";
+}
+
 export interface ResearchPass {
   pass_number: number;
+  /** @deprecated Use pass_kind. Kept for compat with persisted rows + legacy
+   *  consumers that read this field. New code should write pass_kind. */
   pass_type: "discovery" | "validation" | "deepening";
+  /** Phase 3 — first-class pass kind. Always populated on new rows.
+   *  Optional for replayed historical passes that only have pass_type. */
+  pass_kind?: PassKind;
   focus_queries: string[];
   entities_discovered: number;
   signals_found: number;
@@ -58,7 +133,11 @@ export interface PassResult {
 export interface ContinuationDecision {
   continue: boolean;
   reason: string;
+  /** @deprecated Use next_pass_kind. Kept so existing call sites compile. */
   next_pass_type: "validation" | "deepening";
+  /** Phase 3 — what pass-kind to run next. Always populated by
+   *  shouldContinueResearch. */
+  next_pass_kind: PassKind;
   focus_queries: string[];
 }
 
@@ -155,6 +234,7 @@ export function shouldContinueResearch(
     continue: false,
     reason,
     next_pass_type: "deepening",
+    next_pass_kind: "outcome_breadth",
     focus_queries: [],
   });
 
@@ -213,7 +293,14 @@ export function shouldContinueResearch(
 
   // ── Continuation signals evaluation ──
 
-  // After pass 1: continue if any critical or high signal
+  // After pass 1: continue if any critical or high signal.
+  //
+  // Phase 3 routing:
+  //   - contradiction_detected by the LLM → triangulation pass first
+  //     (verify whether the contradiction has independent support
+  //     before chasing more breadth)
+  //   - everything else → another outcome_breadth pass to deepen
+  //     coverage on critical signals
   if (passCount === 0 && criticalOrHigh.length > 0) {
     const hasContradiction = continuationSignals.some(
       (s) => s.type === "contradiction_detected"
@@ -222,18 +309,30 @@ export function shouldContinueResearch(
       continue: true,
       reason: `Pass 1 found ${criticalOrHigh.length} critical/high signals`,
       next_pass_type: hasContradiction ? "validation" : "deepening",
+      next_pass_kind: hasContradiction ? "triangulation" : "outcome_breadth",
       focus_queries: criticalOrHigh.flatMap((s) => s.follow_up_queries).slice(0, 5),
     };
   }
 
-  // After pass 2: continue ONLY if depth is "deep" AND at least 1 critical signal
+  // After pass 2: continue ONLY if depth is "deep" AND at least 1
+  // critical signal — but on deep, also schedule an adversarial pass
+  // when prior passes produced lots of high-confidence claims (the
+  // adversarial gain is highest there). The dispatcher handles either
+  // kind without an extra pass-budget cost.
   if (passCount === 1) {
     const criticalOnly = continuationSignals.filter((s) => s.priority === "critical");
     if (plan.depth === "deep" && criticalOnly.length > 0) {
+      const hasGap = continuationSignals.some(
+        (s) => s.type === "triangulation_gap_detected"
+      );
       return {
         continue: true,
         reason: `Pass 2 found ${criticalOnly.length} critical signals (deep mode)`,
         next_pass_type: "deepening",
+        // If a triangulation gap was flagged on pass 2, fill the gap on
+        // pass 3 before claiming "deep coverage". Otherwise hunt for
+        // counter-evidence on the strongest claims.
+        next_pass_kind: hasGap ? "outcome_breadth" : "adversarial",
         focus_queries: criticalOnly.flatMap((s) => s.follow_up_queries).slice(0, 3),
       };
     }

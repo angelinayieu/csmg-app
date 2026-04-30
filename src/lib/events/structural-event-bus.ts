@@ -34,7 +34,12 @@ export type Pipeline =
   // pipeline waits for kg_plan_approved before kicking off
   // decompose/research/synthesize. See
   // src/lib/pipeline/plan-generator.ts and the 20260614 migration.
-  | "plan_propose";
+  | "plan_propose"
+  // Phase 5 (research-strategy migration) — outcome-anchored modular
+  // round orchestrator. One pipeline_run per round so SSE stays
+  // subscribed across all five pass kinds. See the 20260627 migration
+  // for the matching DB CHECK + research_rounds table.
+  | "research_round";
 
 export interface StartPipelineRunOpts {
   spaceId: string;

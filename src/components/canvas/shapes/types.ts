@@ -432,12 +432,20 @@ export type AppCardShape = TLBaseShape<
     /**
      * Monte Carlo distribution of this app's primary dominant entity's
      * outcome deviation. All three are null until simulate-entity-chain
-     * runs (post-generate). When present, the card renders a compact
-     * p10–p90 band below the title.
+     * runs (post-generate). When present (and no card_spec), the card
+     * renders a compact p10–p90 band below the title.
      */
     p10: number | null;
     p50: number | null;
     p90: number | null;
+    /**
+     * Archetype-driven card spec, JSON-stringified for tldraw prop
+     * compatibility (props must be scalar). Snapshotted from
+     * `apps.config.card_spec` at drop time. When present, the view
+     * dispatches to <CardSpecRenderer /> instead of rendering the
+     * legacy DistributionBand. See src/types/card-spec.ts.
+     */
+    cardSpecJson: string | null;
   }
 >;
 

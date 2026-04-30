@@ -96,6 +96,7 @@ export const appAssetClass: AssetClassDefinition<App> = {
       stale_reason: a.stale_reason,
       intervention_count: a.intervention_count ?? 0,
       simulation_distribution: a.state?.simulation_distribution ?? null,
+      card_spec: a.config?.card_spec ?? null,
     },
   }),
 
@@ -117,6 +118,12 @@ export const appAssetClass: AssetClassDefinition<App> = {
     const p10 = dist && typeof dist.p10 === "number" ? dist.p10 : null;
     const p50 = dist && typeof dist.p50 === "number" ? dist.p50 : null;
     const p90 = dist && typeof dist.p90 === "number" ? dist.p90 : null;
+    // CardSpec rides as a JSON string on the shape so it stays
+    // tldraw-validatable (only scalars allowed in shape props).
+    // The view re-parses + dispatches via <CardSpecRenderer />.
+    const cardSpec = ext.card_spec ?? null;
+    const cardSpecJson = cardSpec ? JSON.stringify(cardSpec) : null;
+    const hasCardSpec = cardSpecJson !== null;
 
     return {
       type: "app-card",
@@ -135,9 +142,12 @@ export const appAssetClass: AssetClassDefinition<App> = {
         p10,
         p50,
         p90,
+        cardSpecJson,
       },
       w: 220,
-      h: p10 !== null ? 152 : 132,
+      // Cards with a card_spec render the full archetype body and
+      // need more height; legacy cards keep the prior sizing.
+      h: hasCardSpec ? 196 : p10 !== null ? 152 : 132,
     };
   },
 

@@ -23,13 +23,15 @@
 //                      panel; cards are buttons that fire onSelect.
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useMemo, useState, useTransition } from "react";
 import {
   Archive,
   ArchiveRestore,
   ArrowLeft,
   ArrowRight,
   Layers,
+  Loader2,
   MessageCircleQuestion,
   Network,
   Pin,
@@ -506,6 +508,8 @@ function WhiteboardCard({
   onPin: (id: string, pinned: boolean) => void;
   onArchive: (id: string, archived: boolean) => void;
 }) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
   const snippet =
     space.description ??
     (space.input_text ? space.input_text.slice(0, 140) : null);
@@ -522,10 +526,39 @@ function WhiteboardCard({
       ? "border-amber-300 ring-1 ring-amber-100"
       : "border-gray-200/80 hover:border-blue-200",
     space.archived && "opacity-70",
+    isPending && "pointer-events-none",
   );
+
+  // Intercept plain clicks so we can show a per-card "Opening…" overlay
+  // while the destination route is being fetched. Modifier / middle clicks
+  // fall through to the native Link behavior (open in new tab, etc.).
+  function handleNavigate(e: React.MouseEvent) {
+    if (
+      e.metaKey ||
+      e.ctrlKey ||
+      e.shiftKey ||
+      e.altKey ||
+      e.button === 1
+    ) {
+      return;
+    }
+    e.preventDefault();
+    startTransition(() => {
+      router.push(`/app/space/${space.id}/whiteboard`);
+    });
+  }
 
   const inner = (
     <>
+      {/* Loading overlay — shown while the destination route is resolving. */}
+      {isPending && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/70 backdrop-blur-[1px]">
+          <div className="inline-flex items-center gap-1.5 rounded-full bg-gray-900/90 px-3 py-1.5 text-[11px] font-semibold text-white shadow-lg">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Opening…
+          </div>
+        </div>
+      )}
       {/* Curate row — pin / archive (browse mode only). Sits above the
           card body so it never overlaps content. Stops propagation so
           clicking a button doesn't navigate. */}
@@ -643,7 +676,12 @@ function WhiteboardCard({
   }
 
   return (
-    <Link href={`/app/space/${space.id}/whiteboard`} className={cardClass}>
+    <Link
+      href={`/app/space/${space.id}/whiteboard`}
+      onClick={handleNavigate}
+      aria-busy={isPending}
+      className={cardClass}
+    >
       {inner}
     </Link>
   );

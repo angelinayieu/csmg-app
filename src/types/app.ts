@@ -14,6 +14,7 @@
 
 import type { Database, Json } from "./database.types";
 import type { AppManifest } from "./app-manifest";
+import type { CardSpec } from "./card-spec";
 
 export type AppType = "dashboard" | "workflow" | "tool" | "monitor" | "integration";
 export type AppStatus = "proposed" | "approved" | "active" | "paused" | "retired";
@@ -74,6 +75,20 @@ export interface AppConfig {
    * See src/types/app-manifest.ts for the shape.
    */
   manifest?: AppManifest;
+  /**
+   * Archetype-driven card spec. Produced at T7 by the CardGenerator
+   * agent and consumed by <CardSpecRenderer /> wherever this app
+   * appears (canvas drop, lab panel, dashboard widget). Replaces the
+   * ad-hoc DistributionBand on the canvas card. When absent, surfaces
+   * fall back to legacy card chrome.
+   *
+   * See src/types/card-spec.ts for the discriminated union.
+   */
+  card_spec?: CardSpec;
+  /** ISO timestamp the card_spec was last (re)generated. Bumps when
+   *  the strategizer's simulation output changes enough to invalidate
+   *  the prior spec. */
+  card_spec_generated_at?: string;
   /**
    * Reasoning provenance — backlinks from this app to upstream strategy
    * artifacts that justify its existence. Computed by app-generator from

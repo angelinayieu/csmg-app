@@ -19,6 +19,7 @@
 // Future: filter by `apps.serves_subject_id` or similar.
 
 import { useEffect, useMemo, useState } from "react";
+import type { CardSpec } from "@/types/card-spec";
 
 export type ApplicationType =
   | "game"
@@ -46,6 +47,10 @@ export interface DownstreamAppRow {
   /** Bidirectional pair links — used by the panel to render small
    *  "paired with [other-app-name]" notes inline. */
   complementary_app_ids: string[];
+  /** Archetype-driven card spec — when present, the lab panel renders
+   *  the full <CardSpecRenderer /> body instead of the legacy
+   *  instrument-checklist / target-chip layout. */
+  card_spec: CardSpec | null;
 }
 
 export interface LabDownstreamAppsIndex {
@@ -137,6 +142,10 @@ export function useLabDownstreamApps(
             complementary_app_ids: Array.isArray(r.complementary_app_ids)
               ? r.complementary_app_ids
               : [],
+            card_spec:
+              config.card_spec && typeof config.card_spec === "object"
+                ? (config.card_spec as CardSpec)
+                : null,
           };
         });
         setApps(flat);

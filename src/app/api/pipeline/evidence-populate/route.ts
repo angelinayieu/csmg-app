@@ -28,6 +28,7 @@ import { NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers";
 import { runMultiSourceRetrieval } from "@/lib/research/multi-source-retrieval";
 import { persistEvidenceBatch } from "@/lib/research/claim-producer";
+import { emitStructuralEvent } from "@/lib/events/structural-event-bus";
 import type {
   CoarseDomain,
   QuestionType,
@@ -60,12 +61,18 @@ export async function POST(request: Request) {
       domain,
       maxEntities: rawMaxEntities,
       researchDepth: rawDepth,
+      runId,
     } = (body ?? {}) as {
       spaceId?: string;
       questionType?: QuestionType;
       domain?: CoarseDomain;
       maxEntities?: number;
       researchDepth?: "training" | "light" | "standard" | "deep";
+      /** Phase 2 — when caller threads through the active pipeline_run
+       *  id, we emit `triangulation_gap` events per under-supported
+       *  claim so the orchestrator can target them next pass. Optional
+       *  (the route still works for ad-hoc grounding without a run). */
+      runId?: string;
     };
 
     if (!spaceId) {
@@ -195,6 +202,34 @@ export async function POST(request: Request) {
       spaceId,
       claimSourceType: "fast_research",
     });
+
+    // ── Phase 2 · emit triangulation_gap events ──
+    // For every claim that didn't reach the triangulation bar,
+    // surface a structural event so the canvas (and downstream
+    // research orchestration) can see exactly which claims need more
+    // independent supporters. Soft-fail per emission: a wedged event
+    // bus shouldn't block the response. Skipped when no runId is
+    // threaded in (ad-hoc grounding without a pipeline run).
+    if (runId && persistResult.gaps.length > 0) {
+      for (const gap of persistResult.gaps) {
+        try {
+          await emitStructuralEvent(db, runId, {
+            type: "triangulation_gap",
+            claimId: gap.claimId,
+            claimText: gap.claimText,
+            currentSupportCount: gap.currentSupportCount,
+            requiredSupportCount: gap.requiredSupportCount,
+            hasContradictor: gap.hasContradictor,
+            suggestedQueries: gap.suggestedQueries,
+          });
+        } catch (emitErr) {
+          console.warn(
+            "[evidence-populate] triangulation_gap emit failed (non-fatal):",
+            emitErr,
+          );
+        }
+      }
+    }
 
     return NextResponse.json({
       success: true,

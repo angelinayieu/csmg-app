@@ -34,6 +34,7 @@ import {
   type ApplicationType,
 } from "../../hooks/use-lab-downstream-apps";
 import { APPLICATION_TYPE_ACCENT } from "@/components/canvas/hooks/use-space-app-pairs";
+import { CardSpecRenderer } from "@/components/cards";
 
 // ── Icon + label maps ────────────────────────────────────────────────
 
@@ -148,6 +149,39 @@ function DownstreamAppCard({
   // measurement.dominant_entity_codes = instrument list (toggleable),
   // game.dominant_entity_codes = entity targets (informational).
   const isMeasurement = appType === "measurement";
+
+  // ── Card-spec branch ─────────────────────────────────────────────
+  // When the app row carries an archetype-driven card_spec, the lab
+  // renders the same widget the user will see when the app deploys —
+  // so dragging a state slider can re-tween its body in place. The
+  // legacy chrome (instrument checklist, target chips, pair note) is
+  // skipped; "Open" still appears as a footer link.
+  if (app.card_spec) {
+    const cardMode = app.status === "active" ? "live" : "forecast";
+    return (
+      <div className="flex flex-col gap-2">
+        <CardSpecRenderer spec={app.card_spec} mode={cardMode} size="expanded" />
+        <div className="flex items-center justify-between px-1">
+          {app.complementary_app_ids.length > 0 ? (
+            <span className="text-[10px] text-[#86868b]">
+              ↔ paired with {app.complementary_app_ids.length}{" "}
+              {app.complementary_app_ids.length === 1 ? "app" : "apps"}
+            </span>
+          ) : (
+            <span />
+          )}
+          <Link
+            href={`/app/space/${spaceId}/app/${app.id}`}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10.5px] font-semibold transition-colors"
+            style={{ color: accent }}
+          >
+            Open {typeLabel}
+            <ArrowUpRight className="h-3 w-3" />
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

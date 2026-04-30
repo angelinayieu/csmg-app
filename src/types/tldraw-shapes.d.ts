@@ -695,6 +695,10 @@ declare module "@tldraw/tlschema" {
       interventionCount: number;
       accent: string;
       expanded: boolean;
+      p10: number | null;
+      p50: number | null;
+      p90: number | null;
+      cardSpecJson: string | null;
     };
     // Phase 4 — Subject card primitive. First-class whiteboard
     // representation of a subjects row. Created via the +Subject

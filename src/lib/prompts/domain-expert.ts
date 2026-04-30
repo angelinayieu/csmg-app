@@ -1,4 +1,17 @@
 import type { ResearchDepth } from "@/lib/web-search";
+import type { KgGenerationPlan } from "@/types/kg-generation-plan";
+
+/** Phase 1 — outcome anchor on `pipeline_runs.target_outcome`.
+ *  Mirrors the JSONB shape persisted by target-outcome-extractor.
+ *  All optional so missing/legacy runs degrade gracefully. */
+export interface ResearchTargetOutcome {
+  name?: string;
+  direction?: "maximize" | "minimize" | "maintain";
+  metric_kind?: "binary" | "continuous" | "distribution" | "qualitative";
+  horizon?: "immediate" | "short_term" | "medium_term" | "long_term" | null;
+  confidence?: number;
+  rationale?: string;
+}
 
 // ── Base prompt (shared across all research depths) ──
 
@@ -237,7 +250,20 @@ RULES:
  */
 export function getDomainExpertPrompt(
   depth: ResearchDepth,
-  options?: { focus_areas?: string[]; skip_categories?: string[] }
+  options?: {
+    focus_areas?: string[];
+    skip_categories?: string[];
+    /** Phase 1 — outcome variable from target-outcome-extractor.
+     *  When present, research is anchored to causes / interventions /
+     *  effect sizes for THIS specific outcome instead of free-form
+     *  domain enumeration. */
+    target_outcome?: ResearchTargetOutcome | null;
+    /** Phase 1 — research_plan section of the approved KG plan.
+     *  Used to (a) seed search around papers the planner already
+     *  identified, and (b) explicitly fill the planner-flagged
+     *  coverage gaps. Both fields tolerate undefined / empty arrays. */
+    active_plan?: KgGenerationPlan | null;
+  }
 ): string {
   let prompt: string;
 
@@ -254,6 +280,55 @@ export function getDomainExpertPrompt(
 
   if (options?.skip_categories?.length) {
     prompt += `\n\nCATEGORY FILTERING: Minimize or skip entities in these categories: ${options.skip_categories.join(", ")}. The analysis already has sufficient coverage in these areas.`;
+  }
+
+  // ── Phase 1 · Outcome anchor ──────────────────────────────────────
+  // Make the research anchor to a specific outcome variable, so every
+  // entity found is filterable by "does this affect the outcome the
+  // user actually cares about?". Without this, research runs domain-
+  // wide and produces breadth at the cost of relevance.
+  const outcome = options?.target_outcome;
+  if (outcome?.name) {
+    const dir = outcome.direction ?? "improve";
+    const horizon = outcome.horizon ? ` over a ${outcome.horizon} horizon` : "";
+    const metric = outcome.metric_kind ? ` (${outcome.metric_kind} metric)` : "";
+    prompt += `\n\nOUTCOME ANCHOR: Research is anchored to a single outcome the user wants to ${dir}${horizon}: "${outcome.name}"${metric}. Bias every section toward this outcome:
+- LANDSCAPE entities should connect (directly or indirectly) to ${outcome.name}.
+- KNOWN PATTERNS should be patterns that drive ${outcome.name} up or down.
+- EMPIRICAL DATA should report effect sizes on ${outcome.name} (or its closest measurable proxy) — Cohen's d, odds ratio, percentage change, etc.
+- Every external_entity SHOULD include in its description either (a) the mechanism by which it affects ${outcome.name}, or (b) the effect size if known.`;
+  }
+
+  // ── Phase 1 · Plan-driven coverage ────────────────────────────────
+  // The planner already identified papers + flagged gaps. Surface those
+  // explicitly so research doesn't redundantly cover what the planner
+  // already mapped, and DOES explicitly fill the gaps.
+  const plan = options?.active_plan;
+  if (plan?.research_plan) {
+    const rp = plan.research_plan;
+    const plannerPapers = rp.papers?.slice(0, 6) ?? [];
+    if (plannerPapers.length > 0) {
+      const lines = plannerPapers
+        .map(
+          (p) =>
+            `- "${p.title ?? "(untitled)"}" — anticipated coverage: layers=${(p.anticipated_coverage_layers ?? []).join("|") || "—"}, axes=${(p.anticipated_coverage_axes ?? []).join("|") || "—"}, expected effect-size count=${p.expected_effect_size_count ?? 0}`,
+        )
+        .join("\n");
+      prompt += `\n\nPLANNER-IDENTIFIED PAPERS (already known to the system; cite + extend, do not re-discover):\n${lines}`;
+    }
+    const gaps = rp.coverage_gaps?.slice(0, 8) ?? [];
+    if (gaps.length > 0) {
+      const lines = gaps
+        .map(
+          (g) =>
+            `- layer=${g.layer_slug ?? "—"}, axis=${g.axis_slug ?? "—"}: ${g.why_uncovered}. Suggested paper kinds: ${(g.suggested_paper_kinds ?? []).join(", ")}`,
+        )
+        .join("\n");
+      prompt += `\n\nCOVERAGE GAPS (no supporting source yet — your research MUST fill these or surface why no source exists):\n${lines}`;
+    }
+    if (rp.extraction_order_rationale) {
+      prompt += `\n\nPLAN RATIONALE: ${rp.extraction_order_rationale}`;
+    }
   }
 
   return prompt;

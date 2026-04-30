@@ -28,6 +28,11 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ExtractedEvidence } from "./evidence-extractor";
+import {
+  detectTriangulationGap,
+  type TriangulationGap,
+  type TriangulationPolicy,
+} from "./triangulation-gap-detector";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyDb = SupabaseClient<any>;
@@ -37,6 +42,11 @@ export interface PersistEvidenceOpts {
   /** Where this evidence batch came from in the pipeline — goes on
    *  derived claim rows as `source_type`. */
   claimSourceType?: "deep_research" | "fast_research" | "synthesis" | "manual";
+  /** Phase 2 — triangulation policy applied per claim. Defaults to the
+   *  policy in triangulation-gap-detector when omitted (≥2 distinct
+   *  high-reliability supporters, no contradictors). Callers running
+   *  the adversarial pass can pass a stricter policy here. */
+  triangulationPolicy?: TriangulationPolicy;
 }
 
 export interface PersistEvidenceResult {
@@ -45,6 +55,11 @@ export interface PersistEvidenceResult {
   claimsUpdated: number;
   linksCreated: number;
   errors: string[];
+  /** Phase 2 — claims that don't yet meet the triangulation bar.
+   *  Caller emits `triangulation_gap` events from these so the research
+   *  orchestrator can target them on the next pass. Empty when every
+   *  claim cleared the bar. */
+  gaps: TriangulationGap[];
 }
 
 export async function persistEvidenceBatch(
@@ -58,6 +73,7 @@ export async function persistEvidenceBatch(
     claimsUpdated: 0,
     linksCreated: 0,
     errors: [],
+    gaps: [],
   };
 
   if (evidence.length === 0) return result;
@@ -262,6 +278,24 @@ export async function persistEvidenceBatch(
             `link threw: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
+      }
+
+      // ── Phase 2 · triangulation gap check ──
+      // After every piece of evidence is linked, decide whether this
+      // claim has enough independent supporters to be "triangulated".
+      // If not, push a TriangulationGap onto the result. Callers emit
+      // a `triangulation_gap` structural event per gap when a runId
+      // is in scope (see /api/pipeline/evidence-populate). Pure data:
+      // we don't touch the event bus here so this module stays
+      // testable as a persistence-only unit.
+      const gap = detectTriangulationGap({
+        claimId,
+        claimText: bucket.claim_text,
+        evidence: bucket.evidence,
+        policy: opts.triangulationPolicy,
+      });
+      if (gap) {
+        result.gaps.push(gap);
       }
     } catch (err) {
       result.errors.push(

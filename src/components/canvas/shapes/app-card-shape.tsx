@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import type { AppType, AppStatus, AppStaleReason } from "@/types/app";
 import type { AppCardShape } from "./types";
+import { CardSpecRenderer, parseCardSpec } from "@/components/cards";
 
 const APP_TYPE_ACCENT: Record<AppType, string> = {
   dashboard: "#3B82F6",      // blue
@@ -123,6 +124,7 @@ export class AppCardShapeUtil extends BaseBoxShapeUtil<AppCardShape> {
     p10: T.number.nullable(),
     p50: T.number.nullable(),
     p90: T.number.nullable(),
+    cardSpecJson: T.string.nullable(),
   };
 
   override canResize = () => true;
@@ -150,6 +152,7 @@ export class AppCardShapeUtil extends BaseBoxShapeUtil<AppCardShape> {
       p10: null,
       p50: null,
       p90: null,
+      cardSpecJson: null,
     };
   }
 
@@ -175,6 +178,7 @@ function AppCardShapeView({ shape }: { shape: AppCardShape }) {
     p10,
     p50,
     p90,
+    cardSpecJson,
   } = shape.props;
 
   const typeAccent = APP_TYPE_ACCENT[appType];
@@ -185,9 +189,56 @@ function AppCardShapeView({ shape }: { shape: AppCardShape }) {
   const hasHealth = typeof healthScore === "number";
   const hasDistribution =
     typeof p10 === "number" && typeof p50 === "number" && typeof p90 === "number";
+  // CardSpec wins over the legacy DistributionBand whenever it parses
+  // cleanly. Active apps render in "live" mode (badge says "Today");
+  // everything pre-active reads as a forecast.
+  const cardSpec = parseCardSpec(cardSpecJson);
+  const cardSpecMode = status === "active" ? "live" : "forecast";
 
   const navHref = spaceId && appId ? `/app/space/${spaceId}/app/${appId}` : "";
 
+  // ── CardSpec render path ─────────────────────────────────────────
+  // When the app row carries a card_spec, the entire body is delegated
+  // to <CardSpecRenderer />. We keep the outer click/nav wrapper +
+  // stale chrome so canvas behaviors (drag-stop, click-to-open, stale
+  // glow) stay identical.
+  if (cardSpec) {
+    return (
+      <HTMLContainer
+        style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
+      >
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            height: "100%",
+            cursor: "pointer",
+            outline: isStale ? "2px solid rgba(217,119,6,0.45)" : undefined,
+            outlineOffset: isStale ? -2 : undefined,
+            borderRadius: 14,
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            if (!navHref) return;
+            e.stopPropagation();
+            if (e.metaKey || e.ctrlKey || e.button === 1) {
+              window.open(navHref, "_blank");
+            } else {
+              window.location.href = navHref;
+            }
+          }}
+          role={navHref ? "link" : undefined}
+          title={
+            staleReason ? `${name} — ${STALE_LABEL[staleReason as AppStaleReason] ?? "stale"}` : name
+          }
+        >
+          <CardSpecRenderer spec={cardSpec} mode={cardSpecMode} size="compact" />
+        </div>
+      </HTMLContainer>
+    );
+  }
+
+  // ── Legacy render path (no card_spec yet) ────────────────────────
   return (
     <HTMLContainer
       style={{

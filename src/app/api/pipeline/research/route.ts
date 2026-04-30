@@ -2,10 +2,20 @@ import { NextResponse, after } from "next/server";
 import { getAnthropicClient } from "@/lib/anthropic";
 import { llmJSON } from "@/lib/llm";
 import { safeAuth, safeJsonParse, verifyMultiSpaceOwnership, refreshSpaceCounts, sanitizeErrorMessage } from "@/lib/api-helpers";
-import { getDomainExpertPrompt, DOMAIN_EXPERT_PROMPT } from "@/lib/prompts/domain-expert";
+import {
+  getDomainExpertPrompt,
+  DOMAIN_EXPERT_PROMPT,
+  type ResearchTargetOutcome,
+} from "@/lib/prompts/domain-expert";
 // Phase 1 — outcome-anchored research wire
 import { loadActivePlan } from "@/lib/pipeline/active-plan-loader";
 import type { KgGenerationPlan } from "@/types/kg-generation-plan";
+// Phase 3 — pass-kind dispatcher (triangulation + adversarial)
+import {
+  runPassByKind,
+  type DispatchContext,
+} from "@/lib/pipeline/pass-kind-dispatcher";
+import type { PassKind } from "@/lib/pipeline/research-depth-engine";
 import { buildResearchIntentBlock } from "@/lib/prompts/intent-context";
 import {
   getResearchTools,
@@ -157,7 +167,20 @@ interface HiddenSignal {
 }
 
 interface ContinuationSignalOutput {
-  type: "critical_bridge_found" | "contradiction_detected" | "high_impact_gap" | "validation_needed";
+  // Legacy types are emitted by the LLM (per the JSON schema baked into
+  // the domain-expert prompt). Phase 3+4 added more types that come
+  // from the dispatcher (triangulation, adversarial, cycle_close,
+  // boundary_condition passes), not the LLM — listed here so the
+  // unified accumulator type is honest.
+  type:
+    | "critical_bridge_found"
+    | "contradiction_detected"
+    | "high_impact_gap"
+    | "validation_needed"
+    | "triangulation_gap_detected"
+    | "contradiction_found_via_adversarial"
+    | "cycle_closed"
+    | "boundary_condition_found";
   description: string;
   follow_up_queries: string[];
   priority: "critical" | "high" | "medium";
@@ -326,7 +349,27 @@ export async function POST(request: Request) {
     // We use this to give the domain expert targeted context about
     // what the analysis found, so it can research more precisely.
 
-    const [entityRes, edgeRes, cycleRes, spaceMetaRes] = await Promise.all([
+    // Phase 1 — load the approved KG plan + target outcome in parallel
+    // with the KG snapshot. Both gracefully degrade to null when absent
+    // (e.g. plan-gate skipped, or outcome extractor never ran). The
+    // research prompt builder accepts undefined and falls back to its
+    // pre-Phase-1 behavior, so this is safe on legacy spaces too.
+    const targetOutcomeQuery = existingRunId
+      ? db
+          .from("pipeline_runs")
+          .select("target_outcome")
+          .eq("id", existingRunId)
+          .maybeSingle()
+      : Promise.resolve({ data: null } as { data: { target_outcome: unknown } | null });
+
+    const [
+      entityRes,
+      edgeRes,
+      cycleRes,
+      spaceMetaRes,
+      activePlanRes,
+      runOutcomeRes,
+    ] = await Promise.all([
       db
         .from("entities")
         .select("id, name, entity_id, importance, is_leverage_point, is_risk_point, is_master_bottleneck, description, entity_category, knowledge_layer")
@@ -349,7 +392,18 @@ export async function POST(request: Request) {
         .select("synthesis_data")
         .eq("id", rootSpaceId)
         .single(),
+      // Soft-fails internally; returns null on missing/legacy plans.
+      loadActivePlan(db, rootSpaceId),
+      targetOutcomeQuery,
     ]);
+    const activePlan = activePlanRes as KgGenerationPlan | null;
+    // target_outcome JSONB shape matches ResearchTargetOutcome (all
+    // fields optional). Cast through unknown — runtime shape is
+    // validated softly by the prompt builder, which handles missing
+    // fields gracefully.
+    const targetOutcome =
+      ((runOutcomeRes?.data as { target_outcome?: unknown } | null)
+        ?.target_outcome as ResearchTargetOutcome | null | undefined) ?? null;
 
     // ── Research cache check ──
     // Compute a fingerprint of the current (internal) entities + edges so the cache
@@ -801,9 +855,65 @@ These are NOT external landscape entities — these are entities the user SHOULD
     let firstPassCoreProposals: DomainExpertOutput["core_proposals"] = undefined;
     let firstPassCoreEdges: DomainExpertOutput["core_proposal_edges"] = undefined;
 
+    // Phase 3 — pass-kind dispatch context. Hoisted out of the loop so
+    // origin / cookieHeader resolve once. The dispatcher only fires for
+    // non-default kinds (triangulation, adversarial); outcome_breadth
+    // falls through to the existing inline LLM + web_search body.
+    const passDispatchCtx: DispatchContext = {
+      origin: new URL(request.url).origin,
+      cookieHeader: request.headers.get("cookie") ?? "",
+      spaceId: rootSpaceId,
+      runId: pipelineRunId,
+      researchDepth,
+    };
+
     for (let passIdx = 0; passIdx < plan.max_passes; passIdx++) {
       const isFirstPass = passIdx === 0;
+      // Phase 3 — first pass is always outcome_breadth. Subsequent
+      // passes consume next_pass_kind from the prior decision; the
+      // legacy passType var is preserved (still drives event labels +
+      // pass_type column) but the dispatcher reads pass_kind directly.
+      const currentKind: PassKind = isFirstPass
+        ? "outcome_breadth"
+        : (lastDecision?.next_pass_kind ?? "outcome_breadth");
       const passType = isFirstPass ? "discovery" : (lastDecision?.next_pass_type ?? "deepening");
+
+      // ── Phase 3 · Dispatch non-default kinds ─────────────────────
+      // For triangulation / adversarial, the dispatcher delegates to
+      // a dedicated route, synthesizes a PassResult, and we record
+      // the pass without running the heavy inline outcome_breadth
+      // body. Soft-fail: dispatcher returns an empty PassResult on
+      // sub-route failure rather than throwing.
+      const dispatchedResult = await runPassByKind(currentKind, passDispatchCtx);
+      if (dispatchedResult !== null) {
+        plan.passes_completed.push({
+          pass_number: passIdx + 1,
+          pass_type: passType,
+          pass_kind: currentKind,
+          focus_queries: lastDecision?.focus_queries ?? [],
+          entities_discovered: 0,
+          signals_found: (dispatchedResult.continuation_signals ?? []).length,
+          should_continue: false, // updated after decision below
+          continuation_reason: undefined,
+        });
+        accumulatedContinuationSignals.push(
+          ...(dispatchedResult.continuation_signals ?? []),
+        );
+        const decision = shouldContinueResearch(plan, dispatchedResult);
+        plan.passes_completed[passIdx].should_continue = decision.continue;
+        plan.passes_completed[passIdx].continuation_reason = decision.reason;
+        lastDecision = decision;
+        console.log(
+          `[research] Pass ${passIdx + 1}/${plan.max_passes} (${currentKind}): dispatched; ${(dispatchedResult.continuation_signals ?? []).length} continuation signals`,
+        );
+        if (!decision.continue) {
+          console.log(`[research] Stopping after pass ${passIdx + 1}: ${decision.reason}`);
+          break;
+        }
+        continue;
+      }
+      // currentKind === "outcome_breadth" — fall through to the
+      // existing inline LLM + web_search body below.
 
       // Heartbeat: research passes each take ~30-90s with the LLM
       // web-search loop running silent the whole time. Without a
@@ -855,9 +965,18 @@ These are NOT external landscape entities — these are entities the user SHOULD
           // Get tools with pass-specific search budget
           const tools = getResearchTools(researchDepth, passSearchBudget > 0 ? passSearchBudget : undefined);
 
-          const promptOptions = (focusAreas.length > 0 || skipCategories.length > 0)
-            ? { focus_areas: focusAreas, skip_categories: skipCategories }
-            : undefined;
+          // Phase 1 — outcome anchor + plan-driven coverage are passed
+          // through on EVERY pass (not just first). targetOutcome /
+          // activePlan are loaded once before the loop and reused.
+          // The previous "undefined when no focus areas" optimization
+          // is dropped — promptOptions is now always built so the
+          // outcome+plan fields can ride through.
+          const promptOptions: Parameters<typeof getDomainExpertPrompt>[1] = {
+            ...(focusAreas.length > 0 ? { focus_areas: focusAreas } : {}),
+            ...(skipCategories.length > 0 ? { skip_categories: skipCategories } : {}),
+            ...(targetOutcome ? { target_outcome: targetOutcome } : {}),
+            ...(activePlan ? { active_plan: activePlan } : {}),
+          };
 
           // Use streaming — Anthropic API requires it for web_search ops that may exceed 10 min
           const stream = anthropic.messages.stream(
@@ -944,6 +1063,10 @@ These are NOT external landscape entities — these are entities the user SHOULD
       plan.passes_completed.push({
         pass_number: passIdx + 1,
         pass_type: isFirstPass ? "discovery" : passType,
+        // Phase 3 — outcome_breadth is the only kind the inline body
+        // handles. Dispatched kinds (triangulation/adversarial) push
+        // their own row earlier and `continue` past this code path.
+        pass_kind: "outcome_breadth",
         focus_queries: isFirstPass
           ? (focusAreas.length > 0 ? focusAreas : [])
           : (lastDecision?.focus_queries ?? []),

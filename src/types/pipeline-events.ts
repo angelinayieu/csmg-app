@@ -78,7 +78,13 @@ export type StructuralEvent =
   | KgPlanEditedEvent
   | KgPlanApprovedEvent
   | KgPlanRejectedEvent
-  | LayerOntologyMaterializedEvent;
+  | LayerOntologyMaterializedEvent
+  // Phase 2 (research-strategy migration) — surface claims that don't
+  // yet meet the triangulation bar (≥2 independent supporting sources)
+  // so research can target them next pass, AND active contradiction
+  // discoveries from the adversarial pass.
+  | TriangulationGapEvent
+  | ContradictionFoundEvent;
 
 // ── Phase 2E · Tier 2 — probability space axes ──
 //
@@ -1322,4 +1328,60 @@ export interface LayerOntologyMaterializedEvent {
   /** Slug of the starter template if ontologySource includes
    *  "starter"; null otherwise. */
   starterSlug: string | null;
+}
+
+// ── Phase 2 · Triangulation gap-flagging ──────────────────────────────
+//
+// Emitted by claim-producer (via triangulation-gap-detector) when a
+// persisted claim has fewer than the required N independent supporting
+// sources. Tells the research orchestrator: this claim is load-bearing
+// but under-supported — target it next pass.
+//
+// Triangulation policy (default): require ≥2 distinct high-reliability
+// supporters and zero high-reliability contradictors before promoting
+// a claim to `status='supported'`. Anything below that threshold
+// produces a gap event.
+export interface TriangulationGapEvent {
+  type: "triangulation_gap";
+  /** The claim row that's under-supported. */
+  claimId: string;
+  /** Compact claim text — first ~200 chars, for log greppability + UI. */
+  claimText: string;
+  /** Distinct high-reliability supporting evidence sources today. */
+  currentSupportCount: number;
+  /** Triangulation threshold the orchestrator is configured to enforce. */
+  requiredSupportCount: number;
+  /** Whether at least one high-reliability contradictor is present —
+   *  flips downstream policy from "find more support" to "investigate
+   *  the contradiction first." */
+  hasContradictor: boolean;
+  /** Suggested follow-up search queries the orchestrator can fan out
+   *  on the next pass. Built by the gap detector from the claim text
+   *  + any related entity names. Empty array is fine — caller can
+   *  freestyle queries from claimText. */
+  suggestedQueries: string[];
+}
+
+// ── Phase 2 · Adversarial pass ───────────────────────────────────────
+//
+// Emitted by the adversarial route when an LLM-driven counter-evidence
+// search produces a contradicting source for a previously-supported
+// claim. Persistence happens via persistEvidenceBatch with
+// support_type='contradicts'; the event is the canvas/log signal that
+// a real contradiction landed (vs. a passive "could not find against").
+export interface ContradictionFoundEvent {
+  type: "contradiction_found";
+  /** The original claim being challenged. */
+  claimId: string;
+  /** The new evidence_items row that contradicts it. */
+  evidenceId: string;
+  /** Source URL of the contradicting evidence — convenient for the
+   *  canvas drawer + logs without an extra fetch. */
+  sourceUrl: string;
+  /** Reliability prior of the contradicting source (0..1). */
+  sourceReliability: number;
+  /** Claim's recomputed confidence after this contradiction landed —
+   *  the Bayesian-ish posterior in claim-producer.ts demotes it
+   *  automatically. UI can render the delta. */
+  confidenceAfter: number;
 }
