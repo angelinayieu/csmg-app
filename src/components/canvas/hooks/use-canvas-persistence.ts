@@ -37,15 +37,31 @@ export function useCanvasPersistence(
   useEffect(() => {
     if (!editor || restoredRef.current) return;
     restoredRef.current = true;
+    // DIAGNOSTIC (TEMP)
+    console.warn("[CANVAS-DEBUG persistence] restore effect started");
 
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch(`/api/canvas/${opts.spaceId}`, { method: "GET" });
+        // DIAGNOSTIC (TEMP)
+        console.warn(
+          `[CANVAS-DEBUG persistence] GET /api/canvas/${opts.spaceId} → ${res.status}`,
+        );
         if (!cancelled && res.ok) {
           const json = (await res.json()) as { snapshot: unknown | null };
+          // DIAGNOSTIC (TEMP)
+          console.warn(
+            `[CANVAS-DEBUG persistence] server snapshot present=${!!json.snapshot}`,
+          );
           if (json.snapshot) {
+            // DIAGNOSTIC (TEMP)
+            const before = editor.getCurrentPageShapes().length;
             loadSnapshot(editor.store, json.snapshot as Parameters<typeof loadSnapshot>[1]);
+            const after = editor.getCurrentPageShapes().length;
+            console.warn(
+              `[CANVAS-DEBUG persistence] loadSnapshot from server: ${before} → ${after} shapes`,
+            );
             setStatus("saved");
             opts.onRestored?.(true);
             return;
@@ -59,7 +75,13 @@ export function useCanvasPersistence(
       try {
         const raw = window.localStorage.getItem(lsKey(opts.spaceId));
         if (raw) {
+          // DIAGNOSTIC (TEMP)
+          const before = editor.getCurrentPageShapes().length;
           loadSnapshot(editor.store, JSON.parse(raw));
+          const after = editor.getCurrentPageShapes().length;
+          console.warn(
+            `[CANVAS-DEBUG persistence] loadSnapshot from localStorage: ${before} → ${after} shapes`,
+          );
           setStatus("saved");
           opts.onRestored?.(true);
           return;
@@ -68,6 +90,8 @@ export function useCanvasPersistence(
         console.warn("[canvas] localStorage restore failed", err);
       }
 
+      // DIAGNOSTIC (TEMP)
+      console.warn("[CANVAS-DEBUG persistence] no snapshot found anywhere");
       opts.onRestored?.(false);
     })();
 
@@ -82,6 +106,14 @@ export function useCanvasPersistence(
 
     const save = async (retriesLeft = 2) => {
       const snapshot = getSnapshot(editor.store);
+      // DIAGNOSTIC (TEMP) — see if autosave is overwriting the server
+      // snapshot with depleted state. shapeCount of 0 here while we
+      // expect cards on canvas means another code path wiped them and
+      // we're about to persist that empty state.
+      const shapeCount = editor.getCurrentPageShapes().length;
+      console.warn(
+        `[CANVAS-DEBUG persistence] autosave firing, shape count=${shapeCount}, retriesLeft=${retriesLeft}`,
+      );
 
       // Local mirror first (cheap, sync)
       try {

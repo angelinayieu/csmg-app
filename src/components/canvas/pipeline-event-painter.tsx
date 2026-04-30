@@ -1275,6 +1275,10 @@ export function PipelineEventPainter({
         }
       }
       if (stale.length > 0) {
+        // DIAGNOSTIC (TEMP)
+        console.warn(
+          `[CANVAS-DEBUG painter] cross-run sweep deleting ${stale.length} shapes for runId=${runId}`,
+        );
         editor.deleteShapes(stale);
       }
     } catch (err) {
@@ -1310,6 +1314,10 @@ export function PipelineEventPainter({
   useEffect(() => {
     if (!editor) return;
     if (status !== "completed" && status !== "failed") return;
+    // DIAGNOSTIC (TEMP)
+    console.warn(
+      `[CANVAS-DEBUG painter] terminal-status handler firing, status=${status}, runId=${runId}`,
+    );
 
     const state = stateRef.current;
     // Cancel any in-flight stagger drain — the run is done; further
