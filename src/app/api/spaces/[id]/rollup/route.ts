@@ -26,7 +26,9 @@ import type { PredictionLedgerRow } from "@/types/prediction";
 import type { AppStrategyRow } from "@/types/app-strategy";
 import type { StrategyBatch, StrategyBatchEntry } from "@/types/strategy-batch";
 
-export const maxDuration = 60;
+// Polling endpoint — cap low so it can't tie up a Vercel function slot
+// during long pipeline runs. Indexed queries normally finish in 2-5s.
+export const maxDuration = 15;
 
 // ── Response shapes ────────────────────────────────────────────────────
 
@@ -360,7 +362,12 @@ export async function GET(
     computed_at: new Date().toISOString(),
   };
 
-  return NextResponse.json(response);
+  // Analysis rollup — phases run for minutes, so 60s of staleness is
+  // imperceptible. Browser caches 60s; can serve stale while refetching
+  // for 120s. Cuts polling pressure dramatically during long runs.
+  return NextResponse.json(response, {
+    headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=120" },
+  });
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────

@@ -15,7 +15,10 @@
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 
-export const maxDuration = 30;
+// Polling endpoint — cap low. Threads are user-mutated via POST below
+// so we don't want stale GETs lingering past the next mutation; no
+// cache header here. The cap protects against starvation only.
+export const maxDuration = 10;
 
 export interface ShapeThreadRow {
   id: string;

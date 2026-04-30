@@ -29,9 +29,11 @@ import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 import type { PulseEvent, PulseEventKind } from "@/components/pulse";
 
-export const maxDuration = 30;
-// The endpoint is hit every 30s by the pulse hook's poll — keep it fast.
-// All four queries use existing indexes + return small slices.
+// Polling endpoint — cap low so it can't tie up a Vercel function slot
+// when upstream is slow. The four indexed queries normally complete in
+// ~1-2s; if they don't, failing fast is better than starving other
+// routes during a long pipeline run.
+export const maxDuration = 10;
 
 export interface PulseEventsResponse {
   /** Per-source events, normalized + sorted most-recent first. */
@@ -274,7 +276,13 @@ export async function GET(
     computed_at: new Date().toISOString(),
   };
 
-  return NextResponse.json(response);
+  // Activity feed — brief staleness OK. Browser caches for 30s; can
+  // serve stale while refetching for 60s. Drops poll-storm pressure
+  // on Supabase during long-running pipelines without making the feed
+  // feel laggy.
+  return NextResponse.json(response, {
+    headers: { "Cache-Control": "private, max-age=30, stale-while-revalidate=60" },
+  });
 }
 
 // ── Mappers ────────────────────────────────────────────────────────────

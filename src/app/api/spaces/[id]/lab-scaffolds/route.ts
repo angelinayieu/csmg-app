@@ -26,7 +26,9 @@ import type {
 } from "@/types/subject";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// GET is a polling endpoint — cap low. POST below does LLM work so it
+// has its own implicit higher cap when invoked.
+export const maxDuration = 30;
 
 interface Ctx {
   params: Promise<{ id: string }>;
@@ -62,10 +64,17 @@ export async function GET(request: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({
-    scaffolds: (data ?? []) as LabScaffold[],
-    computed_at: new Date().toISOString(),
-  });
+  // Status changes when an LLM proposal completes (minutes); 30s
+  // staleness is fine. Cuts polling pressure on Supabase.
+  return NextResponse.json(
+    {
+      scaffolds: (data ?? []) as LabScaffold[],
+      computed_at: new Date().toISOString(),
+    },
+    {
+      headers: { "Cache-Control": "private, max-age=30, stale-while-revalidate=60" },
+    },
+  );
 }
 
 // ── POST (propose) ───────────────────────────────────────────────
