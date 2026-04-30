@@ -381,3 +381,139 @@ export const findingTypeColors = {
 } as const;
 
 export type FindingColorKey = keyof typeof findingTypeColors;
+
+// ── Right-rail tokens (State / Live / Probe-Trail) ───────────────────
+//
+// Single source of truth for the persistent right rail's visual grammar.
+// Anchored on the existing GlassPanel material vocabulary (plate / card /
+// float / modal) — these tokens add the rail-specific dimensions: section
+// rhythm, live-zone tint, streaming/count indicators, and the probe-trail
+// node geometry.
+//
+// Apple-grade rules baked in here so the rail can't drift in usage:
+//   • One accent per zone (not multiple)
+//   • Hairlines, never solid borders (--glass-hairline / --glass-border)
+//   • Section headers are tracking-driven (0.14em caps), not size-driven
+//   • Tabular numerics for any number that changes
+//
+// All raw rgba/hex live in this file or in globals.css — never inline.
+
+export const rail = {
+  width: 340,
+
+  state: {
+    sectionGap: 18,
+    cardGap: 8,
+    cardPadding: "12px 14px",
+    cardRadius: 12,
+    titleSize: 9,
+    titleWeight: 700,
+    titleTracking: "0.14em",
+    titleColor: "rgba(85,100,121,0.85)",
+    titleBottomGap: 8,
+    surfaceTier: "plate" as const, // GlassPanel tier
+  },
+
+  live: {
+    // Subtle gradient tint distinguishes the zone without a heavy fill.
+    bgGradient:
+      "linear-gradient(180deg, rgba(8,108,232,0.04) 0%, rgba(8,108,232,0.01) 60%, transparent 100%)",
+    sectionGap: 14,
+    cardGap: 6,
+    cardPadding: "10px 12px",
+    cardRadius: 10,
+    surfaceTier: "card" as const, // GlassCard (interactive) for live items
+
+    // Streaming indicator — quiet green dot, breath cycle.
+    streamingDot: {
+      color: "#22c55e",
+      size: 6,
+      breathDurationMs: 2400,
+      breathOpacityFrom: 0.55,
+      breathOpacityTo: 1.0,
+    },
+
+    // Count badge — appears in the zone header when new items arrive.
+    countBadge: {
+      color: "#ef4444",
+      sizeIdle: 6,
+      sizeWithNumber: 16,
+      enterDurationMs: 320,
+    },
+
+    // Item fade-in (new arrivals) and ambient dim (old items).
+    arrivalEnterDurationMs: 360,
+    arrivalEnterTranslateY: -6,
+    ambientDimAfterMs: 30_000, // → 0.7 opacity
+    ambientFadeAfterMs: 120_000, // → 0.4 opacity
+  },
+
+  // Probe rabbit hole — spatial trail rendered ON the canvas (not in rail).
+  trail: {
+    nodeWidth: 56,
+    nodeHeight: 40,
+    nodeRadius: 12,
+    nodeGapX: 28, // horizontal spacing between sibling nodes
+    nodeGapY: 14, // vertical spacing on a branch
+    edgeStrokeWidth: 1.5,
+    edgeColor: "rgba(85,100,121,0.4)",
+    edgeDashWhileWorking: "4 4",
+    edgeDashWhenDone: "0 0",
+    drawOnDurationMs: 600, // stroke-dashoffset draw
+
+    // Active node glow — radial gradient that breathes during work.
+    activeGlow: {
+      color: "rgba(8,108,232,0.4)",
+      radiusPx: 16,
+      breathDurationMs: 2400,
+    },
+
+    // Result node accent (final terminal of a trail).
+    resultAccent: {
+      ring: "rgba(255, 184, 0, 0.5)",
+      ringOpacity: 0.7,
+    },
+
+    // Collapse: trail folds back into a small badge on the source card.
+    collapseDurationMs: 480,
+  },
+
+  // Probe chip — small floating bubble above a selected card on canvas.
+  probeChip: {
+    width: 220,
+    radius: 10,
+    paddingX: 10,
+    paddingY: 6,
+    bgGlassTier: "float" as const,
+    enterDurationMs: 240,
+  },
+} as const;
+
+// ── Motion grammar ───────────────────────────────────────────────────
+//
+// Named curves + durations so JSX never carries inline cubic-beziers.
+// Two curves cover 95% of cases:
+//   easeOut → out-of-rest motion (entrances, fades). One direction.
+//   spring  → settles to rest with overshoot (pins, count badge pop).
+//
+// Durations in ms. Skip 200/300 (default-y) intentionally.
+
+export const motion = {
+  curves: {
+    easeOut: "cubic-bezier(0.22, 1, 0.36, 1)",
+    spring: "cubic-bezier(0.34, 1.56, 0.64, 1)",
+    springTight: "cubic-bezier(0.25, 0.8, 0.25, 1)",
+    // CSS variable names already wired in globals.css for parity:
+    //   var(--ease-spring-soft) → spring
+    //   var(--ease-spring-tight) → springTight
+  },
+  durations: {
+    micro: 140,
+    short: 240,
+    medium: 360,
+    cinematic: 480,
+    breath: 2400,
+  },
+} as const;
+
+export type RailZone = "state" | "live";

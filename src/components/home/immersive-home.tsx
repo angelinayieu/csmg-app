@@ -33,6 +33,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   Brain,
+  FastForward,
   FileText,
   FlaskConical,
   Image as ImageIcon,
@@ -283,6 +284,11 @@ export function ImmersiveHome({
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [depth, setDepth] = useState<ReasoningDepth>("standard");
+  // When ON, bootstrap fires decompose immediately instead of pausing
+  // for the Plan Review Card. Power-user / "I trust the defaults" mode.
+  // Default OFF (matches server default) — most users want to review
+  // the proposed scope/ontology/axes before pipeline runs.
+  const [skipPlanGate, setSkipPlanGate] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [appsOpen, setAppsOpen] = useState(false);
   // Reasoning settings — lenses, process toggles, baseline behavior.
@@ -396,6 +402,7 @@ export function ImmersiveHome({
             text: augmented,
             reasoningDepth: depth,
             reasoning_settings: settingsForServer,
+            skipPlanGate,
           }),
         });
         const raw = await res.text();
@@ -868,6 +875,18 @@ export function ImmersiveHome({
                           ...s,
                           strategyCount: n,
                         }))
+                      }
+                    />
+                    <OutputTogglePill
+                      label="Skip plan"
+                      Icon={FastForward}
+                      active={skipPlanGate}
+                      onClick={() => setSkipPlanGate((v) => !v)}
+                      activeBg="#475569"
+                      title={
+                        skipPlanGate
+                          ? "Skip plan: pipeline runs immediately, no review card"
+                          : "Plan review ON — approve the proposed scope/ontology/axes before generation"
                       }
                     />
                     {/* Reasoning: Fast / Balanced / Deep */}

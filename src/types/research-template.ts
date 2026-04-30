@@ -123,6 +123,91 @@ export interface ResearchSeedEdge {
    *  for templates that pool standardized mean differences,
    *  log-odds-ratios, etc. */
   effect_metric?: string;
+  /** Phase 7 — pre-baked TEMPORAL pool from the literature. Optional;
+   *  edges without a temporal claim leave this undefined and the
+   *  Phase 3 pooler can fill in later when ingested papers add
+   *  evidence. When set, the materializer:
+   *    1. Writes onset_days_p50 / peak_days_p50 / persistence_days_p50
+   *       + decay_kinetics_modal directly to the edge.
+   *    2. Emits an evidence_registries row with status='reviewed'
+   *       (templates are vetted; the row gets the same trust treatment
+   *       as a human-reviewed extraction) — making the seeded data
+   *       auditable in the same UI as user-extracted evidence.
+   *
+   *  Field semantics match Phase 1's evidence_registries temporal
+   *  columns. */
+  temporal_seed?: {
+    onset_days?: number;
+    peak_days?: number;
+    persistence_days?: number;
+    decay_kinetics?:
+      | "linear"
+      | "exponential"
+      | "sustained"
+      | "biphasic"
+      | "unknown";
+    /** Heterogeneity I² across the pool (literature consensus). */
+    heterogeneity_i2?: number;
+    /** Number of studies behind these timing claims. Pooled
+     *  evidence_count column on the resulting edge. */
+    evidence_count?: number;
+    /** Citation block — author + year + claim string per source.
+     *  Materialized as a single composite evidence_registries row
+     *  (the template-seeded equivalent of a meta-analysis summary).
+     *  Drives the edge-detail drawer's "supporting timing claims"
+     *  list in P6. */
+    citations?: Array<{
+      authors: string;
+      year: number;
+      claim: string;
+      doi?: string;
+    }>;
+  };
+}
+
+// ── Seed flights (Phase 7 — pre-baked named pathways) ────────────
+
+/** A pre-baked named, categorized, multi-step pathway through the
+ *  template's seed graph. Materialized as a row in `flights`
+ *  (origin='template_seeded'). */
+export interface ResearchSeedFlight {
+  /** Stable seed id (e.g. "flight_inflammation_cognition"). */
+  seed_id: string;
+  /** Display name. */
+  name: string;
+  /** 1-2 sentence description for the flight card. */
+  description: string;
+  /** Domain-specific category (e.g. "inflammation",
+   *  "neuroplasticity", "stress_axis"). Drives chip color + filter. */
+  category: string;
+  /** Ordered list of seed_ids referencing nodes in seed_nodes.
+   *  Length ≥ 2; the materializer resolves to entity UUIDs. */
+  step_seed_ids: string[];
+  /** Optional pre-baked phase structure. Each phase has entry +
+   *  exit criteria expressed in temporal terms ("4 weeks of
+   *  sustained adherence ≥70%"). Templates that don't roadmap a
+   *  flight in phases can omit. */
+  phases?: Array<{
+    phase: number;
+    name: string;
+    duration_weeks: number;
+    entry_criteria?: string;
+    exit_criteria: string;
+    /** Subset of step_seed_ids active during this phase. */
+    step_seed_ids: string[];
+  }>;
+  /** Author-supplied score-breakdown estimate. The materializer
+   *  populates the actual breakdown from the edges' Phase 3+5
+   *  columns; this field is the literature-blessed point estimate,
+   *  used as a sanity check and surfaced as "expected" vs computed. */
+  expected_score_breakdown?: {
+    joint_probability?: number;
+    evidence_depth?: number;
+    time_to_effect_days?: number;
+    persistence_match?: number;
+    controllability?: number;
+    risk_factor?: number;
+  };
 }
 
 // ── Seed subjects ─────────────────────────────────────────────────
@@ -276,6 +361,12 @@ export interface ResearchTemplate {
    *  (F3 / D14). Cognition template ships with cognitive-game ↔
    *  cognitive-measurement pair. Older templates omit this. */
   seed_apps?: ResearchSeedApp[];
+  /** Phase 7 — optional pre-baked named flights (multi-step pathways).
+   *  Cognition template ships 6 (Inflammation→Cognition,
+   *  HPA→Hippocampus, Sleep→Glymphatic→PFC, Exercise→BDNF→Plasticity,
+   *  Diet→Microbiome→Mood, MBSR→PFC-Regulation). Materialized as
+   *  flights rows with origin='template_seeded'. */
+  seed_flights?: ResearchSeedFlight[];
 
   /** Optional — pre-baked `synthesis_data` JSONB written DIRECTLY to
    *  `spaces.synthesis_data` on creation. Lets a template produce a
@@ -315,6 +406,9 @@ export interface ExploreCreateResponse {
     interventions: number;
     instruments: number;
     lab_scaffolds: number;
+    /** Phase 7 — number of pre-baked flights that materialized.
+     *  0 for templates that don't ship seed_flights. */
+    flights?: number;
   };
   /** First subject id — UI uses this to focus the canvas after redirect. */
   primary_subject_id: string | null;

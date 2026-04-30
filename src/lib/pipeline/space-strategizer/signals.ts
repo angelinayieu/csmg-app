@@ -221,6 +221,67 @@ export interface SignalInputBundle {
    *  from fresh decomposition or user review. Null when no recent
    *  calibrations affect the entity (clean signal, not penalty). */
   calibration_drift_by_entity: Map<string, number>;
+  /** Phase 5 — per-entity sum of |temporal_delta_days| across recent
+   *  edge_calibrations rows on edges incident to the entity. Sourced
+   *  from the resolver-driven path_aware_temporal_v1 calibrator
+   *  (resolve-prediction.ts); only rows with non-null
+   *  temporal_delta_days contribute.
+   *
+   *  Higher values = the entity's TIMING claims have been actively
+   *  shifting under reality-checks. Distinct from
+   *  calibration_drift_by_entity (which captures magnitude/confidence
+   *  drift). The two surface different problems: high magnitude drift
+   *  = "we got the size wrong"; high temporal drift = "we got the
+   *  timing wrong." Both signal "stale model region" but for
+   *  different reasons.
+   *
+   *  Null/missing entries handled with the same null semantics as
+   *  the magnitude version. */
+  calibration_drift_temporal_by_entity: Map<string, number>;
+  /** Phase 4 — per-entity temporal summary of the shortest directed
+   *  path from the entity to the focal outcome. Computed by
+   *  `computeUpstreamTemporalSummaries` in one reverse-BFS sweep
+   *  alongside `directed_outcome_hops`. Drives the four temporal
+   *  signals (time_to_outcome, persistence_match, onset_alignment,
+   *  temporal_heterogeneity_penalty).
+   *
+   *  Empty map when no focal outcome is set. Missing entry for an
+   *  entity = entity isn't on a directed path to the outcome (signal
+   *  returns null, not 0 — "no opinion" semantics).
+   *
+   *  Field semantics on each entry:
+   *    total_peak_days     — sum of peak_days_p50 along the path to
+   *                          outcome (the "time to outcome" via this
+   *                          path; null when ANY edge on path lacks
+   *                          peak_days_p50).
+   *    first_onset_days    — onset_days_p50 of the FIRST edge from
+   *                          this entity (the "when does the FIRST
+   *                          measurable change happen" answer).
+   *    min_persistence_days — min persistence along the path (the
+   *                          weakest link in effect duration).
+   *    mean_i2             — mean I² across path edges that have it
+   *                          (heterogeneity across pooled studies).
+   *    edges_with_temporal — count of path edges with ANY temporal
+   *                          data (used as confidence floor).
+   *    edges_total         — total path edges (denominator for
+   *                          coverage). */
+  temporal_path_summaries: Map<string, UpstreamTemporalSummary>;
+  /** Phase 4 — user's deadline expressed as days. Derived from
+   *  outcome_horizon by loadSignalBundle (immediate=14, short_term=90,
+   *  medium_term=365, long_term=730). When null, the time-aware
+   *  signals fall back to a horizon-agnostic normalization. */
+  horizon_days: number | null;
+}
+
+/** Per-entity temporal summary along the shortest directed path to
+ *  the focal outcome. See SignalInputBundle.temporal_path_summaries. */
+export interface UpstreamTemporalSummary {
+  total_peak_days: number | null;
+  first_onset_days: number | null;
+  min_persistence_days: number | null;
+  mean_i2: number | null;
+  edges_with_temporal: number;
+  edges_total: number;
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────
@@ -432,6 +493,173 @@ export function computeUpstreamHops(
     }
   }
   return hops;
+}
+
+/** Phase 4 — companion to computeUpstreamHops. One reverse-BFS sweep
+ *  over the directed causal subgraph that BOTH discovers shortest
+ *  paths AND accumulates per-edge temporal data along the path back
+ *  to the sink (focal outcome). For every entity on a directed path
+ *  to the sink, returns a summary capturing the timing claim of that
+ *  shortest path: how long until effect peaks at the outcome, when
+ *  the FIRST measurable change happens, the bottleneck of effect
+ *  persistence, and the heterogeneity (I²) across pool of edges on
+ *  the path.
+ *
+ *  When edges on the path have no temporal data, the corresponding
+ *  field on the summary is null — propagating "we don't know" rather
+ *  than fabricating a fake number. The signals downstream interpret
+ *  null as "no opinion" (returning null themselves), so a candidate
+ *  with no temporal coverage on its path doesn't get unfairly
+ *  penalized vs one whose timing is well-characterized.
+ *
+ *  Returns an empty map when sinkId is null or unknown. */
+export function computeUpstreamTemporalSummaries(
+  edges: Edge[],
+  sinkId: string | null,
+): Map<string, UpstreamTemporalSummary> {
+  const summaries = new Map<string, UpstreamTemporalSummary>();
+  if (!sinkId) return summaries;
+
+  // Reverse adjacency with the EDGE retained so we can read its
+  // temporal columns when accumulating. Each entry is (predecessor
+  // node, edge_to_successor) — edge.target_entity_id is the
+  // successor we're walking back from.
+  const reverse = new Map<string, Array<{ predecessor: string; edge: Edge }>>();
+  for (const e of edges) {
+    let arr = reverse.get(e.target_entity_id);
+    if (!arr) {
+      arr = [];
+      reverse.set(e.target_entity_id, arr);
+    }
+    arr.push({ predecessor: e.source_entity_id, edge: e });
+  }
+
+  // Per-entity running accumulators for I² mean; persistence min; etc.
+  // Easier than recomputing from saved path edges every visit.
+  const i2Sums = new Map<string, number>();
+  const i2Counts = new Map<string, number>();
+  const peakAccumulators = new Map<string, { sum: number; allKnown: boolean }>();
+
+  // Sink seeds: zero-length path to itself.
+  summaries.set(sinkId, {
+    total_peak_days: 0,
+    first_onset_days: null,
+    min_persistence_days: null,
+    mean_i2: null,
+    edges_with_temporal: 0,
+    edges_total: 0,
+  });
+  i2Sums.set(sinkId, 0);
+  i2Counts.set(sinkId, 0);
+  peakAccumulators.set(sinkId, { sum: 0, allKnown: true });
+
+  const queue: string[] = [sinkId];
+  let head = 0;
+  while (head < queue.length) {
+    const v = queue[head++];
+    const incomingPredEdges = reverse.get(v);
+    if (!incomingPredEdges) continue;
+    const vSummary = summaries.get(v)!;
+    const vPeak = peakAccumulators.get(v)!;
+    const vI2Sum = i2Sums.get(v) ?? 0;
+    const vI2Count = i2Counts.get(v) ?? 0;
+
+    for (const { predecessor: u, edge: e } of incomingPredEdges) {
+      if (summaries.has(u)) continue; // already on a shorter path
+      // Per-edge temporal pull. The DB row has these as numeric|null.
+      const peak = numericOrUndefined(
+        (e as unknown as Record<string, unknown>).peak_days_p50,
+      );
+      const onset = numericOrUndefined(
+        (e as unknown as Record<string, unknown>).onset_days_p50,
+      );
+      const persist = numericOrUndefined(
+        (e as unknown as Record<string, unknown>).persistence_days_p50,
+      );
+      const i2 = numericOrUndefined(
+        (e as unknown as Record<string, unknown>).temporal_heterogeneity_i2,
+      );
+
+      // Peak: cumulative sum. Once any edge on path is missing peak,
+      // the running total becomes null (we don't fake durations).
+      const peakKnown = peak !== undefined;
+      const newPeakAllKnown = vPeak.allKnown && peakKnown;
+      const newPeakSum = newPeakAllKnown ? vPeak.sum + (peak ?? 0) : 0;
+      peakAccumulators.set(u, {
+        sum: newPeakSum,
+        allKnown: newPeakAllKnown,
+      });
+
+      // I² accumulator — running sum + count only over edges that
+      // have it; mean computed from those at lookup time.
+      const newI2Sum = i2 !== undefined ? vI2Sum + i2 : vI2Sum;
+      const newI2Count = i2 !== undefined ? vI2Count + 1 : vI2Count;
+      i2Sums.set(u, newI2Sum);
+      i2Counts.set(u, newI2Count);
+
+      // First onset = u's outgoing edge's onset (the FIRST edge in
+      // u's path forward to outcome). The previous-leg's first onset
+      // doesn't propagate — it belongs to v, not u.
+      const firstOnset = onset ?? null;
+
+      // Min persistence: smaller of current min and this edge's
+      // persistence. Running across the path because the path's
+      // effective persistence is bounded by its weakest link.
+      const minPersist =
+        persist === undefined
+          ? vSummary.min_persistence_days
+          : vSummary.min_persistence_days === null
+            ? persist
+            : Math.min(vSummary.min_persistence_days, persist);
+
+      const edges_total = vSummary.edges_total + 1;
+      const edges_with_temporal =
+        vSummary.edges_with_temporal +
+        (peakKnown || onset !== undefined || persist !== undefined ? 1 : 0);
+
+      summaries.set(u, {
+        total_peak_days: newPeakAllKnown ? newPeakSum : null,
+        first_onset_days: firstOnset,
+        min_persistence_days: minPersist,
+        mean_i2: newI2Count > 0 ? newI2Sum / newI2Count : null,
+        edges_with_temporal,
+        edges_total,
+      });
+      queue.push(u);
+    }
+  }
+  return summaries;
+}
+
+function numericOrUndefined(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/** Phase 4 — convert a categorical horizon to days for time-aware
+ *  signals. Used by loadSignalBundle to populate
+ *  SignalInputBundle.horizon_days; signals consume the numeric form
+ *  so future "user picks an exact deadline" UX is a one-line change.
+ *
+ *  Buckets:
+ *    immediate    → 14 days   (≈ 2 weeks; "what can I do this week")
+ *    short_term   → 90 days   (≈ a quarter)
+ *    medium_term  → 365 days  (≈ a year)
+ *    long_term    → 730 days  (≈ 2 years)
+ *    null         → null      (signals fall back to horizon-agnostic) */
+export function horizonToDays(
+  h: "immediate" | "short_term" | "medium_term" | "long_term" | null,
+): number | null {
+  if (!h) return null;
+  switch (h) {
+    case "immediate":
+      return 14;
+    case "short_term":
+      return 90;
+    case "medium_term":
+      return 365;
+    case "long_term":
+      return 730;
+  }
 }
 
 // ── The actual signal extractors ──────────────────────────────────────
@@ -941,6 +1169,148 @@ export function consequenceBreadthSignal(
   return clamp01(surface.length / max);
 }
 
+// ── Phase 4 — temporal-rigor signals ─────────────────────────────────
+//
+// Four time-aware signals consuming the per-edge temporal pool from
+// edges.{onset,peak,persistence}_days_p50 + decay_kinetics_modal +
+// temporal_heterogeneity_i2 (Phase 3). They flow through
+// computeUpstreamTemporalSummaries so a candidate's "time signature"
+// is the path-aggregate going forward to the focal outcome.
+
+/** Phase 4 — `time_to_outcome` — how many days until the candidate's
+ *  effect peaks at the outcome. Lower = faster = better.
+ *
+ *  Returns 1 / (1 + total_peak_days / horizon_days):
+ *    1.0  → instant impact (total_peak_days = 0, e.g. candidate IS
+ *           the outcome).
+ *    0.5  → impact lands at the user's deadline.
+ *    →0   → impact lands long after the deadline.
+ *
+ *  Null when:
+ *    - no focal outcome resolved (no path to compute);
+ *    - candidate isn't on a directed path to outcome;
+ *    - any edge on the path lacks peak_days_p50 (we don't fabricate
+ *      durations — null propagates "we don't know" rather than
+ *      lying about reach time).
+ *  Falls back to horizon=90 days when horizon_days is null so a
+ *  candidate with full temporal coverage still gets a defensible
+ *  ranking signal. */
+export function timeToOutcomeSignal(
+  bundle: SignalInputBundle,
+  targetEntityId: string | null,
+): number | null {
+  if (!targetEntityId) return null;
+  if (!bundle.target_outcome_entity_id) return null;
+  const summary = bundle.temporal_path_summaries.get(targetEntityId);
+  if (!summary) return null;
+  if (summary.total_peak_days === null) return null;
+  const horizonDays = bundle.horizon_days ?? 90;
+  if (horizonDays <= 0) return null;
+  return clamp01(1 / (1 + summary.total_peak_days / horizonDays));
+}
+
+/** Phase 4 — `persistence_match` — does the effect outlast the user's
+ *  horizon? 1 means yes (sustained at deadline), 0 means no (decays
+ *  before deadline reached).
+ *
+ *  Returns clamp01(min_persistence_days / horizon_days). The min is
+ *  the bottleneck on the path; the path's effective persistence is
+ *  bounded by its weakest link.
+ *
+ *  Null when no min_persistence on path OR no horizon set. */
+export function persistenceMatchSignal(
+  bundle: SignalInputBundle,
+  targetEntityId: string | null,
+): number | null {
+  if (!targetEntityId) return null;
+  if (!bundle.target_outcome_entity_id) return null;
+  const summary = bundle.temporal_path_summaries.get(targetEntityId);
+  if (!summary || summary.min_persistence_days === null) return null;
+  const horizonDays = bundle.horizon_days ?? 90;
+  if (horizonDays <= 0) return null;
+  return clamp01(summary.min_persistence_days / horizonDays);
+}
+
+/** Phase 4 — `onset_alignment` — does the FIRST measurable change
+ *  land before the user's deadline? 1 means immediately, 0 means
+ *  never within the horizon.
+ *
+ *  Returns 1 - clamp01(first_onset_days / horizon_days). Counter-
+ *  intuitively named: "alignment" framed as "how aligned is this
+ *  with the user's need-it-soon expectation." High onset = poor
+ *  alignment.
+ *
+ *  Null when no first_onset on path OR no horizon set. */
+export function onsetAlignmentSignal(
+  bundle: SignalInputBundle,
+  targetEntityId: string | null,
+): number | null {
+  if (!targetEntityId) return null;
+  if (!bundle.target_outcome_entity_id) return null;
+  const summary = bundle.temporal_path_summaries.get(targetEntityId);
+  if (!summary || summary.first_onset_days === null) return null;
+  const horizonDays = bundle.horizon_days ?? 90;
+  if (horizonDays <= 0) return null;
+  return clamp01(1 - summary.first_onset_days / horizonDays);
+}
+
+/** Phase 4 — `temporal_heterogeneity_penalty` — coverage and study-
+ *  agreement signal. 1 means the path's edges have low I² (studies
+ *  agree on timing). 0 means high I² (timing claims contradict).
+ *
+ *  Returns 1 - mean_i2. Aggregates I² across path edges that have
+ *  it; null when no path edges have I² coverage at all. The signal
+ *  rewards candidates whose timing is well-characterized AND whose
+ *  pooled studies agree — a candidate at the end of a path of
+ *  contradictory studies should rank lower than one with consistent
+ *  evidence even if the point estimates are equal. */
+export function temporalHeterogeneityPenaltySignal(
+  bundle: SignalInputBundle,
+  targetEntityId: string | null,
+): number | null {
+  if (!targetEntityId) return null;
+  if (!bundle.target_outcome_entity_id) return null;
+  const summary = bundle.temporal_path_summaries.get(targetEntityId);
+  if (!summary || summary.mean_i2 === null) return null;
+  return clamp01(1 - summary.mean_i2);
+}
+
+/** Phase 5 — `calibration_drift_temporal` — recent prediction-driven
+ *  TIMING calibration activity on edges incident to the entity.
+ *  Reads from `bundle.calibration_drift_temporal_by_entity`,
+ *  populated by loadSignalBundle scanning edge_calibrations for
+ *  rows where temporal_delta_days IS NOT NULL within the recent
+ *  window (default 30 days).
+ *
+ *  Returns:
+ *    1   — entity has the most recent temporal calibration activity
+ *          in the space (most "stale TIMING model region" — the
+ *          system has been actively shifting peak-day estimates here)
+ *    >0  — fractional activity
+ *    null — no recent temporal calibrations OR axis-level candidate
+ *
+ *  Distinct from calibration_drift (magnitude). High temporal drift
+ *  surfaces "we got the WHEN wrong" zones; magnitude drift surfaces
+ *  "we got the HOW MUCH wrong" zones. Strategizer can preferentially
+ *  re-decompose entities whose timing model has been shifting if the
+ *  user's run cares about temporal accuracy (e.g. immediate-horizon
+ *  decisions where a 4-week mis-prediction matters more than a 0.1
+ *  effect-size mis-prediction). */
+export function calibrationDriftTemporalSignal(
+  bundle: SignalInputBundle,
+  targetEntityId: string | null,
+): number | null {
+  if (!targetEntityId) return null;
+  const drifts = bundle.calibration_drift_temporal_by_entity;
+  if (drifts.size === 0) return null;
+  const here = drifts.get(targetEntityId);
+  if (here === undefined) return null;
+  let max = 0;
+  for (const v of drifts.values()) if (v > max) max = v;
+  if (max === 0) return null;
+  return clamp01(here / max);
+}
+
 // ── One-shot: compute the full SignalProfile for a candidate ──────────
 
 export interface CandidateTarget {
@@ -977,5 +1347,18 @@ export function computeSignalProfile(
     cost_efficiency: costEfficiencySignal(bundle, primaryId),
     calibration_drift: calibrationDriftSignal(bundle, primaryId),
     consequence_breadth: consequenceBreadthSignal(bundle, primaryId),
+    // Phase 4 — temporal-rigor signals.
+    time_to_outcome: timeToOutcomeSignal(bundle, primaryId),
+    persistence_match: persistenceMatchSignal(bundle, primaryId),
+    onset_alignment: onsetAlignmentSignal(bundle, primaryId),
+    temporal_heterogeneity_penalty: temporalHeterogeneityPenaltySignal(
+      bundle,
+      primaryId,
+    ),
+    // Phase 5 — closed-loop temporal feedback.
+    calibration_drift_temporal: calibrationDriftTemporalSignal(
+      bundle,
+      primaryId,
+    ),
   };
 }

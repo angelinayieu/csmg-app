@@ -213,9 +213,20 @@ export async function POST(
   }
 
   // ── Update spaces.active_plan_id + merge reasoning_settings ────
+  // Plan-proposed fields override the user's intake-time settings, but
+  // ONLY for keys the plan explicitly set. Intake-time toggles like
+  // generateApps/runLab/strategyCount/lenses must survive when the plan
+  // doesn't speak to them. Read from spaces (where intake stored them);
+  // the plan row has no `existing_reasoning_settings` column.
+  const { data: spaceRow } = (await db
+    .from("spaces")
+    .select("reasoning_settings")
+    .eq("id", spaceId)
+    .maybeSingle()) as {
+    data: { reasoning_settings: Record<string, unknown> | null } | null;
+  };
   const mergedSettings = {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ...((planRow as any).existing_reasoning_settings ?? {}),
+    ...(spaceRow?.reasoning_settings ?? {}),
     ...(updatedPlan.reasoning_settings_proposed ?? {}),
   };
 

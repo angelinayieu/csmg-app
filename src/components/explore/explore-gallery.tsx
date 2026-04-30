@@ -20,6 +20,7 @@ import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Brain,
+  Moon,
   Sparkles,
   ArrowRight,
   Loader2,
@@ -38,7 +39,15 @@ import type {
 
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Brain,
+  Moon,
   Sparkles,
+};
+
+// Pretty per-template eyebrow shown above the card title. Falls back
+// to the first domain tag if a template's slug isn't recognized.
+const TEMPLATE_EYEBROW: Record<string, string> = {
+  mind_body_cognition: "Cognition · Mind-body",
+  sleep_optimization: "Sleep · Recovery",
 };
 
 export function ExploreGallery() {
@@ -165,16 +174,18 @@ export function ExploreGallery() {
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-8 py-10">
         <div className="mx-auto flex max-w-5xl flex-col gap-10">
-          {/* Featured cognition template */}
-          <FeaturedTemplateCard
-            template={MIND_BODY_COGNITION_TEMPLATE}
-            creating={creatingSlug === MIND_BODY_COGNITION_TEMPLATE.slug}
-            disabled={
-              creatingSlug !== null &&
-              creatingSlug !== MIND_BODY_COGNITION_TEMPLATE.slug
-            }
-            onUse={() => handleUseTemplate(MIND_BODY_COGNITION_TEMPLATE)}
-          />
+          {/* All registered research templates */}
+          {RESEARCH_TEMPLATE_LIST.map((template) => (
+            <FeaturedTemplateCard
+              key={template.slug}
+              template={template}
+              creating={creatingSlug === template.slug}
+              disabled={
+                creatingSlug !== null && creatingSlug !== template.slug
+              }
+              onUse={() => handleUseTemplate(template)}
+            />
+          ))}
 
           {/* Coming soon */}
           <ComingSoonRow />
@@ -368,7 +379,9 @@ function FeaturedTemplateCard({
               className="mb-1 text-[10px] font-bold uppercase tracking-widest"
               style={{ color: template.accent_color }}
             >
-              Cognition · Mind-body
+              {TEMPLATE_EYEBROW[template.slug] ??
+                template.domain_tags[0] ??
+                "Research template"}
             </div>
             <h2 className="text-2xl font-bold leading-tight tracking-tight text-gray-900">
               {template.title}
@@ -568,10 +581,10 @@ function formatHour(h: number): string {
 
 function ComingSoonRow() {
   const upcoming = [
-    "Sleep Optimization",
     "Nutrition & Metabolic",
     "Stress & Recovery",
     "Athletic Performance",
+    "Hormone Balance",
   ];
   return (
     <section>

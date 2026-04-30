@@ -2023,7 +2023,10 @@ ${enrichedPrompt}`;
             body: JSON.stringify({
               spaceIds: [chainedSpaceId],
               inputSummary: chainedText.slice(0, 2000),
-              researchDepth: "standard",
+              researchDepth:
+                reasoningDepth === "deep" ? "deep"
+                : reasoningDepth === "quick" ? "light"
+                : "standard",
               triggeredBy: "auto_advance",
               autoAdvance: true,
               existingRunId: chainedRunId,
@@ -2093,7 +2096,20 @@ ${enrichedPrompt}`;
         const { backfillConsequenceSurfaces } = await import(
           "@/lib/pipeline/consequence-surface-tail"
         );
-        await backfillConsequenceSurfaces({ db, spaceId });
+        const csResult = await backfillConsequenceSurfaces({ db, spaceId });
+        if (csResult) {
+          // Surface partial-failure counts. update_failures > 0 means
+          // some entity rows failed to persist their consequence_surface
+          // — silent before this log line.
+          console.log(
+            `[decompose] consequence-surface backfill: scanned=${csResult.scanned} updated=${csResult.updated} skipped_populated=${csResult.skipped_already_populated} skipped_no_outgoing=${csResult.skipped_no_outgoing} failures=${csResult.update_failures} (${csResult.duration_ms}ms)`,
+          );
+          if (csResult.update_failures > 0) {
+            console.warn(
+              `[decompose:degraded] consequence-surface backfill had ${csResult.update_failures} update failures — some entities lack consequence_surface; downstream signals (controllability, surrogate impact) will be partial`,
+            );
+          }
+        }
       } catch (csErr) {
         console.warn(
           "[decompose] consequence-surface backfill failed (non-fatal):",

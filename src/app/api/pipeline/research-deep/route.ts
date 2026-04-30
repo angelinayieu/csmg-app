@@ -479,6 +479,74 @@ export async function POST(request: Request) {
         console.warn("[deep-research] Claim/evidence persistence failed (non-critical):", persistErr);
       }
 
+      // ── Phase 2 — bridge to evidence_registries ──
+      //
+      // Run the L2M-disciplined extract-effect-sizes + extract-temporal
+      // primitives over the deep-research reportText so any verbatim
+      // quotes containing effect sizes / mechanism timing land in the
+      // rigor substrate (where edge-strength + edge-temporal poolers
+      // can consume them). Soft-fail discipline: bridge errors are
+      // logged but never abort the deep-research result; the
+      // narrative report + claims still persist via the path above.
+      let bridgeSummary: {
+        effect_size_extractions: number;
+        effect_size_inserted: number;
+        temporal_extractions: number;
+        temporal_inserted: number;
+        errors: Array<{ stage: string; message: string }>;
+      } | null = null;
+      try {
+        const { bridgeDeepResearchToEvidenceRegistries } = await import(
+          "@/lib/research/bridge-to-evidence-registries"
+        );
+        bridgeSummary = await bridgeDeepResearchToEvidenceRegistries(
+          db,
+          spaceId,
+          user.id,
+          parsed,
+        );
+        // When the bridge actually inserted rigor rows, fire downstream
+        // re-pools so edges in the space see the new evidence
+        // immediately (matches what extract-effect-sizes / extract-
+        // temporal routes do for PDF ingestion). Soft-fail per pool.
+        if (
+          bridgeSummary.effect_size_inserted > 0 ||
+          bridgeSummary.temporal_inserted > 0
+        ) {
+          if (bridgeSummary.effect_size_inserted > 0) {
+            try {
+              const { recomputeEdgeStrengthsForSpace } = await import(
+                "@/lib/evidence/recompute-edge-strengths"
+              );
+              await recomputeEdgeStrengthsForSpace(db, spaceId);
+            } catch (poolErr) {
+              console.warn(
+                "[deep-research] edge-strength repool soft-failed:",
+                poolErr,
+              );
+            }
+          }
+          if (bridgeSummary.temporal_inserted > 0) {
+            try {
+              const { recomputeEdgeTemporalsForSpace } = await import(
+                "@/lib/evidence/recompute-edge-temporals"
+              );
+              await recomputeEdgeTemporalsForSpace(db, spaceId);
+            } catch (poolErr) {
+              console.warn(
+                "[deep-research] edge-temporal repool soft-failed:",
+                poolErr,
+              );
+            }
+          }
+        }
+      } catch (bridgeErr) {
+        console.warn(
+          "[deep-research] evidence-registries bridge soft-failed:",
+          bridgeErr,
+        );
+      }
+
       // Update synthesis_data with deep research results
       const { data: freshSpace } = await db
         .from("spaces")
@@ -581,6 +649,9 @@ export async function POST(request: Request) {
         evidencePersisted,
         entitiesCreated,
         edgesCreated,
+        // Phase 2 — bridge result so the client can show "+N rigor
+        // rows landed" alongside the narrative-evidence count.
+        bridgeSummary,
         reportPreview: parsed.reportText.slice(0, 500),
         topDomains: parsed.stats.uniqueDomains.slice(0, 10),
       });

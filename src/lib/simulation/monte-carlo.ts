@@ -47,6 +47,33 @@ export type EdgeDynamics =
 
 export type EdgePolarity = "positive" | "negative" | "neutral" | "conditional";
 
+/** Phase 4 — per-edge temporal data sourced from
+ *  edges.{onset,peak,persistence}_days_p50 + decay_kinetics_modal
+ *  (populated by Phase 3's temporal pooler).
+ *
+ *  When supplied AND the simulation runs in weeklyHorizon mode, the
+ *  engine multiplies each edge's strength by a temporal ramp factor
+ *  evaluated at the current wall-clock day. When NOT supplied (or
+ *  the sim isn't running in weekly mode), edges fire instantly and
+ *  the ramp is 1.0 for every step — preserving pre-Phase-4 behavior. */
+export type EdgeTemporalDecayKinetics =
+  | "linear"
+  | "exponential"
+  | "sustained"
+  | "biphasic"
+  | "unknown";
+
+export interface EdgeTemporalSpec {
+  /** Days from intervention start to first measurable effect. */
+  onset_days?: number | null;
+  /** Days from intervention start to peak effect. */
+  peak_days?: number | null;
+  /** Days the effect persists after intervention stops. */
+  persistence_days?: number | null;
+  /** Qualitative shape of decay after persistence ends. */
+  decay_kinetics?: EdgeTemporalDecayKinetics | null;
+}
+
 export interface NodeSpec {
   id: string;
   /** Prior mean — the expected starting value. */
@@ -100,6 +127,23 @@ export interface EdgeSpec {
    * pre-Phase-3 behavior, which treated conditional edges as always-on.
    */
   conditionGate?: number;
+  /**
+   * Phase 4 — per-edge temporal pooled estimates (onset / peak /
+   * persistence / decay_kinetics) sourced from
+   * edges.{onset,peak,persistence}_days_p50 + decay_kinetics_modal.
+   *
+   * Used ONLY when `SimulationSpec.weeklyHorizon` is set. In that
+   * mode each timestep represents one wall-clock week, and an edge's
+   * effective strength at week t is `strength × temporalRampFactor(t,
+   * temporal)`. With no temporal data (or weeklyHorizon unset), the
+   * ramp is identically 1 and pre-Phase-4 behavior is preserved.
+   *
+   * Soft-failing on missing fields: a partial spec (e.g. peak_days
+   * only) still produces a sensible ramp — onset defaults to 0,
+   * persistence to ∞, decay to "sustained". A full spec gives the
+   * shape the literature reported.
+   */
+  temporal?: EdgeTemporalSpec | null;
 }
 
 export interface SimulationSpec {
@@ -138,6 +182,26 @@ export interface SimulationSpec {
    * (see ProposalReadyEvent.distribution.provenance).
    */
   integrator?: "discrete" | "ode_rk4";
+  /**
+   * Phase 4 — wall-clock weekly trajectory mode.
+   *
+   * When set to N weeks, the engine runs N timesteps where each
+   * step represents 1 week (so step t = day t × 7). At each step,
+   * each edge's strength is multiplied by a temporal ramp factor
+   * derived from EdgeSpec.temporal (onset / peak / persistence /
+   * decay_kinetics). The result includes a `trajectory` array with
+   * per-week distributions, in addition to the existing final-state
+   * distribution.
+   *
+   * When unset, the engine uses the legacy `timesteps` semantics
+   * (timesteps as iteration count, no temporal ramp). This is an
+   * additive feature — pre-Phase-4 callers see no change in output.
+   *
+   * Compatible with both "discrete" and "ode_rk4" integrators; the
+   * ramp multiplier is applied to the per-edge strength regardless of
+   * integrator (the ODE path receives the ramped strength as input).
+   */
+  weeklyHorizon?: number | null;
 }
 
 export interface NodeDistribution {
@@ -151,6 +215,24 @@ export interface NodeDistribution {
   samples: number[];
 }
 
+export interface NodeWeeklyDistribution {
+  nodeId: string;
+  p10: number;
+  p50: number;
+  p90: number;
+  mean: number;
+  stddev: number;
+}
+
+export interface WeeklyTrajectoryEntry {
+  /** 1-indexed week number (week 0 = baseline, omitted from trajectory
+   *  to reduce payload — callers can derive baseline from priors). */
+  week: number;
+  /** Per-node distribution snapshot at the END of this week. Mirrors
+   *  NodeDistribution but without the raw `samples` array (memory). */
+  nodes: NodeWeeklyDistribution[];
+}
+
 export interface SimulationResult {
   iterations: number;
   timesteps: number;
@@ -162,6 +244,15 @@ export interface SimulationResult {
    *  callers can stamp the right provenance on their event payloads
    *  (e.g. ProposalReadyEvent.distribution.provenance). */
   integrator: "discrete" | "ode_rk4";
+  /** Phase 4 — per-week trajectory snapshot. Populated only when
+   *  `weeklyHorizon` was set on the spec. Each entry is the
+   *  distribution AT THE END of that week. The last entry's
+   *  distributions match `nodes[]` (modulo the missing `samples`
+   *  field) — they're the same final-state values, surfaced both
+   *  ways for caller convenience. */
+  trajectory?: WeeklyTrajectoryEntry[];
+  /** Echoed so callers can stamp provenance on prediction rows. */
+  weeklyHorizon?: number | null;
 }
 
 const DEFAULT_ITERATIONS = 1000;
@@ -175,7 +266,16 @@ const DEFAULT_SEED = 42;
  */
 export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
   const iterations = spec.iterations ?? DEFAULT_ITERATIONS;
-  const timesteps = spec.timesteps ?? DEFAULT_TIMESTEPS;
+  // Phase 4 — when weeklyHorizon is set, each timestep represents one
+  // week of wall-clock time (and we record per-week distributions for
+  // the trajectory output). When unset, legacy semantics apply
+  // (timesteps as iteration count).
+  const weeklyHorizon = spec.weeklyHorizon ?? null;
+  const timesteps =
+    weeklyHorizon !== null && weeklyHorizon > 0
+      ? Math.floor(weeklyHorizon)
+      : (spec.timesteps ?? DEFAULT_TIMESTEPS);
+  const isWeeklyMode = weeklyHorizon !== null && weeklyHorizon > 0;
   const seed = spec.seed ?? DEFAULT_SEED;
   const integrator = spec.integrator ?? "discrete";
   const startedAt =
@@ -186,6 +286,19 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
   const rng = makeSeededRng(seed);
   const samplesByNode = new Map<string, number[]>();
   for (const n of spec.nodes) samplesByNode.set(n.id, []);
+
+  // Phase 4 — per-week per-node sample arrays. Pre-allocate when
+  // weeklyHorizon is set; otherwise leave empty. Indexed
+  // [weekIndex (0-based, week 1 is index 0)][nodeIndex] → sample value.
+  // Memory: iterations × weeks × nodes — typically <10MB at default
+  // sizes. Skipped when not in weekly mode to keep zero-overhead path.
+  const weeklySamples: Array<Map<string, number[]>> = isWeeklyMode
+    ? Array.from({ length: timesteps }, () => {
+        const m = new Map<string, number[]>();
+        for (const n of spec.nodes) m.set(n.id, []);
+        return m;
+      })
+    : [];
 
   // Index edges by target so propagation is O(edges × timesteps).
   const incoming = new Map<string, EdgeSpec[]>();
@@ -229,8 +342,14 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
     // forward, record final value per node. The difference is HOW
     // they evolve — discrete scalar multiplication vs. continuous
     // ODE integration. Tier 4 vs. Tier 5.
+    //
+    // Phase 4 — when weekly mode is active, only the discrete path
+    // can record per-week distributions (the ODE integrator returns
+    // a single final state per call). We force discrete in weekly
+    // mode regardless of the requested integrator; the result's
+    // `integrator` field is stamped accordingly so callers can tell.
     let finalState: Map<string, number>;
-    if (integrator === "ode_rk4") {
+    if (integrator === "ode_rk4" && !isWeeklyMode) {
       // Lazy import is fine — this is a hot loop but the import is
       // hoisted by the bundler. Keeps the discrete path's cold-start
       // cost identical to pre-R3 when ODE isn't used.
@@ -261,9 +380,16 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
       // the prior round's state and writes new state so all effects
       // apply simultaneously (synchronous update — matches spreadsheet
       // intuition better than asynchronous for small graphs).
+      //
+      // Phase 4 — in weekly mode, t represents wall-clock weeks; each
+      // edge's strength gets multiplied by a temporal ramp factor
+      // evaluated at day = (t+1) × 7 (we use end-of-week for the
+      // distribution snapshot). Edges without temporal data ramp
+      // identically (factor = 1) so the math is unchanged for them.
       let state = new Map(values);
       for (let t = 0; t < timesteps; t++) {
         const next = new Map(state);
+        const tDays = isWeeklyMode ? (t + 1) * 7 : null;
         for (const node of spec.nodes) {
           const prior = state.get(node.id) ?? 0;
           const edges = incoming.get(node.id) ?? [];
@@ -278,7 +404,19 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
             if (activeEdges.get(edge) === false) continue;
             const src = state.get(edge.sourceId) ?? 0;
             const polarSign = edge.polarity === "negative" ? -1 : 1;
-            const effect = applyDynamics(edge.dynamics, src, edge.strength * polarSign, edge.params);
+            // Phase 4 — temporal ramp multiplier (1.0 outside weekly
+            // mode or when the edge has no temporal data, so legacy
+            // behavior is unchanged).
+            const ramp =
+              tDays !== null && edge.temporal
+                ? temporalRampFactor(tDays, edge.temporal)
+                : 1;
+            const effect = applyDynamics(
+              edge.dynamics,
+              src,
+              edge.strength * polarSign * ramp,
+              edge.params,
+            );
             contribution += effect;
           }
           // Blend prior + contribution. For v1 we use a damped
@@ -289,6 +427,14 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
           next.set(node.id, clamp(raw, node.min, node.max));
         }
         state = next;
+
+        // Phase 4 — record per-week samples for trajectory output.
+        if (isWeeklyMode) {
+          const weekBucket = weeklySamples[t];
+          for (const node of spec.nodes) {
+            weekBucket.get(node.id)!.push(state.get(node.id) ?? 0);
+          }
+        }
       }
       finalState = state;
     }
@@ -308,6 +454,28 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
     };
   });
 
+  // Phase 4 — build the per-week trajectory array. Skipped when not
+  // in weekly mode so the result shape is identical to pre-Phase-4
+  // for legacy callers.
+  let trajectory: WeeklyTrajectoryEntry[] | undefined = undefined;
+  if (isWeeklyMode) {
+    trajectory = weeklySamples.map((bucket, idx) => ({
+      week: idx + 1,
+      nodes: spec.nodes.map((n) => {
+        const samples = bucket.get(n.id) ?? [];
+        const summary = summarize(samples);
+        return {
+          nodeId: n.id,
+          p10: summary.p10,
+          p50: summary.p50,
+          p90: summary.p90,
+          mean: summary.mean,
+          stddev: summary.stddev,
+        };
+      }),
+    }));
+  }
+
   const endedAt =
     typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
@@ -319,11 +487,105 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
     seed,
     nodes,
     durationMs: Math.round(endedAt - startedAt),
-    integrator,
+    // When weekly mode is active we override the integrator to discrete
+    // (the ODE branch can't record per-step state). Stamp accordingly.
+    integrator: isWeeklyMode ? "discrete" : integrator,
+    trajectory,
+    weeklyHorizon,
   };
 }
 
 // ── Internals ──────────────────────────────────────────────────────
+
+/**
+ * Phase 4 — temporal ramp factor.
+ *
+ * Returns a multiplier in [0, 1] for an edge's strength evaluated at
+ * wall-clock day `tDays`. Models:
+ *
+ *   - 0 before onset: the effect hasn't started yet
+ *   - linear ramp 0 → 1 from onset_days to peak_days
+ *   - 1 (full strength) from peak through peak + persistence
+ *   - decay shape after that:
+ *       * "sustained"      — stays at 1 (no decay)
+ *       * "linear"         — linear taper to 0 over another `persistence_days`
+ *       * "exponential"    — half-life = persistence/2 by convention
+ *       * "biphasic"       — fast drop to 0.3 then plateau
+ *       * "unknown"/null   — treated as "sustained" (conservative; the
+ *                            literature didn't characterize decay)
+ *
+ * Soft defaults when fields missing: onset = 0 (immediate), peak = 0
+ * (instant ramp), persistence = ∞ (no decay phase), decay = "sustained".
+ *
+ * Returned value clamped to [0, 1] for safety.
+ */
+export function temporalRampFactor(
+  tDays: number,
+  temporal: EdgeTemporalSpec,
+): number {
+  const onset = numOr(temporal.onset_days, 0);
+  const peakRaw = numOr(temporal.peak_days, 0);
+  const peak = Math.max(peakRaw, onset);
+  const persistence = numOr(temporal.persistence_days, Infinity);
+  const decay = temporal.decay_kinetics ?? "sustained";
+
+  if (tDays < onset) return 0;
+  // Ramp-up phase.
+  if (tDays <= peak) {
+    if (peak <= onset) return 1; // instant ramp
+    const v = (tDays - onset) / (peak - onset);
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+  // Sustained phase.
+  const persistEnd = peak + persistence;
+  if (tDays <= persistEnd) return 1;
+  // Decay phase.
+  const tAfter = tDays - persistEnd;
+  switch (decay) {
+    case "sustained":
+    case "unknown":
+      return 1;
+    case "linear": {
+      // Decay window same length as persistence — convention; the
+      // literature usually doesn't separate the two so we tie them.
+      // After that the contribution is 0.
+      const decayWindow = persistence > 0 && Number.isFinite(persistence)
+        ? persistence
+        : 30;
+      const v = 1 - tAfter / decayWindow;
+      return v < 0 ? 0 : v > 1 ? 1 : v;
+    }
+    case "exponential": {
+      // Half-life = persistence / 2 by convention. After 5 half-lives
+      // the contribution is below 3% — effectively zero.
+      const halfLife =
+        Number.isFinite(persistence) && persistence > 0
+          ? persistence / 2
+          : 30;
+      return Math.pow(0.5, tAfter / halfLife);
+    }
+    case "biphasic": {
+      // Fast initial drop in first 25% of persistence, then plateau
+      // at 30% of full strength. Captures the "quick acute drop, slow
+      // chronic tail" shape common in neuro / sleep studies.
+      const fastWindow =
+        Number.isFinite(persistence) && persistence > 0
+          ? persistence * 0.25
+          : 7;
+      if (tAfter < fastWindow) {
+        const v = 1 - 0.7 * (tAfter / fastWindow);
+        return v < 0 ? 0 : v > 1 ? 1 : v;
+      }
+      return 0.3;
+    }
+    default:
+      return 1;
+  }
+}
+
+function numOr(n: number | null | undefined, fallback: number): number {
+  return typeof n === "number" && Number.isFinite(n) ? n : fallback;
+}
 
 /**
  * Apply an edge-dynamics function: given a source value + strength +

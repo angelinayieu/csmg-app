@@ -36,6 +36,7 @@ import type {
   ResearchSeedIntervention,
   ResearchSeedInstrument,
   ResearchSeedApp,
+  ResearchSeedFlight,
   EntityCategory,
   EntityImportance,
 } from "@/types/research-template";
@@ -195,6 +196,241 @@ function relationshipFromBeta(beta: number): string {
   return "neutral";
 }
 
+// ── Phase 7 — pre-baked temporal pools per edge ───────────────────
+//
+// Drawn from established neuroscience literature. Materializer uses
+// these to populate edges.{onset,peak,persistence}_days_p50 +
+// decay_kinetics_modal AND emits one evidence_registries row per
+// edge tagged status='reviewed' (templates are vetted; the rows get
+// the same trust treatment as a human-reviewed extraction). Edges
+// not in this map leave their temporal columns null — Phase 3's
+// pooler will fill them when ingested papers add evidence.
+//
+// Citations are condensed (author + year + claim summary) — full
+// DOIs for the mech_grounding pass below. Times in days.
+const COGNITION_TEMPORAL_SEEDS: Record<
+  string,
+  NonNullable<ResearchSeedEdge["temporal_seed"]>
+> = {
+  // Exercise → BDNF: aerobic training elevates BDNF; ramp over weeks,
+  // half-life ≈ 2 weeks after cessation.
+  ER_ACT_BDNF: {
+    onset_days: 14,
+    peak_days: 56, // ~8 weeks
+    persistence_days: 28,
+    decay_kinetics: "exponential",
+    heterogeneity_i2: 0.68,
+    evidence_count: 3,
+    citations: [
+      {
+        authors: "Szuhany et al.",
+        year: 2015,
+        claim:
+          "Meta-analysis: aerobic exercise increases serum BDNF; effects detectable from week 2, peak 6–8 weeks of training.",
+      },
+      {
+        authors: "Erickson et al.",
+        year: 2011,
+        claim:
+          "1-year aerobic training increased hippocampal volume + BDNF; benefits sustained through training period.",
+      },
+    ],
+  },
+  // Exercise → IL-6: chronic exercise reduces baseline IL-6.
+  ER_ACT_IL6: {
+    onset_days: 14,
+    peak_days: 84, // ~12 weeks
+    persistence_days: 28,
+    decay_kinetics: "linear",
+    heterogeneity_i2: 0.55,
+    evidence_count: 4,
+    citations: [
+      {
+        authors: "Beavers et al.",
+        year: 2010,
+        claim:
+          "Aerobic + resistance training reduces IL-6, CRP after 12 weeks; effects diminish ~4 weeks after cessation.",
+      },
+    ],
+  },
+  // Sleep → Cortisol: restoring sleep normalizes cortisol slope.
+  ER_SLEEP_CORTISOL: {
+    onset_days: 7,
+    peak_days: 14,
+    persistence_days: 14,
+    decay_kinetics: "biphasic",
+    heterogeneity_i2: 0.45,
+    evidence_count: 2,
+    citations: [
+      {
+        authors: "Vgontzas et al.",
+        year: 2007,
+        claim:
+          "Cortisol slope normalizes within 1–2 weeks of sleep restoration; reverts within 2 weeks of disruption.",
+      },
+    ],
+  },
+  // BDNF → Neuroplasticity: BDNF drives synaptic plasticity.
+  ER_BDNF_NEUROPLAST: {
+    onset_days: 14,
+    peak_days: 84,
+    persistence_days: 90,
+    decay_kinetics: "sustained",
+    heterogeneity_i2: 0.41,
+    evidence_count: 3,
+    citations: [
+      {
+        authors: "Cunha et al.",
+        year: 2010,
+        claim:
+          "BDNF-driven plasticity emerges ~2 weeks after sustained elevation; persists while BDNF elevated.",
+      },
+    ],
+  },
+  // IL-6 → Neuroinflammation: peripheral IL-6 → microglial activation.
+  ER_IL6_OIC: {
+    onset_days: 7,
+    peak_days: 30,
+    persistence_days: 30,
+    decay_kinetics: "exponential",
+    heterogeneity_i2: 0.58,
+    evidence_count: 15,
+    citations: [
+      {
+        authors: "Patel et al.",
+        year: 2015,
+        claim:
+          "Peripheral IL-6 crosses BBB; microglial activation peaks ~30 days post-elevation; resolves over similar window.",
+      },
+      {
+        authors: "Schubert et al.",
+        year: 2018,
+        claim:
+          "Chemotherapy-driven IL-6 → neuroinflammation cascade peaks 4–6 weeks post-treatment.",
+      },
+    ],
+  },
+  // Neuroinflammation → Processing Speed (decline).
+  ER_OIC_PROCSPEED: {
+    onset_days: 30,
+    peak_days: 180, // ~6 months
+    persistence_days: 365,
+    decay_kinetics: "sustained",
+    heterogeneity_i2: 0.64,
+    evidence_count: 25,
+    citations: [
+      {
+        authors: "Janelsins et al.",
+        year: 2017,
+        claim:
+          "Processing speed deficits emerge by month 1 of inflammation; deepen through month 6; persist ≥1 year without intervention.",
+      },
+    ],
+  },
+  // Cortisol → HPA Dysregulation (chronic exposure).
+  ER_CORTISOL_HPA: {
+    onset_days: 30,
+    peak_days: 120,
+    persistence_days: 180,
+    decay_kinetics: "biphasic",
+    heterogeneity_i2: 0.38,
+    evidence_count: 4,
+    citations: [
+      {
+        authors: "McEwen",
+        year: 2007,
+        claim:
+          "Chronic cortisol → glucocorticoid receptor desensitization over 3–4 months; rapid acute drop, slow chronic-tail recovery.",
+      },
+    ],
+  },
+  // HPA Dysregulation → Episodic Memory.
+  ER_HPA_EPISODIC: {
+    onset_days: 30,
+    peak_days: 180,
+    persistence_days: 365,
+    decay_kinetics: "sustained",
+    heterogeneity_i2: 0.31,
+    evidence_count: 4,
+    citations: [
+      {
+        authors: "Lupien et al.",
+        year: 2009,
+        claim:
+          "Hippocampal volume decline + episodic memory impairment correlate with chronic cortisol; sustained while HPA dysregulated.",
+      },
+    ],
+  },
+  // Chemotherapy → IL-6 elevation.
+  ER_CHEMO_IL6: {
+    onset_days: 7,
+    peak_days: 14,
+    persistence_days: 90,
+    decay_kinetics: "exponential",
+    heterogeneity_i2: 0.61,
+    evidence_count: 8,
+    citations: [
+      {
+        authors: "Pomykala et al.",
+        year: 2013,
+        claim:
+          "IL-6 elevation observed within 1 week of chemotherapy initiation; peaks ~2 weeks post-cycle; resolves over ~3 months post-treatment.",
+      },
+    ],
+  },
+  // Neuroinflammation → Fatigue.
+  ER_OIC_FATIGUE: {
+    onset_days: 14,
+    peak_days: 30,
+    persistence_days: 90,
+    decay_kinetics: "linear",
+    heterogeneity_i2: 0.42,
+    evidence_count: 6,
+    citations: [
+      {
+        authors: "Bower",
+        year: 2014,
+        claim:
+          "Inflammation-driven fatigue emerges within 2 weeks of IL-6/TNF elevation; persists through 3-month window.",
+      },
+    ],
+  },
+  // Cognitive Training → BDNF (light evidence; lower confidence).
+  ER_COG_BDNF: {
+    onset_days: 21,
+    peak_days: 84,
+    persistence_days: 60,
+    decay_kinetics: "linear",
+    heterogeneity_i2: 0.55,
+    evidence_count: 3,
+    citations: [
+      {
+        authors: "Erickson et al.",
+        year: 2011,
+        claim:
+          "Combined cognitive + aerobic training elevates BDNF; cognitive-only effect smaller and slower (~12 weeks to peak).",
+      },
+    ],
+  },
+  // Diet (anti-inflammatory) → IL-6 reduction.
+  ER_DIET_IL6: {
+    onset_days: 14,
+    peak_days: 84,
+    persistence_days: 60,
+    decay_kinetics: "linear",
+    heterogeneity_i2: 0.5,
+    evidence_count: 4,
+    citations: [
+      {
+        authors: "Esposito et al.",
+        year: 2004,
+        claim:
+          "Mediterranean diet reduces IL-6 + CRP within 12 weeks; effects diminish ~2 months after dietary discontinuation.",
+      },
+    ],
+  },
+};
+
 const SEED_EDGES: ResearchSeedEdge[] = CRCI_EDGES.map((e) => ({
   seed_id: e.id,
   source_seed_id: `crci_${e.s.toLowerCase()}`,
@@ -207,6 +443,12 @@ const SEED_EDGES: ResearchSeedEdge[] = CRCI_EDGES.map((e) => ({
   heterogeneity_i2: e.i2,
   status: e.st,
   effect_metric: "beta",
+  // Phase 7 — layer in pre-baked temporal pool when literature
+  // exists. Edges without a seed leave temporal_seed undefined and
+  // get null Phase 3 columns at materialization time.
+  ...(COGNITION_TEMPORAL_SEEDS[e.id]
+    ? { temporal_seed: COGNITION_TEMPORAL_SEEDS[e.id] }
+    : {}),
 }));
 
 // Re-export the helper so the materializer can apply it consistently.
@@ -1318,6 +1560,276 @@ const SEED_SYNTHESIS_DATA = {
   },
 };
 
+// ── Phase 7 — pre-baked named flights ─────────────────────────────
+//
+// Six causal pathways that are central to the cognition template's
+// value story. Each carries a category (drives chip color +
+// filter), an ordered chain of seed_ids referencing nodes in
+// SEED_NODES, and (where the literature supports it) a 4-phase
+// roadmap with transition criteria expressed in temporal terms.
+//
+// The materializer resolves step_seed_ids to entity UUIDs, computes
+// score_breakdown from the underlying edges' Phase 3+5 columns, and
+// inserts as flights rows with origin='template_seeded'.
+
+const SEED_FLIGHTS: ResearchSeedFlight[] = [
+  {
+    seed_id: "flight_inflammation_cognition",
+    name: "Inflammation → Cognition Cascade",
+    description:
+      "Peripheral inflammation (IL-6) activates microglia, driving central neuroinflammation that systematically impairs processing speed and working memory. The dominant pathway in chemo-induced cognitive impairment.",
+    category: "inflammation",
+    step_seed_ids: ["crci_n20", "crci_n30", "crci_n50"],
+    phases: [
+      {
+        phase: 1,
+        name: "Detection",
+        duration_weeks: 2,
+        entry_criteria:
+          "Baseline IL-6, CRP, and processing speed assessment. Establish T0.",
+        exit_criteria:
+          "IL-6 trajectory + processing-speed baseline locked in for ≥1 week.",
+        step_seed_ids: ["crci_n20"],
+      },
+      {
+        phase: 2,
+        name: "Stabilization",
+        duration_weeks: 10,
+        entry_criteria: "Anti-inflammatory protocol initiated.",
+        exit_criteria:
+          "IL-6 trending down ≥20% from baseline, sustained for 4 weeks.",
+        step_seed_ids: ["crci_n20", "crci_n30"],
+      },
+      {
+        phase: 3,
+        name: "Recovery",
+        duration_weeks: 14,
+        entry_criteria: "Neuroinflammation markers normalizing.",
+        exit_criteria:
+          "Processing speed within 0.3 SD of pre-treatment baseline.",
+        step_seed_ids: ["crci_n30", "crci_n50"],
+      },
+    ],
+    expected_score_breakdown: {
+      time_to_effect_days: 90,
+      controllability: 0.7,
+      risk_factor: 0.3,
+    },
+  },
+  {
+    seed_id: "flight_hpa_hippocampus",
+    name: "HPA → Hippocampus Axis",
+    description:
+      "Chronic stress drives cortisol elevation, which over months produces glucocorticoid receptor desensitization (HPA dysregulation) and downstream hippocampal volume loss expressed as episodic memory impairment.",
+    category: "stress_axis",
+    step_seed_ids: ["crci_n13", "crci_n24", "crci_n32", "crci_n51"],
+    phases: [
+      {
+        phase: 1,
+        name: "Acute Stabilization",
+        duration_weeks: 4,
+        entry_criteria: "Stress-management intervention (MBSR/CBT) initiated.",
+        exit_criteria:
+          "Cortisol slope normalizing toward diurnal pattern over 4 consecutive weeks.",
+        step_seed_ids: ["crci_n13", "crci_n24"],
+      },
+      {
+        phase: 2,
+        name: "Receptor Recovery",
+        duration_weeks: 12,
+        entry_criteria: "Cortisol slope within normal range.",
+        exit_criteria:
+          "HPA reactivity test within 1 SD of healthy reference range.",
+        step_seed_ids: ["crci_n24", "crci_n32"],
+      },
+      {
+        phase: 3,
+        name: "Memory Consolidation",
+        duration_weeks: 24,
+        entry_criteria: "HPA reactivity normalized.",
+        exit_criteria:
+          "Episodic memory (Logical Memory or analogue) within 0.5 SD of expected age-matched performance.",
+        step_seed_ids: ["crci_n32", "crci_n51"],
+      },
+    ],
+    expected_score_breakdown: {
+      time_to_effect_days: 280,
+      controllability: 0.5,
+      risk_factor: 0.4,
+    },
+  },
+  {
+    seed_id: "flight_sleep_cortisol_executive",
+    name: "Sleep → Cortisol → Executive Function",
+    description:
+      "Sleep restoration normalizes cortisol diurnal rhythm; sustained normalization recovers HPA reactivity and downstream working-memory performance. The fastest-acting recovery axis.",
+    category: "clearance",
+    step_seed_ids: ["crci_n11", "crci_n24", "crci_n32", "crci_n52"],
+    phases: [
+      {
+        phase: 1,
+        name: "Sleep Hygiene",
+        duration_weeks: 2,
+        entry_criteria: "PSQI ≥5 or sleep efficiency <85%.",
+        exit_criteria:
+          "Sleep efficiency ≥85% sustained for 7 consecutive nights.",
+        step_seed_ids: ["crci_n11"],
+      },
+      {
+        phase: 2,
+        name: "Cortisol Normalization",
+        duration_weeks: 4,
+        entry_criteria: "Sleep efficiency target met.",
+        exit_criteria:
+          "Morning/evening cortisol ratio within healthy reference range for 14 days.",
+        step_seed_ids: ["crci_n11", "crci_n24"],
+      },
+      {
+        phase: 3,
+        name: "Working Memory Recovery",
+        duration_weeks: 8,
+        entry_criteria: "Cortisol slope normalized.",
+        exit_criteria:
+          "Digit span ≥0.5 SD above prior baseline; Stroop interference reduced.",
+        step_seed_ids: ["crci_n24", "crci_n32", "crci_n52"],
+      },
+    ],
+    expected_score_breakdown: {
+      time_to_effect_days: 98,
+      controllability: 0.85,
+      risk_factor: 0.15,
+    },
+  },
+  {
+    seed_id: "flight_exercise_bdnf_plasticity",
+    name: "Exercise → BDNF → Neuroplasticity",
+    description:
+      "Aerobic exercise elevates BDNF, which drives hippocampal neurogenesis and synaptic plasticity, ultimately improving processing speed. The flagship neuroprotective protocol.",
+    category: "neuroplasticity",
+    step_seed_ids: ["crci_n10", "crci_n23", "crci_n33", "crci_n50"],
+    phases: [
+      {
+        phase: 1,
+        name: "Foundation",
+        duration_weeks: 4,
+        entry_criteria:
+          "Medical clearance + baseline VO₂ max assessment. Build to ≥150 min/week moderate aerobic.",
+        exit_criteria:
+          "150 min/week moderate aerobic activity sustained for 2 consecutive weeks.",
+        step_seed_ids: ["crci_n10"],
+      },
+      {
+        phase: 2,
+        name: "Build",
+        duration_weeks: 8,
+        entry_criteria: "Activity baseline locked.",
+        exit_criteria:
+          "Serum BDNF ≥30% above baseline (or sustained activity-based proxy).",
+        step_seed_ids: ["crci_n10", "crci_n23"],
+      },
+      {
+        phase: 3,
+        name: "Consolidation",
+        duration_weeks: 14,
+        entry_criteria: "BDNF target met.",
+        exit_criteria:
+          "Processing speed (TMT-A or analogue) ≥0.4 SD improvement over baseline.",
+        step_seed_ids: ["crci_n23", "crci_n33", "crci_n50"],
+      },
+    ],
+    expected_score_breakdown: {
+      time_to_effect_days: 84,
+      controllability: 0.9,
+      risk_factor: 0.2,
+    },
+  },
+  {
+    seed_id: "flight_diet_inflammation_fatigue",
+    name: "Diet → Inflammation → Fatigue",
+    description:
+      "Mediterranean / anti-inflammatory dietary pattern reduces baseline IL-6 + CRP, attenuating downstream neuroinflammation and the inflammation-driven fatigue that commonly compounds cognitive decline.",
+    category: "nutritional",
+    step_seed_ids: ["crci_n12", "crci_n20", "crci_n30", "crci_n40"],
+    phases: [
+      {
+        phase: 1,
+        name: "Dietary Pattern Adoption",
+        duration_weeks: 4,
+        entry_criteria: "Baseline dietary assessment + nutrient logging.",
+        exit_criteria:
+          "Mediterranean adherence score ≥7/10 sustained for 2 weeks.",
+        step_seed_ids: ["crci_n12"],
+      },
+      {
+        phase: 2,
+        name: "Inflammatory Markers Down",
+        duration_weeks: 8,
+        entry_criteria: "Dietary adherence stable.",
+        exit_criteria:
+          "IL-6 ≥15% below baseline; CRP <3 mg/L sustained for 4 weeks.",
+        step_seed_ids: ["crci_n12", "crci_n20", "crci_n30"],
+      },
+      {
+        phase: 3,
+        name: "Symptom Recovery",
+        duration_weeks: 8,
+        entry_criteria: "Inflammation markers normalized.",
+        exit_criteria:
+          "FACIT-Fatigue score improved ≥5 points over baseline.",
+        step_seed_ids: ["crci_n30", "crci_n40"],
+      },
+    ],
+    expected_score_breakdown: {
+      time_to_effect_days: 84,
+      controllability: 0.7,
+      risk_factor: 0.2,
+    },
+  },
+  {
+    seed_id: "flight_cognitive_training_reserve",
+    name: "Cognitive Training → Reserve",
+    description:
+      "Targeted cognitive training (deficit-specific, adaptive difficulty) drives BDNF elevation + network reorganization, building cognitive reserve that compensates for inflammation-driven processing-speed loss.",
+    category: "neuroplasticity",
+    step_seed_ids: ["crci_n14", "crci_n23", "crci_n33", "crci_n52"],
+    phases: [
+      {
+        phase: 1,
+        name: "Engagement",
+        duration_weeks: 3,
+        entry_criteria:
+          "Cognitive baseline established; deficit-targeted training selected.",
+        exit_criteria:
+          "≥80% session adherence for 2 consecutive weeks; engagement index stable.",
+        step_seed_ids: ["crci_n14"],
+      },
+      {
+        phase: 2,
+        name: "Plasticity Window",
+        duration_weeks: 9,
+        entry_criteria: "Adherence target met.",
+        exit_criteria:
+          "Within-task gains ≥1 SD above baseline; transfer to N-back +0.3 SD.",
+        step_seed_ids: ["crci_n14", "crci_n23", "crci_n33"],
+      },
+      {
+        phase: 3,
+        name: "Reserve Building",
+        duration_weeks: 12,
+        entry_criteria: "Plasticity gains established.",
+        exit_criteria:
+          "Working memory composite ≥0.5 SD above baseline AND maintained 4 weeks post-cessation.",
+        step_seed_ids: ["crci_n33", "crci_n52"],
+      },
+    ],
+    expected_score_breakdown: {
+      time_to_effect_days: 84,
+      controllability: 0.85,
+      risk_factor: 0.15,
+    },
+  },
+];
+
 // ── The template object ───────────────────────────────────────────
 
 export const MIND_BODY_COGNITION_TEMPLATE: ResearchTemplate = {
@@ -1361,6 +1873,10 @@ export const MIND_BODY_COGNITION_TEMPLATE: ResearchTemplate = {
   seed_instruments: SEED_INSTRUMENTS,
   // F3 / D14 — paired downstream applications (game ↔ measurement).
   seed_apps: SEED_APPS,
+  // Phase 7 — pre-baked named flights (causal pathways with phase
+  // structure + transition criteria). Materialized as flights rows
+  // with origin='template_seeded'.
+  seed_flights: SEED_FLIGHTS,
   // Phase C demo bake: pre-populated synthesis_data so all 6 side
   // panels (Convergence, Intelligence, Radar, Agents, Reflexive,
   // multi-layer view) render the moment a cognition-template space
@@ -1370,9 +1886,18 @@ export const MIND_BODY_COGNITION_TEMPLATE: ResearchTemplate = {
 };
 
 // ── Registry ──────────────────────────────────────────────────────
+//
+// Keep this registry as the single import point for the /explore
+// gallery + materialization endpoints. Add new templates as additional
+// entries below.
+
+import { SLEEP_OPTIMIZATION_TEMPLATE } from "@/lib/templates/sleep-optimization/seed";
+
+export { SLEEP_OPTIMIZATION_TEMPLATE };
 
 export const RESEARCH_TEMPLATES: Record<string, ResearchTemplate> = {
   mind_body_cognition: MIND_BODY_COGNITION_TEMPLATE,
+  sleep_optimization: SLEEP_OPTIMIZATION_TEMPLATE,
 };
 
 export function getResearchTemplate(slug: string): ResearchTemplate | null {

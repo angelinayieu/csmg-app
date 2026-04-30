@@ -95,6 +95,71 @@ export const KNOWN_STUDY_DESIGNS = [
 
 export type KnownStudyDesign = (typeof KNOWN_STUDY_DESIGNS)[number];
 
+// ── Temporal extraction vocabulary ──────────────────────────────────
+//
+// Parallel to the effect-size vocabulary above. Both halves of a row
+// (magnitude + timing) follow the same domain-agnostic, open-vocab
+// discipline: const lists are HINTS for the LLM and reviewer
+// auto-complete; check constraints in the migration enforce the
+// current values.
+
+/** Qualitative shape of effect decay after intervention stops. Used
+ *  by the trajectory simulator to pick a decay function. */
+export const DECAY_KINETICS = [
+  /** Linear ramp downward over `persistence_days`. */
+  "linear",
+  /** Exponential decay; `persistence_days` interpreted as half-life. */
+  "exponential",
+  /** No observed decay within the followup window. */
+  "sustained",
+  /** Rapid drop then plateau. */
+  "biphasic",
+  /** Not characterized in the source. */
+  "unknown",
+] as const;
+
+export type DecayKinetics = (typeof DECAY_KINETICS)[number];
+
+/** Provenance of how a timing claim was derived. Strict-mode
+ *  pooling filters to `stated_explicitly` only. */
+export const TEMPORAL_EXTRACTION_METHODS = [
+  /** The artifact stated the timing directly ("improvements began at
+   *  week 2"). Highest rigor; participates in strict pooling. */
+  "stated_explicitly",
+  /** Derived from reported timepoints via curve fit (e.g. peak fitted
+   *  from a T0/T4/T8/T12 trajectory). Mid rigor. */
+  "back_calculated",
+  /** Derived from study followup window when no within-trial timing
+   *  was reported (e.g. assigning peak ≈ followup midpoint). Lower
+   *  rigor; flagged for reviewer attention. */
+  "inferred_from_design",
+  /** Defaulted from the intervention's class kinetics (e.g. SSRI peak
+   *  ≈ 6 weeks). Lowest rigor; only used when nothing else is
+   *  available. */
+  "inferred_from_class",
+] as const;
+
+export type TemporalExtractionMethod =
+  (typeof TEMPORAL_EXTRACTION_METHODS)[number];
+
+/** One observation in a repeated-measures trajectory. */
+export interface TimePointObservation {
+  /** Weeks since intervention start (T0). Float to allow fractional
+   *  weeks (e.g. 0.5 for "3-day post-baseline"). */
+  week: number;
+  /** Effect size at this timepoint (same metric as the row's
+   *  effect_metric). */
+  effect_size: number | null;
+  ci_lower: number | null;
+  ci_upper: number | null;
+  /** Number of subjects observed at this timepoint. May differ from
+   *  n_treatment/n_control due to attrition. */
+  n_observed: number | null;
+  /** Verbatim quote from the artifact for this specific observation,
+   *  when extractable. Useful for reviewer auditing of trajectories. */
+  source_quote: string | null;
+}
+
 // ── Provenance halves (the L2M trust boundary) ──────────────────────
 
 /** What the LLM said, separately from what the parser did. */
@@ -193,6 +258,27 @@ export interface EvidenceRegistryRow {
   extraction_confidence: number | null;
   flags: string[];
 
+  // ── Temporal half (mechanism timing) ──
+  // Independent of the effect-size half: a row may carry effect_size,
+  // temporal data, or both. Schema migration 20260621 adds these.
+  onset_days: number | null;
+  onset_days_ci_lower: number | null;
+  onset_days_ci_upper: number | null;
+  peak_days: number | null;
+  peak_days_ci_lower: number | null;
+  peak_days_ci_upper: number | null;
+  persistence_days: number | null;
+  persistence_days_ci_lower: number | null;
+  persistence_days_ci_upper: number | null;
+  decay_kinetics: DecayKinetics | null;
+  time_points: TimePointObservation[] | null;
+  temporal_evidence_quote: string | null;
+  temporal_extraction_method: TemporalExtractionMethod | null;
+  temporal_flags: string[];
+  temporal_llm_provenance: LlmLabelProvenance | null;
+  temporal_parser_provenance: ParserProvenance | null;
+  temporal_extraction_confidence: number | null;
+
   reviewed_by: string | null;
   reviewed_at: string | null;
   reviewer_notes: string | null;
@@ -253,6 +339,73 @@ export interface ExtractEffectSizesResult {
    *  the drawer header so the user has context on the artifact. */
   summary: string | null;
   /** Total tokens consumed (rough estimate from response usage). */
+  token_estimate: number | null;
+}
+
+// ── Temporal extraction draft ───────────────────────────────────────
+//
+// Output of the temporal-extraction primitive
+// (src/lib/extraction/extract-temporal.ts), parallel to
+// EffectSizeExtraction. Caller persists each as an evidence_registries
+// row (status='extracted', un-reviewed). A row may end up with
+// effect-size data, temporal data, or both — the temporal extractor
+// only writes the temporal half.
+
+export interface TemporalExtraction {
+  /** Local id for this extraction within one run. NOT the DB id. */
+  local_id: string;
+
+  // ── Same labels as effect-size extractions ──
+  // Lets the auto-attach pass route a temporal-only row to the same
+  // entity as a co-extracted effect-size row. Open vocabulary, no
+  // CRCI-specific values.
+  outcome_label: string | null;
+  instrument_label: string | null;
+  intervention_label: string | null;
+  comparator_label: string | null;
+  population_label: string | null;
+  study_design: string | null;
+
+  // ── Mechanism timing ──
+  /** Days from intervention start to first measurable effect. */
+  onset_days: number | null;
+  onset_days_ci_lower: number | null;
+  onset_days_ci_upper: number | null;
+  /** Days from intervention start to peak effect. */
+  peak_days: number | null;
+  peak_days_ci_lower: number | null;
+  peak_days_ci_upper: number | null;
+  /** Days the effect persists after intervention stops. */
+  persistence_days: number | null;
+  persistence_days_ci_lower: number | null;
+  persistence_days_ci_upper: number | null;
+  /** Qualitative shape of decay. */
+  decay_kinetics: DecayKinetics | null;
+  /** Repeated-measures trajectory observations. */
+  time_points: TimePointObservation[] | null;
+
+  // ── Provenance ──
+  /** Verbatim span the LLM labelled. ≤500 chars in practice. */
+  temporal_evidence_quote: string;
+  /** How the timing was derived — strict-mode pooling filters here. */
+  temporal_extraction_method: TemporalExtractionMethod;
+
+  source: SourceLocation;
+  llm_provenance: LlmLabelProvenance;
+  parser_provenance: ParserProvenance | null;
+
+  /** Combined LLM × parser confidence for the temporal half. 0..1. */
+  extraction_confidence: number;
+  /** Parser flags raised during temporal extraction. */
+  flags: string[];
+}
+
+/** Result of running the temporal primitive on one artifact. */
+export interface ExtractTemporalResult {
+  asset_id: string;
+  extractions: TemporalExtraction[];
+  generated_at: string;
+  summary: string | null;
   token_estimate: number | null;
 }
 

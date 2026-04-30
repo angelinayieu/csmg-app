@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   Tldraw,
   type Editor,
@@ -90,6 +90,8 @@ import { AppPairTetherOverlay } from "./chrome/app-pair-tether-overlay";
 // Mounted via InFrontOfTheCanvas so it lives inside the editor
 // context and can call useEditor().
 import { CanvasLegendSidebar } from "./chrome/canvas-legend-sidebar";
+import { ResearchLibraryChip } from "./chrome/research-library-chip";
+import { CommunitiesChip } from "./chrome/communities-chip";
 // Phase 8 — top-of-canvas stage indicator. Reads the latest
 // `stage_boundary` event off the run event store and renders a
 // breadth → depth → weave → test pill strip with active-chip glow.
@@ -169,6 +171,7 @@ import {
   CanvasHierarchyContext,
   useBuildHierarchyIndex,
 } from "./canvas-hierarchy-context";
+import { CardConnectModeProvider } from "./card-connect-mode-context";
 import {
   AtmosphericZoom,
   type AtmosphericZoomHandle,
@@ -350,74 +353,113 @@ const HIDDEN_TLDRAW_COMPONENTS = {
 // `useEditor()`. Combined into a single component because tldraw's
 // `InFrontOfTheCanvas` slot accepts only one component.
 //
-// The factory takes `spaceId` so the legend sidebar can fetch the
-// per-space entity catalog. Memoized at call site to avoid re-mounts
-// when other props change.
-function makeCanvasOverlays(
-  spaceId: string,
-  kgOverviewProps: { entities: Entity[]; edges: Edge[] },
-) {
-  const Overlays = function CanvasOverlays() {
-    return (
-      <>
-        <ThreadTethersOverlay />
-        {/* F4 / D14 — orthogonal flowchart tethers between paired
-            downstream apps (Cognitive Game ↔ Cognitive Measurement).
-            Mirrors the ThreadTethers pattern but renders solid +
-            right-angle paths with rounded corners rather than dashed
-            beziers. Solid stroke conveys structural relationship; the
-            mid-pill label communicates pair semantics. */}
-        <AppPairTetherOverlay spaceId={spaceId} />
-        <CanvasLegendSidebar spaceId={spaceId} />
-        <CanvasStageIndicator />
-        <CanvasLassoSystemButton spaceId={spaceId} />
-        {/* Phase 6C — sibling button: lasso → save-as-subject. Same
-            extractor, atomic /from-lasso endpoint creates both the
-            scoping System and the Subject in one POST. Spawns the
-            SubjectCard via the same window-event bridge. */}
-        <CanvasLassoSubjectButton spaceId={spaceId} />
-        {/* Phase 4 — bridges the chrome-layer +Subject button (which
-            lives outside the editor tree) to editor.createShapes
-            inside the tree. Listens for the
-            interaxis:spawn-subject-card window event. */}
-        <CanvasSubjectCardSpawner spaceId={spaceId} />
-        {/* Hydrator counterpart — fetches pre-existing subjects from
-            the DB on mount and paints SubjectCard shapes for any that
-            aren't already on the canvas. Required for template-
-            materialized spaces (where subjects exist as DB rows
-            before the canvas is ever opened) and lab-proposal-wizard
-            approvals (same situation). Idempotent + filters dupes. */}
-        <CanvasSubjectCardHydrator spaceId={spaceId} />
-        {/* KG overview — for template-seeded spaces, paints a single
-            compact mini-graph (KGFormationShape) summarizing the
-            seeded entities + edges with the top-6 hubs and their
-            real connecting edges. Replaces the old approach of
-            painting every entity as a flat row of cards. Renders
-            nothing for non-template spaces (where useSyncEntities
-            stays disabled and the pipeline produces shells/synthesis
-            cards). Idempotent. */}
-        <CanvasKgOverviewSpawner
-          spaceId={spaceId}
-          entities={kgOverviewProps.entities}
-          edges={kgOverviewProps.edges}
-        />
-        {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
-            user-triggered force-directed reflow over the main KG.
-            Lives in CanvasOverlays so it has the tldraw editor context
-            it needs to read shapes + bindings. Bottom-right above the
-            bottom dock so it's discoverable without dominating. */}
-        <div
-          className="pointer-events-none absolute bottom-20 right-6 z-30"
-          aria-label="Layout controls"
-        >
-          <RelaxLayoutButton />
-        </div>
-      </>
-    );
-  };
-  Overlays.displayName = "CanvasOverlays";
-  return Overlays;
+// CanvasOverlays is module-scope (NOT a per-render closure) so its
+// component identity is stable across renders. Previously this was a
+// factory that returned a fresh function on every entities/edges
+// length change — which caused tldraw to remount the entire overlay
+// subtree on every SSE entity arrival, producing the "blank flash"
+// during live runs. Per-overlay props (spaceId, entities, edges) now
+// flow through CanvasOverlayPropsContext, so the components prop
+// passed to <Tldraw> can be a true module-scope constant
+// (CANVAS_TLDRAW_COMPONENTS below).
+interface CanvasOverlayProps {
+  spaceId: string;
+  entities: Entity[];
+  edges: Edge[];
 }
+
+const CanvasOverlayPropsContext = createContext<CanvasOverlayProps | null>(null);
+
+function useCanvasOverlayProps(): CanvasOverlayProps {
+  const v = useContext(CanvasOverlayPropsContext);
+  if (!v) {
+    // Defensive default — if InFrontOfTheCanvas mounts before the
+    // provider (theoretically possible during a remount), render with
+    // empty data so the overlay tree doesn't throw.
+    return { spaceId: "", entities: [], edges: [] };
+  }
+  return v;
+}
+
+function CanvasOverlays() {
+  const { spaceId, entities, edges } = useCanvasOverlayProps();
+  return (
+    <>
+      <ThreadTethersOverlay />
+      {/* F4 / D14 — orthogonal flowchart tethers between paired
+          downstream apps (Cognitive Game ↔ Cognitive Measurement).
+          Mirrors the ThreadTethers pattern but renders solid +
+          right-angle paths with rounded corners rather than dashed
+          beziers. Solid stroke conveys structural relationship; the
+          mid-pill label communicates pair semantics. */}
+      <AppPairTetherOverlay spaceId={spaceId} />
+      <CanvasLegendSidebar spaceId={spaceId} />
+      {/* P4 — Research Library overview chip. Aggregates per-paper
+          stats (entities + edges + novel/shared split) into a single
+          collapsible chip top-left of the canvas. Auto-hides when
+          no asset has produced anything. Click a row → zooms to
+          that paper's contributions on canvas. */}
+      <ResearchLibraryChip />
+      {/* D8 — KG communities overview chip. Surfaces the modularity-
+          greedy partitions the decompose pipeline computed (the
+          GraphRAG-style hierarchical communities table). Auto-hides
+          when no detection run has populated the table yet. Click a
+          row → zooms to that community's entities on canvas. */}
+      <CommunitiesChip spaceId={spaceId} />
+      <CanvasStageIndicator />
+      <CanvasLassoSystemButton spaceId={spaceId} />
+      {/* Phase 6C — sibling button: lasso → save-as-subject. Same
+          extractor, atomic /from-lasso endpoint creates both the
+          scoping System and the Subject in one POST. Spawns the
+          SubjectCard via the same window-event bridge. */}
+      <CanvasLassoSubjectButton spaceId={spaceId} />
+      {/* Phase 4 — bridges the chrome-layer +Subject button (which
+          lives outside the editor tree) to editor.createShapes
+          inside the tree. Listens for the
+          interaxis:spawn-subject-card window event. */}
+      <CanvasSubjectCardSpawner spaceId={spaceId} />
+      {/* Hydrator counterpart — fetches pre-existing subjects from
+          the DB on mount and paints SubjectCard shapes for any that
+          aren't already on the canvas. Required for template-
+          materialized spaces (where subjects exist as DB rows
+          before the canvas is ever opened) and lab-proposal-wizard
+          approvals (same situation). Idempotent + filters dupes. */}
+      <CanvasSubjectCardHydrator spaceId={spaceId} />
+      {/* KG overview — for template-seeded spaces, paints a single
+          compact mini-graph (KGFormationShape) summarizing the
+          seeded entities + edges with the top-6 hubs and their
+          real connecting edges. Replaces the old approach of
+          painting every entity as a flat row of cards. Renders
+          nothing for non-template spaces (where useSyncEntities
+          stays disabled and the pipeline produces shells/synthesis
+          cards). Idempotent. */}
+      <CanvasKgOverviewSpawner
+        spaceId={spaceId}
+        entities={entities}
+        edges={edges}
+      />
+      {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
+          user-triggered force-directed reflow over the main KG.
+          Lives in CanvasOverlays so it has the tldraw editor context
+          it needs to read shapes + bindings. Bottom-right above the
+          bottom dock so it's discoverable without dominating. */}
+      <div
+        className="pointer-events-none absolute bottom-20 right-6 z-30"
+        aria-label="Layout controls"
+      >
+        <RelaxLayoutButton />
+      </div>
+    </>
+  );
+}
+CanvasOverlays.displayName = "CanvasOverlays";
+
+// Module-scope constant — referentially stable across every render of
+// InteraxisCanvas. tldraw won't remount its components subtree.
+const CANVAS_TLDRAW_COMPONENTS = {
+  ...HIDDEN_TLDRAW_COMPONENTS,
+  InFrontOfTheCanvas: CanvasOverlays,
+} as const;
 
 export interface InteraxisCanvasProps {
   space: Space;
@@ -438,20 +480,13 @@ export function InteraxisCanvas({
 }: InteraxisCanvasProps) {
   const [editor, setEditor] = useState<Editor | null>(null);
 
-  // Phase 3 — combined overlays (tether + legend sidebar) memoized
-  // per space id so the inner closure captures the right spaceId for
-  // the legend's catalog fetch.
-  const canvasTldrawComponents = useMemo(
-    () => ({
-      ...HIDDEN_TLDRAW_COMPONENTS,
-      InFrontOfTheCanvas: makeCanvasOverlays(space.id, {
-        entities,
-        edges,
-      }),
-    }),
-    // Memoize on entity/edge length so the overlay updates when the
-    // KG composition changes (template materialization, manual
-    // entity adds) without thrashing on every prop reference change.
+  // Stable context value for the InFrontOfTheCanvas overlay tree.
+  // Re-creating the object only when entities/edges length changes is
+  // enough — overlays consume length/array contents directly, not the
+  // object identity, so this minimizes context-driven re-renders
+  // without remounting the overlay components themselves.
+  const overlayPropsValue = useMemo<CanvasOverlayProps>(
+    () => ({ spaceId: space.id, entities, edges }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [space.id, entities.length, edges.length],
   );
@@ -2015,24 +2050,54 @@ export function InteraxisCanvas({
 
   useEffect(() => {
     if (!editor) return;
-    const unsubscribe = editor.store.listen(() => {
-      const hoveredId = editor.getHoveredShapeId();
-      if (!hoveredId) { setAutoConnectHover(null); return; }
-      const shape = editor.getShape(hoveredId);
-      if (!shape || shape.type !== "arrow") { setAutoConnectHover(null); return; }
-      const meta = (shape.meta ?? {}) as Record<string, unknown>;
-      if (meta.source !== "auto-connect") { setAutoConnectHover(null); return; }
-      // Compute screen-space position from the shape's page bounds.
-      const bounds = editor.getShapePageBounds(hoveredId);
-      if (!bounds) { setAutoConnectHover(null); return; }
-      const screenPt = editor.pageToScreen({ x: bounds.midX, y: bounds.minY - 8 });
-      setAutoConnectHover({
-        x: screenPt.x,
-        y: screenPt.y,
-        similarity: (meta.similarity as number) ?? 0,
-        sharedTokens: (meta.sharedTokens as string[]) ?? [],
-      });
-    }, { scope: "session" });
+    // scope: "document" — camera changes don't affect what's hovered, only
+    // shape edits do. Previously "session" fired on every pan/zoom frame
+    // and, because nothing here was wrapped in try/catch, a single throw
+    // from getShape/pageToScreen against a shape the painter had just
+    // deleted would unwind to CanvasErrorBoundary mid-pan and show the
+    // "Canvas crashed" card. Defensive try/catch + setState bailout keeps
+    // the listener cheap and crash-proof.
+    const setHoverNullStable = () =>
+      setAutoConnectHover((prev) => (prev === null ? prev : null));
+    const recompute = () => {
+      try {
+        const hoveredId = editor.getHoveredShapeId();
+        if (!hoveredId) return setHoverNullStable();
+        const shape = editor.getShape(hoveredId);
+        if (!shape || shape.type !== "arrow") return setHoverNullStable();
+        const meta = (shape.meta ?? {}) as Record<string, unknown>;
+        if (meta.source !== "auto-connect") return setHoverNullStable();
+        const bounds = editor.getShapePageBounds(hoveredId);
+        if (!bounds) return setHoverNullStable();
+        const screenPt = editor.pageToScreen({ x: bounds.midX, y: bounds.minY - 8 });
+        const nextSharedTokens = (meta.sharedTokens as string[]) ?? [];
+        const nextSimilarity = (meta.similarity as number) ?? 0;
+        setAutoConnectHover((prev) => {
+          if (
+            prev &&
+            prev.x === screenPt.x &&
+            prev.y === screenPt.y &&
+            prev.similarity === nextSimilarity &&
+            prev.sharedTokens.length === nextSharedTokens.length &&
+            prev.sharedTokens.every((t, i) => t === nextSharedTokens[i])
+          ) {
+            return prev;
+          }
+          return {
+            x: screenPt.x,
+            y: screenPt.y,
+            similarity: nextSimilarity,
+            sharedTokens: nextSharedTokens,
+          };
+        });
+      } catch {
+        // Painter may delete a shape between the hover read and the bounds
+        // read; treat as "nothing hovered" rather than tearing down the
+        // whole canvas via the error boundary.
+        setHoverNullStable();
+      }
+    };
+    const unsubscribe = editor.store.listen(recompute, { scope: "document" });
     return () => unsubscribe();
   }, [editor]);
   const clusterProposals = useMemo(
@@ -2557,6 +2622,7 @@ export function InteraxisCanvas({
     <CanvasReactionsContext.Provider value={reactionsContextValue}>
     <CanvasSubjectScopesContext.Provider value={subjectScopesContextValue}>
     <CanvasAssetDerivedEntitiesContext.Provider value={assetDerivedContextValue}>
+    <CardConnectModeProvider>
     <div
       ref={rootRef}
       className="relative h-full w-full"
@@ -2597,11 +2663,13 @@ export function InteraxisCanvas({
               placed from the server. That's the "everything
               disappears when I move the canvas" bug. One source of
               truth: the server. Do not re-add this prop. */}
-          <Tldraw
-            shapeUtils={SHAPE_UTILS}
-            components={canvasTldrawComponents}
-            onMount={(e) => setEditor(e)}
-          />
+          <CanvasOverlayPropsContext.Provider value={overlayPropsValue}>
+            <Tldraw
+              shapeUtils={SHAPE_UTILS}
+              components={CANVAS_TLDRAW_COMPONENTS}
+              onMount={(e) => setEditor(e)}
+            />
+          </CanvasOverlayPropsContext.Provider>
         </CanvasErrorBoundary>
       </BrainstormContextProvider>
 
@@ -3470,6 +3538,7 @@ export function InteraxisCanvas({
       />
       </RunEventStoreProvider>
     </div>
+    </CardConnectModeProvider>
     </CanvasAssetDerivedEntitiesContext.Provider>
     </CanvasSubjectScopesContext.Provider>
     </CanvasReactionsContext.Provider>

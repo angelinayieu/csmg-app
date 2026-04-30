@@ -21,6 +21,8 @@ export interface CanvasAssetDerivedEntitiesContextValue {
 
 const EMPTY_INDEX: AssetDerivedEntitiesIndex = {
   byAssetId: new Map(),
+  statsByAssetId: new Map(),
+  metadataByAssetId: new Map(),
   total: 0,
   loading: false,
 };

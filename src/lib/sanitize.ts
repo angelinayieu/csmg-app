@@ -641,6 +641,22 @@ export interface SanitizedEdge {
   utility: Record<string, unknown> | null;
   temporal_validity: Record<string, unknown> | null;
   topology: string | null;
+  // Phase 7 — pre-baked Phase 3 pooled temporal columns. Optional;
+  // omitted when raw doesn't carry them. Templates that ship temporal
+  // seeds populate these directly via buildEdgeRaw.
+  onset_days_p50?: number | null;
+  peak_days_p50?: number | null;
+  persistence_days_p50?: number | null;
+  decay_kinetics_modal?:
+    | "linear"
+    | "exponential"
+    | "sustained"
+    | "biphasic"
+    | "unknown"
+    | null;
+  temporal_heterogeneity_i2?: number | null;
+  temporal_evidence_count?: number | null;
+  temporal_pooled_at?: string | null;
 }
 
 /**
@@ -733,6 +749,38 @@ export function sanitizeEdge(raw: any, spaceId: string, entityIdMap: Map<string,
       }
       return deriveTopologyFromRelationshipType(raw.relationship_type);
     })(),
+    // Phase 7 — pass through pre-baked Phase 3 temporal pool when
+    // the raw row carries it (template seeded edges). Omits
+    // negative / non-finite values defensively.
+    ...(typeof raw.onset_days_p50 === "number" && raw.onset_days_p50 >= 0
+      ? { onset_days_p50: raw.onset_days_p50 }
+      : {}),
+    ...(typeof raw.peak_days_p50 === "number" && raw.peak_days_p50 >= 0
+      ? { peak_days_p50: raw.peak_days_p50 }
+      : {}),
+    ...(typeof raw.persistence_days_p50 === "number" &&
+    raw.persistence_days_p50 >= 0
+      ? { persistence_days_p50: raw.persistence_days_p50 }
+      : {}),
+    ...(raw.decay_kinetics_modal === "linear" ||
+    raw.decay_kinetics_modal === "exponential" ||
+    raw.decay_kinetics_modal === "sustained" ||
+    raw.decay_kinetics_modal === "biphasic" ||
+    raw.decay_kinetics_modal === "unknown"
+      ? { decay_kinetics_modal: raw.decay_kinetics_modal }
+      : {}),
+    ...(typeof raw.temporal_heterogeneity_i2 === "number" &&
+    raw.temporal_heterogeneity_i2 >= 0 &&
+    raw.temporal_heterogeneity_i2 <= 1
+      ? { temporal_heterogeneity_i2: raw.temporal_heterogeneity_i2 }
+      : {}),
+    ...(typeof raw.temporal_evidence_count === "number" &&
+    raw.temporal_evidence_count >= 0
+      ? { temporal_evidence_count: raw.temporal_evidence_count }
+      : {}),
+    ...(typeof raw.temporal_pooled_at === "string"
+      ? { temporal_pooled_at: raw.temporal_pooled_at }
+      : {}),
   };
 }
 

@@ -227,6 +227,48 @@ export interface SignalProfile {
    *  Weighted modestly (~0.03) initially. Tunable from real-run
    *  telemetry once the field has had time to populate. */
   consequence_breadth: number | null;
+  /** Phase 4 — `time_to_outcome` — how soon the candidate's effect
+   *  reaches the focal outcome, expressed against the user's horizon.
+   *  Computed as 1 / (1 + total_peak_days / horizon_days) along the
+   *  shortest directed path. 1 = instant, 0.5 = lands at deadline,
+   *  →0 = lands far past deadline. Null when no path, no outcome,
+   *  or any path edge lacks pooled peak_days_p50 (we don't fabricate
+   *  durations). Driven by Phase 3's edges.peak_days_p50. */
+  time_to_outcome: number | null;
+  /** Phase 4 — `persistence_match` — does the effect outlast the
+   *  user's deadline? Computed as min_persistence_days / horizon_days
+   *  along the path's bottleneck. 1 = sustained at deadline, 0 =
+   *  decays before deadline. Null when no persistence on path or no
+   *  horizon. Driven by edges.persistence_days_p50. */
+  persistence_match: number | null;
+  /** Phase 4 — `onset_alignment` — does the FIRST measurable change
+   *  fall within the user's deadline? Computed as 1 - first_onset_days
+   *  / horizon_days using the candidate's outgoing edge's onset.
+   *  1 = immediate, 0 = first effect lands past deadline. Null when
+   *  no onset known or no horizon. Driven by edges.onset_days_p50. */
+  onset_alignment: number | null;
+  /** Phase 4 — `temporal_heterogeneity_penalty` — coverage and study-
+   *  agreement signal. 1 - mean_I² across path edges; high I² (studies
+   *  disagree) drags the score down. Null when no I² data on any path
+   *  edge. Driven by edges.temporal_heterogeneity_i2. */
+  temporal_heterogeneity_penalty: number | null;
+  /** Phase 5 — `calibration_drift_temporal` — recent prediction-driven
+   *  TIMING calibration activity on edges incident to the entity.
+   *  Sourced from edge_calibrations rows with temporal_delta_days
+   *  populated (method='path_aware_temporal_v1'), normalized to [0,1]
+   *  by the max activity seen in the space.
+   *
+   *  Distinct from `calibration_drift` (which captures magnitude
+   *  drift): a high temporal-drift entity is one whose pooled timing
+   *  estimates have been shifting under reality-check feedback. The
+   *  ranker uses this to surface "stale TIMING model regions" —
+   *  candidates whose peak-day estimates have been moving rapidly
+   *  may benefit from re-decomposition or fresh evidence pull.
+   *
+   *  Null when no recent temporal calibrations OR axis-level
+   *  candidate. Weighted modestly initially — the signal is new and
+   *  we want telemetry before raising weight. */
+  calibration_drift_temporal: number | null;
 }
 
 // ── One ranked candidate (pre-LLM) ────────────────────────────────────

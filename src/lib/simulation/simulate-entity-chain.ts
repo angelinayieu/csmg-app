@@ -30,6 +30,7 @@ import {
   type EdgeDynamics,
   type EdgeSpec,
   type EdgePolarity,
+  type EdgeTemporalSpec,
   type NodeSpec,
   type SimulationResult,
 } from "./monte-carlo";
@@ -50,6 +51,50 @@ function normalizeDynamics(raw: string | null | undefined): EdgeDynamics {
   if (!raw) return "linear";
   const found = VALID_DYNAMICS.find((d) => d === raw);
   return found ?? "linear";
+}
+
+/** Phase 4 — extract per-edge temporal data from an edges row. The
+ *  fields come from migration 20260622 and are populated by the
+ *  temporal pooler (recompute-edge-temporals). Returns null when no
+ *  temporal data is present (so the caller can omit the field rather
+ *  than send a struct of nulls — the simulator skips the ramp lookup
+ *  entirely when the field is absent, preserving zero-overhead for
+ *  untimed edges). */
+function edgeTemporalFromRow(
+  row: Record<string, unknown> | null | undefined,
+): EdgeTemporalSpec | null {
+  if (!row) return null;
+  const onset = numericOrNull(row.onset_days_p50);
+  const peak = numericOrNull(row.peak_days_p50);
+  const persistence = numericOrNull(row.persistence_days_p50);
+  const decay = row.decay_kinetics_modal;
+  const hasAny =
+    onset !== null ||
+    peak !== null ||
+    persistence !== null ||
+    decay === "linear" ||
+    decay === "exponential" ||
+    decay === "sustained" ||
+    decay === "biphasic";
+  if (!hasAny) return null;
+  return {
+    onset_days: onset,
+    peak_days: peak,
+    persistence_days: persistence,
+    decay_kinetics:
+      decay === "linear" ||
+      decay === "exponential" ||
+      decay === "sustained" ||
+      decay === "biphasic" ||
+      decay === "unknown"
+        ? decay
+        : null,
+  };
+}
+
+function numericOrNull(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  return v;
 }
 
 function normalizePolarity(
@@ -123,6 +168,20 @@ export interface SimulateChainOpts {
    * both legs so the p50 delta is apples-to-apples.
    */
   integrator?: "discrete" | "ode_rk4";
+  /**
+   * Phase 4 — wall-clock weekly trajectory mode. When set, each
+   * simulation timestep represents one week and per-edge temporal
+   * data (sourced from edges.{onset,peak,persistence}_days_p50 +
+   * decay_kinetics_modal) is consumed by the engine to ramp / sustain
+   * / decay each edge's contribution over time. Runs in the discrete
+   * integrator (only path that records per-step state); the
+   * `integrator` opt is overridden internally when this is set.
+   *
+   * Returns per-week NodeWeeklyDistribution snapshots in
+   * `simulation.trajectory[]` so the caller can render a Gantt-style
+   * trajectory chart — what the temporal-rigor plan needs in P5.
+   */
+  weeklyHorizon?: number | null;
 }
 
 /**
@@ -378,6 +437,12 @@ export async function simulateEntityChain(
         conditionText: text.length > 0 ? text.slice(0, 200) : null,
       });
     }
+    // Phase 4 — pass per-edge temporal data through to the simulator
+    // when present on the row. The discrete simulator only consumes
+    // it in weekly mode (weeklyHorizon set); otherwise the field is
+    // a harmless no-op. Sourced from edges.{onset,peak,persistence}_days_p50
+    // + decay_kinetics_modal (populated by Phase 3's temporal pooler).
+    const temporal = edgeTemporalFromRow(e);
     return {
       sourceId: e.source_entity_id,
       targetId: e.target_entity_id,
@@ -389,6 +454,7 @@ export async function simulateEntityChain(
           ? (e.dynamics_properties as Record<string, number>)
           : undefined,
       conditionGate,
+      ...(temporal ? { temporal } : {}),
     };
   });
 
@@ -399,6 +465,9 @@ export async function simulateEntityChain(
     timesteps: opts.timesteps,
     seed: opts.seed,
     integrator: opts.integrator,
+    ...(opts.weeklyHorizon !== undefined && opts.weeklyHorizon !== null
+      ? { weeklyHorizon: opts.weeklyHorizon }
+      : {}),
   });
 
   const targetNodeDist = simulation.nodes.find(
@@ -632,6 +701,9 @@ async function simulateEntityChainFromSnapshot(
         conditionText: text.length > 0 ? text.slice(0, 200) : null,
       });
     }
+    // Phase 4 — same temporal-data pass-through as the live path so
+    // snapshot-mode replays can also exercise weekly trajectories.
+    const temporal = edgeTemporalFromRow(e as unknown as Record<string, unknown>);
     return {
       sourceId: e.source_entity_id,
       targetId: e.target_entity_id,
@@ -643,6 +715,7 @@ async function simulateEntityChainFromSnapshot(
           ? (e.dynamics_properties as Record<string, number>)
           : undefined,
       conditionGate,
+      ...(temporal ? { temporal } : {}),
     };
   });
 
@@ -653,6 +726,9 @@ async function simulateEntityChainFromSnapshot(
     timesteps: opts.timesteps,
     seed: opts.seed,
     integrator: opts.integrator,
+    ...(opts.weeklyHorizon !== undefined && opts.weeklyHorizon !== null
+      ? { weeklyHorizon: opts.weeklyHorizon }
+      : {}),
   });
 
   const targetNodeDist = simulation.nodes.find(

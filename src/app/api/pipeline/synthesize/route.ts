@@ -2515,6 +2515,53 @@ REQUIREMENTS FOR THIS PASS:
         // catches those escapes and marks the run failed so the
         // client sees a proper end state instead of an endless spinner.
         try {
+        // Soft-fail hop helper. Uniform structure for the 4 chain hops
+        // that precede the terminal strategy-refresh. Catches both
+        // thrown errors AND non-OK HTTP responses (a 500 from a hop
+        // route used to be silently ignored — the chain proceeded as
+        // if it succeeded). Always logs a `[synthesize:degraded]` line
+        // with the hop name + reason + the downstream impact, so a
+        // failure is greppable in logs and traceable to its effect.
+        const runChainHop = async (
+          hopName: string,
+          url: string,
+          body: object,
+          timeoutMs: number,
+          downstreamImpact: string,
+        ): Promise<void> => {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+          try {
+            const res = await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Cookie: cookieHeader,
+              },
+              body: JSON.stringify(body),
+              signal: ctrl.signal,
+            });
+            clearTimeout(timer);
+            if (!res.ok) {
+              console.warn(
+                `[synthesize:degraded] hop=${hopName} status=${res.status} ${res.statusText} — ${downstreamImpact}`,
+              );
+            }
+          } catch (err) {
+            clearTimeout(timer);
+            const name = (err as { name?: string })?.name;
+            const reason =
+              name === "AbortError"
+                ? `timeout(${timeoutMs}ms)`
+                : err instanceof Error
+                  ? err.message
+                  : String(err);
+            console.warn(
+              `[synthesize:degraded] hop=${hopName} reason=${reason} — ${downstreamImpact}`,
+            );
+          }
+        };
+
         // ── Hop 0: why-chain-deepen (LLM, adds causal depth) ──────
         //
         // Before the root-tracer can find keystone causes, the causal
@@ -2528,27 +2575,18 @@ REQUIREMENTS FOR THIS PASS:
         // 60-90s realistically. SOFT-FAIL: if this whole hop dies,
         // root-trace just runs on the shallower graph — no regression
         // vs the pre-deepener behavior.
-        try {
-          const wcCtrl = new AbortController();
-          const wcTimeout = setTimeout(() => wcCtrl.abort(), 120_000);
-          await fetch(`${origin}/api/pipeline/decompose-why-chain`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Cookie: cookieHeader,
-            },
-            body: JSON.stringify({
-              space_id: chainedSpaceId,
-              run_id: chainedRunId,
-              max_threads: 6,
-              concurrency: 3,
-            }),
-            signal: wcCtrl.signal,
-          });
-          clearTimeout(wcTimeout);
-        } catch (wcErr) {
-          console.warn("[synthesize] why-chain-deepen soft-fail:", wcErr);
-        }
+        await runChainHop(
+          "why-chain-deepen",
+          `${origin}/api/pipeline/decompose-why-chain`,
+          {
+            space_id: chainedSpaceId,
+            run_id: chainedRunId,
+            max_threads: 6,
+            concurrency: 3,
+          },
+          120_000,
+          "root-trace will run on shallower graph (fan-in diagram won't materialize)",
+        );
 
         // ── Hop 0.5: audit-edges (independent edge reviewer) ──────
         //
@@ -2563,25 +2601,13 @@ REQUIREMENTS FOR THIS PASS:
         // the default single-perspective behavior. 60s timeout
         // covers a space with ~300 edges at 70 per LLM batch with
         // concurrency 3.
-        try {
-          const auditCtrl = new AbortController();
-          const auditTimeout = setTimeout(() => auditCtrl.abort(), 60_000);
-          await fetch(`${origin}/api/pipeline/audit-edges`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Cookie: cookieHeader,
-            },
-            body: JSON.stringify({
-              space_id: chainedSpaceId,
-              run_id: chainedRunId,
-            }),
-            signal: auditCtrl.signal,
-          });
-          clearTimeout(auditTimeout);
-        } catch (auditErr) {
-          console.warn("[synthesize] audit-edges soft-fail:", auditErr);
-        }
+        await runChainHop(
+          "audit-edges",
+          `${origin}/api/pipeline/audit-edges`,
+          { space_id: chainedSpaceId, run_id: chainedRunId },
+          60_000,
+          "edges.agent_feedback stays empty; strategizer falls back to single-perspective signals",
+        );
 
         // ── Hop 1: root-trace (backward BFS, pure structure) ──────
         //
@@ -2590,26 +2616,13 @@ REQUIREMENTS FOR THIS PASS:
         // strategizer's root-cause signals (convergence_count,
         // causal_depth_normalized) have non-null input. No LLM; 5s
         // timeout is plenty for the BFS + persist loop.
-        try {
-          const rootCtrl = new AbortController();
-          const rootTimeout = setTimeout(() => rootCtrl.abort(), 8000);
-          await fetch(`${origin}/api/pipeline/root-trace`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Cookie: cookieHeader,
-            },
-            body: JSON.stringify({
-              space_id: chainedSpaceId,
-              run_id: chainedRunId,
-              top_n: 10,
-            }),
-            signal: rootCtrl.signal,
-          });
-          clearTimeout(rootTimeout);
-        } catch (rootErr) {
-          console.warn("[synthesize] root-trace soft-fail:", rootErr);
-        }
+        await runChainHop(
+          "root-trace",
+          `${origin}/api/pipeline/root-trace`,
+          { space_id: chainedSpaceId, run_id: chainedRunId, top_n: 10 },
+          8000,
+          "entities lack causal_depth/converges_chains; strategizer's root-cause signals will be null",
+        );
 
         // ── Hop 2: materialize-signatures (seed only, no LLM) ─────
         //
@@ -2618,25 +2631,13 @@ REQUIREMENTS FOR THIS PASS:
         // 2/9 signals return null and the ranker silently degrades.
         // 8s timeout is generous — seeding a few hundred entities
         // takes single-digit seconds with no model calls.
-        try {
-          const sigCtrl = new AbortController();
-          const sigTimeout = setTimeout(() => sigCtrl.abort(), 8000);
-          await fetch(`${origin}/api/pipeline/materialize-signatures`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Cookie: cookieHeader,
-            },
-            body: JSON.stringify({
-              space_id: chainedSpaceId,
-              run_id: chainedRunId,
-            }),
-            signal: sigCtrl.signal,
-          });
-          clearTimeout(sigTimeout);
-        } catch (sigErr) {
-          console.warn("[synthesize] materialize-signatures soft-fail:", sigErr);
-        }
+        await runChainHop(
+          "materialize-signatures",
+          `${origin}/api/pipeline/materialize-signatures`,
+          { space_id: chainedSpaceId, run_id: chainedRunId },
+          8000,
+          "2/9 strategizer signals (uncertainty, controllability) will return null",
+        );
 
         // ── Hop 3: space-strategizer (plans work into queue) ──────
         //
@@ -2644,26 +2645,17 @@ REQUIREMENTS FOR THIS PASS:
         // strategy-refresh still running if the plan can't be built.
         // 15s timeout accounts for the one LLM call (~4s) plus
         // signal computation (sub-second for normal space sizes).
-        try {
-          const planCtrl = new AbortController();
-          const planTimeout = setTimeout(() => planCtrl.abort(), 15000);
-          await fetch(`${origin}/api/pipeline/space-strategizer`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Cookie: cookieHeader,
-            },
-            body: JSON.stringify({
-              space_id: chainedSpaceId,
-              run_id: chainedRunId,
-              budget_tokens: 4000,
-            }),
-            signal: planCtrl.signal,
-          });
-          clearTimeout(planTimeout);
-        } catch (planErr) {
-          console.warn("[synthesize] space-strategizer soft-fail:", planErr);
-        }
+        await runChainHop(
+          "space-strategizer",
+          `${origin}/api/pipeline/space-strategizer`,
+          {
+            space_id: chainedSpaceId,
+            run_id: chainedRunId,
+            budget_tokens: 4000,
+          },
+          15000,
+          "space_work_queue stays empty; strategy-refresh runs without prioritized work items",
+        );
 
         // ── Hop 4: strategy-refresh (terminal user-facing hop) ────
         const ctrl = new AbortController();

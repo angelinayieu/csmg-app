@@ -36,6 +36,14 @@ const MAX_ITERATIONS = 5000;
 const MAX_TIMESTEPS = 100;
 const MAX_NODES = 200;
 const MAX_EDGES = 1000;
+// Phase 4 — weekly trajectory mode caps. 156 weeks ≈ 3 years; far
+// beyond what any clinical literature reports, but lets a long-horizon
+// strategy explore until it's confident things plateau or wash out.
+// Per-week storage is iterations × weeks × nodes scalars; at the
+// caps that's 5000 × 156 × 200 ≈ 1.5GB if all maxed simultaneously.
+// In practice nodes ≪ 200 and iterations ≪ 5000 so realistic memory
+// stays under 50MB. Hard cap protects against pathological calls.
+const MAX_WEEKLY_HORIZON = 156;
 
 const VALID_DYNAMICS: EdgeDynamics[] = [
   "linear",
@@ -78,6 +86,12 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+      // Phase 4 — accept weeklyHorizon for chain mode. When set the
+      // engine runs in weekly trajectory mode (each timestep = 1
+      // week, edges respect their temporal ramps from edges.peak_days_p50
+      // etc.). Capped via clampNum so a pathological body doesn't
+      // explode memory.
+      const weeklyHorizon = clampNum(body.weeklyHorizon, MAX_WEEKLY_HORIZON);
       const result = await simulateEntityChain(supabase, {
         spaceId,
         targetEntityId,
@@ -88,6 +102,7 @@ export async function POST(req: NextRequest) {
         iterations: clampNum(body.iterations, MAX_ITERATIONS),
         timesteps: clampNum(body.timesteps, MAX_TIMESTEPS),
         seed: typeof body.seed === "number" ? Math.floor(body.seed) : undefined,
+        weeklyHorizon: weeklyHorizon ?? null,
       });
       if (result.error) {
         return NextResponse.json({ error: result.error }, { status: 400 });
@@ -200,7 +215,43 @@ function parseSpec(
       e.params && typeof e.params === "object"
         ? (e.params as Record<string, number>)
         : undefined;
-    edges.push({ sourceId, targetId, strength, dynamics, polarity, params });
+    // Phase 4 — accept temporal data per edge so callers can pass
+    // edges.{onset,peak,persistence}_days_p50 + decay_kinetics_modal
+    // directly through. Validated softly (numeric + non-negative);
+    // bad fields are dropped silently so a partial payload still runs.
+    const temporalRaw =
+      e.temporal && typeof e.temporal === "object"
+        ? (e.temporal as Record<string, unknown>)
+        : null;
+    const temporal = temporalRaw
+      ? {
+          onset_days: numField(temporalRaw.onset_days),
+          peak_days: numField(temporalRaw.peak_days),
+          persistence_days: numField(temporalRaw.persistence_days),
+          decay_kinetics:
+            temporalRaw.decay_kinetics === "linear" ||
+            temporalRaw.decay_kinetics === "exponential" ||
+            temporalRaw.decay_kinetics === "sustained" ||
+            temporalRaw.decay_kinetics === "biphasic" ||
+            temporalRaw.decay_kinetics === "unknown"
+              ? (temporalRaw.decay_kinetics as
+                  | "linear"
+                  | "exponential"
+                  | "sustained"
+                  | "biphasic"
+                  | "unknown")
+              : null,
+        }
+      : null;
+    edges.push({
+      sourceId,
+      targetId,
+      strength,
+      dynamics,
+      polarity,
+      params,
+      ...(temporal ? { temporal } : {}),
+    });
   }
 
   const iterations = Math.min(
@@ -215,11 +266,31 @@ function parseSpec(
       : 10,
     MAX_TIMESTEPS,
   );
+  // Phase 4 — when caller sets weeklyHorizon, the engine uses it as
+  // the effective timestep count and applies temporal ramp factors
+  // per edge (see runMonteCarlo). When unset, legacy behavior.
+  const weeklyHorizonRaw = body.weeklyHorizon;
+  const weeklyHorizon =
+    typeof weeklyHorizonRaw === "number" && weeklyHorizonRaw > 0
+      ? Math.min(Math.floor(weeklyHorizonRaw), MAX_WEEKLY_HORIZON)
+      : null;
   const seed =
     typeof body.seed === "number" ? Math.floor(body.seed) : undefined;
 
   return {
     ok: true,
-    spec: { nodes, edges, iterations, timesteps, ...(seed !== undefined ? { seed } : {}) },
+    spec: {
+      nodes,
+      edges,
+      iterations,
+      timesteps,
+      ...(seed !== undefined ? { seed } : {}),
+      ...(weeklyHorizon !== null ? { weeklyHorizon } : {}),
+    },
   };
+}
+
+function numField(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return null;
+  return v;
 }

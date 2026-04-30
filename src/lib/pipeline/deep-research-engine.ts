@@ -79,6 +79,27 @@ export function buildEnrichedPrompt(config: DeepResearchRunConfig): string {
     `7. Distinguish between peer-reviewed/official sources and opinion/blog sources.`
   );
 
+  // Phase 2 — temporal-rigor instructions. The downstream bridge
+  // service runs the L2M-disciplined extract-effect-sizes and
+  // extract-temporal parsers over the report text to produce
+  // evidence_registries rows. The parsers want VERBATIM quotes that
+  // contain numbers, not paraphrases. This block instructs the
+  // research model to surface those quotes WHENEVER it finds them
+  // — without demanding the model itself extract numbers (the L2M
+  // discipline says LLMs are bad at numeric extraction).
+  sections.push(
+    `## Temporal Findings — REQUIRED when timing data exists\n` +
+    `The downstream pipeline extracts MECHANISM TIMING claims (onset, peak, persistence, decay) from your report alongside effect sizes. Mechanism timing means WHEN the body responds to the intervention — distinct from MEASUREMENT timing (when the study LOOKED).\n\n` +
+    `Whenever a source reports timing, INCLUDE THE VERBATIM QUOTE in your report. Do NOT paraphrase numbers — preserve the original phrasing that contains the day/week/month value. Examples of timing claims to preserve verbatim:\n` +
+    `  • "Improvements were detectable from week 2 onwards."\n` +
+    `  • "Peak benefit occurred at approximately week 6."\n` +
+    `  • "Effects were sustained at the 6-month follow-up."\n` +
+    `  • "T½ of the cognitive benefit was approximately 30 days."\n` +
+    `  • A trajectory table reporting outcomes at week 0, 4, 8, 12.\n\n` +
+    `Skip MEASUREMENT timing alone — phrases like "outcomes were assessed at 8 weeks" or "patients were followed for 12 months" describe when the study LOOKED, not when the body responded. Those are not mechanism timing.\n\n` +
+    `Effect-size statements should likewise be quoted verbatim ("Cohen's d = 0.42 (95% CI 0.18, 0.66)") — paraphrased numbers (0.4-ish) cannot be parsed reliably and will not feed the rigor pipeline.`
+  );
+
   return sections.join("\n\n---\n\n");
 }
 

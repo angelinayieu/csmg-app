@@ -32,6 +32,7 @@ export interface DeepenInput {
   space_id: string;
   importance: string | null;
   layer: string | null;
+  is_decomposable?: boolean;
 }
 
 export interface DeepenResult {
@@ -351,4 +352,242 @@ export async function findExistingChildren(
     }> | null;
   };
   return children ?? [];
+}
+
+// ── Multi-level recursive deepen ───────────────────────────────────
+
+export type DeepenDepth = "light" | "medium" | "deep" | "first_principles";
+
+const DEPTH_LEVELS: Record<DeepenDepth, number> = {
+  light: 1,
+  medium: 2,
+  deep: 3,
+  first_principles: 4,
+};
+
+// Hard cap on LLM calls per request — keeps the synchronous route
+// inside its 60s budget. first_principles runs hit this before going
+// rogue. ~8 calls × ~4s avg ≈ 32s worst case, leaving headroom.
+const MAX_LLM_CALLS_PER_REQUEST = 8;
+
+export interface RecursiveChildNode {
+  id: string;
+  entity_id: string;
+  name: string;
+  description: string | null;
+  importance: string;
+  layer: string | null;
+  is_decomposable: boolean;
+  grandchildren: RecursiveChildNode[];
+}
+
+export interface RecursiveDeepenResult {
+  parent_entity_id: string;
+  depth_requested: DeepenDepth;
+  depth_reached: number;
+  children: RecursiveChildNode[];
+  total_entities_created: number;
+  total_edges: number;
+  llm_calls_used: number;
+  budget_exhausted: boolean;
+  already_deepened: boolean;
+}
+
+/**
+ * Recursive deepen — runs `deepenEntity` repeatedly down to the
+ * requested depth. Stops early when:
+ *   • LLM call budget exhausted (MAX_LLM_CALLS_PER_REQUEST)
+ *   • Child has reached the atom layer (no further decomposition
+ *     makes sense)
+ *   • Child was already deepened previously (we surface those
+ *     children but don't recurse — they were the user's prior choice)
+ *
+ * For "already_deepened" parents, we DO still recurse into their
+ * existing children up to the requested depth, since the user is
+ * asking to go deeper than before.
+ */
+export async function deepenEntityRecursive(
+  db: AnyDb,
+  target: DeepenInput,
+  depth: DeepenDepth,
+): Promise<RecursiveDeepenResult> {
+  const maxLevels = DEPTH_LEVELS[depth];
+  const state = {
+    llmCalls: 0,
+    entitiesCreated: 0,
+    edgesCreated: 0,
+    depthReached: 0,
+  };
+
+  // Resolve the existing-children case at the root: if the root was
+  // already deepened, we surface its existing children instead of
+  // running the LLM again. We still recurse into them.
+  const rootExisting = await findExistingChildren(db, target.id, target.space_id);
+  const alreadyDeepened = rootExisting.length > 0;
+
+  let rootChildrenFlat: DeepenResult["children"];
+  if (alreadyDeepened) {
+    rootChildrenFlat = rootExisting;
+  } else {
+    if (state.llmCalls >= MAX_LLM_CALLS_PER_REQUEST) {
+      return {
+        parent_entity_id: target.id,
+        depth_requested: depth,
+        depth_reached: 0,
+        children: [],
+        total_entities_created: 0,
+        total_edges: 0,
+        llm_calls_used: 0,
+        budget_exhausted: true,
+        already_deepened: false,
+      };
+    }
+    const result = await deepenEntity(db, target);
+    state.llmCalls += 1;
+    state.entitiesCreated += result.children.length;
+    state.edgesCreated += result.edges;
+    rootChildrenFlat = result.children;
+  }
+
+  if (rootChildrenFlat.length > 0) state.depthReached = 1;
+
+  const tree: RecursiveChildNode[] = [];
+  for (const child of rootChildrenFlat) {
+    const childInput = await loadDeepenInput(db, child.id);
+    const node: RecursiveChildNode = {
+      id: child.id,
+      entity_id: child.entity_id,
+      name: child.name,
+      description: child.description,
+      importance: child.importance,
+      layer: childInput?.layer ?? null,
+      is_decomposable: childInput?.is_decomposable ?? false,
+      grandchildren: [],
+    };
+    if (maxLevels > 1 && childInput) {
+      await recurseInto(db, childInput, node, 2, maxLevels, state);
+    }
+    tree.push(node);
+  }
+
+  return {
+    parent_entity_id: target.id,
+    depth_requested: depth,
+    depth_reached: state.depthReached,
+    children: tree,
+    total_entities_created: state.entitiesCreated,
+    total_edges: state.edgesCreated,
+    llm_calls_used: state.llmCalls,
+    budget_exhausted: state.llmCalls >= MAX_LLM_CALLS_PER_REQUEST,
+    already_deepened: alreadyDeepened,
+  };
+}
+
+async function recurseInto(
+  db: AnyDb,
+  parent: DeepenInput,
+  parentNode: RecursiveChildNode,
+  currentLevel: number,
+  maxLevels: number,
+  state: {
+    llmCalls: number;
+    entitiesCreated: number;
+    edgesCreated: number;
+    depthReached: number;
+  },
+): Promise<void> {
+  // Atom layer = nothing left to decompose meaningfully.
+  if (parent.layer === "atom") return;
+  // Already deepened previously — surface existing children + recurse
+  // into them, but don't spend an LLM call on this level.
+  const existing = await findExistingChildren(db, parent.id, parent.space_id);
+  let layerChildren: DeepenResult["children"];
+  if (existing.length > 0) {
+    layerChildren = existing;
+  } else {
+    if (!parent.is_decomposable) return;
+    if (state.llmCalls >= MAX_LLM_CALLS_PER_REQUEST) return;
+    const result = await deepenEntity(db, parent);
+    state.llmCalls += 1;
+    state.entitiesCreated += result.children.length;
+    state.edgesCreated += result.edges;
+    layerChildren = result.children;
+  }
+
+  if (layerChildren.length > 0 && currentLevel > state.depthReached) {
+    state.depthReached = currentLevel;
+  }
+
+  for (const child of layerChildren) {
+    const childInput = await loadDeepenInput(db, child.id);
+    const node: RecursiveChildNode = {
+      id: child.id,
+      entity_id: child.entity_id,
+      name: child.name,
+      description: child.description,
+      importance: child.importance,
+      layer: childInput?.layer ?? null,
+      is_decomposable: childInput?.is_decomposable ?? false,
+      grandchildren: [],
+    };
+    if (currentLevel < maxLevels && childInput) {
+      await recurseInto(db, childInput, node, currentLevel + 1, maxLevels, state);
+    }
+    parentNode.grandchildren.push(node);
+  }
+}
+
+async function loadDeepenInput(
+  db: AnyDb,
+  entityUuid: string,
+): Promise<DeepenInput | null> {
+  const { data } = (await db
+    .from("entities")
+    .select(
+      "id, entity_id, space_id, name, description, importance, layer, is_decomposable",
+    )
+    .eq("id", entityUuid)
+    .maybeSingle()) as {
+    data: {
+      id: string;
+      entity_id: string;
+      space_id: string;
+      name: string;
+      description: string | null;
+      importance: string | null;
+      layer: string | null;
+      is_decomposable: boolean;
+    } | null;
+  };
+  return data;
+}
+
+export function flattenRecursiveChildren(
+  nodes: RecursiveChildNode[],
+): Array<{
+  id: string;
+  entity_id: string;
+  name: string;
+  description: string | null;
+  importance: string;
+}> {
+  const out: Array<{
+    id: string;
+    entity_id: string;
+    name: string;
+    description: string | null;
+    importance: string;
+  }> = [];
+  function walk(n: RecursiveChildNode) {
+    out.push({
+      id: n.id,
+      entity_id: n.entity_id,
+      name: n.name,
+      description: n.description,
+      importance: n.importance,
+    });
+    for (const g of n.grandchildren) walk(g);
+  }
+  for (const n of nodes) walk(n);
+  return out;
 }

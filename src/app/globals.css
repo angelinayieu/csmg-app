@@ -85,9 +85,35 @@
   /* Motion — spring timings */
   --ease-spring-soft: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-spring-tight: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --ease-out-quart: cubic-bezier(0.22, 1, 0.36, 1);
   --dur-quick: 120ms;
   --dur-normal: 220ms;
   --dur-soft: 360ms;
+  /* Rail motion grammar (skips 200/300 to avoid generic feel) */
+  --dur-rail-micro: 140ms;
+  --dur-rail-short: 240ms;
+  --dur-rail-medium: 360ms;
+  --dur-rail-cinematic: 480ms;
+
+  /* ── Right-rail tokens ───────────────────────────────────────── */
+  /* State zone — settled, anchor-grade. Inherits white via no fill. */
+  --rail-state-title: rgba(85, 100, 121, 0.85);
+
+  /* Live zone — fluid, attention without anxiety. */
+  --rail-live-bg:
+    linear-gradient(
+      180deg,
+      rgba(8, 108, 232, 0.04) 0%,
+      rgba(8, 108, 232, 0.01) 60%,
+      transparent 100%
+    );
+  --rail-live-streaming: #22c55e;
+  --rail-live-count: #ef4444;
+
+  /* Probe trail — spatial reasoning unfurl on canvas. */
+  --trail-edge: rgba(85, 100, 121, 0.4);
+  --trail-glow: rgba(8, 108, 232, 0.4);
+  --trail-result-ring: rgba(255, 184, 0, 0.5);
 }
 
 /* Dark theme glass — smoke glass instead of frost */
@@ -1850,5 +1876,109 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .animate-pulse-panel-enter {
     animation: none;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────────
+   Right-rail motion grammar
+   ─────────────────────────────────────────────────────────────────── */
+
+/* Streaming dot — quiet breath, never blinks. 2.4s cycle matches the
+   kg-drill-halo-pulse so all "I'm alive and working" surfaces share
+   the same cadence. */
+@keyframes rail-streaming-breath {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1.0;  transform: scale(1.15); }
+}
+.rail-streaming-breath {
+  animation: rail-streaming-breath 2400ms ease-in-out infinite;
+}
+
+/* Live item arrival — the rail's primary "new thing landed" gesture.
+   Fade + 6px Y from above, settle with the standard ease-out-quart.
+   Runs once on mount. */
+@keyframes rail-arrival-enter {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.rail-arrival-enter {
+  animation: rail-arrival-enter 360ms var(--ease-out-quart) both;
+}
+
+/* Count badge pop — appears on first arrival, settles with overshoot.
+   Spring (1.56) is intentional — feels alive without being loud. */
+@keyframes rail-count-pop {
+  0%   { opacity: 0; transform: scale(0); }
+  60%  { opacity: 1; transform: scale(1.18); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.rail-count-pop {
+  animation: rail-count-pop 320ms var(--ease-spring-soft) both;
+}
+
+/* Live-zone ambient pulse — the gradient tint barely breathes,
+   signaling the zone is live without being distracting. ~5% opacity
+   variation, very slow cycle. */
+@keyframes rail-live-zone-pulse {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 1; }
+}
+.rail-live-zone-pulse {
+  animation: rail-live-zone-pulse 6000ms ease-in-out infinite;
+}
+
+/* Probe trail — active node glow. Same 2.4s cadence as streaming dot
+   so the user reads "active work" consistently across the app. */
+@keyframes trail-glow-breath {
+  0%, 100% {
+    box-shadow:
+      0 0 0 0 rgba(8, 108, 232, 0.0),
+      0 0 18px 0 rgba(8, 108, 232, 0.18);
+  }
+  50% {
+    box-shadow:
+      0 0 0 0 rgba(8, 108, 232, 0.0),
+      0 0 22px 4px rgba(8, 108, 232, 0.42);
+  }
+}
+.trail-glow-breath {
+  animation: trail-glow-breath 2400ms ease-in-out infinite;
+}
+
+/* Probe trail — edge draw-on. Uses stroke-dashoffset; the dasharray is
+   set inline by the component (path length-aware). */
+@keyframes trail-edge-draw {
+  from { stroke-dashoffset: var(--trail-len, 100); }
+  to   { stroke-dashoffset: 0; }
+}
+.trail-edge-draw {
+  animation: trail-edge-draw 600ms var(--ease-out-quart) forwards;
+}
+
+/* Probe trail — node settle. Soft scale-in when a step completes. */
+@keyframes trail-node-settle {
+  from { opacity: 0; transform: scale(0.9); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.trail-node-settle {
+  animation: trail-node-settle 320ms var(--ease-spring-soft) both;
+}
+
+/* Reduced-motion guards — drop motion to instant or opacity-only. */
+@media (prefers-reduced-motion: reduce) {
+  .rail-streaming-breath,
+  .rail-live-zone-pulse,
+  .trail-glow-breath {
+    animation: none;
+  }
+  .rail-arrival-enter,
+  .rail-count-pop,
+  .trail-node-settle {
+    animation-duration: 1ms;
+    animation-timing-function: linear;
+  }
+  .trail-edge-draw {
+    animation: none;
+    stroke-dashoffset: 0;
   }
 }

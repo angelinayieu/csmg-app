@@ -269,5 +269,42 @@ export async function PATCH(
     );
   }
 
+  // Phase 3 — temporal pool freshness. When the action changes pool
+  // composition (reject removes a row; attach/detach changes which
+  // edge sees it; edit_numerics may change the values being pooled),
+  // repool the space's edges so onset/peak/persistence on edges
+  // reflect the new evidence state. Soft-fail discipline: pool errors
+  // never propagate (caller got the updated row).
+  //
+  // We don't repool on `approve` because the existing temporal pooler
+  // (like the effect-size pooler) accepts both 'extracted' and
+  // 'reviewed' rows — the pool composition is unchanged. If we ever
+  // run strict-mode pooling that requires status='reviewed', flip
+  // shouldRepool below.
+  //
+  // NOTE: this PATCH path does NOT also re-trigger the effect-size
+  // pool today. That asymmetry is intentional within the scope of
+  // Phase 3; effect-size pool freshness on PATCH is a pre-existing
+  // gap that should be fixed in a follow-up so the two halves stay
+  // in lockstep.
+  const shouldRepoolTemporal =
+    body.action === "reject" ||
+    body.action === "attach_entity" ||
+    body.action === "detach_entity" ||
+    body.action === "edit_numerics";
+  if (shouldRepoolTemporal) {
+    try {
+      const { recomputeEdgeTemporalsForSpace } = await import(
+        "@/lib/evidence/recompute-edge-temporals"
+      );
+      await recomputeEdgeTemporalsForSpace(db, spaceId);
+    } catch (err) {
+      console.warn(
+        "[evidence PATCH] temporal repool soft-failed:",
+        err,
+      );
+    }
+  }
+
   return NextResponse.json({ row: updated as EvidenceRegistryRow });
 }

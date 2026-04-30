@@ -591,7 +591,7 @@ export async function POST(request: Request) {
                   reasoningDepth,
                   autoAdvance: true,
                 },
-              },
+              } satisfies import("@/types/kg-generation-plan").KgPlanHandoffContext,
             }),
           },
           45_000,

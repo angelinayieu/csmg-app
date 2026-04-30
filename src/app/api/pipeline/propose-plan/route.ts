@@ -47,7 +47,7 @@ import {
   emitStructuralEvent,
   completePipelineRun,
 } from "@/lib/events/structural-event-bus";
-import type { KgPlanMode } from "@/types/kg-generation-plan";
+import type { KgPlanMode, KgPlanHandoffContext } from "@/types/kg-generation-plan";
 import type { LayerOntologyTemplate } from "@/types/layer-ontology";
 
 export const maxDuration = 180;
@@ -63,15 +63,7 @@ interface RequestBody {
    *  plan row so the approve route can fire decompose with the same
    *  reservationId / intake_run_id / inputs. Null when called via
    *  direct API (no bootstrap chain). */
-  pipeline_handoff_context?: {
-    reservation_id: string;
-    intake_run_id: string;
-    decompose_input: {
-      text: string;
-      reasoningDepth: "quick" | "standard" | "deep";
-      autoAdvance: boolean;
-    };
-  };
+  pipeline_handoff_context?: KgPlanHandoffContext;
 }
 
 interface IngestedFileRow {

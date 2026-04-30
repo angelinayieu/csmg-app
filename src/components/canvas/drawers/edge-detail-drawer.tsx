@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 import { X, ArrowRight, TrendingUp, TrendingDown, Minus, Zap, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Ring } from "@/components/ui/ring";
+import { EdgeTimingSection } from "@/components/flights/edge-timing-section";
 import type { Edge, Entity, Claim } from "@/types";
 
 export interface EdgeDetailDrawerProps {
@@ -244,6 +245,10 @@ export function EdgeDetailDrawer({ edgeId, onClose }: EdgeDetailDrawerProps) {
             )}
           </div>
         </div>
+
+        {/* Phase 6 — Phase 3 pooled temporal pool. Renders nothing
+            when no temporal data has been pooled for this edge. */}
+        <EdgeTimingSection edge={ae as Parameters<typeof EdgeTimingSection>[0]["edge"]} />
 
         {ae.utility?.failure_consequence && (
           <div>

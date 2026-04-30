@@ -455,6 +455,85 @@ export async function POST(request: Request) {
       }
     }
 
+    // ── Step 5c — Phase 7: pre-baked flights ────────────────────
+    //
+    // Templates may ship pre-baked named pathways through the seed
+    // graph. Each flight references seed_ids; we resolve to entity
+    // UUIDs via the seedIdToEntityUuid map, then insert a flights row
+    // with origin='template_seeded'. Soft-fail per flight: a flight
+    // citing a seed_id that didn't materialize (entity drop during
+    // sanitize) is skipped with a warning. Score breakdown is left
+    // null at insert time — the next strategizer run computes the
+    // real breakdown from the freshly-pooled edges' Phase 3+5
+    // columns.
+    let flightsInserted = 0;
+    if (Array.isArray(template.seed_flights) && template.seed_flights.length > 0) {
+      const flightRows: Array<Record<string, unknown>> = [];
+      for (const seedFlight of template.seed_flights) {
+        const stepEntityIds: string[] = [];
+        let unresolved = false;
+        for (const seedId of seedFlight.step_seed_ids) {
+          const uuid = seedIdToEntityUuid.get(seedId);
+          if (!uuid) {
+            unresolved = true;
+            break;
+          }
+          stepEntityIds.push(uuid);
+        }
+        if (unresolved || stepEntityIds.length < 2) {
+          warnings.push(
+            `flights: skipping ${seedFlight.seed_id} (≥1 step unresolved or <2 steps after entity sanitize)`,
+          );
+          continue;
+        }
+        // Resolve phase step_seed_ids → entity UUIDs (best-effort;
+        // a phase that loses a step still ships, with the surviving
+        // entities).
+        const phases = (seedFlight.phases ?? []).map((phase) => ({
+          phase: phase.phase,
+          name: phase.name,
+          duration_weeks: phase.duration_weeks,
+          entry_criteria: phase.entry_criteria ?? null,
+          exit_criteria: phase.exit_criteria,
+          step_entity_ids: phase.step_seed_ids
+            .map((sid) => seedIdToEntityUuid.get(sid))
+            .filter((id): id is string => typeof id === "string"),
+        }));
+        flightRows.push({
+          space_id: spaceId,
+          user_id: user.id,
+          name: seedFlight.name,
+          description: seedFlight.description,
+          category: seedFlight.category,
+          steps_entity_ids: stepEntityIds,
+          // steps_edge_ids is populated lazily by a follow-up resolver
+          // that walks edges between consecutive step entities; we
+          // leave it empty at template-install time so flights ship
+          // even when an edge dropped during sanitize.
+          steps_edge_ids: [],
+          origin: "template_seeded",
+          template_seed_id: seedFlight.seed_id,
+          status: "active",
+          phases: phases.length > 0 ? phases : null,
+          score_breakdown: seedFlight.expected_score_breakdown ?? null,
+        });
+      }
+      if (flightRows.length > 0) {
+        const { inserted } = await resilientInsert(
+          db,
+          "flights",
+          flightRows,
+          "id",
+        );
+        flightsInserted = inserted;
+        if (inserted < flightRows.length) {
+          warnings.push(
+            `flights insert: ${inserted}/${flightRows.length} succeeded`,
+          );
+        }
+      }
+    }
+
     // ── Step 6 — lab scaffolds ───────────────────────────────────
     // One scaffold row carrying the proposed_subjects + features +
     // status='scaffolded'. This satisfies the lab proposal wizard
@@ -707,6 +786,7 @@ export async function POST(request: Request) {
         interventions: template.seed_interventions.length,
         instruments: template.seed_instruments.length,
         lab_scaffolds: scaffoldsInserted,
+        flights: flightsInserted,
       },
       primary_subject_id: firstSubjectId,
       warnings: warnings.length > 0 ? warnings : undefined,
@@ -816,7 +896,7 @@ function buildEdgeRaw(seedEdge: ResearchSeedEdge): RawRow {
     seedEdge.num_studies,
     seedEdge.status,
   );
-  return {
+  const row: RawRow = {
     source_entity_id: seedEdge.source_seed_id,
     target_entity_id: seedEdge.target_seed_id,
     relationship_type: seedEdge.relationship_type,
@@ -835,6 +915,35 @@ function buildEdgeRaw(seedEdge: ResearchSeedEdge): RawRow {
       evidence_status: seedEdge.status,
     },
   };
+
+  // Phase 7 — when the template ships pre-baked temporal data,
+  // populate the Phase 3 pooled columns directly so edges have
+  // onset/peak/persistence the moment the space is created. The
+  // companion evidence_registries row (buildEvidenceRow) carries
+  // the citation chain so the audit trail matches.
+  const t = seedEdge.temporal_seed;
+  if (t) {
+    if (typeof t.onset_days === "number") {
+      row.onset_days_p50 = t.onset_days;
+    }
+    if (typeof t.peak_days === "number") {
+      row.peak_days_p50 = t.peak_days;
+    }
+    if (typeof t.persistence_days === "number") {
+      row.persistence_days_p50 = t.persistence_days;
+    }
+    if (t.decay_kinetics) {
+      row.decay_kinetics_modal = t.decay_kinetics;
+    }
+    if (typeof t.heterogeneity_i2 === "number") {
+      row.temporal_heterogeneity_i2 = t.heterogeneity_i2;
+    }
+    if (typeof t.evidence_count === "number") {
+      row.temporal_evidence_count = t.evidence_count;
+    }
+    row.temporal_pooled_at = new Date().toISOString();
+  }
+  return row;
 }
 
 function buildEvidenceRow(
@@ -850,11 +959,21 @@ function buildEvidenceRow(
   const ci_upper = beta + 1.96 * se;
   const conf = confidenceFromEvidence(seedEdge.num_studies, seedEdge.status);
 
-  return {
+  const flags = seedEdge.status === "sparse" ? ["low_evidence"] : [];
+
+  const row: RawRow = {
     space_id: spaceId,
     user_id: userId,
     attached_entity_id: targetEntityUuid,
-    status: "extracted",
+    // Phase 7 — template-shipped evidence is curator-vetted; flip
+    // to 'reviewed' so it participates in strict-mode pooling
+    // (require_reviewed=true) without further user action. The
+    // existing 'extracted' default stays for templates without
+    // pre-baked citations.
+    status: seedEdge.temporal_seed?.citations?.length ? "reviewed" : "extracted",
+    reviewed_at: seedEdge.temporal_seed?.citations?.length
+      ? new Date().toISOString()
+      : null,
     outcome_label: seedEdge.target_seed_id,
     intervention_label: seedEdge.source_seed_id,
     effect_size: beta,
@@ -866,7 +985,7 @@ function buildEvidenceRow(
     study_design: "meta_analysis",
     blinding: null,
     extraction_confidence: conf,
-    flags: seedEdge.status === "sparse" ? ["low_evidence"] : [],
+    flags,
     parser_provenance: {
       module: "research_template_seed",
       version: "v1",
@@ -878,6 +997,46 @@ function buildEvidenceRow(
     },
     llm_label_provenance: null,
   };
+
+  // Phase 7 — temporal half. When the template ships pre-baked
+  // timing + citations, materialize the temporal columns + a
+  // separate L2M provenance for the temporal half so the edge-detail
+  // drawer's "supporting timing claims" surface (P6) can render
+  // them with full attribution.
+  const t = seedEdge.temporal_seed;
+  if (t) {
+    if (typeof t.onset_days === "number") row.onset_days = t.onset_days;
+    if (typeof t.peak_days === "number") row.peak_days = t.peak_days;
+    if (typeof t.persistence_days === "number")
+      row.persistence_days = t.persistence_days;
+    if (t.decay_kinetics) row.decay_kinetics = t.decay_kinetics;
+    row.temporal_extraction_method = "stated_explicitly";
+    row.temporal_extraction_confidence = conf;
+    row.temporal_evidence_quote = (t.citations ?? [])
+      .map((c) => `${c.authors} (${c.year}): ${c.claim}`)
+      .join("\n\n")
+      .slice(0, 2000);
+    row.temporal_parser_provenance = {
+      module: "research_template_seed_temporal",
+      version: "v1",
+      rule_fired: "manual_curation",
+      seed_edge_id: seedEdge.seed_id,
+      heterogeneity_i2: t.heterogeneity_i2 ?? null,
+      evidence_count: t.evidence_count ?? null,
+      flags: ["template_seeded"],
+    };
+    row.temporal_llm_provenance = {
+      model: "n/a",
+      prompt_hash: "template_seed",
+      span_id: seedEdge.seed_id,
+      raw_label: "temporal",
+      llm_confidence: conf,
+      reasoning: "Template-curated temporal pool from published literature.",
+      citations: t.citations ?? [],
+    };
+    row.temporal_flags = ["template_seeded"];
+  }
+  return row;
 }
 
 function buildSubjectRow(

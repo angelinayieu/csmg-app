@@ -42,24 +42,29 @@ import {
 // the other signals when they're present but shouldn't dominate.
 
 export const DEFAULT_WEIGHTS: Record<keyof SignalProfile, number> = {
-  convergence_count: 0.16,          // ← strongest root-cause signal (fan-in across goals)
-  coverage_gap: 0.13,
-  causal_depth_normalized: 0.11,    // ← depth upstream from goal
-  agent_convergence_count: 0.10,    // ← independent-proposer consensus (opinion fan-in)
-  goal_proximity: 0.08,             // ← was 0.12, −0.04 for outcome_alignment (run-focal proximity is sharper)
-  outcome_alignment: 0.08,          // ← Phase 3: this-run focal-outcome proximity from frame extractor
-  user_controllable_lever: 0.06,    // ← actionable driver — entity is a why-chain user-controllable root
-  centrality: 0.05,                 // ← was 0.06, −0.01 for D3 cost_efficiency (structural < causal)
-  interaction_density: 0.05,        // ← D4: candidate participates in emergent 3-way interactions
-  cost_efficiency: 0.03,            // ← D3 phase 3: cheap-relative-to-budget levers; modulated up to 1.5× under immediate horizon
-  calibration_drift: 0.03,          // ← D6 phase 2: stale model regions (recent prediction-error-driven recalibration)
-  consequence_breadth: 0.03,        // ← D13a: divergence (downstream-reach) twin of convergence_count; companion to causal_depth/convergence
-  uncertainty: 0.02,                // ← was 0.04, −0.02 for D13a consequence_breadth (uncertainty + breadth measure adjacent "what we know about this node")
-  layer_crossing: 0.02,             // ← was 0.04, −0.02 for D6 calibration_drift
-  intersection_density: 0.01,       // ← was 0.02, −0.01 for D13a consequence_breadth (both reach-adjacent signals)
+  convergence_count: 0.13,                  // ← was 0.14, −0.01 for Phase 5 calibration_drift_temporal
+  coverage_gap: 0.11,
+  causal_depth_normalized: 0.09,
+  agent_convergence_count: 0.08,
+  goal_proximity: 0.07,
+  outcome_alignment: 0.07,
+  user_controllable_lever: 0.06,
+  centrality: 0.05,
+  interaction_density: 0.05,
+  time_to_outcome: 0.04,                    // ← Phase 4: how soon does the effect reach the outcome
+  cost_efficiency: 0.03,                    // ← D3 phase 3: cheap-relative-to-budget levers
+  calibration_drift: 0.03,                  // ← D6 phase 2: stale magnitude model regions
+  consequence_breadth: 0.03,                // ← D13a: divergence (downstream-reach)
+  uncertainty: 0.02,
+  layer_crossing: 0.02,
   controllability_spread: 0.02,
-  axis_calibration: 0.01,           // ← was 0.02, −0.01 for D6 calibration_drift
-  novelty: 0.01,
+  onset_alignment: 0.02,                    // ← Phase 4: first-effect within deadline
+  persistence_match: 0.02,                  // ← Phase 4: does the effect outlast the deadline
+  temporal_heterogeneity_penalty: 0.02,     // ← Phase 4: pooled-study timing agreement (low I²)
+  calibration_drift_temporal: 0.02,         // ← Phase 5: stale TIMING model regions (resolver-driven temporal feedback)
+  intersection_density: 0.01,               // ← was 0.01, unchanged
+  axis_calibration: 0.005,                  // ← was 0.01, −0.005 for Phase 5 calibration_drift_temporal
+  novelty: 0.005,                           // ← was 0.01, −0.005 for Phase 5 calibration_drift_temporal
 };
 
 // Sanity — weights must sum to ~1.0 so the composite lives in [0,1].
@@ -351,6 +356,13 @@ export function rankCandidates(input: RankerInput): RankerOutput {
     cost_efficiency: 0,
     calibration_drift: 0,
     consequence_breadth: 0,
+    // Phase 4 — temporal-rigor signals.
+    time_to_outcome: 0,
+    persistence_match: 0,
+    onset_alignment: 0,
+    temporal_heterogeneity_penalty: 0,
+    // Phase 5 — closed-loop temporal feedback.
+    calibration_drift_temporal: 0,
   };
   for (const { weights: w } of perProfileNormalized) {
     for (const key of Object.keys(meanWeights) as Array<keyof SignalProfile>) {

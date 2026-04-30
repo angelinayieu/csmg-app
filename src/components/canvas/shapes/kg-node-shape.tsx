@@ -14,6 +14,8 @@ import { LAYERS, type LayerId } from "@/lib/whiteboard/layer-config";
 import { useCanvasReactions } from "../canvas-reactions-context";
 import { useCanvasSubjectScopes } from "../canvas-subject-scopes-context";
 import { useCanvasHierarchy } from "../canvas-hierarchy-context";
+import { useCardConnectMode } from "../card-connect-mode-context";
+import { CardActionMenu } from "../card-action-menu";
 import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
 import { ReactionHoverPreview } from "@/components/shared/reaction-preview";
 import type { ReactionType, Reaction } from "@/types/reactions";
@@ -147,6 +149,31 @@ function KGNodeAnimationStyles() {
       @keyframes kg-drill-halo-pulse {
         0%, 100% { opacity: 0.85; }
         50%      { opacity: 1; }
+      }
+      /* Per-card (+) action menu — hover-reveal trigger. Default
+         invisible, visible on card hover or when the popover is open
+         (data-open="true"). Positioned outside the card boundary
+         (top:-10, right:-10) so it doesn't collide with corner
+         badges (signature ring / subject scope ring). */
+      .kg-node-with-actions .card-action-menu-trigger {
+        opacity: 0;
+      }
+      .kg-node-with-actions:hover .card-action-menu-trigger,
+      .kg-node-with-actions .card-action-menu-trigger[data-open="true"] {
+        opacity: 1 !important;
+      }
+      /* Connect-mode target affordance — when a different card is the
+         active connect source, every other card gets a subtle dashed
+         outline + crosshair cursor so the user can see they're
+         pickable targets. */
+      .kg-node-connect-target {
+        outline: 2px dashed rgba(8, 108, 232, 0.55);
+        outline-offset: 4px;
+        cursor: crosshair;
+      }
+      .kg-node-connect-source {
+        outline: 2px solid rgba(8, 108, 232, 0.85);
+        outline-offset: 4px;
       }
     `}</style>
   );
@@ -334,9 +361,22 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
   const sparkColor = isHero ? "rgba(255,255,255,0.85)" : layerColor;
   const sparkFill = isHero ? "rgba(255,255,255,0.18)" : `${layerColor}22`;
 
+  // Connect-mode wiring — when another card is the active source, this
+  // card becomes a click-target. When this card IS the source, mark
+  // it as such for the visual outline. Skip entirely for ghost cards
+  // (no entityId) since they don't represent a persisted entity.
+  const connect = useCardConnectMode();
+  const isConnectSource =
+    !!connect.active && !!entityId && connect.active.entityId === entityId;
+  const isConnectTarget =
+    !!connect.active && !!entityId && connect.active.entityId !== entityId;
+
   const containerClasses = [
     showEnter ? "kg-node-enter" : "",
     pulsing ? "kg-node-confirm-pulse" : "",
+    entityId ? "kg-node-with-actions" : "",
+    isConnectSource ? "kg-node-connect-source" : "",
+    isConnectTarget ? "kg-node-connect-target" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -368,7 +408,20 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
           opacity: isGhost ? 0.68 : 1,
           filter: isGhost ? "saturate(0.85)" : undefined,
           transition: "opacity 200ms ease, filter 200ms ease",
+          position: "relative",
         }}
+        onPointerDownCapture={
+          isConnectTarget && entityId
+            ? (e) => {
+                // Capture-phase pointer down: when the user is in
+                // connect-pick mode, intercept the click before tldraw
+                // selects/drags the card and instead resolve the pick.
+                e.stopPropagation();
+                e.preventDefault();
+                connect.pick({ entityId, entityName: name });
+              }
+            : undefined
+        }
       >
         <KGNodeAnimationStyles />
         {/* D5b confidence halo — sits behind the card, polarity-neutral
@@ -775,6 +828,21 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
             />
           )}
         </div>
+
+        {/* Per-card (+) action menu — Connect / Decompose (with depth)
+            / Add related. Floats outside the top-right corner so it
+            doesn't collide with the signature ring or subject scope
+            ring. Skip on ghost cards (entityId is empty for those —
+            they're speculative and don't have a persisted row to
+            decompose / connect / relate to). */}
+        {entityId && !isGhost && (
+          <CardActionMenu
+            entityId={entityId}
+            entityName={name}
+            isHero={isHero}
+            subunitCount={subunitCount}
+          />
+        )}
       </HTMLContainer>
   );
 }

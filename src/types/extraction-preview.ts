@@ -146,6 +146,29 @@ export interface ExtractionCandidate {
   suggested: boolean;
 }
 
+// ── Paper metadata (P6) ──────────────────────────────────────────────
+//
+// Extracted at preview time alongside the candidate list. Lets the UI
+// show "Smith et al. 2023" / paper title instead of the raw asset id
+// in research-library views, popovers, and asset-card subtitles. All
+// fields are optional — non-paper assets (specs, web pages, datasets)
+// produce no metadata and the UI falls back to source_name.
+
+export interface PaperMetadata {
+  /** Best-effort paper title — first sentence of the abstract or
+   *  whatever the LLM identifies as the work's title. Already capped
+   *  at 240 chars. */
+  title: string | null;
+  /** Author surnames OR full "Last, F." strings. Max 12 entries; the
+   *  preview validator caps each string at 80 chars. */
+  authors: string[];
+  /** Publication year if extractable. Null when not present. */
+  year: number | null;
+  /** DOI if present in the asset content. Stored verbatim (no
+   *  normalization to a URL form). */
+  doi: string | null;
+}
+
 // ── Preview shape ────────────────────────────────────────────────────
 
 export interface ExtractionPreview {
@@ -166,6 +189,10 @@ export interface ExtractionPreview {
   /** Free-form narrative summary of what the LLM saw in the asset.
    *  Surfaced at the top of the drawer for context. ≤500 chars. */
   summary: string | null;
+  /** P6 · paper-shape metadata (title, authors, year, doi). Optional —
+   *  empty fields mean the LLM couldn't extract them or the asset
+   *  isn't a research paper. Persists in ingested_files.extraction_preview. */
+  paper_metadata?: PaperMetadata | null;
 }
 
 // ── Commit-time payload ──────────────────────────────────────────────

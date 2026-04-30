@@ -282,24 +282,14 @@ export class AssetCardShapeUtil extends BaseBoxShapeUtil<AssetCardShape> {
               {formatCount(charCount)} ch
             </span>
           </div>
-          {/* Row 2: file name */}
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: "#0f172a",
-              lineHeight: 1.2,
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              wordBreak: "break-word",
-            }}
-            title={sourceName}
-          >
-            {sourceName}
-          </div>
+          {/* Row 2: paper title (when extracted) → falls through to
+              filename. Authors+year render as a small subtitle below
+              the title when present. P6: title comes from the asset
+              preview pass and lives in extraction_preview.paper_metadata. */}
+          <AssetCardTitleRow
+            assetId={shape.props.assetId}
+            sourceName={sourceName}
+          />
           {/* Row 2.5: extraction status badge.
               Shows the asset's HITL lifecycle so the user can scan
               a row of cards and immediately see which still need
@@ -325,6 +315,13 @@ export class AssetCardShapeUtil extends BaseBoxShapeUtil<AssetCardShape> {
           >
             {statusBadge.label}
           </div>
+          {/* P4 · contribution stats row. Tells the user at a glance
+              what this paper actually added to the KG: entities (and
+              how many are novel-vs-shared with other papers) + edges.
+              Renders nothing until extraction has produced something. */}
+          {shape.props.assetId && (
+            <AssetContributionRow assetId={shape.props.assetId} accent={accent} />
+          )}
           {/* Row 3: HITL extraction-review affordance.
               Fires canvas-bus → useExtractionReview.open() in the
               host (interaxis-canvas) which POSTs /api/ingest/[id]/preview
@@ -534,5 +531,180 @@ function AssetHighlightButton({
       <Eye style={{ width: 9, height: 9 }} />
       {derived.length} on canvas
     </button>
+  );
+}
+
+// ── P4 — Asset contribution row ──────────────────────────────────────
+//
+// One-line stats summary above the action pills:
+//   📦 5 entities (2 shared)   🔗 8 edges
+//
+// "shared" = entities also referenced by another paper (P3 dedup
+// matched). When 0 shared, that segment is suppressed to keep the
+// row terse. Renders nothing until the first commit produces something.
+
+function AssetContributionRow({
+  assetId,
+  accent,
+}: {
+  assetId: string;
+  accent: string;
+}) {
+  const { index } = useCanvasAssetDerivedEntities();
+  const stats = index.statsByAssetId.get(assetId);
+  if (!stats || (stats.entityCount === 0 && stats.edgeCount === 0)) {
+    return null;
+  }
+  const sharedCount = Math.max(
+    0,
+    stats.entityCount - stats.novelEntityCount,
+  );
+  const titleLines = [
+    `Contributes ${stats.entityCount} entities + ${stats.edgeCount} edges to this space`,
+    sharedCount > 0
+      ? `  · ${stats.novelEntityCount} novel · ${sharedCount} shared with other papers`
+      : `  · all ${stats.entityCount} unique to this paper`,
+  ];
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        marginTop: 6,
+        marginBottom: 2,
+        padding: "3px 6px",
+        borderRadius: 6,
+        background: `color-mix(in srgb, ${accent} 6%, transparent)`,
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: "0.02em",
+        color: `color-mix(in srgb, ${accent} 75%, #475569)`,
+      }}
+      title={titleLines.join("\n")}
+    >
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+        <span style={{ fontSize: 11 }}>📦</span>
+        {stats.entityCount}
+        {sharedCount > 0 && (
+          <span
+            style={{
+              marginLeft: 2,
+              fontSize: 9,
+              fontWeight: 600,
+              color: `color-mix(in srgb, ${accent} 60%, #94a3b8)`,
+            }}
+          >
+            ({sharedCount} shared)
+          </span>
+        )}
+      </span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+        <span style={{ fontSize: 11 }}>🔗</span>
+        {stats.edgeCount}
+      </span>
+    </div>
+  );
+}
+
+// ── P6 — Asset card title row ────────────────────────────────────────
+//
+// When the preview pass extracts paper_metadata (title/authors/year),
+// promote the title to the primary card name and demote the original
+// filename to a small mono-styled secondary line. Authors+year render
+// as a one-line byline under the title.
+//
+// Falls through to the previous "just show the filename" behavior for
+// non-paper assets (specs, web articles, datasets, anything pre-P6).
+
+function AssetCardTitleRow({
+  assetId,
+  sourceName,
+}: {
+  assetId: string;
+  sourceName: string;
+}) {
+  const { index } = useCanvasAssetDerivedEntities();
+  const meta = index.metadataByAssetId.get(assetId);
+  const paperMeta = meta?.paper_metadata ?? null;
+  const title =
+    paperMeta?.title && paperMeta.title.trim().length > 0
+      ? paperMeta.title.trim()
+      : null;
+
+  // Compact authors+year line. Mirrors formatAuthorsLine from drawer
+  // and ResearchLibraryChip so the three surfaces read identically.
+  const authorsLine = (() => {
+    if (!paperMeta) return null;
+    const yearStr = paperMeta.year ? ` ${paperMeta.year}` : "";
+    const a = paperMeta.authors ?? [];
+    if (a.length === 0)
+      return yearStr.trim().length > 0 ? yearStr.trim() : null;
+    if (a.length === 1) return `${a[0]}${yearStr}`;
+    if (a.length === 2) return `${a[0]} & ${a[1]}${yearStr}`;
+    return `${a[0]} et al.${yearStr}`;
+  })();
+
+  if (!title) {
+    // No paper title extracted — preserve original single-line filename
+    // rendering so non-paper assets look the same as before P6.
+    return (
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: "#0f172a",
+          lineHeight: 1.2,
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          wordBreak: "break-word",
+        }}
+        title={sourceName}
+      >
+        {sourceName}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: "#0f172a",
+          lineHeight: 1.2,
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          wordBreak: "break-word",
+        }}
+        title={`${title}${authorsLine ? ` — ${authorsLine}` : ""}\nFile: ${sourceName}`}
+      >
+        {title}
+      </div>
+      {authorsLine && (
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 500,
+            color: "rgba(15,23,42,0.6)",
+            lineHeight: 1.2,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+          title={authorsLine}
+        >
+          {authorsLine}
+        </div>
+      )}
+    </div>
   );
 }

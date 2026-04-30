@@ -44,6 +44,8 @@ import {
   computeCentralityApprox,
   computeGoalHops,
   computeUpstreamHops,
+  computeUpstreamTemporalSummaries,
+  horizonToDays,
   graphDistance,
 } from "./signals";
 import { rankCandidates } from "./ranker";
@@ -516,6 +518,22 @@ async function loadSignalBundle(
   // target_outcome_entity_id null-guard.
   const directedOutcomeHops = computeUpstreamHops(edges, resolvedOutcomeEntityId);
 
+  // Phase 4 — temporal summaries along the same shortest paths. One
+  // additional sweep that also accumulates per-edge temporal data
+  // (peak_days_p50 / onset_days_p50 / persistence_days_p50 /
+  // temporal_heterogeneity_i2) so the four time-aware signals don't
+  // need their own BFS each candidate. Empty when no outcome resolved.
+  const temporalPathSummaries = computeUpstreamTemporalSummaries(
+    edges,
+    resolvedOutcomeEntityId,
+  );
+
+  // Phase 4 — convert the categorical horizon to days so time-aware
+  // signals can normalize against an actual deadline. Null when
+  // outcome_horizon is null; signals fall back to a 90-day default
+  // when the bundle's horizon is null AND temporal data is present.
+  const horizonDays = horizonToDays(outcomeHorizon);
+
   // ── D4 · interaction counts per entity ─────────────────────────────
   //
   // Single query against `reactions` for emergent rows; bucket count
@@ -551,7 +569,14 @@ async function loadSignalBundle(
   //   1. edge_calibrations rows in the recent window for this space
   //   2. edges referenced by those rows (to map edge_id → entities)
   // Soft-fail on either; calibrationDriftSignal handles empty map.
+  //
+  // Phase 5 — same query also populates a parallel TEMPORAL drift
+  // map from rows whose `temporal_delta_days` is non-null (those
+  // come from the path_aware_temporal_v1 calibrator in
+  // resolve-prediction.ts). Magnitude drift and temporal drift are
+  // tracked separately because they surface different problems.
   const calibrationDriftByEntity = new Map<string, number>();
+  const calibrationDriftTemporalByEntity = new Map<string, number>();
   const CALIBRATION_DRIFT_WINDOW_DAYS = 30;
   try {
     const cutoff = new Date(
@@ -559,22 +584,31 @@ async function loadSignalBundle(
     ).toISOString();
     const { data: calibRows } = await db
       .from("edge_calibrations")
-      .select("edge_id, delta_strength, delta_confidence")
+      .select("edge_id, delta_strength, delta_confidence, temporal_delta_days")
       .eq("space_id", spaceId)
       .gte("applied_at", cutoff);
     type CalibRow = {
       edge_id: string;
       delta_strength: number;
       delta_confidence: number;
+      temporal_delta_days: number | null;
     };
     const rows = (calibRows as CalibRow[] | null) ?? [];
     if (rows.length > 0) {
-      // Sum magnitudes per edge_id
+      // Sum magnitudes per edge_id; temporal-drift sum tracked separately.
       const magByEdge = new Map<string, number>();
+      const tempByEdge = new Map<string, number>();
       for (const r of rows) {
         const mag =
           Math.abs(r.delta_strength ?? 0) + Math.abs(r.delta_confidence ?? 0);
         magByEdge.set(r.edge_id, (magByEdge.get(r.edge_id) ?? 0) + mag);
+        if (
+          typeof r.temporal_delta_days === "number" &&
+          Number.isFinite(r.temporal_delta_days)
+        ) {
+          const t = Math.abs(r.temporal_delta_days);
+          tempByEdge.set(r.edge_id, (tempByEdge.get(r.edge_id) ?? 0) + t);
+        }
       }
       // Look up edges to bucket by entity. We already loaded the
       // space's edges into the local `edges` variable above; reuse it.
@@ -592,6 +626,18 @@ async function loadSignalBundle(
         calibrationDriftByEntity.set(
           e.target_entity_id,
           (calibrationDriftByEntity.get(e.target_entity_id) ?? 0) + mag,
+        );
+      }
+      for (const [edgeId, t] of tempByEdge) {
+        const e = edgeById.get(edgeId);
+        if (!e) continue;
+        calibrationDriftTemporalByEntity.set(
+          e.source_entity_id,
+          (calibrationDriftTemporalByEntity.get(e.source_entity_id) ?? 0) + t,
+        );
+        calibrationDriftTemporalByEntity.set(
+          e.target_entity_id,
+          (calibrationDriftTemporalByEntity.get(e.target_entity_id) ?? 0) + t,
         );
       }
     }
@@ -629,6 +675,11 @@ async function loadSignalBundle(
     outcome_horizon: outcomeHorizon,
     interaction_counts: interactionCounts,
     calibration_drift_by_entity: calibrationDriftByEntity,
+    // Phase 4 — temporal-rigor bundle additions.
+    temporal_path_summaries: temporalPathSummaries,
+    horizon_days: horizonDays,
+    // Phase 5 — closed-loop temporal feedback.
+    calibration_drift_temporal_by_entity: calibrationDriftTemporalByEntity,
   };
 }
 
@@ -1124,6 +1175,13 @@ export async function runSpaceStrategizer(
       cost_efficiency: 0,
       calibration_drift: 0,
       consequence_breadth: 0,
+      // Phase 4 — temporal-rigor signals.
+      time_to_outcome: 0,
+      persistence_match: 0,
+      onset_alignment: 0,
+      temporal_heterogeneity_penalty: 0,
+      // Phase 5 — closed-loop temporal feedback.
+      calibration_drift_temporal: 0,
     };
     const plan: SpacePlan = {
       id: randomUUID(),

@@ -230,6 +230,13 @@ const ZERO_WEIGHTS: Record<keyof SignalProfile, number> = {
   cost_efficiency: 0,
   calibration_drift: 0,
   consequence_breadth: 0,
+  // Phase 4 — temporal-rigor signals.
+  time_to_outcome: 0,
+  persistence_match: 0,
+  onset_alignment: 0,
+  temporal_heterogeneity_penalty: 0,
+  // Phase 5 — closed-loop temporal feedback.
+  calibration_drift_temporal: 0,
 };
 
 function mergeWeights(

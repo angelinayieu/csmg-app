@@ -497,6 +497,9 @@ export type Database = {
             | "inferred_only"
             | "unobservable"
             | null;
+          // P3 · cross-paper attribution. Asset ids that contributed to
+          // or referenced this entity. Append-only across asset commits.
+          literature_sources: string[];
         };
         Insert: {
           id?: string;
@@ -577,6 +580,8 @@ export type Database = {
             | "inferred_only"
             | "unobservable"
             | null;
+          // P3 · cross-paper attribution.
+          literature_sources?: string[];
         };
         Update: {
           id?: string;
@@ -657,6 +662,8 @@ export type Database = {
             | "inferred_only"
             | "unobservable"
             | null;
+          // P3 · cross-paper attribution.
+          literature_sources?: string[];
         };
       };
       expansions: {
@@ -760,6 +767,28 @@ export type Database = {
           // ingested_files.id; entity source_tag convention "asset:<id>"
           // unwrapped). Empty array = unattributed.
           literature_sources: string[];
+          // Phase 3 · temporal pooling — populated by
+          // recompute-edge-temporals from evidence_registries.
+          onset_days_p50: number | null;
+          onset_days_p10: number | null;
+          onset_days_p90: number | null;
+          peak_days_p50: number | null;
+          peak_days_p10: number | null;
+          peak_days_p90: number | null;
+          persistence_days_p50: number | null;
+          persistence_days_p10: number | null;
+          persistence_days_p90: number | null;
+          decay_kinetics_modal:
+            | "linear"
+            | "exponential"
+            | "sustained"
+            | "biphasic"
+            | "unknown"
+            | null;
+          temporal_evidence_count: number;
+          temporal_heterogeneity_i2: number | null;
+          temporal_evidence_ids: string[];
+          temporal_pooled_at: string | null;
         };
         Insert: {
           id?: string;
@@ -812,6 +841,27 @@ export type Database = {
             | null;
           // P2 · asset ids supporting this edge.
           literature_sources?: string[];
+          // Phase 3 · temporal pooling.
+          onset_days_p50?: number | null;
+          onset_days_p10?: number | null;
+          onset_days_p90?: number | null;
+          peak_days_p50?: number | null;
+          peak_days_p10?: number | null;
+          peak_days_p90?: number | null;
+          persistence_days_p50?: number | null;
+          persistence_days_p10?: number | null;
+          persistence_days_p90?: number | null;
+          decay_kinetics_modal?:
+            | "linear"
+            | "exponential"
+            | "sustained"
+            | "biphasic"
+            | "unknown"
+            | null;
+          temporal_evidence_count?: number;
+          temporal_heterogeneity_i2?: number | null;
+          temporal_evidence_ids?: string[];
+          temporal_pooled_at?: string | null;
         };
         Update: {
           id?: string;
@@ -864,6 +914,27 @@ export type Database = {
             | null;
           // P2 · asset ids supporting this edge.
           literature_sources?: string[];
+          // Phase 3 · temporal pooling.
+          onset_days_p50?: number | null;
+          onset_days_p10?: number | null;
+          onset_days_p90?: number | null;
+          peak_days_p50?: number | null;
+          peak_days_p10?: number | null;
+          peak_days_p90?: number | null;
+          persistence_days_p50?: number | null;
+          persistence_days_p10?: number | null;
+          persistence_days_p90?: number | null;
+          decay_kinetics_modal?:
+            | "linear"
+            | "exponential"
+            | "sustained"
+            | "biphasic"
+            | "unknown"
+            | null;
+          temporal_evidence_count?: number;
+          temporal_heterogeneity_i2?: number | null;
+          temporal_evidence_ids?: string[];
+          temporal_pooled_at?: string | null;
         };
       };
       cycles: {
@@ -1461,6 +1532,20 @@ export type Database = {
           subject_kind: "metric" | "step_outcome" | "action_return";
           plan_step_id: string | null;
           capability_id: string | null;
+          // Phase 5 · trajectory + entity/intervention/basis columns (migration 20260624)
+          prediction_kind: "point_value" | "trajectory";
+          target_entity_id: string | null;
+          intervention_id: string | null;
+          predicted_trajectory: Json | null;
+          predicted_basis_edge_ids: string[];
+          predicted_basis_evidence_ids: string[];
+          actual_trajectory: Json | null;
+          predicted_simulator:
+            | "monte_carlo_discrete"
+            | "monte_carlo_ode"
+            | "template_seed"
+            | "user_curated"
+            | null;
         };
         Insert: {
           id?: string;
@@ -1490,6 +1575,20 @@ export type Database = {
           subject_kind?: "metric" | "step_outcome" | "action_return";
           plan_step_id?: string | null;
           capability_id?: string | null;
+          // Phase 5 · trajectory columns.
+          prediction_kind?: "point_value" | "trajectory";
+          target_entity_id?: string | null;
+          intervention_id?: string | null;
+          predicted_trajectory?: Json | null;
+          predicted_basis_edge_ids?: string[];
+          predicted_basis_evidence_ids?: string[];
+          actual_trajectory?: Json | null;
+          predicted_simulator?:
+            | "monte_carlo_discrete"
+            | "monte_carlo_ode"
+            | "template_seed"
+            | "user_curated"
+            | null;
         };
         Update: {
           id?: string;
@@ -1519,6 +1618,20 @@ export type Database = {
           subject_kind?: "metric" | "step_outcome" | "action_return";
           plan_step_id?: string | null;
           capability_id?: string | null;
+          // Phase 5 · trajectory columns.
+          prediction_kind?: "point_value" | "trajectory";
+          target_entity_id?: string | null;
+          intervention_id?: string | null;
+          predicted_trajectory?: Json | null;
+          predicted_basis_edge_ids?: string[];
+          predicted_basis_evidence_ids?: string[];
+          actual_trajectory?: Json | null;
+          predicted_simulator?:
+            | "monte_carlo_discrete"
+            | "monte_carlo_ode"
+            | "template_seed"
+            | "user_curated"
+            | null;
         };
       };
       improvement_goals: {
@@ -1959,6 +2072,12 @@ export type Database = {
           created_at: string;
           updated_at: string;
           completed_at: string | null;
+          // Phase 4 · temporal columns from migration 20260623.
+          onset_days: number | null;
+          peak_days: number | null;
+          persistence_days: number | null;
+          temporal_confidence: number | null;
+          temporal_basis_edge_id: string | null;
         };
         Insert: {
           id?: string;
@@ -1988,6 +2107,12 @@ export type Database = {
           created_at?: string;
           updated_at?: string;
           completed_at?: string | null;
+          // Phase 4 · temporal columns.
+          onset_days?: number | null;
+          peak_days?: number | null;
+          persistence_days?: number | null;
+          temporal_confidence?: number | null;
+          temporal_basis_edge_id?: string | null;
         };
         Update: {
           id?: string;
@@ -2017,6 +2142,12 @@ export type Database = {
           created_at?: string;
           updated_at?: string;
           completed_at?: string | null;
+          // Phase 4 · temporal columns.
+          onset_days?: number | null;
+          peak_days?: number | null;
+          persistence_days?: number | null;
+          temporal_confidence?: number | null;
+          temporal_basis_edge_id?: string | null;
         };
       };
       apps: {

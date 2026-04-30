@@ -31,9 +31,11 @@ import {
 import {
   ArrowDownRight,
   ArrowUpRight,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   FileBarChart,
   Layers,
   Loader2,
@@ -447,6 +449,22 @@ export function CanvasEntityDetailDrawer() {
                     <Zap className="h-3 w-3" /> Leverage
                   </span>
                 )}
+                {/* P3 · cross-paper attribution. Click → popover lists
+                    supporting papers. Hidden when the column is empty
+                    (manual entities, decompose-emitted, template seeds). */}
+                {Array.isArray(entity.literature_sources) &&
+                  entity.literature_sources.filter(
+                    (s) => typeof s === "string" && s.length > 0,
+                  ).length > 0 && (
+                    <EntityLiteratureBadge
+                      entityId={entity.id}
+                      count={
+                        entity.literature_sources.filter(
+                          (s) => typeof s === "string" && s.length > 0,
+                        ).length
+                      }
+                    />
+                  )}
                 {/* Phase 3 — per-space layer ontology chip overrides
                     the legacy depth-based layer chip when an active
                     plan materialized a topic-adaptive ontology. */}
@@ -860,12 +878,7 @@ function EdgeRow({
         </span>
       )}
       {litCount > 0 && (
-        <span
-          className="flex-shrink-0 rounded bg-violet-50 px-1 py-0.5 text-[9px] font-semibold text-violet-700"
-          title={`Supported by ${litCount} ingested paper${litCount === 1 ? "" : "s"} (asset id${litCount === 1 ? "" : "s"}: ${litSources.slice(0, 3).join(", ")}${litCount > 3 ? ", …" : ""})`}
-        >
-          📚 {litCount}
-        </span>
+        <EdgeLiteratureBadge edgeId={edge.id} count={litCount} />
       )}
       {editing ? (
         <select
@@ -897,6 +910,249 @@ function EdgeRow({
         {edge.relationship_type ?? "related"}
       </span>
     </li>
+  );
+}
+
+// ── Edge literature-sources popover (P2 / D14 follow-up) ─────────
+//
+// Click the 📚 N badge → fetch /api/edges/[id]/sources → render a
+// small list of supporting papers (source_name + asset_class +
+// optional source_url link). Lazy-fetches on first open and caches
+// the result for the lifetime of the badge.
+//
+// Visual: anchored absolute popover above the edge row. Closes on
+// outside click via a backdrop layer. Keeps its own loading/error
+// state — soft-fails to "no papers found" if the endpoint returns
+// an empty list (shouldn't happen if the badge rendered, but cheap
+// insurance against race conditions where the asset got deleted
+// between read + click).
+
+interface PaperMetadata {
+  title: string | null;
+  authors: string[];
+  year: number | null;
+  doi: string | null;
+}
+
+interface PaperRef {
+  asset_id: string;
+  source_name: string | null;
+  source_url: string | null;
+  asset_class: string | null;
+  paper_metadata: PaperMetadata | null;
+}
+
+/** Format a paper's display name with metadata fallback chain:
+ *  paper title → source_name (filename) → assetId prefix. */
+function formatPaperLabel(p: PaperRef): string {
+  if (p.paper_metadata?.title && p.paper_metadata.title.trim().length > 0) {
+    return p.paper_metadata.title;
+  }
+  if (p.source_name && p.source_name.trim().length > 0) {
+    return p.source_name;
+  }
+  return `${p.asset_id.slice(0, 8)}…`;
+}
+
+/** Format authors line: "Smith" → "Smith"; "Smith, Doe" → "Smith & Doe";
+ *  3+ → "Smith et al." If empty, returns null. Year is appended when
+ *  available: "Smith et al. 2023". */
+function formatAuthorsLine(meta: PaperMetadata | null): string | null {
+  if (!meta) return null;
+  const yearStr = meta.year ? ` ${meta.year}` : "";
+  const authors = meta.authors;
+  if (authors.length === 0) {
+    return yearStr.trim().length > 0 ? yearStr.trim() : null;
+  }
+  if (authors.length === 1) return `${authors[0]}${yearStr}`;
+  if (authors.length === 2) return `${authors[0]} & ${authors[1]}${yearStr}`;
+  return `${authors[0]} et al.${yearStr}`;
+}
+
+function LiteratureBadge({
+  endpoint,
+  count,
+  size = "edge",
+}: {
+  endpoint: string;
+  count: number;
+  /** "edge": tiny inline badge (used in EdgeRow). "chip": header-chip
+   *  size matching kind/layer chips (used in entity drawer header). */
+  size?: "edge" | "chip";
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [papers, setPapers] = useState<PaperRef[] | null>(null);
+  const [errored, setErrored] = useState(false);
+
+  const onToggle = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (papers !== null || loading) return;
+    setLoading(true);
+    setErrored(false);
+    try {
+      const res = await fetch(endpoint, { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { papers?: PaperRef[] };
+      setPapers(Array.isArray(data?.papers) ? data.papers : []);
+    } catch (err) {
+      console.warn(`[literature popover] fetch failed for ${endpoint}:`, err);
+      setErrored(true);
+      setPapers([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const buttonClass =
+    size === "chip"
+      ? "inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700 transition hover:bg-violet-200"
+      : "flex items-center gap-0.5 rounded bg-violet-50 px-1 py-0.5 text-[9px] font-semibold text-violet-700 transition hover:bg-violet-100";
+
+  return (
+    <span className="relative flex-shrink-0">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          void onToggle();
+        }}
+        className={buttonClass}
+        title={`Supported by ${count} ingested paper${count === 1 ? "" : "s"} — click to view`}
+      >
+        <BookOpen className={size === "chip" ? "h-3 w-3" : "h-2.5 w-2.5"} />
+        {count}
+      </button>
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setOpen(false)}
+            aria-hidden
+          />
+          <div
+            className={cn(
+              "absolute right-0 z-50 w-64 rounded-md border border-slate-200 bg-white p-2 text-[10px] shadow-lg",
+              size === "chip" ? "top-full mt-1" : "bottom-full mb-1",
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-1 flex items-center justify-between border-b border-slate-100 pb-1">
+              <span className="font-semibold uppercase tracking-wide text-slate-500">
+                Supporting papers
+              </span>
+              <span className="text-slate-400">{count}</span>
+            </div>
+            {loading && (
+              <div className="flex items-center gap-1.5 px-1 py-2 text-slate-500">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading…
+              </div>
+            )}
+            {!loading && errored && (
+              <div className="px-1 py-2 italic text-rose-600">
+                Couldn&apos;t load papers.
+              </div>
+            )}
+            {!loading && !errored && papers !== null && papers.length === 0 && (
+              <div className="px-1 py-2 italic text-slate-400">
+                No live papers (sources may have been removed).
+              </div>
+            )}
+            {!loading && !errored && papers !== null && papers.length > 0 && (
+              <ul className="space-y-1">
+                {papers.map((p) => {
+                  const label = formatPaperLabel(p);
+                  const authorsLine = formatAuthorsLine(p.paper_metadata);
+                  // Prefer DOI link when present (paper canonical); fall
+                  // back to source_url (uploaded URL or signed asset url).
+                  const doi = p.paper_metadata?.doi ?? null;
+                  const externalHref = doi
+                    ? doi.startsWith("http")
+                      ? doi
+                      : `https://doi.org/${encodeURIComponent(doi)}`
+                    : p.source_url;
+                  const externalTitle = doi
+                    ? `Open DOI: ${doi}`
+                    : "Open source URL";
+                  return (
+                    <li
+                      key={p.asset_id}
+                      className="flex items-start gap-1.5 rounded px-1 py-0.5 hover:bg-slate-50"
+                    >
+                      <BookOpen className="mt-0.5 h-2.5 w-2.5 flex-shrink-0 text-violet-500" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-medium text-slate-800">
+                          {label}
+                        </div>
+                        {authorsLine && (
+                          <div className="truncate text-[9.5px] text-slate-500">
+                            {authorsLine}
+                          </div>
+                        )}
+                        {p.asset_class && !authorsLine && (
+                          <div className="text-[9px] uppercase tracking-wide text-slate-400">
+                            {p.asset_class}
+                          </div>
+                        )}
+                      </div>
+                      {externalHref && (
+                        <a
+                          href={externalHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-shrink-0 text-slate-400 hover:text-violet-600"
+                          title={externalTitle}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
+function EdgeLiteratureBadge({
+  edgeId,
+  count,
+}: {
+  edgeId: string;
+  count: number;
+}) {
+  return (
+    <LiteratureBadge
+      endpoint={`/api/edges/${edgeId}/sources`}
+      count={count}
+      size="edge"
+    />
+  );
+}
+
+function EntityLiteratureBadge({
+  entityId,
+  count,
+}: {
+  entityId: string;
+  count: number;
+}) {
+  return (
+    <LiteratureBadge
+      endpoint={`/api/entities/${entityId}/sources`}
+      count={count}
+      size="chip"
+    />
   );
 }
 

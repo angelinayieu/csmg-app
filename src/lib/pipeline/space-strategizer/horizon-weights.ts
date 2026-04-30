@@ -53,6 +53,14 @@ export function deriveHorizonOverrides(
         causal_depth_normalized: 0.6, // root-cause work doesn't help today
         convergence_count: 0.7,
         novelty: 0.7,                  // novel bridges take time to pay off
+        // ── Phase 4 — temporal signals under "immediate" horizon ──
+        // First-effect-soon dominates: boost time_to_outcome and
+        // onset_alignment hard. Persistence matters less when the
+        // outcome window is days, not years. Heterogeneity penalty
+        // stays neutral — disagreement is bad regardless of horizon.
+        time_to_outcome: 1.6,
+        onset_alignment: 1.5,
+        persistence_match: 0.8,
       };
     case "short_term":
       // Weeks-scale — bias toward action but leave some room for
@@ -64,6 +72,10 @@ export function deriveHorizonOverrides(
         cost_efficiency: 1.2,          // D3 phase 3: cost still matters at weeks-scale
         causal_depth_normalized: 0.85,
         novelty: 0.9,
+        // Phase 4 — moderate temporal boosts.
+        time_to_outcome: 1.3,
+        onset_alignment: 1.2,
+        persistence_match: 1.0,         // baseline at weeks-scale
       };
     case "long_term":
       // Year+ — root-cause work compounds. Push deep upstream signals
@@ -78,6 +90,17 @@ export function deriveHorizonOverrides(
         user_controllable_lever: 0.85, // not zero — still want some actionable anchor
         goal_proximity: 0.9,
         cost_efficiency: 0.7,          // D3 phase 3: expensive root-cause investments are tolerable when the payoff window is years
+        // ── Phase 4 — temporal signals under "long_term" horizon ──
+        // Persistence is what matters: a treatment that fades after 6
+        // months is pointless against a 2-year goal. Onset less so.
+        // time_to_outcome stays neutral (a long path is fine when
+        // the horizon is also long).
+        persistence_match: 1.5,
+        onset_alignment: 0.7,
+        time_to_outcome: 0.9,
+        // High-heterogeneity claims are especially costly long-term —
+        // a contradicted timing today compounds over years.
+        temporal_heterogeneity_penalty: 1.3,
       };
     case "medium_term":
     case null:
