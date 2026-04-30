@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Tldraw,
   type Editor,
@@ -13,99 +13,33 @@ import {
 } from "tldraw";
 import "tldraw/tldraw.css";
 
+import {
+  createStickyAtCenter,
+  createThreadOnShape,
+  isTypingTarget,
+  updateAssetCardStatus,
+} from "./interaxis-canvas-helpers";
 import type { Entity, Edge, Space } from "@/types";
-import { KGNodeShapeUtil, KG_NODE_TIER_SIZE } from "./shapes/kg-node-shape";
-import { KGFormationShapeUtil } from "./shapes/kg-formation-shape";
-import { KgOverviewCardShapeUtil } from "./shapes/kg-overview-card-shape";
-import { OriginPromptShapeUtil } from "./shapes/origin-prompt-shape";
-import { ProbabilitySpaceShellShapeUtil } from "./shapes/probability-space-shell-shape";
+import { KG_NODE_TIER_SIZE } from "./shapes/kg-node-shape";
 import { RunEventStoreProvider } from "./hooks/run-event-store";
-import { StickyNoteShapeUtil } from "./shapes/sticky-note-shape";
-import { SynthesisCardShapeUtil } from "./shapes/synthesis-card-shape";
-import { ClusterFrameShapeUtil } from "./shapes/cluster-frame-shape";
-import { StrategyShapeUtil } from "./shapes/strategy-shape";
-import { ReactionCardShapeUtil } from "./shapes/reaction-card-shape";
-import { AppCardShapeUtil } from "./shapes/app-card-shape";
-import { BridgeLinkShapeUtil } from "./shapes/bridge-link-shape";
-import { CycleLoopShapeUtil } from "./shapes/cycle-loop-shape";
-import { ClaimChipShapeUtil } from "./shapes/claim-chip-shape";
-import { SubjectCardShapeUtil } from "./shapes/subject-card-shape";
-import { AxiomStoneShapeUtil } from "./shapes/axiom-stone-shape";
-import { ConvergentFanShapeUtil } from "./shapes/convergent-fan-shape";
-import { SignalFlagShapeUtil } from "./shapes/signal-flag-shape";
-import { TwinSnapshotShapeUtil } from "./shapes/twin-snapshot-shape";
-import { ObjectiveTreeShapeUtil } from "./shapes/objective-tree-shape";
-import { SourceCardShapeUtil } from "./shapes/source-card-shape";
-import { FileCardShapeUtil } from "./shapes/file-card-shape";
-import { ThreadSnapshotShapeUtil } from "./shapes/thread-snapshot-shape";
-import { ProposalSnapshotShapeUtil } from "./shapes/proposal-snapshot-shape";
-import { RootCauseTreeShapeUtil } from "./shapes/root-cause-tree-shape";
-import { ProposalChainRibbonShapeUtil } from "./shapes/proposal-chain-ribbon-shape";
-import { TaxonomyCardShapeUtil } from "./shapes/taxonomy-card-shape";
-import { VariantCardShapeUtil } from "./shapes/variant-card-shape";
-// Sprint A — wrap-what-exists pass: pre-built widgets from /apps/widgets
-// surfaced as first-class tldraw shapes so the painter can drop them
-// during the downstream / experiment bands of the unfurl.
-import { DownstreamRealityShapeUtil } from "./shapes/downstream-reality-shape";
-import { IVDecompositionShapeUtil } from "./shapes/iv-decomposition-shape";
-import { VariantCarouselShapeUtil } from "./shapes/variant-carousel-shape";
-import { StageNodeShapeUtil } from "./shapes/stage-node-shape";
-// 5-column experiment-design card — IV / DV / Control / Process / Results.
-// Painted alongside the proposal-snapshot for experiment-kind events
-// to give the canvas a single cohesive surface that names what's
-// being tested in experimental-design vocabulary.
-import { ExperimentDesignCardShapeUtil } from "./shapes/experiment-design-card-shape";
-// Synthesis intersection card — the canvas's final-ranking anchor.
-// Painted once after axes settle; proposals fork off this card
-// instead of off individual entity ghosts. Closes the unfurl as:
-// prompt → axis landscapes → intersection → proposals.
-import { SynthesisIntersectionCardShapeUtil } from "./shapes/synthesis-intersection-card-shape";
-// Top-of-flow input layer — asset chips (per ingested file) painted
-// alongside the origin-prompt, plus the situation card that maps
-// the user's CURRENT state from intake_text + assets.
-import { AssetCardShapeUtil } from "./shapes/asset-card-shape";
-import { SituationCardShapeUtil } from "./shapes/situation-card-shape";
-// Phase B (intake redesign) — persistent on-canvas hero card for the
-// user's #1 ranked strategy. Always-visible primary surface so the
-// strategy doesn't get lost behind the cascade of upstream artifacts.
-// Includes inline rank chips so the user can swap #2/#3 into the hero
-// slot without leaving the whiteboard.
-import { StrategyHeroCardShapeUtil } from "./shapes/strategy-hero-card-shape";
-// Phase C (cascade rooms) — wide translucent backdrops that group the
-// painter's shapes by pipeline stage. Spawned by the painter on
-// stage_boundary events; sent to back so subsequent shapes layer on
-// top naturally. Drives the top-down "rooms forking out" cascade UX.
-import { RoomShapeUtil } from "./shapes/room-shape";
 // Phase C — popover that opens when a room's (+) button is clicked.
 // Listens for `canvas-room:extend` window events; dispatches
 // `canvas-room:extend-verb` on selection.
 import { CanvasRoomExtendPopover } from "./chrome/canvas-room-extend-popover";
-import { ThreadNoteShapeUtil, THREAD_DEFAULT_W, THREAD_DEFAULT_H } from "./shapes/thread-note-shape";
-import type { StickyNoteShape, KGNodeShape, StrategyShape, ThreadNoteShape, AssetCardShape } from "./shapes/types";
-import { ThreadTethersOverlay } from "./chrome/thread-tethers-overlay";
-import { AppPairTetherOverlay } from "./chrome/app-pair-tether-overlay";
-// Phase 3 — legend / filter sidebar. Reads kind + layer counts from
-// the entity catalog API; reads axis chips live from the tldraw store
-// (every probability-space-shell shape exposes its axis as a prop).
-// Mounted via InFrontOfTheCanvas so it lives inside the editor
-// context and can call useEditor().
-import { CanvasLegendSidebar } from "./chrome/canvas-legend-sidebar";
-import { ResearchLibraryChip } from "./chrome/research-library-chip";
-import { CommunitiesChip } from "./chrome/communities-chip";
-// Phase 8 — top-of-canvas stage indicator. Reads the latest
-// `stage_boundary` event off the run event store and renders a
-// breadth → depth → weave → test pill strip with active-chip glow.
-import { CanvasStageIndicator } from "./chrome/canvas-stage-indicator";
-// Phase 4/5 follow-on — lasso save-as-system button. Appears top-
-// right when the user has selected one or more shells / synthesis
-// card; click → POSTs the union of their entity ids as a new
-// System with source_kind="user_lasso".
-import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
-import { CanvasLassoSubjectButton } from "./chrome/canvas-lasso-subject-button";
-import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
-import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
-import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
-import { RelaxLayoutButton } from "./chrome/relax-layout-button";
+// Aggregated tldraw shape utils. Adding a new custom shape: import
+// its util into ./interaxis-canvas-shape-utils and append to the
+// array — interaxis-canvas itself doesn't need to know.
+import { SHAPE_UTILS } from "./interaxis-canvas-shape-utils";
+import type { StickyNoteShape, KGNodeShape, StrategyShape } from "./shapes/types";
+// CanvasOverlays + the components prop passed to <Tldraw>. Adding a
+// new in-canvas overlay (chip, lasso button, hydrator, etc.) means
+// importing it inside ./interaxis-canvas-overlays — interaxis-canvas
+// itself only needs the context and the components constant.
+import {
+  CANVAS_TLDRAW_COMPONENTS,
+  CanvasOverlayPropsContext,
+  type CanvasOverlayProps,
+} from "./interaxis-canvas-overlays";
 import { useThreadPersistence } from "./hooks/use-thread-persistence";
 import { CardSidecar } from "./sidecar/card-sidecar";
 import { toast } from "@/lib/hooks/use-toast";
@@ -223,243 +157,7 @@ import { useCycleDetailState } from "./drawers/use-cycle-detail-state";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useSpaceData } from "@/contexts/space-data-context";
 
-const SHAPE_UTILS = [
-  KGNodeShapeUtil,
-  // Project-Overview design pass — live landscape overview during a run
-  KGFormationShapeUtil,
-  // Persistent companion — spawned once for template-seeded spaces;
-  // survives sessions; clickable Browse-entities / Edges CTAs.
-  KgOverviewCardShapeUtil,
-  // Lineage root — the user's intake prompt as a real tldraw shape so
-  // kg-formation (and everything below it) can tether UP to it,
-  // turning the canvas into a readable "thought → landscape →
-  // branches" tree. Replaces the prior chrome CanvasOriginCard.
-  OriginPromptShapeUtil,
-  // Per-axis intake lens cards. Painted by the pipeline painter on
-  // `space_opened`, updated on entity_added / edge_added / merge /
-  // scored events, tethered up to origin-prompt. Replaces the prior
-  // chrome ProbabilitySpaceRail — shells now pan with the canvas and
-  // drags land on tldraw so the whiteboard isn't "stuck" anymore.
-  ProbabilitySpaceShellShapeUtil,
-  StickyNoteShapeUtil,
-  SynthesisCardShapeUtil,
-  ClusterFrameShapeUtil,
-  StrategyShapeUtil,
-  ThreadNoteShapeUtil,
-  // Phase A1.1 — universal asset catalog: reaction cards
-  ReactionCardShapeUtil,
-  // Phase A1.2 — universal asset catalog: app cards
-  AppCardShapeUtil,
-  // Phase A1.3 — universal asset catalog: bridge + cycle
-  BridgeLinkShapeUtil,
-  CycleLoopShapeUtil,
-  // Phase A1.4a — universal asset catalog: claim + axiom
-  ClaimChipShapeUtil,
-  AxiomStoneShapeUtil,
-  // Phase 4 — Subject card primitive (manual authoring + lab bridge).
-  // Created via the +Subject button or accepted from the lab proposal
-  // wizard. "Open Lab" footer routes to /lab?subjectId=X.
-  SubjectCardShapeUtil,
-  // Phase A1.4b — universal asset catalog: convergent + signal
-  ConvergentFanShapeUtil,
-  SignalFlagShapeUtil,
-  // Phase A1.4c — universal asset catalog: twin snapshot
-  TwinSnapshotShapeUtil,
-  // Phase A1.7 — universal asset catalog: objective tree
-  ObjectiveTreeShapeUtil,
-  // Phase 2D — universal asset catalog: source card (external inputs)
-  SourceCardShapeUtil,
-  // Phase 2D — universal asset catalog: ingested file card
-  FileCardShapeUtil,
-  // Phase 2D — universal asset catalog: thread conversation snapshot
-  ThreadSnapshotShapeUtil,
-  // Phase 2E · PR 4 — forked proposal snapshot card painted live by
-  // the pipeline event painter when proposal_ready events arrive
-  ProposalSnapshotShapeUtil,
-  // Root-cause fan-in tree painted by the event painter on
-  // root_cause_identified / updated on why_chain_deepened. Single
-  // shape per space; upserts on re-emission.
-  RootCauseTreeShapeUtil,
-  // Project-Overview design pass — reasoning chain ribbon painted
-  // directly below each proposal snapshot. Breadcrumb of upstream
-  // entity names → target + signed lift chip.
-  ProposalChainRibbonShapeUtil,
-  // VP Project report (Phase 3) — independent-variable taxonomy card,
-  // painted at end of intake once the domain-inferrer emits. Drives
-  // the DecomposedPromptViz widget downstream.
-  TaxonomyCardShapeUtil,
-  // VP Project report (Phase 3, Batch 2e) — variant flashcards painted
-  // live when the writer-path's variant_factory emits variant_proposed.
-  VariantCardShapeUtil,
-  // Sprint A — wrap-what-exists pass: the four pre-built widgets that
-  // were previously only reachable from the App detail page. Now first-
-  // class canvas shapes so the painter can drop them during the
-  // downstream / experiment / root-cause bands of the unfurl. Each one
-  // takes JSON-serialized payloads on the shape and re-hydrates
-  // internally via the standalone widget context (no AppRenderer).
-  DownstreamRealityShapeUtil,
-  IVDecompositionShapeUtil,
-  VariantCarouselShapeUtil,
-  StageNodeShapeUtil,
-  // 5-column experiment-design card (IV / DV / Control / Process /
-  // Results + editable hypothesis). Painted by pipeline-event-painter
-  // when a proposal_ready event fires with kind="experiment".
-  ExperimentDesignCardShapeUtil,
-  // Synthesis intersection card — the canvas's final-ranking anchor.
-  SynthesisIntersectionCardShapeUtil,
-  // Input layer — asset chips + situation/baseline card.
-  AssetCardShapeUtil,
-  SituationCardShapeUtil,
-  // Phase B (intake redesign) — persistent on-canvas hero card for the
-  // top-ranked strategy. Painter drops one when the first proposal_ready
-  // (is_primary) event lands, keeps it pinned through the run, and
-  // updates its preview props in place when the user swaps ranks via
-  // the inline chips. Click-to-detail navigates to /app/space/[id]/strategy.
-  StrategyHeroCardShapeUtil,
-  // Phase C (cascade rooms) — wide translucent stage backdrops. Painter
-  // spawns one per pipeline stage on stage_boundary(enter) and
-  // sends it to back so subsequent painted shapes (entities, axes,
-  // proposals) layer on top, reading as "inside" the room.
-  RoomShapeUtil,
-];
 
-// Hide tldraw's stock UI — we supply our own chrome (top bar, left tool
-// dock, HUD rail, bottom dock, command palette, shortcut help). Leaving
-// tldraw's default components ON creates a visually cluttered double-
-// toolbar UX.
-const HIDDEN_TLDRAW_COMPONENTS = {
-  Toolbar: null,
-  StylePanel: null,
-  PageMenu: null,
-  MainMenu: null,
-  ActionsMenu: null,
-  QuickActions: null,
-  HelpMenu: null,
-  ZoomMenu: null,
-  NavigationPanel: null,
-  MenuPanel: null,
-  TopPanel: null,
-  SharePanel: null,
-  MinimapToggle: null,
-  Minimap: null,
-  HelperButtons: null,
-  DebugPanel: null,
-  DebugMenu: null,
-  KeyboardShortcutsDialog: null,
-} as const;
-
-// Arc 5A + Phase 3: tether overlay AND legend sidebar render above
-// the canvas background, inside the editor context so they can call
-// `useEditor()`. Combined into a single component because tldraw's
-// `InFrontOfTheCanvas` slot accepts only one component.
-//
-// CanvasOverlays is module-scope (NOT a per-render closure) so its
-// component identity is stable across renders. Previously this was a
-// factory that returned a fresh function on every entities/edges
-// length change — which caused tldraw to remount the entire overlay
-// subtree on every SSE entity arrival, producing the "blank flash"
-// during live runs. Per-overlay props (spaceId, entities, edges) now
-// flow through CanvasOverlayPropsContext, so the components prop
-// passed to <Tldraw> can be a true module-scope constant
-// (CANVAS_TLDRAW_COMPONENTS below).
-interface CanvasOverlayProps {
-  spaceId: string;
-  entities: Entity[];
-  edges: Edge[];
-}
-
-const CanvasOverlayPropsContext = createContext<CanvasOverlayProps | null>(null);
-
-function useCanvasOverlayProps(): CanvasOverlayProps {
-  const v = useContext(CanvasOverlayPropsContext);
-  if (!v) {
-    // Defensive default — if InFrontOfTheCanvas mounts before the
-    // provider (theoretically possible during a remount), render with
-    // empty data so the overlay tree doesn't throw.
-    return { spaceId: "", entities: [], edges: [] };
-  }
-  return v;
-}
-
-function CanvasOverlays() {
-  const { spaceId, entities, edges } = useCanvasOverlayProps();
-  return (
-    <>
-      <ThreadTethersOverlay />
-      {/* F4 / D14 — orthogonal flowchart tethers between paired
-          downstream apps (Cognitive Game ↔ Cognitive Measurement).
-          Mirrors the ThreadTethers pattern but renders solid +
-          right-angle paths with rounded corners rather than dashed
-          beziers. Solid stroke conveys structural relationship; the
-          mid-pill label communicates pair semantics. */}
-      <AppPairTetherOverlay spaceId={spaceId} />
-      <CanvasLegendSidebar spaceId={spaceId} />
-      {/* P4 — Research Library overview chip. Aggregates per-paper
-          stats (entities + edges + novel/shared split) into a single
-          collapsible chip top-left of the canvas. Auto-hides when
-          no asset has produced anything. Click a row → zooms to
-          that paper's contributions on canvas. */}
-      <ResearchLibraryChip />
-      {/* D8 — KG communities overview chip. Surfaces the modularity-
-          greedy partitions the decompose pipeline computed (the
-          GraphRAG-style hierarchical communities table). Auto-hides
-          when no detection run has populated the table yet. Click a
-          row → zooms to that community's entities on canvas. */}
-      <CommunitiesChip spaceId={spaceId} />
-      <CanvasStageIndicator />
-      <CanvasLassoSystemButton spaceId={spaceId} />
-      {/* Phase 6C — sibling button: lasso → save-as-subject. Same
-          extractor, atomic /from-lasso endpoint creates both the
-          scoping System and the Subject in one POST. Spawns the
-          SubjectCard via the same window-event bridge. */}
-      <CanvasLassoSubjectButton spaceId={spaceId} />
-      {/* Phase 4 — bridges the chrome-layer +Subject button (which
-          lives outside the editor tree) to editor.createShapes
-          inside the tree. Listens for the
-          interaxis:spawn-subject-card window event. */}
-      <CanvasSubjectCardSpawner spaceId={spaceId} />
-      {/* Hydrator counterpart — fetches pre-existing subjects from
-          the DB on mount and paints SubjectCard shapes for any that
-          aren't already on the canvas. Required for template-
-          materialized spaces (where subjects exist as DB rows
-          before the canvas is ever opened) and lab-proposal-wizard
-          approvals (same situation). Idempotent + filters dupes. */}
-      <CanvasSubjectCardHydrator spaceId={spaceId} />
-      {/* KG overview — for template-seeded spaces, paints a single
-          compact mini-graph (KGFormationShape) summarizing the
-          seeded entities + edges with the top-6 hubs and their
-          real connecting edges. Replaces the old approach of
-          painting every entity as a flat row of cards. Renders
-          nothing for non-template spaces (where useSyncEntities
-          stays disabled and the pipeline produces shells/synthesis
-          cards). Idempotent. */}
-      <CanvasKgOverviewSpawner
-        spaceId={spaceId}
-        entities={entities}
-        edges={edges}
-      />
-      {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
-          user-triggered force-directed reflow over the main KG.
-          Lives in CanvasOverlays so it has the tldraw editor context
-          it needs to read shapes + bindings. Bottom-right above the
-          bottom dock so it's discoverable without dominating. */}
-      <div
-        className="pointer-events-none absolute bottom-20 right-6 z-30"
-        aria-label="Layout controls"
-      >
-        <RelaxLayoutButton />
-      </div>
-    </>
-  );
-}
-CanvasOverlays.displayName = "CanvasOverlays";
-
-// Module-scope constant — referentially stable across every render of
-// InteraxisCanvas. tldraw won't remount its components subtree.
-const CANVAS_TLDRAW_COMPONENTS = {
-  ...HIDDEN_TLDRAW_COMPONENTS,
-  InFrontOfTheCanvas: CanvasOverlays,
-} as const;
 
 export interface InteraxisCanvasProps {
   space: Space;
@@ -3548,179 +3246,7 @@ export function InteraxisCanvas({
   );
 }
 
-// ── helpers ──
-
-/**
- * Update an asset-card shape's HITL extraction status props.
- * Looks up the shape by `assetId` (not by tldraw id, since the
- * caller usually only knows the asset row id, not the shape id).
- * Soft-fails if no matching shape is on the canvas — the asset may
- * have been uploaded outside the canvas (settings panel, library
- * view) and have no card to update.
- *
- * Called by the extraction-review drawer's onExtract / onSkip
- * callbacks so the card visibly transitions through the states:
- * pending_preview → previewed (when preview returns) → extracting
- * (during commit) → extracted | skipped (terminal).
- */
-function updateAssetCardStatus(
-  editor: Editor,
-  assetId: string,
-  patch: {
-    extractionStatus?: string;
-    extractedEntityCount?: number;
-    previewCandidateCount?: number;
-  },
-): void {
-  if (!assetId) return;
-  // Find every asset-card shape with the matching assetId. Usually 1
-  // — but if the user dragged multiple cards for the same asset
-  // (rare; possible via copy/paste) we update all of them.
-  const allShapes = editor.getCurrentPageShapes();
-  for (const shape of allShapes) {
-    if (shape.type !== "asset-card") continue;
-    const props = (shape as AssetCardShape).props;
-    if (props.assetId !== assetId) continue;
-    editor.updateShape<AssetCardShape>({
-      id: shape.id,
-      type: "asset-card",
-      props: {
-        ...(patch.extractionStatus !== undefined
-          ? { extractionStatus: patch.extractionStatus }
-          : {}),
-        ...(patch.extractedEntityCount !== undefined
-          ? { extractedEntityCount: patch.extractedEntityCount }
-          : {}),
-        ...(patch.previewCandidateCount !== undefined
-          ? { previewCandidateCount: patch.previewCandidateCount }
-          : {}),
-      },
-    });
-  }
-}
-
-function createStickyAtCenter(
-  editor: Editor,
-  opts: { text: string; color?: StickyNoteShape["props"]["color"]; offset?: { x: number; y: number } },
-) {
-  const viewport = editor.getViewportPageBounds();
-  const cx = viewport.midX + (opts.offset?.x ?? 0);
-  const cy = viewport.midY + (opts.offset?.y ?? 0);
-  const id = createShapeId();
-  editor.createShape<StickyNoteShape>({
-    id,
-    type: "sticky-note",
-    x: cx - 100 + (Math.random() - 0.5) * 24,
-    y: cy - 100 + (Math.random() - 0.5) * 24,
-    props: {
-      w: 200,
-      h: 200,
-      text: opts.text,
-      color: opts.color ?? "yellow",
-      dimension: null,
-      aiTagged: false,
-      entityId: null,
-    },
-  });
-  editor.select(id);
-  if (opts.text === "") {
-    editor.setEditingShape(id);
-  }
-}
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!target || !(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
-}
-
-// ── Arc 5A: thread-note creation helper ────────────────────────────────
-//
-// Drops a ThreadNoteShape tethered to the given parent shape and enters
-// edit mode. Chooses accent color from the parent's visible palette so
-// the tether + accent bar inherit meaningfully:
-//   • kg-node: category-derived indigo default
-//   • sticky-note: hard-coded border color per color prop
-//   • strategy-card: status accent
-//   • thread-note: inherit parent's accent (reply chain)
-//   • anything else: indigo fallback
-//
-// Placement: below-right of the parent with a small random jitter so
-// rapid repeat-C doesn't stack threads on top of each other. Depth
-// increments when parent is already a thread.
-function createThreadOnShape(
-  editor: Editor,
-  parentShape: TLShape,
-): TLShapeId | null {
-  // Accent derivation
-  let accentHex = "#6366F1"; // indigo-500 default
-  if (parentShape.type === "sticky-note") {
-    const p = parentShape as StickyNoteShape;
-    const map: Record<StickyNoteShape["props"]["color"], string> = {
-      yellow: "#F59E0B",
-      pink: "#EC4899",
-      blue: "#3B82F6",
-      green: "#10B981",
-      purple: "#8B5CF6",
-    };
-    accentHex = map[p.props.color] ?? accentHex;
-  } else if (parentShape.type === "strategy-card") {
-    const p = parentShape as StrategyShape;
-    const statusMap = {
-      confirmed: "#10B981",
-      reviewing: "#F59E0B",
-      generated: "#6366F1",
-      superseded: "#9CA3AF",
-    } as const;
-    accentHex = statusMap[p.props.status] ?? accentHex;
-  } else if (parentShape.type === "thread-note") {
-    accentHex = (parentShape as ThreadNoteShape).props.accentHex || accentHex;
-  }
-
-  // Depth + root tracing
-  let parentShapeId: string | null;
-  let rootShapeId: string;
-  let depth: number;
-  if (parentShape.type === "thread-note") {
-    const t = parentShape as ThreadNoteShape;
-    parentShapeId = t.id;
-    rootShapeId = t.props.rootShapeId || t.id;
-    depth = t.props.depth + 1;
-  } else {
-    parentShapeId = null;
-    rootShapeId = parentShape.id;
-    depth = 0;
-  }
-
-  // Placement: below-right of parent
-  const bounds = editor.getShapePageBounds(parentShape.id);
-  if (!bounds) return null;
-  const jitter = (Math.random() - 0.5) * 18;
-  const x = Math.round(bounds.x + bounds.w + 24 + jitter);
-  const y = Math.round(bounds.y + jitter);
-
-  const id = createShapeId();
-  editor.markHistoryStoppingPoint(`thread-create-${parentShape.id}`);
-  editor.createShape<ThreadNoteShape>({
-    id,
-    type: "thread-note",
-    x,
-    y,
-    props: {
-      w: THREAD_DEFAULT_W,
-      h: THREAD_DEFAULT_H,
-      threadId: "",
-      text: "",
-      parentShapeId,
-      rootShapeId,
-      depth,
-      accentHex,
-      authorDisplay: "",
-      createdAtIso: new Date().toISOString(),
-      pending: true,
-    },
-  });
-  editor.select(id);
-  editor.setEditingShape(id);
-  return id;
-}
+// Module-scope helpers extracted to ./interaxis-canvas-helpers.ts —
+// pure functions over an editor + plain args, no component state. See
+// that file for createStickyAtCenter, createThreadOnShape,
+// isTypingTarget, updateAssetCardStatus.
