@@ -4,7 +4,6 @@ import { validateFile, validateUrl, isImageMime, inferMimeFromName } from "@/lib
 import {
   extractPdf,
   extractDocx,
-  extractImage,
   extractText,
   extractUrl,
   type ExtractResult,
@@ -84,8 +83,32 @@ export async function POST(request: Request) {
       extractionMethod = "docx";
       extraction = await extractDocx(buf, file.name || "document.docx");
     } else if (isImageMime(mime)) {
-      extractionMethod = "image-ocr";
-      extraction = await extractImage(buf, file.name || "image", mime);
+      // Two-phase image ingest (2026-05-01): phase 1 returns
+      // immediately with an empty result so the file-card lands on
+      // canvas without a multi-second wait. The client follows up by
+      // POSTing the same binary to /api/ingest/vision-extract which
+      // populates image_description + extracted_entities + edges.
+      // Until the vision pass completes the row's normalized_text is
+      // empty — that's intentional; useMaterialize is a no-op until
+      // phase 2 fires (the file-card status badge handles the UX).
+      extractionMethod = "image-pending-vision";
+      extraction = {
+        ok: true,
+        result: {
+          text: "",
+          source_name: file.name || "image",
+          metadata: {
+            source_type: "image",
+            original_bytes: buf.byteLength,
+            image_mime: mime,
+            // Phase 2 will overwrite this once the structured vision
+            // pass lands. Until then we conservatively report
+            // ocr_confident=false so any UI gating on it doesn't
+            // treat the empty row as authoritative.
+            ocr_confident: false,
+          },
+        },
+      };
     } else if (mime === "text/plain" || mime === "text/markdown") {
       extractionMethod = mime === "text/markdown" ? "markdown" : "text";
       extraction = extractText(
@@ -214,6 +237,11 @@ export async function POST(request: Request) {
     console.warn("[ingest] persist threw (non-fatal):", err);
   }
 
+  // Two-phase image ingest signal — when the request was an image
+  // and we deferred the vision pass, tell the client to follow up
+  // with /api/ingest/vision-extract using the same binary.
+  const awaitingVision = extractionMethod === "image-pending-vision";
+
   return NextResponse.json({
     text: normalizedText,
     source_name: extraction.result.source_name,
@@ -230,6 +258,10 @@ export async function POST(request: Request) {
     // The classified asset class — UI can render the upload chip with
     // the right color/label without a second roundtrip.
     asset_class: assetClass,
+    // Two-phase ingest: client should re-POST the same image binary
+    // to /api/ingest/vision-extract to populate description/entities/
+    // relationships. Non-image ingests get false here.
+    awaiting_vision: awaitingVision,
     // Small reminder to the client: text is editable before submit.
     notice:
       "Review the extracted text below. You can edit it before submitting for analysis.",

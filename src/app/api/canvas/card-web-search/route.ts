@@ -24,6 +24,7 @@ import {
   extractJSON,
   type Citation,
 } from "@/lib/web-search";
+import { buildKgContext, renderKgContext } from "@/lib/kg-context";
 
 export const maxDuration = 60;
 
@@ -118,7 +119,29 @@ export async function POST(request: Request) {
           .join("\n")}`
       : "";
 
-  const userMessage = `${ancestorBlock}
+  // ── Phase 1: KG context (broad mode, query=card text) ──────────
+  // Web search currently sees only the card's own text + a few
+  // ancestors. By prepending KG grounding we let Claude know what's
+  // already in the user's space — so it doesn't search for things
+  // the canvas already answers, and so its searches target the
+  // gaps. Soft-fails: a web search without KG context is still
+  // useful, we just don't want to 500 the request.
+  let kgGrounding = "";
+  try {
+    const kgCtx = await buildKgContext(supabase, {
+      spaceId,
+      mode: "broad",
+      query: primary_text,
+    });
+    kgGrounding = renderKgContext(kgCtx, {
+      header:
+        "## What the user's knowledge graph already knows (target your searches at the gaps)",
+    });
+  } catch (err) {
+    console.warn("[card-web-search] KG context fetch failed:", err);
+  }
+
+  const userMessage = `${kgGrounding ? `${kgGrounding}\n\n---\n\n` : ""}${ancestorBlock}
 
 Card content:
 "${primary_text.slice(0, 1500)}"

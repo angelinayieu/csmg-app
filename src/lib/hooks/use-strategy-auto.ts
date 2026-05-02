@@ -229,6 +229,23 @@ export function useStrategyAuto(space: Space): UseStrategyAutoReturn {
       // entry + materializes apps; both should surface in the activity
       // feed immediately rather than waiting for the next 30s poll.
       dispatchPulseRefresh();
+      // Phase 2 (final-plan card) — fire a window event the canvas
+      // listens for to spawn a final-plan-card with the freshly
+      // approved strategy's recommendation. The card auto-fetches its
+      // own execution-brief, so this dispatch carries only the
+      // identifying info (spaceId + recommendation handle) — no
+      // payload to keep stale.
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("final-plan-card:spawn", {
+            detail: {
+              spaceId: space.id,
+              recommendationId: null, // canvas resolves the active strategy
+              source: "confirm",
+            },
+          }),
+        );
+      }
     } catch (err) {
       setState((s) => ({ ...s, error: (err as Error).message }));
     }

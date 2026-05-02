@@ -37,6 +37,7 @@ import {
 import { readRunContext } from "@/lib/events/run-context";
 import { formatPriorContextPrompt } from "@/lib/events/format-run-context-prompt";
 import { formatRichKgContextForStrategy } from "@/lib/pipeline/format-kg-rich-context";
+import { buildKgContext, renderKgContextSupplements } from "@/lib/kg-context";
 import { formatSimilarPatternsBlock } from "@/lib/pipeline/format-similar-patterns";
 import { simulateEntityChain } from "@/lib/simulation/simulate-entity-chain";
 import { persistStrategyPrediction } from "@/lib/pipeline/persist-strategy-prediction";
@@ -1680,6 +1681,27 @@ export async function POST(request: Request) {
     const richKgContextBlock =
       formatRichKgContextForStrategy(allEntities, allEdges, allClaims) ?? "";
 
+    // Phase 1 (KG Context Construction Layer, 2026-05-01) — surface
+    // the SUPPLEMENTARY layers the existing rich block omits:
+    // GraphRAG-style cluster summaries, load-bearing axioms, and
+    // post-synthesis convergent concerns. These are stored on
+    // kg_communities and spaces.synthesis_data jsonb but never made
+    // it into the strategy prompt before. Soft-fail: if the fetch
+    // throws, the strategy LLM still has the rich block above.
+    let kgSupplementsBlock = "";
+    try {
+      const kgCtx = await buildKgContext(db, {
+        spaceId,
+        mode: "strategy",
+        // No focus entity ids — the strategy engine reasons over the
+        // whole space. The fetcher will pick top-importance entities
+        // by importance × centrality_rank just like the rich block.
+      });
+      kgSupplementsBlock = renderKgContextSupplements(kgCtx);
+    } catch (err) {
+      console.warn("[strategy-refresh] KG supplements fetch failed:", err);
+    }
+
     // Phase 1 Step 10 — cross-space pattern retrieval. Pulls semantic
     // memory hits from the user's OTHER spaces so the strategy LLM
     // can reason by analogy. Resolved once per refresh (not per
@@ -1839,6 +1861,7 @@ export async function POST(request: Request) {
             userBaselineBlock,
             priorRunContextBlock,
             richKgContextBlock,
+            kgSupplementsBlock,
             similarPatternsBlock,
             learningContextBlock,
             // Wave D L0.3 — thread the Wave A junction through so the
@@ -3072,40 +3095,6 @@ export async function POST(request: Request) {
         await writeSpaceMemory(db, spaceId, user.id);
       } catch (memErr) {
         console.warn("[strategy-refresh] memory write-back failed:", memErr);
-      }
-    });
-
-    // ── Lab proposal — fire after strategy completes ──────────────
-    //
-    // Generates a `lab_scaffolds` row with status='proposed' so the
-    // whiteboard can surface a "lab proposal ready — review" chip.
-    // User opens the wizard, edits/approves, and the approve
-    // endpoint materializes subjects + emits stage_boundary{lab}.
-    //
-    // Soft-fail: a missing proposal blocks zero strategy output.
-    // Parallel with generate-apps (no ordering dependency).
-    after(async () => {
-      try {
-        const cookieHeader = request.headers.get("cookie") ?? "";
-        const proposalOrigin = new URL(request.url).origin;
-        await fetch(
-          `${proposalOrigin}/api/spaces/${spaceId}/lab-scaffolds`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Cookie: cookieHeader,
-            },
-            body: JSON.stringify({
-              pipeline_run_id: pipelineRunId,
-            }),
-          },
-        );
-      } catch (propErr) {
-        console.warn(
-          "[strategy-refresh] lab proposal kickoff failed (non-critical):",
-          propErr,
-        );
       }
     });
 

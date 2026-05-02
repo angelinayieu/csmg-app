@@ -24,6 +24,14 @@ import { CommunitiesChip } from "./chrome/communities-chip";
 import { CanvasStageIndicator } from "./chrome/canvas-stage-indicator";
 import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
 import { CanvasLassoSubjectButton } from "./chrome/canvas-lasso-subject-button";
+import { CanvasLassoSummarizeButton } from "./chrome/canvas-lasso-summarize-button";
+import { CanvasSummaryArrowFader } from "./chrome/canvas-summary-arrow-fader";
+import { CanvasSummaryCardActions } from "./chrome/canvas-summary-card-actions";
+import { CanvasRoomExtendHandler } from "./chrome/canvas-room-extend-handler";
+import { LabLeaderboardChip } from "./chrome/lab-leaderboard-chip";
+import { CanvasFinalPlanCardBridge } from "./chrome/canvas-final-plan-card-bridge";
+import { CanvasStrategyAppFanout } from "./chrome/canvas-strategy-app-fanout";
+import { CanvasImageVisionBridge } from "./chrome/canvas-image-vision-bridge";
 import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
 import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
 import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
@@ -105,6 +113,51 @@ function CanvasOverlays() {
           scoping System and the Subject in one POST. Spawns the
           SubjectCard via the same window-event bridge. */}
       <CanvasLassoSubjectButton spaceId={spaceId} />
+      {/* Lasso → Summarize. Mounts to the LEFT of the system+subject
+          buttons. Uses the unified shape-content extractor (handles
+          all 41 shape types, not just entity-bearing ones), POSTs the
+          items to /api/spaces/[id]/lasso-summarize, and on success
+          drops a SummaryCardShape below the selection bbox with
+          tldraw-arrow connectors back to each source. */}
+      <CanvasLassoSummarizeButton spaceId={spaceId} />
+      {/* Tracks selection and dims/un-dims summary connector arrows so
+          the fork only "lights up" when the user is interacting with
+          the owning card or one of its sources. Returns null. */}
+      <CanvasSummaryArrowFader />
+      {/* Bridges summary-card:action window events (fired by the
+          shape's Regenerate / Decompose / Pin buttons) to actual
+          editor mutations + API calls. Mounted once per canvas. */}
+      <CanvasSummaryCardActions spaceId={spaceId} />
+      {/* Bridges canvas-room:extend-verb events (fired by the
+          Room (+) button → CanvasRoomExtendPopover verb pick) to
+          concrete sticky-note placements inside the target room.
+          Auto-decompose picks up the stickies after IDLE_MS. */}
+      <CanvasRoomExtendHandler />
+      {/* Top-right chip pinned to the Lab Room. Aggregates variants
+          across all apps in this space and pops a panel listing the
+          top scorers + their champion status. Self-hides until the
+          Lab Room exists on canvas. */}
+      <LabLeaderboardChip spaceId={spaceId} />
+      {/* Phase 2 — final-plan card bridge. Listens for
+          final-plan-card:spawn (fired by useStrategyAuto.confirm)
+          and final-plan-card:action (fired by the shape's header
+          buttons + view-mode tabs). Spawns the card, regenerates
+          the brief, switches view modes, and paints a flowchart
+          when the user clicks the Flowchart tab. */}
+      <CanvasFinalPlanCardBridge spaceId={spaceId} />
+      {/* Phase 1.4 — fan-out connectors from the strategy hero card to
+          every app card on canvas. Returns null; idempotent across
+          re-renders. Arrows are tagged with meta.strategyAppFanout
+          so the overlay can clean up stale connectors when shapes
+          come and go. */}
+      <CanvasStrategyAppFanout spaceId={spaceId} />
+      {/* Two-phase image ingest bridge — listens for the
+          ingested-file:vision-{start,complete,error} window events
+          fired by useIngest's phase-2 dispatcher and updates the
+          matching file-card shape's status badges. On success it
+          also calls /api/canvas/materialize-from-image so the
+          extracted entities + edges land next to the card. */}
+      <CanvasImageVisionBridge spaceId={spaceId} />
       {/* Phase 4 — bridges the chrome-layer +Subject button (which
           lives outside the editor tree) to editor.createShapes
           inside the tree. Listens for the

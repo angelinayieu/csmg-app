@@ -33,11 +33,15 @@
 // (CanvasStageIndicator, CanvasEventHud, CanvasRunSignalsBanner).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, Crown, Loader2, Sparkles } from "lucide-react";
+import { ArrowUpRight, Crown, Loader2, Sparkles, Pin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { canvasNavigate } from "@/lib/canvas/canvas-bus";
 import { useRunEventStore } from "../hooks/run-event-store";
 import type { PipelineStage } from "@/types/pipeline-events";
+import {
+  STRATEGY_ALTERNATIVE_DRAG_MIME,
+  type StrategyAlternativeDragPayload,
+} from "../shapes/strategy-alternative-shape";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -115,9 +119,21 @@ function stagePlaceholderCopy(stage: PipelineStage | null): string {
 export interface StrategyHeroBarProps {
   spaceId: string | null;
   runId: string | null;
+  /** Set of entry ranks already pinned to the canvas as
+   *  strategy-alternative-card shapes. Drives the per-card "ON CANVAS"
+   *  pill so the user knows which ones are already in their workspace. */
+  placedRanks?: Set<number>;
+  /** Click handler for the "ON CANVAS" pill — zooms the editor to the
+   *  pinned card. Receives the entry rank that maps to a placed shape. */
+  onZoomToRank?: (entryRank: number) => void;
 }
 
-export function StrategyHeroBar({ spaceId, runId }: StrategyHeroBarProps) {
+export function StrategyHeroBar({
+  spaceId,
+  runId,
+  placedRanks,
+  onZoomToRank,
+}: StrategyHeroBarProps) {
   const { events, status } = useRunEventStore();
   const [entries, setEntries] = useState<HeroEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -380,9 +396,14 @@ export function StrategyHeroBar({ spaceId, runId }: StrategyHeroBarProps) {
               <StrategyCard
                 key={entry.rank}
                 entry={entry}
+                spaceId={spaceId}
                 isSwapPending={swapPending === entry.rank}
                 onSetActive={() => handleSwapRank(entry.rank)}
                 onOpenDetail={handleOpenDetail}
+                isOnCanvas={placedRanks?.has(entry.rank) ?? false}
+                onZoomToCanvas={
+                  onZoomToRank ? () => onZoomToRank(entry.rank) : undefined
+                }
               />
             ))}
           </div>
@@ -416,14 +437,20 @@ export function StrategyHeroBar({ spaceId, runId }: StrategyHeroBarProps) {
 
 function StrategyCard({
   entry,
+  spaceId,
   isSwapPending,
   onSetActive,
   onOpenDetail,
+  isOnCanvas,
+  onZoomToCanvas,
 }: {
   entry: HeroEntry;
+  spaceId: string | null;
   isSwapPending: boolean;
   onSetActive: () => void;
   onOpenDetail: () => void;
+  isOnCanvas: boolean;
+  onZoomToCanvas?: () => void;
 }) {
   const accent = postureAccent(entry.posture);
   const confidencePct =
@@ -431,10 +458,40 @@ function StrategyCard({
       ? Math.round(entry.confidence > 1 ? entry.confidence : entry.confidence * 100)
       : null;
 
+  const handleDragStart = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!spaceId) {
+        e.preventDefault();
+        return;
+      }
+      e.dataTransfer.effectAllowed = "copy";
+      const payload: StrategyAlternativeDragPayload = {
+        spaceId,
+        entryRank: entry.rank,
+        posture: entry.posture,
+        title: entry.title,
+        summary: entry.summary,
+        confidence: entry.confidence,
+        isPrimary: entry.is_active,
+      };
+      e.dataTransfer.setData(
+        STRATEGY_ALTERNATIVE_DRAG_MIME,
+        JSON.stringify(payload),
+      );
+      // text/plain fallback so dropping into a text editor / outside the
+      // canvas surfaces something readable instead of "[object Object]".
+      e.dataTransfer.setData("text/plain", `${entry.title} — #${entry.rank}`);
+    },
+    [spaceId, entry],
+  );
+
   return (
     <div
+      draggable={Boolean(spaceId)}
+      onDragStart={handleDragStart}
       className={cn(
         "group relative flex w-[340px] flex-shrink-0 flex-col rounded-xl border bg-white px-3 py-2.5 shadow-sm transition",
+        spaceId ? "cursor-grab active:cursor-grabbing" : "",
         entry.is_active
           ? "border-amber-300 ring-2 ring-amber-200/60"
           : "border-gray-200 hover:border-indigo-300 hover:shadow-md",
@@ -446,6 +503,7 @@ function StrategyCard({
             }
           : undefined
       }
+      title={spaceId ? "Drag onto the canvas to pin this strategy" : undefined}
     >
       {/* Header row: rank badge + posture + confidence */}
       <div className="mb-1.5 flex items-center gap-1.5">
@@ -478,6 +536,27 @@ function StrategyCard({
           >
             {confidencePct}%
           </span>
+        )}
+        {isOnCanvas && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onZoomToCanvas?.();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            draggable={false}
+            onDragStart={(e) => e.preventDefault()}
+            className={cn(
+              "flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] text-emerald-700 transition hover:bg-emerald-100",
+              confidencePct !== null ? "" : "ml-auto",
+            )}
+            title="Pinned to canvas — click to zoom in"
+            aria-label="Pinned on canvas — click to zoom"
+          >
+            <Pin className="h-2.5 w-2.5" />
+            On canvas
+          </button>
         )}
       </div>
 

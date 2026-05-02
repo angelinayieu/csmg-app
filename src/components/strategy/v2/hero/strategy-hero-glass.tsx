@@ -58,7 +58,7 @@ export function StrategyHeroGlass({
 
   return (
     <div
-      className="glass-hero flex items-start justify-between gap-5 p-6 rounded-[20px]"
+      className="glass-hero @container flex items-start justify-between gap-5 flex-wrap p-6 rounded-[20px]"
       style={{
         background: "rgba(255, 255, 255, 0.68)",
         backdropFilter: "blur(24px) saturate(170%)",
@@ -68,7 +68,7 @@ export function StrategyHeroGlass({
           "0 1px 0 rgba(255,255,255,0.85) inset, 0 1px 2px rgba(11,13,18,0.04), 0 24px 60px -20px rgba(var(--accent-rgb), 0.18)",
       }}
     >
-      <div className="flex-1 max-w-[820px] flex flex-col gap-2">
+      <div className="flex-1 min-w-0 max-w-[820px] flex flex-col gap-2">
         {/* Pill */}
         <span
           className="inline-flex items-center gap-[7px] px-2.5 py-1 rounded-md text-[11px] font-semibold self-start"
@@ -176,7 +176,7 @@ export function StrategyHeroGlass({
         </div>
 
         {/* Hero metrics */}
-        <div className="grid grid-cols-4 gap-2.5 mt-4">
+        <div className="grid grid-cols-2 @[520px]:grid-cols-4 gap-2.5 mt-4">
           <HeroMetric
             label="Confidence"
             value={`${hero.metrics.confidence}`}
@@ -209,10 +209,10 @@ export function StrategyHeroGlass({
         </div>
       </div>
 
-      {/* Right side controls */}
-      <div className="flex items-center gap-2 flex-shrink-0">
+      {/* Right side controls — wraps below the title block when the hero is narrower than ~720px */}
+      <div className="flex items-center gap-2 flex-wrap min-w-0">
         <div
-          className="flex p-[3px] rounded-[10px]"
+          className="flex p-[3px] rounded-[10px] flex-wrap"
           style={{
             background: "rgba(255,255,255,0.4)",
             border: "1px solid rgba(11,13,18,0.08)",

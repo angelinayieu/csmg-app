@@ -19,7 +19,11 @@ export async function GET(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
       .from("spaces")
-      .select("id, name, kind, space_prefix")
+      // Phase 3 (intake mode chip) — reasoning_settings is read by the
+      // canvas top-bar chip to render "Plan-only" vs "Plan + Apps" vs
+      // "Plan + Apps + Lab". Selection stays narrow — synthesis_data
+      // is heavy; we only need the small settings JSON.
+      .select("id, name, kind, space_prefix, reasoning_settings")
       .eq("id", id)
       .eq("user_id", user.id)
       .maybeSingle();

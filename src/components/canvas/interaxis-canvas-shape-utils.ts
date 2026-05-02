@@ -14,6 +14,7 @@ import { OriginPromptShapeUtil } from "./shapes/origin-prompt-shape";
 import { ProbabilitySpaceShellShapeUtil } from "./shapes/probability-space-shell-shape";
 import { StickyNoteShapeUtil } from "./shapes/sticky-note-shape";
 import { SynthesisCardShapeUtil } from "./shapes/synthesis-card-shape";
+import { SummaryCardShapeUtil } from "./shapes/summary-card-shape";
 import { ClusterFrameShapeUtil } from "./shapes/cluster-frame-shape";
 import { StrategyShapeUtil } from "./shapes/strategy-shape";
 import { ThreadNoteShapeUtil } from "./shapes/thread-note-shape";
@@ -23,6 +24,7 @@ import { BridgeLinkShapeUtil } from "./shapes/bridge-link-shape";
 import { CycleLoopShapeUtil } from "./shapes/cycle-loop-shape";
 import { ClaimChipShapeUtil } from "./shapes/claim-chip-shape";
 import { SubjectCardShapeUtil } from "./shapes/subject-card-shape";
+import { FinalPlanCardShapeUtil } from "./shapes/final-plan-card-shape";
 import { AxiomStoneShapeUtil } from "./shapes/axiom-stone-shape";
 import { ConvergentFanShapeUtil } from "./shapes/convergent-fan-shape";
 import { SignalFlagShapeUtil } from "./shapes/signal-flag-shape";
@@ -45,6 +47,7 @@ import { SynthesisIntersectionCardShapeUtil } from "./shapes/synthesis-intersect
 import { AssetCardShapeUtil } from "./shapes/asset-card-shape";
 import { SituationCardShapeUtil } from "./shapes/situation-card-shape";
 import { StrategyHeroCardShapeUtil } from "./shapes/strategy-hero-card-shape";
+import { StrategyAlternativeShapeUtil } from "./shapes/strategy-alternative-shape";
 import { RoomShapeUtil } from "./shapes/room-shape";
 
 export const SHAPE_UTILS = [
@@ -67,6 +70,13 @@ export const SHAPE_UTILS = [
   ProbabilitySpaceShellShapeUtil,
   StickyNoteShapeUtil,
   SynthesisCardShapeUtil,
+  // Lasso → Summarize output card. Carries an LLM-generated paragraph
+  // plus an inline header chip with Regenerate / Decompose / Pin
+  // actions. Created by CanvasLassoSummarizeButton; arrows back to the
+  // source shapes are emitted at the same time and tagged via
+  // shape.meta.summarySourceFor so the canvas can dim them when the
+  // owning summary card isn't selected.
+  SummaryCardShapeUtil,
   ClusterFrameShapeUtil,
   StrategyShapeUtil,
   ThreadNoteShapeUtil,
@@ -84,6 +94,10 @@ export const SHAPE_UTILS = [
   // Created via the +Subject button or accepted from the lab proposal
   // wizard. "Open Lab" footer routes to /lab?subjectId=X.
   SubjectCardShapeUtil,
+  // Phase 2 (final-plan card) — auto-spawned PRD-style document on
+  // strategy approval. Renders execution-brief data with a (+) menu
+  // for switching between PRD / Flowchart / Prototype / Summary modes.
+  FinalPlanCardShapeUtil,
   // Phase A1.4b — universal asset catalog: convergent + signal
   ConvergentFanShapeUtil,
   SignalFlagShapeUtil,
@@ -140,6 +154,10 @@ export const SHAPE_UTILS = [
   // updates its preview props in place when the user swaps ranks via
   // the inline chips. Click-to-detail navigates to /app/space/[id]/strategy.
   StrategyHeroCardShapeUtil,
+  // Strategy alternative — a single ranked alternative dropped from the
+  // hero bar onto the canvas as a frozen working surface. Distinct from
+  // the singular swap-aware StrategyHeroCard above.
+  StrategyAlternativeShapeUtil,
   // Phase C (cascade rooms) — wide translucent stage backdrops. Painter
   // spawns one per pipeline stage on stage_boundary(enter) and
   // sends it to back so subsequent painted shapes (entities, axes,

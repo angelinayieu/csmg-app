@@ -44,6 +44,7 @@ type Dispatcher = (
 let registeredNavigator: Navigator | null = null;
 let registeredDispatcher: Dispatcher | null = null;
 let registeredExtractionReviewer: ExtractionReviewer | null = null;
+let registeredStickyPinner: StickyPinner | null = null;
 
 /**
  * HITL extraction-review trigger registered by the canvas host.
@@ -59,6 +60,20 @@ type ExtractionReviewer = (input: {
   assetName: string;
   assetClass?: string | null;
   force?: boolean;
+}) => void;
+
+/**
+ * Pin-as-sticky trigger. Surfaces highlighted text from a chrome panel
+ * (typically the strategy drawer) onto the canvas as a sticky-note that
+ * AutoDecompose can pick up. The host (interaxis-canvas) registers a
+ * handler that knows how to place the sticky at a sensible canvas
+ * location (viewport center, with offset for stacked drops).
+ */
+type StickyPinner = (input: {
+  text: string;
+  /** Free-form provenance string ("strategy-drawer-highlight", "synthesis", …)
+   *  — surfaces in dev tools / future telemetry but not user-visible. */
+  source?: string;
 }) => void;
 
 /**
@@ -181,6 +196,42 @@ export function canvasOpenExtractionReview(input: {
     registeredExtractionReviewer(input);
   } catch (err) {
     console.warn("[canvas-bus] extraction reviewer threw:", err);
+  }
+}
+
+/**
+ * Register the sticky-pinner. Typical host usage:
+ *
+ *   useEffect(() => setCanvasStickyPinner(({ text }) => {
+ *     // create sticky-note shape at viewport center
+ *   }), [editor]);
+ */
+export function setCanvasStickyPinner(fn: StickyPinner): () => void {
+  registeredStickyPinner = fn;
+  return () => {
+    if (registeredStickyPinner === fn) registeredStickyPinner = null;
+  };
+}
+
+/** Pin a piece of text onto the canvas as a sticky-note. AutoDecompose
+ *  will pick it up after the standard idle window. Silent no-op when no
+ *  canvas is mounted (e.g. user is on a non-whiteboard page). */
+export function canvasPinAsSticky(input: {
+  text: string;
+  source?: string;
+}): void {
+  const text = input.text.trim();
+  if (!text) return;
+  if (!registeredStickyPinner) {
+    console.warn(
+      "[canvas-bus] canvasPinAsSticky called but no pinner registered",
+    );
+    return;
+  }
+  try {
+    registeredStickyPinner({ text, source: input.source });
+  } catch (err) {
+    console.warn("[canvas-bus] sticky pinner threw:", err);
   }
 }
 

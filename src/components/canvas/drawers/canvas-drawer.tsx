@@ -8,8 +8,8 @@
 //
 // Width: 520px. Z-index sits above canvas chrome but below modals.
 
-import { useEffect, useRef } from "react";
-import { X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { X, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface DrawerTab {
@@ -28,6 +28,8 @@ export interface CanvasDrawerProps {
   onTabChange?: (tabId: string) => void;
   children: React.ReactNode;
   widthPx?: number;
+  /** Show maximize/restore toggle in the header. */
+  enableFullscreen?: boolean;
 }
 
 export function CanvasDrawer({
@@ -40,18 +42,30 @@ export function CanvasDrawer({
   onTabChange,
   children,
   widthPx = 520,
+  enableFullscreen = false,
 }: CanvasDrawerProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Escape-to-close
+  // Escape-to-close (or restore from fullscreen first)
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      if (isFullscreen) {
+        setIsFullscreen(false);
+      } else {
+        onClose();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, isFullscreen]);
+
+  // Reset fullscreen when drawer closes so reopening starts clean.
+  useEffect(() => {
+    if (!open) setIsFullscreen(false);
+  }, [open]);
 
   return (
     <>
@@ -66,10 +80,10 @@ export function CanvasDrawer({
       <aside
         ref={panelRef}
         className={cn(
-          "fixed right-0 top-0 z-50 flex h-full flex-col border-l border-gray-200 bg-white shadow-2xl transition-transform duration-200 ease-out",
+          "fixed right-0 top-0 z-50 flex h-full flex-col border-l border-gray-200 bg-white shadow-2xl transition-[transform,width] duration-200 ease-out",
           open ? "translate-x-0" : "translate-x-full",
         )}
-        style={{ width: widthPx }}
+        style={{ width: isFullscreen ? "100vw" : widthPx }}
         aria-hidden={!open}
       >
         {/* Header */}
@@ -83,13 +97,29 @@ export function CanvasDrawer({
                 {title}
               </h2>
             </div>
-            <button
-              onClick={onClose}
-              className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
-              title="Close drawer (Esc)"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              {enableFullscreen && (
+                <button
+                  onClick={() => setIsFullscreen((v) => !v)}
+                  className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+                  title={isFullscreen ? "Restore (Esc)" : "Maximize"}
+                  aria-label={isFullscreen ? "Restore drawer" : "Maximize drawer"}
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="h-3.5 w-3.5" />
+                  ) : (
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
+              <button
+                onClick={onClose}
+                className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+                title="Close drawer (Esc)"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
 
           {/* Tabs */}

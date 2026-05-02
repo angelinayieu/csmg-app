@@ -137,7 +137,7 @@ export function WhiteboardBootstrapSplash({
         if (!res.ok) return;
         const ctx = (await res.json()) as {
           status?: RunStatus;
-          last_event_at?: string;
+          lastEventAt?: string | null;
         };
         if (cancelled) return;
 
@@ -148,10 +148,10 @@ export function WhiteboardBootstrapSplash({
 
         // status === "running": treat it as stalled when the most
         // recent event hasn't moved for STALE_RUN_MS. We compare the
-        // server's last_event_at across polls — a frozen value
+        // server's lastEventAt across polls — a frozen value
         // means decompose isn't making progress.
         if (ctx.status === "running") {
-          const cur = ctx.last_event_at ?? null;
+          const cur = ctx.lastEventAt ?? null;
           if (cur && cur === lastEventEmittedAt) {
             staleSince ??= Date.now();
             if (Date.now() - staleSince > STALE_RUN_MS) {

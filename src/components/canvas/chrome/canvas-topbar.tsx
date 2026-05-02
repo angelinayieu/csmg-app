@@ -16,6 +16,7 @@ import {
   ArrowRightLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CanvasModeChip } from "./canvas-mode-chip";
 
 export type AutoAIState = "off" | "watching" | "running" | "cooldown";
 
@@ -131,6 +132,11 @@ export function CanvasTopBar({
             <FlaskConical className="h-3 w-3" />
             Twins
           </Link>
+          {/* Phase 3 — output mode chip. Cycles Plan-only → Plan +
+              Apps → Plan + Apps + Lab and PATCHes the space's
+              reasoning_settings. Persisted state drives whether the
+              pipeline materializes apps + runs lab simulations. */}
+          <CanvasModeChip spaceId={spaceId} />
         </div>
       </div>
 

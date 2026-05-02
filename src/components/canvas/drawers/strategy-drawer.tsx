@@ -5,10 +5,12 @@
 // Tabs: Strategy (StrategyGlassPage / LegacyStrategyPage conditional)
 //       Interventions (grouped list preserving #intervention-<id> anchors).
 
+import { useRef } from "react";
 import { Compass, CheckCircle2 } from "./drawer-icons";
 import { CanvasDrawer, type DrawerTab } from "./canvas-drawer";
 import { StrategyGlassPage } from "@/components/strategy/v2/strategy-glass-page";
 import { LegacyStrategyPage } from "@/components/strategy/legacy/legacy-strategy-page";
+import { StrategyHighlightMenu } from "@/components/strategy/v2/strategy-highlight-menu";
 import { InterventionsList } from "@/components/interventions/interventions-list";
 import { useSpaceData } from "@/contexts/space-data-context";
 
@@ -50,6 +52,7 @@ export function StrategyDrawer({
       activeTab={tab}
       onTabChange={onTabChange}
       widthPx={720}
+      enableFullscreen
     >
       {open ? <StrategyDrawerBody tabId={tab} /> : null}
     </CanvasDrawer>
@@ -58,6 +61,7 @@ export function StrategyDrawer({
 
 function StrategyDrawerBody({ tabId }: { tabId: string }) {
   const ctx = useSpaceData();
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   if (tabId === "interventions") {
     return (
@@ -68,8 +72,12 @@ function StrategyDrawerBody({ tabId }: { tabId: string }) {
   }
 
   return (
-    <div className="h-full">
+    <div ref={containerRef} className="h-full">
       {FALLBACK ? <LegacyStrategyPage /> : <StrategyGlassPage />}
+      {/* Highlight any text inside the drawer to surface a floating
+          action chip — Pin to canvas (drops a sticky → AutoDecompose
+          picks it up), Decompose, or Copy. */}
+      <StrategyHighlightMenu containerRef={containerRef} />
     </div>
   );
 }

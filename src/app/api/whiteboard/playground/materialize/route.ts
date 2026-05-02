@@ -15,6 +15,7 @@
 import { NextResponse } from "next/server";
 import { safeAuth, verifySpaceOwnership, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { llmJSON } from "@/lib/llm";
+import { buildKgContext, renderKgContext } from "@/lib/kg-context";
 import { sanitizeEntity, sanitizeEdge, resilientInsert } from "@/lib/sanitize";
 import { detectEntities } from "@/lib/whiteboard/playground-detector";
 import { flagAppsByEntityChange } from "@/lib/apps/staleness-triggers";
@@ -148,13 +149,41 @@ export async function POST(request: Request) {
       ? `${activeLensAddendum}\n\n---\n\n${PLAYGROUND_MATERIALIZE_SYSTEM_PROMPT}`
       : PLAYGROUND_MATERIALIZE_SYSTEM_PROMPT;
 
+    // ── Phase 1: KG context (broad mode, query=user text) ─────────
+    // The candidates list (top-N entities by detector heuristics)
+    // already enters the prompt as a flat name list. We complement
+    // it with the KG layer the detector can't surface: edges between
+    // candidates, the community summary that contains them, axioms
+    // anchored to similar entities, and convergent concerns. This
+    // helps materialize wire the new entity to a relationship
+    // structure instead of guessing connections semantically.
+    let kgGrounding = "";
+    try {
+      const kgCtx = await buildKgContext(supabase, {
+        spaceId,
+        mode: "broad",
+        query: text,
+      });
+      kgGrounding = renderKgContext(kgCtx, {
+        header:
+          "## Knowledge graph context (use to wire the new entity into existing structure)",
+      });
+    } catch (err) {
+      console.warn("[playground/materialize] KG context fetch failed:", err);
+    }
+
+    const taskPrompt = buildMaterializeUserPrompt({
+      userText: text,
+      spaceName: space?.name,
+      candidates,
+    });
+    const userPrompt = kgGrounding
+      ? `${kgGrounding}\n\n---\n\n${taskPrompt}`
+      : taskPrompt;
+
     const llmResult = await llmJSON<MaterializeResponse>({
       system: systemPromptToUse,
-      user: buildMaterializeUserPrompt({
-        userText: text,
-        spaceName: space?.name,
-        candidates,
-      }),
+      user: userPrompt,
       maxTokens: 2000,
       temperature: 0.3,
       fallback,

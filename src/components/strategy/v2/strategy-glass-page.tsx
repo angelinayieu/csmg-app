@@ -23,6 +23,8 @@ import { SpacePulseCard } from "./deliverables/space-pulse-card";
 import { ChangeProposalsBanner } from "@/components/strategy/change-proposals-banner";
 import { ChangeProposalsPanel } from "@/components/strategy/change-proposals-panel";
 import { StrategyVersionHistory } from "@/components/strategy/strategy-version-history";
+import { PinnedSynthesesSection } from "./pinned-syntheses-section";
+import { LeaderboardSection } from "./leaderboard-section";
 import { useRouter } from "next/navigation";
 import type { ViewKind } from "./view-kind";
 import type { Entity } from "@/types";
@@ -397,6 +399,24 @@ export function StrategyGlassPage() {
             to /whiteboard with a ?place_strategy={snapshot_id} query param;
             the whiteboard's Phase C consumer reads that param on mount and
             drops the corresponding StrategyShape at the viewport center. */}
+        {/* Pinned syntheses — surfaces summaries the user pinned from
+            canvas SummaryCard shapes. Self-hides when there are no
+            pins. The "Show on canvas" button on each row dispatches a
+            `summary-card:focus` window event that the canvas catches
+            to zoom + select the matching shape if it still exists. */}
+        <div className="mb-4">
+          <PinnedSynthesesSection spaceId={ctx.space.id} />
+        </div>
+
+        {/* Phase 4 — variant leaderboard. Self-hides when zero
+            variants exist. Refreshes on focus + every 30s while
+            expanded. Show-on-canvas dispatches a `variant:focus`
+            event the canvas can pick up to zoom to the variant
+            carousel for that variant's app. */}
+        <div className="mb-4">
+          <LeaderboardSection spaceId={ctx.space.id} />
+        </div>
+
         <div className="mb-4">
           <StrategyVersionHistory
             spaceId={ctx.space.id}

@@ -1236,6 +1236,133 @@ function TrajectoryCard() {
 }
 
 // ── DIGITAL TWIN (real Bayesian forward-pass) ───────────────────────
+//
+// Visual rules for this card:
+//   • Inputs are CONTROLS — neutral/recessed, never the loudest thing
+//   • Outputs are DATA — only colorful elements; sign by position, tone
+//     by polarity at low saturation (no hue swaps that read as
+//     "different in kind")
+//   • One chrome. No inverted callouts, no gray sub-panels.
+//   • ±SE shares a baseline with the value and is rendered as a band
+//     under the effect bar — the reader sees magnitude AND confidence
+//     in one glance.
+
+const Z_DOMAIN = 0.5; // ±0.5 z-units covers virtually all forecast outputs
+
+function ZBar({ value, se }: { value: number; se: number }) {
+  const v = Math.max(-Z_DOMAIN, Math.min(Z_DOMAIN, value));
+  const lo = Math.max(-Z_DOMAIN, v - se);
+  const hi = Math.min(Z_DOMAIN, v + se);
+  const pctOf = (z: number) => ((z + Z_DOMAIN) / (2 * Z_DOMAIN)) * 100;
+  const isPositive = v >= 0;
+  // Effect tone — emerald positive / rose negative, low saturation so
+  // it reads as an annotation, not a status alert. Inflation upstream
+  // (e.g., IL-6↑) is semantically NEGATIVE for cognition, but this
+  // card is presenting raw z-effects on each node, not "good/bad".
+  // Color encodes direction-of-change only.
+  const effectTone = isPositive ? "bg-emerald-500/55" : "bg-rose-500/55";
+  const seTone = isPositive ? "bg-emerald-300/35" : "bg-rose-300/35";
+  return (
+    <div className="relative h-[6px] rounded-full bg-slate-100">
+      {/* center-zero tick — extends slightly beyond the track */}
+      <div className="absolute -top-[3px] -bottom-[3px] left-1/2 w-px bg-slate-300" />
+      {/* SE band — wider, faint */}
+      <div
+        className={`absolute top-0 bottom-0 ${seTone}`}
+        style={{
+          left: `${pctOf(lo)}%`,
+          width: `${pctOf(hi) - pctOf(lo)}%`,
+        }}
+      />
+      {/* Effect bar — from 0 to v, narrower stripe, more saturated */}
+      <div
+        className={`absolute top-[1px] bottom-[1px] rounded-sm ${effectTone}`}
+        style={{
+          left: isPositive ? "50%" : `${pctOf(v)}%`,
+          width: `${Math.max(1.2, Math.abs(pctOf(v) - 50))}%`,
+        }}
+      />
+    </div>
+  );
+}
+
+function ZRow({
+  label,
+  note,
+  value,
+  se,
+  emphasize = false,
+}: {
+  label: string;
+  note?: string;
+  value: number;
+  se: number;
+  emphasize?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[120px_1fr_82px] items-center gap-3">
+      <div className="min-w-0">
+        <div
+          className={`truncate ${emphasize ? "text-[12px] font-medium text-slate-800" : "text-[11px] text-slate-700"}`}
+        >
+          {label}
+        </div>
+        {note ? (
+          <div className="truncate text-[9px] tabular-nums text-slate-400">
+            {note}
+          </div>
+        ) : null}
+      </div>
+      <ZBar value={value} se={se} />
+      <div className="text-right font-mono tabular-nums">
+        <span
+          className={`${emphasize ? "text-[14px] font-semibold text-slate-900" : "text-[12px] text-slate-800"}`}
+        >
+          {value >= 0 ? "+" : ""}
+          {value.toFixed(2)}
+        </span>
+        <span className="ml-1 text-[9.5px] text-slate-400">
+          ±{se.toFixed(2)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function InputSlider({
+  label,
+  value,
+  setValue,
+  hint,
+}: {
+  label: string;
+  value: number;
+  setValue: (v: number) => void;
+  hint: string;
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between">
+        <span className="text-[11px] text-slate-700">{label}</span>
+        <span className="font-mono text-[11px] tabular-nums text-slate-600">
+          {value.toFixed(2)}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={1.5}
+        step={0.05}
+        value={value}
+        onChange={(e) => setValue(parseFloat(e.target.value))}
+        className="twin-range mt-1.5 w-full"
+      />
+      <div className="mt-1 text-[9.5px] tabular-nums text-slate-400">
+        {hint}
+      </div>
+    </div>
+  );
+}
 
 function DigitalTwinCard() {
   const [activity, setActivity] = useState(0.5);
@@ -1257,11 +1384,11 @@ function DigitalTwinCard() {
   const se = useMemo(() => forwardSE(inputs), [inputs]);
 
   const biomarkers = [
-    { id: "N20", label: "IL-6", note: "pg/mL · ↑inflammation" },
-    { id: "N21", label: "CRP", note: "mg/L · ↑inflammation" },
-    { id: "N22", label: "TNF-α", note: "pg/mL · ↑inflammation" },
-    { id: "N23", label: "BDNF", note: "ng/mL · ↑plasticity" },
-    { id: "N24", label: "Cortisol", note: "nmol/L · stress axis" },
+    { id: "N20", label: "IL-6", note: "pg/mL · inflammation" },
+    { id: "N21", label: "CRP", note: "mg/L · inflammation" },
+    { id: "N22", label: "TNF-α", note: "pg/mL · inflammation" },
+    { id: "N23", label: "BDNF", note: "ng/mL · plasticity" },
+    { id: "N24", label: "Cortisol", note: "nmol/L · HPA axis" },
   ];
   const outcomes = [
     { id: "N30", label: "Neuroinflammation (OIC)" },
@@ -1270,157 +1397,135 @@ function DigitalTwinCard() {
   ];
 
   return (
-    <Card className="w-[600px]">
-      <div className="flex items-start justify-between">
+    <Card className="w-[640px]">
+      {/* Slider styling — neutral graphite, hairline track. Scoped to this
+          card via the `twin-range` class so it doesn't leak. */}
+      <style jsx>{`
+        :global(.twin-range) {
+          -webkit-appearance: none;
+          appearance: none;
+          height: 4px;
+          background: #e2e8f0;
+          border-radius: 9999px;
+          outline: none;
+        }
+        :global(.twin-range::-webkit-slider-thumb) {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 14px;
+          height: 14px;
+          border-radius: 9999px;
+          background: #1e293b;
+          cursor: pointer;
+          border: 2px solid #fff;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
+        }
+        :global(.twin-range::-moz-range-thumb) {
+          width: 14px;
+          height: 14px;
+          border-radius: 9999px;
+          background: #1e293b;
+          cursor: pointer;
+          border: 2px solid #fff;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
+        }
+      `}</style>
+
+      <header className="flex items-baseline justify-between border-b border-slate-100 pb-4">
         <div>
-          <Eyebrow>◯ Digital Twin · forward-pass</Eyebrow>
-          <div className="mt-2 text-[15px] font-semibold text-slate-900">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+            Digital twin · forward-pass model
+          </div>
+          <div className="mt-1.5 text-[16px] font-semibold tracking-tight text-slate-900">
             Patient-specific CRCI forecast
           </div>
         </div>
-        <Chip kind="model">MODEL</Chip>
-      </div>
+        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400">
+          {TOTAL_EDGES} edges · IVW
+        </span>
+      </header>
 
-      <div className="mt-5 grid grid-cols-2 gap-6">
-        {/* INPUTS */}
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-            Patient inputs
+      <div className="mt-5 grid grid-cols-[180px_1fr] gap-7">
+        {/* INPUTS — narrow, recessed control column */}
+        <section>
+          <div className="text-[9.5px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+            Inputs · z-units
           </div>
-          <div className="mt-3 space-y-3">
-            {[
-              {
-                label: "Activity (N10)",
-                val: activity,
-                set: setActivity,
-                hint: "0=sedentary · 1=150min/wk MVPA",
-              },
-              {
-                label: "Sleep (N11)",
-                val: sleep,
-                set: setSleep,
-                hint: "0=fragmented · 1=PSQI<5",
-              },
-              {
-                label: "Chemo (N01)",
-                val: chemo,
-                set: setChemo,
-                hint: "0=none · 1=AC standard dose",
-              },
-            ].map((s) => (
-              <div key={s.label}>
-                <div className="flex items-baseline justify-between">
-                  <span className="text-[11px] font-medium text-slate-700">
-                    {s.label}
-                  </span>
-                  <span className="font-mono text-[11px] tabular-nums text-slate-600">
-                    {s.val.toFixed(2)}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={1.5}
-                  step={0.05}
-                  value={s.val}
-                  onChange={(e) => s.set(parseFloat(e.target.value))}
-                  className="mt-1 w-full accent-violet-600"
-                />
-                <div className="mt-0.5 text-[9px] italic text-slate-400 tabular-nums">
-                  {s.hint}
-                </div>
+          <div className="mt-3 space-y-4">
+            <InputSlider
+              label="Activity (N10)"
+              value={activity}
+              setValue={setActivity}
+              hint="0=sedentary · 1=150min/wk"
+            />
+            <InputSlider
+              label="Sleep (N11)"
+              value={sleep}
+              setValue={setSleep}
+              hint="0=fragmented · 1=PSQI<5"
+            />
+            <InputSlider
+              label="Chemo (N01)"
+              value={chemo}
+              setValue={setChemo}
+              hint="0=none · 1=AC standard"
+            />
+          </div>
+        </section>
+
+        {/* OUTPUTS — primary visual mass */}
+        <section className="space-y-5">
+          <div>
+            <div className="flex items-baseline justify-between">
+              <div className="text-[9.5px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                Biomarker forecast
               </div>
-            ))}
-          </div>
-          <div className="mt-5 rounded-md bg-slate-50 p-2.5 text-[9px] tabular-nums leading-snug text-slate-500">
-            Inputs in z-units. Forward-pass propagates through {TOTAL_EDGES}{" "}
-            confirmed edges via inverse-variance weighting (β±SE per meta-edge).
-          </div>
-        </div>
-
-        {/* OUTPUTS */}
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-            Biomarker forecast (z, ±1 SE)
-          </div>
-          <div className="mt-3 space-y-2">
-            {biomarkers.map((b) => {
-              const v = state[b.id] ?? 0;
-              const eps = se[b.id] ?? 0.1;
-              const tone = v > 0 ? "bg-rose-300" : "bg-cyan-300";
-              const wPct = Math.max(
-                2,
-                Math.min(48, Math.abs(v) * 33),
-              );
-              return (
-                <div key={b.id}>
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="text-slate-700">{b.label}</span>
-                    <span className="font-mono tabular-nums text-slate-800">
-                      {v >= 0 ? "+" : ""}
-                      {v.toFixed(2)}{" "}
-                      <span className="text-[9px] text-slate-400">
-                        ± {eps.toFixed(2)}
-                      </span>
-                    </span>
-                  </div>
-                  <div className="relative mt-1 h-1.5 rounded-full bg-slate-100">
-                    <div
-                      className="absolute top-0 bottom-0 w-px bg-slate-400"
-                      style={{ left: "50%" }}
-                    />
-                    <div
-                      className={`absolute top-0 bottom-0 rounded-full ${tone}`}
-                      style={{
-                        left: v >= 0 ? "50%" : `${50 - wPct}%`,
-                        width: `${wPct}%`,
-                      }}
-                    />
-                  </div>
-                  <div className="mt-0.5 text-[9px] tabular-nums text-slate-400">
-                    {b.note}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="mt-4 rounded-md bg-slate-900 p-3 text-white">
-            <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">
-              Cognitive forecast
+              <div className="font-mono text-[9px] tabular-nums uppercase tracking-wider text-slate-300">
+                z ± 1 SE
+              </div>
             </div>
-            {outcomes.map((o) => {
-              const v = state[o.id] ?? 0;
-              const eps = se[o.id] ?? 0.1;
-              return (
-                <div
-                  key={o.id}
-                  className="mt-2 flex items-baseline justify-between"
-                >
-                  <span className="text-[11px] text-slate-300">
-                    {o.label}
-                  </span>
-                  <span className="font-mono tabular-nums">
-                    <span className="text-[14px] font-semibold">
-                      {v >= 0 ? "+" : ""}
-                      {v.toFixed(2)}
-                    </span>
-                    <span className="ml-1 text-[10px] text-slate-400">
-                      ± {eps.toFixed(2)}
-                    </span>
-                  </span>
-                </div>
-              );
-            })}
+            <div className="mt-3 space-y-2.5">
+              {biomarkers.map((b) => (
+                <ZRow
+                  key={b.id}
+                  label={b.label}
+                  note={b.note}
+                  value={state[b.id] ?? 0}
+                  se={se[b.id] ?? 0.1}
+                />
+              ))}
+            </div>
           </div>
-        </div>
+
+          <div className="border-t border-slate-100 pt-4">
+            <div className="flex items-baseline justify-between">
+              <div className="text-[9.5px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                Cognitive forecast
+              </div>
+              <div className="font-mono text-[9px] tabular-nums uppercase tracking-wider text-slate-300">
+                downstream
+              </div>
+            </div>
+            <div className="mt-3 space-y-2.5">
+              {outcomes.map((o) => (
+                <ZRow
+                  key={o.id}
+                  label={o.label}
+                  value={state[o.id] ?? 0}
+                  se={se[o.id] ?? 0.1}
+                  emphasize
+                />
+              ))}
+            </div>
+          </div>
+        </section>
       </div>
 
-      <Methodology>
+      <div className="mt-5 border-t border-slate-100 pt-3 text-[9.5px] leading-relaxed tabular-nums text-slate-400">
         Forward-pass through {TOTAL_EDGES} confirmed edges · IVW pooling
-        (β ± SE from meta-analyses) · L0→L6 layer order · δ-method SE ·
-        observational priors · not causal-identified
-      </Methodology>
+        (β±SE per meta-edge) · L0→L6 layer order · δ-method SE · observational
+        priors, not causal-identified.
+      </div>
     </Card>
   );
 }

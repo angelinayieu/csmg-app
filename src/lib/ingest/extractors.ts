@@ -271,6 +271,236 @@ RULES:
   }
 }
 
+// ── Image: structured vision pass (two-phase ingest, 2026-05-01) ────
+//
+// Replacement for `extractImage()` on the phase-2 path. One Claude
+// vision call returns FOUR pieces in one round-trip:
+//   - ocr_text:        verbatim text in the image (markdown-preserving)
+//   - description:     2-4 sentence description of what the image
+//                      depicts ("Architecture diagram with three
+//                      microservices and a shared Postgres")
+//   - entities:        discrete things visible — used to bulk-create
+//                      KG nodes via /api/canvas/materialize-from-image
+//   - relationships:   visible arrows / spatial groupings — used to
+//                      bulk-create KG edges between the entities
+//
+// Why one call instead of two: better visual reasoning when the model
+// holds the whole image in context for both OCR and structured
+// extraction; halves token + latency cost vs OCR-then-extract.
+//
+// Why Claude (not GPT-4o which the legacy `extractImage()` uses):
+// significantly better at structured visual reasoning + relationship
+// extraction in our internal benchmarks. Cost differential is dwarfed
+// by the value of correct entity wiring downstream.
+
+export interface ExtractedEntity {
+  /** Display name — used as the join key for relationships AND as the
+   *  KG entity name when materialized. */
+  name: string;
+  /** Free-form type ("service", "person", "metric"…) — the materialize
+   *  step maps these to canonical LayerIds via best-effort heuristics. */
+  type: string;
+  /** One-sentence description used for KG entity body + tooltips. */
+  description: string;
+  /** Optional spatial hint ("center", "top-left", "step 3"). Carried
+   *  for human readability; not used by the materializer. */
+  rolePosition?: string;
+}
+
+export interface ExtractedRelationship {
+  /** Must match an entity.name in the same extraction. Resolution is
+   *  case-sensitive — the model is instructed to reuse exact names. */
+  fromName: string;
+  toName: string;
+  /** Verb phrase ("calls", "feeds into", "blocks", "depends on"). */
+  label: string;
+  /** Optional: positive (reinforcing), negative (inhibiting), neutral.
+   *  When omitted, materializer treats as neutral. */
+  polarity?: "positive" | "negative" | "neutral";
+}
+
+export interface StructuredImageExtraction {
+  ocr_text: string;
+  description: string;
+  entities: ExtractedEntity[];
+  relationships: ExtractedRelationship[];
+}
+
+const STRUCTURED_IMAGE_SYSTEM = `You are reading an image dropped onto a knowledge canvas.
+
+The user is building a structured knowledge graph and wants the image to contribute discrete entities + relationships, not just raw text.
+
+Return STRICT JSON in this shape (no prose before or after, no code fences):
+
+{
+  "ocr_text": string,
+  "description": string,
+  "entities": [{ "name": string, "type": string, "description": string, "rolePosition"?: string }],
+  "relationships": [{ "fromName": string, "toName": string, "label": string, "polarity"?: "positive" | "negative" | "neutral" }]
+}
+
+RULES:
+- ocr_text: any visible text, transcribed verbatim with markdown structure preserved (headings, lists, tables). Empty string if no readable text.
+- description: 2-4 sentences naming what the image depicts. Be specific about the kind of artifact (diagram, screenshot, photo, sketch) and what's in it. Avoid generic phrases like "an image showing".
+- entities: one entry per discrete thing visible — services, people, metrics, components, steps, concepts, locations, datasets. Skip purely decorative elements. Use the image's own terminology for names; if a thing is unlabeled, give it a short specific name based on what it depicts. Cap at 12 entities — pick the most meaningful.
+- relationships: one entry per visible arrow, line, or spatial grouping that implies a connection. fromName/toName MUST exactly match names in the entities array (case-sensitive). polarity is optional; only include when the visual makes the sign obvious (e.g., a red X, a blocking icon, a "+" symbol).
+- If the image carries no semantic content (pure decoration, abstract art with no labels), return entities: [] and relationships: [] but still produce a description.
+
+Return ONLY the JSON object.`;
+
+export async function extractImageWithStructure(
+  buffer: Buffer,
+  filename: string,
+  mime: string,
+): Promise<
+  | { ok: true; result: ExtractResult; structured: StructuredImageExtraction; model: string }
+  | { ok: false; error: IngestError }
+> {
+  // Anthropic supports png/jpeg/gif/webp — gate other types here so
+  // we don't waste a round trip on a 415-shaped failure later.
+  const allowedMime = (
+    ["image/png", "image/jpeg", "image/gif", "image/webp"] as const
+  ).find((m) => m === mime);
+  if (!allowedMime) {
+    return {
+      ok: false,
+      error: {
+        code: "extraction_failed",
+        message: `Image MIME ${mime} is not supported by the structured vision pass (use png/jpeg/gif/webp).`,
+      },
+    };
+  }
+
+  try {
+    // Lazy import keeps the cold-start cost off paths that never see images.
+    const { llmGenerate, MODEL_DEFAULTS } = await import("../llm");
+    const model = MODEL_DEFAULTS.anthropic.fast; // Sonnet — Opus is overkill for vision OCR
+    const raw = await llmGenerate({
+      system: STRUCTURED_IMAGE_SYSTEM,
+      user: "Analyze this image and return the JSON described in the system prompt.",
+      provider: "anthropic",
+      model,
+      maxTokens: 4096,
+      temperature: 0.2,
+      images: [
+        { base64: buffer.toString("base64"), mediaType: allowedMime },
+      ],
+    });
+
+    const parsed = parseStructuredImageJson(raw);
+    if (!parsed) {
+      return {
+        ok: false,
+        error: {
+          code: "extraction_failed",
+          message: "Vision response was not valid JSON. Image may be too complex; try Re-analyze.",
+        },
+      };
+    }
+
+    // Carry the OCR text through the existing ExtractResult shape so
+    // downstream code (normalizer, asset_class inferrer) keeps working.
+    // Empty OCR is fine — the row will still have description + entities.
+    const text = parsed.ocr_text || parsed.description || "";
+    return {
+      ok: true,
+      result: {
+        text,
+        source_name: filename,
+        metadata: {
+          source_type: "image",
+          original_bytes: buffer.byteLength,
+          image_mime: mime,
+          // The structured pass is "confident" by definition — it's
+          // not pattern-matching on a SCENE: prefix like the legacy
+          // GPT-4o OCR path. Default to true; downstream consumers
+          // can lower priority via empty extracted_entities[] if the
+          // image is purely decorative.
+          ocr_confident: true,
+        },
+      },
+      structured: parsed,
+      model,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: "extraction_failed",
+        message: `Vision extraction failed: ${err instanceof Error ? err.message : "unknown error"}`,
+      },
+    };
+  }
+}
+
+function parseStructuredImageJson(raw: string): StructuredImageExtraction | null {
+  // Models occasionally wrap JSON in ```json fences or pad with prose.
+  // Strip both before parsing. Same logic the lasso-summarize endpoint
+  // uses — extracted to a shared helper if a third call site appears.
+  let cleaned = raw.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  }
+  const open = cleaned.indexOf("{");
+  const close = cleaned.lastIndexOf("}");
+  if (open >= 0 && close > open) cleaned = cleaned.slice(open, close + 1);
+  try {
+    const obj = JSON.parse(cleaned) as Partial<StructuredImageExtraction>;
+    if (typeof obj !== "object" || obj == null) return null;
+    const ocr_text = typeof obj.ocr_text === "string" ? obj.ocr_text : "";
+    const description = typeof obj.description === "string" ? obj.description : "";
+    const entities = Array.isArray(obj.entities)
+      ? obj.entities
+          .filter((e): e is ExtractedEntity =>
+            !!e &&
+            typeof e === "object" &&
+            typeof (e as ExtractedEntity).name === "string" &&
+            (e as ExtractedEntity).name.length > 0,
+          )
+          .slice(0, 24) // hard cap — defends against runaway model output
+          .map((e) => ({
+            name: e.name.slice(0, 120),
+            type: typeof e.type === "string" ? e.type.slice(0, 60) : "concept",
+            description:
+              typeof e.description === "string" ? e.description.slice(0, 400) : "",
+            rolePosition:
+              typeof e.rolePosition === "string"
+                ? e.rolePosition.slice(0, 60)
+                : undefined,
+          }))
+      : [];
+    const entityNames = new Set(entities.map((e) => e.name));
+    const relationships = Array.isArray(obj.relationships)
+      ? obj.relationships
+          .filter((r): r is ExtractedRelationship =>
+            !!r &&
+            typeof r === "object" &&
+            typeof (r as ExtractedRelationship).fromName === "string" &&
+            typeof (r as ExtractedRelationship).toName === "string" &&
+            entityNames.has((r as ExtractedRelationship).fromName) &&
+            entityNames.has((r as ExtractedRelationship).toName),
+          )
+          .slice(0, 48)
+          .map((r) => ({
+            fromName: r.fromName,
+            toName: r.toName,
+            label:
+              typeof r.label === "string" && r.label.length > 0
+                ? r.label.slice(0, 80)
+                : "related to",
+            polarity:
+              r.polarity === "positive" || r.polarity === "negative" || r.polarity === "neutral"
+                ? r.polarity
+                : undefined,
+          }))
+      : [];
+    if (!description && entities.length === 0 && !ocr_text) return null;
+    return { ocr_text, description, entities, relationships };
+  } catch {
+    return null;
+  }
+}
+
 // ── Plain text / markdown ────────────────────────────────────────────
 
 export function extractText(

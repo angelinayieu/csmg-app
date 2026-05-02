@@ -137,8 +137,11 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
  *  widest natural unfurl (the layered KG grid). */
 export const ROOM_W = 1900;
 
-/** Per-stage starting height. Painter can extend if needed. */
-const STAGE_HEIGHT: Record<PipelineStage, number> = {
+/** Per-stage starting height. Painter can extend if needed. Exported
+ *  so canvas-side helpers (e.g., the final-plan-card bridge that
+ *  creates the results Room outside the SSE event stream) can size
+ *  rooms consistently with the painter. */
+export const STAGE_HEIGHT: Record<PipelineStage, number> = {
   intake: 280,
   landscape: 420,
   kg: 700,
@@ -194,9 +197,59 @@ export function computeRoomBounds(
 }
 
 /**
- * Compute the connector line endpoint for an arrow that drops from
- * `fromStage` to `toStage`. Used by the painter when drawing the
- * vertical connector between adjacent rooms.
+ * Compute an absolute (x, y) coordinate inside a room's content area
+ * given an offset relative to the room's interior. Use this for any
+ * painter-managed shape that should visually live "inside" its
+ * stage's room (kg-formation, probability shells, origin-prompt,
+ * future proposal/lab cards).
+ *
+ * `offsetXFromCenter` is centered on the room's horizontal midline.
+ * `offsetYFromTop` is measured from the top of the content area
+ * (i.e., already past ROOM_PADDING.top so the header doesn't overlap).
+ *
+ * @example
+ *   // Place kg-formation 24px down from the kg room's content top,
+ *   // centered horizontally:
+ *   const { x, y } = placeInsideRoom("kg", anchor, 0, 24);
+ */
+export function placeInsideRoom(
+  stage: PipelineStage,
+  anchor: { x: number; y: number },
+  offsetXFromCenter: number,
+  offsetYFromTop: number,
+): { x: number; y: number } {
+  const bounds = computeRoomBounds(stage, anchor);
+  return {
+    x: bounds.x + bounds.w / 2 + offsetXFromCenter,
+    y: bounds.y + ROOM_PADDING.top + offsetYFromTop,
+  };
+}
+
+/**
+ * Inverse of `placeInsideRoom` — returns the (x, y) for a shape's
+ * top-left corner given desired centered placement inside a room.
+ * Subtracts half the shape's width/height so callers can think in
+ * terms of "where do I want the shape's CENTER to land."
+ */
+export function placeCenteredInsideRoom(
+  stage: PipelineStage,
+  anchor: { x: number; y: number },
+  shapeW: number,
+  shapeH: number,
+  offsetXFromCenter: number,
+  offsetYFromTop: number,
+): { x: number; y: number } {
+  const inner = placeInsideRoom(stage, anchor, offsetXFromCenter, offsetYFromTop);
+  return {
+    x: inner.x - shapeW / 2,
+    y: inner.y, // top-aligned by default; callers can pass extra y offset
+  };
+}
+
+/**
+ * Connector line endpoint for an arrow that drops from `fromStage`
+ * to `toStage`. Used by the painter when drawing the vertical
+ * connector between adjacent rooms.
  */
 export function computeConnectorPoints(
   fromStage: PipelineStage,

@@ -758,55 +758,77 @@ export function ImmersiveHome({
                     <Plus className="h-3.5 w-3.5" />
                   </button>
 
-                  {/* Apps pill + inline integration icons + "..." opens full popup */}
-                  <div
-                    className="flex items-center gap-1.5 rounded-full px-1.5 py-1"
-                    style={{
-                      border: "1px solid var(--home-chrome-stroke)",
-                      background: "var(--home-chrome-fill)",
-                    }}
-                  >
+                  {/* Apps & integrations — condensed to a single icon
+                      button. Click opens the full Apps popup; hover
+                      reveals a peek of the inline integration logos so
+                      the affordance still hints at what's behind it. */}
+                  <div className="group relative">
                     <button
                       onClick={() => setAppsOpen((v) => !v)}
-                      className="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors"
-                      style={{ color: "var(--home-text-mid)" }}
+                      className="flex h-7 w-7 items-center justify-center rounded-full transition-colors"
+                      style={{
+                        border: "1px solid var(--home-chrome-stroke)",
+                        background: "var(--home-chrome-fill)",
+                        color: "var(--home-text-mid)",
+                      }}
                       title="Apps & integrations"
                       aria-expanded={appsOpen}
+                      aria-label="Apps & integrations"
                     >
                       <LucideIcons.LayoutGrid
-                        className="h-3 w-3"
+                        className="h-3.5 w-3.5"
                         strokeWidth={1.75}
                       />
-                      <span>Apps</span>
                     </button>
-                    <div className="flex items-center gap-0.5">
-                      {INLINE_INTEGRATION_IDS.map((id) => {
-                        const integ = INTEGRATIONS.find((i) => i.id === id);
-                        if (!integ) return null;
-                        const { Logo } = integ;
-                        return (
-                          <button
-                            key={id}
-                            onClick={() => setAppsOpen(true)}
-                            className="flex h-5 w-5 items-center justify-center rounded-md transition-transform hover:scale-110"
-                            title={`${integ.label} — coming soon`}
-                          >
-                            <span className="[&_svg]:h-4 [&_svg]:w-4">
-                              <Logo />
-                            </span>
-                          </button>
-                        );
-                      })}
-                      <button
-                        onClick={() => setAppsOpen((v) => !v)}
-                        className="flex h-5 w-5 items-center justify-center rounded-md text-[color:var(--home-text-mid)] transition-colors"
-                        title="See all integrations"
+                    <div className="pointer-events-none invisible absolute left-1/2 top-full z-30 -translate-x-1/2 pt-1.5 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100">
+                      <div
+                        className="rounded-lg p-2 shadow-lg whitespace-nowrap"
+                        style={{
+                          background: "var(--home-chrome-fill)",
+                          border: "1px solid var(--home-chrome-stroke)",
+                          backdropFilter: "blur(8px)",
+                        }}
                       >
-                        <LucideIcons.MoreHorizontal
-                          className="h-3.5 w-3.5"
-                          strokeWidth={2}
-                        />
-                      </button>
+                        <div
+                          className="mb-1.5 text-[11px] font-semibold"
+                          style={{ color: "var(--home-text)" }}
+                        >
+                          Apps & integrations
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {INLINE_INTEGRATION_IDS.map((id) => {
+                            const integ = INTEGRATIONS.find(
+                              (i) => i.id === id,
+                            );
+                            if (!integ) return null;
+                            const { Logo } = integ;
+                            return (
+                              <button
+                                key={id}
+                                onClick={() => setAppsOpen(true)}
+                                className="flex h-6 w-6 items-center justify-center rounded-md transition-transform hover:scale-110"
+                                title={`${integ.label} — coming soon`}
+                              >
+                                <span className="[&_svg]:h-4 [&_svg]:w-4">
+                                  <Logo />
+                                </span>
+                              </button>
+                            );
+                          })}
+                          <button
+                            onClick={() => setAppsOpen((v) => !v)}
+                            className="flex h-6 items-center justify-center gap-0.5 rounded-md px-1.5 text-[10px] font-semibold transition-colors"
+                            style={{ color: "var(--home-text-mid)" }}
+                            title="See all integrations"
+                          >
+                            <LucideIcons.MoreHorizontal
+                              className="h-3.5 w-3.5"
+                              strokeWidth={2}
+                            />
+                            <span>more</span>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -889,43 +911,78 @@ export function ImmersiveHome({
                           : "Plan review ON — approve the proposed scope/ontology/axes before generation"
                       }
                     />
-                    {/* Reasoning: Fast / Balanced / Deep */}
-                    <div
-                      className="inline-flex items-center gap-1 rounded-full p-[3px]"
-                      style={{
-                        border: "1px solid var(--home-chrome-stroke)",
-                        background: "var(--home-chrome-fill)",
-                      }}
-                      title="Reasoning depth"
-                    >
-                      <Brain
-                        className="ml-1.5 h-3 w-3 text-[color:var(--home-text-faint)]"
-                        strokeWidth={1.75}
-                      />
-                      {(Object.keys(REASONING_META) as ReasoningDepth[]).map(
-                        (d) => {
-                          const meta = REASONING_META[d];
-                          const active = depth === d;
-                          return (
-                            <button
-                              key={d}
-                              onClick={() => setDepth(d)}
-                              title={meta.hint}
-                              className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors"
-                              style={
-                                active
-                                  ? {
-                                      background: "var(--home-cta-bg)",
-                                      color: "var(--home-cta-fg)",
-                                    }
-                                  : { color: "var(--home-text-mid)" }
-                              }
-                            >
-                              {meta.label}
-                            </button>
-                          );
-                        },
-                      )}
+                    {/* Reasoning: Fast / Balanced / Deep — collapsed to
+                        Brain icon. Hover dropdown reveals full selector
+                        so the chip row stays inside the chat box. */}
+                    <div className="group relative">
+                      <button
+                        type="button"
+                        aria-label={`Reasoning depth: ${REASONING_META[depth].label}`}
+                        className="flex h-7 items-center justify-center rounded-full transition-colors"
+                        style={{
+                          border: "1px solid var(--home-chrome-stroke)",
+                          background: "var(--home-chrome-fill)",
+                          color: "var(--home-text-mid)",
+                          width: 28,
+                        }}
+                      >
+                        <Brain className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      </button>
+                      <div className="pointer-events-none invisible absolute right-0 top-full z-30 pt-1.5 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100">
+                        <div
+                          className="rounded-lg p-2.5 shadow-lg whitespace-nowrap"
+                          style={{
+                            background: "var(--home-chrome-fill)",
+                            border: "1px solid var(--home-chrome-stroke)",
+                            backdropFilter: "blur(8px)",
+                          }}
+                        >
+                          <div
+                            className="mb-1.5 text-[11px] font-semibold"
+                            style={{ color: "var(--home-text)" }}
+                          >
+                            Reasoning depth
+                          </div>
+                          <div
+                            className="inline-flex items-center gap-1 rounded-full p-[3px]"
+                            style={{
+                              border: "1px solid var(--home-chrome-stroke)",
+                              background: "var(--home-chrome-fill)",
+                            }}
+                          >
+                            {(
+                              Object.keys(REASONING_META) as ReasoningDepth[]
+                            ).map((d) => {
+                              const meta = REASONING_META[d];
+                              const active = depth === d;
+                              return (
+                                <button
+                                  key={d}
+                                  onClick={() => setDepth(d)}
+                                  title={meta.hint}
+                                  className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors"
+                                  style={
+                                    active
+                                      ? {
+                                          background: "var(--home-cta-bg)",
+                                          color: "var(--home-cta-fg)",
+                                        }
+                                      : { color: "var(--home-text-mid)" }
+                                  }
+                                >
+                                  {meta.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p
+                            className="mt-1.5 text-[10.5px] leading-snug"
+                            style={{ color: "var(--home-text-mid)" }}
+                          >
+                            {REASONING_META[depth].hint}
+                          </p>
+                        </div>
+                      </div>
                     </div>
 
                     <button
@@ -1488,10 +1545,10 @@ function surfaceLabelFor(surface: string): string {
 }
 
 // ── Output toggle pill ──
-// Compact rounded-pill switch styled to match the depth pill row. Off
-// state is subdued (chrome stroke + faint text). Active state fills
-// with the supplied accent color so the user can see at a glance
-// which outputs they've opted into. Used for Apps + Lab toggles.
+// Icon-only round switch — active state fills with the accent color so
+// the user can see opt-ins at a glance without text labels. Full label,
+// ON/OFF state, and description appear in a hover dropdown so the row
+// stays compact. Used for Apps / Lab / Skip plan toggles.
 function OutputTogglePill({
   label,
   Icon,
@@ -1508,45 +1565,84 @@ function OutputTogglePill({
   title: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-pressed={active}
-      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold transition-colors"
-      style={
-        active
-          ? {
-              background: activeBg,
-              color: "#fff",
-              border: `1px solid ${activeBg}`,
-            }
-          : {
-              background: "var(--home-chrome-fill)",
-              color: "var(--home-text-mid)",
-              border: "1px solid var(--home-chrome-stroke)",
-            }
-      }
-    >
-      <Icon className="h-3 w-3" strokeWidth={2} />
-      <span>{label}</span>
-      <span
-        className="ml-0.5 text-[9px] font-bold uppercase tracking-wider"
-        style={{
-          opacity: active ? 0.85 : 0.55,
-        }}
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={active}
+        aria-label={`${label} ${active ? "on" : "off"}`}
+        className="flex h-7 w-7 items-center justify-center rounded-full transition-colors"
+        style={
+          active
+            ? {
+                background: activeBg,
+                color: "#fff",
+                border: `1px solid ${activeBg}`,
+              }
+            : {
+                background: "var(--home-chrome-fill)",
+                color: "var(--home-text-mid)",
+                border: "1px solid var(--home-chrome-stroke)",
+              }
+        }
       >
-        {active ? "ON" : "OFF"}
-      </span>
-    </button>
+        <Icon className="h-3.5 w-3.5" strokeWidth={2} />
+      </button>
+      {/* Hover dropdown — pt-1.5 on the wrapper (not mt) so cursor can
+          travel from button to popover without losing :hover. */}
+      <div className="pointer-events-none invisible absolute left-1/2 top-full z-30 -translate-x-1/2 pt-1.5 opacity-0 transition-opacity duration-100 group-hover:visible group-hover:opacity-100">
+        <div
+          className="w-44 rounded-lg p-2.5 shadow-lg"
+          style={{
+            background: "var(--home-chrome-fill)",
+            border: "1px solid var(--home-chrome-stroke)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span
+              className="text-[11px] font-semibold"
+              style={{ color: "var(--home-text)" }}
+            >
+              {label}
+            </span>
+            <span
+              className="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+              style={
+                active
+                  ? {
+                      background: activeBg,
+                      color: "#fff",
+                      border: `1px solid ${activeBg}`,
+                    }
+                  : {
+                      background: "transparent",
+                      color: "var(--home-text-faint)",
+                      border: "1px solid var(--home-chrome-stroke)",
+                    }
+              }
+            >
+              {active ? "ON" : "OFF"}
+            </span>
+          </div>
+          <p
+            className="mt-1 text-[10.5px] leading-snug"
+            style={{ color: "var(--home-text-mid)" }}
+          >
+            {title}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
 // ── Strategy count stepper ──
-// Inline numeric control: shows current count with - / + buttons.
-// Bounded by STRATEGY_COUNT_MIN..STRATEGY_COUNT_MAX. Default 3. The
-// value plumbs into the synthesis prompt's option count + a final
-// slice on ranked_strategies (strategy-engine.ts).
+// Compact value chip — shows Target icon + current count. Hover reveals
+// a dropdown with the - / + stepper. Bounded by
+// STRATEGY_COUNT_MIN..STRATEGY_COUNT_MAX. Default 3. Plumbs into the
+// synthesis prompt's option count + a final slice on ranked_strategies
+// (strategy-engine.ts).
 function StrategyCountStepper({
   value,
   onChange,
@@ -1563,44 +1659,84 @@ function StrategyCountStepper({
   const decDisabled = safeValue <= STRATEGY_COUNT_MIN;
   const incDisabled = safeValue >= STRATEGY_COUNT_MAX;
   return (
-    <div
-      className="inline-flex items-center gap-0.5 rounded-full p-[3px]"
-      style={{
-        border: "1px solid var(--home-chrome-stroke)",
-        background: "var(--home-chrome-fill)",
-      }}
-      title={`Generate ${safeValue} ranked ${safeValue === 1 ? "strategy" : "strategies"} (${STRATEGY_COUNT_MIN}–${STRATEGY_COUNT_MAX})`}
-    >
-      <Target
-        className="ml-1 h-3 w-3 text-[color:var(--home-text-faint)]"
-        strokeWidth={1.75}
-      />
+    <div className="group relative">
       <button
         type="button"
-        onClick={dec}
-        disabled={decDisabled}
-        className="flex h-5 w-5 items-center justify-center rounded-full transition-colors disabled:opacity-30"
-        style={{ color: "var(--home-text-mid)" }}
-        aria-label="Fewer strategies"
+        aria-label={`${safeValue} ${safeValue === 1 ? "strategy" : "strategies"}`}
+        className="flex h-7 items-center gap-1 rounded-full px-2 transition-colors"
+        style={{
+          border: "1px solid var(--home-chrome-stroke)",
+          background: "var(--home-chrome-fill)",
+          color: "var(--home-text-mid)",
+        }}
       >
-        <Minus className="h-2.5 w-2.5" strokeWidth={2.5} />
+        <Target className="h-3 w-3" strokeWidth={1.75} />
+        <span
+          className="min-w-[8px] text-center text-[11px] font-bold tabular-nums"
+          style={{ color: "var(--home-text-strong, var(--home-text))" }}
+        >
+          {safeValue}
+        </span>
       </button>
-      <span
-        className="min-w-[14px] text-center text-[11px] font-bold tabular-nums"
-        style={{ color: "var(--home-text-strong, var(--home-text-mid))" }}
-      >
-        {safeValue}
-      </span>
-      <button
-        type="button"
-        onClick={inc}
-        disabled={incDisabled}
-        className="flex h-5 w-5 items-center justify-center rounded-full transition-colors disabled:opacity-30"
-        style={{ color: "var(--home-text-mid)" }}
-        aria-label="More strategies"
-      >
-        <Plus className="h-2.5 w-2.5" strokeWidth={2.5} />
-      </button>
+      <div className="pointer-events-none invisible absolute left-1/2 top-full z-30 -translate-x-1/2 pt-1.5 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100">
+        <div
+          className="rounded-lg p-2.5 shadow-lg"
+          style={{
+            background: "var(--home-chrome-fill)",
+            border: "1px solid var(--home-chrome-stroke)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <div className="mb-1.5 flex items-center justify-between gap-3 whitespace-nowrap">
+            <span
+              className="text-[11px] font-semibold"
+              style={{ color: "var(--home-text)" }}
+            >
+              Strategies
+            </span>
+            <span
+              className="text-[9.5px]"
+              style={{ color: "var(--home-text-faint)" }}
+            >
+              {STRATEGY_COUNT_MIN}–{STRATEGY_COUNT_MAX}
+            </span>
+          </div>
+          <div
+            className="inline-flex items-center gap-0.5 rounded-full p-[3px]"
+            style={{
+              border: "1px solid var(--home-chrome-stroke)",
+              background: "var(--home-chrome-fill)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={dec}
+              disabled={decDisabled}
+              className="flex h-5 w-5 items-center justify-center rounded-full transition-colors disabled:opacity-30"
+              style={{ color: "var(--home-text-mid)" }}
+              aria-label="Fewer strategies"
+            >
+              <Minus className="h-2.5 w-2.5" strokeWidth={2.5} />
+            </button>
+            <span
+              className="min-w-[20px] text-center text-[11px] font-bold tabular-nums"
+              style={{ color: "var(--home-text-strong, var(--home-text-mid))" }}
+            >
+              {safeValue}
+            </span>
+            <button
+              type="button"
+              onClick={inc}
+              disabled={incDisabled}
+              className="flex h-5 w-5 items-center justify-center rounded-full transition-colors disabled:opacity-30"
+              style={{ color: "var(--home-text-mid)" }}
+              aria-label="More strategies"
+            >
+              <Plus className="h-2.5 w-2.5" strokeWidth={2.5} />
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

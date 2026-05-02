@@ -77,6 +77,15 @@ export interface MultiStepStrategyParams {
    */
   richKgContextBlock?: string;
   /**
+   * Phase 1 KG-Context-Layer (2026-05-01) — supplemental block
+   * carrying GraphRAG-style cluster summaries, load-bearing axioms,
+   * and post-synthesis convergent concerns. Sits AFTER the rich KG
+   * block so the LLM reads "here are the entities → here is the
+   * structural meta-context that already digested them." Empty
+   * string when none of the three layers have content yet.
+   */
+  kgSupplementsBlock?: string;
+  /**
    * Cross-space similar-patterns block (Phase 1 Step 10). Retrieved
    * via pgvector from the user's broader `memory_items` store,
    * filtered to exclude the current space so it truly reflects prior
@@ -680,6 +689,15 @@ export async function generateMultiStepStrategy(
     ? `${params.richKgContextBlock}\n\nUse the entities, relationships, and evidence above to justify tradeoffs and name specific levers. Do not echo field names back in your output — readers see the strategy, not the prompt.\n\n`
     : "";
 
+  // Phase 1 KG-Context-Layer (2026-05-01) — meta-structural sections
+  // (cluster summaries, axioms, convergent concerns) that complement
+  // the entity/edge/claim block above. Each is suppress-empty so a
+  // young space (no community detection yet, no axioms extracted)
+  // collapses out cleanly.
+  const kgSupplementsRendered = params.kgSupplementsBlock
+    ? `${params.kgSupplementsBlock}\n\n`
+    : "";
+
   // Phase 1 Step 10 — cross-space pattern analogies. Sits between
   // prior-run context and the current-space KG block so the LLM
   // reads "here's what you've seen before" right before "here's
@@ -702,6 +720,7 @@ export async function generateMultiStepStrategy(
     learningBlock,
     patternsBlock,
     richKgBlock,
+    kgSupplementsRendered,
     servedByBlock,
     // Intervention candidates sit LAST before the core prompt so they're
     // the freshest context in the LLM's working memory when it starts

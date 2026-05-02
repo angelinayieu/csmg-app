@@ -29,6 +29,9 @@ import {
   FileSpreadsheet,
   CheckCircle2,
   ExternalLink,
+  Loader2,
+  Sparkles,
+  AlertCircle,
 } from "lucide-react";
 import type { FileCardShape } from "./types";
 
@@ -73,6 +76,11 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
     charCount: T.number,
     analyzed: T.boolean,
     accent: T.string,
+    visionStatus: T.literalEnum("idle", "analyzing", "ready", "error"),
+    visionDescription: T.string,
+    visionEntityCount: T.number,
+    visionRelationshipCount: T.number,
+    visionError: T.string.nullable(),
   };
 
   override getDefaultProps(): FileCardShape["props"] {
@@ -89,6 +97,11 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
       charCount: 0,
       analyzed: false,
       accent: "#64748B",
+      visionStatus: "idle",
+      visionDescription: "",
+      visionEntityCount: 0,
+      visionRelationshipCount: 0,
+      visionError: null,
     };
   }
 
@@ -108,7 +121,13 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
       charCount,
       analyzed,
       accent,
+      visionStatus,
+      visionDescription,
+      visionEntityCount,
+      visionRelationshipCount,
+      visionError,
     } = shape.props;
+    const isImageCard = !!mimeType?.startsWith("image/");
 
     const Icon = iconForFile(sourceType, mimeType);
     const typeLabel =
@@ -221,6 +240,67 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
                     Analyzed
                   </span>
                 )}
+                {/* Two-phase image ingest status — only shown for
+                    image-typed cards. Drives the user's mental model
+                    that the canvas is "looking" at the image. */}
+                {isImageCard && visionStatus === "analyzing" && (
+                  <span
+                    title="Running vision analysis…"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 3,
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: "#7c3aed",
+                    }}
+                  >
+                    <Loader2
+                      size={9}
+                      strokeWidth={2.25}
+                      style={{ animation: "spin 1s linear infinite" }}
+                    />
+                    Analyzing…
+                  </span>
+                )}
+                {isImageCard && visionStatus === "ready" && (
+                  <span
+                    title={
+                      visionDescription
+                        ? `Image analysis: ${visionDescription}`
+                        : "Vision analysis complete"
+                    }
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 3,
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: "#7c3aed",
+                    }}
+                  >
+                    <Sparkles size={9} strokeWidth={2.25} />
+                    {visionEntityCount > 0
+                      ? `${visionEntityCount}e · ${visionRelationshipCount}r`
+                      : "Analyzed"}
+                  </span>
+                )}
+                {isImageCard && visionStatus === "error" && (
+                  <span
+                    title={visionError ?? "Vision analysis failed"}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 3,
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: "#dc2626",
+                    }}
+                  >
+                    <AlertCircle size={9} strokeWidth={2.25} />
+                    Vision failed
+                  </span>
+                )}
               </div>
               <div
                 style={{
@@ -240,27 +320,35 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
             </div>
           </div>
 
-          {/* Preview */}
-          {preview && (
-            <div
-              style={{
-                flex: 1,
-                padding: "4px 12px 6px",
-                fontSize: 11,
-                fontWeight: 400,
-                color: "rgba(15,23,42,0.6)",
-                lineHeight: 1.4,
-                overflow: "hidden",
-                display: "-webkit-box",
-                WebkitLineClamp: 3,
-                WebkitBoxOrient: "vertical",
-                whiteSpace: "pre-wrap",
-              }}
-              title={preview}
-            >
-              {preview}
-            </div>
-          )}
+          {/* Preview — for image cards, prefer the cached vision
+              description when available (more useful than raw OCR). */}
+          {(() => {
+            const previewText =
+              isImageCard && visionStatus === "ready" && visionDescription
+                ? visionDescription
+                : preview;
+            if (!previewText) return null;
+            return (
+              <div
+                style={{
+                  flex: 1,
+                  padding: "4px 12px 6px",
+                  fontSize: 11,
+                  fontWeight: 400,
+                  color: "rgba(15,23,42,0.6)",
+                  lineHeight: 1.4,
+                  overflow: "hidden",
+                  display: "-webkit-box",
+                  WebkitLineClamp: 3,
+                  WebkitBoxOrient: "vertical",
+                  whiteSpace: "pre-wrap",
+                }}
+                title={previewText}
+              >
+                {previewText}
+              </div>
+            );
+          })()}
 
           {/* Footer */}
           <div

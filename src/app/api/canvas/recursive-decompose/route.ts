@@ -22,6 +22,7 @@ import { sanitizeEntity, resilientInsert } from "@/lib/sanitize";
 import { logKnowledgeEvent } from "@/lib/changelog/log-knowledge-event";
 import { emitBatchEvents } from "@/lib/events/structural-event-bus";
 import type { StructuralEvent } from "@/types/pipeline-events";
+import { buildKgContext, renderKgContext } from "@/lib/kg-context";
 import {
   ABSOLUTE_MAX_DRILL_DEPTH,
   computeParentQualityScore,
@@ -204,8 +205,32 @@ export async function POST(request: Request) {
               ? "domain-level (a core sub-system)"
               : "system-level (a top-level structure)";
 
+    // ── Phase 1: KG context (deep mode, focused on parent) ────────
+    // Pulls parent's 1-hop neighbors + edges + claims + axioms
+    // anchored to it + the community summary that contains it. The
+    // LLM stops decomposing in isolation — it can see what the
+    // parent borders on and avoid generating children that duplicate
+    // existing siblings or peer entities.
+    let kgGrounding = "";
+    try {
+      const kgCtx = await buildKgContext(supabase, {
+        spaceId,
+        mode: "deep",
+        focusEntityIds: [parent.id],
+        query: `${parent.name ?? ""} ${parent.description ?? ""}`.trim(),
+      });
+      kgGrounding = renderKgContext(kgCtx, {
+        header:
+          "## Parent's neighborhood (use as grounding; avoid generating children that duplicate these)",
+      });
+    } catch (err) {
+      // Soft-fail — parent-only decompose still works without
+      // surrounding context, just less informed.
+      console.warn("[recursive-decompose] KG context fetch failed:", err);
+    }
+
     // Build prompt
-    const userPrompt = `Parent entity:
+    const taskPrompt = `Parent entity:
 Name: ${parent.name}
 Description: ${parent.description ?? "(none)"}
 Category: ${parent.entity_category ?? "concept"}
@@ -214,6 +239,9 @@ Layer: ${parent.layer ?? "(none)"}  (depth ${parentDepth})
 Produce 2-${MAX_CHILDREN} proxy indicators for this entity at layer
 "${childLayerName}" (depth ${childDepth}) — ${childGuidance}. Each child
 must be MORE SPECIFIC than the parent, not a paraphrase of it.`;
+    const userPrompt = kgGrounding
+      ? `${kgGrounding}\n\n---\n\n${taskPrompt}`
+      : taskPrompt;
 
     const fallback: LLMResponse = { children: [] };
     const result = await llmJSON<LLMResponse>({

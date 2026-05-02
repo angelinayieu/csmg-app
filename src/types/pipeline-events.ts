@@ -64,6 +64,14 @@ export type StructuralEvent =
   // row at top-of-canvas. Run-scoped; cleared with the rest of the
   // painter's emission overlay on run completion.
   | AssetAddedEvent
+  // Image extraction phase 2 (two-phase ingest, 2026-05-01) — fires
+  // when /api/ingest/vision-extract finishes the structured Claude
+  // vision pass on a previously-ingested image. Carries description,
+  // entity count, and relationship count so the file-card can flip
+  // from "Analyzing image…" to its ready state without a refetch.
+  // Materialize-from-image consumes this event to bulk-create the
+  // associated KG nodes + edges around the file-card.
+  | ImageExtractedEvent
   // Memory context — emitted at decompose start when the user's
   // memory_items were queried and relevant prior context was injected
   // into the Pass 1 system prompt. Canvas HUD displays a subtle
@@ -84,7 +92,15 @@ export type StructuralEvent =
   // so research can target them next pass, AND active contradiction
   // discoveries from the adversarial pass.
   | TriangulationGapEvent
-  | ContradictionFoundEvent;
+  | ContradictionFoundEvent
+  // Phase 6 (Insight Lab) — manual algorithm-stack experimentation. One
+  // pipeline_run per stack run; events stream the per-step lifecycle so
+  // the lab UI can render progress + ranked insights through the existing
+  // event bus rather than a parallel channel. See 20260629_insight_lab.sql
+  // for the matching DB CHECK and src/lib/insight-lab/ for the runtime.
+  | LabStepStartedEvent
+  | LabInsightEmittedEvent
+  | LabScoreRecordedEvent;
 
 // ── Phase 2E · Tier 2 — probability space axes ──
 //
@@ -1240,6 +1256,39 @@ export interface MemoryContextLoadedEvent {
   tokenEstimate: number;
 }
 
+// ── Image extraction phase 2 (two-phase ingest, 2026-05-01) ────────
+//
+// /api/ingest now returns immediately for image MIME types — the file-
+// card lands on canvas with status="analyzing". Phase 2 runs the
+// Claude vision pass via /api/ingest/vision-extract. When that
+// finishes, this event fires.
+//
+// Subscribers:
+//   - file-card-shape: flip status badge to "ready" or "error"
+//   - canvas painter: optionally call materialize-from-image to drop
+//     the extracted entities + edges next to the file-card
+//   - lasso-summarize / decompose: now safe to read the cached fields
+//     off the ingested_files row when this image is in the selection
+export interface ImageExtractedEvent {
+  type: "image_extracted";
+  /** ingested_files.id — canonical handle. */
+  ingestedFileId: string;
+  spaceId: string;
+  /** How many entities the vision pass produced. Drives the file-
+   *  card's "✦ N entities · M relationships" pill. */
+  entityCount: number;
+  relationshipCount: number;
+  /** First ~120 chars of image_description so subscribers can update
+   *  hover tooltips without a follow-up fetch. */
+  description: string;
+  /** Wall-clock ms for the vision call — surfaced in the run-events
+   *  log for ad-hoc latency monitoring. */
+  durationMs: number;
+  /** Set when the vision pass failed; otherwise null. The file-card
+   *  switches to its error badge when present. */
+  error: string | null;
+}
+
 export interface PipelineRunEventRow {
   id: string;
   run_id: string;
@@ -1384,4 +1433,73 @@ export interface ContradictionFoundEvent {
    *  the Bayesian-ish posterior in claim-producer.ts demotes it
    *  automatically. UI can render the delta. */
   confidenceAfter: number;
+}
+
+// ── Phase 6 · Insight Lab events ─────────────────────────────────────
+//
+// Manual lab runs an algorithm "stack" (ordered list of registered
+// algorithms) over a space's graph and emits ranked insights with
+// provenance. These three events let the existing SSE infrastructure
+// stream lab progress + results through pipeline_run_events instead of
+// a parallel channel — the lab UI subscribes to the same /api/pipeline
+// stream every other pipeline uses.
+//
+// Persistence target: lab_experiments + lab_insights tables (see
+// 20260629_insight_lab.sql). Runtime: src/lib/insight-lab/.
+
+/** Fired when a step in the stack starts executing. Stack composition
+ *  is known up-front, so the UI can pre-render placeholder rows and
+ *  fill them in as each step lands. */
+export interface LabStepStartedEvent {
+  type: "lab_step_started";
+  /** lab_experiments.id — the experiment row this run is persisting to. */
+  experimentId: string;
+  /** Position in the stack (0-indexed). */
+  stepIdx: number;
+  /** Registered algorithm id (matches AlgoId in src/lib/insight-lab/types.ts). */
+  algoId: string;
+  /** Display name for the algorithm — denormalized so consumers don't
+   *  need to round-trip to the registry. */
+  algoName: string;
+}
+
+/** Fired once per insight emitted by a step. Carries enough payload
+ *  for the canvas to render without a follow-up fetch — provenance is
+ *  the algoId + stepIdx that produced it, raw native output is intentionally
+ *  omitted from the event (it's persisted on the row). */
+export interface LabInsightEmittedEvent {
+  type: "lab_insight_emitted";
+  experimentId: string;
+  /** Stable insight key within the experiment (matches lab_insights.insight_key). */
+  insightKey: string;
+  kind:
+    | "hub"
+    | "bridge"
+    | "cluster"
+    | "cycle"
+    | "community"
+    | "cascade"
+    | "pathway"
+    | "tier";
+  summary: string;
+  /** Entities the insight references. Soft FK — may be deleted later. */
+  entityIds: string[];
+  /** Provenance — which step in the stack produced this insight. */
+  algoId: string;
+  stepIdx: number;
+}
+
+/** Fired once per scoring axis once all insights are scored. Lets the
+ *  UI defer score rendering until the full distribution is known
+ *  (perInsight ranges normalize per-axis, not per-insight). */
+export interface LabScoreRecordedEvent {
+  type: "lab_score_recorded";
+  experimentId: string;
+  /** Which scoring axis. v0 ships goal-match only; novelty +
+   *  actionability arrive in Phase 6+. */
+  axis: "goal_match" | "novelty" | "actionability";
+  /** Aggregate score for the whole stack (0-1). */
+  stackAvg: number;
+  /** Number of insights that contributed to the stack average. */
+  insightCount: number;
 }

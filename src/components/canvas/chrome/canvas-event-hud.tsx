@@ -14,7 +14,7 @@
 // proves the stream works end-to-end + gives a live count.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, CheckCircle2, AlertCircle, AlertTriangle, Check, StopCircle, Clock, Brain } from "lucide-react";
+import { Loader2, CheckCircle2, AlertCircle, AlertTriangle, Check, StopCircle, Clock, Brain, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRunEventStore } from "../hooks/run-event-store";
 import type { PipelineStage } from "@/types/pipeline-events";
@@ -44,6 +44,15 @@ export interface CanvasEventHudProps {
    * old run).
    */
   onRetry?: () => void;
+  /**
+   * Resume callback — same trigger window as Retry (failed/timeout)
+   * but rehydrates the SAME run via /api/pipeline/decompose with
+   * existingRunId + existingSpaceId. Cheaper than Retry (no new
+   * credits, no duplicate space) so it's the preferred recovery and
+   * renders as the primary CTA when both are wired. Parent owns the
+   * fetch since it has the prompt + space context.
+   */
+  onResume?: () => void;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -73,7 +82,8 @@ const STAGE_SHORT: Record<PipelineStage, string> = {
   results: "Results",
 };
 
-export function CanvasEventHud({ runId, onClose, onRetry }: CanvasEventHudProps) {
+export function CanvasEventHud({ runId, onClose, onRetry, onResume }: CanvasEventHudProps) {
+  const [resumePending, setResumePending] = useState(false);
   const { events, status, error, latest, lastEventAtMs } = useRunEventStore();
   const [cancelPending, setCancelPending] = useState(false);
   // `now` ticks every second so the stall badge updates live. Cheap:
@@ -386,6 +396,35 @@ export function CanvasEventHud({ runId, onClose, onRetry }: CanvasEventHudProps)
           <span className="ml-1 text-[10px] font-semibold text-amber-600">
             Stopping…
           </span>
+        )}
+
+        {/* Resume affordance — primary CTA on failure. Continues the
+            same run (no duplicate space, no new credits) by calling
+            decompose's rehydrate path. Sits before Retry because it's
+            the cheaper/faster recovery; Retry stays available for
+            users who want a clean restart. */}
+        {onResume && (status === "failed" || status === "timeout") && !isStreamDroppedNotFailed && (
+          <button
+            onClick={async () => {
+              if (resumePending) return;
+              setResumePending(true);
+              try {
+                await onResume();
+              } finally {
+                setResumePending(false);
+              }
+            }}
+            disabled={resumePending}
+            className="ml-1 inline-flex items-center gap-1 rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            title="Continue the interrupted run — no duplicate, no new credits"
+          >
+            {resumePending ? (
+              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+            ) : (
+              <Play className="h-2.5 w-2.5 fill-current" />
+            )}
+            {resumePending ? "Resuming…" : "Resume"}
+          </button>
         )}
 
         {/* U4 (docs/KG_DEPTH_CRITIQUE.md audit) — Retry affordance for

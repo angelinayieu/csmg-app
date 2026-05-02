@@ -85,6 +85,8 @@ import {
   computeRoomBounds,
   buildRoomSubtitle,
   roomForEventType,
+  placeInsideRoom,
+  ROOM_PADDING,
   EMPTY_ROOM_COUNTS,
   type RoomCounts,
 } from "@/lib/whiteboard/room-layout";
@@ -241,11 +243,23 @@ function ensureOriginPrompt(
   if (!state.anchor) return null;
   const shapeId = createShapeId();
   try {
+    // Place inside the `intake` room's content area, centered
+    // horizontally, ~16px below the room header. Room bounds are
+    // deterministic from the anchor so this works even when the room
+    // shape itself hasn't been created yet (the painter creates it on
+    // the first stage_boundary event; until then this position is
+    // off-screen but consistent with where the room will land).
+    const placement = placeInsideRoom(
+      "intake",
+      state.anchor,
+      0,
+      16,
+    );
     editor.createShape<OriginPromptShape>({
       id: shapeId,
       type: "origin-prompt",
-      x: state.anchor.x - ORIGIN_PROMPT_DEFAULT_W / 2,
-      y: state.anchor.y - ORIGIN_PROMPT_OFFSET_Y,
+      x: placement.x - ORIGIN_PROMPT_DEFAULT_W / 2,
+      y: placement.y,
       props: {
         w: ORIGIN_PROMPT_DEFAULT_W,
         h: ORIGIN_PROMPT_DEFAULT_H,
@@ -255,6 +269,12 @@ function ensureOriginPrompt(
       },
     });
     state.originPromptShapeId = shapeId;
+    recordChildBottomForStage(
+      editor,
+      state,
+      "intake",
+      placement.y + ORIGIN_PROMPT_DEFAULT_H,
+    );
     // Fit the viewport so the user sees the prompt card immediately.
     // The painter's anchor lives at viewport midY − 100 but we just
     // placed origin-prompt ~820px above the anchor (well outside the
@@ -273,11 +293,16 @@ function ensureKGFormation(editor: Editor, state: PainterState) {
   if (!state.anchor) return null;
   const shapeId = createShapeId();
   try {
+    // Place inside the `kg` room — the live overview card lives here
+    // so the user sees the entities + edges piling up inside the
+    // "Knowledge graph" room that owns the stage. Centered, with a
+    // ~16px gap below the room header.
+    const placement = placeInsideRoom("kg", state.anchor, 0, 16);
     editor.createShape<KGFormationShape>({
       id: shapeId,
       type: "kg-formation",
-      x: state.anchor.x - KG_FORMATION_W / 2,
-      y: state.anchor.y - KG_FORMATION_OFFSET_Y,
+      x: placement.x - KG_FORMATION_W / 2,
+      y: placement.y,
       props: {
         w: KG_FORMATION_W,
         h: KG_FORMATION_H,
@@ -290,6 +315,12 @@ function ensureKGFormation(editor: Editor, state: PainterState) {
       },
     });
     state.kgFormationShapeId = shapeId;
+    recordChildBottomForStage(
+      editor,
+      state,
+      "kg",
+      placement.y + KG_FORMATION_H,
+    );
     // Tether UP to the origin-prompt so the entire downstream tree
     // reads as branching from the user's thought. Silent no-op when
     // there's no prompt (strategy-refresh, etc.) — kg-formation just
@@ -499,11 +530,23 @@ function paintSpaceOpened(
 
   const shapeId = createShapeId();
   try {
+    // Place inside the `landscape` room. `spaceShellLayout()` already
+    // computes a centered offsetX (column position within the row);
+    // we just need to map the row's vertical offset to a position
+    // inside the room's content area instead of an anchor-relative
+    // band. ~16px below the room header so the lenses sit visually
+    // inside their owning "Probability spaces" card.
+    const placement = placeInsideRoom(
+      "landscape",
+      state.anchor,
+      offsetX + SPACE_SHELL_DEFAULT_W / 2, // placeInsideRoom returns center; shell uses top-left
+      16 + rowOffsetY,
+    );
     editor.createShape<ProbabilitySpaceShellShape>({
       id: shapeId,
       type: "probability-space-shell",
-      x: state.anchor.x + offsetX,
-      y: state.anchor.y - SPACE_SHELL_ROW_Y_OFFSET + rowOffsetY,
+      x: placement.x - SPACE_SHELL_DEFAULT_W / 2,
+      y: placement.y,
       props: {
         w: SPACE_SHELL_DEFAULT_W,
         h: SPACE_SHELL_DEFAULT_H,
@@ -522,6 +565,12 @@ function paintSpaceOpened(
       },
     });
     state.spaceShellShapeIds.set(event.spaceKey, shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "landscape",
+      placement.y + SPACE_SHELL_DEFAULT_H,
+    );
     // Tether UP to origin-prompt so each lens reads as descending from
     // the user's thought. Silent no-op if origin-prompt wasn't painted
     // (runs with no intake text — shells become visual roots themselves).
@@ -3179,6 +3228,50 @@ function ensureSynthesisCard(
 // nest tldraw children. Achieved with `editor.sendToBack` immediately
 // after creation.
 
+/**
+ * Record that a child shape now occupies down to `childBottomY` inside
+ * `stage`'s room, and grow the room's height if it's not already
+ * tall enough to enclose that y. Idempotent — repeat calls with a
+ * smaller y are no-ops. Pulled out of the placement helpers so callers
+ * can call it after creating any shape inside a room (kg-formation,
+ * shells, origin-prompt, future cards).
+ *
+ * The +ROOM_PADDING.bottom buffer keeps the bottom edge from kissing
+ * the last shape — the room's footer chrome and the connector arrow
+ * to the next room need a bit of breathing room.
+ */
+function recordChildBottomForStage(
+  editor: Editor,
+  state: PainterState,
+  stage: string,
+  childBottomY: number,
+) {
+  const prev = state.roomChildMaxY.get(stage) ?? -Infinity;
+  if (childBottomY <= prev) return;
+  state.roomChildMaxY.set(stage, childBottomY);
+
+  const roomId = state.roomShapeIds.get(stage);
+  if (!roomId) return; // room not painted yet — height will be applied on its first paint
+  const room = editor.getShape(roomId);
+  if (!room) return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const props = (room as any).props as { h?: number } | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const y = (room as any).y as number;
+  const currentH = typeof props?.h === "number" ? props.h : 0;
+  const requiredH = childBottomY - y + ROOM_PADDING.bottom;
+  if (requiredH <= currentH) return;
+  try {
+    editor.updateShape({
+      id: roomId,
+      type: "room",
+      props: { h: requiredH },
+    });
+  } catch (err) {
+    console.warn("[pipeline-painter] room auto-resize failed:", err);
+  }
+}
+
 function upsertRoomForStage(
   editor: Editor,
   stage: string,
@@ -3189,7 +3282,26 @@ function upsertRoomForStage(
   const meta = STAGE_ROOMS[stage as keyof typeof STAGE_ROOMS];
   if (!meta) return; // unknown / sub-stage — no room
 
-  const existingId = state.roomShapeIds.get(stage);
+  let existingId = state.roomShapeIds.get(stage);
+  // Dedup across painter remounts: if our local state doesn't know
+  // about a room for this stage but one already exists on the canvas
+  // (e.g., user navigated away and back; hot-reload reset the painter
+  // ref), adopt it instead of creating a duplicate. This is what
+  // produced the "two Knowledge graph rooms with different counts"
+  // visual in earlier reports — a fresh painter spawned a second room
+  // because it had no record of the first.
+  if (!existingId) {
+    for (const shape of editor.getCurrentPageShapes()) {
+      if (shape.type !== "room") continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const props = (shape as any).props as { stage?: string } | undefined;
+      if (props?.stage === stage) {
+        existingId = shape.id;
+        state.roomShapeIds.set(stage, shape.id);
+        break;
+      }
+    }
+  }
   const newState = phase === "exit" ? "complete" : "active";
 
   // Initialize counts if this is the first time we've seen this stage.
@@ -3226,6 +3338,15 @@ function upsertRoomForStage(
     stage as keyof typeof STAGE_ROOMS,
     state.anchor,
   );
+  // If children for this stage already painted before the room (the
+  // common case — kg-formation paints on first entity_added, but
+  // stage_boundary lands immediately after), grow the room's initial
+  // height so the children we already placed are enclosed.
+  const recordedMaxY = state.roomChildMaxY.get(stage);
+  const requiredH =
+    recordedMaxY != null
+      ? Math.max(bounds.h, recordedMaxY - bounds.y + ROOM_PADDING.bottom)
+      : bounds.h;
   const shapeId = createShapeId();
   try {
     const room: TLShapePartial<RoomShape> = {
@@ -3235,7 +3356,7 @@ function upsertRoomForStage(
       y: bounds.y,
       props: {
         w: bounds.w,
-        h: bounds.h,
+        h: requiredH,
         stage: stage as RoomShape["props"]["stage"],
         state: newState,
         subtitle,

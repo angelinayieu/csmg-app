@@ -406,6 +406,41 @@ export type StrategyHeroCardShape = TLBaseShape<
   }
 >;
 
+// ── Strategy alternative card ─────────────────────────────────────────
+//
+// One ranked alternative from the StrategyHeroBar dropped onto the canvas
+// as its own working surface. Distinct from `StrategyShape` (which points
+// at a versioned snapshot) and `StrategyHeroCardShape` (which always
+// renders the *current* active rank — swap-aware and singular).
+//
+// This shape pins to ONE specific rank+posture from the batch as it
+// existed at drop time. If the user later swaps which rank is primary,
+// this card keeps showing the alternative the user dropped — it's a
+// frozen working copy, not a live mirror. The `pinnedAt` ISO lets the
+// user see how stale the pin is.
+export type StrategyAlternativeCardShape = TLBaseShape<
+  "strategy-alternative-card",
+  {
+    w: number;
+    h: number;
+    spaceId: string;
+    /** Rank within the batch at drop time (1, 2, 3...) */
+    entryRank: number;
+    /** Posture — drives accent color + label */
+    posture: string;
+    title: string;
+    summary: string;
+    /** 0–1 fraction (or 0–100 — the renderer normalizes) */
+    confidence: number | null;
+    /** Was this the active (#1) entry at drop time? */
+    wasPrimary: boolean;
+    /** ISO when dropped */
+    pinnedAt: string;
+    /** Compact ↔ expanded visual mode */
+    expanded: boolean;
+  }
+>;
+
 export type AppCardShape = TLBaseShape<
   "app-card",
   {
@@ -534,6 +569,24 @@ export type FileCardShape = TLBaseShape<
     charCount: number;
     analyzed: boolean;
     accent: string;
+    // Two-phase image ingest (2026-05-01) — populated for image MIME
+    // cards by the ingest hook + image_extracted event listener.
+    // Non-image cards leave these at their defaults forever.
+    //   - "idle"        : not an image / nothing pending
+    //   - "analyzing"   : phase 2 vision pass in flight
+    //   - "ready"       : phase 2 succeeded; description + counts set
+    //   - "error"       : phase 2 failed; visionError carries the msg
+    visionStatus: "idle" | "analyzing" | "ready" | "error";
+    /** 2-4 sentence description from the vision pass — surfaced on
+     *  the card body (truncated) and in tooltips. */
+    visionDescription: string;
+    /** Cached count for the "✦ N entities · M relationships" badge,
+     *  so the file-card doesn't have to fetch the full extraction
+     *  just to render the chip. */
+    visionEntityCount: number;
+    visionRelationshipCount: number;
+    /** Failure reason (only when visionStatus === "error"). */
+    visionError: string | null;
   }
 >;
 
@@ -1291,6 +1344,7 @@ export type CanvasCustomShape =
   | VariantCardShape
   | StickyNoteShape
   | SynthesisCardShape
+  | SummaryCardShape
   | ClusterFrameShape
   | StrategyShape
   | ThreadNoteShape
@@ -1317,6 +1371,7 @@ export type CanvasCustomShape =
   | AssetCardShape
   | SituationCardShape
   | SubjectCardShape
+  | FinalPlanCardShape
   | KgOverviewCardShape;
 
 // ── KG Overview card (template-seeded spaces) ──────────────────────
@@ -1400,5 +1455,113 @@ export type SubjectCardShape = TLBaseShape<
     /** When true, the card renders with a "needs review" treatment
      *  (e.g. unsaved local edits). Optional; defaults to false. */
     needsReview: boolean;
+  }
+>;
+
+// ── Summary card (Lasso → Summarize output) ────────────────────────────
+//
+// Output shape produced by the Lasso → Summarize action. The user
+// multi-selects shapes on the canvas, hits "Summarize", and gets one of
+// these placed below the selection bbox with auto-routed arrows back
+// to each source. The card carries:
+//   - `summaryId`: stable identifier so we can re-run regenerate
+//   - `body`: the LLM-generated paragraph
+//   - `sourceShapeIds`: tldraw shape ids the summary points back at —
+//      used by the renderer to dim/highlight arrows on selection
+//   - `sourceCount`: cached count for the header chip ("· 5 sources")
+//   - `kind`: "summary" for now; reserved for "decompose" / "connect"
+//      variants that may share this shape later
+// Header chip (rendered inline) carries Regenerate / Decompose /
+// Pin actions — see `summary-card-shape.tsx` for the interactive
+// surface.
+export type SummaryCardShape = TLBaseShape<
+  "summary-card",
+  {
+    w: number;
+    h: number;
+    /** UUID/nanoid generated client-side at creation. Stable across
+     *  regenerations of the same card (so retried summaries land in
+     *  the same surface instead of stacking new shapes). */
+    summaryId: string;
+    /** Variant — reserved for future kinds like "decomposition" or
+     *  "connection-map" that may want the same chrome. */
+    kind: "summary";
+    title: string;
+    body: string;
+    /** Source tldraw shape ids — drives arrow drawing & "zoom to
+     *  source" interactions in the card header. */
+    sourceShapeIds: string[];
+    /** Cached source count — used so the header doesn't have to
+     *  re-derive it on each render. */
+    sourceCount: number;
+    /** Human-friendly summary of the source mix (e.g. "3 entities + 2
+     *  strategies"). Stored at creation so the card stays readable
+     *  even if the source shapes change later. */
+    sourceLabel: string;
+    /** Lifecycle: "fresh" right after creation, "regenerating" while
+     *  the user is re-running the LLM call, "stale" when one of the
+     *  source shapes has been edited since (future hook). */
+    status: "fresh" | "regenerating" | "stale" | "error";
+    /** Error message if the most recent regenerate failed. */
+    errorMessage: string | null;
+    /** ISO timestamp when this summary was last successfully
+     *  generated. */
+    generatedAt: string;
+  }
+>;
+
+// ── Final plan card (Phase 2 — PRD/Flowchart/Prototype) ────────────────
+//
+// Auto-spawned below the strategy hero when the user approves a
+// strategy. Renders the execution-brief data as a multi-section card
+// directly on the canvas (vs. the off-canvas /app/space/[id]/strategy
+// page that DeliverablesView uses today). Carries a (+) menu with
+// alternate view modes:
+//   - "prd"        — long-form document body (default)
+//   - "flowchart"  — calls /api/spaces/[id]/final-plan-flowchart and
+//                    paints arrow shapes near the card
+//   - "prototype"  — placeholder, future prototype generator
+//   - "summary"    — collapsed card (just title + confidence)
+//
+// We bake the brief content into shape props at creation time so the
+// card survives reload without re-fetching. Regeneration replaces
+// `briefJson` in place. The card is the seam between the structured
+// recommendation data (off-canvas) and the canvas-native artifact
+// flow (on-canvas).
+export type FinalPlanCardShape = TLBaseShape<
+  "final-plan-card",
+  {
+    w: number;
+    h: number;
+    /** Stable client-generated id. Survives regeneration of the body
+     *  so retries land on the same card. */
+    planId: string;
+    /** Source space — used for re-fetching the brief, opening the
+     *  shareable PRD report URL, etc. */
+    spaceId: string;
+    /** strategy_snapshots.id (or recommendation title fallback when
+     *  the snapshot row hasn't been backfilled). */
+    recommendationId: string;
+    /** Cached headline pulled from the recommendation at spawn time. */
+    title: string;
+    /** Active render mode. (+) menu writes to this prop; the
+     *  component branches on it. */
+    viewMode: "prd" | "flowchart" | "prototype" | "summary";
+    /** JSON-stringified ExecutionBrief snapshot (to keep the prop
+     *  schema flat — tldraw's prop validator doesn't love deeply
+     *  nested shapes). Empty string until the first fetch lands. */
+    briefJson: string;
+    /** Cached evidence count + confidence pulled out of the brief
+     *  for the header strip without re-parsing briefJson. */
+    evidenceCount: number;
+    confidence: "high" | "moderate" | "low" | null;
+    /** Lifecycle: "fresh" right after gen; "regenerating" during
+     *  re-fetch; "stale" when the underlying strategy changed since
+     *  this card was generated; "error" if last gen failed. */
+    status: "fresh" | "regenerating" | "stale" | "error";
+    /** Error message if last gen failed. */
+    errorMessage: string | null;
+    /** ISO when the brief was last successfully generated. */
+    generatedAt: string;
   }
 >;

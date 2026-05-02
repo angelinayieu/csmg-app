@@ -39,7 +39,13 @@ export type Pipeline =
   // round orchestrator. One pipeline_run per round so SSE stays
   // subscribed across all five pass kinds. See the 20260627 migration
   // for the matching DB CHECK + research_rounds table.
-  | "research_round";
+  | "research_round"
+  // Phase 6 (Insight Lab) — manual algorithm-stack experimentation
+  // pipeline. One pipeline_run per stack run, streams lab_step_started
+  // / lab_insight_emitted / lab_score_recorded events. See the
+  // 20260629 migration for the matching DB CHECK + lab_experiments /
+  // lab_insights tables.
+  | "insight_lab";
 
 export interface StartPipelineRunOpts {
   spaceId: string;

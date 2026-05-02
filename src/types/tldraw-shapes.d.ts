@@ -119,6 +119,14 @@ declare module "@tldraw/tlschema" {
       charCount: number;
       analyzed: boolean;
       accent: string;
+      // Two-phase image ingest (2026-05-01) — populated for image
+      // MIME cards by the ingest hook + the image_extracted SSE
+      // event listener. Non-image cards leave these at defaults.
+      visionStatus: "idle" | "analyzing" | "ready" | "error";
+      visionDescription: string;
+      visionEntityCount: number;
+      visionRelationshipCount: number;
+      visionError: string | null;
     };
     // Phase 2D — universal asset catalog: thread snapshot card.
     "thread-snapshot": {
@@ -674,6 +682,22 @@ declare module "@tldraw/tlschema" {
        *  so the view component re-fetches the latest batch. */
       pulse: number;
     };
+    // Strategy alternative — one ranked alternative pinned from the
+    // hero bar onto the canvas as a frozen working surface. Distinct
+    // from the singular swap-aware "strategy-hero-card" above.
+    "strategy-alternative-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      entryRank: number;
+      posture: string;
+      title: string;
+      summary: string;
+      confidence: number | null;
+      wasPrimary: boolean;
+      pinnedAt: string;
+      expanded: boolean;
+    };
     // Phase A1.2 — universal asset catalog: app card.
     "app-card": {
       w: number;
@@ -728,6 +752,44 @@ declare module "@tldraw/tlschema" {
         | "partial_artifact"
         | "complete_artifact";
       needsReview: boolean;
+    };
+    // Lasso → Summarize output card. Carries the AI-generated body +
+    // an inline action header (Regenerate / Decompose / Pin). Source
+    // shape ids drive the connector arrows the canvas paints back at
+    // each input. summaryId is stable across regenerations so retries
+    // land on the same surface instead of stacking new shapes.
+    "summary-card": {
+      w: number;
+      h: number;
+      summaryId: string;
+      kind: "summary";
+      title: string;
+      body: string;
+      sourceShapeIds: string[];
+      sourceCount: number;
+      sourceLabel: string;
+      status: "fresh" | "regenerating" | "stale" | "error";
+      errorMessage: string | null;
+      generatedAt: string;
+    };
+    // Phase 2 — final-plan card. Auto-spawned below the strategy
+    // hero on approval. Renders execution-brief data as a multi-
+    // section PRD-style document with a (+) menu that switches
+    // between PRD / Flowchart / Prototype / Summary modes.
+    "final-plan-card": {
+      w: number;
+      h: number;
+      planId: string;
+      spaceId: string;
+      recommendationId: string;
+      title: string;
+      viewMode: "prd" | "flowchart" | "prototype" | "summary";
+      briefJson: string;
+      evidenceCount: number;
+      confidence: "high" | "moderate" | "low" | null;
+      status: "fresh" | "regenerating" | "stale" | "error";
+      errorMessage: string | null;
+      generatedAt: string;
     };
   }
 }

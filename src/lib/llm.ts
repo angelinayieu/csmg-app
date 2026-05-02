@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
+import type Anthropic from "@anthropic-ai/sdk";
 import { ValidationError } from "@/lib/validation/llm-validators";
 import { RecoveryStrategy } from "@/lib/validation/error-recovery";
 import { repairTruncatedJson } from "@/lib/llm/repair-truncated-json";
@@ -143,6 +144,27 @@ async function withRetry<T>(
   throw lastError;
 }
 
+// ── Multimodal image input ──
+//
+// llmGenerate accepts an optional `images` array. Each image is sent
+// alongside the text user prompt as part of a single multimodal user
+// message — Claude's SDK natively supports `image` content blocks
+// since v0.3, OpenAI supports `image_url` content blocks on its
+// vision-capable models. Use it for image OCR + structured extraction
+// (see src/lib/ingest/extractors.ts), Vision-aided summarize, etc.
+//
+// Pass either `base64` (raw bytes already encoded) or `url` (publicly
+// reachable HTTPS URL). Anthropic accepts either; OpenAI prefers
+// `url` but tolerates a `data:` URL we synthesize from base64.
+export interface LlmImageInput {
+  /** Base64-encoded bytes (no `data:` prefix). Required if `url` is omitted. */
+  base64?: string;
+  /** Publicly reachable image URL. Required if `base64` is omitted. */
+  url?: string;
+  /** MIME type — needed to build the Anthropic image source / OpenAI data URL. */
+  mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+}
+
 // ── Non-streaming LLM call ──
 
 export async function llmGenerate(opts: {
@@ -155,16 +177,45 @@ export async function llmGenerate(opts: {
    *  to Claude (Opus by default). The caller can also pass an explicit
    *  `model` string that overrides the provider default. */
   provider?: LlmProvider;
+  /** Optional images to send alongside the user text. Anthropic and
+   *  OpenAI both support multimodal user messages on vision-capable
+   *  models. When the chosen model can't see images, the caller is
+   *  responsible for picking a vision-capable model via `model:`
+   *  (e.g. "claude-sonnet-4-5-20251001" or "gpt-4o"). */
+  images?: LlmImageInput[];
 }): Promise<string> {
   return withRetry(async () => {
     if (opts.provider === "anthropic") {
       const anthropic = getAnthropicClient();
+      // Build multimodal content blocks when images are provided.
+      // Claude expects images BEFORE the text in the user message —
+      // following Anthropic's docs, putting the image first improves
+      // descriptive accuracy on visual prompts.
+      const userContent: Anthropic.Messages.ContentBlockParam[] = [];
+      for (const img of opts.images ?? []) {
+        if (img.base64) {
+          userContent.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: img.mediaType,
+              data: img.base64,
+            },
+          });
+        } else if (img.url) {
+          userContent.push({
+            type: "image",
+            source: { type: "url", url: img.url },
+          });
+        }
+      }
+      userContent.push({ type: "text", text: opts.user });
       const resp = await anthropic.messages.create({
         model: opts.model ?? MODEL_DEFAULTS.anthropic.reasoning,
         max_tokens: opts.maxTokens ?? 8192,
         temperature: opts.temperature ?? 0.5,
         system: opts.system,
-        messages: [{ role: "user", content: opts.user }],
+        messages: [{ role: "user", content: userContent }],
       });
       // Claude returns a content array of blocks; concatenate text blocks.
       // Avoid the strict TextBlock predicate (SDK requires a `citations`
@@ -176,13 +227,39 @@ export async function llmGenerate(opts: {
       return text;
     }
     const openai = getOpenAI();
+    // Build OpenAI multimodal content. When images are supplied, the
+    // user message becomes an array of content parts; otherwise we
+    // keep the simpler string form for backward compat.
+    let userMessage:
+      | string
+      | Array<
+          | { type: "text"; text: string }
+          | { type: "image_url"; image_url: { url: string } }
+        > = opts.user;
+    if (opts.images && opts.images.length > 0) {
+      const parts: Array<
+        | { type: "text"; text: string }
+        | { type: "image_url"; image_url: { url: string } }
+      > = [];
+      for (const img of opts.images) {
+        const url = img.url
+          ? img.url
+          : `data:${img.mediaType};base64,${img.base64 ?? ""}`;
+        parts.push({ type: "image_url", image_url: { url } });
+      }
+      parts.push({ type: "text", text: opts.user });
+      userMessage = parts;
+    }
     const response = await openai.chat.completions.create({
       model: opts.model ?? MODEL_DEFAULTS.openai.reasoning,
       max_tokens: opts.maxTokens ?? 8192,
       temperature: opts.temperature ?? 0.5,
       messages: [
         { role: "system", content: opts.system },
-        { role: "user", content: opts.user },
+        // OpenAI's TS types want a discriminated union; the runtime
+        // accepts both string and array forms, so the cast is safe.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { role: "user", content: userMessage as any },
       ],
     });
     return response.choices[0]?.message?.content ?? "";

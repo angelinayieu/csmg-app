@@ -109,6 +109,11 @@ export interface PainterState {
    *  `subtitle` prop on every change so the canvas re-renders
    *  without an extra DB read. */
   roomCounts: Map<string, RoomCounts>;
+  /** stage → max child bottom Y observed so far (page coords). Used
+   *  by `ensureRoomFitsChildren()` to grow a room's height when its
+   *  default soft-height under-counts the actual content. Reset
+   *  alongside roomShapeIds on run cleanup. */
+  roomChildMaxY: Map<string, number>;
   // ── Origin prompt (lineage root) ───────────────────────────────
   /** tldraw id of the origin-prompt card. Created on the first event
    *  once the anchor lands so every downstream painter shape can
@@ -341,6 +346,7 @@ export function makeInitialState(): PainterState {
     strategyHeroSpaceId: null,
     roomShapeIds: new Map(),
     roomCounts: new Map(),
+    roomChildMaxY: new Map(),
     originPromptShapeId: null,
     spaceShellShapeIds: new Map(),
     spaceShellState: new Map(),

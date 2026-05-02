@@ -98,6 +98,14 @@ export interface RunContext {
   completedAt: string | null;
   errorMessage: string | null;
   /**
+   * `emitted_at` of the most recent event in the log, or null if the run
+   * has no events yet. The splash component polls this to detect stalled
+   * runs — when the value stops moving across polls, it surfaces a
+   * Resume CTA. Computed from the same events query used for everything
+   * else; no extra round-trip.
+   */
+  lastEventAt: string | null;
+  /**
    * Totals per event type — quick at-a-glance summary for UI badges
    * and cost/progress estimators.
    */
@@ -325,6 +333,14 @@ export async function readRunContext(
     };
   });
 
+  // Events are ordered by sequence ascending, so the last row is the
+  // most recently appended one. sequence and emitted_at are tightly
+  // correlated (both monotonic per run), so this is sufficient for
+  // staleness detection without a separate MAX() query.
+  const lastEventAt = events.length > 0
+    ? events[events.length - 1]!.emitted_at
+    : null;
+
   return {
     runId: runRow.id,
     spaceId: runRow.space_id,
@@ -333,6 +349,7 @@ export async function readRunContext(
     startedAt: runRow.started_at,
     completedAt: runRow.completed_at,
     errorMessage: runRow.error_message,
+    lastEventAt,
     counts,
     stages,
     entities,

@@ -82,6 +82,14 @@ import { CanvasNudgeChip } from "./chrome/canvas-nudge-chip";
 import { CanvasCommandPalette, type PaletteCommandId } from "./chrome/canvas-command-palette";
 import { CanvasShortcutHelp } from "./chrome/canvas-shortcut-help";
 import { ENTITY_DRAG_MIME, type EntityDragPayload } from "./chrome/canvas-asset-drawer";
+import {
+  STRATEGY_ALTERNATIVE_DRAG_MIME,
+  strategyAlternativeShapeIdSeed,
+  STRATEGY_ALT_COMPACT_W,
+  STRATEGY_ALT_COMPACT_H,
+  type StrategyAlternativeDragPayload,
+} from "./shapes/strategy-alternative-shape";
+import type { StrategyAlternativeCardShape } from "./shapes/types";
 import { CanvasAssetDrawerV2 } from "./chrome/canvas-asset-drawer-v2";
 import { CanvasAssetCatalogProvider } from "./library/canvas-asset-catalog-context";
 import {
@@ -115,6 +123,7 @@ import {
   setCanvasNavigator,
   setCanvasDispatcher,
   setCanvasExtractionReviewer,
+  setCanvasStickyPinner,
 } from "@/lib/canvas/canvas-bus";
 import { useAIReceipts } from "./hooks/use-ai-receipts";
 import {
@@ -399,6 +408,40 @@ export function InteraxisCanvas({
       return ids;
     },
     [editor],
+  );
+
+  // Strategy hero bar — set of (entryRank) values for which a
+  // strategy-alternative-card already lives on the canvas. Drives the
+  // "ON CANVAS" pill on each hero-bar card.
+  const placedStrategyAltRanks = useValue<Set<number>>(
+    "placed strategy-alt ranks",
+    () => {
+      if (!editor) return new Set();
+      const ranks = new Set<number>();
+      for (const s of editor.getCurrentPageShapes()) {
+        if (s.type === "strategy-alternative-card") {
+          const rank = (s.props as { entryRank?: unknown }).entryRank;
+          if (typeof rank === "number") ranks.add(rank);
+        }
+      }
+      return ranks;
+    },
+    [editor],
+  );
+
+  const handleZoomToStrategyAlt = useCallback(
+    (entryRank: number) => {
+      if (!editor || !space?.id) return;
+      const shapeId = createShapeId(
+        strategyAlternativeShapeIdSeed(space.id, entryRank),
+      );
+      const shape = editor.getShape(shapeId);
+      if (shape) {
+        editor.select(shapeId);
+        editor.zoomToSelection({ animation: { duration: 250 } });
+      }
+    },
+    [editor, space?.id],
   );
 
   // ── Sync KG entities + edges into tldraw on first mount ──
@@ -1301,6 +1344,14 @@ export function InteraxisCanvas({
     const unregisterReviewer = setCanvasExtractionReviewer((input) => {
       void extractionReview.open(input);
     });
+    // Sticky-pinner — strategy drawer + other chrome panels can pin
+    // highlighted text onto the canvas as a yellow sticky. AutoDecompose
+    // picks it up after its standard idle window; the user gets ghost
+    // KG nodes appearing nearby a few seconds later.
+    const unregisterStickyPinner = setCanvasStickyPinner(({ text }) => {
+      if (!editor) return;
+      createStickyAtCenter(editor, { text, color: "yellow" });
+    });
     const unregisterDispatch = setCanvasDispatcher(async (call) => {
       const { actionKey, payload, spaceId, appId } = call;
       if (actionKey === "activate") {
@@ -1340,12 +1391,13 @@ export function InteraxisCanvas({
       unregisterNav();
       unregisterDispatch();
       unregisterReviewer();
+      unregisterStickyPinner();
     };
     // extractionReview.open is stable across renders (useCallback in
     // the hook); intentionally NOT in deps so we don't re-register on
     // every render. nextRouter is stable per Next 16's app router.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nextRouter]);
+  }, [nextRouter, editor]);
 
   // Phase 31: return-from-lab focus. The lab's Exit button writes
   // `?focus=<entityId>&rings=1` into the canvas URL. On mount we read
@@ -2134,7 +2186,8 @@ export function InteraxisCanvas({
     const hasEntity = types.includes(ENTITY_DRAG_MIME);
     // Phase A1.0 — accept the unified library MIME envelope too.
     const hasAsset = types.includes(LIBRARY_ASSET_MIME);
-    if (!hasFiles && !hasEntity && !hasAsset) return;
+    const hasStrategyAlt = types.includes(STRATEGY_ALTERNATIVE_DRAG_MIME);
+    if (!hasFiles && !hasEntity && !hasAsset && !hasStrategyAlt) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
     if (hasFiles) setIsDragOver(true);
@@ -2155,6 +2208,53 @@ export function InteraxisCanvas({
       // the bloom burst and processing ghost render at that spot.
       const burstX = e.clientX - rect.left;
       const burstY = e.clientY - rect.top;
+
+      // ── Strategy alternative drop (from StrategyHeroBar) ──
+      // Hero-bar entries aren't library items (they're live ranked
+      // proposals), so they ride a dedicated MIME. Dedupe by
+      // (spaceId, rank) so re-dropping the same alternative selects
+      // the existing card instead of stacking.
+      const strategyAltRaw = e.dataTransfer.getData(STRATEGY_ALTERNATIVE_DRAG_MIME);
+      if (strategyAltRaw) {
+        e.preventDefault();
+        try {
+          const payload = JSON.parse(strategyAltRaw) as StrategyAlternativeDragPayload;
+          const shapeId = createShapeId(
+            strategyAlternativeShapeIdSeed(payload.spaceId, payload.entryRank),
+          );
+          const existing = editor.getShape(shapeId);
+          if (existing) {
+            editor.select(shapeId);
+            editor.zoomToSelection({ animation: { duration: 200 } });
+          } else {
+            const w = STRATEGY_ALT_COMPACT_W;
+            const h = STRATEGY_ALT_COMPACT_H;
+            editor.createShape<StrategyAlternativeCardShape>({
+              id: shapeId,
+              type: "strategy-alternative-card",
+              x: Math.round(pagePt.x - w / 2),
+              y: Math.round(pagePt.y - h / 2),
+              props: {
+                w,
+                h,
+                spaceId: payload.spaceId,
+                entryRank: payload.entryRank,
+                posture: payload.posture,
+                title: payload.title,
+                summary: payload.summary,
+                confidence: payload.confidence,
+                wasPrimary: payload.isPrimary,
+                pinnedAt: new Date().toISOString(),
+                expanded: false,
+              },
+            });
+            editor.select(shapeId);
+          }
+        } catch (err) {
+          console.warn("[canvas] strategy-alternative drop parse failed", err);
+        }
+        return;
+      }
 
       // ── Phase A1.0 — universal asset catalog drop ──
       // Single dispatcher driven by the asset class registry. New
@@ -2747,6 +2847,37 @@ export function InteraxisCanvas({
       <CanvasEventHud
         runId={activeRunId}
         onClose={dismissRun}
+        onResume={
+          // Continue the SAME run via decompose's rehydrate path
+          // (existingSpaceId + existingRunId). No new space, no new
+          // credits — preferred over Retry. SSE re-opens on the same
+          // runId so no navigation needed.
+          activeRunId && space?.id
+            ? async () => {
+                try {
+                  const res = await fetch("/api/pipeline/decompose", {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      text: space.input_text ?? "",
+                      existingSpaceId: space.id,
+                      existingRunId: activeRunId,
+                      autoAdvance: true,
+                    }),
+                  });
+                  if (!res.ok) {
+                    console.warn(
+                      "[resume] decompose returned",
+                      res.status,
+                    );
+                  }
+                } catch (err) {
+                  console.warn("[resume] failed (non-fatal):", err);
+                }
+              }
+            : undefined
+        }
         onRetry={
           // U4 (docs/KG_DEPTH_CRITIQUE.md audit) — re-fire the
           // bootstrap with the same prompt + reasoning_settings.
@@ -2808,7 +2939,12 @@ export function InteraxisCanvas({
           existing in-canvas strategy-hero-card-shape continues to
           paint at y=1080 as a draggable canvas anchor — this bar is
           the always-visible promo, the shape is the canvas tether. */}
-      <StrategyHeroBar spaceId={space.id} runId={activeRunId} />
+      <StrategyHeroBar
+        spaceId={space.id}
+        runId={activeRunId}
+        placedRanks={placedStrategyAltRanks}
+        onZoomToRank={handleZoomToStrategyAlt}
+      />
 
       {/* Origin prompt card is now a real tldraw shape (`origin-prompt`,
           painted by PipelineEventPainter at the top of the canvas) so
