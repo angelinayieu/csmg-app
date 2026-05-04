@@ -113,15 +113,23 @@ export default function WhiteboardPage() {
   }, [space.id]);
 
   const handleRerunSituation = useCallback(async () => {
-    try {
-      await fetch(`/api/pipeline/analyze-situation`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ space_id: space.id, force: true }),
-      });
-    } catch (err) {
-      console.warn("[whiteboard] situation re-run failed:", err);
+    // Throw on non-2xx so the drawer can surface the failure instead
+    // of spinning silently and re-rendering the same NoDataState.
+    const res = await fetch(`/api/pipeline/analyze-situation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ space_id: space.id, force: true }),
+    });
+    if (!res.ok) {
+      let detail = `status ${res.status}`;
+      try {
+        const body = (await res.json()) as { error?: string };
+        if (body?.error) detail = body.error;
+      } catch {
+        // body wasn't JSON — keep the status-code fallback
+      }
+      throw new Error(detail);
     }
   }, [space.id]);
 

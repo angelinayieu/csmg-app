@@ -3098,6 +3098,89 @@ export async function POST(request: Request) {
       }
     });
 
+    // ── POST-RUN CAUSAL-CHAIN PROPAGATION ──────────────────────────
+    // Causal chains are deterministic, no-LLM propagation from L3/L4
+    // convergences (synthesize) through micro_tactics (this run's
+    // strategy). They were historically gated behind a manual button —
+    // now wired into the auto-advance chain so a fresh space gets
+    // chains populated automatically once the strategy commits.
+    //
+    // Soft-fail. Re-reads synthesis_data inside the after() block to
+    // avoid clobbering memory write-back's parallel update (which
+    // touches memory_items, not synthesis_data, so there is no real
+    // conflict — the re-read is purely defensive).
+    after(async () => {
+      try {
+        const { propagateCausalChains } = await import(
+          "@/lib/causal-chains/propagate"
+        );
+        const { data: spaceRow } = await db
+          .from("spaces")
+          .select("synthesis_data")
+          .eq("id", spaceId)
+          .single();
+        const rawSynth = spaceRow?.synthesis_data;
+        const synthData =
+          typeof rawSynth === "string"
+            ? JSON.parse(rawSynth)
+            : (rawSynth ?? null);
+        if (!synthData) return;
+
+        const { data: entityRows } = await db
+          .from("entities")
+          .select("*")
+          .eq("space_id", spaceId);
+
+        const { data: goalRow } = await db
+          .from("improvement_goals")
+          .select("*")
+          .eq("space_id", spaceId)
+          .eq("status", "active")
+          .is("parent_goal_id", null)
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        const chains = propagateCausalChains({
+          synthesisData: synthData,
+          entities: (entityRows ?? []) as Parameters<
+            typeof propagateCausalChains
+          >[0]["entities"],
+          activeGoal: (goalRow ?? null) as Parameters<
+            typeof propagateCausalChains
+          >[0]["activeGoal"],
+        });
+
+        // Re-read to merge against the latest snapshot — defensive
+        // against any other parallel writer touching synthesis_data.
+        const { data: fresh } = await db
+          .from("spaces")
+          .select("synthesis_data")
+          .eq("id", spaceId)
+          .single();
+        const freshSynth =
+          typeof fresh?.synthesis_data === "string"
+            ? JSON.parse(fresh.synthesis_data)
+            : (fresh?.synthesis_data ?? {});
+
+        await db
+          .from("spaces")
+          .update({
+            synthesis_data: { ...freshSynth, causal_chains: chains },
+          })
+          .eq("id", spaceId);
+
+        console.log(
+          `[strategy-refresh] auto-propagated ${chains.length} causal chains for space ${spaceId}`,
+        );
+      } catch (chainErr) {
+        console.warn(
+          "[strategy-refresh] auto-propagate causal chains failed (non-blocking):",
+          chainErr,
+        );
+      }
+    });
+
     // ── TERMINAL COMMIT ── Strategy-refresh is the last hop of the
     // auto-advance chain. The full pipeline succeeded: deduct the
     // reserved credits from the user's balance. Soft-fail so a

@@ -33,6 +33,7 @@ import type {
   ObjectiveRollup,
 } from "@/app/api/spaces/[id]/rollup/route";
 import type { BatchSubstrategiesResponse } from "@/app/api/spaces/[id]/substrategies/batch/route";
+import type { GoalRecommendation } from "@/types/goals";
 
 export function StrategyGlassPage() {
   const ctx = useSpaceData();
@@ -76,6 +77,72 @@ export function StrategyGlassPage() {
   const [preGenerating, setPreGenerating] = useState(false);
   const [preGenResult, setPreGenResult] = useState<{ generated: number; skipped: number } | null>(null);
   const [preGenError, setPreGenError] = useState<string | null>(null);
+
+  // Goal recommendations live in the `goal_recommendations` table — written
+  // by the synthesize pipeline and the goals API. Earlier this was reading
+  // from `(strategyData as any).goal_recommendations`, a field the strategy
+  // engine never writes, so EvidenceStrip always saw an empty array.
+  const [goalRecommendations, setGoalRecommendations] = useState<GoalRecommendation[]>([]);
+  useEffect(() => {
+    const goal = ctx.activeGoal;
+    if (!goal) {
+      setGoalRecommendations([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/goals/${goal.id}/recommendations`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.recommendations) {
+          setGoalRecommendations(data.recommendations as GoalRecommendation[]);
+        }
+      })
+      .catch(() => {
+        // Soft-fail — evidence strip degrades to an empty list.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx.activeGoal]);
+
+  // Outcome recording handler — PATCHes /api/goals/:id/recommendations/:recId
+  // and updates local state. The endpoint also triggers downstream feedback
+  // on ineffective/partial outcomes (entity demote + edge confidence drop +
+  // refinement_signals stored on synthesis_data); the response surfaces those
+  // signals so EvidenceStrip can show a demote notification.
+  const handleRecordOutcome = async (
+    recId: string,
+    goalId: string,
+    outcome: "effective" | "partial" | "ineffective",
+    notes: string,
+  ) => {
+    const res = await fetch(`/api/goals/${goalId}/recommendations/${recId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ outcome, outcome_notes: notes }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    setGoalRecommendations((prev) =>
+      prev.map((r) =>
+        r.id === recId
+          ? {
+              ...r,
+              outcome: data.outcome,
+              outcome_notes: data.outcome_notes,
+              outcome_recorded_at: data.outcome_recorded_at,
+            }
+          : r,
+      ),
+    );
+    return data as {
+      refinement_signals?: Array<{
+        entity_id: string;
+        recommendation: string;
+        reason: string;
+      }>;
+    };
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -440,6 +507,7 @@ export function StrategyGlassPage() {
             regenerating={flags.loading}
             view={view}
             onViewChange={setView}
+            degradedSteps={recommendation?.degraded_steps}
           />
         </div>
 
@@ -827,10 +895,8 @@ export function StrategyGlassPage() {
               spaceId={ctx.space.id}
               suggestedObjectives={ctx.pendingObjectives}
               activeGoal={ctx.activeGoal}
-              goalRecommendations={
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ((strategyData as any)?.goal_recommendations ?? []) as Array<any>
-              }
+              goalRecommendations={goalRecommendations}
+              onRecordOutcome={handleRecordOutcome}
             />
           </>
         )}
@@ -939,29 +1005,6 @@ export function StrategyGlassPage() {
 
         {view === "flow" && (
           <StrategySwimlane recommendation={recommendation} />
-        )}
-
-        {view === "table" && (
-          <div className="flex flex-col items-center justify-center py-20 gap-2 text-center">
-            <p className="text-sm font-medium text-gray-700 capitalize">Table view</p>
-            <p className="text-xs text-gray-500 max-w-sm">
-              Coming soon — for now, try{" "}
-              <button
-                onClick={() => setView("flow")}
-                className="font-semibold text-interaxis-600 hover:underline"
-              >
-                Flow
-              </button>{" "}
-              for the execution timeline, or{" "}
-              <button
-                onClick={() => setView("cascade")}
-                className="font-semibold text-interaxis-600 hover:underline"
-              >
-                Cascade
-              </button>{" "}
-              for the reasoning tree.
-            </p>
-          </div>
         )}
 
         {/* Error state */}

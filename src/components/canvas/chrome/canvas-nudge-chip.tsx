@@ -12,6 +12,11 @@ export interface CanvasNudgeChipProps {
   onDecompose: () => void;
 }
 
+/** Same dock-avoidance band as CanvasGhostChip — when a hub sits near
+ *  the viewport bottom, render the nudge chip BELOW the shape instead
+ *  of above so it doesn't collide with the bottom dock. */
+const DOCK_BUFFER_PX = 240;
+
 export function CanvasNudgeChip({
   screenX,
   screenY,
@@ -20,10 +25,20 @@ export function CanvasNudgeChip({
   busy,
   onDecompose,
 }: CanvasNudgeChipProps) {
+  const flipBelow =
+    typeof window !== "undefined" &&
+    screenY > window.innerHeight - DOCK_BUFFER_PX;
+
   return (
     <div
       className="pointer-events-none absolute z-20"
-      style={{ left: screenX, top: screenY, transform: "translate(-50%, calc(-100% - 14px))" }}
+      style={{
+        left: screenX,
+        top: screenY,
+        transform: flipBelow
+          ? "translate(-50%, calc(0% + 14px))"
+          : "translate(-50%, calc(-100% - 14px))",
+      }}
     >
       <button
         onClick={onDecompose}

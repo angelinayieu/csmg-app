@@ -1,7 +1,18 @@
 // Causal Chain Propagator (deterministic, no LLM).
 // Input: synthesis_data + entities + edges + active goal.
-// Output: CausalChain[] — each chain starts from an L4 convergence and walks
+// Output: CausalChain[] — each chain starts from an L3/L4 convergence and walks
 // forward through research, deliverables, applications, outcomes to the goal.
+//
+// Read-path note: synthesize/route.ts:672 writes graph-category convergences
+// under `interaction_metadata.convergences`. We read that path first, falling
+// back to a top-level `convergences` field for forward-compat.
+//
+// Seed-tier note: depth=L4 (entity importance="moderate") is intentionally
+// scarce by design — it requires a moderate-importance entity that bridges
+// 2+ foreign categories, and the decomposition prompt biases importance
+// upward via the quality gate. To produce useful chains in the typical case,
+// we accept both L3 and L4 seeds (sorted L4 first by structural_value).
+// L4-only filtering proved empirically empty for >90% of fresh spaces.
 
 import type { Entity } from "@/types";
 import type { SynthesisData } from "@/types/synthesis";
@@ -55,19 +66,45 @@ function pickChainSeeds(synthData: SynthesisData | null): Array<{
 
   if (!synthData) return seeds;
 
-  // Prefer L4 convergences
-  const convergences = ((synthData as unknown as Record<string, unknown>).convergences ??
+  // Prefer L3/L4 convergences. Read from interaction_metadata.convergences
+  // (the canonical write path in synthesize/route.ts) and fall back to a
+  // top-level `convergences` field for forward-compat with future writers.
+  const synthRecord = synthData as unknown as Record<string, unknown>;
+  const im = synthRecord.interaction_metadata as
+    | { convergences?: unknown }
+    | undefined;
+  const convergences = ((im?.convergences as Convergence[] | undefined) ??
+    (synthRecord.convergences as Convergence[] | undefined) ??
     []) as Convergence[];
-  const l4s = convergences
-    .filter((c) => (c.depth ?? "").toString().toUpperCase() === "L4")
-    .sort((a, b) => (b.structural_value ?? 0) - (a.structural_value ?? 0))
+
+  // Accept L3 (important) + L4 (moderate). Sort L4 first within tier so the
+  // rarer/deeper seeds win when MAX_CHAINS is hit, then by structural_value.
+  const tierRank = (depth: string) => {
+    const u = depth.toString().toUpperCase();
+    if (u === "L4") return 0;
+    if (u === "L3") return 1;
+    return 99;
+  };
+  const tieredSeeds = convergences
+    .filter((c) => {
+      const d = (c.depth ?? "").toString().toUpperCase();
+      return d === "L3" || d === "L4";
+    })
+    .sort((a, b) => {
+      const ta = tierRank(a.depth ?? "");
+      const tb = tierRank(b.depth ?? "");
+      if (ta !== tb) return ta - tb;
+      return (b.structural_value ?? 0) - (a.structural_value ?? 0);
+    })
     .slice(0, MAX_CHAINS);
 
-  l4s.forEach((c, i) => {
+  tieredSeeds.forEach((c, i) => {
+    const depth = (c.depth ?? "").toString().toUpperCase();
+    const tierLabel = depth === "L4" ? "L4 Invariant" : "L3 Mechanism";
     seeds.push({
       kind: "convergence",
       index: i,
-      name: c.shared_element_name ?? `L4 Invariant ${i + 1}`,
+      name: c.shared_element_name ?? `${tierLabel} ${i + 1}`,
       structural_value: c.structural_value ?? 0.5,
       raw: c,
     });
@@ -93,14 +130,25 @@ function buildConceptStage(
   seedName: string,
   seedEntity: Entity | undefined,
   structuralValue: number,
+  seedDepth?: string,
 ): CausalStage {
+  // Prefer the seed's actual convergence depth tier (L3 / L4) when available.
+  // Fall back to a derived tier from structural_value for non-convergence
+  // seeds (leverage points). Without this fall-through the label always
+  // misrepresents the seed's tier — e.g. an L3 mechanism would appear as L4
+  // because the prior heuristic mapped any structural_value ≥ 0.875 to L4.
+  const tier = seedDepth?.toString().toUpperCase();
+  const valueLabel =
+    tier === "L4" || tier === "L3" || tier === "L2" || tier === "L1"
+      ? tier
+      : `L${Math.round(structuralValue * 4) || 4}`;
   return {
     kind: "concept",
     title: seedName.length > 40 ? seedName.slice(0, 37) + "…" : seedName,
     meta: seedEntity?.entity_category ?? "invariant",
     entity_id: seedEntity?.id ?? null,
     confidence: Math.max(0.6, structuralValue),
-    value_label: `L${Math.round(structuralValue * 4) || 4}`,
+    value_label: valueLabel,
   };
 }
 
@@ -322,7 +370,14 @@ export function propagateCausalChains({
       ? findEntityById(entities, seed.raw.entity_id)
       : findEntityByName(entities, seed.name);
 
-    const conceptStage = buildConceptStage(seed.name, seedEntity, seed.structural_value);
+    // For convergence seeds, the raw row carries `depth` (L3 / L4) — pass it
+    // through so the stage label reflects the real tier instead of a number
+    // re-derived from structural_value.
+    const seedDepth =
+      seed.kind === "convergence"
+        ? ((seed.raw as { depth?: string })?.depth ?? undefined)
+        : undefined;
+    const conceptStage = buildConceptStage(seed.name, seedEntity, seed.structural_value, seedDepth);
     const researchStage = buildResearchStage(synthesisData, seed.name, entities);
     const { stage: deliverableStage, tactic_ids } = buildDeliverableStage(
       synthesisData,

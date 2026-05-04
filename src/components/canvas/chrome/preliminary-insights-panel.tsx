@@ -64,7 +64,7 @@ export function PreliminaryInsightsPanel({
   if (totalSignals === 0) return null;
 
   return (
-    <div className="pointer-events-auto fixed right-4 top-[68px] z-30 w-[320px]">
+    <div className="pointer-events-auto fixed right-4 top-[160px] z-30 w-[320px]">
       <div className="overflow-hidden rounded-2xl border border-purple-100 bg-white/95 shadow-lg backdrop-blur-md">
         {/* Header — click to collapse/expand. */}
         <button

@@ -65,6 +65,36 @@ const TIER_WEIGHT: Record<string, number> = {
   peripheral: 0.3,
 };
 
+/** Painter shapes treated as fixed obstacles by the post-layout
+ *  collision pass. Force layout doesn't know they exist (it only
+ *  simulates kg-nodes), so a converged kg-node can land on top of a
+ *  room header or a kg-formation card — exactly the "overlapping cards
+ *  under Relax layout" complaint. After computing target positions we
+ *  push any kg-node whose rect overlaps one of these out of the way. */
+const OBSTACLE_SHAPE_TYPES = new Set([
+  "room",
+  "kg-formation",
+  "situation-card",
+  "asset-card",
+  "origin-prompt",
+  "taxonomy-card",
+  "root-cause-tree",
+  "synthesis-intersection-card",
+  "probability-space-shell",
+  "proposal-snapshot",
+  "experiment-design-card",
+  "variant-card",
+  "iv-decomposition",
+  "variant-carousel",
+  "app-result",
+  "strategy-hero",
+]);
+
+/** Extra clearance kept between a kg-node and an obstacle after the
+ *  push-out pass. Small but non-zero so the node doesn't kiss the
+ *  obstacle's edge. */
+const OBSTACLE_CLEARANCE_PX = 6;
+
 // ── Hook public API ──────────────────────────────────────────────────
 
 export interface RelaxLayoutResult {
@@ -129,6 +159,28 @@ export function useForceRelaxation(): UseForceRelaxationApi {
           y: p.y + snapshot.bboxOriginY,
         });
       }
+
+      // Post-layout push-out: the simulation is unaware of rooms,
+      // kg-formation cards, situation cards, etc. — so a converged
+      // kg-node can land directly on top of one. Sweep target
+      // positions and displace any node whose rect overlaps an
+      // obstacle to the nearest non-overlapping spot. Resolves the
+      // "overlapping cards under Relax layout" complaint.
+      for (const [id, target] of targetById) {
+        const node = snapshot.nodeRectsById.get(id);
+        if (!node) continue;
+        const cleared = pushOutOfObstacles(
+          target.x,
+          target.y,
+          node.w,
+          node.h,
+          snapshot.obstacles,
+        );
+        if (cleared.x !== target.x || cleared.y !== target.y) {
+          targetById.set(id, cleared);
+        }
+      }
+
       const fromById = new Map(snapshot.currentPositions);
       const computeMs = performance.now() - t0;
 
@@ -176,11 +228,29 @@ export function useForceRelaxation(): UseForceRelaxationApi {
 
 // ── Internals ────────────────────────────────────────────────────────
 
+interface ObstacleRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface NodeRect {
+  w: number;
+  h: number;
+}
+
 interface KgGraphSnapshot {
   nodes: ForceLayoutNode[];
   edges: ForceLayoutEdge[];
   /** Map of shape id → current (x, y). Used as the animation start. */
   currentPositions: Map<string, { x: number; y: number }>;
+  /** Map of shape id → rendered (w, h). Needed by the post-layout
+   *  collision pass to compute true rect overlap with obstacles. */
+  nodeRectsById: Map<string, NodeRect>;
+  /** Painter shape rects (rooms, kg-formation, situation-card, etc.)
+   *  treated as fixed obstacles in the post-layout push-out pass. */
+  obstacles: ObstacleRect[];
   /** Bounding box of the current node positions. We size the simulation
    *  viewport to this so the relaxed graph occupies roughly the same
    *  on-canvas region (no global teleport). */
@@ -207,6 +277,7 @@ function snapshotKgGraph(editor: Editor): KgGraphSnapshot {
   // keep our id space aligned with shape IDs.
   const nodeIds = new Set<string>();
   const currentPositions = new Map<string, { x: number; y: number }>();
+  const nodeRectsById = new Map<string, NodeRect>();
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -221,10 +292,24 @@ function snapshotKgGraph(editor: Editor): KgGraphSnapshot {
     currentPositions.set(s.id, { x: s.x, y: s.y });
     const w = typeof props.w === "number" ? props.w : 220;
     const h = typeof props.h === "number" ? props.h : 112;
+    nodeRectsById.set(s.id, { w, h });
     if (s.x < minX) minX = s.x;
     if (s.y < minY) minY = s.y;
     if (s.x + w > maxX) maxX = s.x + w;
     if (s.y + h > maxY) maxY = s.y + h;
+  }
+
+  // Painter obstacles — read every non-kg-node shape with a known
+  // obstacle type and capture its current rect. Done in the same pass
+  // over allShapes so we don't walk the page twice.
+  const obstacles: ObstacleRect[] = [];
+  for (const s of allShapes) {
+    if (!OBSTACLE_SHAPE_TYPES.has(s.type)) continue;
+    const props = s.props as { w?: number; h?: number };
+    const w = typeof props.w === "number" ? props.w : 0;
+    const h = typeof props.h === "number" ? props.h : 0;
+    if (w <= 0 || h <= 0) continue;
+    obstacles.push({ x: s.x, y: s.y, w, h });
   }
 
   // 2. Build force-layout node array with tier-derived weights so hub
@@ -270,6 +355,8 @@ function snapshotKgGraph(editor: Editor): KgGraphSnapshot {
       nodes,
       edges,
       currentPositions,
+      nodeRectsById,
+      obstacles,
       bboxWidth: 1600,
       bboxHeight: 1000,
       bboxOriginX: 0,
@@ -282,11 +369,67 @@ function snapshotKgGraph(editor: Editor): KgGraphSnapshot {
     nodes,
     edges,
     currentPositions,
+    nodeRectsById,
+    obstacles,
     bboxWidth,
     bboxHeight,
     bboxOriginX: minX,
     bboxOriginY: minY,
   };
+}
+
+/**
+ * Push a kg-node out of every obstacle it overlaps. For each
+ * intersecting obstacle, computes the smallest displacement along an
+ * axis-aligned direction and applies it. Cascading overlaps (push out
+ * of A → land on B) are resolved by iterating until either the node
+ * is clear or the cap is hit, since the algorithm doesn't guarantee
+ * progress in pathological cases.
+ *
+ * Note: this is a best-effort de-overlap, not a constraint solver.
+ * For a canvas with deeply stacked obstacles a node may end up beside
+ * one but still touching another. Acceptable trade for the simplicity
+ * — the user can always drag the node a few pixels manually.
+ */
+function pushOutOfObstacles(
+  startX: number,
+  startY: number,
+  nodeW: number,
+  nodeH: number,
+  obstacles: ObstacleRect[],
+): { x: number; y: number } {
+  let x = startX;
+  let y = startY;
+  // Cap iterations to bound cost on dense canvases (rooms + many cards).
+  const MAX_PASSES = 4;
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    let moved = false;
+    for (const obs of obstacles) {
+      const nL = x;
+      const nR = x + nodeW;
+      const nT = y;
+      const nB = y + nodeH;
+      const oL = obs.x;
+      const oR = obs.x + obs.w;
+      const oT = obs.y;
+      const oB = obs.y + obs.h;
+      if (nR <= oL || nL >= oR || nB <= oT || nT >= oB) continue;
+      // Overlapping. Compute push distances along each cardinal
+      // direction and pick the smallest — that's the closest exit.
+      const pushLeft = nR - oL;
+      const pushRight = oR - nL;
+      const pushUp = nB - oT;
+      const pushDown = oB - nT;
+      const minPush = Math.min(pushLeft, pushRight, pushUp, pushDown);
+      if (minPush === pushLeft) x -= pushLeft + OBSTACLE_CLEARANCE_PX;
+      else if (minPush === pushRight) x += pushRight + OBSTACLE_CLEARANCE_PX;
+      else if (minPush === pushUp) y -= pushUp + OBSTACLE_CLEARANCE_PX;
+      else y += pushDown + OBSTACLE_CLEARANCE_PX;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  return { x, y };
 }
 
 // Cubic ease-out so the relaxation feels gentle at the end (the human

@@ -105,6 +105,16 @@ export async function GET(request: Request) {
     ranked_alternatives_count: number;
     provenance_score?: number;
     coverage_pct?: number;
+    // Phase 0 readiness wiring — surface the four ReadyToShipMeter inputs +
+    // sidecar signals (degraded steps, blind spots, open questions, coherence
+    // issue counts) so the dashboard card can render the composite without
+    // dragging the entire synthesis_data into every list response.
+    coherence_score?: number;
+    coherence_issue_count?: number;
+    coherence_critical_count?: number;
+    open_questions_count?: number;
+    degraded_steps?: string[];
+    blind_spots?: string[];
     generated_at?: string;
     has_user_constraint?: boolean;
   } | null = null;
@@ -121,7 +131,8 @@ export async function GET(request: Request) {
       } | null;
     };
     strategyCommittedAt = spaceRow?.strategy_committed_at ?? null;
-    const stratRec = spaceRow?.synthesis_data?.strategic_recommendation as Record<string, unknown> | undefined;
+    const synthData = (spaceRow?.synthesis_data ?? {}) as Record<string, unknown>;
+    const stratRec = synthData.strategic_recommendation as Record<string, unknown> | undefined;
     strategyStatus = (stratRec?.status as string | undefined) ?? null;
 
     // Build the summary when a strategy exists — regardless of app count.
@@ -131,6 +142,36 @@ export async function GET(request: Request) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ranked = (stratRec.ranked_strategies as any[] | undefined) ?? [];
       const proposals = ranked[0]?.infrastructure_proposals ?? [];
+
+      // Coherence — sibling to strategic_recommendation in synthesis_data;
+      // persisted by /api/pipeline/synthesize when validateStrategyCoherence runs.
+      const coherenceScoreRaw = synthData.coherence_score;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const coherenceIssues = (synthData.coherence_issues as any[] | undefined) ?? [];
+      const coherenceScore = typeof coherenceScoreRaw === "number" ? coherenceScoreRaw : undefined;
+      const criticalIssueCount = coherenceIssues.filter(
+        (i) => i?.severity === "critical",
+      ).length;
+
+      // Open questions — sibling to strategic_recommendation; populated by gap analysis.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const openQuestions = (synthData.open_questions as any[] | undefined) ?? [];
+
+      // Blind spots — nested in the reasoning trace (Step 1 diagnosis output).
+      // Path: strategic_recommendation.reasoning_trace.diagnosis.signal_synthesis.blind_spots
+      const blindSpotsRaw =
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ((stratRec.reasoning_trace as any)?.diagnosis?.signal_synthesis?.blind_spots as
+          | string[]
+          | undefined) ?? undefined;
+
+      // Degraded steps — set by strategy-engine when any pipeline step hit a
+      // fallback path. Honest-failure marker; the meter shows numbers, this
+      // banner explains why they may be low.
+      const degradedSteps = Array.isArray(rec.degraded_steps)
+        ? (rec.degraded_steps as string[])
+        : undefined;
+
       strategySummary = {
         title: String(rec.title ?? "(untitled strategy)"),
         confidence: typeof rec.confidence === "number" ? rec.confidence : 0,
@@ -142,6 +183,12 @@ export async function GET(request: Request) {
           ? rec.provenance.overall_provenance_score : undefined,
         coverage_pct: typeof rec.provenance?.coverage_pct_at_generation === "number"
           ? rec.provenance.coverage_pct_at_generation : undefined,
+        coherence_score: coherenceScore,
+        coherence_issue_count: coherenceIssues.length || undefined,
+        coherence_critical_count: criticalIssueCount || undefined,
+        open_questions_count: openQuestions.length || undefined,
+        degraded_steps: degradedSteps && degradedSteps.length > 0 ? degradedSteps : undefined,
+        blind_spots: blindSpotsRaw && blindSpotsRaw.length > 0 ? blindSpotsRaw : undefined,
         generated_at: stratRec.generated_at as string | undefined,
         has_user_constraint: !!(stratRec as Record<string, unknown>).user_constraint_applied,
       };

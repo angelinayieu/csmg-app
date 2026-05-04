@@ -10,6 +10,10 @@ const SIG_COLORS: Record<string, string> = {
   warn: "#F59E0B",
   bad: "#EF4444",
 };
+// Neutral indicator for proxies whose sig hasn't been computed yet. Renders
+// as a muted gray dot rather than green so the user can tell "no data"
+// apart from "tracking healthy".
+const NEUTRAL_SIG_COLOR = "rgba(11,13,18,0.18)";
 
 export function ProxyIndicatorList({ row }: { row: CascadeRowVM }) {
   const p = palette(row.paletteKey);
@@ -80,7 +84,8 @@ export function ProxyIndicatorList({ row }: { row: CascadeRowVM }) {
           >
             <span
               className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-              style={{ background: SIG_COLORS[m.sig] }}
+              style={{ background: m.sig ? SIG_COLORS[m.sig] : NEUTRAL_SIG_COLOR }}
+              title={m.sig ? undefined : "No tracker data yet"}
             />
             <span
               className="flex-1 truncate"

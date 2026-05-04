@@ -345,7 +345,7 @@ export function VariantDetail({
             fontWeight: 500,
           }}
         >
-          Click any node to inspect · drag to reorder (coming soon)
+          Click any node to inspect
         </span>
       </div>
 

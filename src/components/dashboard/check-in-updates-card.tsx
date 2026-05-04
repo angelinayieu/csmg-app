@@ -23,8 +23,10 @@ import {
   ChevronDown,
   CheckCircle2,
   Zap,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ReadyToShipMeter } from "@/components/strategy/ready-to-ship-meter";
 
 interface StrategySummary {
   title: string;
@@ -35,6 +37,13 @@ interface StrategySummary {
   ranked_alternatives_count: number;
   provenance_score?: number;
   coverage_pct?: number;
+  // Phase 0/1a readiness wiring — see /api/apps/route.ts for population.
+  coherence_score?: number;
+  coherence_issue_count?: number;
+  coherence_critical_count?: number;
+  open_questions_count?: number;
+  degraded_steps?: string[];
+  blind_spots?: string[];
   generated_at?: string;
   has_user_constraint?: boolean;
 }
@@ -196,10 +205,28 @@ export function CheckInUpdatesCard({ spaceId }: Props) {
               <div className="text-[12.5px] font-semibold text-gray-900 leading-snug line-clamp-2">
                 {strategySummary.title}
               </div>
+
+              {/* Composite readiness meter — replaces the single conf pill +
+                  prov/cov footer. Shows confidence as one of FOUR weighted
+                  factors so the user sees the whole epistemic posture, not
+                  just an LLM-self-reported integer. Compact mode keeps it
+                  inside the narrow card slot; the ring + sub-bars give the
+                  full breakdown without needing the hover tooltip (which
+                  would clip against the card's overflow-y-auto wrapper). */}
+              <div className="mt-2">
+                <ReadyToShipMeter
+                  inputs={{
+                    confidence: strategySummary.confidence,
+                    coverage_pct: strategySummary.coverage_pct ?? null,
+                    provenance_score: strategySummary.provenance_score ?? null,
+                    coherence_score: strategySummary.coherence_score ?? null,
+                  }}
+                  compact
+                  className="w-full"
+                />
+              </div>
+
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-600">
-                <span className="rounded-full bg-white ring-1 ring-indigo-100 px-1.5 py-[1px] tabular-nums font-medium">
-                  conf {strategySummary.confidence}%
-                </span>
                 {strategySummary.tactic_count > 0 && (
                   <span className="tabular-nums">
                     <span className="font-semibold text-gray-700">{strategySummary.tactic_count}</span> tactics
@@ -216,22 +243,31 @@ export function CheckInUpdatesCard({ spaceId }: Props) {
                   </span>
                 )}
               </div>
-              {(typeof strategySummary.provenance_score === "number" || typeof strategySummary.coverage_pct === "number") && (
-                <div className="mt-1.5 flex gap-3 text-[10px] text-gray-500">
-                  {typeof strategySummary.provenance_score === "number" && (
-                    <span>
-                      <span className="text-[9px] uppercase tracking-wider mr-0.5">prov</span>
-                      <span className="tabular-nums font-semibold text-gray-700">{strategySummary.provenance_score}</span>
+
+              {/* Honest-failure markers. The meter shows a number; these chips
+                  explain WHY it might be lower than the user expects, without
+                  forcing them into the drawer (Phase 2). Both are no-ops when
+                  the strategy ran clean. */}
+              {(strategySummary.coherence_critical_count || strategySummary.degraded_steps?.length) && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {strategySummary.coherence_critical_count ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-red-50 ring-1 ring-red-200 px-1.5 py-[1px] text-[9px] font-medium text-red-700">
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      {strategySummary.coherence_critical_count} critical
                     </span>
-                  )}
-                  {typeof strategySummary.coverage_pct === "number" && (
-                    <span>
-                      <span className="text-[9px] uppercase tracking-wider mr-0.5">cov</span>
-                      <span className="tabular-nums font-semibold text-gray-700">{strategySummary.coverage_pct}%</span>
+                  ) : null}
+                  {strategySummary.degraded_steps?.length ? (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full bg-amber-50 ring-1 ring-amber-200 px-1.5 py-[1px] text-[9px] font-medium text-amber-800"
+                      title={`Pipeline steps that fell back: ${strategySummary.degraded_steps.join(", ")}`}
+                    >
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      degraded
                     </span>
-                  )}
+                  ) : null}
                 </div>
               )}
+
               <div className="flex-1" />
               <Link
                 href={`/app/space/${spaceId}/strategy`}

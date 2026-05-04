@@ -29,6 +29,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   ShieldOff,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
@@ -38,6 +39,11 @@ import type {
   TwinAlternativeRejected,
   CalibrationGateSnapshot,
 } from "@/types/strategy";
+import { ReadyToShipMeter } from "@/components/strategy/ready-to-ship-meter";
+import type { CoherenceCheckResult } from "@/lib/pipeline/validate-strategy-coherence";
+import { ConfidenceProvenanceDrawer, type ConfidenceAudit } from "@/components/strategy/confidence-provenance-drawer";
+import type { StrategyProvenance } from "@/components/strategy/strategy-provenance-panel";
+import type { ConfidenceOverrideRow } from "@/app/api/strategy/confidence-override/route";
 
 interface ProposalRow {
   id: string;
@@ -48,11 +54,25 @@ interface ProposalRow {
   mechanism_ids: string[];
 }
 
+interface MeterInputs {
+  confidence: number | null;
+  coverage_pct: number | null;
+  provenance_score: number | null;
+  coherence_score: number | null;
+}
+
 interface ApiResponse {
   proposal: ProposalRow | null;
   proposal_extracted: TwinProposalJustification | null;
   mechanisms: MechanismRow[];
   is_extracted: boolean;
+  meter_inputs?: MeterInputs | null;
+  coherence?: CoherenceCheckResult | null;
+  degraded_steps?: string[] | null;
+  audit?: ConfidenceAudit | null;
+  provenance?: StrategyProvenance | null;
+  user_override?: ConfidenceOverrideRow | null;
+  strategy_generated_at?: string | null;
 }
 
 interface Props {
@@ -173,6 +193,23 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
 
   const confidence = Math.max(0, Math.min(100, Math.round(justification.confidence)));
 
+  // Phase 1c — meter inputs come from the API alongside the proposal so we
+  // render the full composite (cov + conf + prov + coh) instead of just the
+  // proposal's self-reported number. Falls back to {confidence-only} if the
+  // route hasn't yet returned the new fields (legacy or partial responses).
+  const apiMeterInputs = data?.meter_inputs ?? null;
+  const meterInputs = {
+    confidence: apiMeterInputs?.confidence ?? confidence,
+    coverage_pct: apiMeterInputs?.coverage_pct ?? null,
+    provenance_score: apiMeterInputs?.provenance_score ?? null,
+    coherence_score: apiMeterInputs?.coherence_score ?? null,
+  };
+  const coherenceData = data?.coherence ?? null;
+  const degradedSteps = data?.degraded_steps ?? null;
+  const criticalIssueCount = (coherenceData?.issues ?? []).filter(
+    (i) => i.severity === "critical",
+  ).length;
+
   return (
     <GlassCard variant="dashboard" className={cn("p-6", className)}>
       {/* Header */}
@@ -182,7 +219,7 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
             <Compass className="h-4 w-4 text-indigo-600" />
           </span>
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-[14px] font-semibold text-gray-900 leading-tight">
                 Why this workflow?
               </h2>
@@ -197,13 +234,51 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
                   Approved
                 </span>
               )}
+              {/* Honest-failure markers — same chips as the dashboard card. The
+                  meter shows the composite; these explain WHY it might be low.
+                  Both no-op when the strategy ran clean. */}
+              {criticalIssueCount > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-red-50 ring-1 ring-red-200 px-1.5 py-[1px] text-[9px] font-medium text-red-700">
+                  <AlertTriangle className="h-2.5 w-2.5" />
+                  {criticalIssueCount} critical
+                </span>
+              )}
+              {degradedSteps && degradedSteps.length > 0 && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 ring-1 ring-amber-200 px-1.5 py-[1px] text-[9px] font-medium text-amber-800"
+                  title={`Pipeline steps that fell back: ${degradedSteps.join(", ")}`}
+                >
+                  <AlertTriangle className="h-2.5 w-2.5" />
+                  degraded
+                </span>
+              )}
             </div>
             <p className="text-[11.5px] text-gray-500 leading-snug mt-0.5">
               The Twin generated for your objective, with the reasoning behind it.
             </p>
           </div>
         </div>
-        <ConfidenceRing pct={confidence} />
+        {/* Composite readiness meter — replaces the bare ConfidenceRing so the
+            review surface shows all four weighted factors (cov/conf/prov/coh)
+            instead of just the proposal's self-reported confidence integer.
+            Phase 2 added the "How was this computed?" drawer below; Phase 4
+            hangs an "You: N" badge here when the user has saved an override
+            so the second opinion is visible without opening the drawer. */}
+        <div className="flex flex-col items-end gap-1.5 shrink-0">
+          <ReadyToShipMeter inputs={meterInputs} compact />
+          {data?.user_override && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 ring-1 ring-indigo-200 px-2 py-[2px] text-[10px] font-semibold text-indigo-700 tabular-nums">
+              You: {data.user_override.user_score}
+              <span className="text-gray-400 font-normal">
+                (Δ{" "}
+                {data.user_override.user_score - data.user_override.ai_composite_score > 0
+                  ? "+"
+                  : ""}
+                {data.user_override.user_score - data.user_override.ai_composite_score})
+              </span>
+            </span>
+          )}
+        </div>
       </header>
 
       {/* Gap B — stamped calibration snapshot. Rendered as a thin status
@@ -215,6 +290,29 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
       {justification.calibration_gate && (
         <CalibrationBanner snapshot={justification.calibration_gate} spaceId={spaceId} />
       )}
+
+      {/* Phase 2 — "How was this computed?" drawer. Sits between the meter +
+          calibration banner (epistemic posture) and the chosen-approach pitch
+          (the content). Collapsed by default — user sees the meter first,
+          opens the drawer when they want to audit the rigor. Renders an
+          "empty" state when no audit payload exists (legacy strategies).
+          Phase 4 — also hosts the user confidence override widget; the saved
+          override updates `data.user_override` via load() refetch. */}
+      <div className="mb-5">
+        <ConfidenceProvenanceDrawer
+          provenance={data?.provenance ?? null}
+          meterInputs={meterInputs}
+          coherence={coherenceData}
+          audit={data?.audit ?? null}
+          degradedSteps={degradedSteps}
+          spaceId={spaceId}
+          strategyGeneratedAt={data?.strategy_generated_at ?? null}
+          initialOverride={data?.user_override ?? null}
+          onOverrideSaved={() => {
+            void load();
+          }}
+        />
+      </div>
 
       {/* Chosen approach */}
       <section className="mb-5">
@@ -354,11 +452,11 @@ export function TwinProposalReviewPanel({ spaceId, onApproved, className }: Prop
             className="overflow-hidden"
           >
             <div className="mt-3 rounded-xl bg-white/60 ring-1 ring-black/5 px-4 py-3 text-[11.5px] text-gray-600">
-              Constraint-driven refinement runs through the existing
-              <code className="mx-1 px-1.5 py-[1px] rounded bg-white/80 ring-1 ring-black/5 text-[10.5px] font-mono">
-                regenerate-with-constraint
-              </code>
-              flow. Wiring lands in PR&nbsp;3b.
+              To refine this proposal with a constraint, regenerate the
+              strategy from the sidebar with your constraint (the regenerate
+              flow accepts a free-text guidance string and re-runs the
+              pipeline). A dedicated in-place refine action for twin proposals
+              is not yet wired.
             </div>
           </motion.div>
         )}
@@ -384,41 +482,6 @@ function SectionLabel({
     <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
       {icon}
       {children}
-    </div>
-  );
-}
-
-function ConfidenceRing({ pct }: { pct: number }) {
-  const radius = 16;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (pct / 100) * circumference;
-  return (
-    <div className="relative shrink-0">
-      <svg width="44" height="44" viewBox="0 0 44 44" className="-rotate-90">
-        <circle
-          cx="22" cy="22" r={radius}
-          fill="none" stroke="rgba(0,0,0,0.07)" strokeWidth="3"
-        />
-        <circle
-          cx="22" cy="22" r={radius}
-          fill="none"
-          stroke="url(#conf-grad)"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          style={{ transition: "stroke-dashoffset 0.6s ease" }}
-        />
-        <defs>
-          <linearGradient id="conf-grad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="rgb(99,102,241)" />
-            <stop offset="100%" stopColor="rgb(79,70,229)" />
-          </linearGradient>
-        </defs>
-      </svg>
-      <div className="absolute inset-0 grid place-items-center text-[10px] font-semibold text-indigo-700 tabular-nums">
-        {pct}
-      </div>
     </div>
   );
 }

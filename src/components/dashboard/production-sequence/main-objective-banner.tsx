@@ -13,23 +13,78 @@
 
 import { motion } from "framer-motion";
 import { useSpaceData } from "@/contexts/space-data-context";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import type { SuggestedObjective } from "@/types/goals";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
 export function MainObjectiveBanner() {
-  const { space, activeGoal, liveCounts, setShowGoalSetter } = useSpaceData();
+  const {
+    space,
+    activeGoal,
+    liveCounts,
+    setShowGoalSetter,
+    setGoalPrefill,
+    pendingObjectives,
+  } = useSpaceData();
+  const [suggestingGoal, setSuggestingGoal] = useState(false);
 
-  // Compute a lightweight "twin state" summary right here so the banner is self-sufficient.
-  // The detailed computation lives elsewhere; this just pulls the headline.
+  // "Set ultimate goal" handler. Tries hardest path → fallback chain:
+  //   1. If pendingObjectives exists (synthesize already detected some),
+  //      pre-fill the modal with the first one.
+  //   2. Otherwise call /api/goals/detect synchronously to derive
+  //      candidates from current synthesis (or just subject text in
+  //      early intake mode), then pre-fill with the first result.
+  //   3. If detection returns nothing, just open the modal blank so
+  //      the user can free-form their goal.
+  async function handleOpenGoalSetter() {
+    if (!space?.id) {
+      setShowGoalSetter(true);
+      return;
+    }
+    if (pendingObjectives && pendingObjectives.length > 0) {
+      setGoalPrefill(pendingObjectives[0]);
+      setShowGoalSetter(true);
+      return;
+    }
+    setSuggestingGoal(true);
+    try {
+      const res = await fetch("/api/goals/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spaceId: space.id }),
+      });
+      if (res.ok) {
+        const payload = (await res.json()) as { objectives?: SuggestedObjective[] };
+        const first = payload.objectives?.[0];
+        if (first) setGoalPrefill(first);
+      }
+    } catch {
+      /* non-fatal — user can still set a goal manually */
+    } finally {
+      setSuggestingGoal(false);
+      setShowGoalSetter(true);
+    }
+  }
+
+  // Pull twin headline from synthesis_data.twin_state. The persisted shape
+  // is the full TwinState ({ macro, goal_overlay }) — we read from .macro
+  // since that's where computeTwinState writes health_score / health_label.
+  // Coverage % is derived from confidence distribution: share of entities
+  // we've mapped at high confidence (>=0.7) vs total entities — a more
+  // honest "how much of the picture is solid" signal than a raw count.
   const twin = useMemo(() => {
     const synth = (space?.synthesis_data as Record<string, unknown> | null) ?? null;
     const twinState = (synth?.twin_state ?? null) as Record<string, unknown> | null;
-    const health = typeof twinState?.health_score === "number" ? twinState.health_score : null;
-    const label = typeof twinState?.health_label === "string" ? twinState.health_label : null;
-    const coverage = typeof (twinState?.coverage as { pct?: number } | undefined)?.pct === "number"
-      ? (twinState?.coverage as { pct: number }).pct
-      : null;
+    const macro = (twinState?.macro ?? twinState ?? null) as Record<string, unknown> | null;
+    const health = typeof macro?.health_score === "number" ? (macro.health_score as number) : null;
+    const label = typeof macro?.health_label === "string" ? (macro.health_label as string) : null;
+    const coverageObj = macro?.coverage as
+      | { entities_modeled?: number; confidence_distribution?: { high?: number } }
+      | undefined;
+    const total = coverageObj?.entities_modeled ?? 0;
+    const high = coverageObj?.confidence_distribution?.high ?? 0;
+    const coverage = total > 0 ? Math.round((high / total) * 100) : null;
     return { health, label, coverage };
   }, [space]);
 
@@ -143,11 +198,12 @@ export function MainObjectiveBanner() {
                 Set an ultimate goal to anchor this project.
               </p>
               <motion.button
-                onClick={() => setShowGoalSetter(true)}
+                onClick={handleOpenGoalSetter}
+                disabled={suggestingGoal}
                 whileHover={{ y: -1 }}
                 whileTap={{ scale: 0.98 }}
                 transition={{ duration: 0.2, ease: EASE }}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-md transition-all"
+                className="mt-3 inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-md transition-all disabled:opacity-70"
                 style={{
                   background:
                     "linear-gradient(135deg, rgb(var(--accent-rgb)), rgba(var(--accent-rgb), 0.85))",
@@ -160,7 +216,7 @@ export function MainObjectiveBanner() {
                   <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.3" fill="none" />
                   <circle cx="6" cy="6" r="2" fill="currentColor" />
                 </svg>
-                Set ultimate goal
+                {suggestingGoal ? "Suggesting…" : "Set ultimate goal"}
               </motion.button>
             </>
           )}

@@ -10,9 +10,12 @@ import {
 import { SpaceInsightsStrip } from "@/components/dashboard/space-insights-strip";
 import { CommandCenterRow } from "@/components/dashboard/command-center-row";
 import { TwinSurface } from "@/components/twin/twin-surface";
+import { TwinCalibrationPanel } from "@/components/twin/twin-calibration-panel";
+import { TwinAnalyticsStrip } from "@/components/twin/twin-analytics-strip";
 import { PendingAppsSection } from "@/components/apps/pending-apps-section";
 import { AppGenerationProgressChip } from "@/components/strategy/app-generation-progress-chip";
 import { AskSpaceView } from "@/components/space/ask-space-view";
+import { SynthesisView } from "@/components/synthesis/synthesis-view";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { useRouter } from "next/navigation";
 
@@ -30,7 +33,8 @@ interface AppListPayload {
 }
 
 export default function SpaceDashboardPage() {
-  const { space } = useSpaceData();
+  const ctx = useSpaceData();
+  const { space } = ctx;
   const router = useRouter();
   const spaceId = space?.id;
   const kind = (space as unknown as { kind?: "analysis" | "ask" } | null)?.kind ?? "analysis";
@@ -91,9 +95,27 @@ export default function SpaceDashboardPage() {
         />
       ) : null}
 
-      {/* Space-level insights row — external signals, contributors,
-          KG top insights. */}
+      {/* Space-level insights row — external signals + contributors.
+          KG-top-insights body is rendered by SynthesisView below. */}
       <SpaceInsightsStrip />
+
+      {/* Full synthesis surface — master bottleneck, leverage points,
+          risks, feedback loops, action plan, scenarios, contradictions,
+          convergences, causal chains, etc. Reads directly from
+          space.synthesis_data + entity flags. Self-renders an empty
+          state when synthesis hasn't run. */}
+      <SynthesisView
+        space={ctx.space}
+        entities={ctx.entities}
+        cycles={ctx.cycles}
+        novelConnections={ctx.novelConnections}
+        contradictions={ctx.contradictions}
+        scenarios={ctx.scenarios}
+        actionItems={ctx.actionItems}
+        propositions={ctx.propositions}
+        bridges={ctx.bridges}
+        domainMap={ctx.domainMap}
+      />
 
       {/* Command Center — the dashboard's live pipeline strip. Three views
           of the same twin: app activity, the workflow itself, per-agent
@@ -108,6 +130,18 @@ export default function SpaceDashboardPage() {
           onOpenTwin={() => router.push(`/app/space/${spaceId}/twin?tab=live`)}
         />
       ) : null}
+
+      {/* Twin analytics strip — state-space radar + health sparkline at
+          top, per-entity attribution underneath. Replaces the "scalar
+          chip" reading of the twin with a multi-axis shape, history
+          trace, and entity-level legibility. */}
+      {spaceId ? <TwinAnalyticsStrip /> : null}
+
+      {/* Twin calibration — predicted vs actual residual plot + surprise
+          timeline. The transparent view of the Tier 6 surprise-density
+          signal that backs the twin's risk_exposure penalty. Self-hides
+          gracefully when no resolved predictions exist. */}
+      {spaceId ? <TwinCalibrationPanel spaceId={spaceId} /> : null}
 
       {/* Production sequence + apps — the product-line chrome */}
       {spaceId ? (

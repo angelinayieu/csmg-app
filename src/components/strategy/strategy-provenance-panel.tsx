@@ -19,8 +19,22 @@ import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import type { StrategicRecommendation } from "@/types/strategy";
 import type { CoherenceCheckResult } from "@/lib/pipeline/validate-strategy-coherence";
 
+/**
+ * Type alias for the provenance payload — extracted so callers that don't have
+ * a full StrategicRecommendation in scope (e.g. the twin-proposal review panel,
+ * which only fetches the proposal + provenance) can still render the panel.
+ */
+export type StrategyProvenance = NonNullable<StrategicRecommendation["provenance"]>;
+
 interface Props {
-  recommendation: StrategicRecommendation;
+  /**
+   * Either pass a full `recommendation` (legacy) OR the lighter-weight
+   * `provenance` object directly. Callsites without the full strategy in
+   * hand (review panel, dashboard drawer) prefer the latter to avoid
+   * shipping ~20kb of unused fields.
+   */
+  recommendation?: StrategicRecommendation;
+  provenance?: StrategyProvenance | null;
   /** Optional coherence result — if provided, issues surface with severity chips */
   coherence?: CoherenceCheckResult | null;
   /** Optional: strategy staleness — surfaces a "may be stale" banner above the panel */
@@ -32,8 +46,8 @@ interface Props {
   className?: string;
 }
 
-export function StrategyProvenancePanel({ recommendation, coherence, staleness, className }: Props) {
-  const prov = recommendation.provenance;
+export function StrategyProvenancePanel({ recommendation, provenance, coherence, staleness, className }: Props) {
+  const prov = provenance ?? recommendation?.provenance ?? null;
   if (!prov) {
     return (
       <section className={cn("rounded-2xl border border-gray-200/70 bg-white/60 backdrop-blur-xl px-5 py-4", className)}>

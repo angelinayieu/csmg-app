@@ -73,14 +73,10 @@ const SPACE_INSIGHTS_MANIFEST: AppManifest = {
       },
       config: { max_visible: 5, show_names: false },
     },
-    {
-      id: "space-top-insights",
-      type: "kg_top_insights",
-      slot: { column: 1, span: 3, order: 10 },
-      bindings: {
-        insights: { source: "kg_top_insights" },
-      },
-    },
+    // kg_top_insights widget intentionally removed from the strip — the
+    // full SynthesisView on SpaceDashboardPage renders the same content
+    // (master bottleneck, leverage, risks, loops, etc.) at higher fidelity.
+    // Resolver below stays exported in case other manifests embed the widget.
   ],
   actions: [],
   provenance: {
@@ -129,6 +125,20 @@ export function SpaceInsightsStrip() {
 
     const kg_top_insights_resolver: Resolver = () => {
       if (!synth) return null;
+
+      // Rich synthesis types (RichLeveragePoint, RichRiskPoint, RichBottleneck)
+      // store entity_id only; entity_name is optional/absent. Build a lookup
+      // so the widget can render names without each consumer re-doing it.
+      const nameById = new Map<string, string>();
+      for (const e of entities) {
+        if (e.entity_id) nameById.set(e.entity_id, e.name ?? e.entity_id);
+      }
+      const nameOf = (
+        id: string | undefined,
+        fallback: string | undefined
+      ): string | undefined =>
+        fallback ?? (id ? nameById.get(id) ?? id : undefined);
+
       const lev = Array.isArray(synth.leverage_points)
         ? (synth.leverage_points as Array<Record<string, unknown>>)
         : [];
@@ -152,19 +162,26 @@ export function SpaceInsightsStrip() {
         quality_label: (quality?.label as string | undefined) ?? null,
         total_entities: entities.length,
         leverage_points: lev.slice(0, 5).map((p) => ({
-          entity_name: p.entity_name as string | undefined,
-          reason: p.reason as string | undefined,
+          entity_name: nameOf(p.entity_id as string | undefined, p.entity_name as string | undefined),
+          // Rich shape stores `summary`; legacy validation shape uses `reason`.
+          reason: (p.summary as string | undefined) ?? (p.reason as string | undefined),
           downstream_impact: p.downstream_impact as number | undefined,
         })),
         risk_points: risks.slice(0, 5).map((p) => ({
-          entity_name: p.entity_name as string | undefined,
-          reason: p.reason as string | undefined,
+          entity_name: nameOf(p.entity_id as string | undefined, p.entity_name as string | undefined),
+          reason: (p.summary as string | undefined) ?? (p.reason as string | undefined),
           blast_radius: p.blast_radius as number | undefined,
         })),
         master_bottleneck: bottleneck
           ? {
-              entity_name: bottleneck.entity_name as string | undefined,
-              explanation: bottleneck.explanation as string | undefined,
+              entity_name: nameOf(
+                bottleneck.entity_id as string | undefined,
+                bottleneck.entity_name as string | undefined
+              ),
+              explanation:
+                (bottleneck.summary as string | undefined) ??
+                (bottleneck.explanation as string | undefined) ??
+                (bottleneck.reason as string | undefined),
             }
           : null,
         open_question_count: openQs.length,
@@ -234,7 +251,7 @@ export function SpaceInsightsStrip() {
       kg_top_insights: kg_top_insights_resolver,
       contributors: contributors_resolver,
     };
-  }, [space, entities.length, goalList, activeGoal, agentRows, agentRuns]);
+  }, [space, entities, goalList, activeGoal, agentRows, agentRuns]);
 
   // ── Pseudo-App for WidgetRenderContext.app ──
   // Some widget contracts read app.state / app.config fields via the

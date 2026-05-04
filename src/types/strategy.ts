@@ -311,6 +311,15 @@ export interface StrategicRecommendation {
   // Phase 9: 4-layer reasoning architecture showing HOW the strategy was formed
   strategy_layers?: StrategyLayers;
 
+  /**
+   * Names of pipeline steps that hit a fallback path during generation
+   * (`"diagnosis" | "synthesis" | "verification" | "final"`). Empty/unset
+   * when the run was clean. The UI uses this to surface a degraded-run
+   * banner so users can tell a successful strategy apart from one whose
+   * confidence number was synthesized from a failed step.
+   */
+  degraded_steps?: string[];
+
   // Evidence grounding
   entity_references: string[];
   external_evidence_count: number;

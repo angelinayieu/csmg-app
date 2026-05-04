@@ -305,6 +305,11 @@ export function ImmersiveHome({
   // mode and render the Q&A step in place of the normal prompt UI.
   // After they answer (or skip), we proceed with bootstrap.
   const [clarifyingActive, setClarifyingActive] = useState(false);
+  // Phase 4-Option-B — when the user types a thin prompt we surface a
+  // soft banner offering pre-flight questions. Stays dismissed for the
+  // session once the user explicitly skips, so it doesn't nag.
+  const [thinPromptBannerDismissed, setThinPromptBannerDismissed] =
+    useState(false);
   const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(
     null,
   );
@@ -383,6 +388,14 @@ export function ImmersiveHome({
         // Append the clarifier Q&A to the input_text so decompose +
         // research see them as part of the user's intake. Format kept
         // simple/readable since downstream LLMs read it as prose.
+        //
+        // Phase 4-wire-1b — ALSO pass the answers as a structured
+        // clarifying_qa_pairs field. Bootstrap seeds
+        // synthesis_data.open_questions with each pair (priority=high,
+        // answered_at=now), so the Phase 4b banner ("N user-supplied
+        // answers informed this strategy") attributes them on the
+        // first run. The prose append stays for LLM context; the
+        // structured pairs are what the post-pipeline UI reads.
         const augmented =
           answers.length > 0
             ? `${finalText}\n\n--- additional context (clarifier Q&A) ---\n${answers
@@ -403,6 +416,10 @@ export function ImmersiveHome({
             reasoningDepth: depth,
             reasoning_settings: settingsForServer,
             skipPlanGate,
+            // Empty array if no clarifier ran; bootstrap silently
+            // ignores it and falls back to default open_questions
+            // population from the synthesize stage.
+            clarifying_qa_pairs: answers,
           }),
         });
         const raw = await res.text();
@@ -1072,6 +1089,89 @@ export function ImmersiveHome({
             )}
           </GlassPanel>
           )}
+
+          {/* Phase 4-Option-B — thin-prompt banner.
+              Shown when the user's draft is short enough that the
+              pipeline would likely run on sparse data. The banner is
+              a soft offer (not a block) — clicking flips
+              askClarifyingQuestions to true so the next Submit lands
+              the user in the clarifier popup; clicking Skip dismisses
+              for the session. The server-side safety net (Option C in
+              bootstrap/route.ts) still fires on Submit even if the
+              user skips, so a vague prompt always gets the baseline
+              analyzer forced on regardless of UI choice.
+              Heuristic: < 50 chars OR < 12 words.
+              Self-hides when:
+                - askClarifyingQuestions already on (no value to add)
+                - user dismissed the banner this session
+                - prompt is empty (keeps the empty state clean)
+                - clarifier modal is active (race avoidance) */}
+          {promptMode === "create" && !clarifyingActive && (() => {
+            const trimmed = prompt.trim();
+            const wordCount = trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
+            const isShort = trimmed.length > 0 && (trimmed.length < 50 || wordCount < 12);
+            const shouldShow =
+              isShort &&
+              !reasoningSettings.askClarifyingQuestions &&
+              !thinPromptBannerDismissed;
+            if (!shouldShow) return null;
+            return (
+              <div
+                className="mt-2 flex items-center gap-3 rounded-xl border px-3.5 py-2.5"
+                style={{
+                  border: "1px solid rgba(99,102,241,0.28)",
+                  background:
+                    "linear-gradient(90deg, rgba(99,102,241,0.06), rgba(168,85,247,0.04))",
+                  color: "var(--home-text)",
+                }}
+                role="status"
+              >
+                <Sparkles
+                  className="h-3.5 w-3.5 shrink-0"
+                  style={{ color: "#6366F1" }}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-semibold leading-tight">
+                    This is a starting point.
+                  </div>
+                  <div
+                    className="mt-0.5 text-[11px] leading-snug"
+                    style={{ color: "var(--home-text-mid)" }}
+                  >
+                    Want us to ask 3 quick questions first? They&rsquo;ll
+                    fill in details the analysis can&rsquo;t infer from a
+                    short prompt.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReasoningSettings((s) => ({
+                      ...s,
+                      askClarifyingQuestions: true,
+                    }));
+                    setThinPromptBannerDismissed(true);
+                  }}
+                  className="shrink-0 rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                  style={{
+                    background: "#6366F1",
+                    color: "white",
+                  }}
+                >
+                  Ask me 3 questions
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setThinPromptBannerDismissed(true)}
+                  className="shrink-0 text-[11px] font-medium transition-colors"
+                  style={{ color: "var(--home-text-faint)" }}
+                  title="Skip — server-side safety nets still apply"
+                >
+                  Skip
+                </button>
+              </div>
+            );
+          })()}
 
           {/* Reasoning settings panel — collapsed by default. Lets
               users customize lenses + process toggles before submit.

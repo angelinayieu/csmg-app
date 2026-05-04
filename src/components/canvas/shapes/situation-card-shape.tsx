@@ -532,6 +532,8 @@ function skipReasonHeadline(reason: string): string {
       return "Idea-only intake — no baseline yet";
     case "no_assets_no_richness":
       return "Insufficient detail for baseline";
+    case "no_input_no_assets":
+      return "Nothing to analyze yet";
     case "analyzer_failed":
       return "Baseline analysis failed";
     default:
@@ -545,6 +547,8 @@ function skipReasonExplanation(reason: string): string {
       return "Your prompt described a goal but didn't specify current inputs / process / outputs to model. The pipeline will go directly to landscape generation. Upload a spec sheet, dataset, or prior analysis to build a baseline.";
     case "no_assets_no_richness":
       return "Not enough structured detail in the prompt and no assets attached. The pipeline will continue to landscape generation; come back and upload assets to enable baseline analysis.";
+    case "no_input_no_assets":
+      return "This space has no intake text and no uploaded assets — the analyzer has nothing to read. Add a prompt or upload a file via the canvas Library, then re-run from the situation drawer.";
     case "analyzer_failed":
       return "The baseline analyzer encountered an error. Landscape generation will still proceed normally — re-run the analyzer from the situation drawer to retry.";
     default:

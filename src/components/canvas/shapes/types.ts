@@ -441,6 +441,34 @@ export type StrategyAlternativeCardShape = TLBaseShape<
   }
 >;
 
+// ── Strategy objective card ─────────────────────────────────────────
+// One CascadeObjective dropped from the strategy drawer onto the canvas.
+// The sidebar version stays mounted; this shape is a *pinned snapshot*
+// of the objective's state at drop time. Identified by (spaceId,
+// objectiveId) so re-dragging dedupes.
+export type StrategyObjectiveCardShape = TLBaseShape<
+  "strategy-objective-card",
+  {
+    w: number;
+    h: number;
+    spaceId: string;
+    /** CascadeObjective.id (stable across renders) */
+    objectiveId: string;
+    title: string;
+    description: string | null;
+    /** 0–100 — drives the inline progress bar */
+    progressPct: number;
+    tag: "lead" | "lag";
+    valueLabel: string | null;
+    /** Drives accent color */
+    paletteKey: "finance" | "customers" | "internal" | "learning";
+    /** Display label for the parent perspective */
+    perspectiveLabel: string;
+    /** ISO when dropped */
+    pinnedAt: string;
+  }
+>;
+
 export type AppCardShape = TLBaseShape<
   "app-card",
   {

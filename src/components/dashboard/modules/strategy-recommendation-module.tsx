@@ -10,6 +10,9 @@ import { Tier3Evidence } from "@/components/strategy/tier-3-evidence";
 import { StrategyHero } from "@/components/strategy/strategy-hero";
 import { ReasoningTracePanel } from "@/components/strategy/reasoning-trace-panel";
 import { StrategyLayersPanel } from "@/components/strategy/strategy-layers-panel";
+import { ReadyToShipMeter } from "@/components/strategy/ready-to-ship-meter";
+import { StrategyProvenancePanel } from "@/components/strategy/strategy-provenance-panel";
+import type { CoherenceCheckResult } from "@/lib/pipeline/validate-strategy-coherence";
 import type {
   StrategicRecommendation,
   MicroTactic,
@@ -55,26 +58,6 @@ const perspectiveColors: Record<number, { bar: string; bg: string; text: string;
   4: { bar: "bg-purple-400", bg: "bg-purple-50", text: "text-purple-800", border: "border-purple-200" },
 };
 
-function ConfidenceRing({ value, size = 48 }: { value: number; size?: number }) {
-  const radius = (size - 6) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (value / 100) * circumference;
-  const color = value >= 70 ? "#22C55E" : value >= 40 ? "#F59E0B" : "#EF4444";
-  return (
-    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="transform -rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#F3F4F6" strokeWidth={4} />
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={4}
-          strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset}
-          className="transition-all duration-700" />
-      </svg>
-      <div className="absolute flex flex-col items-center">
-        <span className="text-sm font-bold text-gray-900">{value}</span>
-      </div>
-    </div>
-  );
-}
-
 function EntityRef({ id, entityMap }: { id: string; entityMap: Map<string, Entity> }) {
   const entity = entityMap.get(id);
   const isExternal = id.startsWith("X");
@@ -94,12 +77,14 @@ function BSCStrategyPage({
   rec,
   entityMap,
   infraProposals,
+  synthData,
   onClose,
   onTacticClick,
 }: {
   rec: StrategicRecommendation;
   entityMap: Map<string, Entity>;
   infraProposals: InfrastructureProposal[];
+  synthData?: SynthesisData | null;
   onClose: () => void;
   onTacticClick?: (tactic: MicroTactic) => void;
 }) {
@@ -111,6 +96,28 @@ function BSCStrategyPage({
 
   const posture = postureConfig[rec.strategic_posture] ?? postureConfig.cautious_validation;
 
+  // Derive a CoherenceCheckResult shape from persisted synth-data fields so
+  // the StrategyProvenancePanel can render the issues list. The validator
+  // function and the persisted shape are intentionally aligned — this is just
+  // a re-pack, not a recompute.
+  const coherence: CoherenceCheckResult | null = (() => {
+    if (typeof synthData?.coherence_score !== "number") return null;
+    const issues = synthData.coherence_issues ?? [];
+    const hasCritical = issues.some((i) => i?.severity === "critical");
+    return {
+      coherence_score: synthData.coherence_score,
+      passed: !hasCritical && synthData.coherence_score >= 40,
+      issues,
+    };
+  })();
+
+  const meterInputs = {
+    confidence: rec.confidence,
+    coverage_pct: rec.provenance?.coverage_pct_at_generation ?? null,
+    provenance_score: rec.provenance?.overall_provenance_score ?? null,
+    coherence_score: typeof synthData?.coherence_score === "number" ? synthData.coherence_score : null,
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center overflow-auto" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="relative m-4 w-full max-w-[1400px] rounded-2xl bg-white shadow-2xl overflow-hidden">
@@ -121,7 +128,13 @@ function BSCStrategyPage({
             <h2 className="text-lg font-bold text-white">{rec.title}</h2>
           </div>
           <div className="flex items-center gap-3">
-            <ConfidenceRing value={rec.confidence} size={40} />
+            {/* Composite readiness — replaces the single ConfidenceRing so the
+                header surfaces the four-factor rollup the dashboard now uses.
+                Compact mode fits the header chrome without crowding the close
+                button; the meter's frosted-glass chrome reads cleanly on the
+                indigo gradient. The full StrategyProvenancePanel below the
+                header gives the deep breakdown. */}
+            <ReadyToShipMeter inputs={meterInputs} compact />
             <button
               onClick={onClose}
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/20 text-white hover:bg-white/30 transition-colors"
@@ -144,6 +157,15 @@ function BSCStrategyPage({
               <span className="font-bold text-green-600">{rec.target_objective.target}</span>
               <span className="text-[10px] text-gray-400">{rec.target_objective.metric}</span>
             </div>
+          </div>
+        )}
+
+        {/* Provenance + coherence breakdown — full-width banner above the flex
+            split so users see the rigor BEFORE the strategy content. The panel
+            is a no-op when provenance hasn't been computed (legacy strategies). */}
+        {(rec.provenance || coherence) && (
+          <div className="border-b border-gray-200 bg-gradient-to-b from-gray-50/50 to-white px-6 py-4">
+            <StrategyProvenancePanel recommendation={rec} coherence={coherence} />
           </div>
         )}
 
@@ -429,6 +451,13 @@ export function StrategyRecommendationModule({
           summary={rec.summary}
           confidence={rec.confidence}
           posture={rec.strategic_posture}
+          coveragePct={rec.provenance?.coverage_pct_at_generation ?? null}
+          provenanceScore={rec.provenance?.overall_provenance_score ?? null}
+          coherenceScore={
+            typeof synthData?.coherence_score === "number"
+              ? synthData.coherence_score
+              : null
+          }
         />
 
         {/* ── TIER 1: Core Move (always visible) ── */}
@@ -522,6 +551,7 @@ export function StrategyRecommendationModule({
                 entityMap={entityMap}
                 infraProposals={infraProposals}
                 spaceId={spaceId}
+                synthData={synthData}
                 onTacticClick={onTacticClick}
               />
             </div>
@@ -595,6 +625,7 @@ export function StrategyRecommendationModule({
           rec={rec}
           entityMap={entityMap}
           infraProposals={infraProposals}
+          synthData={synthData}
           onClose={() => setShowFullStrategy(false)}
           onTacticClick={onTacticClick}
         />

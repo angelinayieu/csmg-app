@@ -53,7 +53,7 @@ export function CanvasProbabilityBadge() {
   return (
     <button
       onClick={() => openDrawer("probability", "spaces")}
-      className="pointer-events-auto absolute right-4 top-16 z-30 flex items-center gap-1.5 rounded-lg border border-indigo-200/80 bg-indigo-50/95 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700 shadow-sm backdrop-blur transition-all hover:-translate-y-px hover:bg-indigo-100 hover:shadow-md"
+      className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-indigo-200/80 bg-indigo-50/95 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700 shadow-sm backdrop-blur transition-all hover:-translate-y-px hover:bg-indigo-100 hover:shadow-md"
       title="Open probability spaces — shared nodes, critical paths, intersection points between strategic pathways"
     >
       <Gauge className="h-3 w-3" />

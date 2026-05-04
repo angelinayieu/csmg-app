@@ -292,6 +292,12 @@ export async function generateMultiStepStrategy(
 ): Promise<MultiStepStrategyResult> {
   const startTime = Date.now();
   const stepTimings = { diagnosis_ms: 0, synthesis_ms: 0, verification_ms: 0, layer_generation_ms: 0, final_ms: 0 };
+  // Track which steps fell into a fallback path. Each catch below pushes its
+  // step name; the names are attached to the returned recommendation so the
+  // UI can render a "degraded run" banner instead of the engine silently
+  // returning a low-confidence dummy that looks indistinguishable from a
+  // clean output.
+  const degradedSteps: string[] = [];
 
   // ── Pre-compute: graph structure + probability spaces ──
   const graphStructure: GraphStructure = computeGraphStructure(
@@ -389,6 +395,7 @@ export async function generateMultiStepStrategy(
     }
   } catch (err) {
     console.warn("[strategy-engine] Diagnosis failed, using fallback:", err);
+    degradedSteps.push("diagnosis");
     diagnosis = {
       core_problem_statement: "Unable to complete structural diagnosis — proceeding with synthesis findings only.",
       graph_insights: {
@@ -455,6 +462,7 @@ export async function generateMultiStepStrategy(
     }
   } catch (err) {
     console.warn("[strategy-engine] Synthesis failed, using single-option fallback:", err);
+    degradedSteps.push("synthesis");
     synthesisResult = {
       options: [{
         title: "Diagnostic-Guided Strategy",
@@ -500,6 +508,7 @@ export async function generateMultiStepStrategy(
     }
   } catch (err) {
     console.warn("[strategy-engine] Verification failed, using unverified ranking:", err);
+    degradedSteps.push("verification");
     verification = {
       verifications: synthesisResult.options.map((opt) => ({
         option_title: opt.title,
@@ -742,6 +751,7 @@ export async function generateMultiStepStrategy(
     });
   } catch (err) {
     finalCallFailed = true;
+    degradedSteps.push("final");
     console.warn(
       "[strategy-engine] Final strategy LLM call failed — using degraded fallback from prior steps:",
       err instanceof Error ? err.message : err,
@@ -986,6 +996,14 @@ export async function generateMultiStepStrategy(
     console.warn(
       `[strategy-engine] Layer cross-ref audit: ${stripIssueCount} refs stripped across ${rankedStrategies.length} ranked strategies (score -${stripIssueCount})`,
     );
+  }
+
+  // Attach the degraded-step list (if any) so the UI can surface a banner
+  // distinguishing a degraded run from a clean one. We mutate `recommendation`
+  // here rather than threading the list through return shape because every
+  // consumer already reads it off `synthesis_data.strategic_recommendation`.
+  if (degradedSteps.length > 0) {
+    recommendation.degraded_steps = [...degradedSteps];
   }
 
   return {

@@ -106,6 +106,16 @@ export async function POST(request: Request) {
       .eq("id", spaceId)
       .single();
 
+    // Diagnostic — a baseline silently failing to generate during intake
+    // was invisible in logs because every branch soft-fails. This single
+    // line tells you on every call: did we enter, what does the row look
+    // like, and which gate are we headed into.
+    console.log(
+      `[analyze-situation] entered space=${spaceId} run=${runId ?? "-"} ` +
+        `force=${force} twin_mode=${spaceRow?.twin_mode ?? "null"} ` +
+        `has_baseline=${spaceRow?.situation_baseline ? "yes" : "no"}`,
+    );
+
     if (!spaceRow) {
       return NextResponse.json({ error: "Space not found" }, { status: 404 });
     }
@@ -202,10 +212,29 @@ export async function POST(request: Request) {
     }
 
     if (!inputText && assets.length === 0) {
-      return NextResponse.json(
-        { error: "no input_text and no assets — nothing to analyze" },
-        { status: 400 },
-      );
+      // Persist a skipped baseline so the drawer can transition out of
+      // "No baseline yet" and tell the user exactly what's missing.
+      // Returning a bare 400 here used to make the Re-run button look
+      // dead — the spaces row stayed null and the drawer kept rendering
+      // NoDataState with no explanation.
+      const baseline: SituationBaseline = {
+        inputs: [],
+        process: { steps: [], constraints: [] },
+        outputs: { current: [], target: [], gap: [] },
+        knowns: [],
+        unknowns: [],
+        uncertainty_score: 0,
+        analyzed_at: new Date().toISOString(),
+        skipped_reason: "no_input_no_assets",
+      };
+      await persist(db, spaceId, baseline);
+      await emit(db, runId, spaceId, baseline, 0);
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        skipped_reason: "no_input_no_assets",
+        baseline,
+      });
     }
 
     // ── Pre-extract entities from each asset ────────────────────────
@@ -346,6 +375,79 @@ async function persist(db: any, spaceId: string, baseline: SituationBaseline) {
       .eq("id", spaceId);
   } catch (err) {
     console.warn("[analyze-situation] persist failed (non-fatal):", err);
+  }
+
+  // Phase 4-wire-3 — mirror baseline.unknowns into
+  // synthesis_data.open_questions so they appear in the same queue
+  // the user already answers in the synthesis drawer. This unifies
+  // the two question systems (pre-flight clarifier + post-decompose
+  // synthesis questions) into a single answerable surface.
+  //
+  // Rules:
+  //   - Skip when baseline was skipped (skipped_reason !== null).
+  //   - Skip empty / whitespace unknowns.
+  //   - Dedup against existing open_questions by case-insensitive
+  //     question-text match — so re-runs of analyze-situation don't
+  //     stack duplicates and pre-flight answers stick around.
+  //   - New rows land with no `user_answer` set (the user hasn't
+  //     answered yet), priority="high" (analyzer-detected gaps are
+  //     worth the user's time), and a why_it_matters that flags the
+  //     analyzer as the source.
+  try {
+    const unknowns = Array.isArray(baseline.unknowns)
+      ? baseline.unknowns
+          .filter((u): u is string => typeof u === "string" && u.trim().length > 0)
+          .map((u) => u.trim())
+      : [];
+    if (unknowns.length === 0 || baseline.skipped_reason) return;
+
+    const { data: spaceRow } = await db
+      .from("spaces")
+      .select("synthesis_data")
+      .eq("id", spaceId)
+      .maybeSingle();
+
+    const synth =
+      (spaceRow?.synthesis_data as Record<string, unknown> | null) ?? {};
+    const existing = Array.isArray(synth.open_questions)
+      ? (synth.open_questions as Array<{
+          question?: unknown;
+          [k: string]: unknown;
+        }>)
+      : [];
+    const existingTexts = new Set(
+      existing
+        .map((q) =>
+          typeof q?.question === "string" ? q.question.trim().toLowerCase() : "",
+        )
+        .filter((s) => s.length > 0),
+    );
+
+    const additions = unknowns
+      .filter((u) => !existingTexts.has(u.toLowerCase()))
+      .map((u) => ({
+        question: u,
+        why_it_matters:
+          "Detected as a gap by the situation analyzer — answering it tightens the landscape and the strategy.",
+        priority: "high" as const,
+      }));
+
+    if (additions.length === 0) return;
+
+    await db
+      .from("spaces")
+      .update({
+        synthesis_data: {
+          ...synth,
+          open_questions: [...existing, ...additions],
+        },
+      })
+      .eq("id", spaceId);
+  } catch (err) {
+    console.warn(
+      "[analyze-situation] mirror-unknowns-to-open-questions failed (non-fatal):",
+      err,
+    );
   }
 }
 

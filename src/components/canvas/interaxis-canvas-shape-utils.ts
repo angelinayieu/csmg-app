@@ -48,6 +48,7 @@ import { AssetCardShapeUtil } from "./shapes/asset-card-shape";
 import { SituationCardShapeUtil } from "./shapes/situation-card-shape";
 import { StrategyHeroCardShapeUtil } from "./shapes/strategy-hero-card-shape";
 import { StrategyAlternativeShapeUtil } from "./shapes/strategy-alternative-shape";
+import { StrategyObjectiveShapeUtil } from "./shapes/strategy-objective-shape";
 import { RoomShapeUtil } from "./shapes/room-shape";
 
 export const SHAPE_UTILS = [
@@ -158,6 +159,10 @@ export const SHAPE_UTILS = [
   // hero bar onto the canvas as a frozen working surface. Distinct from
   // the singular swap-aware StrategyHeroCard above.
   StrategyAlternativeShapeUtil,
+  // Strategy objective — one CascadeObjective dragged from the strategy
+  // drawer's cascade view onto the canvas. Stays mounted in the drawer;
+  // this shape is a frozen pin of the objective's state at drop time.
+  StrategyObjectiveShapeUtil,
   // Phase C (cascade rooms) — wide translucent stage backdrops. Painter
   // spawns one per pipeline stage on stage_boundary(enter) and
   // sends it to back so subsequent painted shapes (entities, axes,

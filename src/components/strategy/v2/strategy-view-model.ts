@@ -54,7 +54,13 @@ export interface HeroVM {
 export interface CascadeObjective {
   id: string;
   title: string;
-  progressPct: number;             // 0-100
+  /**
+   * 0-100 progress against the key_metric target. `undefined` when the
+   * metric is qualitative (current/target are non-numeric strings like
+   * "high"/"low") or when neither current nor target is set — in that case
+   * the UI hides the progress bar instead of rendering 0% as if measured.
+   */
+  progressPct?: number;
   tag: "lead" | "lag";
   valueLabel?: string;
   description?: string;
@@ -67,7 +73,12 @@ export interface CascadeProxy {
   name: string;
   value: string;
   unit?: string;
-  sig: "ok" | "warn" | "bad";
+  /**
+   * Color-coded health status. `undefined` until a downstream tracker has
+   * enough data to compute it (post-confirm). Pre-confirm we render a
+   * neutral indicator instead of pretending everything is "ok".
+   */
+  sig?: "ok" | "warn" | "bad";
   trend?: "up" | "down" | "stable";
 }
 
@@ -164,15 +175,25 @@ export function buildHeroVM(args: {
 }): HeroVM {
   const { recommendation: rec, reasoningTrace, synthData, entityCount, causalChains, spaceName, alternativesCount } = args;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const convergences = (synthData as any)?.convergences as Array<{ depth?: string }> | undefined;
+  // Convergences live in `interaction_metadata.convergences` (graph-category topology),
+  // not top-level — see synthesize/route.ts:1577 and propagate.ts:73 for the canonical path.
+  const im = (synthData as unknown as { interaction_metadata?: { convergences?: Array<{ depth?: string }> } })
+    ?.interaction_metadata;
+  const convergences = im?.convergences;
   const l4Count = convergences?.filter((c) => (c.depth ?? "").toUpperCase() === "L4").length ?? 0;
 
   const hubCount =
     reasoningTrace?.diagnosis?.graph_insights?.hub_entities?.length ?? 0;
   const tracedChainCount = causalChains.filter((c) => !!c.calculation_trace_id).length;
-  // StrategyReasoningTrace has no iteration list in the current shape; use presence as a proxy.
-  const iterationCount = reasoningTrace ? 1 : 0;
+  // The trace is the 3-stage diagnose → synthesize → verify chain (see
+  // src/types/strategy-reasoning.ts:157). Count the steps that actually
+  // produced output instead of always reporting `1` — that hardcoded value
+  // made the chip purely cosmetic.
+  const iterationCount = reasoningTrace
+    ? [reasoningTrace.diagnosis, reasoningTrace.synthesis, reasoningTrace.verification].filter(
+        Boolean,
+      ).length
+    : 0;
 
   const tgt = rec.target_objective;
   const targetMetric = tgt
@@ -232,12 +253,14 @@ function deriveLeadLag(p: StrategyPerspective, i: number): "lead" | "lag" {
   return key === "finance" ? "lag" : "lead";
 }
 
-function objectiveProgress(p: StrategyPerspective): number {
+function objectiveProgress(p: StrategyPerspective): number | undefined {
   const km = p.key_metric;
-  if (!km) return 0;
+  if (!km) return undefined;
   const current = parseFirstNumber(km.current);
   const target = parseFirstNumber(km.target);
-  if (current === null || target === null || target === 0) return 0;
+  // Qualitative metrics ("high" / "low") yield null and we return undefined
+  // so the UI can render the qualitative valueLabel instead of a bogus 0%.
+  if (current === null || target === null || target === 0) return undefined;
   const pct = (current / target) * 100;
   return Math.round(Math.max(0, Math.min(100, pct)));
 }
@@ -323,11 +346,14 @@ export function buildCascadeRow(
     });
   }
 
-  // Secondary objectives derived from actions (one row per action, up to 2)
+  // Secondary objectives derived from actions (one row per action, up to 2).
+  // Action objectives have no measured progress until execution kicks in, so
+  // progressPct is left undefined — the UI hides the bar rather than showing
+  // a flat 0% that reads like a tracked-but-failing metric.
   const actionObjs: CascadeObjective[] = (p.actions ?? []).slice(0, 3).map((a, ai) => ({
     id: `p${i + 1}-obj-action-${ai}`,
     title: a.text,
-    progressPct: 0, // actions start at 0
+    progressPct: undefined,
     tag: a.timeframe === "long_term" || a.timeframe === "medium_term" ? "lag" : "lead",
     description: a.infrastructure_note,
     matchedChainId: matchedChain?.id,
@@ -338,14 +364,17 @@ export function buildCascadeRow(
   // Prefer action-based objectives when key_metric absent
   const combined = [...objectives, ...actionObjs].slice(0, 3);
 
-  // Proxies: key_metric + all micro_tactics whose macro_link matches this perspective
+  // Proxies: key_metric + all micro_tactics whose macro_link matches this
+  // perspective. `sig` is intentionally undefined — there's no metric_tracker
+  // posterior in hand here to compute ok/warn/bad against, and hardcoding
+  // "ok" was a structural lie. Once trackers feed into this builder, set sig
+  // from the latest observation vs target delta.
   const proxies: CascadeProxy[] = [];
   if (p.key_metric) {
     proxies.push({
       name: p.key_metric.name,
       value: p.key_metric.current,
       unit: p.key_metric.unit,
-      sig: "ok",
       trend: p.key_metric.trend_direction,
     });
   }
@@ -359,7 +388,6 @@ export function buildCascadeRow(
       value:
         t.metric.current_value !== undefined ? String(t.metric.current_value) : t.metric.target,
       unit: t.metric.unit,
-      sig: "ok",
       trend: t.metric.trend,
     });
   }

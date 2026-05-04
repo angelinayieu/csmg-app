@@ -89,7 +89,20 @@ import {
   STRATEGY_ALT_COMPACT_H,
   type StrategyAlternativeDragPayload,
 } from "./shapes/strategy-alternative-shape";
-import type { StrategyAlternativeCardShape } from "./shapes/types";
+import {
+  STRATEGY_OBJECTIVE_DRAG_MIME,
+  strategyObjectiveShapeIdSeed,
+  type StrategyObjectiveDragPayload,
+} from "./strategy-objective-drag";
+import {
+  STRATEGY_OBJECTIVE_COMPACT_W,
+  STRATEGY_OBJECTIVE_COMPACT_H,
+} from "./shapes/strategy-objective-shape";
+import { StrategyCanvasPresenceProvider } from "./strategy-canvas-presence-context";
+import type {
+  StrategyAlternativeCardShape,
+  StrategyObjectiveCardShape,
+} from "./shapes/types";
 import { CanvasAssetDrawerV2 } from "./chrome/canvas-asset-drawer-v2";
 import { CanvasAssetCatalogProvider } from "./library/canvas-asset-catalog-context";
 import {
@@ -444,6 +457,48 @@ export function InteraxisCanvas({
     [editor, space?.id],
   );
 
+  // Strategy drawer ↔ canvas presence — set of CascadeObjective.id
+  // values for which a strategy-objective-card lives on the page.
+  // Drives the "● ON CANVAS" pill in the cascade view.
+  const placedStrategyObjectiveIds = useValue<Set<string>>(
+    "placed strategy-objective ids",
+    () => {
+      if (!editor) return new Set();
+      const ids = new Set<string>();
+      for (const s of editor.getCurrentPageShapes()) {
+        if (s.type === "strategy-objective-card") {
+          const oid = (s.props as { objectiveId?: unknown }).objectiveId;
+          if (typeof oid === "string") ids.add(oid);
+        }
+      }
+      return ids;
+    },
+    [editor],
+  );
+
+  const handleZoomToStrategyObjective = useCallback(
+    (objectiveId: string) => {
+      if (!editor || !space?.id) return;
+      const shapeId = createShapeId(
+        strategyObjectiveShapeIdSeed(space.id, objectiveId),
+      );
+      const shape = editor.getShape(shapeId);
+      if (shape) {
+        editor.select(shapeId);
+        editor.zoomToSelection({ animation: { duration: 250 } });
+      }
+    },
+    [editor, space?.id],
+  );
+
+  const strategyCanvasPresence = useMemo(
+    () => ({
+      objectiveIds: placedStrategyObjectiveIds,
+      zoomToObjective: handleZoomToStrategyObjective,
+    }),
+    [placedStrategyObjectiveIds, handleZoomToStrategyObjective],
+  );
+
   // ── Sync KG entities + edges into tldraw on first mount ──
   // Disabled on the main whiteboard. Previous behavior seeded every
   // entity onto the canvas as a kg-node shape, producing a flat row
@@ -466,7 +521,10 @@ export function InteraxisCanvas({
   // the effect's cleanup → setup cycle). The internal restoredRef
   // guard already prevents re-restore, but stabilizing the dep is
   // cleaner and avoids any future foot-gun.
-  const persistenceOpts = useMemo(() => ({ spaceId: space.id }), [space.id]);
+  const persistenceOpts = useMemo(
+    () => ({ spaceId: space.id, currentRunId: activeRunId }),
+    [space.id, activeRunId],
+  );
   const { status: saveStatus } = useCanvasPersistence(editor, persistenceOpts);
 
   // ── Per-ghost predicted edge IDs (for accept/reject) ──
@@ -2187,7 +2245,15 @@ export function InteraxisCanvas({
     // Phase A1.0 — accept the unified library MIME envelope too.
     const hasAsset = types.includes(LIBRARY_ASSET_MIME);
     const hasStrategyAlt = types.includes(STRATEGY_ALTERNATIVE_DRAG_MIME);
-    if (!hasFiles && !hasEntity && !hasAsset && !hasStrategyAlt) return;
+    const hasStrategyObjective = types.includes(STRATEGY_OBJECTIVE_DRAG_MIME);
+    if (
+      !hasFiles &&
+      !hasEntity &&
+      !hasAsset &&
+      !hasStrategyAlt &&
+      !hasStrategyObjective
+    )
+      return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
     if (hasFiles) setIsDragOver(true);
@@ -2252,6 +2318,52 @@ export function InteraxisCanvas({
           }
         } catch (err) {
           console.warn("[canvas] strategy-alternative drop parse failed", err);
+        }
+        return;
+      }
+
+      // ── Strategy objective drop (from cascade view in strategy drawer) ──
+      // Same dedupe-by-id pattern as alternatives: re-dragging the same
+      // objective focuses the existing card instead of stacking.
+      const strategyObjRaw = e.dataTransfer.getData(STRATEGY_OBJECTIVE_DRAG_MIME);
+      if (strategyObjRaw) {
+        e.preventDefault();
+        try {
+          const payload = JSON.parse(strategyObjRaw) as StrategyObjectiveDragPayload;
+          const shapeId = createShapeId(
+            strategyObjectiveShapeIdSeed(payload.spaceId, payload.objectiveId),
+          );
+          const existing = editor.getShape(shapeId);
+          if (existing) {
+            editor.select(shapeId);
+            editor.zoomToSelection({ animation: { duration: 200 } });
+          } else {
+            const w = STRATEGY_OBJECTIVE_COMPACT_W;
+            const h = STRATEGY_OBJECTIVE_COMPACT_H;
+            editor.createShape<StrategyObjectiveCardShape>({
+              id: shapeId,
+              type: "strategy-objective-card",
+              x: Math.round(pagePt.x - w / 2),
+              y: Math.round(pagePt.y - h / 2),
+              props: {
+                w,
+                h,
+                spaceId: payload.spaceId,
+                objectiveId: payload.objectiveId,
+                title: payload.title,
+                description: payload.description,
+                progressPct: payload.progressPct,
+                tag: payload.tag,
+                valueLabel: payload.valueLabel,
+                paletteKey: payload.paletteKey,
+                perspectiveLabel: payload.perspectiveLabel,
+                pinnedAt: new Date().toISOString(),
+              },
+            });
+            editor.select(shapeId);
+          }
+        } catch (err) {
+          console.warn("[canvas] strategy-objective drop parse failed", err);
         }
         return;
       }
@@ -2662,24 +2774,14 @@ export function InteraxisCanvas({
         />
       )}
 
-      {/* Phase 2D — Brainstorm entry button + right-rail panel.
+      {/* Phase 2D — Brainstorm right-rail panel. The toggle button
+          itself lives in the consolidated TopRightChromeStack below
+          (so Probability / Layer / Brainstorm chips share one column
+          with consistent spacing instead of stacking via hardcoded
+          `top:` values that overlap each other).
           Hidden in quiet mode (same pattern as the TopBar). */}
       {!quietMode && (
         <>
-          <BrainstormToggleButton
-            open={brainstormPanelOpen}
-            onToggle={() => {
-              setBrainstormPanelOpen((v) => !v);
-              // First-time open also enables brainstorm mode so the
-              // panel doesn't feel inert — user can toggle the master
-              // switch off inside the panel if they just want to peek.
-              if (!brainstormPanelOpen && !brainstorm.settings.enabled) {
-                brainstorm.update({ enabled: true });
-              }
-            }}
-            settings={brainstorm.settings}
-            active={hasAnyActiveFeature(brainstorm.settings)}
-          />
           <BrainstormPanel
             open={brainstormPanelOpen}
             onClose={() => setBrainstormPanelOpen(false)}
@@ -2722,12 +2824,14 @@ export function InteraxisCanvas({
         activeTab={drawerState.tab}
         onTabChange={drawerState.setTab}
       />
-      <StrategyDrawer
-        open={drawerState.drawer === "strategy"}
-        onClose={drawerState.closeDrawer}
-        activeTab={drawerState.tab}
-        onTabChange={drawerState.setTab}
-      />
+      <StrategyCanvasPresenceProvider value={strategyCanvasPresence}>
+        <StrategyDrawer
+          open={drawerState.drawer === "strategy"}
+          onClose={drawerState.closeDrawer}
+          activeTab={drawerState.tab}
+          onTabChange={drawerState.setTab}
+        />
+      </StrategyCanvasPresenceProvider>
       <ObjectivesDrawer
         open={drawerState.drawer === "objectives"}
         onClose={drawerState.closeDrawer}
@@ -2833,12 +2937,14 @@ export function InteraxisCanvas({
           the entities + edges already in the DB). Auto-collapses
           once synthesis_data lands and the richer LLM-synthesized
           cards take over. */}
-      <PreliminaryInsightsPanel
-        editor={editor}
-        space={space}
-        entities={entities}
-        edges={edges}
-      />
+      {!brainstormPanelOpen && (
+        <PreliminaryInsightsPanel
+          editor={editor}
+          space={space}
+          entities={entities}
+          edges={edges}
+        />
+      )}
 
       {/* Phase 1 Step 2 — live pipeline-run HUD. Mounts only when the
           URL carries ?run=<uuid>; connects to the SSE stream and shows
@@ -2969,21 +3075,43 @@ export function InteraxisCanvas({
           never competes with the main graph hierarchy. */}
       <CanvasReasoningStream runId={activeRunId} />
 
-      {/* Phase 1 Step 20 — layer filter toggle. Uses the existing
-          `knowledge_layer` tagging on entities to surface the
-          internal (decomposition) vs external (research) landscape
-          layers as separable views. Hides when there are no
-          entities yet — nothing to filter. */}
-      <CanvasLayerToggle hasAnyEntity={entities.length > 0} />
-
-      {/* Phase 1 Step 21 — probability spaces badge. Surfaces the
-          probability_spaces + space_intersections data that the
-          strategy engine already persists into synthesis_data. One
-          click opens the Probability drawer focused on Spaces tab,
-          where IntersectionHeatmap + ProbabilitySpaceModule render
-          the full picture. Closes the "we compute this but no one
-          knows" discoverability gap. */}
-      <CanvasProbabilityBadge />
+      {/* Top-right chrome stack — consolidates the three small
+          right-edge chips into one flex column so they stack with
+          consistent gaps regardless of which are visible. Replaces
+          three independent `absolute right-4 top-{16,68,112}`
+          positions that were overlapping each other (Probability
+          badge at 64-96px collided with Layer toggle at 68-112px).
+          Hidden when the brainstorm panel is open since the panel
+          covers this column anyway and the user closes it from the
+          panel header.
+          - CanvasProbabilityBadge: rendered only when probability
+            spaces have been computed (post-decompose synthesis).
+          - CanvasLayerToggle: rendered only when there's at least
+            one entity to filter (`knowledge_layer` tagging).
+          - BrainstormToggleButton: always present so the user can
+            open the brainstorm panel; its visual state reflects
+            whether brainstorm features are active. */}
+      {!quietMode && !brainstormPanelOpen && (
+        <div className="pointer-events-none absolute right-4 top-16 z-30 flex flex-col items-end gap-2">
+          <CanvasProbabilityBadge />
+          <CanvasLayerToggle hasAnyEntity={entities.length > 0} />
+          <BrainstormToggleButton
+            open={brainstormPanelOpen}
+            onToggle={() => {
+              setBrainstormPanelOpen((v) => !v);
+              // First-time open also enables brainstorm mode so the
+              // panel doesn't feel inert — user can toggle the
+              // master switch off inside the panel if they just
+              // want to peek.
+              if (!brainstormPanelOpen && !brainstorm.settings.enabled) {
+                brainstorm.update({ enabled: true });
+              }
+            }}
+            settings={brainstorm.settings}
+            active={hasAnyActiveFeature(brainstorm.settings)}
+          />
+        </div>
+      )}
 
       {/* Phase 1 Step 7 — proposal rings overlay. Consumes the same SSE
           stream and renders a right-side stack of cards for each
@@ -2991,7 +3119,9 @@ export function InteraxisCanvas({
           Shows p10→p90 certainty bar + median tick + confidence %
           derived from stddev. Sample-derived uncertainty replacing
           LLM confidence theater on the strategy cards. */}
-      <CanvasProposalRings runId={activeRunId} />
+      {!brainstormPanelOpen && (
+        <CanvasProposalRings runId={activeRunId} />
+      )}
 
       {/* Phase 2H — cross-domain structural analogs overlay. Left-side
           stack mirroring the proposal rings; consumes the same SSE

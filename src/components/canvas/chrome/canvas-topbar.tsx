@@ -5,8 +5,6 @@ import {
   ArrowLeft,
   Maximize2,
   Minimize2,
-  Users,
-  MoreHorizontal,
   Magnet,
   Sparkles,
   Network,
@@ -193,15 +191,6 @@ export function CanvasTopBar({
         )}
         <div className="h-4 w-px bg-gray-200" />
         <button
-          className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11.5px] font-semibold text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
-          title="Collaborators (Phase 6)"
-          disabled
-        >
-          <Users className="h-3 w-3" />
-          Solo
-        </button>
-        <div className="h-4 w-px bg-gray-200" />
-        <button
           onClick={onToggleFullscreen}
           className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
           title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen (F)"}
@@ -211,12 +200,6 @@ export function CanvasTopBar({
           ) : (
             <Maximize2 className="h-3.5 w-3.5" />
           )}
-        </button>
-        <button
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
-          title="More"
-        >
-          <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
       </div>
     </div>

@@ -1219,6 +1219,7 @@ export interface SituationAnalyzedEvent {
   skippedReason:
     | "twin_mode_structural"
     | "no_assets_no_richness"
+    | "no_input_no_assets"
     | "analyzer_failed"
     | null;
 }

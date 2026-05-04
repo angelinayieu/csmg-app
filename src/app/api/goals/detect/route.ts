@@ -52,23 +52,31 @@ export async function POST(request: Request) {
   const synthData = (spaceRow.synthesis_data ?? {}) as Record<string, unknown>;
   const synthesis = synthData as unknown as SynthesisData;
 
-  // Check we have synthesis findings to reason over
+  // We can derive objectives from THREE different signal strengths:
+  //   1. Rich synthesis (leverage_points / risk_points / master_bottleneck)
+  //   2. Sparse graph (entities + edges from decompose, no synthesis yet)
+  //   3. Subject text only (intake-time, before decompose runs)
+  //
+  // The prompt builder accepts all three and degrades gracefully. The
+  // caller can hit this endpoint early — e.g. when the user clicks
+  // "Set ultimate goal" right after intake — and still get sensible
+  // candidate objectives from the subject text alone.
   const hasFindings =
     (synthesis.leverage_points?.length ?? 0) > 0 ||
     (synthesis.risk_points?.length ?? 0) > 0 ||
     synthesis.master_bottleneck != null;
+  const hasSubjectText = typeof spaceRow.input_text === "string" && spaceRow.input_text.trim().length > 0;
 
-  if (!hasFindings) {
-    console.log("[goals/detect] No findings in synthesis_data:", {
-      leverage: synthesis.leverage_points?.length ?? 0,
-      risk: synthesis.risk_points?.length ?? 0,
-      bottleneck: synthesis.master_bottleneck != null,
-    });
+  if (!hasFindings && !hasSubjectText) {
+    console.log("[goals/detect] No synthesis findings AND no subject text — cannot derive objectives");
     return NextResponse.json({
       objectives: [],
       stored: false,
-      reason: "No synthesis findings to derive objectives from",
+      reason: "No synthesis findings or subject text to derive objectives from",
     });
+  }
+  if (!hasFindings) {
+    console.log("[goals/detect] Early mode: no synthesis findings yet, deriving from subject + graph only");
   }
 
   // Fetch graph structure for deep causal reasoning

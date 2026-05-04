@@ -7,12 +7,21 @@ import {
   GitBranch,
   Shield,
 } from "lucide-react";
+import { ReadyToShipMeter } from "./ready-to-ship-meter";
 
 interface StrategyHeroProps {
   title: string;
   summary: string;
   confidence: number;
   posture: string;
+  // Phase 1b — additional readiness inputs so the hero can render the
+  // composite meter (coverage·0.30 + confidence·0.25 + provenance·0.25 +
+  // coherence·0.20) instead of just the LLM-self-reported confidence.
+  // All optional; the meter falls back to neutral 50 for missing values
+  // and only renders the bars it has data for.
+  coveragePct?: number | null;
+  provenanceScore?: number | null;
+  coherenceScore?: number | null;
 }
 
 const postureConfig: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
@@ -23,27 +32,15 @@ const postureConfig: Record<string, { label: string; color: string; bg: string; 
   defensive: { label: "Defensive", color: "text-red-700", bg: "bg-red-50", icon: <Shield className="h-3.5 w-3.5" /> },
 };
 
-function ConfidenceRing({ value }: { value: number }) {
-  const size = 36;
-  const radius = (size - 5) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (value / 100) * circumference;
-  const color = value >= 70 ? "#22C55E" : value >= 40 ? "#F59E0B" : "#EF4444";
-
-  return (
-    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="transform -rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#F3F4F6" strokeWidth={3.5} />
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={3.5}
-          strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset}
-          className="transition-all duration-700" />
-      </svg>
-      <span className="absolute text-xs font-bold text-gray-900">{value}</span>
-    </div>
-  );
-}
-
-export function StrategyHero({ title, summary, confidence, posture }: StrategyHeroProps) {
+export function StrategyHero({
+  title,
+  summary,
+  confidence,
+  posture,
+  coveragePct = null,
+  provenanceScore = null,
+  coherenceScore = null,
+}: StrategyHeroProps) {
   const p = postureConfig[posture] ?? postureConfig.cautious_validation;
 
   return (
@@ -57,8 +54,16 @@ export function StrategyHero({ title, summary, confidence, posture }: StrategyHe
             {summary}
           </p>
         </div>
-        <div className="flex flex-col items-center gap-2 flex-shrink-0 pt-1">
-          <ConfidenceRing value={confidence} />
+        <div className="flex flex-col items-end gap-2 flex-shrink-0 pt-1 max-w-[300px]">
+          <ReadyToShipMeter
+            inputs={{
+              confidence,
+              coverage_pct: coveragePct,
+              provenance_score: provenanceScore,
+              coherence_score: coherenceScore,
+            }}
+            compact
+          />
           <span className={cn(
             "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium whitespace-nowrap",
             p.bg, p.color

@@ -698,6 +698,24 @@ declare module "@tldraw/tlschema" {
       pinnedAt: string;
       expanded: boolean;
     };
+    // Strategy objective — one CascadeObjective dragged out of the
+    // strategy drawer's cascade view onto the canvas. Frozen pin of
+    // the objective's state at drop time; deduped by (spaceId,
+    // objectiveId) so re-dragging focuses the existing card.
+    "strategy-objective-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      objectiveId: string;
+      title: string;
+      description: string | null;
+      progressPct: number;
+      tag: "lead" | "lag";
+      valueLabel: string | null;
+      paletteKey: "finance" | "customers" | "internal" | "learning";
+      perspectiveLabel: string;
+      pinnedAt: string;
+    };
     // Phase A1.2 — universal asset catalog: app card.
     "app-card": {
       w: number;

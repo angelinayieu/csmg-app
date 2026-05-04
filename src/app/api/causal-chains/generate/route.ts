@@ -93,14 +93,28 @@ export async function POST(request: Request) {
 
     await db.from("spaces").update({ synthesis_data: merged }).eq("id", spaceId);
 
+    // Source counts read from interaction_metadata.convergences (canonical
+    // write path) with top-level `convergences` as a fallback. Counts both
+    // L3 + L4 since the propagator now seeds from either tier.
+    const synthRecord = synthData as unknown as Record<string, unknown>;
+    const im = synthRecord?.interaction_metadata as
+      | { convergences?: unknown[] }
+      | undefined;
+    const convergences = ((im?.convergences as
+      | Array<{ depth?: string }>
+      | undefined) ??
+      (synthRecord?.convergences as Array<{ depth?: string }> | undefined) ??
+      []) as Array<{ depth?: string }>;
+    const seedCount = convergences.filter((c) => {
+      const d = (c.depth ?? "").toString().toUpperCase();
+      return d === "L3" || d === "L4";
+    }).length;
+
     const response: CausalChainResponse = {
       chains,
       generated_at: new Date().toISOString(),
       source_counts: {
-        l4_convergences: (
-          ((synthData as unknown as Record<string, unknown>)?.convergences as unknown[]) ??
-          []
-        ).length,
+        l4_convergences: seedCount,
         leverage_points: synthData?.leverage_points?.length ?? 0,
         micro_tactics:
           // eslint-disable-next-line @typescript-eslint/no-explicit-any

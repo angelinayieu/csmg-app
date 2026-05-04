@@ -291,6 +291,19 @@ function ensureOriginPrompt(
 function ensureKGFormation(editor: Editor, state: PainterState) {
   if (state.kgFormationShapeId) return state.kgFormationShapeId;
   if (!state.anchor) return null;
+
+  // Dedup across painter remounts: if our local state has no record of
+  // a kg-formation shape but one already exists on the canvas (from a
+  // restored snapshot or a hot reload that reset PainterState), adopt
+  // it instead of stamping a duplicate. Mirrors the room dedup at
+  // upsertRoomForStage. Without this, snapshot restore + new run can
+  // produce two kg-formation cards at different anchor positions.
+  for (const shape of editor.getCurrentPageShapes()) {
+    if (shape.type !== "kg-formation") continue;
+    state.kgFormationShapeId = shape.id;
+    return shape.id;
+  }
+
   const shapeId = createShapeId();
   try {
     // Place inside the `kg` room — the live overview card lives here
@@ -704,9 +717,9 @@ const TAXONOMY_CARD_OFFSET_X =
 // ── Asset chip + situation card painters ─────────────────────────
 //
 // Top-of-flow input layer. Asset chips render in a horizontal row to
-// the right of the origin-prompt. The situation card sits BELOW the
-// asset row + origin-prompt, ABOVE the probability-space-shells, so
-// the canvas reads as: prompt + assets → current state → landscapes.
+// the right of the origin-prompt. The situation card lands inside the
+// intake room, below the origin-prompt, so the room reads top-to-
+// bottom as: prompt → current state.
 
 const ASSET_CARD_W = 200;
 const ASSET_CARD_H = 88;
@@ -716,7 +729,6 @@ const ASSET_CARD_ROW_Y_OFFSET = -780; // above anchor (origin-prompt sits even h
 
 const SITUATION_CARD_W = 560;
 const SITUATION_CARD_H = 240;
-const SITUATION_CARD_Y_OFFSET = -700; // between origin-prompt row and shells row
 
 const ASSET_CLASS_ACCENT_LOOKUP: Record<string, string> = {
   research_pdf: "#7C3AED",
@@ -817,9 +829,20 @@ function paintSituationAnalyzed(
   }
 
   const shapeId = createShapeId();
-  // Center on anchor.x; place above the kg-formation row.
-  const x = state.anchor.x - SITUATION_CARD_W / 2;
-  const y = state.anchor.y + SITUATION_CARD_Y_OFFSET;
+  // Place inside the `intake` room ("Understanding your situation"),
+  // below the origin-prompt card so the room reads top-to-bottom as
+  // prompt → current state. Was previously at a legacy fixed offset
+  // (anchor.y - 700) that floated it ABOVE the entire room cascade,
+  // which broke the "what's in the situational analysis room?" mental
+  // model the cascade promises.
+  const placement = placeInsideRoom(
+    "intake",
+    state.anchor,
+    0,
+    ORIGIN_PROMPT_DEFAULT_H + 24,
+  );
+  const x = placement.x - SITUATION_CARD_W / 2;
+  const y = placement.y;
   try {
     editor.createShape<SituationCardShape>({
       id: shapeId,
@@ -833,6 +856,15 @@ function paintSituationAnalyzed(
       meta: { source: "pipeline-event" },
     });
     state.situationCardShapeId = shapeId;
+    // Grow the intake room to enclose the card so it doesn't poke past
+    // the room's bottom edge. The default intake height (280) only
+    // fits the prompt; with the situation card we need ~prompt+card.
+    recordChildBottomForStage(
+      editor,
+      state,
+      "intake",
+      y + SITUATION_CARD_H,
+    );
   } catch (err) {
     console.warn("[pipeline-painter] situation card create failed:", err);
   }

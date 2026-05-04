@@ -401,6 +401,13 @@ export interface SynthesisData {
   // Strategy coverage audit: post-synthesis gap check — do actions address every critical axiom / hidden axiom / critical risk / high-impact signal?
   strategy_coverage?: StrategyCoverageAudit;
 
+  // Post-generation strategy coherence validation. Stamped by /api/pipeline/synthesize
+  // when validateStrategyCoherence runs against the finalized recommendation.
+  // 0-100 score plus the rule-based issues that contributed to the deduction —
+  // surfaced in the dashboard meter + drawer so users can audit the rigor.
+  coherence_score?: number;
+  coherence_issues?: import("../lib/pipeline/validate-strategy-coherence").CoherenceIssue[];
+
   // Pipeline audit trail — append-only log of what ran, was cached, was skipped
   analysis_runs?: import("./analysis-runs").AnalysisRun[];
 

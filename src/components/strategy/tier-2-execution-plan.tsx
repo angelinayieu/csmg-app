@@ -17,11 +17,13 @@ import {
 import { ExecutionFlowchart } from "@/components/strategy/execution-flowchart";
 import { useExecutionBrief } from "@/lib/hooks/use-execution-brief";
 import { ExecutionBriefPanel } from "@/components/strategy/execution-brief-panel";
+import { TacticProvenanceChips } from "@/components/strategy/tactic-provenance-chips";
 import type {
   StrategicRecommendation,
   MicroTactic,
   InfrastructureProposal,
 } from "@/types/strategy";
+import type { SynthesisData } from "@/types/synthesis";
 import type { Entity } from "@/types";
 
 // ── Props ──
@@ -31,6 +33,11 @@ export interface Tier2ExecutionPlanProps {
   entityMap: Map<string, Entity>;
   infraProposals?: InfrastructureProposal[];
   spaceId?: string;
+  /** Optional — when provided, per-tactic provenance chips resolve their
+   *  axiom / convergence / gap / inversion IDs to human-readable labels
+   *  in hover tooltips. Without it the chips still render counts; hover
+   *  just shows raw IDs. */
+  synthData?: SynthesisData | null;
   onTacticClick?: (tactic: MicroTactic) => void;
 }
 
@@ -72,7 +79,17 @@ function EntityRef({ id, entityMap }: { id: string; entityMap: Map<string, Entit
 
 // ── Micro Tactic Row ──
 
-function MicroTacticRow({ tactic, entityMap, onClick }: { tactic: MicroTactic; entityMap: Map<string, Entity>; onClick?: () => void }) {
+function MicroTacticRow({
+  tactic,
+  entityMap,
+  synthData,
+  onClick,
+}: {
+  tactic: MicroTactic;
+  entityMap: Map<string, Entity>;
+  synthData?: SynthesisData | null;
+  onClick?: () => void;
+}) {
   return (
     <button
       className="w-full flex items-start gap-2.5 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2 text-left hover:border-interaxis-200 hover:bg-interaxis-50/20 transition-all group"
@@ -99,6 +116,10 @@ function MicroTacticRow({ tactic, entityMap, onClick }: { tactic: MicroTactic; e
           <Target className="h-2.5 w-2.5" />
           <span>{tactic.metric.name}: {tactic.metric.target}{tactic.metric.unit ? ` ${tactic.metric.unit}` : ""}</span>
         </div>
+        {/* Provenance chips — surfaces per-tactic backlinks (axioms /
+            convergences / coverage gaps / inversions) that the strategy
+            engine produces but used to render nowhere. */}
+        <TacticProvenanceChips tactic={tactic} synthData={synthData} />
         {/* Implementation intention */}
         {tactic.implementation_intention && (
           <div className="mt-1.5 rounded border border-blue-100 bg-blue-50/30 px-2 py-1">
@@ -123,11 +144,13 @@ function MicroTacticWithBrief({
   tactic,
   entityMap,
   spaceId,
+  synthData,
   onClick,
 }: {
   tactic: MicroTactic;
   entityMap: Map<string, Entity>;
   spaceId: string;
+  synthData?: SynthesisData | null;
   onClick?: () => void;
 }) {
   const [briefOpen, setBriefOpen] = useState(false);
@@ -150,7 +173,7 @@ function MicroTacticWithBrief({
 
   return (
     <div>
-      <MicroTacticRow tactic={tactic} entityMap={entityMap} onClick={onClick} />
+      <MicroTacticRow tactic={tactic} entityMap={entityMap} synthData={synthData} onClick={onClick} />
       <div className="ml-7 mt-1">
         <button
           onClick={handleToggleBrief}
@@ -194,6 +217,7 @@ export function Tier2ExecutionPlan({
   entityMap,
   infraProposals = [],
   spaceId,
+  synthData,
   onTacticClick,
 }: Tier2ExecutionPlanProps) {
   const [expanded, setExpanded] = useState(false);
@@ -281,6 +305,7 @@ export function Tier2ExecutionPlan({
                     tactic={tactic}
                     entityMap={entityMap}
                     spaceId={spaceId}
+                    synthData={synthData}
                     onClick={() => onTacticClick?.(tactic)}
                   />
                 ) : (
@@ -288,6 +313,7 @@ export function Tier2ExecutionPlan({
                     key={tactic.id}
                     tactic={tactic}
                     entityMap={entityMap}
+                    synthData={synthData}
                     onClick={() => onTacticClick?.(tactic)}
                   />
                 )

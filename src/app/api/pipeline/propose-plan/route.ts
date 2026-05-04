@@ -49,6 +49,7 @@ import {
 } from "@/lib/events/structural-event-bus";
 import type { KgPlanMode, KgPlanHandoffContext } from "@/types/kg-generation-plan";
 import type { LayerOntologyTemplate } from "@/types/layer-ontology";
+import type { KgPlanProposedEvent } from "@/types/pipeline-events";
 
 export const maxDuration = 180;
 export const runtime = "nodejs";
@@ -177,7 +178,13 @@ export async function POST(request: NextRequest) {
   });
 
   // ── Generate the plan body (the heavy LLM work) ────────────────
+  // Diagnostic timing: this is the single longest-running call in
+  // the intake chain (one big LLM round-trip). When the bootstrap
+  // route's 45s `fetchWithTimeout` aborts, the request still keeps
+  // running on the server — without a timer here we can't tell the
+  // difference between "LLM hung" and "server crashed mid-stream".
   let planBody;
+  console.time(`[propose-plan] generatePlan space=${spaceId}`);
   try {
     planBody = await generatePlan({
       space_id: spaceId,
@@ -192,7 +199,12 @@ export async function POST(request: NextRequest) {
       existing_reasoning_settings: (spaceRow.reasoning_settings as any) ?? undefined,
       superseded_plan_id: supersedesId ?? undefined,
     });
+    console.timeEnd(`[propose-plan] generatePlan space=${spaceId}`);
+    console.log(
+      `[propose-plan] generatePlan ok space=${spaceId} layers=${planBody.layer_ontology_proposal.layers.length} axes=${planBody.axis_proposals.axes.length} nodes~${planBody.conceptual_skeleton.estimated_total_nodes}`,
+    );
   } catch (err) {
+    console.timeEnd(`[propose-plan] generatePlan space=${spaceId}`);
     console.error("[propose-plan] plan generation failed:", err);
     await completePipelineRun(db, runId, "failed").catch(() => {});
     return NextResponse.json(
@@ -242,7 +254,24 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Emit kg_plan_proposed event for Plan Review Card paint ─────
-  await emitStructuralEvent(db, runId, {
+  //
+  // Cross-run delivery rule: when called from the bootstrap chain,
+  // `pipeline_handoff_context.intake_run_id` points at the
+  // `intake_bootstrap` run that the canvas SSE is already subscribed
+  // to. The painter (pipeline-event-painter.tsx) translates
+  // `kg_plan_proposed` events into the `interaxis:kg-plan-proposed`
+  // window event that wakes up KgPlanReviewGate +
+  // whiteboard-bootstrap-splash. Emitting only to the propose-plan
+  // run leaves both surfaces blind until the gate's 5s polling
+  // fallback catches up — and the splash never gets the signal at
+  // all because it doesn't poll.
+  //
+  // We emit to BOTH runs:
+  //   1. propose-plan run — so /pipeline/stream/[planRunId] consumers
+  //      (telemetry, future per-stage UIs) see the canonical event.
+  //   2. intake_bootstrap run — so the canvas SSE that the user is
+  //      currently watching wakes the gate + splash immediately.
+  const proposedEvent: KgPlanProposedEvent = {
     type: "kg_plan_proposed",
     planId: insertedRow.id as string,
     version,
@@ -259,7 +288,16 @@ export async function POST(request: NextRequest) {
       estimatedWallClockSeconds:
         planBody.cost_estimate.wall_clock_seconds_estimate,
     },
-  });
+  };
+  await emitStructuralEvent(db, runId, proposedEvent);
+
+  const intakeRunId = body.pipeline_handoff_context?.intake_run_id ?? null;
+  if (intakeRunId && intakeRunId !== runId) {
+    await emitStructuralEvent(db, intakeRunId, proposedEvent);
+    console.log(
+      `[propose-plan] mirrored kg_plan_proposed to intake run ${intakeRunId} (planRun=${runId}, planId=${insertedRow.id})`,
+    );
+  }
 
   // The pipeline_run stays open with stage 'intake' — it completes
   // when the user approves (in the approve route) and downstream

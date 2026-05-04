@@ -32,6 +32,14 @@ interface ClarifyingQuestionsRequest {
   lenses?: ReasoningLens[];
   /** Optional model override. */
   model?: string;
+  /** Phase 4-wire-1 — when the caller is regenerating against an
+   *  existing space, pass the space's situation_baseline.unknowns
+   *  list and uncertainty_score so the LLM biases its questions
+   *  toward closing real gaps the analyzer already identified.
+   *  Empty / undefined for fresh-prompt flows where no baseline
+   *  exists yet. */
+  unknowns?: string[];
+  uncertaintyScore?: number;
 }
 
 interface ClarifyingQuestion {
@@ -103,18 +111,37 @@ const LENS_LABELS: Record<ReasoningLens, string> = {
   historian: "historian (precedents, base rates)",
 };
 
-function buildPrompt(text: string, lenses: ReasoningLens[]): string {
+function buildPrompt(
+  text: string,
+  lenses: ReasoningLens[],
+  unknowns: string[],
+  uncertaintyScore: number | null,
+): string {
   const lensesBlock =
     lenses.length > 0
       ? `\nACTIVE LENSES (bias your questions toward what these care about): ${lenses
           .map((l) => LENS_LABELS[l])
           .join(", ")}\n`
       : "";
+
+  // Phase 4-wire-1 — baseline-gap injection. When the caller knows
+  // the space's prior situation_baseline.unknowns, surface them as
+  // priority targets so the question generator closes real analyzer-
+  // detected gaps instead of inventing parallel ones.
+  const baselineBlock =
+    unknowns.length > 0
+      ? `\nPRIOR ANALYSIS GAPS (from the situation_baseline ran on a previous version of this prompt):
+${unknowns.slice(0, 8).map((u, i) => `  ${i + 1}. ${u}`).join("\n")}
+${uncertaintyScore != null ? `Overall uncertainty: ${uncertaintyScore.toFixed(2)} (0=fully known, 1=fully unknown).` : ""}
+
+Prioritize questions that would close the gaps above. If a gap is too vague to be a single-sentence question, skip it. Don't invent new gaps when the analyzer already found ones — refine those instead.\n`
+      : "";
+
   return `USER'S DRAFT PROMPT:
 """
 ${text.slice(0, 2000)}
 """
-${lensesBlock}
+${lensesBlock}${baselineBlock}
 Generate 3-5 clarifying questions per the system instructions.`;
 }
 
@@ -148,10 +175,26 @@ export async function POST(request: Request) {
       )
     : [];
 
+  // Phase 4-wire-1 — sanitize unknowns. Cap at 8 (matches frame-
+  // extractor's slice), drop empty / non-string entries, trim each.
+  const unknowns = Array.isArray(body?.unknowns)
+    ? (body!.unknowns as unknown[])
+        .filter((u): u is string => typeof u === "string" && u.trim().length > 0)
+        .map((u) => u.trim())
+        .slice(0, 8)
+    : [];
+  const uncertaintyScore =
+    typeof body?.uncertaintyScore === "number" &&
+    Number.isFinite(body.uncertaintyScore) &&
+    body.uncertaintyScore >= 0 &&
+    body.uncertaintyScore <= 1
+      ? body.uncertaintyScore
+      : null;
+
   try {
     const raw = await llmJSON<{ questions: ClarifyingQuestion[] }>({
       system: SYSTEM_PROMPT,
-      user: buildPrompt(text, lenses),
+      user: buildPrompt(text, lenses, unknowns, uncertaintyScore),
       responseSchema: RESPONSE_SCHEMA,
       temperature: 0.4,
       maxTokens: 800,

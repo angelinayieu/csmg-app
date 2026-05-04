@@ -79,8 +79,8 @@ export function CanvasBottomDock({
   const memoryOn = memorySettings?.enabled ?? false;
 
   return (
-    <div className="pointer-events-none absolute bottom-5 left-1/2 z-30 -translate-x-1/2">
-      <div className="pointer-events-auto flex min-w-[640px] max-w-[840px] flex-col gap-1.5 rounded-2xl border border-gray-200/70 bg-white/95 p-1.5 shadow-[0_10px_40px_-10px_rgba(0,0,30,0.18)] backdrop-blur-xl">
+    <div className="pointer-events-none absolute bottom-5 left-1/2 z-30 w-[calc(100%-3rem)] max-w-[840px] -translate-x-1/2">
+      <div className="pointer-events-auto flex min-w-0 flex-col gap-1.5 rounded-2xl border border-gray-200/70 bg-white/95 p-1.5 shadow-[0_10px_40px_-10px_rgba(0,0,30,0.18)] backdrop-blur-xl sm:min-w-[480px] md:min-w-[560px] lg:min-w-[640px]">
         {files.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-2 pt-1">
             {files.map((f, i) => (

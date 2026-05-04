@@ -18,6 +18,8 @@ import type {
   MechanismRow,
   RankedStrategy,
 } from "@/types/strategy";
+import type { CoherenceCheckResult, CoherenceIssue } from "@/lib/pipeline/validate-strategy-coherence";
+import type { ConfidenceOverrideRow } from "@/app/api/strategy/confidence-override/route";
 
 export const maxDuration = 15;
 
@@ -56,6 +58,61 @@ interface TwinProposalRow {
   updated_at: string;
 }
 
+/**
+ * Phase 1c readiness wiring — composite-meter inputs surfaced on the twin
+ * proposal response so the review panel can render `ReadyToShipMeter` in a
+ * single fetch (the panel already reads this endpoint to render the
+ * justification + mechanisms, and synthesis_data is already in scope here).
+ *
+ * All four fields are nullable. The meter falls back to neutral 50 for
+ * missing values, so legacy strategies still render a usable composite.
+ */
+export interface TwinProposalMeterInputs {
+  confidence: number | null;
+  coverage_pct: number | null;
+  provenance_score: number | null;
+  coherence_score: number | null;
+}
+
+/**
+ * Phase 2 audit drawer — bundles the upstream signals that explain HOW the
+ * composite-meter number was produced. Mirrors the persisted shape; this is
+ * a re-pack from synthesis_data, not a recompute.
+ *
+ *   trace             — three confidence numbers from the diagnose→synthesize→
+ *                       verify pipeline (so the user sees how stress-testing
+ *                       moved the number).
+ *   open_questions    — gap-analyzer output. Sidecar context for the user.
+ *   reasoning_chain   — the LLM's rigorous narrative (entity codes, edge
+ *                       dynamics, evidence quality). Already on rec but
+ *                       surfaced here for drawer-only consumers.
+ *   entity_references — IDs the strategy claims to be grounded in. Drawer
+ *                       renders as chips; full KG-confidence resolution is
+ *                       a follow-up (would require a join on `entities`).
+ */
+export interface TwinProposalAudit {
+  trace: {
+    diagnosis_confidence: number | null;
+    estimated_confidence: number | null;
+    verified_confidence: number | null;
+    diagnosis_blind_spots: string[];
+    step_durations_ms: {
+      diagnosis: number | null;
+      synthesis: number | null;
+      verification: number | null;
+      final: number | null;
+    };
+  };
+  open_questions: Array<{
+    question: string;
+    why_it_matters?: string;
+    priority?: string;
+    user_answer?: string;
+  }>;
+  reasoning_chain: string | null;
+  entity_references: string[];
+}
+
 interface TwinProposalResponse {
   proposal: TwinProposalRow | null;
   /** Set when no row exists yet but we extracted one from synthesis_data. */
@@ -83,6 +140,27 @@ interface TwinProposalResponse {
    * runs — the bar's fallback handles those by rendering one card).
    */
   ranked_strategies: RankedStrategyEntry[];
+  /** Composite-meter inputs. Null when no strategy exists yet. */
+  meter_inputs: TwinProposalMeterInputs | null;
+  /** Re-packed coherence shape so the review panel + drawer can render
+   *  StrategyProvenancePanel issue lists without re-running the validator. */
+  coherence: CoherenceCheckResult | null;
+  /** Pipeline steps that fell back during generation (degraded honesty marker). */
+  degraded_steps: string[] | null;
+  /** Phase 2 audit-drawer payload. Null on legacy strategies (no reasoning trace). */
+  audit: TwinProposalAudit | null;
+  /** Provenance object passed straight to <StrategyProvenancePanel />. Decoupled
+   *  from the rest of the recommendation to keep the wire small (~1kb vs ~25kb
+   *  for the full strategy). Null when provenance hasn't been computed. */
+  provenance: StrategicRecommendation["provenance"] | null;
+  /** Latest confidence override the user has saved against THIS generation
+   *  (not previous generations). Null when no override exists yet. The drawer
+   *  pre-fills its widget from this; the meter shows "AI N · You M" when set. */
+  user_override: ConfidenceOverrideRow | null;
+  /** ISO timestamp of the strategy generation this response describes. The
+   *  drawer passes this through when saving an override so the row is
+   *  anchored to the right generation. Null on legacy strategies. */
+  strategy_generated_at: string | null;
 }
 
 export async function GET(
@@ -214,12 +292,156 @@ export async function GET(
     extracted = extractTwinProposalFromStrategy(strategy ?? null);
   }
 
+  // Phase 1c — readiness meter inputs. All four come from already-fetched
+  // synthesis_data; this is a re-pack, no extra DB call.
+  const synthData = (spaceRow?.synthesis_data ?? {}) as Record<string, unknown>;
+  const coherenceScoreRaw = synthData.coherence_score;
+  const coherenceScoreNum =
+    typeof coherenceScoreRaw === "number" ? coherenceScoreRaw : null;
+  const coherenceIssues = (synthData.coherence_issues as CoherenceIssue[] | undefined) ?? [];
+
+  const meterInputs: TwinProposalMeterInputs | null = strategy
+    ? {
+        confidence: typeof strategy.confidence === "number" ? strategy.confidence : null,
+        coverage_pct:
+          typeof strategy.provenance?.coverage_pct_at_generation === "number"
+            ? strategy.provenance.coverage_pct_at_generation
+            : null,
+        provenance_score:
+          typeof strategy.provenance?.overall_provenance_score === "number"
+            ? strategy.provenance.overall_provenance_score
+            : null,
+        coherence_score: coherenceScoreNum,
+      }
+    : null;
+
+  const coherence: CoherenceCheckResult | null =
+    coherenceScoreNum !== null
+      ? {
+          coherence_score: coherenceScoreNum,
+          // Mirror the validator's lenient passing rule: no critical issues +
+          // score >= 40. We don't have the strict-mode flag here so always
+          // use lenient — comprehensive-mode runs already gate at synth time.
+          passed:
+            !coherenceIssues.some((i) => i?.severity === "critical") &&
+            coherenceScoreNum >= 40,
+          issues: coherenceIssues,
+        }
+      : null;
+
+  const degradedSteps = Array.isArray(strategy?.degraded_steps)
+    ? (strategy.degraded_steps as string[])
+    : null;
+
+  // Phase 2 — audit-drawer payload. Re-packs the existing reasoning_trace +
+  // open_questions so the panel can render the diagnose→synthesize→verify
+  // sub-trace without a second fetch. All paths are best-effort — legacy
+  // strategies return audit: null and the drawer renders a "no trace
+  // available" empty state.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reasoningTrace = (stratWrap as any)?.reasoning_trace as
+    | {
+        diagnosis?: { confidence?: number; signal_synthesis?: { blind_spots?: string[] } };
+        synthesis?: { options?: Array<{ estimated_confidence?: number }> };
+        verification?: { verifications?: Array<{ verified_confidence?: number }> };
+        step_timings?: {
+          diagnosis_ms?: number;
+          synthesis_ms?: number;
+          verification_ms?: number;
+          final_ms?: number;
+        };
+      }
+    | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const openQuestions = (synthData.open_questions as any[] | undefined) ?? [];
+
+  // Phase 4 — anchor the override fetch on the strategy's generated_at.
+  // stratWrap.generated_at is set by /api/pipeline/synthesize at write time
+  // (see synthesize/route.ts:1791). Fall back to the proposal row's
+  // generated_at when the strategy wasn't wrapped (legacy single-strategy).
+  const strategyGeneratedAt: string | null =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (typeof (stratWrap as any)?.generated_at === "string"
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ? ((stratWrap as any).generated_at as string)
+      : null) ??
+    (proposal?.generated_at ?? null);
+
+  let latestOverride: ConfidenceOverrideRow | null = null;
+  if (strategyGeneratedAt) {
+    const { data: overrideRows } = (await db
+      .from("strategy_confidence_overrides")
+      .select("*")
+      .eq("space_id", spaceId)
+      .eq("user_id", user.id)
+      .eq("strategy_generated_at", strategyGeneratedAt)
+      .order("created_at", { ascending: false })
+      .limit(1)) as { data: ConfidenceOverrideRow[] | null };
+    latestOverride = overrideRows?.[0] ?? null;
+  }
+
+  const audit: TwinProposalAudit | null = strategy
+    ? {
+        trace: {
+          diagnosis_confidence:
+            typeof reasoningTrace?.diagnosis?.confidence === "number"
+              ? reasoningTrace.diagnosis.confidence
+              : null,
+          estimated_confidence:
+            typeof reasoningTrace?.synthesis?.options?.[0]?.estimated_confidence === "number"
+              ? reasoningTrace.synthesis.options[0].estimated_confidence
+              : null,
+          verified_confidence:
+            typeof reasoningTrace?.verification?.verifications?.[0]?.verified_confidence ===
+            "number"
+              ? reasoningTrace.verification.verifications[0].verified_confidence
+              : null,
+          diagnosis_blind_spots: Array.isArray(
+            reasoningTrace?.diagnosis?.signal_synthesis?.blind_spots,
+          )
+            ? (reasoningTrace.diagnosis.signal_synthesis.blind_spots as string[])
+            : [],
+          step_durations_ms: {
+            diagnosis: reasoningTrace?.step_timings?.diagnosis_ms ?? null,
+            synthesis: reasoningTrace?.step_timings?.synthesis_ms ?? null,
+            verification: reasoningTrace?.step_timings?.verification_ms ?? null,
+            final: reasoningTrace?.step_timings?.final_ms ?? null,
+          },
+        },
+        open_questions: openQuestions
+          .filter((q): q is Record<string, unknown> => !!q && typeof q === "object")
+          .map((q) => ({
+            question: typeof q.question === "string" ? q.question : "",
+            why_it_matters:
+              typeof q.why_it_matters === "string" ? q.why_it_matters : undefined,
+            priority: typeof q.priority === "string" ? q.priority : undefined,
+            user_answer:
+              typeof q.user_answer === "string" ? q.user_answer : undefined,
+          }))
+          .filter((q) => q.question.length > 0),
+        reasoning_chain:
+          typeof strategy.reasoning_chain === "string" && strategy.reasoning_chain.trim().length > 0
+            ? strategy.reasoning_chain
+            : null,
+        entity_references: Array.isArray(strategy.entity_references)
+          ? strategy.entity_references
+          : [],
+      }
+    : null;
+
   const payload: TwinProposalResponse = {
     proposal,
     proposal_extracted: extracted,
     mechanisms,
     is_extracted: !proposal && extracted !== null,
     ranked_strategies,
+    meter_inputs: meterInputs,
+    coherence,
+    degraded_steps: degradedSteps && degradedSteps.length > 0 ? degradedSteps : null,
+    audit,
+    provenance: strategy?.provenance ?? null,
+    user_override: latestOverride,
+    strategy_generated_at: strategyGeneratedAt,
   };
   return NextResponse.json(payload);
 }

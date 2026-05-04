@@ -44,8 +44,7 @@ export function CanvasLayerToggle({ hasAnyEntity }: CanvasLayerToggleProps) {
 
   return (
     <div
-      className="pointer-events-auto absolute right-4 z-30 flex items-center gap-0.5 rounded-lg border border-gray-200/80 bg-white/95 p-0.5 shadow-sm backdrop-blur"
-      style={{ top: 68 }}
+      className="pointer-events-auto flex items-center gap-0.5 rounded-lg border border-gray-200/80 bg-white/95 p-0.5 shadow-sm backdrop-blur"
       aria-label="Canvas layer filter"
     >
       {OPTIONS.map((opt) => {

@@ -91,6 +91,7 @@ export function EvidenceStrip({
             recommendation={recommendation}
             entityMap={entityMap}
             spaceId={spaceId}
+            synthData={synthData}
           />
         </AccordionPanel>
 

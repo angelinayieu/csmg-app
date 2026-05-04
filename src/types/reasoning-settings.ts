@@ -103,7 +103,12 @@ export const DEFAULT_REASONING_SETTINGS: ReasoningSettings = {
   askClarifyingQuestions: false,
   buildBaselineFirst: false,
   showAlternatives: true,
-  generateApps: false,
+  // Default true: strategy → apps is the natural completion of a project's
+  // intake flow. Without this, every fresh project ends with "0 apps" and
+  // the dashboard's apps surfaces stay empty until the user discovers the
+  // separate "generate apps" action. Power users can still opt out by
+  // toggling generateApps=false explicitly in the intake settings.
+  generateApps: true,
   runLab: false,
   strategyCount: 3,
 };
@@ -215,9 +220,10 @@ export function coerceReasoningSettings(raw: unknown): ReasoningSettings {
     askClarifyingQuestions: r.askClarifyingQuestions === true,
     buildBaselineFirst: r.buildBaselineFirst === true,
     showAlternatives: r.showAlternatives !== false, // default true
-    // generateApps + runLab default to FALSE (strategy-only mode is the
-    // new default flow; apps + lab are explicit user opt-in).
-    generateApps: r.generateApps === true,
+    // generateApps defaults to TRUE (strategy → apps is the natural
+    // completion of intake; explicit opt-out via generateApps=false).
+    // runLab still defaults to FALSE (heavier; explicit opt-in only).
+    generateApps: r.generateApps !== false,
     runLab: r.runLab === true,
     strategyCount,
     ...(costBudget !== undefined ? { costBudget } : {}),

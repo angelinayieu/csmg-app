@@ -433,28 +433,48 @@ export function SynthesisView({
     }
   }, [space.synthesis_data]);
 
-  const bottleneckEntity = useMemo(
-    () => entities.find((e) => e.is_master_bottleneck),
-    [entities]
-  );
-
   const richBottleneck: RichBottleneck | null = synthData?.master_bottleneck ?? null;
 
-  const leverageEntities = useMemo(
-    () =>
-      entities
-        .filter((e) => e.is_leverage_point)
-        .sort((a, b) => (a.centrality_rank ?? 99) - (b.centrality_rank ?? 99)),
-    [entities]
-  );
+  // Entity-flag → synthesis_data fallback. Entity flags are the fast path
+  // (set by decompose + the synthesize entity-feedback loop), but on older
+  // spaces or when the feedback loop hasn't run yet, the flags can be
+  // missing even though synthesis_data has the right answers. Fall back
+  // to synthesis_data entity_id references so the view populates anyway.
+  const bottleneckEntity = useMemo(() => {
+    const fromFlag = entities.find((e) => e.is_master_bottleneck);
+    if (fromFlag) return fromFlag;
+    const synthId = richBottleneck?.entity_id;
+    if (synthId) return entities.find((e) => e.entity_id === synthId);
+    return undefined;
+  }, [entities, richBottleneck]);
 
-  const riskEntities = useMemo(
-    () =>
-      entities
-        .filter((e) => e.is_risk_point)
-        .sort((a, b) => (b.blast_radius ?? 0) - (a.blast_radius ?? 0)),
-    [entities]
-  );
+  const leverageEntities = useMemo(() => {
+    const fromFlags = entities.filter((e) => e.is_leverage_point);
+    if (fromFlags.length > 0) {
+      return fromFlags.sort((a, b) => (a.centrality_rank ?? 99) - (b.centrality_rank ?? 99));
+    }
+    const synthIds = new Set(
+      (synthData?.leverage_points ?? []).map((p) => p.entity_id).filter(Boolean)
+    );
+    if (synthIds.size === 0) return [];
+    return entities
+      .filter((e) => synthIds.has(e.entity_id))
+      .sort((a, b) => (a.centrality_rank ?? 99) - (b.centrality_rank ?? 99));
+  }, [entities, synthData]);
+
+  const riskEntities = useMemo(() => {
+    const fromFlags = entities.filter((e) => e.is_risk_point);
+    if (fromFlags.length > 0) {
+      return fromFlags.sort((a, b) => (b.blast_radius ?? 0) - (a.blast_radius ?? 0));
+    }
+    const synthIds = new Set(
+      (synthData?.risk_points ?? []).map((p) => p.entity_id).filter(Boolean)
+    );
+    if (synthIds.size === 0) return [];
+    return entities
+      .filter((e) => synthIds.has(e.entity_id))
+      .sort((a, b) => (b.blast_radius ?? 0) - (a.blast_radius ?? 0));
+  }, [entities, synthData]);
 
   const openQuestions = useMemo(
     () => propositions.filter((p) => p.proposition_type === "irreducible"),

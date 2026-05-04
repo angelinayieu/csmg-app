@@ -59,8 +59,11 @@ export function CanvasSituationDrawer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
+  const [rerunFlash, setRerunFlash] = useState<string | null>(null);
 
-  const fetchBaseline = useCallback(async () => {
+  const fetchBaseline = useCallback(async (): Promise<
+    SituationBaseline | null
+  > => {
     setLoading(true);
     setError(null);
     try {
@@ -73,10 +76,12 @@ export function CanvasSituationDrawer({
       // Be defensive — same pattern as canvas-snapshots-drawer.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const space = (json?.space ?? json) as any;
-      const raw = space?.situation_baseline as SituationBaseline | null;
-      setBaseline(raw ?? null);
+      const raw = (space?.situation_baseline as SituationBaseline | null) ?? null;
+      setBaseline(raw);
+      return raw;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -90,15 +95,38 @@ export function CanvasSituationDrawer({
   const handleRerun = useCallback(async () => {
     if (!onRerun) return;
     setRerunning(true);
+    setError(null);
+    setRerunFlash(null);
+    const priorAnalyzedAt = baseline?.analyzed_at ?? null;
     try {
       await onRerun();
       // Give the analyzer a moment to land then re-fetch.
       await new Promise((r) => setTimeout(r, 1200));
-      await fetchBaseline();
+      const next = await fetchBaseline();
+      // Flash visible feedback regardless of whether the underlying
+      // state changed — a silent "Re-running… → Re-run" with no
+      // visible state diff is indistinguishable from a no-op.
+      const changed =
+        next?.analyzed_at != null && next.analyzed_at !== priorAnalyzedAt;
+      const message = !next
+        ? "Re-ran — no baseline data returned"
+        : next.skipped_reason
+          ? changed
+            ? "Re-ran — analyzer skipped (see reason below)"
+            : "Re-ran — still skipped (no change)"
+          : changed
+            ? "Re-ran — baseline rebuilt"
+            : "Re-ran — baseline unchanged";
+      setRerunFlash(message);
+      setTimeout(() => setRerunFlash(null), 5000);
+    } catch (err) {
+      setError(
+        `Re-run failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setRerunning(false);
     }
-  }, [onRerun, fetchBaseline]);
+  }, [onRerun, fetchBaseline, baseline]);
 
   if (!open) return null;
 
@@ -151,12 +179,26 @@ export function CanvasSituationDrawer({
         </button>
       </div>
 
+      {/* Re-run flash — fades after 5s. Visible above the body so the
+          user gets explicit confirmation a Re-run click did something,
+          even when the underlying state didn't change. */}
+      {rerunFlash && (
+        <div className="border-b border-cyan-200 bg-cyan-50 px-5 py-2 text-[11px] font-medium text-cyan-800">
+          {rerunFlash}
+        </div>
+      )}
+
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <LoadingState />
         ) : error ? (
-          <ErrorState message={error} onRetry={fetchBaseline} />
+          <ErrorState
+            message={error}
+            onRetry={() => {
+              void fetchBaseline();
+            }}
+          />
         ) : empty ? (
           <NoDataState />
         ) : skipped ? (
@@ -229,17 +271,21 @@ function SkippedState({ reason }: { reason: string }) {
       ? "Idea-only intake — no baseline built"
       : reason === "no_assets_no_richness"
         ? "Insufficient detail for baseline"
-        : reason === "analyzer_failed"
-          ? "Baseline analysis failed"
-          : "Baseline skipped";
+        : reason === "no_input_no_assets"
+          ? "Nothing to analyze yet"
+          : reason === "analyzer_failed"
+            ? "Baseline analysis failed"
+            : "Baseline skipped";
   const explanation =
     reason === "twin_mode_structural"
       ? "Your prompt described a goal but didn't specify a current process / inputs / outputs to model. Upload a spec sheet, dataset, or prior analysis and click Re-run to build a baseline."
       : reason === "no_assets_no_richness"
         ? "Not enough structured detail in the prompt and no assets attached. Add some files via the canvas Library and re-run."
-        : reason === "analyzer_failed"
-          ? "The baseline analyzer encountered an error during the run. Click Re-run to retry — landscape generation continued normally regardless."
-          : "Baseline analysis was skipped for this run.";
+        : reason === "no_input_no_assets"
+          ? "This space has no intake text and no uploaded assets, so the analyzer has nothing to read. Add a prompt or upload a file via the canvas Library, then Re-run."
+          : reason === "analyzer_failed"
+            ? "The baseline analyzer encountered an error during the run. Click Re-run to retry — landscape generation continued normally regardless."
+            : "Baseline analysis was skipped for this run.";
 
   return (
     <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">

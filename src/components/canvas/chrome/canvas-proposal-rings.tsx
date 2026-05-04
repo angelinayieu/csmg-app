@@ -153,7 +153,13 @@ export function CanvasProposalRings({ runId }: CanvasProposalRingsProps) {
   return (
     <aside
       className={cn(
-        "pointer-events-auto absolute right-4 top-4 z-20 flex w-[300px] flex-col gap-2",
+        // Anchored below the top-right button stack (which ends near
+        // y=140). Was previously at top-4 (16px) which placed it
+        // *under the topbar* (z-20 < topbar's z-30 so the topbar
+        // covered the header). Same lane as the PreliminaryInsights
+        // panel — they're rarely simultaneous (insights surfaces
+        // pre-proposal, rings surface post-proposal).
+        "pointer-events-auto absolute right-4 top-[160px] z-20 flex w-[300px] flex-col gap-2",
       )}
       aria-label="Simulated proposal distributions"
     >

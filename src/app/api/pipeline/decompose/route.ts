@@ -708,6 +708,34 @@ ${text}`;
     const dedupedEntities = topoMerged.entities;
     const dedupedEdges = topoMerged.edges;
 
+    // Cross-reference per-entity role flags from the top-level structured
+    // arrays (parsed.leverage_points / risk_points / master_bottleneck).
+    // The LLM frequently lists an entity in those arrays without setting
+    // is_leverage_point / is_risk_point / is_master_bottleneck on the
+    // entity row itself. Without this enrichment the flags stay false →
+    // entities table is missing the role bits → KG mini-map renders all
+    // dots as slate, SynthesisView leverage/risk/bottleneck sections
+    // stay empty even though synthesis_data populates correctly.
+    {
+      const leverageIds = new Set(
+        ((parsed.leverage_points ?? []) as Array<{ entity_id?: string }>)
+          .map((lp) => lp?.entity_id)
+          .filter((id): id is string => Boolean(id))
+      );
+      const riskIds = new Set(
+        ((parsed.risk_points ?? []) as Array<{ entity_id?: string }>)
+          .map((rp) => rp?.entity_id)
+          .filter((id): id is string => Boolean(id))
+      );
+      const mb = parsed.master_bottleneck as { entity_id?: string } | null | undefined;
+      const bottleneckId = mb?.entity_id;
+      for (const e of dedupedEntities as Array<{ entity_id: string; is_leverage_point?: boolean; is_risk_point?: boolean; is_master_bottleneck?: boolean }>) {
+        if (leverageIds.has(e.entity_id)) e.is_leverage_point = true;
+        if (riskIds.has(e.entity_id)) e.is_risk_point = true;
+        if (bottleneckId && e.entity_id === bottleneckId) e.is_master_bottleneck = true;
+      }
+    }
+
     console.log(`[decompose] Pipeline: ${rawEntityCount} raw → ${nameDeduped.entities.length} after name-dedup → ${dedupedEntities.length} after topology-merge (${topoMerged.mergesApplied} topo merges), ${rawEdgeCount} raw edges → ${confFilteredEdges.length} after confidence → ${dedupedEdges.length} final`);
 
     // ── Pass 3 substage: cycle verification ──
@@ -2011,6 +2039,14 @@ ${enrichedPrompt}`;
       }
 
       after(async () => {
+        // Diagnostic: log BEFORE the fetch so a hung after() block (or
+        // a Lambda that died before reaching the handoff) is visible.
+        // Without this log, a stalled chain looks identical to a stalled
+        // research stage — both leave the run in `running` with the same
+        // last event.
+        console.log(
+          `[decompose] research handoff dispatching runId=${chainedRunId} spaceId=${chainedSpaceId} depth=${reasoningDepth}`,
+        );
         const ctrl = new AbortController();
         const handoffTimeout = setTimeout(() => ctrl.abort(), 10000);
         try {
@@ -2035,6 +2071,9 @@ ${enrichedPrompt}`;
             signal: ctrl.signal,
           });
           clearTimeout(handoffTimeout);
+          console.log(
+            `[decompose] research handoff dispatched ok runId=${chainedRunId}`,
+          );
         } catch (advanceErr) {
           clearTimeout(handoffTimeout);
           const name = (advanceErr as { name?: string })?.name;

@@ -31,14 +31,14 @@ export function BrainstormToggleButton({
     <button
       onClick={onToggle}
       className={cn(
-        "pointer-events-auto absolute right-4 z-30 flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-semibold backdrop-blur-sm transition-all",
+        "pointer-events-auto flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-semibold backdrop-blur-sm transition-all",
         open && "shadow-md",
       )}
       style={{
-        // Sits below the topbar AND below the CanvasLayerToggle (which
-        // anchors at top:68, right-4). Stacking vertically at the right
-        // edge keeps both visible without depending on either's width.
-        top: 112,
+        // Positioning is now handled by the parent flex stack in
+        // interaxis-canvas.tsx (TopRightChromeStack). Visual styles
+        // for the active/open state stay here so the button remains
+        // self-contained from a styling perspective.
         background: active
           ? `color-mix(in srgb, ${ACCENT} 14%, rgba(255,255,255,0.9))`
           : "rgba(255,255,255,0.85)",

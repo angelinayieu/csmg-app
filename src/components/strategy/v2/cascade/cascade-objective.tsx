@@ -1,11 +1,16 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { useCallback, useState } from "react";
+import { ChevronRight, Pin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CascadeObjective, CascadeRowVM } from "../strategy-view-model";
 import { palette } from "../strategy-palette";
 import { MechanismChain } from "./mechanism-chain";
+import {
+  STRATEGY_OBJECTIVE_DRAG_MIME,
+  type StrategyObjectiveDragPayload,
+} from "@/components/canvas/strategy-objective-drag";
+import { useStrategyCanvasPresence } from "@/components/canvas/strategy-canvas-presence-context";
 import type { CausalChain } from "@/types/causal-chains";
 import type { Entity } from "@/types";
 
@@ -28,6 +33,8 @@ export function CascadeObjectiveCard({
 }: CascadeObjectiveProps) {
   const p = palette(row.paletteKey);
   const [expanded, setExpanded] = useState(false);
+  const presence = useStrategyCanvasPresence();
+  const isOnCanvas = presence.objectiveIds.has(objective.id);
 
   const matchedChain = objective.matchedChainId
     ? causalChains.find((c) => c.id === objective.matchedChainId)
@@ -39,10 +46,57 @@ export function CascadeObjectiveCard({
     setTimeout(() => onLayoutChange?.(), 260);
   };
 
+  const handleDragStart = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!spaceId) {
+        e.preventDefault();
+        return;
+      }
+      // Don't toggle expanded on drag-start (the click handler still fires
+      // on drop without movement, but native drag suppresses click).
+      e.dataTransfer.effectAllowed = "copy";
+      const payload: StrategyObjectiveDragPayload = {
+        spaceId,
+        objectiveId: objective.id,
+        title: objective.title,
+        description: objective.description ?? null,
+        // The canvas shape requires a numeric progress for its inline bar;
+        // qualitative / untracked objectives drop on the canvas at 0% and
+        // the user can update it once execution data exists.
+        progressPct: objective.progressPct ?? 0,
+        tag: objective.tag,
+        valueLabel: objective.valueLabel ?? null,
+        paletteKey: row.paletteKey,
+        sourceEntityIds: objective.sourceEntityIds,
+        perspectiveLabel: row.categoryLabel,
+      };
+      e.dataTransfer.setData(
+        STRATEGY_OBJECTIVE_DRAG_MIME,
+        JSON.stringify(payload),
+      );
+      // text/plain fallback for non-canvas drop targets.
+      const fallbackText = objective.description
+        ? `${objective.title}\n\n${objective.description}`
+        : objective.title;
+      e.dataTransfer.setData("text/plain", fallbackText);
+    },
+    [spaceId, objective, row.paletteKey, row.categoryLabel],
+  );
+
   return (
     <div
-      className={cn("rounded-[8px] overflow-hidden transition-all cursor-pointer")}
+      draggable={Boolean(spaceId)}
+      onDragStart={handleDragStart}
+      className={cn(
+        "rounded-[8px] overflow-hidden transition-all cursor-pointer",
+        spaceId && "active:cursor-grabbing",
+      )}
       onClick={handleToggle}
+      title={
+        spaceId
+          ? "Click to expand · drag onto the canvas to pin this objective"
+          : undefined
+      }
       style={{
         background: "#fff",
         border: expanded
@@ -65,18 +119,24 @@ export function CascadeObjectiveCard({
           >
             {objective.title}
           </p>
-          <div
-            className="h-[3px] rounded-full overflow-hidden relative"
-            style={{ background: "rgba(11,13,18,0.06)" }}
-          >
+          {/* Progress bar only renders when we have a numeric percent. For
+              qualitative metrics (current/target = "high"/"low") and for
+              action-derived objectives that haven't been tracked yet, the
+              valueLabel below carries the meaningful info instead. */}
+          {objective.progressPct !== undefined && (
             <div
-              className="absolute left-0 top-0 bottom-0 rounded-full"
-              style={{
-                width: `${objective.progressPct}%`,
-                background: p.accent,
-              }}
-            />
-          </div>
+              className="h-[3px] rounded-full overflow-hidden relative"
+              style={{ background: "rgba(11,13,18,0.06)" }}
+            >
+              <div
+                className="absolute left-0 top-0 bottom-0 rounded-full"
+                style={{
+                  width: `${objective.progressPct}%`,
+                  background: p.accent,
+                }}
+              />
+            </div>
+          )}
           {objective.valueLabel && (
             <p
               className="mt-1 font-mono"
@@ -91,19 +151,48 @@ export function CascadeObjectiveCard({
           )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span
-            className="tabular-nums"
-            style={{
-              fontSize: "11.5px",
-              fontWeight: 700,
-              color: "#0B0D12",
-              letterSpacing: "-0.02em",
-              minWidth: 30,
-              textAlign: "right",
-            }}
-          >
-            {objective.progressPct}%
-          </span>
+          {isOnCanvas && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                presence.zoomToObjective(objective.id);
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              draggable={false}
+              onDragStart={(e) => e.preventDefault()}
+              className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 transition-colors"
+              style={{
+                background: "rgba(16,185,129,0.10)",
+                border: "1px solid rgba(16,185,129,0.32)",
+                color: "#047857",
+                fontSize: 8.5,
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+              }}
+              title="Pinned on canvas — click to zoom there"
+              aria-label="Zoom to this objective on canvas"
+            >
+              <Pin className="h-2.5 w-2.5" strokeWidth={2.5} />
+              On canvas
+            </button>
+          )}
+          {objective.progressPct !== undefined && (
+            <span
+              className="tabular-nums"
+              style={{
+                fontSize: "11.5px",
+                fontWeight: 700,
+                color: "#0B0D12",
+                letterSpacing: "-0.02em",
+                minWidth: 30,
+                textAlign: "right",
+              }}
+            >
+              {objective.progressPct}%
+            </span>
+          )}
           <span
             className="rounded px-1.5 py-0.5"
             style={{

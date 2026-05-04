@@ -409,11 +409,11 @@ export function KGTopInsights({
             </span>
           ) : null}
           {snap.feedback_loop_count != null ? (
-            <span>
+            <span title="Named dynamical feedback structures from synthesis. Distinct from graph cycles (closed paths) shown in the entity stats above.">
               <span className="font-mono font-semibold text-[color:var(--fg,#1d1d1f)]">
                 {snap.feedback_loop_count}
               </span>{" "}
-              loops
+              feedback loops
             </span>
           ) : null}
         </div>

@@ -79,6 +79,7 @@ export async function POST(request: Request) {
     reasoning_settings: rawReasoningSettings,
     skipPlanGate: rawSkipPlanGate,
     planMode: rawPlanMode,
+    clarifying_qa_pairs: rawClarifyingPairs,
   } = (body ?? {}) as {
     text?: string;
     reasoningDepth?: string;
@@ -91,13 +92,26 @@ export async function POST(request: Request) {
     /** Mode for the plan card UI ("consumer" | "clinician" |
      *  "researcher"). Drives which sections render. Default "researcher". */
     planMode?: "consumer" | "clinician" | "researcher";
+    /** Phase 4-wire-2 — pre-flight clarifier answers as structured
+     *  pairs, NOT only as appended prompt prose. The bootstrap route
+     *  seeds `synthesis_data.open_questions` with these so the Phase 4b
+     *  banner ("N user-supplied answers informed this strategy") works
+     *  on the first run instead of always reading 0. Optional; absent
+     *  when the user didn't toggle "ask clarifying questions". */
+    clarifying_qa_pairs?: Array<{ question?: unknown; answer?: unknown }>;
   };
 
-  const skipPlanGate = rawSkipPlanGate === true;
-  const planMode: "consumer" | "clinician" | "researcher" =
-    rawPlanMode === "consumer" || rawPlanMode === "clinician"
-      ? rawPlanMode
-      : "researcher";
+  // Sanitize clarifying pairs — drop empty pairs, trim, cap at 10.
+  const clarifyingPairs: Array<{ question: string; answer: string }> =
+    Array.isArray(rawClarifyingPairs)
+      ? rawClarifyingPairs
+          .map((p) => ({
+            question: typeof p?.question === "string" ? p.question.trim() : "",
+            answer: typeof p?.answer === "string" ? p.answer.trim() : "",
+          }))
+          .filter((p) => p.question.length > 0 && p.answer.length > 0)
+          .slice(0, 10)
+      : [];
 
   if (typeof text !== "string" || text.trim().length < 4) {
     return NextResponse.json(
@@ -106,6 +120,47 @@ export async function POST(request: Request) {
     );
   }
   const trimmed = text.trim();
+
+  // ── Phase 4-Option-C — thin-prompt safety nets ──────────────────
+  //
+  // When the user submits a very short prompt the pipeline used to
+  // burn ~25 credits on sparse data and produce low-confidence output
+  // with no warning. The client-side banner (Option B) offers a
+  // pre-flight clarifier; this server-side path enforces guardrails
+  // regardless of whether the user accepted the offer.
+  //
+  // Rules (only apply on the immersive-home create path; the
+  // clarifier_qa_pairs presence is treated as the user already
+  // accepting the upstream offer, so we DO respect their explicit
+  // signals when they're present):
+  //
+  //   1. Heuristic: prompt is "thin" when trimmed.length < 50 chars
+  //      OR word-count < 12. Long prompts skip this whole block.
+  //   2. buildBaselineFirst → forced TRUE. Otherwise the situation
+  //      analyzer skips on twin_mode="structural" and the
+  //      situation_baseline.unknowns mirror (Wire 3) has nothing to
+  //      mirror. Forcing it on means the user always gets a real
+  //      baseline + analyzer-detected gaps in the open_questions
+  //      queue.
+  //   3. Plan review gate → forced ON when the caller didn't
+  //      explicitly skip it. Long prompts trust the user's explicit
+  //      skipPlanGate=true; thin prompts ignore it (the user might
+  //      not realize what they're skipping past).
+  //
+  // Both overrides are silent — no error response, no extra round
+  // trip. The client sees behavior change naturally (situation card
+  // populates; plan review card appears).
+  const wordCount =
+    trimmed.length === 0 ? 0 : trimmed.split(/\s+/).filter(Boolean).length;
+  const isThinPrompt = trimmed.length < 50 || wordCount < 12;
+
+  // skipPlanGate: thin prompts force OFF (plan review on); long
+  // prompts respect the explicit signal.
+  const skipPlanGate = isThinPrompt ? false : rawSkipPlanGate === true;
+  const planMode: "consumer" | "clinician" | "researcher" =
+    rawPlanMode === "consumer" || rawPlanMode === "clinician"
+      ? rawPlanMode
+      : "researcher";
 
   const reasoningDepth: ReasoningDepth =
     rawDepth === "quick" || rawDepth === "standard" || rawDepth === "deep"
@@ -124,6 +179,26 @@ export async function POST(request: Request) {
   // Mirror the depth into reasoning_settings so the column is
   // self-consistent even when the client only sent reasoningDepth.
   reasoningSettings.depth = reasoningDepth;
+
+  // Phase 4-Option-C — for thin prompts, force buildBaselineFirst on
+  // so the situation analyzer doesn't skip in twin_mode="structural".
+  // Without this, vague intakes get a dimmed situation card with
+  // "Insufficient detail" copy and Wire 3 has zero unknowns to mirror
+  // into the open_questions queue. Forcing it on costs one extra LLM
+  // call (the analyzer) but produces real baseline data the user can
+  // act on. We also force askClarifyingQuestions only when the client
+  // didn't ALREADY pass clarifying_qa_pairs — if the user already
+  // answered some clarifier questions, they made their choice.
+  if (isThinPrompt) {
+    reasoningSettings.buildBaselineFirst = true;
+    if (clarifyingPairs.length === 0 && !reasoningSettings.askClarifyingQuestions) {
+      // Note: this only takes effect on subsequent regeneration —
+      // the current submission already happened without the popup.
+      // Persisting so a future regen from this space starts with the
+      // right defaults.
+      reasoningSettings.askClarifyingQuestions = true;
+    }
+  }
 
   // ── Pre-flight credit reservation ──
   // Gate 3 of the launch blockers: every pipeline chain must reserve
@@ -261,6 +336,30 @@ export async function POST(request: Request) {
   // Fields like entity_count / cycle_count stay 0 — decompose will
   // UPDATE them in place when it finishes. Storing input_text now so
   // any refresh / retry path can re-derive without asking again.
+  //
+  // Phase 4-wire-2 — when the pre-flight clarifier ran, seed the new
+  // space's `synthesis_data.open_questions` with the structured Q&A
+  // pairs (each marked answered_at = now). The synthesize stage's
+  // text-match dedup (synthesize/route.ts:1544–1564) will preserve
+  // these answers when it generates fresh open_questions, so the
+  // Phase 4b banner attributes them correctly. Without this, pre-flight
+  // answers were only appended to input_text as prose — useful for
+  // LLM context but invisible to the structured-answer surface.
+  const seededOpenQuestions =
+    clarifyingPairs.length > 0
+      ? clarifyingPairs.map((qa) => ({
+          question: qa.question,
+          why_it_matters:
+            "User-supplied via pre-flight clarifier — informs the initial pipeline run.",
+          user_answer: qa.answer,
+          answered_at: new Date().toISOString(),
+          priority: "high" as const,
+        }))
+      : null;
+  const initialSynthesisData = seededOpenQuestions
+    ? { open_questions: seededOpenQuestions }
+    : null;
+
   const placeholderName = deriveName(trimmed);
   const { data: spaceRow, error: spaceError } = await db
     .from("spaces")
@@ -280,6 +379,12 @@ export async function POST(request: Request) {
       // captured at intake time. Read by frame-panel + analyze-situation
       // + (future) synthesize for prompt scoping.
       reasoning_settings: reasoningSettings,
+      // Phase 4-wire-2 — only set when the user actually answered
+      // pre-flight questions. Otherwise leave the column at its
+      // default so synthesize starts with a clean slate.
+      ...(initialSynthesisData
+        ? { synthesis_data: initialSynthesisData }
+        : {}),
     })
     .select("id")
     .single();
@@ -428,6 +533,19 @@ export async function POST(request: Request) {
       input_text: trimmed,
       run_id: runId,
     });
+    // analyze-situation runs in parallel with classify-data-presence —
+    // which means it usually reads spaces.twin_mode BEFORE the
+    // classifier writes it. Without `force: true`, the skip gate would
+    // see twin_mode=null and persist a "no_assets_no_richness" no-op
+    // baseline (or, on the previous code, return 400 and never persist
+    // anything). Bootstrap KNOWS it wants the analyzer to run on every
+    // intake, so override the skip gate explicitly here.
+    const analyzeSituationBody = JSON.stringify({
+      space_id: spaceId,
+      input_text: trimmed,
+      run_id: runId,
+      force: true,
+    });
 
     // ── Phase 1 · parallel intake-context stages ─────────────────
     //
@@ -463,7 +581,7 @@ export async function POST(request: Request) {
       ),
       fetchWithTimeout(
         `${origin}/api/pipeline/analyze-situation`,
-        { method: "POST", headers: stageHeaders, body: stageBody },
+        { method: "POST", headers: stageHeaders, body: analyzeSituationBody },
         30_000, // single structured-output LLM
       ),
     ]);
@@ -595,6 +713,13 @@ export async function POST(request: Request) {
             }),
           },
           45_000,
+        );
+        // Diagnostic: log every propose-plan return so a stalled
+        // intake can be diagnosed by tail -f. The three signals we
+        // care about — was the plan row created, did the LLM finish,
+        // did the chain hand off — are otherwise silent.
+        console.log(
+          `[intake/bootstrap] propose-plan returned ok=${planRes.ok} status=${planRes.status} runId=${runId} spaceId=${spaceId}`,
         );
         if (planRes.ok) {
           planGateBlocked = true;

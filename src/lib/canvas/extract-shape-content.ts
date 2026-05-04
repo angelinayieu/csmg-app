@@ -191,6 +191,24 @@ const EXTRACTORS: Record<string, (props: Props) => PerShapePick> = {
     },
   }),
 
+  "strategy-objective-card": (p) => ({
+    backendId: s(p.objectiveId) || null,
+    backendKind: "strategy_objective",
+    oneLiner: `Objective '${s(p.title, "")}' (${s(p.perspectiveLabel, "?")}, ${s(p.tag, "?")}): ${pct(p.progressPct)} progress${
+      p.description ? ` — ${s(p.description, "").slice(0, 120)}` : ""
+    }`,
+    content: {
+      objectiveId: s(p.objectiveId),
+      title: s(p.title),
+      description: s(p.description),
+      progressPct: n(p.progressPct),
+      tag: s(p.tag),
+      paletteKey: s(p.paletteKey),
+      perspectiveLabel: s(p.perspectiveLabel),
+      valueLabel: s(p.valueLabel),
+    },
+  }),
+
   // ── App + downstream cards ──────────────────────────────────────────
   "app-card": (p) => ({
     backendId: s(p.appId) || null,

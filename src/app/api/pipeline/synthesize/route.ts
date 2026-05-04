@@ -539,6 +539,64 @@ export async function POST(request: Request) {
       if (priorFingerprint === decompFingerprint && hasPriorSynthesis) {
         console.log(`[synthesize] Lazy guard: fingerprint match (${decompFingerprint}) — skipping re-synthesis`);
         const priorRuns = (preflightData.analysis_runs as AnalysisRun[] | undefined) ?? [];
+
+        // Backfill entity role flags from cached synthesis. This is the
+        // recovery path for spaces where prior synthesis ran successfully
+        // but the entity feedback loop never executed (or the loop wasn't
+        // implemented yet at the time). Without this, lazy-guard hits
+        // leave is_leverage_point / is_risk_point / is_master_bottleneck
+        // permanently false → SynthesisView and KGMiniMap render empty
+        // even though synthesis_data has the right answers.
+        let backfilledFlags = 0;
+        try {
+          const rootEntities = cachedEntities.get(rootSpaceId) ?? [];
+          if (rootEntities.length > 0) {
+            const { computeEntityCorrections, applyEntityCorrections } = await import(
+              "@/lib/twin/entity-feedback"
+            );
+            const corrections = computeEntityCorrections(
+              preflightData as unknown as import("@/types/synthesis").SynthesisData,
+              rootEntities,
+            );
+            if (corrections.length > 0) {
+              backfilledFlags = await applyEntityCorrections(db, corrections, rootSpaceId);
+              if (backfilledFlags > 0) {
+                console.log(`[synthesize] Lazy-guard backfill: applied ${backfilledFlags} entity-flag corrections from cached synthesis`);
+              }
+            }
+          }
+        } catch (backfillErr) {
+          console.warn("[synthesize] Lazy-guard entity-flag backfill failed (non-critical):", backfillErr);
+        }
+
+        // Compute + backfill twin_state from cached synthesis. The expensive
+        // computeTwinState is pure local math (no LLM), so re-running it on
+        // every cache hit is cheap and ensures the dashboard's Twin chip
+        // stays in sync. Reads the just-backfilled entity flags by re-querying.
+        let twinStateUpdated = false;
+        let cachedTwinState: unknown = null;
+        try {
+          const { computeTwinState } = await import("@/lib/twin/compute-twin-state");
+          const { data: rootSpaceForTwin } = await db
+            .from("spaces").select("*").eq("id", rootSpaceId).single();
+          if (rootSpaceForTwin) {
+            // Re-fetch entities so the twin sees the freshly-backfilled flags.
+            const refreshedEntities = backfilledFlags > 0
+              ? (await db.from("entities").select("*").eq("space_id", rootSpaceId)).data ?? cachedEntities.get(rootSpaceId) ?? []
+              : cachedEntities.get(rootSpaceId) ?? [];
+            cachedTwinState = computeTwinState(
+              rootSpaceForTwin as unknown as import("@/types").Space,
+              refreshedEntities as unknown as import("@/types").Entity[],
+              cachedEdges.get(rootSpaceId) ?? [],
+              cachedCycles.get(rootSpaceId) ?? [],
+              preflightData as unknown as import("@/types/synthesis").SynthesisData,
+            );
+            twinStateUpdated = true;
+          }
+        } catch (twinErr) {
+          console.warn("[synthesize] Lazy-guard twin-state backfill failed (non-critical):", twinErr);
+        }
+
         const skippedRun: AnalysisRun = {
           run_id: runId,
           pipeline: "synthesize",
@@ -546,15 +604,24 @@ export async function POST(request: Request) {
           completed_at: new Date().toISOString(),
           status: "skipped_cache",
           tier,
-          stages_run: [],
+          stages_run: [
+            ...(backfilledFlags > 0 ? ["entity_flag_backfill"] : []),
+            ...(twinStateUpdated ? ["twin_state_recompute"] : []),
+          ],
           stages_skipped: ["llm_synthesis", "convergence_detection", "coverage_audit", "strategy_recommendation"],
           cache_hits: ["decomp_fingerprint_match"],
           fingerprint: decompFingerprint,
-          note: "Decomposition unchanged since last synthesis — reused existing data",
+          note: backfilledFlags > 0 || twinStateUpdated
+            ? `Decomposition unchanged — reused synthesis.${backfilledFlags > 0 ? ` Backfilled ${backfilledFlags} entity flags.` : ""}${twinStateUpdated ? " Refreshed twin_state." : ""}`
+            : "Decomposition unchanged since last synthesis — reused existing data",
         };
         const updatedRuns = appendRun(priorRuns, skippedRun);
         await db.from("spaces").update({
-          synthesis_data: { ...preflightData, analysis_runs: updatedRuns },
+          synthesis_data: {
+            ...preflightData,
+            analysis_runs: updatedRuns,
+            ...(twinStateUpdated ? { twin_state: cachedTwinState } : {}),
+          },
         }).eq("id", rootSpaceId);
         return NextResponse.json({
           ok: true,
@@ -562,6 +629,8 @@ export async function POST(request: Request) {
           reason: "fingerprint_match",
           fingerprint: decompFingerprint,
           run_id: runId,
+          entity_flags_backfilled: backfilledFlags,
+          twin_state_refreshed: twinStateUpdated,
         });
       }
     }
@@ -2336,6 +2405,36 @@ REQUIREMENTS FOR THIS PASS:
       } catch (progressErr) {
         console.warn("Auto-progress recording failed:", progressErr);
       }
+    }
+
+    // ── Compute + persist twin_state into synthesis_data ──
+    // computeTwinState produces a TwinMacroState (health_score, coverage,
+    // risk_exposure, dynamics, goal_overlay) that the dashboard's
+    // MainObjectiveBanner reads to render the Twin chip. Without this
+    // write, the chip stays "Twin — not initialized" forever — the
+    // computation existed but was never persisted to the field the UI
+    // reads. We do this BEFORE the final write so it lands in the same
+    // JSONB row update.
+    try {
+      const { computeTwinState } = await import("@/lib/twin/compute-twin-state");
+      const { data: rootSpaceForTwin } = await db
+        .from("spaces").select("*").eq("id", rootSpaceId).single();
+      if (rootSpaceForTwin) {
+        const rootEntitiesForTwin = cachedEntities.get(rootSpaceId) ?? [];
+        const rootEdgesForTwin = cachedEdges.get(rootSpaceId) ?? [];
+        const rootCyclesForTwin = cachedCycles.get(rootSpaceId) ?? [];
+        const twinState = computeTwinState(
+          rootSpaceForTwin as unknown as import("@/types").Space,
+          rootEntitiesForTwin,
+          rootEdgesForTwin,
+          rootCyclesForTwin,
+          finalSynthData as unknown as import("@/types/synthesis").SynthesisData,
+          activeGoal ?? null,
+        );
+        (finalSynthData as Record<string, unknown>).twin_state = twinState;
+      }
+    } catch (twinErr) {
+      console.warn("[synthesize] Twin state computation failed (non-critical):", twinErr);
     }
 
     // ── Single final write — all accumulated data in one shot ──
