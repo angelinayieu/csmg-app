@@ -128,6 +128,14 @@ export function CanvasBottomDock({
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [memoryPopoverOpen, setMemoryPopoverOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  // Drag-over visual state. The dock placeholder advertises "drop a
+  // file…" so the dock itself must accept drops — until this fix the
+  // <input type="text"> would eat the drop and the file vanished.
+  // Counter (not boolean) so dragenter/dragleave on nested children
+  // (file pills, paperclip button) don't clear the highlight while
+  // the cursor is still over the dock.
+  const [dragDepth, setDragDepth] = useState(0);
+  const isDraggingFile = dragDepth > 0;
 
   // Phase 4 — mode + depth state. Mode auto-shifts to "decompose" once
   // the user attaches a file (single-entity materialize is rarely the
@@ -275,6 +283,40 @@ export function CanvasBottomDock({
     setFiles((prev) => [...prev, ...picked]);
   }, []);
 
+  // ── Drag-and-drop onto the dock ───────────────────────────────────
+  // Stop propagation so the canvas's drop handler (which auto-fires
+  // ingestAndMaterialize on every dropped file) doesn't double-fire.
+  // The dock pattern is "stage + click Decompose" — matches paperclip.
+  const dragHasFiles = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const onDockDragEnter = useCallback((e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragDepth((d) => d + 1);
+  }, []);
+  const onDockDragOver = useCallback((e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+  const onDockDragLeave = useCallback((e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragDepth((d) => Math.max(0, d - 1));
+  }, []);
+  const onDockDrop = useCallback((e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragDepth(0);
+    const dropped = Array.from(e.dataTransfer.files ?? []);
+    if (dropped.length === 0) return;
+    setFiles((prev) => [...prev, ...dropped]);
+  }, []);
+
   function disabledReason(m: DockMode): string | null {
     if (modeAvailability[m]) return null;
     const k = MODE_META[m].disabledReasonKey;
@@ -291,7 +333,28 @@ export function CanvasBottomDock({
 
   return (
     <div className="pointer-events-none absolute bottom-5 left-1/2 z-30 w-[calc(100%-3rem)] max-w-[840px] -translate-x-1/2">
-      <div className="pointer-events-auto flex min-w-0 flex-col gap-1.5 rounded-2xl border border-gray-200/70 bg-white/95 p-1.5 shadow-[0_10px_40px_-10px_rgba(0,0,30,0.18)] backdrop-blur-xl sm:min-w-[480px] md:min-w-[560px] lg:min-w-[640px]">
+      <div
+        onDragEnter={onDockDragEnter}
+        onDragOver={onDockDragOver}
+        onDragLeave={onDockDragLeave}
+        onDrop={onDockDrop}
+        className={cn(
+          "pointer-events-auto relative flex min-w-0 flex-col gap-1.5 rounded-2xl border bg-white/95 p-1.5 shadow-[0_10px_40px_-10px_rgba(0,0,30,0.18)] backdrop-blur-xl transition-all duration-150 sm:min-w-[480px] md:min-w-[560px] lg:min-w-[640px]",
+          isDraggingFile
+            ? "border-indigo-400/80 ring-2 ring-indigo-300/60 ring-offset-1 ring-offset-white"
+            : "border-gray-200/70",
+        )}
+      >
+        {isDraggingFile && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-indigo-50/80 backdrop-blur-sm"
+          >
+            <span className="text-[12px] font-semibold tracking-tight text-indigo-700">
+              Drop to attach
+            </span>
+          </div>
+        )}
 
         {/* ── Mode chips (Phase 4) ─────────────────────────────────────
             Leading control row. Every mode advertises which endpoint

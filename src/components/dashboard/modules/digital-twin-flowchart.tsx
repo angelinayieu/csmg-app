@@ -585,7 +585,7 @@ function buildWorkflowModel(
   const baseline_anchor = ((): WorkflowMeta["baseline_anchor"] => {
     const maturity = space?.maturity ?? null;
     const baselineValue =
-      activeGoal?.baseline_value != null && activeGoal.baseline_value !== ""
+      activeGoal?.baseline_value != null
         ? String(activeGoal.baseline_value)
         : null;
     const metricName = activeGoal?.metric_name ?? null;

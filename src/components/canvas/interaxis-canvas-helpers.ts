@@ -339,5 +339,3 @@ export async function pollProbeBranch(opts: {
   onError?.("Research timed out (12 min cap)");
 }
 
-// Suppress unused imports — TLShape is used in the probe view shape.
-void {} as TLShape;

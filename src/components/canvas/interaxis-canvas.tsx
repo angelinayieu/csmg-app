@@ -1747,13 +1747,15 @@ export function InteraxisCanvas({
       const cy = viewport.midY;
       const id = createShapeId();
       editor.markHistoryStoppingPoint(`pin-card-${payload.class}-${payload.id}`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       editor.createShape({
         id,
         type: spec.type,
         x: Math.round(cx - spec.w / 2),
         y: Math.round(cy - spec.h / 2),
         props: spec.props,
-      });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
       editor.select(id);
       editor.zoomToSelection({ animation: { duration: 300 } });
     });
