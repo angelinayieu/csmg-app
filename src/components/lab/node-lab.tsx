@@ -70,6 +70,22 @@ export function NodeLab({
     [entities, focal.id],
   );
 
+  // Phase B — children map for recursive inline expansion in the reagent
+  // bay. Each entity → its direct sub-entities. Built once from the full
+  // entities array (already in props) so the bay can render arbitrary
+  // depth without needing to query the graph itself.
+  const childrenByParentId = useMemo<Map<string, Entity[]>>(() => {
+    const map = new Map<string, Entity[]>();
+    for (const e of entities) {
+      const parentId = parentIdOf(e);
+      if (!parentId) continue;
+      const list = map.get(parentId);
+      if (list) list.push(e);
+      else map.set(parentId, [e]);
+    }
+    return map;
+  }, [entities]);
+
   // Build entity lookup for up/downstream partner + reaction participant resolution
   const entitiesByUuid = useMemo<Map<string, Entity>>(() => {
     const m = new Map<string, Entity>();
@@ -173,7 +189,11 @@ export function NodeLab({
       : null;
 
   return (
-    <div className="relative flex h-full w-full flex-col">
+    // Phase A — force light theme on the generic lab regardless of the
+    // user's global app theme. The dark "reactor" palette was causing the
+    // lab to feel disconnected from the rest of the dashboard. The light
+    // variant is already defined under [data-theme="blue"] in globals.css.
+    <div data-theme="blue" className="relative flex h-full w-full flex-col bg-[var(--lab-bg)]">
       <LabHeader
         spaceId={spaceId}
         spaceName={spaceName}
@@ -207,6 +227,9 @@ export function NodeLab({
           bondDrillHref={bondDrillHref}
           selectedSubunitId={selectedSubunitId}
           onSelectSubunit={setSelectedSubunitId}
+          // Phase B — enables per-row hover (+) probe + inline child rendering.
+          childrenByParentId={childrenByParentId}
+          spaceId={spaceId}
           subunitsEmptyAction={
             <LabBuildConnections spaceId={spaceId} entityId={focal.id} variant="full" />
           }

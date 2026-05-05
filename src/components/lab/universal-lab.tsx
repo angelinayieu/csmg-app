@@ -376,7 +376,8 @@ export function UniversalLab({
         : null;
 
   return (
-    <div className="relative flex h-full w-full flex-col">
+    // Phase A — force light theme on UniversalLab.
+    <div data-theme="blue" className="relative flex h-full w-full flex-col bg-[var(--lab-bg)]">
       <LabHeader
         spaceId={writeTargetSpace.id}
         spaceName={`Universe · writing to ${writeTargetSpace.name}`}

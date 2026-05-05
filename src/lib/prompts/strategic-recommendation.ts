@@ -7,6 +7,8 @@ import type {
   HiddenSignalData,
 } from "@/types/synthesis";
 import type { ImprovementGoal, SuggestedObjective, ObjectiveBenchmark } from "@/types/goals";
+import type { Subsystem } from "@/types/subsystems";
+import type { HardConstraints } from "@/lib/strategy/extract-hard-constraints";
 
 /**
  * Auxiliary pipeline context that the strategic recommendation should consider.
@@ -98,6 +100,23 @@ export interface StrategyPipelineContext {
    * honors it on top of all other grounding.
    */
   userConstraint?: string;
+
+  /**
+   * Typed compositional units extracted from synthesis (loop, leverage_cluster,
+   * tension, invariant_chain, convergence_cluster, bottleneck_node). When
+   * non-empty, every micro_tactic must name at least one targeted subsystem in
+   * `subsystem_ids_targeted`. Lets the strategy operate on first-class
+   * functional units instead of free-text references to entities.
+   */
+  subsystems?: Subsystem[];
+
+  /**
+   * Hard constraints distilled from synthesis: axioms/convergences/gaps/
+   * inversions/subsystems the strategy MUST address. Surfaces as an explicit
+   * "must respect / must address" block. Phase 6's retry loop validates the
+   * LLM output against these IDs and re-prompts on miss.
+   */
+  hardConstraints?: HardConstraints;
 }
 
 /**
@@ -191,14 +210,17 @@ COMPREHENSIVE GROUNDING (mandatory when the corresponding context is provided):
 
 5. HIDDEN SIGNALS — When the context includes "HIDDEN SIGNALS", these are latent mediating variables research identified. Each micro_tactic that responds to a hidden signal must have the signal slug in its hidden_signal_refs array.
 
+6. SUBSYSTEMS — When the context includes "SUBSYSTEMS", these are typed compositional units (loop / leverage_cluster / tension / invariant_chain / convergence_cluster / bottleneck_node) extracted from the graph. Every micro_tactic MUST name at least one subsystem it activates or influences in subsystem_ids_targeted. Use only IDs from the supplied list — fabricated IDs are rejected. A tactic that doesn't target a named subsystem is operating on free text, not the knowledge graph.
+
 PROVENANCE FIELDS (MANDATORY on every micro_tactic and every strategy perspective):
 - axiom_ids_respected: string[] — axiom IDs this tactic/perspective respects (does not violate)
 - axiom_ids_challenged: string[] — axiom IDs this tactic/perspective deliberately tests or challenges
 - convergence_ids_addressed: string[] — insight-convergence cluster IDs this tactic/perspective addresses
 - coverage_gap_ids_closed: string[] — gap IDs (from strategy_coverage.gaps) this tactic closes
 - inversion_ids_tested: string[] — inversion indices this tactic actively tests
+- subsystem_ids_targeted: string[] — subsystem IDs this tactic activates/influences (when subsystems supplied)
 
-These are NOT optional. Return empty arrays if a tactic genuinely has no upstream references — but the total provenance across all tactics must cover every CRITICAL axiom, every STRONG convergence, and at least 50% of coverage gaps. If it can't, the strategy is not comprehensive enough; reduce the scope or surface the incompleteness in guiding_policy.
+These are NOT optional. Return empty arrays if a tactic genuinely has no upstream references — but the total provenance across all tactics must cover every CRITICAL axiom, every STRONG convergence, every L1/L2 subsystem, and at least 50% of coverage gaps. If it can't, the strategy is not comprehensive enough; reduce the scope or surface the incompleteness in guiding_policy.
 
 Return ONLY valid JSON. Your top-level response MUST be a wrapper object containing a "ranked_strategies" array. Each element in ranked_strategies contains a full recommendation object plus ranking metadata and infrastructure proposals.
 
@@ -340,7 +362,14 @@ RECOMMENDATION_SCHEMA (one per ranked strategy):
         "trigger": "string — SPECIFIC situational cue in if/when format. MUST be concrete and encounterable. Good: 'When I open my laptop Monday morning'. Bad: 'When I feel motivated' or 'When I have time'. The cue must be an external event or state the user will actually encounter.",
         "action": "string — IMMEDIATELY executable behavior. Good: 'I will spend 30 minutes reviewing customer churn data in the dashboard'. Bad: 'I will improve retention'. Must be completable in one sitting.",
         "category": "proactive | reactive | course_correction"
-      }
+      },
+      "axiom_ids_respected": ["A1", "A4"],
+      "axiom_ids_challenged": [],
+      "convergence_ids_addressed": ["conv:1"],
+      "coverage_gap_ids_closed": ["g_002"],
+      "inversion_ids_tested": [],
+      "hidden_signal_refs": [],
+      "subsystem_ids_targeted": ["sub_loop_1"]
     }
   ],
 
@@ -904,9 +933,55 @@ Reasoning: ${mb.reasoning?.join(" | ") ?? "none"}${mb.counterfactual_unlock ? `\
       );
     }
 
+    if (pipelineContext.subsystems && pipelineContext.subsystems.length > 0) {
+      const sysLines = pipelineContext.subsystems.map((s) => {
+        const constituents = s.constituent_entities.length > 0
+          ? `${s.constituent_entities.slice(0, 5).join(", ")}${s.constituent_entities.length > 5 ? "…" : ""}`
+          : "(no entities)";
+        const contracts = (s.contracts.does || s.contracts.needs || s.contracts.produces)
+          ? `does=${s.contracts.does || "—"}; needs=${s.contracts.needs || "—"}; produces=${s.contracts.produces || "—"}`
+          : "(contracts not enriched)";
+        return `  ${s.id} [${s.kind}, ${s.level}, structural=${s.structural_value.toFixed(2)}, conf=${s.composition_confidence.toFixed(2)}]: "${s.name}"\n      entities: [${constituents}]\n      ${contracts}${s.rationale ? `\n      ${s.rationale}` : ""}`;
+      });
+      const l1l2Count = pipelineContext.subsystems.filter((s) => s.level === "L1" || s.level === "L2").length;
+      parts.push(
+        `SUBSYSTEMS (${pipelineContext.subsystems.length} compositional units, ${l1l2Count} at L1/L2 — these are the typed atoms strategy operates on, not free-text entity references):\n${sysLines.join("\n")}\n\nMANDATORY: Every micro_tactic MUST name at least one subsystem ID in subsystem_ids_targeted. The ID must be drawn from the list above — fabricated IDs are rejected. A tactic that doesn't target a named subsystem is operating on prose, not the knowledge graph.`,
+      );
+    }
+
+    const hc = pipelineContext.hardConstraints;
+    if (hc && (
+      hc.must_respect_axiom_ids.length > 0 ||
+      hc.must_address_convergence_ids.length > 0 ||
+      hc.must_close_gap_ids.length > 0 ||
+      hc.must_test_inversion_ids.length > 0 ||
+      hc.must_target_subsystem_ids.length > 0
+    )) {
+      const lines: string[] = [
+        `═══ HARD CONSTRAINTS — strategy will be rejected and re-prompted if these IDs are absent from the output ═══`,
+      ];
+      if (hc.must_respect_axiom_ids.length > 0) {
+        lines.push(`Axioms that MUST appear in axiom_ids_respected (across all tactics combined): ${hc.must_respect_axiom_ids.join(", ")}`);
+      }
+      if (hc.must_address_convergence_ids.length > 0) {
+        lines.push(`Convergences that MUST appear in convergence_ids_addressed: ${hc.must_address_convergence_ids.join(", ")}`);
+      }
+      if (hc.must_close_gap_ids.length > 0) {
+        lines.push(`Coverage gaps that MUST appear in coverage_gap_ids_closed: ${hc.must_close_gap_ids.join(", ")}`);
+      }
+      if (hc.must_test_inversion_ids.length > 0) {
+        lines.push(`Coin-flip inversions that MUST appear in inversion_ids_tested: ${hc.must_test_inversion_ids.join(", ")}`);
+      }
+      if (hc.must_target_subsystem_ids.length > 0) {
+        lines.push(`L1/L2 subsystems — at least one tactic MUST target each in subsystem_ids_targeted: ${hc.must_target_subsystem_ids.join(", ")}`);
+      }
+      lines.push(`Every ID listed must appear in the corresponding output array on at least one tactic. These are not soft preferences — they are gating requirements. If you genuinely cannot honor a constraint given the upstream context, surface the conflict in strategic_diagnosis rather than silently dropping the ID.`);
+      parts.push(lines.join("\n"));
+    }
+
     if (pipelineContext.comprehensiveMode) {
       parts.push(
-        `═══ COMPREHENSIVE MODE ENGAGED ═══\nThe user selected comprehensive tier. Apply the strictest interpretation of the COMPREHENSIVE GROUNDING rules. The strategy MUST include axiom_ids_respected / convergence_ids_addressed / coverage_gap_ids_closed / inversion_ids_tested fields on every tactic and perspective. If the upstream context cannot support a fully-grounded strategy (missing axioms, no convergences, etc.), say so explicitly in strategic_diagnosis rather than producing an ungrounded strategy.`,
+        `═══ COMPREHENSIVE MODE ENGAGED ═══\nThe user selected comprehensive tier. Apply the strictest interpretation of the COMPREHENSIVE GROUNDING rules. The strategy MUST include axiom_ids_respected / convergence_ids_addressed / coverage_gap_ids_closed / inversion_ids_tested / subsystem_ids_targeted fields on every tactic and perspective. If the upstream context cannot support a fully-grounded strategy (missing axioms, no convergences, etc.), say so explicitly in strategic_diagnosis rather than producing an ungrounded strategy.`,
       );
     }
 

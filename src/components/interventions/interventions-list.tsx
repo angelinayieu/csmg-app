@@ -9,10 +9,13 @@
 
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { GripVertical } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInterventions } from "@/lib/hooks/use-interventions";
 import { useApps, type AppView } from "@/lib/hooks/use-apps";
 import type { Intervention, InterventionStatus } from "@/types/intervention";
+import { LIBRARY_ASSET_MIME } from "@/components/canvas/library/types";
+import { appAssetClass } from "@/components/canvas/library/classes/apps";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -99,6 +102,7 @@ export function InterventionsList({ spaceId }: { spaceId: string }) {
               <AppGroup
                 key={appId}
                 appId={appId}
+                app={app}
                 appName={app?.name ?? "App"}
                 appType={app?.app_type ?? "dashboard"}
                 spaceId={spaceId}
@@ -111,6 +115,7 @@ export function InterventionsList({ spaceId }: { spaceId: string }) {
           {grouped.unassigned.size > 0 ? (
             <AppGroup
               appId={null}
+              app={undefined}
               appName="Unclustered interventions"
               appType={null}
               spaceId={spaceId}
@@ -127,6 +132,7 @@ export function InterventionsList({ spaceId }: { spaceId: string }) {
 
 function AppGroup({
   appId,
+  app,
   appName,
   appType,
   spaceId,
@@ -135,6 +141,7 @@ function AppGroup({
   focusedRowRef,
 }: {
   appId: string | null;
+  app: AppView | undefined;
   appName: string;
   appType: string | null;
   spaceId: string;
@@ -144,14 +151,39 @@ function AppGroup({
 }) {
   const totalCount = [...statusMap.values()].reduce((n, arr) => n + arr.length, 0);
 
+  const appRef = useRef(app);
+  appRef.current = app;
+
+  const handleDragStart = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      const currentApp = appRef.current;
+      if (!currentApp || !appId) { e.preventDefault(); return; }
+      e.dataTransfer.effectAllowed = "copy";
+      const payload = appAssetClass.toDragPayload(currentApp, { spaceId });
+      e.dataTransfer.setData(LIBRARY_ASSET_MIME, JSON.stringify(payload));
+      e.dataTransfer.setData("text/plain", appName);
+    },
+    [appId, spaceId, appName],
+  );
+
   return (
-    <section className="glass-card rounded-[18px] px-5 py-4">
+    <section
+      draggable={Boolean(app && appId)}
+      onDragStart={handleDragStart}
+      className="glass-card rounded-[18px] px-5 py-4"
+      title={app && appId ? "Drag to pin this app on the canvas" : undefined}
+    >
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
+          {app && appId && (
+            <GripVertical className="h-3.5 w-3.5 flex-shrink-0 cursor-grab text-gray-300 hover:text-gray-500 active:cursor-grabbing" />
+          )}
           {appId ? (
             <Link
               href={`/app/space/${spaceId}/app/${appId}`}
               className="text-[15px] font-semibold tracking-[-0.005em] text-[color:var(--fg,#1d1d1f)] hover:underline decoration-[color:var(--fg,#1d1d1f)]/30 underline-offset-4"
+              draggable={false}
+              onDragStart={(e) => e.preventDefault()}
             >
               {appName}
             </Link>

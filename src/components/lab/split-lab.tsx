@@ -88,9 +88,10 @@ export function SplitLab({
   }, [sideA.system, sideB.system]);
 
   return (
-    <div className="flex h-full w-full flex-col">
+    // Phase A — force light theme on SplitLab.
+    <div data-theme="blue" className="flex h-full w-full flex-col bg-[var(--lab-bg)]">
       {/* ── Split chrome strip ───────────────────────────────────── */}
-      <div className="flex flex-shrink-0 items-center gap-3 border-b border-[rgba(255,255,255,0.08)] bg-[rgba(8,145,178,0.10)] px-4 py-2 text-[11px] text-cyan-100">
+      <div className="flex flex-shrink-0 items-center gap-3 border-b border-[var(--lab-border)] bg-[rgba(8,145,178,0.10)] px-4 py-2 text-[11px] text-cyan-100">
         <span className="font-bold uppercase tracking-[0.14em] text-cyan-300">
           A/B split
         </span>

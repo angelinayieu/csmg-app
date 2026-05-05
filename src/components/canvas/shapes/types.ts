@@ -400,6 +400,13 @@ export type RoomShape = TLBaseShape<
 // src/lib/pipeline/probe-orchestrator.ts) — tldraw's prop validators
 // require scalar fields, so structured trail data rides as JSON. The
 // shape util parses on render with a defensive fallback.
+//
+// `collapsed`: when true, the shape renders as a compact 220×40 pill
+// (probe icon + 'Probe · N branches' + expand chevron) instead of the
+// full trail. Toggled by clicking the result terminal in expanded
+// state, or the chevron in collapsed state. Same shape across both
+// modes — no separate badge shape — so the user can drag the
+// collapsed pill around as a permanent canvas chip.
 export type ProbeTrailShape = TLBaseShape<
   "probe-trail",
   {
@@ -416,6 +423,8 @@ export type ProbeTrailShape = TLBaseShape<
     rootQuestion: string;
     /** ms epoch — used to play the entrance animation once. */
     spawnedAt: number;
+    /** When true, render compact pill instead of full trail. */
+    collapsed: boolean;
   }
 >;
 

@@ -261,6 +261,26 @@ export function SpaceLab({
   // components of the space reactor.
   const subunits = heroes;
 
+  // Phase B — children map for recursive inline expansion in the reagent
+  // bay. Each entity → its direct sub-entities (entities with
+  // provenance.parent_entity_id === entity.id). Built from the full
+  // entities array so the bay can render arbitrary depth from any hero.
+  const childrenByParentId = useMemo<Map<string, Entity[]>>(() => {
+    const map = new Map<string, Entity[]>();
+    for (const e of entities) {
+      const prov = e.provenance as
+        | { parent_entity_id?: string | null }
+        | null
+        | undefined;
+      const parentId = prov?.parent_entity_id ?? null;
+      if (!parentId) continue;
+      const list = map.get(parentId);
+      if (list) list.push(e);
+      else map.set(parentId, [e]);
+    }
+    return map;
+  }, [entities]);
+
   // Load cross-space partner entities (they live in OTHER spaces). For
   // the MVP we've already loaded all bridges; look up partner entities
   // against the current space's entity list plus whatever sibling-space
@@ -502,7 +522,10 @@ export function SpaceLab({
   };
 
   return (
-    <div className="relative flex h-full w-full flex-col">
+    // Phase A — force light theme on the generic SpaceLab. The dark
+    // reactor palette caused the lab to feel disconnected from the rest
+    // of the dashboard. Light vars are defined under [data-theme="blue"].
+    <div data-theme="blue" className="relative flex h-full w-full flex-col bg-[var(--lab-bg)]">
       <LabHeader
         spaceId={space.id}
         spaceName={space.name}
@@ -567,7 +590,7 @@ export function SpaceLab({
           one-click escape back to the unscoped view. Renders nothing
           when not scoped. */}
       {scopedSystem && (
-        <div className="flex items-center gap-2 border-b border-[rgba(255,255,255,0.08)] bg-[rgba(124,58,237,0.10)] px-4 py-1.5 text-[11px] text-violet-200">
+        <div className="flex items-center gap-2 border-b border-[var(--lab-border)] bg-[rgba(124,58,237,0.10)] px-4 py-1.5 text-[11px] text-violet-200">
           <span className="font-bold uppercase tracking-[0.14em]">Scoped</span>
           <span className="text-violet-300">·</span>
           <span className="font-medium text-violet-100">
@@ -618,7 +641,7 @@ export function SpaceLab({
           screen comparator is a future pass; for now this is the
           navigational substrate that establishes the pair. */}
       {scopedSystem && comparedSystem && (
-        <div className="flex items-center gap-2 border-b border-[rgba(255,255,255,0.08)] bg-[rgba(8,145,178,0.10)] px-4 py-1 text-[11px] text-cyan-200">
+        <div className="flex items-center gap-2 border-b border-[var(--lab-border)] bg-[rgba(8,145,178,0.10)] px-4 py-1 text-[11px] text-cyan-200">
           <span className="font-bold uppercase tracking-[0.14em]">A/B</span>
           <span className="text-cyan-300">·</span>
           <span className="font-medium text-cyan-100">
@@ -708,6 +731,9 @@ export function SpaceLab({
           bondDrillHref={bondDrillHref}
           selectedSubunitId={selectedSubunitId}
           onSelectSubunit={setSelectedSubunitId}
+          // Phase B — enables per-row hover (+) probe + inline expansion.
+          childrenByParentId={childrenByParentId}
+          spaceId={space.id}
         />
 
         {mode === "structure" && (
@@ -922,7 +948,7 @@ function SubjectStrip({
   const conditionCount = Object.keys(conditions).length;
 
   return (
-    <div className="border-b border-[rgba(255,255,255,0.08)] bg-[rgba(124,58,237,0.10)]">
+    <div className="border-b border-[var(--lab-border)] bg-[rgba(124,58,237,0.10)]">
       {/* Header bar */}
       <div className="flex items-center gap-2 px-4 py-1.5 text-[11px] text-violet-200">
         <span className="font-bold uppercase tracking-[0.14em]">Twin</span>
@@ -969,7 +995,7 @@ function SubjectStrip({
 
       {/* Modulators panel — light-on-dark variant via CSS scope */}
       {open && (
-        <div className="border-t border-[rgba(255,255,255,0.08)] bg-white px-4 py-3 text-slate-900">
+        <div className="border-t border-[var(--lab-border)] bg-white px-4 py-3 text-slate-900">
           <ConditionModulatorsPanel
             conditions={conditions}
             onChange={onConditionsChange}

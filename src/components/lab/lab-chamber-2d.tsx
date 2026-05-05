@@ -150,11 +150,11 @@ export function LabChamber2D({
       {/* HUD readouts */}
       <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[var(--lab-accent)]/75">
         <div className="mb-1 flex gap-2.5">
-          <span>CHAMBER</span>
-          <b className="font-medium text-[var(--lab-text)]">REACTOR-01</b>
+          <span>VIEW</span>
+          <b className="font-medium text-[var(--lab-text)]">GRAPH-2D</b>
         </div>
         <div className="mb-1 flex gap-2.5">
-          <span>FIELD</span>
+          <span>MODE</span>
           <b className="font-medium text-[var(--lab-text)]">STRUCTURE</b>
         </div>
         <div className="flex gap-2.5">

@@ -49,7 +49,7 @@ export function LabReactionNetwork({
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
-            ⚗ Reaction Network
+            ⚗ Patterns
           </span>
           <span className="font-mono text-[9px] text-[var(--lab-text-faint)]">{reactions.length}</span>
         </div>
@@ -61,10 +61,10 @@ export function LabReactionNetwork({
       {enriched.length === 0 ? (
         <div className="flex flex-1 items-center justify-center rounded-[3px] border border-dashed border-[var(--lab-border)] bg-[var(--lab-panel-raised)]">
           <div className="text-center">
-            <div className="text-[11px] text-[var(--lab-text-mid)]">No saved reactions yet.</div>
+            <div className="text-[11px] text-[var(--lab-text-mid)]">No saved patterns yet.</div>
             <div className="mt-1 text-[9.5px] text-[var(--lab-text-faint)]">
               Combine this entity with others on the canvas and hit{" "}
-              <span className="font-semibold text-[var(--lab-text-mid)]">Save as Reaction</span>.
+              <span className="font-semibold text-[var(--lab-text-mid)]">Save as Pattern</span>.
             </div>
           </div>
         </div>

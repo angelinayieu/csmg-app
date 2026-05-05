@@ -283,7 +283,12 @@ export default function LabChamber3D({
     host.appendChild(renderer.domElement);
 
     // ── Lighting ──
-    scene.add(new THREE.AmbientLight(0x334466, 0.5));
+    // Phase A — ambient was 0x334466 (dark blue) which made the chamber
+    // look murky under the new light theme. Switched to neutral white at
+    // slightly higher intensity so subunit categorical colors stay
+    // readable in both light and dark modes; the colored point lights
+    // below still provide the signature green/pink/cyan rim effect.
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const key = new THREE.PointLight(0x4ade80, 1.2, 60);
     key.position.set(10, 8, 14);
     scene.add(key);
@@ -940,11 +945,11 @@ export default function LabChamber3D({
       {/* HUD readouts (kept 2D so they're always crisp) */}
       <div className="pointer-events-none absolute left-5 top-5 text-[9px] font-mono uppercase tracking-widest text-[var(--lab-accent)]/75">
         <div className="mb-1 flex gap-2.5">
-          <span>CHAMBER</span>
-          <b className="font-medium text-[var(--lab-text)]">REACTOR-01</b>
+          <span>VIEW</span>
+          <b className="font-medium text-[var(--lab-text)]">GRAPH-3D</b>
         </div>
         <div className="mb-1 flex gap-2.5">
-          <span>FIELD</span>
+          <span>MODE</span>
           <b className="font-medium text-[var(--lab-text)]">STRUCTURE · 3D</b>
         </div>
         <div className="flex gap-2.5">

@@ -114,7 +114,7 @@ export function LabHeader({
             InterAxis Lab
           </div>
           <div className="mt-1 text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--lab-accent)]">
-            Knowledge Reactor
+            Knowledge Graph
           </div>
         </div>
       </div>

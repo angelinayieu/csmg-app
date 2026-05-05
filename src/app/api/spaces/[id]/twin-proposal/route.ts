@@ -18,6 +18,7 @@ import type {
   MechanismRow,
   RankedStrategy,
 } from "@/types/strategy";
+import type { ProposedTwinSpec } from "@/types/twin";
 import type { CoherenceCheckResult, CoherenceIssue } from "@/lib/pipeline/validate-strategy-coherence";
 import type { ConfidenceOverrideRow } from "@/app/api/strategy/confidence-override/route";
 
@@ -56,6 +57,13 @@ interface TwinProposalRow {
   rejection_reason: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * Frozen snapshot of what was claimed at approval time. Populated async
+   * via persistProposedSpec() after the approve route returns. Null on
+   * legacy proposals approved before migration 20260705 landed — clients
+   * fall back to legacy infrastructure-map status counts.
+   */
+  proposed_spec: ProposedTwinSpec | null;
 }
 
 /**

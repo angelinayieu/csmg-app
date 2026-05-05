@@ -35,10 +35,11 @@
 //   reproduce reality, neither writing-back discovered edges nor
 //   firing mechanisms is trustworthy.
 
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { safeAuth, verifySpaceOwnership, safeJsonParse } from "@/lib/api-helpers";
 import { captureSnapshot } from "@/lib/twin/snapshot-capture";
 import { commitScenarioToLiveKG } from "@/lib/twin/commit-scenario";
+import { persistProposedSpec } from "@/lib/twin/persist-proposed-spec";
 import {
   isDiscoverySource,
   type DiscoveryProposalJustification,
@@ -347,6 +348,22 @@ export async function POST(
       // Non-fatal — proposal is approved even if mechanism flips failed; caller
       // can retry. Surface the warning in the response so the UI knows.
       console.error("[twin-proposal approve] mechanism update failed:", mechErr);
+      // Even on warning we still want to capture the proposed-spec snapshot
+      // so the twin display can diff against what was approved.
+      after(
+        persistProposedSpec({
+          db,
+          spaceId,
+          userId: user.id,
+          proposalId: targetId,
+        }).then((res) => {
+          if (!res.ok) {
+            console.warn(
+              `[twin-proposal approve] proposed_spec snapshot failed for ${targetId}: ${res.error}`,
+            );
+          }
+        }),
+      );
       return NextResponse.json({
         approved: true,
         proposal_id: targetId,
@@ -355,6 +372,25 @@ export async function POST(
       });
     }
   }
+
+  // Capture a frozen ProposedTwinSpec snapshot so the workflow display can
+  // diff materialized state against what was approved. Async via after()
+  // because the user's response shouldn't wait on this audit write — the
+  // diff strip falls back gracefully when no snapshot exists yet.
+  after(
+    persistProposedSpec({
+      db,
+      spaceId,
+      userId: user.id,
+      proposalId: targetId,
+    }).then((res) => {
+      if (!res.ok) {
+        console.warn(
+          `[twin-proposal approve] proposed_spec snapshot failed for ${targetId}: ${res.error}`,
+        );
+      }
+    }),
+  );
 
   return NextResponse.json({
     approved: true,

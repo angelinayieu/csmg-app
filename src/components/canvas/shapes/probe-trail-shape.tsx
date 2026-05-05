@@ -41,6 +41,8 @@ import type { ProbeTrail, ProbeTrailNode } from "@/lib/pipeline/probe-orchestrat
 
 const DEFAULT_W = 560;
 const DEFAULT_H = 220;
+const COLLAPSED_W = 220;
+const COLLAPSED_H = 40;
 
 const KIND_TO_ICON: Record<ProbeTrailNode["kind"], TrailNodeIcon> = {
   "probe-origin": "probe-origin",
@@ -75,6 +77,7 @@ export class ProbeTrailShapeUtil extends BaseBoxShapeUtil<ProbeTrailShape> {
     sourceEntityName: T.string,
     rootQuestion: T.string,
     spawnedAt: T.number,
+    collapsed: T.boolean,
   };
 
   override canResize = () => true;
@@ -95,6 +98,7 @@ export class ProbeTrailShapeUtil extends BaseBoxShapeUtil<ProbeTrailShape> {
       sourceEntityName: "",
       rootQuestion: "",
       spawnedAt: Date.now(),
+      collapsed: false,
     };
   }
 
@@ -110,7 +114,7 @@ export class ProbeTrailShapeUtil extends BaseBoxShapeUtil<ProbeTrailShape> {
 }
 
 function ProbeTrailView({ shape }: { shape: ProbeTrailShape }) {
-  const { w, h, trailJson, sourceEntityName, rootQuestion, spawnedAt } =
+  const { w, h, trailJson, sourceEntityName, rootQuestion, spawnedAt, collapsed } =
     shape.props;
 
   // One-shot entrance animation. Same 700ms cadence as the room shape
@@ -156,18 +160,156 @@ function ProbeTrailView({ shape }: { shape: ProbeTrailShape }) {
         }),
       );
     } else if (node.kind === "result-terminal") {
-      window.dispatchEvent(
-        new CustomEvent("probe-trail:collapse", {
-          detail: {
-            trailId: trail?.id ?? null,
-            shapeId: shape.id,
-            sourceEntityId: shape.props.sourceEntityId,
-            resultCount:
-              (trail?.nodes ?? []).filter((n) => n.kind === "search-step").length,
-          },
-        }),
-      );
+      // Result terminal click → toggle to collapsed state. Listener
+      // in interaxis-canvas resizes the shape + flips the prop.
+      dispatchCollapseToggle();
     }
+  }
+
+  function dispatchCollapseToggle() {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(
+      new CustomEvent("probe-trail:collapse", {
+        detail: {
+          trailId: trail?.id ?? null,
+          shapeId: shape.id,
+          sourceEntityId: shape.props.sourceEntityId,
+          resultCount:
+            (trail?.nodes ?? []).filter((n) => n.kind === "search-step").length,
+          /** Caller's intended next state; the listener honors it. */
+          nextCollapsed: !collapsed,
+        },
+      }),
+    );
+  }
+
+  // ── Compact pill render (collapsed mode) ─────────────────────────
+  // Drag-around chip that lives next to the source card. Click the
+  // expand chevron to restore the full trail. Same trail data — just
+  // hidden — so re-expansion is instant + no re-fetch needed.
+  if (collapsed) {
+    const branchCount =
+      (trail?.nodes ?? []).filter((n) => n.kind === "search-step").length;
+    const resolvedCount =
+      (trail?.nodes ?? []).filter(
+        (n) => n.kind === "search-step" && n.status === "result",
+      ).length;
+    return (
+      <HTMLContainer
+        style={{
+          width: w,
+          height: h,
+          pointerEvents: "all",
+          position: "relative",
+        }}
+      >
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => dispatchCollapseToggle()}
+          title={`Expand probe trail (${resolvedCount}/${branchCount} resolved)`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 10px 6px 8px",
+            borderRadius: 999,
+            background: "rgba(8,108,232,0.06)",
+            border: "1px solid rgba(8,108,232,0.18)",
+            boxShadow: "0 1px 2px rgba(8,108,232,0.08)",
+            color: "#0a1020",
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: "0.005em",
+            cursor: "pointer",
+            transition:
+              "transform 140ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 140ms cubic-bezier(0.22, 1, 0.36, 1)",
+            width: "100%",
+            height: "100%",
+            justifyContent: "flex-start",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "translateY(-1px)";
+            e.currentTarget.style.boxShadow = "0 3px 10px rgba(8,108,232,0.18)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "";
+            e.currentTarget.style.boxShadow = "0 1px 2px rgba(8,108,232,0.08)";
+          }}
+        >
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 16,
+              height: 16,
+              borderRadius: "50%",
+              background: "rgba(8,108,232,0.18)",
+              flexShrink: 0,
+              color: "#086ce8",
+            }}
+          >
+            <svg
+              width={9}
+              height={9}
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.6}
+              aria-hidden
+            >
+              <circle cx="8" cy="8" r="5.5" />
+              <circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none" />
+            </svg>
+          </span>
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Probe · {branchCount} branch{branchCount === 1 ? "" : "es"}
+            {resolvedCount > 0 && (
+              <span
+                style={{
+                  marginLeft: 6,
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  color: "#086ce8",
+                  background: "rgba(8,108,232,0.12)",
+                  padding: "1px 5px",
+                  borderRadius: 3,
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {resolvedCount}/{branchCount} resolved
+              </span>
+            )}
+          </span>
+          {/* Expand chevron — rotated up to indicate "click to expand." */}
+          <svg
+            width={10}
+            height={10}
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ flexShrink: 0, color: "#086ce8" }}
+            aria-hidden
+          >
+            <path d="M 4 10 L 8 6 L 12 10" />
+          </svg>
+        </button>
+      </HTMLContainer>
+    );
   }
 
   return (

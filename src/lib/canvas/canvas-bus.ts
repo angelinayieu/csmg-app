@@ -235,6 +235,44 @@ export function canvasPinAsSticky(input: {
   }
 }
 
+// ── Card pinner — library-asset payload → placed shape ──────────────
+//
+// Registered by InteraxisCanvas on mount. Callers (e.g. strategy drawer's
+// "Send to canvas" button) pass a LibraryAssetPayload; the pinner looks
+// up the correct shape constructor via the asset-class registry and
+// places the shape at the current viewport center. Distinct from
+// canvasPinAsSticky (which only creates sticky-notes from raw text).
+
+import type { LibraryAssetPayload } from "@/components/canvas/library/types";
+
+type CardPinner = (payload: LibraryAssetPayload) => void;
+
+let registeredCardPinner: CardPinner | null = null;
+
+export function setCanvasCardPinner(fn: CardPinner): () => void {
+  registeredCardPinner = fn;
+  return () => {
+    if (registeredCardPinner === fn) registeredCardPinner = null;
+  };
+}
+
+/** Place a library asset as its proper canvas shape (app-card, strategy-card,
+ *  etc.) at the current viewport centre. Silent no-op when the canvas is not
+ *  mounted. */
+export function canvasPinAsCard(payload: LibraryAssetPayload): void {
+  if (!registeredCardPinner) {
+    console.warn(
+      "[canvas-bus] canvasPinAsCard called but no card pinner registered",
+    );
+    return;
+  }
+  try {
+    registeredCardPinner(payload);
+  } catch (err) {
+    console.warn("[canvas-bus] card pinner threw:", err);
+  }
+}
+
 // Re-export Router type so consumers that need it don't have to
 // import next/router separately; not used inside this module today
 // but kept for API stability.

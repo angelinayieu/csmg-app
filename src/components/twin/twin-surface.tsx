@@ -19,9 +19,10 @@
 // filter set — used by per-app twins.
 
 import { motion } from "framer-motion";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { computeTwinState } from "@/lib/twin/compute-twin-state";
+import type { ProposedTwinSpec } from "@/types/twin";
 import { DigitalTwinFlowchart } from "@/components/dashboard/modules/digital-twin-flowchart";
 import { OperatingTwinShell } from "@/components/operating-twin/operating-twin-shell";
 import { AgentWorkflowGraph } from "@/components/apps/widgets/agent-workflow-widget";
@@ -142,6 +143,35 @@ export function TwinSurface({
     return computeTwinState(space, entities, edges, cycles, synthesisData, activeGoal);
   }, [space, entities, edges, cycles, synthesisData, activeGoal]);
 
+  // Latest twin-proposal proposed_spec — drives the flowchart's
+  // proposed-vs-actual diff strip. Null when no proposal has been approved
+  // yet (or when the snapshot column hasn't been populated for legacy
+  // proposals); flowchart falls back to its legacy infrastructure-map pill.
+  // Single fetch on mount; refetched only on space change.
+  const [proposedSpec, setProposedSpec] = useState<ProposedTwinSpec | null>(null);
+  useEffect(() => {
+    if (!space?.id) {
+      setProposedSpec(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/spaces/${encodeURIComponent(space.id)}/twin-proposal`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (cancelled) return;
+        const spec =
+          (payload?.proposal as { proposed_spec?: ProposedTwinSpec | null } | null)
+            ?.proposed_spec ?? null;
+        setProposedSpec(spec);
+      })
+      .catch(() => {
+        if (!cancelled) setProposedSpec(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [space?.id]);
+
   // Persisted twin quality score — strategy-refresh writes this onto
   // synthesis_data.twin_quality. Shown as a chip on the state card so
   // users see trust-level at a glance without opening /twin. Falls back
@@ -226,6 +256,9 @@ export function TwinSurface({
             synthesisData={synthesisData}
             activeGoal={activeGoal}
             infrastructureMap={infrastructureMap}
+            proposedSpec={proposedSpec}
+            currentTwinState={twinState}
+            space={space}
           />
         ) : (
           <SubjectEmpty density={density} filtered={Boolean(filter?.entityCodes?.length)} />

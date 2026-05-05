@@ -61,6 +61,8 @@ export interface BrainstormPanelProps {
   onDecompose?: () => void;
   onJumpToEntity?: (e: HudRailEntity) => void;
   onAppendQuestion?: (q: string) => void;
+  /** Open the deep-dive panel for the given question instead of appending it. */
+  onDeepDive?: (q: string) => void;
 }
 
 const ACCENT = "#8B5CF6"; // Brainstorm's signature violet.
@@ -73,6 +75,7 @@ export function BrainstormPanel({
   onDecompose,
   onJumpToEntity,
   onAppendQuestion,
+  onDeepDive,
 }: BrainstormPanelProps) {
   const { settings, update, applyPreset, activePresetId, resetToDefaults } =
     ctl;
@@ -239,9 +242,11 @@ export function BrainstormPanel({
                   {hudCtx!.suggestedQuestions.slice(0, 4).map((q, i) => (
                     <li key={i}>
                       <button
-                        onClick={() => onAppendQuestion?.(q)}
-                        className="w-full rounded-lg bg-white px-3 py-2 text-left text-[11.5px] text-gray-700 shadow-sm transition-all hover:shadow hover:text-gray-900 hover:bg-blue-50/40"
-                        title="Click to add this question to your sticky"
+                        onClick={() =>
+                          onDeepDive ? onDeepDive(q) : onAppendQuestion?.(q)
+                        }
+                        className="w-full rounded-lg bg-white px-3 py-2 text-left text-[11.5px] text-gray-700 shadow-sm transition-all hover:bg-violet-50/50 hover:shadow hover:text-gray-900"
+                        title="Click to deep-dive this question"
                       >
                         {q}
                       </button>

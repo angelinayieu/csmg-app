@@ -190,3 +190,154 @@ export function createThreadOnShape(
   editor.setEditingShape(id);
   return id;
 }
+
+// ── Probe trail helpers (2026-07-04) ───────────────────────────────
+//
+// Mutating a probe-trail node's status (idle → working → result / error)
+// requires parsing the trail JSON, walking to the node, flipping its
+// status, and re-stringifying back to the shape prop. Centralized here
+// so the canvas's branch-click + collapse listeners stay readable.
+
+type ProbeTrailNodeStatus = "idle" | "working" | "complete" | "result" | "error";
+
+interface ProbeTrailShapeView {
+  id: TLShapeId;
+  type: "probe-trail";
+  props: {
+    w: number;
+    h: number;
+    trailJson: string;
+    sourceEntityId: string;
+    sourceEntityName: string;
+    rootQuestion: string;
+    spawnedAt: number;
+  };
+}
+
+/**
+ * Find the probe-trail shape on the current page whose embedded
+ * trail.id matches `trailId`. Returns null if no match — the user
+ * may have deleted the trail or navigated to another page.
+ */
+function findProbeTrailShape(
+  editor: Editor,
+  trailId: string | null,
+): ProbeTrailShapeView | null {
+  if (!trailId) return null;
+  const all = editor.getCurrentPageShapes();
+  for (const s of all) {
+    if (s.type !== "probe-trail") continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sa = s as any;
+    try {
+      const parsed = JSON.parse(sa.props.trailJson);
+      if (parsed?.id === trailId) {
+        return sa as ProbeTrailShapeView;
+      }
+    } catch {
+      // ignore — malformed trail JSON
+    }
+  }
+  return null;
+}
+
+/**
+ * Flip one probe-trail node's status by id. No-op if the trail or
+ * node can't be found (caller is expected to check; this is intended
+ * to be safe to call from poll-loop ticks where the user may have
+ * deleted the trail).
+ */
+export function updateProbeTrailNodeStatus(
+  editor: Editor,
+  trailId: string | null,
+  nodeId: string,
+  status: ProbeTrailNodeStatus,
+): void {
+  const shape = findProbeTrailShape(editor, trailId);
+  if (!shape) return;
+  let parsed: { nodes?: Array<{ id: string; status: string }> };
+  try {
+    parsed = JSON.parse(shape.props.trailJson);
+  } catch {
+    return;
+  }
+  const node = parsed.nodes?.find((n) => n.id === nodeId);
+  if (!node) return;
+  node.status = status;
+  editor.updateShape({
+    id: shape.id,
+    type: "probe-trail",
+    props: { trailJson: JSON.stringify(parsed) },
+  });
+}
+
+/**
+ * Poll research-deep until terminal state, then flip the trail node
+ * accordingly. Self-terminating: stops when the trail shape is
+ * deleted, when status reaches 'completed' / 'failed', or when the
+ * timeout fires.
+ *
+ * Polling is intentionally simple — every 8 seconds, no exponential
+ * backoff. Research-deep is async OpenAI background mode which can
+ * legitimately take 2-10 min, so the timeout is generous (12 min).
+ */
+const PROBE_POLL_INTERVAL_MS = 8000;
+const PROBE_POLL_TIMEOUT_MS = 12 * 60 * 1000;
+
+export async function pollProbeBranch(opts: {
+  editor: Editor;
+  spaceId: string;
+  responseId: string;
+  trailId: string | null;
+  nodeId: string;
+  onResult?: () => void;
+  onError?: (msg: string) => void;
+}): Promise<void> {
+  const { editor, spaceId, responseId, trailId, nodeId, onResult, onError } = opts;
+  const start = Date.now();
+
+  while (Date.now() - start < PROBE_POLL_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, PROBE_POLL_INTERVAL_MS));
+
+    // Bail if the user deleted the trail mid-poll.
+    if (!findProbeTrailShape(editor, trailId)) return;
+
+    let pollRes: Response;
+    try {
+      pollRes = await fetch("/api/pipeline/research-deep", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "poll", responseId, spaceId }),
+      });
+    } catch {
+      // Network blip — try again next tick.
+      continue;
+    }
+    if (!pollRes.ok) continue;
+    let payload: { status?: string; completed?: boolean };
+    try {
+      payload = (await pollRes.json()) as { status?: string; completed?: boolean };
+    } catch {
+      continue;
+    }
+
+    if (payload.completed === true || payload.status === "completed") {
+      updateProbeTrailNodeStatus(editor, trailId, nodeId, "result");
+      onResult?.();
+      return;
+    }
+    if (payload.status === "failed" || payload.status === "cancelled") {
+      updateProbeTrailNodeStatus(editor, trailId, nodeId, "error");
+      onError?.(payload.status);
+      return;
+    }
+    // status in_progress / queued / unknown — keep polling.
+  }
+
+  // Timeout reached without a terminal state.
+  updateProbeTrailNodeStatus(editor, trailId, nodeId, "error");
+  onError?.("Research timed out (12 min cap)");
+}
+
+// Suppress unused imports — TLShape is used in the probe view shape.
+void {} as TLShape;

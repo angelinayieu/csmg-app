@@ -665,6 +665,13 @@ declare module "@tldraw/tlschema" {
       rootQuestion: string;
       /** Spawned-at ms epoch — drives the one-shot entrance animation. */
       spawnedAt: number;
+      /** Compact pill mode — when true, the shape collapses to a
+       *  220×40 'Probe · N branches' chip the user can drag around as
+       *  a permanent canvas marker. Toggled by clicking the result
+       *  terminal (expanded → collapsed) or the chevron (collapsed →
+       *  expanded). The trail data stays intact in `trailJson` either
+       *  way. */
+      collapsed: boolean;
     };
     // Phase B (intake redesign) — STRATEGY HERO CARD.
     //

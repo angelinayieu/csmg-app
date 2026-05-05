@@ -35,6 +35,7 @@ import {
   completePipelineRun,
 } from "@/lib/events/structural-event-bus";
 import { readRunContext } from "@/lib/events/run-context";
+import { extractHardConstraints, hasAnyHardConstraints } from "@/lib/strategy/extract-hard-constraints";
 import { formatPriorContextPrompt } from "@/lib/events/format-run-context-prompt";
 import { formatRichKgContextForStrategy } from "@/lib/pipeline/format-kg-rich-context";
 import { buildKgContext, renderKgContextSupplements } from "@/lib/kg-context";
@@ -1470,14 +1471,35 @@ export async function POST(request: Request) {
       // tier==="comprehensive").
       pipelineCtx.comprehensiveMode = bodyComprehensiveMode === true;
 
+      // Subsystems — typed compositional units extracted post-synthesis.
+      // When present, the strategy prompt forces every micro_tactic to name a
+      // target subsystem in subsystem_ids_targeted. Absent on legacy spaces
+      // (extract-subsystems hasn't run); the prompt block self-gates.
+      // synthData is Record<string, unknown> at this scope (line 165 cast),
+      // so we narrow through SynthesisData for typed field access.
+      const synthDataTyped = synthData as unknown as SynthesisData;
+      const subs = synthDataTyped.subsystems;
+      if (Array.isArray(subs) && subs.length > 0) {
+        pipelineCtx.subsystems = subs;
+      }
+
+      // Hard constraints — distilled IDs (critical axioms, strong convergences,
+      // coverage gaps, coin-flip inversions, L1/L2 subsystems) the strategy
+      // MUST reference. The prompt block self-gates if all categories empty.
+      // Phase 6's retry loop validates these against the LLM output.
+      pipelineCtx.hardConstraints = extractHardConstraints(synthDataTyped);
+
       // Iterative refinement: user-typed natural-language constraint.
       if (typeof userConstraint === "string" && userConstraint.trim().length > 0) {
         pipelineCtx.userConstraint = userConstraint.trim().slice(0, 1000);
         console.log(`[strategy-refresh] userConstraint provided: "${pipelineCtx.userConstraint.slice(0, 80)}${pipelineCtx.userConstraint.length > 80 ? "…" : ""}"`);
       }
 
+      const hcSummary = hasAnyHardConstraints(pipelineCtx.hardConstraints)
+        ? `axioms=${pipelineCtx.hardConstraints.must_respect_axiom_ids.length}, convergences=${pipelineCtx.hardConstraints.must_address_convergence_ids.length}, gaps=${pipelineCtx.hardConstraints.must_close_gap_ids.length}, inversions=${pipelineCtx.hardConstraints.must_test_inversion_ids.length}, subsystems=${pipelineCtx.hardConstraints.must_target_subsystem_ids.length}`
+        : "none";
       console.log(
-        `[strategy-refresh] Comprehensive-grounding extracted: ${pipelineCtx.axioms?.length ?? 0} axioms (${pipelineCtx.axioms?.filter((a) => a.visibility === "HIDDEN").length ?? 0} hidden), coverage=${pipelineCtx.strategyCoverage?.overall_coverage ?? "n/a"}%, ${pipelineCtx.insightConvergences?.length ?? 0} insight_convergences (${pipelineCtx.insightConvergences?.filter((c) => c.strength === "strong").length ?? 0} strong), ${pipelineCtx.assumptionInversions?.length ?? 0} inversions, ${pipelineCtx.expansionAxioms?.length ?? 0} expansion_axioms, ${pipelineCtx.candidateCycles?.length ?? 0} candidate_cycles`,
+        `[strategy-refresh] Comprehensive-grounding extracted: ${pipelineCtx.axioms?.length ?? 0} axioms (${pipelineCtx.axioms?.filter((a) => a.visibility === "HIDDEN").length ?? 0} hidden), coverage=${pipelineCtx.strategyCoverage?.overall_coverage ?? "n/a"}%, ${pipelineCtx.insightConvergences?.length ?? 0} insight_convergences (${pipelineCtx.insightConvergences?.filter((c) => c.strength === "strong").length ?? 0} strong), ${pipelineCtx.assumptionInversions?.length ?? 0} inversions, ${pipelineCtx.expansionAxioms?.length ?? 0} expansion_axioms, ${pipelineCtx.candidateCycles?.length ?? 0} candidate_cycles, ${pipelineCtx.subsystems?.length ?? 0} subsystems, hard_constraints=[${hcSummary}]`,
       );
     } catch (gErr) {
       console.warn("[strategy-refresh] Comprehensive-grounding extraction failed (non-critical):", gErr);

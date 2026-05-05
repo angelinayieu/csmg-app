@@ -30,10 +30,18 @@ export interface InstrumentParameters {
   alpha: number;
 }
 
+// Phase A — labels relabeled to plain English. Symbols (K/τ/ρ/α) and
+// internal keys are unchanged so the throughput formula, Monte Carlo,
+// modulator system, and persisted JSONB rows all keep working.
+//
+// label → user-facing copy in dial header
+// symbol → kept for the small Greek glyph next to the label (researcher
+//          mode aesthetic; harmless if hidden later)
+// unit → display-only suffix
 export const PARAMETER_SPECS: ParameterSpec[] = [
   {
     key: "K",
-    label: "Slots",
+    label: "Capacity",
     unit: "",
     symbol: "K",
     min: 1,
@@ -43,7 +51,7 @@ export const PARAMETER_SPECS: ParameterSpec[] = [
   },
   {
     key: "tau",
-    label: "Decay",
+    label: "Memory",
     unit: "s",
     symbol: "τ",
     min: 1,
@@ -53,7 +61,7 @@ export const PARAMETER_SPECS: ParameterSpec[] = [
   },
   {
     key: "rho",
-    label: "Refresh",
+    label: "Update",
     unit: "/s",
     symbol: "ρ",
     min: 0,
@@ -63,7 +71,7 @@ export const PARAMETER_SPECS: ParameterSpec[] = [
   },
   {
     key: "alpha",
-    label: "Attn BW",
+    label: "Focus",
     unit: "",
     symbol: "α",
     min: 1,

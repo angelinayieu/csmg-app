@@ -5,6 +5,9 @@ import type { Entity, Edge, Cycle } from "@/types";
 import type { SynthesisData, RichFeedbackLoop } from "@/types/synthesis";
 import type { ImprovementGoal } from "@/types/goals";
 import type { InfrastructureMap } from "@/types/strategy";
+import type { ProposedTwinSpec, TwinState } from "@/types/twin";
+import { computeTwinProposalDiff } from "@/lib/twin/compute-twin-proposal-diff";
+import { TwinProposalDiffStrip } from "./twin-proposal-diff-strip";
 import { cn } from "@/lib/utils";
 import {
   GitBranch,
@@ -42,6 +45,23 @@ export interface DigitalTwinFlowchartProps {
    *   - needs_building         → thick stroke + "NEW" badge (AI is adding this)
    */
   infrastructureMap?: InfrastructureMap | null;
+  /**
+   * Frozen proposal snapshot from twin_proposals.proposed_spec. When present,
+   * the header pill renders an honest proposed-vs-actual diff (matched /
+   * missing / baseline counts + materialization fidelity) instead of the
+   * legacy infrastructure_map status counts. Older spaces approved before
+   * the snapshot column landed pass null and fall back to the legacy pill
+   * rendering — no UI regression.
+   */
+  proposedSpec?: ProposedTwinSpec | null;
+  /** Required alongside proposedSpec to compute the health-delta chip. */
+  currentTwinState?: TwinState | null;
+  /**
+   * Minimal space shape — only `maturity` is read, used by the workflow's
+   * baseline-anchor metadata so the user has an explicit "you are here"
+   * zero-point. Optional; baseline anchor renders only when this is present.
+   */
+  space?: { maturity?: string | null } | null;
 }
 
 /** Per-entity infra status, used to drive "baseline vs added" visual weighting. */
@@ -74,6 +94,26 @@ interface WorkflowStage {
   order: number;
   /** Infra status for the stage's primary entity (drives stage-level visual weighting). */
   infra_status: InfraStatus | null;
+  /**
+   * Why this stage sits where it does in the order. Computed alongside the
+   * topological sort so the user can audit the precedence logic instead of
+   * trusting an opaque sequence. Without this, an arbitrary-looking stage 1
+   * (e.g. "Data Privacy Management") looks like it was hand-picked when in
+   * reality it just happened to have zero in-degree at sort time.
+   */
+  precedence: {
+    /** Stages that causally precede this one (in-edges). Empty = "starting node". */
+    predecessors: Array<{ stage_id: string; entity_name: string; relation: string }>;
+    /**
+     * Why this stage occupies its slot. Honest when there's no real signal:
+     *   - "follows X (causal)"          ← had a real predecessor
+     *   - "starting node — no upstream" ← legitimate starting point
+     *   - "tied — no causal predecessor; ordered by importance" ← tie-broken
+     */
+    rationale: string;
+    /** True when the placement is genuinely earned by causal predecessors. */
+    causally_anchored: boolean;
+  };
 }
 
 /** A connection between stages showing flow/dependency */
@@ -83,6 +123,35 @@ interface StageConnection {
   label: string;
   type: "flow" | "dependency" | "feedback";
   polarity: "positive" | "negative" | "neutral";
+}
+
+/**
+ * Workflow-level metadata returned alongside stages. Surfaces the topology's
+ * honesty (how much of the order is causal vs tie-broken-by-importance) and
+ * names the baseline the workflow is anchored to.
+ */
+interface WorkflowMeta {
+  /**
+   * Ratio in [0, 1] — fraction of stages that have at least one causal
+   * predecessor. When this is low (< 0.3), the order is mostly determined
+   * by importance tier, not real precedence — surface an honest banner.
+   */
+  causal_density: number;
+  /** Total causal/temporal/functional/agentive edges between stage entities. */
+  causal_edge_count: number;
+  /** Stages whose order is genuinely earned by causal predecessors. */
+  causally_anchored_count: number;
+  /**
+   * Baseline anchor — the user's starting state. Surfaced as a "you are
+   * here" header so the workflow has an explicit zero-point. Pulled from
+   * space.maturity + activeGoal.baseline_value when available.
+   */
+  baseline_anchor: {
+    label: string;
+    detail: string;
+  } | null;
+  /** Why this workflow exists — addresses the master bottleneck if known. */
+  purpose: string | null;
 }
 
 // ── Helpers ──
@@ -111,7 +180,12 @@ function buildWorkflowModel(
   synthesisData: SynthesisData | null,
   activeGoal: ImprovementGoal | null,
   infrastructureMap?: InfrastructureMap | null,
-): { stages: WorkflowStage[]; connections: StageConnection[] } {
+  space?: { maturity?: string | null } | null,
+): {
+  stages: WorkflowStage[];
+  connections: StageConnection[];
+  meta: WorkflowMeta;
+} {
   const entityById = new Map<string, Entity>();
   for (const e of entities) {
     entityById.set(e.entity_id, e);
@@ -226,7 +300,12 @@ function buildWorkflowModel(
     }
   }
 
-  // Kahn's algorithm for topological sort
+  // Kahn's algorithm for topological sort. We also record, per stage, the
+  // FIRST in-degree value at the start of the run — this is the count of
+  // genuine causal predecessors and drives the per-stage rationale below.
+  // (The dynamic `inDegree` map gets decremented during traversal; we need
+  // the original count to know whether a stage was a real starting node
+  // vs. a tie-broken-by-importance one.)
   const inDegree = new Map<string, number>();
   for (const id of stageIds) inDegree.set(id, 0);
   for (const [, targets] of outgoing) {
@@ -234,6 +313,7 @@ function buildWorkflowModel(
       inDegree.set(t, (inDegree.get(t) ?? 0) + 1);
     }
   }
+  const initialInDegree = new Map(inDegree);
 
   const queue: string[] = [];
   for (const [id, deg] of inDegree) {
@@ -260,6 +340,55 @@ function buildWorkflowModel(
     }
   }
 
+  // Compute per-stage precedence info for the rationale renderer. A stage
+  // is "causally anchored" iff it has at least one in-edge — meaning its
+  // position was earned, not tie-broken by importance. We surface this on
+  // the StageCard so users can audit "why does this come first?" instead
+  // of trusting an opaque order.
+  const initialZeroDegreeCount = sorted.filter(
+    (id) => (initialInDegree.get(id) ?? 0) === 0,
+  ).length;
+  const isUnanchoredTieBreak = initialZeroDegreeCount > Math.max(1, sorted.length * 0.7);
+  const buildPrecedence = (stageId: string): WorkflowStage["precedence"] => {
+    const preds = incoming.get(stageId) ?? [];
+    const predecessorEntries = preds.map((pid) => {
+      const e = entityById.get(pid);
+      const key = `${pid}→${stageId}`;
+      return {
+        stage_id: pid,
+        entity_name: e?.name ?? pid,
+        relation: edgeLabels.get(key) ?? "precedes",
+      };
+    });
+
+    if (predecessorEntries.length > 0) {
+      const top = predecessorEntries[0];
+      const more =
+        predecessorEntries.length > 1
+          ? ` (+${predecessorEntries.length - 1} more)`
+          : "";
+      return {
+        predecessors: predecessorEntries,
+        rationale: `follows ${top.entity_name} (${top.relation})${more}`,
+        causally_anchored: true,
+      };
+    }
+    // No upstream stages — but is this a *legitimate* starting node, or
+    // an artifact of a sparse causal graph?
+    if (isUnanchoredTieBreak) {
+      return {
+        predecessors: [],
+        rationale: "no causal predecessor — placed by importance, not dependency",
+        causally_anchored: false,
+      };
+    }
+    return {
+      predecessors: [],
+      rationale: "starting node — no upstream stage",
+      causally_anchored: false,
+    };
+  };
+
   // Add any unsorted (cycle members) at the end
   for (const id of stageIds) {
     if (!sorted.includes(id)) sorted.push(id);
@@ -279,6 +408,7 @@ function buildWorkflowModel(
         status: "not_started" as const,
         order: idx,
         infra_status: null,
+        precedence: buildPrecedence(stageId),
       };
     }
 
@@ -404,6 +534,7 @@ function buildWorkflowModel(
       status,
       order: idx,
       infra_status: getInfraStatus(entity),
+      precedence: buildPrecedence(stageId),
     };
   });
 
@@ -432,7 +563,83 @@ function buildWorkflowModel(
     }
   }
 
-  return { stages, connections };
+  // ── Step 5: Build workflow-level metadata ──
+  // Surfaces the topology's honesty + names a baseline anchor so the user
+  // has an explicit zero-point. Without this the workflow renders as 87
+  // identical "Pending" cards with no hint of "where am I?" or "is this
+  // order earned?"
+  const causallyAnchoredCount = stages.filter(
+    (s) => s.precedence.causally_anchored,
+  ).length;
+  const causalDensity =
+    stages.length > 0 ? causallyAnchoredCount / stages.length : 0;
+
+  const causalEdgeCount = Array.from(outgoing.values()).reduce(
+    (acc, arr) => acc + arr.length,
+    0,
+  );
+
+  // Baseline anchor — the user's starting state. Pulled from space.maturity
+  // and the active goal's baseline_value when both are available; falls
+  // back to a maturity-only label otherwise.
+  const baseline_anchor = ((): WorkflowMeta["baseline_anchor"] => {
+    const maturity = space?.maturity ?? null;
+    const baselineValue =
+      activeGoal?.baseline_value != null && activeGoal.baseline_value !== ""
+        ? String(activeGoal.baseline_value)
+        : null;
+    const metricName = activeGoal?.metric_name ?? null;
+
+    if (!maturity && !baselineValue) return null;
+
+    const maturityLabel =
+      maturity === "actionable_now"
+        ? "Actionable now"
+        : maturity === "waiting_on_dependency"
+          ? "Waiting on dependency"
+          : maturity === "theoretical"
+            ? "Theoretical"
+            : maturity === "blocked"
+              ? "Blocked"
+              : null;
+
+    const detailParts: string[] = [];
+    if (baselineValue && metricName) {
+      detailParts.push(`${metricName} starts at ${baselineValue}`);
+    } else if (baselineValue) {
+      detailParts.push(`baseline: ${baselineValue}`);
+    }
+    if (maturityLabel && !detailParts.length) {
+      detailParts.push(maturityLabel);
+    }
+
+    return {
+      label:
+        maturityLabel ?? (baselineValue ? "Baseline captured" : "Starting state"),
+      detail: detailParts.join(" · ") || "Workflow zero-point",
+    };
+  })();
+
+  // Purpose — the workflow's reason for existing. Names the master
+  // bottleneck so the user knows what this workflow is OPTIMIZING for.
+  const bottleneckEntity = bottleneckId
+    ? entityById.get(bottleneckId) ?? null
+    : null;
+  const purpose = bottleneckEntity
+    ? `Resolves master bottleneck: ${bottleneckEntity.name}`
+    : activeGoal?.title
+      ? `Pursues goal: ${activeGoal.title}`
+      : null;
+
+  const meta: WorkflowMeta = {
+    causal_density: causalDensity,
+    causal_edge_count: causalEdgeCount,
+    causally_anchored_count: causallyAnchoredCount,
+    baseline_anchor,
+    purpose,
+  };
+
+  return { stages, connections, meta };
 }
 
 // ── Status visual config ──
@@ -683,6 +890,33 @@ function StageCard({
                 </span>
               )}
             </div>
+            {/* Per-stage rationale — answers "why is this stage here?"
+                Distinguishes earned-by-causal-edges placement from
+                tie-broken-by-importance placement so the user can audit
+                the order. Color-coded: gray=neutral starting node,
+                indigo=causally anchored, amber=tie-broken (honest
+                limitation). */}
+            <p
+              className={cn(
+                "text-[10px] mt-0.5 truncate",
+                stage.precedence.causally_anchored
+                  ? "text-indigo-600"
+                  : stage.precedence.predecessors.length === 0 &&
+                      stage.precedence.rationale.startsWith("starting")
+                    ? "text-gray-500"
+                    : "text-amber-700",
+              )}
+              title={
+                stage.precedence.predecessors.length > 0
+                  ? `Predecessors: ${stage.precedence.predecessors
+                      .map((p) => `${p.entity_name} (${p.relation})`)
+                      .join(", ")}`
+                  : stage.precedence.rationale
+              }
+            >
+              {stage.precedence.causally_anchored ? "↳ " : "·  "}
+              {stage.precedence.rationale}
+            </p>
             {/* Quick variable summary when collapsed */}
             {!expanded && stage.variables.length > 0 && (
               <p className="text-[10px] text-gray-400 mt-0.5 truncate">
@@ -1026,10 +1260,13 @@ export function DigitalTwinFlowchart({
   activeGoal,
   onEntityClick,
   infrastructureMap,
+  proposedSpec,
+  currentTwinState,
+  space,
 }: DigitalTwinFlowchartProps) {
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set());
 
-  const { stages, connections } = useMemo(
+  const { stages, connections, meta } = useMemo(
     () =>
       buildWorkflowModel(
         entities,
@@ -1038,11 +1275,16 @@ export function DigitalTwinFlowchart({
         synthesisData,
         activeGoal,
         infrastructureMap,
+        space ?? null,
       ),
-    [entities, edges, cycles, synthesisData, activeGoal, infrastructureMap],
+    [entities, edges, cycles, synthesisData, activeGoal, infrastructureMap, space],
   );
 
-  // Delta totals for the header + legend
+  // Delta totals for the header + legend (legacy fallback when no proposal
+  // snapshot exists). Reads from infrastructure_map.core_components[].status,
+  // which is the LATEST strategy's claim — honest about the current proposal
+  // but loses the audit trail when the strategy regenerates. The new diff
+  // strip below uses a frozen proposal snapshot when available.
   const deltaCounts = useMemo(() => {
     let newCount = 0;
     let strengthenCount = 0;
@@ -1061,6 +1303,25 @@ export function DigitalTwinFlowchart({
     }
     return { newCount, strengthenCount, existsCount };
   }, [stages]);
+
+  // Proposed-vs-actual diff. Falls back to `no_proposal` when no snapshot is
+  // available; the strip component renders nothing in that case so the
+  // legacy deltaCounts pill takes over below.
+  const proposalDiff = useMemo(
+    () =>
+      proposedSpec && currentTwinState
+        ? computeTwinProposalDiff({
+            proposedSpec,
+            currentEntities: entities,
+            currentTwinState,
+          })
+        : null,
+    [proposedSpec, currentTwinState, entities],
+  );
+  const hasProposalDiff =
+    proposalDiff !== null &&
+    proposalDiff.fidelity !== "no_proposal" &&
+    proposalDiff.chips.length > 0;
 
   const feedbackLoops = useMemo(
     () => synthesisData?.feedback_loops ?? [],
@@ -1104,36 +1365,49 @@ export function DigitalTwinFlowchart({
         <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wider flex-1">
           Digital Twin — Your Workflow
         </h3>
-        {/* Delta counters — only rendered when the strategy's infrastructure plan is attached */}
-        {(deltaCounts.newCount > 0 || deltaCounts.strengthenCount > 0) && (
-          <div className="flex items-center gap-1.5">
-            {deltaCounts.newCount > 0 && (
-              <span
-                className="inline-flex items-center gap-1 rounded-full bg-teal-600 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white"
-                title="Components the strategy adds on top of your baseline"
-              >
-                <Sparkles className="h-2.5 w-2.5" />
-                {deltaCounts.newCount} new
-              </span>
-            )}
-            {deltaCounts.strengthenCount > 0 && (
-              <span
-                className="inline-flex items-center gap-1 rounded-full bg-amber-500 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white"
-                title="Existing components the strategy strengthens"
-              >
-                <Hammer className="h-2.5 w-2.5" />
-                {deltaCounts.strengthenCount} amplified
-              </span>
-            )}
-            {deltaCounts.existsCount > 0 && (
-              <span
-                className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-gray-500"
-                title="Baseline components already in your setup"
-              >
-                {deltaCounts.existsCount} baseline
-              </span>
-            )}
-          </div>
+        {/* Header strip:
+            - When a frozen proposal snapshot is attached, render the
+              proposed-vs-actual diff (honest audit of "did the materialized
+              twin match what was approved?").
+            - Else fall back to the legacy infrastructure_map status pill,
+              which shows the LATEST strategy's claim — useful when no
+              snapshot exists yet (older spaces, mid-generation states). */}
+        {hasProposalDiff && proposalDiff ? (
+          <TwinProposalDiffStrip diff={proposalDiff} />
+        ) : (
+          (deltaCounts.newCount > 0 || deltaCounts.strengthenCount > 0) && (
+            <div
+              className="flex items-center gap-1.5"
+              title="Showing the latest strategy's claimed deltas. Approve a twin proposal to enable the proposed-vs-actual audit."
+            >
+              {deltaCounts.newCount > 0 && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-teal-600 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white"
+                  title="Components the strategy claims to add on top of your baseline"
+                >
+                  <Sparkles className="h-2.5 w-2.5" />
+                  {deltaCounts.newCount} new
+                </span>
+              )}
+              {deltaCounts.strengthenCount > 0 && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-500 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white"
+                  title="Existing components the strategy claims to strengthen"
+                >
+                  <Hammer className="h-2.5 w-2.5" />
+                  {deltaCounts.strengthenCount} amplified
+                </span>
+              )}
+              {deltaCounts.existsCount > 0 && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-gray-500"
+                  title="Baseline components already in your setup"
+                >
+                  {deltaCounts.existsCount} baseline
+                </span>
+              )}
+            </div>
+          )
         )}
         <span className="text-[10px] text-gray-400">
           {stages.length} stages · {stages.reduce((s, st) => s + st.variables.length, 0)} variables
@@ -1141,6 +1415,61 @@ export function DigitalTwinFlowchart({
       </div>
 
       <div className="p-4 space-y-3">
+        {/* Workflow purpose + baseline anchor — gives the user an explicit
+            "you are here" zero-point and names what the workflow optimizes
+            for. Without this the cards read as a generic 87-stage list with
+            no orienting frame. Renders only when the workflow has at least
+            one of the two — purpose OR baseline — to surface. */}
+        {(meta.purpose || meta.baseline_anchor) && (
+          <div className="rounded-lg border border-gray-200 bg-gradient-to-br from-gray-50 to-white px-3 py-2.5">
+            <div className="flex items-start gap-3">
+              <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-indigo-100 text-indigo-600 text-[10px] font-bold">
+                0
+              </div>
+              <div className="min-w-0 flex-1">
+                {meta.baseline_anchor && (
+                  <>
+                    <p className="text-[9px] font-semibold uppercase tracking-wider text-indigo-600">
+                      You are here · {meta.baseline_anchor.label}
+                    </p>
+                    <p className="text-[11px] text-gray-700 mt-0.5">
+                      {meta.baseline_anchor.detail}
+                    </p>
+                  </>
+                )}
+                {meta.purpose && (
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    {meta.purpose}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Honesty banner — when the order isn't earned by causal
+            precedence, surface that instead of letting the user assume
+            "stage 1 must come first because it depends on nothing." This
+            is the answer to "why does Data Privacy Management come at
+            stage 1?" — it doesn't, in any meaningful sense; it just lost
+            the importance tie-break. */}
+        {stages.length >= 4 && meta.causal_density < 0.3 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 flex items-start gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 text-amber-600 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-800">
+                Order is approximate
+              </p>
+              <p className="text-[11px] text-amber-900 mt-0.5">
+                Only {meta.causally_anchored_count} of {stages.length} stages
+                have a causal predecessor. The rest are ordered by importance
+                — not dependency. Add causal/temporal edges between processes
+                to firm this up.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Goal progress overlay */}
         {activeGoal && stages.length > 0 && (
           <GoalProgressOverlay activeGoal={activeGoal} stages={stages} />

@@ -18,6 +18,8 @@ import {
   createThreadOnShape,
   isTypingTarget,
   updateAssetCardStatus,
+  updateProbeTrailNodeStatus,
+  pollProbeBranch,
 } from "./interaxis-canvas-helpers";
 import type { Entity, Edge, Space } from "@/types";
 import { KG_NODE_TIER_SIZE } from "./shapes/kg-node-shape";
@@ -68,6 +70,7 @@ import {
   BrainstormPanel,
   hasAnyActiveFeature,
 } from "./chrome/brainstorm-panel";
+import { QuestionDeepDivePanel } from "./chrome/question-deep-dive-panel";
 import { BrainstormToggleButton } from "./chrome/brainstorm-toggle-button";
 import { BrainstormContextProvider } from "./brainstorm-context";
 import {
@@ -139,6 +142,7 @@ import {
   setCanvasDispatcher,
   setCanvasExtractionReviewer,
   setCanvasStickyPinner,
+  setCanvasCardPinner,
 } from "@/lib/canvas/canvas-bus";
 import { useAIReceipts } from "./hooks/use-ai-receipts";
 import {
@@ -242,6 +246,11 @@ export function InteraxisCanvas({
   // + honest status badges and wait for their primitives to land.
   const brainstorm = useBrainstormSettings(space.id);
   const [brainstormPanelOpen, setBrainstormPanelOpen] = useState(false);
+  const [deepDiveState, setDeepDiveState] = useState<{
+    question: string;
+    context: string;
+    originShapeId: string | null;
+  } | null>(null);
   const [advancedContextOpen, setAdvancedContextOpen] = useState(false);
   const [contextOverride, setContextOverride] = useState<ContextOverride | null>(null);
   // Wave 2: URL-param-driven drawers (synthesis / intelligence / inventory).
@@ -1368,6 +1377,41 @@ export function InteraxisCanvas({
     [editor, activeSticky],
   );
 
+  const handleOpenDeepDive = useCallback(
+    (q: string) => {
+      setDeepDiveState({
+        question: q,
+        context: activeSticky?.props.text ?? "",
+        originShapeId: activeSticky?.id ?? null,
+      });
+      setBrainstormPanelOpen(false);
+    },
+    [activeSticky],
+  );
+
+  const handleDeepDiveBack = useCallback(() => {
+    setDeepDiveState(null);
+    setBrainstormPanelOpen(true);
+  }, []);
+
+  const handleDeepDiveMaterialize = useCallback(
+    async (text: string) => {
+      if (!editor) return;
+      const placement = deepDiveState?.originShapeId
+        ? (() => {
+            const b = editor.getShapePageBounds(
+              deepDiveState.originShapeId as TLShapeId,
+            );
+            return b
+              ? { x: Math.round(b.maxX + 140), y: Math.round(b.midY) }
+              : undefined;
+          })()
+        : undefined;
+      await materialize(text, placement);
+    },
+    [editor, deepDiveState, materialize],
+  );
+
   // ── Phase 9a/b: Probability-space rings (now multi-selection aware) ──
   // For every selected KG entity, anchor a rings overlay at its shape
   // midpoint. Multi-select is the canonical trigger for intersection
@@ -1685,6 +1729,34 @@ export function InteraxisCanvas({
       if (!editor) return;
       createStickyAtCenter(editor, { text, color: "yellow" });
     });
+    // Card pinner — places a library asset as its proper canvas shape
+    // (app-card, strategy-card, etc.) at the viewport centre. Used by
+    // sidebar panels that want to pin a rich card without going through
+    // the drag-and-drop path (e.g. the strategy drawer's "Send to canvas").
+    const unregisterCardPinner = setCanvasCardPinner((payload) => {
+      if (!editor) return;
+      const def = getAssetClass(payload.class);
+      if (!def) {
+        console.warn("[canvas] canvasPinAsCard: unknown class", payload.class);
+        return;
+      }
+      const spec = def.toShapeProps(payload);
+      if (!spec) return;
+      const viewport = editor.getViewportPageBounds();
+      const cx = viewport.midX;
+      const cy = viewport.midY;
+      const id = createShapeId();
+      editor.markHistoryStoppingPoint(`pin-card-${payload.class}-${payload.id}`);
+      editor.createShape({
+        id,
+        type: spec.type,
+        x: Math.round(cx - spec.w / 2),
+        y: Math.round(cy - spec.h / 2),
+        props: spec.props,
+      });
+      editor.select(id);
+      editor.zoomToSelection({ animation: { duration: 300 } });
+    });
     const unregisterDispatch = setCanvasDispatcher(async (call) => {
       const { actionKey, payload, spaceId, appId } = call;
       if (actionKey === "activate") {
@@ -1725,6 +1797,7 @@ export function InteraxisCanvas({
       unregisterDispatch();
       unregisterReviewer();
       unregisterStickyPinner();
+      unregisterCardPinner();
     };
     // extractionReview.open is stable across renders (useCallback in
     // the hook); intentionally NOT in deps so we don't re-register on
@@ -3001,6 +3074,163 @@ export function InteraxisCanvas({
     return () => window.removeEventListener("dock:probe", handler);
   }, [editor]);
 
+  // ── Probe trail branch-click + collapse listeners (2026-07-04) ────
+  //
+  // probe-trail-shape dispatches these when the user clicks a sub-
+  // question or the result terminal. Branch-click fires research-deep
+  // against the clicked sub-question; collapse stubs out for now (the
+  // full "fold trail into a TrailBadge on source card" gesture is a
+  // follow-up — current behavior is just a toast acknowledging the
+  // intent, the trail stays on canvas).
+  useEffect(() => {
+    if (!editor) return;
+    type BranchClickDetail = {
+      trailId: string | null;
+      nodeId: string;
+      question: string | null;
+      search_hint: string | null;
+      sourceEntityId: string;
+    };
+    const onBranchClick = async (ev: Event) => {
+      const d = (ev as CustomEvent<BranchClickDetail>).detail;
+      if (!d?.question || !d.nodeId) return;
+      // Flip the clicked node from idle → working so the breathing
+      // glow turns on. updateProbeTrailNodeStatus walks the trail
+      // JSON, mutates the matching node, and re-stringifies into the
+      // shape prop.
+      updateProbeTrailNodeStatus(editor, d.trailId, d.nodeId, "working");
+
+      // Fire research-deep against the clicked sub-question. The
+      // existing canvas SSE stream picks up the run; the rail's
+      // activity feed will tick as findings arrive.
+      let responseId: string | null = null;
+      try {
+        const promptBody =
+          `Conduct deep research on this question, scoped to a specific concept in the user's knowledge graph.\n\n` +
+          `Question: ${d.question}\n\n` +
+          (d.search_hint ? `Suggested search: ${d.search_hint}\n\n` : "") +
+          `Find evidence, mechanisms, contradictions, and connections that resolve this question or refine its scope. ` +
+          `Tie findings back to the source entity in the existing graph.`;
+        const res = await fetch("/api/pipeline/research-deep", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            action: "start",
+            spaceId: space.id,
+            prompt: promptBody,
+            focusAreas: [d.question],
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          toast.error("Research kickoff failed", {
+            description: err.error ?? `HTTP ${res.status}`,
+          });
+          // Mark the node as error so it doesn't spin forever.
+          updateProbeTrailNodeStatus(editor, d.trailId, d.nodeId, "error");
+          return;
+        }
+        const startData = (await res.json()) as {
+          responseId?: string;
+          runId?: string;
+        };
+        responseId = startData.responseId ?? null;
+        toast.success("Research started", {
+          description: "Trail node will update as findings land (~2-10 min).",
+        });
+      } catch (err) {
+        toast.error("Research kickoff failed", {
+          description: err instanceof Error ? err.message : "network",
+        });
+        updateProbeTrailNodeStatus(editor, d.trailId, d.nodeId, "error");
+        return;
+      }
+
+      // ── Poll loop: research-deep is async OpenAI background mode.
+      // Poll every 8s up to 12 min. On completion flip the node to
+      // 'result'; on failure or timeout flip to 'error'. Re-checks
+      // shape existence each tick so polling stops gracefully if the
+      // user deleted the trail.
+      if (responseId) {
+        void pollProbeBranch({
+          editor,
+          spaceId: space.id,
+          responseId,
+          trailId: d.trailId,
+          nodeId: d.nodeId,
+          onResult: () => {
+            toast.success("Research complete", {
+              description: "Findings landed in the canvas. Trail node updated.",
+            });
+            // Refresh the rail's pulse so the new findings surface in
+            // Locked insights / Live activity.
+            window.dispatchEvent(new CustomEvent("rail:refresh"));
+          },
+          onError: (msg) => {
+            toast.error("Research failed", { description: msg });
+          },
+        });
+      }
+    };
+
+    type CollapseDetail = {
+      trailId: string | null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      shapeId: any;
+      sourceEntityId: string;
+      resultCount: number;
+      /** Intended next state. Provided by the shape so the toggle
+       *  is deterministic regardless of the listener's view. */
+      nextCollapsed?: boolean;
+    };
+    const onCollapse = (ev: Event) => {
+      const d = (ev as CustomEvent<CollapseDetail>).detail;
+      if (!d?.shapeId) return;
+      // Resolve current shape to find its current bounds + collapsed
+      // state, then flip + resize. Two render modes:
+      //   • Expanded: 560×220 full trail with all nodes + bezier edges
+      //   • Collapsed: 220×40 'Probe · N branches' pill (drag-able)
+      // The trailJson stays intact across the toggle so re-expanding
+      // is instant + no re-fetch.
+      const shape = editor.getShape(d.shapeId);
+      if (!shape) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sa = shape as any;
+      if (sa.type !== "probe-trail") return;
+      const currentlyCollapsed = !!sa.props.collapsed;
+      const next =
+        typeof d.nextCollapsed === "boolean" ? d.nextCollapsed : !currentlyCollapsed;
+      const COLLAPSED_W = 220;
+      const COLLAPSED_H = 40;
+      const EXPANDED_W = 560;
+      const EXPANDED_H = 220;
+      editor.updateShape({
+        id: d.shapeId,
+        type: "probe-trail",
+        props: {
+          collapsed: next,
+          w: next ? COLLAPSED_W : EXPANDED_W,
+          h: next ? COLLAPSED_H : EXPANDED_H,
+        },
+      });
+      // Bring focus to the toggled shape so the user immediately sees
+      // the new mode. Skip animation on collapse (it's quick) but
+      // animate on expand so the trail unfurl reads as a deliberate
+      // gesture.
+      editor.select(d.shapeId);
+      if (!next) {
+        editor.zoomToSelection({ animation: { duration: 280 } });
+      }
+    };
+
+    window.addEventListener("probe-trail:branch-click", onBranchClick);
+    window.addEventListener("probe-trail:collapse", onCollapse);
+    return () => {
+      window.removeEventListener("probe-trail:branch-click", onBranchClick);
+      window.removeEventListener("probe-trail:collapse", onCollapse);
+    };
+  }, [editor, space.id]);
+
   return (
     <CanvasAssetCatalogProvider spaceId={space.id}>
     <CanvasHierarchyContext.Provider value={hierarchyContextValue}>
@@ -3257,7 +3487,7 @@ export function InteraxisCanvas({
       {!quietMode && (
         <>
           <BrainstormPanel
-            open={brainstormPanelOpen}
+            open={brainstormPanelOpen && !deepDiveState}
             onClose={() => setBrainstormPanelOpen(false)}
             settings={brainstorm}
             // Unified panel: ambient context flows in here so the
@@ -3266,7 +3496,20 @@ export function InteraxisCanvas({
             onDecompose={handleDecompose}
             onJumpToEntity={handleJumpToEntity}
             onAppendQuestion={handleAppendQuestion}
+            onDeepDive={handleOpenDeepDive}
           />
+          {deepDiveState && (
+            <QuestionDeepDivePanel
+              question={deepDiveState.question}
+              context={deepDiveState.context}
+              spaceId={space.id}
+              editor={editor}
+              originShapeId={deepDiveState.originShapeId}
+              relatedEntityNames={hudCtx.relatedEntities.map((e) => e.name)}
+              onBack={handleDeepDiveBack}
+              onMaterialize={handleDeepDiveMaterialize}
+            />
+          )}
         </>
       )}
 
@@ -3374,6 +3617,66 @@ export function InteraxisCanvas({
                     err,
                   ),
                 );
+              }
+
+              // ── Chain-result poll (2026-07-04 fix) ─────────────────
+              //
+              // The decompose chain (Phase 2a) now runs in after() on
+              // the server — the route response returns immediately
+              // with HITL commit results, but the chain's entities/
+              // edges land in the DB over the next 30-180s without
+              // emitting events to a runId we're subscribed to. Poll
+              // refreshSpaceEntities every 10s for up to 3 minutes
+              // after a "Commit + Decompose" so chain entities paint
+              // as they land. Stops early if no growth observed for
+              // 30s.
+              if (
+                result.full_decompose_requested === true &&
+                refreshSpaceEntities
+              ) {
+                const POLL_INTERVAL_MS = 10_000;
+                const MAX_POLL_MS = 3 * 60_000;
+                const STAGNANT_CUTOFF_MS = 30_000;
+                let lastGrowthAt = Date.now();
+                let lastSeenCount = result.entity_ids.length;
+                const start = Date.now();
+                const tick = async () => {
+                  if (Date.now() - start > MAX_POLL_MS) return;
+                  if (Date.now() - lastGrowthAt > STAGNANT_CUTOFF_MS) return;
+                  try {
+                    const refreshed = await refreshSpaceEntities();
+                    // refreshSpaceEntities returns whatever the
+                    // useSpaceData hook returns — usually an entities
+                    // array or an object with one. Check both shapes
+                    // defensively because the hook's signature isn't
+                    // typed at this call site.
+                    let count: number | null = null;
+                    if (Array.isArray(refreshed)) {
+                      count = refreshed.length;
+                    } else if (
+                      refreshed &&
+                      typeof refreshed === "object" &&
+                      "entities" in refreshed &&
+                      Array.isArray(
+                        (refreshed as { entities: unknown }).entities,
+                      )
+                    ) {
+                      count = (refreshed as { entities: unknown[] }).entities
+                        .length;
+                    }
+                    if (count !== null && count > lastSeenCount) {
+                      lastSeenCount = count;
+                      lastGrowthAt = Date.now();
+                    }
+                  } catch (err) {
+                    console.warn(
+                      "[extraction-review] chain-result poll tick failed:",
+                      err,
+                    );
+                  }
+                  window.setTimeout(tick, POLL_INTERVAL_MS);
+                };
+                window.setTimeout(tick, POLL_INTERVAL_MS);
               }
             }
           }}

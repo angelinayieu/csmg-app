@@ -105,7 +105,7 @@ export function LabControlPanel({
       <div className="mb-2 flex items-center justify-between">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[8.5px] font-semibold uppercase tracking-[0.18em] text-[var(--lab-text-dim)]">
-            ⚙ Control Panel
+            ⚙ Tuning
           </span>
           {tuningTargetName ? (
             <div

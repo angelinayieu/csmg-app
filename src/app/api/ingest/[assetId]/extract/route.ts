@@ -279,59 +279,65 @@ export async function POST(
     typeof asset.normalized_text === "string" &&
     asset.normalized_text.trim().length > 50;
 
-  let decomposeRunId: string | null = null;
-  let decomposeError: string | null = null;
-
-  if (fullDecomposeReq && hasParsedText) {
-    try {
-      // Internal POST mirrors the canvas/materialize → playground/materialize
-      // pattern: forward the cookie so RLS + auth work, hit our own
-      // origin so the backing route owns its full pipeline (event bus,
-      // structuring, sanitize, persist).
-      const origin = new URL(request.url).origin;
-      const cookieHeader = request.headers.get("cookie") ?? "";
-      const decompRes = await fetch(`${origin}/api/pipeline/decompose`, {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie: cookieHeader },
-        body: JSON.stringify({
-          text: asset.normalized_text,
-          existingSpaceId: asset.space_id,
-          // Tells the Phase 8 epistemic router to apply Pearl's ladder
-          // + epistemic_status overlays. We know it's a paper because
-          // asset_class said so — don't make the classifier guess.
-          epistemicClassification:
-            asset.asset_class === "research_pdf" ? "research_paper" : null,
-          // Deep so all 6 tiers + framework overlays fire. The paper is
-          // the source of truth; we want the multi-pass extraction.
-          reasoningDepth: "deep",
-          // Soft signal that this came from a paper — appears in run
-          // metadata + entity provenance via decompose's normal path.
-          intent: {
-            paper_asset_id: assetId,
-            chained_from: "ingest_extract",
-          },
-        }),
-      });
-      if (decompRes.ok) {
-        const decompPayload = (await decompRes.json().catch(() => ({}))) as {
-          runId?: string;
-          run_id?: string;
-        };
-        decomposeRunId = decompPayload.runId ?? decompPayload.run_id ?? null;
-      } else {
-        // Non-fatal — the HITL commit succeeded and the user has their
-        // entities + edges already. The decompose chain failing just
-        // means they don't get the deeper extraction this round.
-        const errBody = (await decompRes.json().catch(() => ({}))) as { error?: string };
-        decomposeError = errBody.error ?? `decompose HTTP ${decompRes.status}`;
+  // ── Phase 2a — schedule the decompose chain (background) ──────────
+  //
+  // Decompose can take 30-180s for a deep multi-pass extraction. Awaiting
+  // it inline blew through extract's 30s maxDuration (HTTP 504 at the
+  // gateway). Worse, the user-facing extract() promise rejected before
+  // the HITL refresh could run, so the candidate entities never painted.
+  // Move the chain to after() so the route response carries the HITL
+  // commit results immediately; the chain runs in the background and
+  // its events stream to the same SSE channel the canvas already
+  // listens on (when existingRunId is provided).
+  //
+  // The client doesn't get back a decompose runId on this path — it's
+  // not known synchronously. The client mitigates by polling
+  // refreshSpaceEntities for ~3 minutes after extract returns, catching
+  // chain entities/edges as they land.
+  const willChain = fullDecomposeReq && hasParsedText;
+  const decomposeError: string | null = null;
+  if (willChain) {
+    after(async () => {
+      try {
+        const origin = new URL(request.url).origin;
+        const cookieHeader = request.headers.get("cookie") ?? "";
+        const decompRes = await fetch(`${origin}/api/pipeline/decompose`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: cookieHeader },
+          body: JSON.stringify({
+            text: asset.normalized_text,
+            existingSpaceId: asset.space_id,
+            // Tells the Phase 8 epistemic router to apply Pearl's ladder
+            // + epistemic_status overlays. We know it's a paper because
+            // asset_class said so — don't make the classifier guess.
+            epistemicClassification:
+              asset.asset_class === "research_pdf" ? "research_paper" : null,
+            // Deep so all 6 tiers + framework overlays fire. The paper is
+            // the source of truth; we want the multi-pass extraction.
+            reasoningDepth: "deep",
+            // Soft signal that this came from a paper — appears in run
+            // metadata + entity provenance via decompose's normal path.
+            intent: {
+              paper_asset_id: assetId,
+              chained_from: "ingest_extract",
+            },
+          }),
+        });
+        if (!decompRes.ok) {
+          const errBody = (await decompRes.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          console.warn(
+            `[ingest/extract] background decompose chain failed (non-fatal): ${errBody.error ?? decompRes.status}`,
+          );
+        }
+      } catch (err) {
         console.warn(
-          `[ingest/extract] decompose chain failed (non-fatal): ${decomposeError}`,
+          "[ingest/extract] background decompose chain threw (non-fatal):",
+          err,
         );
       }
-    } catch (err) {
-      decomposeError = sanitizeErrorMessage(err);
-      console.warn("[ingest/extract] decompose chain threw (non-fatal):", err);
-    }
+    });
   }
 
   // ── Initiative 2 — auto-fire quantitative extractions ─────────────
@@ -550,9 +556,12 @@ export async function POST(
     entity_ids: result.insertedIds,
     skipped_count: result.skippedCount,
     committed_at: committedAt,
-    decompose_run_id: decomposeRunId,
+    // Chain runs in after() — runId isn't known synchronously. The
+    // client polls refreshSpaceEntities for ~3 min to catch results.
+    // null here signals "queued, no runId yet" rather than "didn't fire."
+    decompose_run_id: null,
     decompose_error: decomposeError,
-    full_decompose_requested: fullDecomposeReq && hasParsedText,
+    full_decompose_requested: willChain,
     auto_quantitative_queued:
       autoExtractQuantitative &&
       defaultFullDecompose(asset.asset_class) &&

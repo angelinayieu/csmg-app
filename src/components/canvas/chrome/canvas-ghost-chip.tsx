@@ -50,7 +50,10 @@ export function CanvasGhostChip({
           : "translate(-50%, -130%)",
       }}
     >
-      <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-gray-200/80 bg-white/95 px-1 py-1 shadow-[0_6px_24px_-6px_rgba(0,0,40,0.25)] backdrop-blur-md">
+      <div
+        className="pointer-events-auto flex items-center gap-1 rounded-full border border-gray-200/80 bg-white/95 px-1 py-1 shadow-[0_6px_24px_-6px_rgba(0,0,40,0.25)] backdrop-blur-md"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
         <span className="pl-2 pr-1 text-[11px] font-semibold text-gray-500 max-w-[180px] truncate" title={entityName}>
           Predicted: {entityName}
         </span>

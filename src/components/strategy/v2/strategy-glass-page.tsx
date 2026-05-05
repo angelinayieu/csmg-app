@@ -26,6 +26,8 @@ import { StrategyVersionHistory } from "@/components/strategy/strategy-version-h
 import { PinnedSynthesesSection } from "./pinned-syntheses-section";
 import { LeaderboardSection } from "./leaderboard-section";
 import { useRouter } from "next/navigation";
+import { canvasPinAsCard } from "@/lib/canvas/canvas-bus";
+import { strategyAssetClass } from "@/components/canvas/library/classes/strategies";
 import type { ViewKind } from "./view-kind";
 import type { Entity } from "@/types";
 import type {
@@ -488,11 +490,13 @@ export function StrategyGlassPage() {
           <StrategyVersionHistory
             spaceId={ctx.space.id}
             onSendToCanvas={(snapshot) => {
-              router.push(
-                `/app/space/${ctx.space.id}/whiteboard?place_strategy=${encodeURIComponent(
-                  snapshot.id,
-                )}`,
-              );
+              // When the canvas bus has a pinner (i.e. we're already on the
+              // whiteboard with the strategy drawer open), place the card
+              // directly without a page navigation.
+              const payload = strategyAssetClass.toDragPayload(snapshot, {
+                spaceId: ctx.space.id,
+              });
+              canvasPinAsCard(payload);
             }}
           />
         </div>
