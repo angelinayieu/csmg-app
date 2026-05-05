@@ -37,6 +37,13 @@ import {
   findPredictorAgent,
   hydrateSubStrategy,
 } from "./predictor-agent";
+import {
+  readRuntimeSettings,
+  isCronDue,
+  lastRunColumn,
+  type RuntimeLastRuns,
+  type RuntimeSettings,
+} from "@/lib/runtime/runtime-settings";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DB = SupabaseClient<Database> | any;
@@ -111,6 +118,63 @@ export async function runAgentRuntime(db: DB): Promise<SchedulerResult> {
     appsById.set(a.id, a);
   }
 
+  // Phase A — per-space runtime gating. Pull settings + last-run column
+  // for every distinct space referenced by these apps in ONE roundtrip.
+  // The last_agent_runtime_at column is a top-level timestamp (not nested
+  // in JSONB) so concurrent crons can stamp it atomically without the
+  // read-modify-write race the original Phase A design had.
+  const spaceIds = Array.from(
+    new Set(
+      ((appRows ?? []) as AppRow[])
+        .map((a) => a.space_id)
+        .filter((s): s is string => !!s),
+    ),
+  );
+  const settingsBySpace = new Map<string, RuntimeSettings>();
+  const lastRunsBySpace = new Map<string, RuntimeLastRuns>();
+  if (spaceIds.length > 0) {
+    const { data: spaceRows } = await db
+      .from("spaces")
+      .select("id, runtime_settings, last_agent_runtime_at, last_predictions_resolve_at")
+      .in("id", spaceIds);
+    for (const row of (spaceRows ?? []) as Array<{
+      id: string;
+      runtime_settings: unknown;
+      last_agent_runtime_at: string | null;
+      last_predictions_resolve_at: string | null;
+    }>) {
+      settingsBySpace.set(row.id, readRuntimeSettings(row.runtime_settings));
+      lastRunsBySpace.set(row.id, {
+        agent_runtime: row.last_agent_runtime_at,
+        predictions_resolve: row.last_predictions_resolve_at,
+      });
+    }
+  }
+  // Spaces that pass the due-check this tick. We stamp last_run on each
+  // AFTER the run completes (or skips with a useful side effect); see
+  // the bulk update at the end of this function.
+  const dueSpaceIds = new Set<string>();
+  const skippedSpaceLog: Array<{ space_id: string; reason: string }> = [];
+  for (const sid of spaceIds) {
+    const settings = settingsBySpace.get(sid);
+    if (!settings) {
+      // No row found for this space (RLS oddity, deleted, etc.) — be
+      // permissive: defaults say enabled, so let the run proceed.
+      dueSpaceIds.add(sid);
+      continue;
+    }
+    const lastRuns = lastRunsBySpace.get(sid) ?? {
+      agent_runtime: null,
+      predictions_resolve: null,
+    };
+    const check = isCronDue(settings, "agent_runtime", lastRuns);
+    if (check.due) {
+      dueSpaceIds.add(sid);
+    } else {
+      skippedSpaceLog.push({ space_id: sid, reason: check.reason });
+    }
+  }
+
   // Load the most recent completed agent_runs for these apps so we can
   // compute "is the agent due?" without N+1 queries.
   const { data: recentRuns } = await db
@@ -140,6 +204,13 @@ export async function runAgentRuntime(db: DB): Promise<SchedulerResult> {
   for (const subRow of subStrategies) {
     const appRow = appsById.get(subRow.app_id);
     if (!appRow) continue;
+    // Per-space gate: drop apps whose space is paused/disabled or under
+    // its cadence threshold. Done HERE (not at the subStrategies query)
+    // so the skip stays auditable in the result.skipped count.
+    if (appRow.space_id && !dueSpaceIds.has(appRow.space_id)) {
+      result.skipped++;
+      continue;
+    }
     const subStrategy = hydrateSubStrategy(subRow);
     const predictor = findPredictorAgent(subStrategy);
     if (!predictor) continue;
@@ -168,11 +239,40 @@ export async function runAgentRuntime(db: DB): Promise<SchedulerResult> {
     );
   }
 
+  // Stamp last_agent_runtime_at on every space we actually touched this
+  // tick. Atomic single-column write (no JSONB merge) so concurrent
+  // crons can't race. We iterate spaces (not apps) so a space with N
+  // apps gets one stamp, not N.
+  const spacesActuallyRun = new Set<string>();
+  for (const job of eligible) {
+    const sid = job.appRow.space_id;
+    if (sid && dueSpaceIds.has(sid)) spacesActuallyRun.add(sid);
+  }
+  if (spacesActuallyRun.size > 0) {
+    const stampedAt = new Date().toISOString();
+    const column = lastRunColumn("agent_runtime");
+    const { error: stampErr } = await db
+      .from("spaces")
+      .update({ [column]: stampedAt })
+      .in("id", Array.from(spacesActuallyRun));
+    if (stampErr) {
+      console.warn(`[agent-runtime] last_run bulk stamp failed:`, stampErr);
+    }
+  }
+
   console.log(
     `[agent-runtime] scanned=${result.scanned} eligible=${result.eligible} ` +
     `ran=${result.ran} skipped=${result.skipped} failed=${result.failed} ` +
-    `outcomes=${JSON.stringify(result.by_outcome)}`,
+    `outcomes=${JSON.stringify(result.by_outcome)} ` +
+    `spaces_skipped_by_runtime_settings=${skippedSpaceLog.length}`,
   );
+  if (skippedSpaceLog.length > 0) {
+    // Trim to first 10 to avoid unbounded log lines on large fleets.
+    console.log(
+      `[agent-runtime] skipped spaces: ${JSON.stringify(skippedSpaceLog.slice(0, 10))}` +
+        (skippedSpaceLog.length > 10 ? ` (+${skippedSpaceLog.length - 10} more)` : ""),
+    );
+  }
 
   return result;
 }

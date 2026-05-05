@@ -171,6 +171,51 @@ export const CascadeRow = forwardRef<CascadeRowHandle, CascadeRowProps>(function
             />
           </div>
         ))}
+        {row.tactics.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {row.tactics.map((t, idx) => (
+              <span
+                key={`${row.index}-tactic-${idx}`}
+                className="inline-flex items-center gap-1.5 rounded-md"
+                style={{
+                  padding: "3px 8px",
+                  fontSize: 10.5,
+                  lineHeight: 1.3,
+                  background: "rgba(255,255,255,0.6)",
+                  color: "rgba(11,13,18,0.62)",
+                  border: "1px solid rgba(11,13,18,0.08)",
+                  maxWidth: "100%",
+                }}
+              >
+                {t.timeframe && (
+                  <span
+                    className="font-mono"
+                    style={{
+                      fontSize: 8.5,
+                      fontWeight: 700,
+                      letterSpacing: "0.1em",
+                      textTransform: "uppercase",
+                      color: p.accent,
+                      opacity: 0.85,
+                    }}
+                  >
+                    {t.timeframe.replace(/_/g, " ")}
+                  </span>
+                )}
+                <span
+                  style={{
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    maxWidth: 280,
+                  }}
+                >
+                  {t.text.length > 56 ? `${t.text.slice(0, 53)}…` : t.text}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Proxy indicators */}

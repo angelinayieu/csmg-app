@@ -19,6 +19,9 @@ export function PerspectiveCard({ row }: { row: CascadeRowVM }) {
         style={{ width: 4, background: p.accent }}
       />
 
+      {/* Subtitle is the LLM-generated perspective name (domain-adapted),
+          not the palette label. Palette stays as color only — falling back to
+          p.label only if the recommendation somehow shipped without a name. */}
       <div
         className="font-mono"
         style={{
@@ -31,7 +34,7 @@ export function PerspectiveCard({ row }: { row: CascadeRowVM }) {
           marginBottom: 7,
         }}
       >
-        {p.label}
+        {row.categoryLabel?.trim() || p.label}
       </div>
       <p
         style={{

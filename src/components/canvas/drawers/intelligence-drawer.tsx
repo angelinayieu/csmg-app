@@ -88,9 +88,14 @@ function IntelligenceDrawerBody({ open, tabId }: { open: boolean; tabId: string 
   })();
 
   return (
-    <div className="flex h-full flex-col">
-      <DrawerStrategyHeader spine={spine} loading={loading} error={error} />
-      <div className="min-h-0 flex-1 overflow-y-auto">{tabBody}</div>
-    </div>
+    <>
+      <DrawerStrategyHeader
+        spine={spine}
+        loading={loading}
+        error={error}
+        className="sticky top-0 z-10"
+      />
+      {tabBody}
+    </>
   );
 }

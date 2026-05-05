@@ -14,7 +14,7 @@ import type { StrategyReasoningTrace } from "@/types/strategy-reasoning";
 import type { CausalChain } from "@/types/causal-chains";
 import type { SynthesisData } from "@/types/synthesis";
 import type { ImprovementGoal } from "@/types/goals";
-import { perspectiveKey, type PerspectiveKey } from "./strategy-palette";
+import { paletteSlot, type PaletteSlot } from "./strategy-palette";
 
 // ── Hero ──
 
@@ -61,7 +61,13 @@ export interface CascadeObjective {
    * the UI hides the progress bar instead of rendering 0% as if measured.
    */
   progressPct?: number;
-  tag: "lead" | "lag";
+  /**
+   * Lead = forward-looking signal; Lag = trailing/measured outcome. `null`
+   * when the perspective doesn't carry enough information to call it either
+   * way — render the chip ONLY when this is non-null. Defaulting to "lead"
+   * when uncertain (the previous behaviour) was misleading.
+   */
+  tag: "lead" | "lag" | null;
   valueLabel?: string;
   description?: string;
   matchedChainId?: string;         // for mechanism expansion
@@ -80,16 +86,43 @@ export interface CascadeProxy {
    */
   sig?: "ok" | "warn" | "bad";
   trend?: "up" | "down" | "stable";
+  /**
+   * `true` when `value` is a placeholder ("Baseline", empty, em-dash, etc.)
+   * rather than a real measurement. Drives muted rendering + tooltip in
+   * ProxyIndicatorList instead of showing the literal placeholder string.
+   */
+  placeholder?: boolean;
+}
+
+/**
+ * Subordinate tactical step. Rendered as a small chip beneath the row's
+ * primary objective — NOT as a parallel objective card. Promoting actions
+ * to objective cards previously caused visual redundancy because action.text
+ * frequently paraphrases perspective.objective.
+ */
+export interface CascadeTactic {
+  text: string;
+  timeframe?: "now" | "short_term" | "medium_term" | "long_term";
+  entityId?: string;
 }
 
 export interface CascadeRowVM {
   index: number;                   // 1-indexed, for numbox
-  paletteKey: PerspectiveKey;
+  paletteKey: PaletteSlot;
   perspective: StrategyPerspective;
   question: string;                // = perspective.objective
   categoryLabel: string;           // = perspective.name
-  weight: number;                  // 0-1, for the weight bar
+  /**
+   * 0-1 weight for the cascade row's bar. Set ONLY when the LLM provided
+   * `key_metric.contribution_to_health` — a real signal. `null` when the
+   * value would be a confidence-bucket fallback; the UI shows a confidence
+   * chip in that case instead of a fake-precise decimal.
+   */
+  weight: number | null;
+  /** Set when the LLM provided a confidence bucket. Independent of weight. */
+  confidence: "high" | "moderate" | "low" | null;
   objectives: CascadeObjective[];
+  tactics: CascadeTactic[];
   proxies: CascadeProxy[];
   proxyCount: number;              // total, may exceed proxies.length
 }
@@ -228,29 +261,63 @@ export function buildHeroVM(args: {
   };
 }
 
-// Derive perspective weight 0-1.  contribution_to_health is 0-100; confidence bucket if missing.
-function deriveWeight(p: StrategyPerspective): number {
+// Derive perspective weight from the LLM's contribution_to_health (0-100).
+// Returns null when no real signal is available — the UI then shows a
+// confidence chip instead of a fake-precise decimal derived from the bucket.
+// (The previous fallback returned 0.85/0.7/0.5 from confidence bucket which
+// rendered as e.g. "0.70" with two-decimal precision — fake rigor.)
+function deriveWeight(p: StrategyPerspective): number | null {
   const c = p.key_metric?.contribution_to_health;
-  if (typeof c === "number" && c >= 0) return Math.max(0.2, Math.min(1, c / 100));
-  switch (p.confidence) {
-    case "high":
-      return 0.85;
-    case "moderate":
-      return 0.7;
-    case "low":
-      return 0.5;
-    default:
-      return 0.7;
+  if (typeof c === "number" && c >= 0) {
+    return Math.max(0.2, Math.min(1, c / 100));
   }
+  return null;
 }
 
-// Lead vs Lag: leading indicators trend, lagging measure past state.
-// Heuristic: if key_metric has trend_direction, it's lead; if action.timeframe is long, lag.
-function deriveLeadLag(p: StrategyPerspective, i: number): "lead" | "lag" {
+function deriveConfidence(
+  p: StrategyPerspective,
+): "high" | "moderate" | "low" | null {
+  if (p.confidence === "high" || p.confidence === "moderate" || p.confidence === "low") {
+    return p.confidence;
+  }
+  return null;
+}
+
+// Lead vs Lag — only assign when the perspective gives us a real signal:
+//   - explicit key_metric.trend_direction → "lead" (we're tracking direction)
+//   - first action timeframe = now/short_term → "lead" (forward-looking work)
+//   - first action timeframe = medium/long_term → "lag" (trailing outcome)
+//   - neither → null (the row's badge is hidden rather than faking a value)
+// The previous heuristic mapped any perspective whose color-slot landed on
+// "finance" to "lag", which was both arbitrary and dependent on the now-dead
+// regex name-mapper in strategy-palette.ts.
+function deriveLeadLag(p: StrategyPerspective): "lead" | "lag" | null {
   if (p.key_metric?.trend_direction) return "lead";
-  // Finance is typically lagging, customers/internal/learning lead
-  const key = perspectiveKey(p.name, i);
-  return key === "finance" ? "lag" : "lead";
+  const tf = p.actions?.[0]?.timeframe;
+  if (tf === "now" || tf === "short_term") return "lead";
+  if (tf === "medium_term" || tf === "long_term") return "lag";
+  return null;
+}
+
+// True when a metric value is a placeholder (LLM-emitted "Baseline" /
+// "TBD" / em-dash / empty) rather than a real measurement. Used to suppress
+// nonsense progress strings like "Baseline → 95%" and to mute the proxy
+// rendering for unmeasured metrics.
+const PLACEHOLDER_VALUES = new Set([
+  "",
+  "—",
+  "-",
+  "n/a",
+  "na",
+  "tbd",
+  "baseline",
+  "current",
+  "current value",
+  "unknown",
+]);
+function isPlaceholderValue(v: string | undefined | null): boolean {
+  if (v == null) return true;
+  return PLACEHOLDER_VALUES.has(v.trim().toLowerCase());
 }
 
 function objectiveProgress(p: StrategyPerspective): number | undefined {
@@ -346,44 +413,74 @@ export function buildCascadeRow(
     });
   }
 
-  // Secondary objectives derived from actions (one row per action, up to 2).
-  // Action objectives have no measured progress until execution kicks in, so
-  // progressPct is left undefined — the UI hides the bar rather than showing
-  // a flat 0% that reads like a tracked-but-failing metric.
-  const actionObjs: CascadeObjective[] = (p.actions ?? []).slice(0, 3).map((a, ai) => ({
-    id: `p${i + 1}-obj-action-${ai}`,
-    title: a.text,
-    progressPct: undefined,
-    tag: a.timeframe === "long_term" || a.timeframe === "medium_term" ? "lag" : "lead",
-    description: a.infrastructure_note,
-    matchedChainId: matchedChain?.id,
-    sourceEntityIds: a.entity_id ? [a.entity_id] : [],
+  // Actions become subordinate tactic chips, not parallel objective cards.
+  // Exception: when the perspective has no key_metric, promote the first
+  // action so the row isn't empty — the remaining actions still ship as chips.
+  const allActions = p.actions ?? [];
+  let tacticActions = allActions;
+  if (objectives.length === 0 && allActions.length > 0) {
+    const a = allActions[0];
+    objectives.push({
+      id: `p${i + 1}-obj-fallback`,
+      title: a.text,
+      progressPct: undefined,
+      tag: a.timeframe === "long_term" || a.timeframe === "medium_term" ? "lag" : "lead",
+      description: a.infrastructure_note,
+      matchedChainId: matchedChain?.id,
+      sourceEntityIds: a.entity_id ? [a.entity_id] : [],
+      timeframe: a.timeframe,
+    });
+    tacticActions = allActions.slice(1);
+  }
+
+  const tactics: CascadeTactic[] = tacticActions.slice(0, 4).map((a) => ({
+    text: a.text,
     timeframe: a.timeframe,
+    entityId: a.entity_id,
   }));
 
-  // Prefer action-based objectives when key_metric absent
-  const combined = [...objectives, ...actionObjs].slice(0, 3);
-
-  // Proxies: key_metric + all micro_tactics whose macro_link matches this
+  // Proxies: key_metric + micro_tactics whose macro_link points at this
   // perspective. `sig` is intentionally undefined — there's no metric_tracker
   // posterior in hand here to compute ok/warn/bad against, and hardcoding
   // "ok" was a structural lie. Once trackers feed into this builder, set sig
   // from the latest observation vs target delta.
+  //
+  // Linking: prefer exact match on perspective.id or .name. The legacy
+  // first-word substring match remains as a final fallback (older snapshots
+  // shipped macro_link as a free-form phrase) but it's gated on length to
+  // avoid matching tiny words ("a", "is").
+  //
+  // Dedup by lowercased name — without this, key_metric and a tactic.metric
+  // sharing a name produced the "two identical rows" symptom (e.g. two
+  // 'Reminder Efficiency 70%' entries) on the cascade.
   const proxies: CascadeProxy[] = [];
+  const seenProxy = new Set<string>();
+  const pushProxy = (proxy: CascadeProxy) => {
+    const key = proxy.name.trim().toLowerCase();
+    if (!key || seenProxy.has(key)) return;
+    seenProxy.add(key);
+    proxies.push(proxy);
+  };
   if (p.key_metric) {
-    proxies.push({
+    pushProxy({
       name: p.key_metric.name,
       value: p.key_metric.current,
       unit: p.key_metric.unit,
       trend: p.key_metric.trend_direction,
     });
   }
-  const relevantTactics = (recommendation.micro_tactics ?? []).filter((t) =>
-    (t.macro_link ?? "").toLowerCase().includes((p.name ?? "").toLowerCase().split(" ")[0] ?? ""),
-  );
-  for (const t of relevantTactics.slice(0, 4)) {
+  const relevantTactics = (recommendation.micro_tactics ?? []).filter((t) => {
+    const link = (t.macro_link ?? "").toLowerCase().trim();
+    if (!link) return false;
+    if (p.id && link === p.id.toLowerCase()) return true;
+    if (p.name && link === p.name.toLowerCase()) return true;
+    const firstWord = (p.name ?? "").toLowerCase().split(/\s+/)[0] ?? "";
+    return firstWord.length > 3 && link.includes(firstWord);
+  });
+  for (const t of relevantTactics) {
     if (!t.metric) continue;
-    proxies.push({
+    if (proxies.length >= 4 + (p.key_metric ? 1 : 0)) break;
+    pushProxy({
       name: t.metric.name,
       value:
         t.metric.current_value !== undefined ? String(t.metric.current_value) : t.metric.target,
@@ -399,9 +496,10 @@ export function buildCascadeRow(
     question: p.objective ?? "",
     categoryLabel: p.name,
     weight,
-    objectives: combined,
+    objectives,
+    tactics,
     proxies,
-    proxyCount: proxies.length + Math.max(0, relevantTactics.length - 4),
+    proxyCount: proxies.length,
   };
 }
 

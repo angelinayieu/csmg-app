@@ -236,6 +236,22 @@ export function GoalSetter({
       }
 
       const data = await res.json();
+
+      // Fire-and-forget: now that a goal exists, kick the strategy
+      // pipeline so the downstream cascade (strategy → apps → interventions)
+      // starts producing without the user needing to manually click
+      // Re-evaluate. The endpoint is async; we don't block the modal close
+      // on it. On failure, the existing 15-min cron path still picks it up.
+      if (data.goal?.id && spaceId) {
+        void fetch("/api/pipeline/strategy-refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ spaceId }),
+        }).catch(() => {
+          /* non-fatal — cron fallback or manual Re-evaluate still works */
+        });
+      }
+
       if (prefill?.key?.startsWith("intel_decision:")) {
         const decisionId = prefill.key.slice("intel_decision:".length);
         if (decisionId) {

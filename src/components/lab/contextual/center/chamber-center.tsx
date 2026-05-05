@@ -114,10 +114,14 @@ export function ChamberCenter({
 
   return (
     <>
-      {/* 3D chamber */}
+      {/* 3D chamber. Trajectory mode is rendered upstream (ContextualLab
+          swaps the chamber for the TrajectoryPanel before this component
+          mounts), so here we narrow to the chamber's own ChamberMode
+          enum — falling back to "structure" defensively if the upstream
+          ever lets a stale LabMode leak through. */}
       <ContextualChamber3D
         compWeights={prediction.compWeights}
-        mode={mode}
+        mode={mode === "trajectory" ? "structure" : mode}
         populationSamples={populationSamples}
         onSubunitHover={setHovered}
         onSubunitClick={setInspected}

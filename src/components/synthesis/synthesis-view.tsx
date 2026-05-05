@@ -2497,20 +2497,38 @@ export function SynthesisView({
           )}
 
           {/* Sub-section: External Context (Agent 7 entities) */}
-          {externalEntities.length > 0 && (
-            <div className={synthData?.worth_considering?.length ? "mt-5" : "mt-3"}>
-              <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-purple-600">
-                <span>External Context</span>
-                <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-500">
-                  {externalEntities.length}
-                </span>
-              </h4>
-              <p className="mb-3 text-[11px] text-gray-500">
-                Field context from outside your situation. Toggle in Graph View to see on the graph.
-              </p>
-              <ExternalContextSection externalEntities={externalEntities} />
-            </div>
-          )}
+          {externalEntities.length > 0 && (() => {
+            // Count root frameworks and bridged ones for the header. Roots
+            // exclude SUB_/SUB2_ decompositions (those nest under their
+            // X-parent in the section). "Bridged" = has a bridge edge to
+            // an internal entity, i.e. actively shaping the strategy.
+            const rootCount = externalEntities.filter(
+              (e) => !/^SUB2?_x\d+_/.test(e.entity_id),
+            ).length;
+            const bridgedIds = new Set<string>();
+            for (const b of bridges) {
+              bridgedIds.add(b.source_entity_id);
+              bridgedIds.add(b.target_entity_id);
+            }
+            const bridgedRootCount = externalEntities.filter(
+              (e) => !/^SUB2?_x\d+_/.test(e.entity_id) && bridgedIds.has(e.id),
+            ).length;
+            const subtitle =
+              bridgedRootCount > 0
+                ? `${bridgedRootCount} bridged to your situation${rootCount > bridgedRootCount ? ` · ${rootCount - bridgedRootCount} observatory` : ""}`
+                : `${rootCount} field item${rootCount === 1 ? "" : "s"}`;
+            return (
+              <div className={synthData?.worth_considering?.length ? "mt-5" : "mt-3"}>
+                <h4 className="mb-2 flex items-baseline gap-2 text-xs font-semibold uppercase tracking-wider text-purple-600">
+                  <span>External Context</span>
+                  <span className="text-[10px] font-normal normal-case tracking-normal text-gray-500">
+                    {subtitle}
+                  </span>
+                </h4>
+                <ExternalContextSection externalEntities={externalEntities} bridges={bridges} />
+              </div>
+            );
+          })()}
 
           {/* Sub-section: Cross-Context Bridges */}
           {crossContextInsights.length > 0 && (

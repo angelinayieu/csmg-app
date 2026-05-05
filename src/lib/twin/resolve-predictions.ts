@@ -23,6 +23,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database.types";
 import { tagDeviation } from "@/types/prediction";
+import {
+  readRuntimeSettings,
+  isCronDue,
+  lastRunColumn,
+  type RuntimeLastRuns,
+  type RuntimeSettings,
+} from "@/lib/runtime/runtime-settings";
 
 // Supabase query-builder generics collapse to `never` across module
 // boundaries — mirror the app-generator.ts convention of accepting
@@ -96,7 +103,110 @@ export async function resolvePredictions(
   result.scanned = openRows?.length ?? 0;
   if (!openRows || openRows.length === 0) return result;
 
+  // Phase A — per-space runtime gating. Predictions are stored in
+  // prediction_ledger but settings live on `spaces`. Pull settings for
+  // every distinct space referenced by this batch in one roundtrip,
+  // then skip predictions whose space says "don't resolve me right now"
+  // (paused, disabled, or under cadence). Default-permissive: missing
+  // rows fall to defaults via readRuntimeSettings.
+  const spaceIdsInBatch: string[] = Array.from(
+    new Set(
+      (openRows as Array<{ space_id?: string | null }>)
+        .map((r) => r.space_id ?? null)
+        .filter((s): s is string => !!s),
+    ),
+  );
+  const settingsBySpace = new Map<string, RuntimeSettings>();
+  const lastRunsBySpace = new Map<string, RuntimeLastRuns>();
+  if (spaceIdsInBatch.length > 0) {
+    const { data: spaceRows } = await db
+      .from("spaces")
+      .select("id, runtime_settings, last_agent_runtime_at, last_predictions_resolve_at")
+      .in("id", spaceIdsInBatch);
+    for (const row of (spaceRows ?? []) as Array<{
+      id: string;
+      runtime_settings: unknown;
+      last_agent_runtime_at: string | null;
+      last_predictions_resolve_at: string | null;
+    }>) {
+      settingsBySpace.set(row.id, readRuntimeSettings(row.runtime_settings));
+      lastRunsBySpace.set(row.id, {
+        agent_runtime: row.last_agent_runtime_at,
+        predictions_resolve: row.last_predictions_resolve_at,
+      });
+    }
+  }
+  const dueSpaceIds = new Set<string>();
+  let skippedByGate = 0;
+  for (const sid of spaceIdsInBatch) {
+    const settings = settingsBySpace.get(sid);
+    if (!settings) {
+      // Missing row → default-permissive
+      dueSpaceIds.add(sid);
+      continue;
+    }
+    const lastRuns = lastRunsBySpace.get(sid) ?? {
+      agent_runtime: null,
+      predictions_resolve: null,
+    };
+    if (isCronDue(settings, "predictions_resolve", lastRuns).due) {
+      dueSpaceIds.add(sid);
+    }
+  }
+
+  // P0.2 — pause-aware staleCutoff. The default 14-day stale window is
+  // measured from `now`; if a space was paused for 30 days, predictions
+  // that matured during the pause and missed their resolution window
+  // would all get abandoned in one tick on unpause. To prevent that,
+  // shift the effective staleCutoff for each space backward by the time
+  // since its last successful resolve — predictions get the SAME 14-day
+  // window measured from when the resolver was last allowed to act on
+  // them, rather than wall-clock time.
+  //
+  // Concretely: if last_predictions_resolve_at is 30 days ago,
+  // staleCutoff for that space is (last_resolve - 14d) = 44 days ago,
+  // not (now - 14d) = 14 days ago. Predictions whose horizon is between
+  // 14 and 44 days ago survive this tick and get a real shot at
+  // resolution; the user can keep logging observations.
+  const staleCutoffBySpace = new Map<string, string>();
+  for (const sid of dueSpaceIds) {
+    const lastRuns = lastRunsBySpace.get(sid);
+    const lastResolveIso = lastRuns?.predictions_resolve ?? null;
+    if (!lastResolveIso) {
+      staleCutoffBySpace.set(sid, staleCutoff);
+      continue;
+    }
+    const lastResolveMs = Date.parse(lastResolveIso);
+    if (Number.isNaN(lastResolveMs)) {
+      staleCutoffBySpace.set(sid, staleCutoff);
+      continue;
+    }
+    // Effective cutoff is min(last_resolve - 14d, now - 14d) — i.e., the
+    // OLDER of the two so we never tighten the cutoff.
+    const effectiveCutoffMs = Math.min(
+      lastResolveMs - STALE_HOURS * 60 * 60 * 1000,
+      now.getTime() - STALE_HOURS * 60 * 60 * 1000,
+    );
+    staleCutoffBySpace.set(sid, new Date(effectiveCutoffMs).toISOString());
+  }
+
+  // Track which spaces actually had a prediction resolve in this batch.
+  // After the row loop we recompute twin_state once per affected space —
+  // this is what makes the dashboard's Twin chip "breathe with reality"
+  // (Tier 6 design intent). Without this, the twin sits frozen at its
+  // synthesize-time value even after surprises land in the ledger.
+  const resolvedBySpaceId = new Set<string>();
+
   for (const row of openRows) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rowSpaceId = (row as any).space_id as string | null;
+    if (rowSpaceId && !dueSpaceIds.has(rowSpaceId)) {
+      // Skip — leave the row open; the next cron tick may find it eligible.
+      // This is intentionally cheap (no DB write) so paused spaces don't
+      // accrue any cost on the hourly tick.
+      skippedByGate++;
+      continue;
+    }
     // Qualitative — text-only predictions, no numeric comparison possible.
     // Mark 'qualitative' and leave for validator agents to resolve.
     if (row.predicted_value === null) {
@@ -115,11 +225,15 @@ export async function resolvePredictions(
       }
       result.qualitative++;
       result.by_tag.qualitative = (result.by_tag.qualitative ?? 0) + 1;
+      if (rowSpaceId) resolvedBySpaceId.add(rowSpaceId);
       continue;
     }
 
     // Stale-no-tracker: abandon immediately.
-    if (!row.tracker_id && row.horizon_at < staleCutoff) {
+    // Cutoff is per-space (extended for spaces that were paused) so an
+    // unpause doesn't trigger mass-abandonment of the prediction backlog.
+    const effectiveCutoff = (rowSpaceId && staleCutoffBySpace.get(rowSpaceId)) ?? staleCutoff;
+    if (!row.tracker_id && row.horizon_at < effectiveCutoff) {
       const { error: updErr } = await db
         .from("prediction_ledger")
         .update({
@@ -189,7 +303,10 @@ export async function resolvePredictions(
 
     // Still nothing? Either abandon (stale) or leave open (fresh).
     if (actual === null) {
-      if (row.horizon_at < staleCutoff) {
+      // Per-space cutoff (see staleCutoffBySpace setup at top): if the
+      // space was paused, cutoff shifts backward so unpause doesn't
+      // mass-abandon predictions that never had a real chance to resolve.
+      if (row.horizon_at < effectiveCutoff) {
         const { error: updErr } = await db
           .from("prediction_ledger")
           .update({
@@ -235,6 +352,7 @@ export async function resolvePredictions(
 
     result.resolved++;
     result.by_tag[tag] = (result.by_tag[tag] ?? 0) + 1;
+    if (rowSpaceId) resolvedBySpaceId.add(rowSpaceId);
 
     // Phase 1 Step 12 — outcome → confidence feedback loop.
     // Apply a small Bayesian-ish nudge to strategy-relevant entities
@@ -403,9 +521,104 @@ export async function resolvePredictions(
     }
   }
 
+  // Phase A — stamp last_predictions_resolve_at on every space we
+  // actually resolved a prediction in. Atomic single-column write so
+  // concurrent crons can't race on JSONB merge (the previous design did).
+  // Done once per space at the end so N predictions in one space → one
+  // stamp, not N. Best-effort; failure is logged but doesn't block.
+  if (dueSpaceIds.size > 0) {
+    const stampedAt = new Date().toISOString();
+    const column = lastRunColumn("predictions_resolve");
+    const { error: stampErr } = await db
+      .from("spaces")
+      .update({ [column]: stampedAt })
+      .in("id", Array.from(dueSpaceIds));
+    if (stampErr) {
+      console.warn(`[resolve-predictions] last_run bulk stamp failed:`, stampErr);
+    }
+  }
+
+  // Tier 6 — twin recompute. For every space that had at least one
+  // resolution in this batch, refresh synthesis_data.twin_state so the
+  // dashboard's Twin chip reflects the new surprise/regime_shift signal.
+  // computeTwinState is pure local math (no LLM, no expensive joins),
+  // so this is cheap to do per-affected-space. Soft-fail: a recompute
+  // miss leaves the chip stale, doesn't break the resolver.
+  let twinsRecomputed = 0;
+  if (resolvedBySpaceId.size > 0) {
+    try {
+      const { computeTwinState } = await import("@/lib/twin/compute-twin-state");
+      const observationCutoff = new Date(
+        Date.now() - 14 * 24 * 60 * 60 * 1000,
+      ).toISOString(); // Last 14 days of resolved predictions
+      for (const sid of resolvedBySpaceId) {
+        try {
+          const [
+            { data: spaceRow },
+            { data: entityRows },
+            { data: edgeRows },
+            { data: cycleRows },
+            { data: predRows },
+          ] = await Promise.all([
+            db.from("spaces").select("*").eq("id", sid).single(),
+            db.from("entities").select("*").eq("space_id", sid),
+            db.from("edges").select("*").eq("space_id", sid),
+            db.from("cycles").select("*").eq("space_id", sid),
+            db
+              .from("prediction_ledger")
+              .select("status, deviation_tag, resolved_at")
+              .eq("space_id", sid)
+              .eq("status", "resolved")
+              .gte("resolved_at", observationCutoff),
+          ]);
+          if (!spaceRow) continue;
+          const synthData = (spaceRow.synthesis_data ?? {}) as Record<string, unknown>;
+          const twinState = computeTwinState(
+            spaceRow as unknown as import("@/types").Space,
+            (entityRows ?? []) as unknown as import("@/types").Entity[],
+            (edgeRows ?? []) as unknown as import("@/types").Edge[],
+            (cycleRows ?? []) as unknown as import("@/types").Cycle[],
+            synthData as unknown as import("@/types/synthesis").SynthesisData,
+            null, // activeGoal — could resolve but not strictly needed for the macro signal
+            undefined,
+            (predRows ?? []) as Array<{
+              status: "open" | "resolved" | "abandoned";
+              deviation_tag: "expected" | "regime_shift" | "surprise" | "qualitative" | null;
+              resolved_at: string | null;
+            }>,
+          );
+          const { error: twinUpdErr } = await db
+            .from("spaces")
+            .update({ synthesis_data: { ...synthData, twin_state: twinState } })
+            .eq("id", sid);
+          if (twinUpdErr) {
+            console.warn(
+              `[resolve-predictions] twin recompute write failed for space ${sid}:`,
+              twinUpdErr,
+            );
+          } else {
+            twinsRecomputed++;
+          }
+        } catch (perSpaceErr) {
+          console.warn(
+            `[resolve-predictions] twin recompute failed for space ${sid} (non-fatal):`,
+            perSpaceErr,
+          );
+        }
+      }
+    } catch (twinImportErr) {
+      console.warn(
+        "[resolve-predictions] twin recompute pass aborted (non-fatal):",
+        twinImportErr,
+      );
+    }
+  }
+
   console.log(
     `[resolve-predictions] scanned=${result.scanned} resolved=${result.resolved} ` +
-      `abandoned=${result.abandoned} qualitative=${result.qualitative} tags=${JSON.stringify(result.by_tag)}`,
+      `abandoned=${result.abandoned} qualitative=${result.qualitative} ` +
+      `tags=${JSON.stringify(result.by_tag)} skipped_by_runtime_settings=${skippedByGate} ` +
+      `twins_recomputed=${twinsRecomputed}`,
   );
 
   return result;

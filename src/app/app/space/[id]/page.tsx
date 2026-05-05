@@ -12,10 +12,12 @@ import { CommandCenterRow } from "@/components/dashboard/command-center-row";
 import { TwinSurface } from "@/components/twin/twin-surface";
 import { TwinCalibrationPanel } from "@/components/twin/twin-calibration-panel";
 import { TwinAnalyticsStrip } from "@/components/twin/twin-analytics-strip";
+import { TrajectoryPanel } from "@/components/trajectory/trajectory-panel";
 import { PendingAppsSection } from "@/components/apps/pending-apps-section";
 import { AppGenerationProgressChip } from "@/components/strategy/app-generation-progress-chip";
 import { AskSpaceView } from "@/components/space/ask-space-view";
 import { SynthesisView } from "@/components/synthesis/synthesis-view";
+import { PipelineRunHistoryPanel } from "@/components/dashboard/pipeline-run-history-panel";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { useRouter } from "next/navigation";
 
@@ -73,6 +75,12 @@ export default function SpaceDashboardPage() {
     <div className="flex flex-col gap-6 px-6 pt-6 pb-2">
       {/* Main objective hero + sub-heading */}
       <MainObjectiveBanner />
+
+      {/* Diagnostic: pipeline run history — collapsed by default, expand
+          to see which stages ran/skipped/failed. Surfaces silent skips
+          (lazy-guard cache hits, deferred apps) that would otherwise
+          look like "synthesis broken / no apps generated". */}
+      <PipelineRunHistoryPanel />
 
       {/* Live app-generation progress (chip returns null when idle, so no
           empty wrapper is rendered when not running). */}
@@ -142,6 +150,13 @@ export default function SpaceDashboardPage() {
           signal that backs the twin's risk_exposure penalty. Self-hides
           gracefully when no resolved predictions exist. */}
       {spaceId ? <TwinCalibrationPanel spaceId={spaceId} /> : null}
+
+      {/* Trajectory engine — forward projection of a chosen metric
+          under a chosen intervention. Walks the KG from the target up
+          to depth 3, runs Monte Carlo over the subgraph using each
+          edge's effect-size + temporal pooled estimates, persists the
+          result to prediction_ledger as a trajectory prediction. */}
+      {spaceId ? <TrajectoryPanel /> : null}
 
       {/* Production sequence + apps — the product-line chrome */}
       {spaceId ? (

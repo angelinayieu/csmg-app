@@ -43,8 +43,14 @@ import { InterventionList } from "./right/intervention-list";
 import { ReactionNetwork } from "./bottom/reaction-network";
 import { OutcomeDistribution } from "./bottom/outcome-distribution";
 import { ScenarioLibrary } from "./bottom/scenario-library";
+import { TrajectoryPanel } from "@/components/trajectory/trajectory-panel";
 
-export type LabMode = "structure" | "compare" | "population";
+// Trajectory mode: forward Monte Carlo projection of a chosen target
+// metric under an optional intervention. Reads the same KG (entities,
+// edges, edge.{strength, confidence, onset/peak/persistence_days_p50,
+// decay_kinetics_modal}) as the structure mode but produces a temporal
+// per-week trajectory instead of a static prediction snapshot.
+export type LabMode = "structure" | "compare" | "population" | "trajectory";
 
 export interface ContextualLabProps {
   space: Space;
@@ -131,21 +137,32 @@ export function ContextualLab({
         <TaskPicker tasks={TASKS} activeTaskId={taskId} onChange={setTaskId} />
       </aside>
 
-      {/* Center chamber */}
+      {/* Center chamber. In trajectory mode the chamber yields to the
+          TrajectoryPanel — the chamber's static snapshot of state isn't
+          informative when the user is asking a temporal question. The
+          left/right rails (subject, baseline state, task picker,
+          predicted-performance card) stay in place so the trajectory
+          query inherits the lab's full setup context. */}
       <main
-        className="relative overflow-hidden"
+        className="relative overflow-auto"
         style={{
           gridArea: "center",
           background: "linear-gradient(180deg, #ffffff, #fafafa)",
         }}
       >
-        <ChamberCenter
-          subject={subject}
-          task={task}
-          stateBag={stateBag}
-          prediction={prediction}
-          mode={mode}
-        />
+        {mode === "trajectory" ? (
+          <div className="p-4">
+            <TrajectoryPanel />
+          </div>
+        ) : (
+          <ChamberCenter
+            subject={subject}
+            task={task}
+            stateBag={stateBag}
+            prediction={prediction}
+            mode={mode}
+          />
+        )}
       </main>
 
       {/* Right rail */}

@@ -37,10 +37,16 @@ export function useCausalChainsActions(spaceId: string): CausalChainsActions {
         body: JSON.stringify({ spaceId }),
       });
       if (!res.ok) {
-        const err = await res
-          .json()
-          .catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new Error(err?.error ?? "Regeneration failed");
+        let message: string;
+        if (res.status === 504) {
+          message = "Generation timed out — the graph may be unusually large. Try again in a moment.";
+        } else if (res.status === 502 || res.status === 503) {
+          message = `Server unavailable (HTTP ${res.status}) — try again in a moment.`;
+        } else {
+          const body = await res.json().catch(() => null);
+          message = body?.error ?? `Request failed (HTTP ${res.status})`;
+        }
+        throw new Error(message);
       }
       const data = (await res.json()) as { generated_at?: string };
       setState({
@@ -50,10 +56,16 @@ export function useCausalChainsActions(spaceId: string): CausalChainsActions {
       });
       router.refresh();
     } catch (err) {
+      const message =
+        err instanceof TypeError
+          ? "Network error — check your connection and try again."
+          : err instanceof Error
+            ? err.message
+            : String(err);
       setState((s) => ({
         ...s,
         regenerating: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
       }));
     }
   }, [spaceId, router]);

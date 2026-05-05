@@ -29,6 +29,7 @@ import type { SynthesisData } from "@/types/synthesis";
 import type { TwinMacroState } from "@/types/twin";
 import { TwinStateRadar } from "./twin-state-radar";
 import { TwinHealthSparkline } from "./twin-health-sparkline";
+import { TwinTrajectorySparkline } from "./twin-trajectory-sparkline";
 import { TwinEntityAttribution } from "./twin-entity-attribution";
 
 export function TwinAnalyticsStrip() {
@@ -77,14 +78,27 @@ export function TwinAnalyticsStrip() {
             </div>
           </div>
 
-          <div className="flex flex-col items-end gap-1">
-            <span className="text-[10px] font-semibold tracking-[0.14em] uppercase text-[color:var(--muted-fg,#6b7280)]">
-              History
-            </span>
-            <TwinHealthSparkline spaceId={space.id} width={180} height={44} />
-            <span className="text-[10px] text-[color:var(--muted-fg,#86868b)]">
-              health_score across snapshots
-            </span>
+          <div className="flex flex-col items-end gap-3">
+            <div className="flex flex-col items-end gap-1">
+              <span className="text-[10px] font-semibold tracking-[0.14em] uppercase text-[color:var(--muted-fg,#6b7280)]">
+                History
+              </span>
+              <TwinHealthSparkline spaceId={space.id} width={180} height={44} />
+              <span className="text-[10px] text-[color:var(--muted-fg,#86868b)]">
+                health_score across snapshots
+              </span>
+            </div>
+            {/* Forward projection from the most recent trajectory_run.
+                Self-hides when no trajectory has been computed yet —
+                so this strip stays calm when the engine hasn't been
+                used. Once the user runs a projection, the sparkline
+                appears alongside the historical trace. */}
+            <div className="flex flex-col items-end gap-1">
+              <span className="text-[10px] font-semibold tracking-[0.14em] uppercase text-[color:var(--muted-fg,#6b7280)]">
+                Forecast
+              </span>
+              <TwinTrajectorySparkline spaceId={space.id} width={180} height={44} />
+            </div>
           </div>
         </div>
       </div>

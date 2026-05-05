@@ -30,7 +30,7 @@ import { CanvasRoomExtendPopover } from "./chrome/canvas-room-extend-popover";
 // its util into ./interaxis-canvas-shape-utils and append to the
 // array — interaxis-canvas itself doesn't need to know.
 import { SHAPE_UTILS } from "./interaxis-canvas-shape-utils";
-import type { StickyNoteShape, KGNodeShape, StrategyShape } from "./shapes/types";
+import type { StickyNoteShape, KGNodeShape, StrategyShape, AppCardShape } from "./shapes/types";
 // CanvasOverlays + the components prop passed to <Tldraw>. Adding a
 // new in-canvas overlay (chip, lasso button, hydrator, etc.) means
 // importing it inside ./interaxis-canvas-overlays — interaxis-canvas
@@ -47,6 +47,8 @@ import { useClusterFrames } from "./hooks/use-cluster-frames";
 import { entityToLayerId } from "@/lib/whiteboard/layer-config";
 import { PAINT_GLOBAL_GHOST_KG_NODES } from "@/lib/whiteboard/canvas-feature-flags";
 import { useSyncEntities } from "./hooks/use-sync-entities";
+import { useExternalExpandController } from "./hooks/use-external-expand-controller";
+import { ExternalExpandContext } from "./contexts/external-expand-context";
 import { useCanvasPersistence } from "./hooks/use-canvas-persistence";
 import { useCanvasAmbient } from "./hooks/use-canvas-ambient";
 import { useMaterialize, type MaterializeResponse } from "./hooks/use-materialize";
@@ -270,6 +272,268 @@ export function InteraxisCanvas({
   const spaceDataCtx = useSpaceData();
   const refreshSpaceEntities = spaceDataCtx.refreshEntities;
   const patchEntitySignature = spaceDataCtx.patchEntitySignature;
+
+  // ── Auto-place active goal as objective-tree shape on first mount ──
+  // Per the canvas-northstar doctrine, goals belong on the whiteboard,
+  // not just in the dashboard banner. When the user creates an ultimate
+  // goal (or one auto-detected by /api/goals/detect), we materialize it
+  // as an `objective-tree` shape using the existing library asset class
+  // (no parallel implementation). One-shot per (space, goal) — guarded by
+  // localStorage so deleting the shape doesn't auto-resurrect it.
+  useEffect(() => {
+    if (!editor) return;
+    const goal = spaceDataCtx.activeGoal;
+    if (!goal) return;
+    const flagKey = `interaxis:auto_placed_goal:${space.id}:${goal.id}`;
+    if (typeof window !== "undefined" && window.localStorage.getItem(flagKey) === "1") return;
+    const shapeId = createShapeId(`objective-${goal.id}`);
+    if (editor.getShape(shapeId)) {
+      // Shape already exists (manual drag, or previous mount). Mark
+      // placed so we don't re-attempt.
+      if (typeof window !== "undefined") window.localStorage.setItem(flagKey, "1");
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/spaces/${encodeURIComponent(space.id)}/objectives/catalog`,
+        );
+        if (!res.ok || cancelled) return;
+        const json = (await res.json()) as {
+          objectives?: Array<{
+            id: string;
+            space_id: string;
+            title: string;
+            status?: string;
+            objective_type?: string;
+            progress?: number;
+            nodeCount?: number;
+            depth?: number;
+            proposedCount?: number;
+            tree?: unknown;
+          }>;
+        };
+        const entry = (json.objectives ?? []).find((o) => o.id === goal.id);
+        if (!entry || cancelled) return;
+        if (editor.getShape(shapeId)) {
+          if (typeof window !== "undefined") window.localStorage.setItem(flagKey, "1");
+          return;
+        }
+        // Place at viewport center so the user notices it. Falls back to
+        // (0,0) if camera info is unavailable.
+        const vp = editor.getViewportPageBounds();
+        const w = 320;
+        const h = 180;
+        const x = vp ? vp.midX - w / 2 : 0;
+        const y = vp ? vp.midY - h / 2 : 0;
+        editor.markHistoryStoppingPoint(`auto-place-goal-${goal.id}`);
+        editor.createShape({
+          id: shapeId,
+          type: "objective-tree",
+          x,
+          y,
+          props: {
+            w,
+            h,
+            goalId: entry.id,
+            spaceId: entry.space_id,
+            title: entry.title,
+            status: entry.status ?? "active",
+            objectiveType: entry.objective_type ?? "maximize",
+            progress: typeof entry.progress === "number" ? entry.progress : 0,
+            nodeCount: typeof entry.nodeCount === "number" ? entry.nodeCount : 1,
+            depth: typeof entry.depth === "number" ? entry.depth : 1,
+            proposedCount:
+              typeof entry.proposedCount === "number" ? entry.proposedCount : 0,
+            treeJson: entry.tree ? JSON.stringify(entry.tree) : "",
+            expanded: false,
+          },
+        });
+        if (typeof window !== "undefined") window.localStorage.setItem(flagKey, "1");
+      } catch {
+        /* non-fatal — user can still drag from the library */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editor, spaceDataCtx.activeGoal, space.id]);
+
+  // ── Auto-cascade: strategy snapshot + app cards next to goal ──
+  // Once a goal has been placed, cascade the downstream chain onto the
+  // canvas: latest strategy snapshot to the right, app cards below it
+  // in a row. Each placement is one-shot per (space, item) so deletion
+  // is sticky. Reuses the same shape props as the library asset classes
+  // (strategies.ts + apps.ts) — no parallel implementation. The fetches
+  // soft-fail individually so an empty strategy list doesn't block apps
+  // from rendering and vice versa.
+  useEffect(() => {
+    if (!editor) return;
+    const goal = spaceDataCtx.activeGoal;
+    if (!goal) return;
+
+    let cancelled = false;
+    void (async () => {
+      // Anchor cascade off the goal card. Falls back to viewport center
+      // if the goal shape hasn't been placed yet (rare race — the
+      // previous effect normally lands first).
+      const goalShapeId = createShapeId(`objective-${goal.id}`);
+      const goalBounds = editor.getShapePageBounds(goalShapeId);
+      const vp = editor.getViewportPageBounds();
+      const goalRight = goalBounds ? goalBounds.maxX : (vp ? vp.midX + 160 : 320);
+      const goalTop = goalBounds ? goalBounds.minY : (vp ? vp.midY - 90 : 0);
+      const gap = 48;
+      const stratW = 220;
+      const stratH = 120;
+      const appW = 220;
+      const appH = 132;
+      const stratX = goalRight + gap;
+      const stratY = goalTop;
+      const appsRowY = stratY + stratH + gap;
+
+      const flag = (key: string) =>
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(key) === "1"
+          : false;
+      const setFlag = (key: string) => {
+        if (typeof window !== "undefined") window.localStorage.setItem(key, "1");
+      };
+
+      // ── Strategy card ────────────────────────────────────────────
+      try {
+        const res = await fetch(
+          `/api/spaces/${encodeURIComponent(space.id)}/strategy-snapshots`,
+        );
+        if (res.ok && !cancelled) {
+          const json = (await res.json()) as {
+            snapshots?: Array<{
+              id: string;
+              version: number;
+              label?: string | null;
+              title?: string | null;
+              status: "generated" | "reviewing" | "confirmed" | "superseded";
+              quality_score?: number | null;
+              tactic_count?: number | null;
+            }>;
+          };
+          const snap = (json.snapshots ?? [])[0]; // most recent first
+          if (snap) {
+            const stratFlag = `interaxis:auto_placed_strategy:${space.id}:${snap.id}`;
+            const stratShapeId = createShapeId(`strategy-${snap.id}`);
+            if (editor.getShape(stratShapeId)) {
+              setFlag(stratFlag);
+            } else if (!flag(stratFlag) && !cancelled) {
+              editor.markHistoryStoppingPoint(`auto-place-strategy-${snap.id}`);
+              editor.createShape<StrategyShape>({
+                id: stratShapeId,
+                type: "strategy-card",
+                x: Math.round(stratX),
+                y: Math.round(stratY),
+                props: {
+                  w: stratW,
+                  h: stratH,
+                  snapshotId: snap.id,
+                  version: snap.version,
+                  label: snap.label ?? `v${snap.version}`,
+                  title: snap.title ?? snap.label ?? `v${snap.version}`,
+                  status: snap.status,
+                  readyScore: snap.quality_score ?? null,
+                  tacticCount: snap.tactic_count ?? null,
+                  confidence: null,
+                  expanded: false,
+                },
+              });
+              setFlag(stratFlag);
+            }
+          }
+        }
+      } catch {
+        /* non-fatal — strategy may not exist yet */
+      }
+
+      if (cancelled) return;
+
+      // ── App cards (one per app, in a row under strategy) ─────────
+      try {
+        const res = await fetch(
+          `/api/apps?spaceId=${encodeURIComponent(space.id)}`,
+        );
+        if (res.ok && !cancelled) {
+          const json = (await res.json()) as {
+            apps?: Array<{
+              id: string;
+              name: string;
+              description?: string | null;
+              app_type?: string;
+              status?: string;
+              health_score?: number | null;
+              stale_reason?: string | null;
+              intervention_count?: number;
+            }>;
+          };
+          const apps = json.apps ?? [];
+          let placedSoFar = 0;
+          // Color accents mirror APP_TYPE_ACCENT in apps.ts
+          const accentFor = (t: string): string => {
+            if (t === "workflow") return "#8B5CF6";
+            if (t === "tool") return "#10B981";
+            if (t === "monitor") return "#F59E0B";
+            if (t === "integration") return "#EC4899";
+            return "#3B82F6";
+          };
+          for (const app of apps) {
+            if (cancelled) break;
+            const appFlag = `interaxis:auto_placed_app:${space.id}:${app.id}`;
+            const appShapeId = createShapeId(`app-${app.id}`);
+            if (editor.getShape(appShapeId)) {
+              setFlag(appFlag);
+              continue;
+            }
+            if (flag(appFlag)) continue;
+            const appTypeStr = app.app_type ?? "dashboard";
+            editor.markHistoryStoppingPoint(`auto-place-app-${app.id}`);
+            editor.createShape<AppCardShape>({
+              id: appShapeId,
+              type: "app-card",
+              x: Math.round(stratX + placedSoFar * (appW + gap)),
+              y: Math.round(appsRowY),
+              props: {
+                w: appW,
+                h: appH,
+                appId: app.id,
+                spaceId: space.id,
+                name: app.name,
+                appType: appTypeStr as AppCardShape["props"]["appType"],
+                status: (app.status ?? "proposed") as AppCardShape["props"]["status"],
+                healthScore: app.health_score ?? null,
+                staleReason: (app.stale_reason ?? null) as AppCardShape["props"]["staleReason"],
+                hasInterventions: (app.intervention_count ?? 0) > 0,
+                interventionCount: app.intervention_count ?? 0,
+                accent: accentFor(appTypeStr),
+                expanded: false,
+                p10: null,
+                p50: null,
+                p90: null,
+                cardSpecJson: null,
+              },
+            });
+            setFlag(appFlag);
+            placedSoFar++;
+          }
+        }
+      } catch {
+        /* non-fatal — apps may not be materialized yet */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editor, spaceDataCtx.activeGoal, space.id]);
+
   // Counter bumped whenever a pipeline run terminates. Consumed by
   // the credit chip so the balance updates the moment a commit or
   // cancel lands — without this the user sees stale balance until
@@ -379,7 +643,11 @@ export function InteraxisCanvas({
       } else if (layerFilter === "external") {
         matches = layer === "external" || layer === "bridge";
       }
-      const targetOpacity = matches ? 1 : 0.15;
+      // Hidden = opacity 0, not faded. The previous 0.15 fade still
+      // consumed visual layout space and made it ambiguous whether the
+      // entity was "in the picture" or not. With 0 the toggle is a true
+      // show/hide.
+      const targetOpacity = matches ? 1 : 0;
       if (Math.abs((ks.opacity ?? 1) - targetOpacity) > 0.01) {
         shapesToUpdate.push({ id: ks.id, type: "kg-node", opacity: targetOpacity });
       }
@@ -511,6 +779,13 @@ export function InteraxisCanvas({
   // topbar Entities chip, OR open a subject's lab to see the
   // connected KG inside the chamber.
   useSyncEntities(editor, { entities, edges, enabled: false });
+
+  // ── Click-to-expand for external X / XSIG nodes ──
+  // Powers the "Show sub-components" affordance that fans SUB / SUB2
+  // children below their parent on demand. Edges with relationship_type
+  // "has_component" wire parent → child; the controller creates ghost
+  // shapes on expand and deletes them on collapse.
+  const externalExpandApi = useExternalExpandController(editor, entities, edges);
 
   // ── Auto-surface synthesis insights as cards on the canvas ──
   useSynthesisSeeder(editor, { space, entities, enabled: true });
@@ -2534,6 +2809,7 @@ export function InteraxisCanvas({
     <CanvasReactionsContext.Provider value={reactionsContextValue}>
     <CanvasSubjectScopesContext.Provider value={subjectScopesContextValue}>
     <CanvasAssetDerivedEntitiesContext.Provider value={assetDerivedContextValue}>
+    <ExternalExpandContext.Provider value={externalExpandApi}>
     <CardConnectModeProvider>
     <div
       ref={rootRef}
@@ -3538,6 +3814,7 @@ export function InteraxisCanvas({
       </RunEventStoreProvider>
     </div>
     </CardConnectModeProvider>
+    </ExternalExpandContext.Provider>
     </CanvasAssetDerivedEntitiesContext.Provider>
     </CanvasSubjectScopesContext.Provider>
     </CanvasReactionsContext.Provider>

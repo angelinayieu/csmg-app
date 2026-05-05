@@ -2742,6 +2742,25 @@ function trackSignatureDeepened(
 // (auto-cluster, probability-rings) flip in lockstep when the flag
 // changes.
 
+// External-knowledge prefix detection. Mirrors the sidebar grouping in
+// external-context-section.tsx so canvas + sidebar agree on what counts
+// as external. SUB_/SUB2_ are decomposition leaves and rolled up under
+// their X-parent in the sidebar — we suppress them entirely on canvas
+// to avoid 60+ extra ghost nodes flooding the unfurl. X1-X5 frameworks
+// and XSIG_ hidden signals still paint, but get a dashed-purple border
+// + "Field" badge so users can tell field context from their own
+// situation entities at a glance.
+const SUB_PREFIX = /^SUB2?_x\d+_/;
+const EXTERNAL_PREFIX = /^(X\d+|XSIG_)/;
+
+function isSubComponentCode(code: string | null | undefined): boolean {
+  return !!code && SUB_PREFIX.test(code);
+}
+
+function isExternalCode(code: string | null | undefined): boolean {
+  return !!code && EXTERNAL_PREFIX.test(code);
+}
+
 function paintEntity(
   editor: Editor,
   event: Extract<StructuralEvent, { type: "entity_added" }>,
@@ -2749,6 +2768,14 @@ function paintEntity(
 ) {
   if (state.ghostsByEntity.has(event.entityId)) return;
   if (!state.anchor) return;
+  // Suppress SUB_/SUB2_ decomposition leaves from the canvas — they
+  // belong nested under their X-parent in the sidebar, not as standalone
+  // ghost nodes. We still register in the hub tracker so later edges
+  // and synthesis math that reference them resolve cleanly.
+  if (isSubComponentCode(event.entityCode)) {
+    state.hubTracker.addEntity(event.entityId, event.name);
+    return;
+  }
   if (!PAINT_GLOBAL_GHOST_KG_NODES) {
     // Still register the entity in the hub tracker so cross-axis
     // entity-name lookups continue to resolve (used by the synthesis
@@ -2801,6 +2828,7 @@ function paintEntity(
             category: normalizeCategory(event.entityCategory),
             tier: tierForImportance(event.importance),
             confirmedPulse: nextPulse,
+            isExternal: isExternalCode(event.entityCode),
           },
         });
       } catch {
@@ -2904,6 +2932,7 @@ function paintEntity(
       isConvergence: false,
       isGhost: true,
       confirmedPulse: 0,
+      isExternal: isExternalCode(event.entityCode),
     },
   });
   state.ghostsByEntity.set(event.entityId, shapeId);

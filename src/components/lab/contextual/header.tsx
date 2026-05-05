@@ -26,6 +26,7 @@ const MODE_LABEL: Record<LabMode, string> = {
   structure: "Structure",
   compare: "Compare",
   population: "Population",
+  trajectory: "Trajectory",
 };
 
 export function ContextualLabHeader({
@@ -101,7 +102,7 @@ export function ContextualLabHeader({
 
       {/* Mode tabs */}
       <nav className="flex gap-0.5 rounded-[9px] bg-[#f2f2f4] p-[3px]">
-        {(["structure", "compare", "population"] as LabMode[]).map((m) => (
+        {(["structure", "compare", "population", "trajectory"] as LabMode[]).map((m) => (
           <button
             key={m}
             type="button"

@@ -15,6 +15,7 @@ import { useCanvasReactions } from "../canvas-reactions-context";
 import { useCanvasSubjectScopes } from "../canvas-subject-scopes-context";
 import { useCanvasHierarchy } from "../canvas-hierarchy-context";
 import { useCardConnectMode } from "../card-connect-mode-context";
+import { useExternalExpand } from "../contexts/external-expand-context";
 import { CardActionMenu } from "../card-action-menu";
 import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
 import { ReactionHoverPreview } from "@/components/shared/reaction-preview";
@@ -211,6 +212,7 @@ export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
     // render as plain ghosts). Default 0 = no halo, identical to
     // pre-D5b ghost rendering. See docs/KG_DEPTH_CRITIQUE.md §9 D5b.
     drillConfidence: T.number,
+    isExternal: T.boolean,
   };
 
   override canResize = () => true;
@@ -239,6 +241,7 @@ export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
       isGhost: false,
       confirmedPulse: 0,
       drillConfidence: 0,
+      isExternal: false,
     };
   }
 
@@ -252,8 +255,18 @@ export class KGNodeShapeUtil extends BaseBoxShapeUtil<KGNodeShape> {
 }
 
 function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
-  const { name, description, layer, category, tier, weight, isLeverage, isRisk, isBottleneck, isConvergence, isGhost, entityId, confirmedPulse, drillConfidence } =
+  const { name, description, layer, category, tier, weight, isLeverage, isRisk, isBottleneck, isConvergence, isGhost, entityId, confirmedPulse, drillConfidence, isExternal } =
     shape.props;
+  // External-knowledge accent. Purple aligns with the "Domain Expertise"
+  // synthesis section so the visual language matches across views.
+  const EXTERNAL_ACCENT = "#7c3aed";
+  // Decomposition expand affordance for X / XSIG framework nodes — the
+  // controller fans the SUB / SUB2 children below the parent on click,
+  // and deletes them on collapse. Chip only renders when the entity
+  // actually has has_component children so we don't show dead taps.
+  const externalExpand = useExternalExpand();
+  const expandable = isExternal && entityId ? externalExpand.hasChildren(entityId) : false;
+  const expanded = isExternal && entityId ? externalExpand.isExpanded(entityId) : false;
 
   // P1 #5 — one-shot enter animation. Tldraw keeps the same React
   // instance mounted for the life of a shape, so this ref tracks
@@ -461,13 +474,15 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                 ? "rgba(255,255,255,0.6)"
                 : "rgba(255,255,255,0.92)",
             backdropFilter: "blur(12px)",
-            border: isGhost
-              ? `1.5px dashed ${layerColor}`
-              : isHero
-                ? "1.5px solid rgba(255,255,255,0.3)"
-                : isKey
-                  ? `2px solid ${layerColor}`
-                  : "1px solid rgba(10,30,80,0.08)",
+            border: isExternal
+              ? `1.5px dashed ${EXTERNAL_ACCENT}`
+              : isGhost
+                ? `1.5px dashed ${layerColor}`
+                : isHero
+                  ? "1.5px solid rgba(255,255,255,0.3)"
+                  : isKey
+                    ? `2px solid ${layerColor}`
+                    : "1px solid rgba(10,30,80,0.08)",
             boxShadow: isGhost
               ? `0 0 0 1px ${layerColor}22, 0 6px 18px -8px ${layerColor}55`
               : isHero
@@ -481,7 +496,7 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
               '-apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif',
           }}
         >
-          {isGhost && (
+          {(isGhost || isExternal) && (
             <div
               style={{
                 position: "absolute",
@@ -490,16 +505,50 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
                 fontSize: 8.5,
                 fontWeight: 700,
                 letterSpacing: "0.14em",
-                color: layerColor,
-                background: layerCfg.bg,
-                border: `1px solid ${layerCfg.border}`,
+                color: isExternal ? EXTERNAL_ACCENT : layerColor,
+                background: isExternal ? "rgba(124,58,237,0.08)" : layerCfg.bg,
+                border: `1px solid ${isExternal ? "rgba(124,58,237,0.35)" : layerCfg.border}`,
                 padding: "2px 6px",
                 borderRadius: 4,
                 textTransform: "uppercase",
               }}
             >
-              Ghost
+              {isExternal ? "Field" : "Ghost"}
             </div>
+          )}
+          {expandable && entityId && (
+            <button
+              type="button"
+              onPointerDownCapture={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                externalExpand.toggle(entityId);
+              }}
+              title={expanded ? "Collapse sub-components" : "Show sub-components"}
+              style={{
+                position: "absolute",
+                bottom: -10,
+                left: "50%",
+                transform: "translateX(-50%)",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 8px",
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: "0.04em",
+                color: EXTERNAL_ACCENT,
+                background: "white",
+                border: `1px solid rgba(124,58,237,0.4)`,
+                borderRadius: 999,
+                boxShadow: "0 2px 6px -2px rgba(124,58,237,0.35)",
+                cursor: "pointer",
+                pointerEvents: "all",
+              }}
+            >
+              <span style={{ fontSize: 11, lineHeight: 1 }}>{expanded ? "−" : "+"}</span>
+              <span>{expanded ? "Hide parts" : "Show parts"}</span>
+            </button>
           )}
           {isConvergence && (
             <div

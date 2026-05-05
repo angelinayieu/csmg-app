@@ -48,6 +48,22 @@ function parseSynthData(raw: unknown): SynthesisData | null {
   }
 }
 
+function countL34Seeds(sd: SynthesisData | null): number {
+  if (!sd) return 0;
+  const record = sd as unknown as Record<string, unknown>;
+  const im = record.interaction_metadata as
+    | { convergences?: Array<{ depth?: string }> }
+    | undefined;
+  const convergences =
+    im?.convergences ??
+    (record.convergences as Array<{ depth?: string }> | undefined) ??
+    [];
+  return convergences.filter((c) => {
+    const d = (c?.depth ?? "").toString().toUpperCase();
+    return d === "L3" || d === "L4";
+  }).length;
+}
+
 export function CausalChainsView() {
   const ctx = useSpaceData();
   const router = useRouter();
@@ -72,6 +88,11 @@ export function CausalChainsView() {
     const sd = parseSynthData(ctx.space.synthesis_data);
     if (sd?.causal_chains) setChains(sd.causal_chains);
   }, [ctx.space.synthesis_data]);
+
+  const seedCount = useMemo(
+    () => countL34Seeds(parseSynthData(ctx.space.synthesis_data)),
+    [ctx.space.synthesis_data],
+  );
 
   const sortedChains = useMemo(() => {
     const arr = [...chains];
@@ -100,9 +121,17 @@ export function CausalChainsView() {
     [chainsActions],
   );
 
-  // Auto-generate on first visit if no chains exist yet but synthesis does
+  // Auto-generate on first visit when synthesis has L3/L4 seeds to chain from.
+  // Skip if seedCount === 0 (the API would 200 with chains=[] — wasted call)
+  // or if a prior attempt errored (avoid retry loops on cold-start 504s).
   useEffect(() => {
-    if (chains.length === 0 && ctx.hasSynthesis && !generating && !error) {
+    if (
+      chains.length === 0 &&
+      ctx.hasSynthesis &&
+      seedCount > 0 &&
+      !generating &&
+      !error
+    ) {
       generate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -329,10 +358,17 @@ export function CausalChainsView() {
           {/* Error banner */}
           {error && (
             <div
-              className="mx-5 my-3 px-4 py-2 rounded-lg text-[12px]"
+              className="mx-5 my-3 px-4 py-2 rounded-lg text-[12px] flex items-center justify-between gap-3"
               style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B" }}
             >
-              {error}
+              <span>{error}</span>
+              <button
+                onClick={generate}
+                disabled={generating}
+                className="font-semibold underline hover:no-underline disabled:opacity-50 flex-shrink-0"
+              >
+                {generating ? "Retrying…" : "Try again"}
+              </button>
             </div>
           )}
 
@@ -395,24 +431,49 @@ export function CausalChainsView() {
             {/* Empty + loading states: render once regardless of viewMode. */}
             {sortedChains.length === 0 && !generating && (
               <div className="px-6 py-12 text-center text-[13px] text-gray-500">
-                No chains generated yet.{" "}
-                {ctx.hasSynthesis ? (
-                  <button
-                    onClick={generate}
-                    className="underline font-medium"
-                    style={{ color: "var(--accent-600, #4F46E5)" }}
-                  >
-                    Generate now
-                  </button>
+                {!ctx.hasSynthesis ? (
+                  <>
+                    <div className="font-semibold text-gray-700 mb-1">
+                      No synthesis yet
+                    </div>
+                    <div>Run synthesis first to detect L4 invariants in the graph.</div>
+                  </>
+                ) : seedCount === 0 ? (
+                  <>
+                    <div className="font-semibold text-gray-700 mb-1">
+                      No L3/L4 atoms detected in this graph
+                    </div>
+                    <div className="max-w-md mx-auto">
+                      Causal chains seed from L3/L4 convergences — entities marked{" "}
+                      <code className="text-[11px] px-1 py-0.5 rounded bg-gray-100">
+                        importance=&quot;moderate&quot;
+                      </code>{" "}
+                      that bridge 2+ entity categories. Add more entities or
+                      cross-category edges to enable propagation.
+                    </div>
+                  </>
                 ) : (
-                  "Run synthesis first to detect L4 invariants."
+                  <>
+                    <div className="font-semibold text-gray-700 mb-1">
+                      {seedCount} L3/L4 atom{seedCount === 1 ? "" : "s"} ready to propagate
+                    </div>
+                    <div>
+                      <button
+                        onClick={generate}
+                        className="underline font-medium"
+                        style={{ color: "var(--accent-600, #4F46E5)" }}
+                      >
+                        {error ? "Try again" : "Generate now"}
+                      </button>
+                    </div>
+                  </>
                 )}
               </div>
             )}
 
             {generating && sortedChains.length === 0 && (
               <div className="px-6 py-12 text-center text-[13px] text-gray-500">
-                Propagating L4 invariants to goal…
+                Propagating {seedCount > 0 ? `${seedCount} ` : ""}L4 invariants to goal…
               </div>
             )}
 

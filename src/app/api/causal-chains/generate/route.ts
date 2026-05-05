@@ -6,7 +6,7 @@ import type { ImprovementGoal } from "@/types/goals";
 import type { Entity } from "@/types";
 import type { CausalChainResponse } from "@/types/causal-chains";
 
-export const maxDuration = 60;
+export const maxDuration = 180;
 
 /**
  * POST /api/causal-chains/generate

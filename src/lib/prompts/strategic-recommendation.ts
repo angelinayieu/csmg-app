@@ -135,7 +135,7 @@ YOUR OUTPUT HAS 5 PARTS:
 
 1. MACRO STRATEGY — The overall direction, the central system design, and the key decision
 2. INFRASTRUCTURE MAP — What components (entities) to build/strengthen, how they connect (edges), and why this configuration produces the target outcome
-3. STRATEGY ON A PAGE — 3-4 perspectives with objectives, metrics, entity references, and temporal markers
+3. STRATEGY ON A PAGE — 3 domain-natural perspectives (4 only when justified) with objectives, metrics, entity references, and temporal markers — see PERSPECTIVE NAMING RULES below
 4. MICRO TACTICS — 4-6 concrete steps, each specifying which entity to act on, what infrastructure to deploy, and which channel it establishes
 5. TEMPORAL FLOW — 4 phases showing system evolution: what components come online when, which dynamics activate at each phase
 
@@ -291,10 +291,10 @@ RECOMMENDATION_SCHEMA (one per ranked strategy):
 
   "perspectives": [
     {
-      "id": "string — short stable slug e.g. 'growth-scale'",
-      "name": "string",
+      "id": "string — short stable slug e.g. 'retention-economics'. micro_tactic.macro_link MUST reference this id.",
+      "name": "string — DOMAIN-NATURAL lever name. NOT 'Finance'/'Customers'/'Internal'/'Learning' unless the system is literally a multi-product P&L. Name the slice of value optimized — see PERSPECTIVE NAMING RULES.",
       "icon": "string — emoji",
-      "objective": "string",
+      "objective": "string — what this perspective achieves. Each entry in actions[] MUST DECOMPOSE this into a concrete sub-step, not paraphrase it (see PERSPECTIVE NAMING RULES rule 6).",
       "rationale": "string — 1 sentence why this perspective matters",
       "key_metric": {
         "name": "string",
@@ -327,7 +327,7 @@ RECOMMENDATION_SCHEMA (one per ranked strategy):
       "description": "string — 1-2 sentences including what infrastructure to deploy",
       "entity_id": "string",
       "entity_name": "string",
-      "macro_link": "string — which perspective this serves",
+      "macro_link": "string — MUST equal a perspectives[].id from this same recommendation (id, NOT name, NOT free-form phrase). Required for downstream proxy linking.",
       "infrastructure_action": "build | strengthen | connect | monitor | configure",
       "channels_established": ["entity_id → entity_id"],
       "priority": 1,
@@ -483,7 +483,7 @@ INFRASTRUCTURE_PROPOSAL_SCHEMA (1-3 per strategy — concrete tools/apps for exe
   "name": "string — descriptive tool name, e.g. 'Innovation Pipeline Dashboard'",
   "description": "string — what this tool does and how it connects to the strategy",
   "type": "app | tool | dashboard | workflow | integration | monitor",
-  "source_perspective": "string — which BSC perspective this supports",
+  "source_perspective": "string — which perspective this supports (use the perspectives[].id)",
   "source_components": ["entity IDs from infrastructure_map this implements"],
   "metrics_tracked": ["KPI names this tool monitors"],
   "priority": number (1 = highest),
@@ -552,7 +552,7 @@ MECHANISM HINT RULES:
 - Do NOT include hints speculatively. Each hint unlocks widgets + infrastructure; unused hints create dead UI.
 
 STRATEGY FORMULATION RULES:
-- 3-4 perspectives adapted to the domain
+- 3 perspectives by default (4 only when justified — see PERSPECTIVE NAMING RULES)
 - 4-6 micro tactics sorted by priority (1 = highest)
 - 4 temporal phases
 - 3-8 core_components in infrastructure_map
@@ -562,8 +562,34 @@ STRATEGY FORMULATION RULES:
 - Each temporal_phase must list loops_activated and infrastructure_deployed
 - strategic_posture reflects analysis: critical risks → cautious/defensive; strong leverage → aggressive_growth
 - confidence is lower when: evidence stale, contradictions exist, no external validation, open questions unresolved
-- 1-3 infrastructure_proposals per strategy, each mapping to BSC perspectives and infrastructure_map components
+- 1-3 infrastructure_proposals per strategy, each mapping to a perspective (by id) and infrastructure_map components
 - Each infrastructure_proposal MUST include at least 1 agent_spec and an (optionally empty) mechanism_hints array — see AGENT SPEC RULES and MECHANISM HINT RULES below
+
+PERSPECTIVE NAMING RULES (read carefully — generic naming is the #1 quality regression in this output):
+
+1. NAME THE LEVER, NOT THE FUNCTION. Default failure mode: defaulting to Balanced Scorecard ("Finance" / "Customers" / "Internal" / "Learning & Growth"). DO NOT use those labels unless the system under analysis is literally a multi-product business P&L where those four functions are the natural decomposition. For everything else (consumer apps, internal tools, personal systems, research workflows, supply chains, public services, etc.) the perspective name MUST describe the slice of value being optimized — what is actually being LEVERED — and SHOULD draw vocabulary from the master_bottleneck and leverage_points surfaced in the synthesis context.
+
+2. EXAMPLES (illustrative only — ADAPT to the actual master_bottleneck; do not copy verbatim):
+   • Reminder/habit app whose master bottleneck is poorly-timed notifications:
+     ✓ "Notification Timing Quality" / "Habit Activation Loop" / "Trust & Privacy Posture"
+     ✗ "Customers" / "Internal" / "Finance"
+   • B2B SaaS with churn-driven revenue ceiling:
+     ✓ "Retention Economics" / "Onboarding Activation" / "Expansion Surface"
+     ✗ "Finance" / "Customers" / "Learning & Growth"
+   • Personal research workflow with synthesis bottleneck:
+     ✓ "Source Triage Discipline" / "Synthesis Throughput" / "Insight Compounding"
+     ✗ "Internal" / "Learning" / "Customers"
+   Each ✓ name names a CONCRETE LEVER measurable by a specific metric. Each ✗ name names a generic FUNCTION.
+
+3. COUNT. Produce exactly 3 perspectives. Produce 4 ONLY when the synthesis surfaces a fourth lever that genuinely cannot be merged into one of the other three without losing fidelity. Padding to 4 with a generic-corporate label (e.g., tacking on "Learning & Growth" filler) is a violation.
+
+4. DISTINCTNESS. Every perspective.name MUST be lexically and semantically distinct. If two perspectives share more than one substantive keyword, they are duplicates — merge them.
+
+5. KEY_METRIC ≠ TACTIC METRIC. Each perspective.key_metric.name MUST be distinct from every micro_tactic.metric.name whose macro_link points at this same perspective. Proxies are SUBORDINATE measurements — sharing the same name means you measured the same thing twice. If the same measurement is the perspective metric AND a tactic metric, generalize the perspective metric or drop the tactic metric.
+
+6. ACTIONS DECOMPOSE, NOT PARAPHRASE. Each entry in perspective.actions[] must propose a CONCRETE sub-step that contributes to perspective.objective. An action that re-states the objective in different words ("Optimize the optimization", "Improve the improvement") is a violation. Test: if you remove the action, does perspective.objective still describe the same end state? If yes, the action decomposed correctly. If the objective also collapses, the action was a paraphrase — rewrite it as a discrete step.
+
+7. MACRO_LINK USES IDS. micro_tactic.macro_link MUST equal a perspectives[].id (NOT the .name, NOT a free-form phrase). Free-form macro_link strings break downstream proxy linking and are deprecated.
 
 GUIDING POLICY RULES (Rumelt's kernel of strategy):
 - The policy_statement MUST be ONE sentence. If it has more than 2 "and"s, it's an incoherent list, not a policy.
@@ -1097,7 +1123,7 @@ Return JSON with this wrapper format:
           "name": "string — e.g., Customer Feedback Tracker",
           "description": "string — what this tool does",
           "type": "app | tool | dashboard | workflow | integration | monitor",
-          "source_perspective": "string — which BSC perspective this supports",
+          "source_perspective": "string — which perspective this supports (use the perspectives[].id)",
           "source_components": ["entity IDs from infrastructure_map"],
           "metrics_tracked": ["KPI names this tool monitors"],
           "priority": 1,
@@ -1147,7 +1173,7 @@ Return JSON with this wrapper format:
           "name": "string — descriptive tool name, e.g., 'Innovation Pipeline Dashboard'",
           "description": "string — what this tool does and how it connects to the strategy",
           "type": "app | tool | dashboard | workflow | integration | monitor",
-          "source_perspective": "string — which BSC perspective this supports",
+          "source_perspective": "string — which perspective this supports (use the perspectives[].id)",
           "source_components": ["entity IDs from infrastructure_map this implements"],
           "metrics_tracked": ["KPI names this tool monitors"],
           "priority": 1,

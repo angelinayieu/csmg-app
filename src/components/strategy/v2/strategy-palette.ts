@@ -1,11 +1,16 @@
-// BSC perspective color palette — semantic only.
-// Limited to numbox fill + 4px accent bar + proxy chip bg.
-// Everything else on the Strategy v2 page uses --accent-* CSS vars (re-theme with blue).
+// Color slots for cascade rows. The names "finance" / "customers" / "internal" /
+// "learning" are LEGACY identifiers carried for compatibility with the
+// PERSPECTIVE_PALETTES record and tldraw shape validators — they carry NO
+// semantic meaning. Slot assignment is purely index-based color rotation; the
+// row's actual subtitle is the LLM-generated perspective.name (rendered by
+// PerspectiveCard, see P0 fix). DO NOT add a regex that maps perspective names
+// to slots — that path produced the "FINANCE on a reminder app" bug where a
+// hardcoded BSC label silently overrode domain-natural LLM output.
 
-export type PerspectiveKey = "finance" | "customers" | "internal" | "learning";
+export type PaletteSlot = "finance" | "customers" | "internal" | "learning";
 
 export interface PerspectivePalette {
-  key: PerspectiveKey;
+  key: PaletteSlot;
   label: string;
   accent: string;
   deep: string;
@@ -14,7 +19,7 @@ export interface PerspectivePalette {
   edge: string;
 }
 
-export const PERSPECTIVE_PALETTES: Record<PerspectiveKey, PerspectivePalette> = {
+export const PERSPECTIVE_PALETTES: Record<PaletteSlot, PerspectivePalette> = {
   finance: {
     key: "finance",
     label: "Finance",
@@ -54,25 +59,24 @@ export const PERSPECTIVE_PALETTES: Record<PerspectiveKey, PerspectivePalette> = 
   },
 };
 
+const PALETTE_ROTATION: PaletteSlot[] = [
+  "finance",
+  "customers",
+  "internal",
+  "learning",
+];
+
 /**
- * Map a perspective's `name` to one of our 4 keys.
- * Strategies in the wild can have arbitrary perspective names — we match by first keyword
- * and fall back to a rotating index.
+ * Pick a palette slot by row index. Pure color rotation — does NOT inspect
+ * the perspective name. The previous regex-based mapper was removed because
+ * it silently coerced LLM-generated names like "Adaptive Quality" into
+ * "finance" via cycle-fallback, which then surfaced as a bogus "FINANCE"
+ * subtitle on the row.
  */
-export function perspectiveKey(
-  name: string | undefined,
-  index: number,
-): PerspectiveKey {
-  const lower = (name ?? "").toLowerCase();
-  if (/finan|cost|budget|revenue|roi|profit/.test(lower)) return "finance";
-  if (/cust|user|client|exper|adopt|market/.test(lower)) return "customers";
-  if (/intern|process|operat|workflow|quality|compliance/.test(lower)) return "internal";
-  if (/learn|growth|train|capab|cultur|skill/.test(lower)) return "learning";
-  // fallback by slot so 4 rows still get 4 distinct colors
-  const order: PerspectiveKey[] = ["finance", "customers", "internal", "learning"];
-  return order[index % 4] ?? "internal";
+export function paletteSlot(index: number): PaletteSlot {
+  return PALETTE_ROTATION[index % PALETTE_ROTATION.length] ?? "internal";
 }
 
-export function palette(key: PerspectiveKey): PerspectivePalette {
+export function palette(key: PaletteSlot): PerspectivePalette {
   return PERSPECTIVE_PALETTES[key];
 }

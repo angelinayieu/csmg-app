@@ -25,11 +25,15 @@ import { AgentFleetPanel } from "./agent-fleet-panel";
 import { StrategyImpactPanel } from "./strategy-impact-panel";
 import { SuggestedBridgesPanel } from "./suggested-bridges-panel";
 import { DecisionCardV2 } from "./decision-card-v2";
+import { BackgroundRuntimePanel } from "./background-runtime-panel";
 import { DEFAULT_RESEARCH_SCHEDULE } from "@/types/intelligence";
 
 type OperationsTab = "signals" | "schedule" | "agents" | "strategy" | "history";
 
 interface OperationsPanelProps {
+  /** Anchor for the per-space cron-gate panel + any future space-scoped controls. */
+  spaceId: string;
+
   // Signals & Decisions
   signals: IntelligenceSignal[];
   onSignalAction: (signalId: string, status: SignalStatus, note?: string) => Promise<void>;
@@ -66,13 +70,18 @@ interface OperationsPanelProps {
 
 const TABS: Array<{ key: OperationsTab; label: string; icon: React.ReactNode }> = [
   { key: "signals", label: "Signals & Decisions", icon: <Radio className="h-3.5 w-3.5" /> },
-  { key: "schedule", label: "Research Schedule", icon: <Calendar className="h-3.5 w-3.5" /> },
+  // "Schedules" (plural) — the tab now hosts both the research-loop schedule
+  // AND the per-space cron-gate panel (Phase A runtime control). Both are
+  // schedule-shaped controls; keeping them grouped makes the dashboard one
+  // less surface for users to hunt for runtime knobs in.
+  { key: "schedule", label: "Schedules", icon: <Calendar className="h-3.5 w-3.5" /> },
   { key: "agents", label: "Agent Fleet", icon: <Users className="h-3.5 w-3.5" /> },
   { key: "strategy", label: "Strategy Bridge", icon: <Compass className="h-3.5 w-3.5" /> },
   { key: "history", label: "History", icon: <Clock className="h-3.5 w-3.5" /> },
 ];
 
 export function OperationsPanel({
+  spaceId,
   signals,
   onSignalAction,
   priorityDecisionsV2,
@@ -209,12 +218,20 @@ export function OperationsPanel({
         </div>
       )}
 
-      {/* ── Research Schedule ── */}
+      {/* ── Schedules — research loop + per-space cron gating ── */}
       {activeTab === "schedule" && (
-        <ResearchSchedulePanel
-          schedule={schedule ?? DEFAULT_RESEARCH_SCHEDULE}
-          onUpdate={onUpdateSchedule}
-        />
+        <div className="space-y-3">
+          {/* Phase A — Background Runtime panel. Sits at the top of the
+              schedule tab so the user sees per-space cron control (the
+              expensive crons: agent-runtime + predictions-resolve) BEFORE
+              the research-loop cadence (which most users never touch). */}
+          <BackgroundRuntimePanel spaceId={spaceId} />
+
+          <ResearchSchedulePanel
+            schedule={schedule ?? DEFAULT_RESEARCH_SCHEDULE}
+            onUpdate={onUpdateSchedule}
+          />
+        </div>
       )}
 
       {/* ── Agent Fleet ── */}

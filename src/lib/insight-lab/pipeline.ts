@@ -49,8 +49,15 @@ export interface RunLabPipelineResult {
   experimentId: string;
   /** Number of insights the stack emitted across all steps. */
   insightCount: number;
-  /** Aggregate scores by axis. v0 ships goal_match only. */
-  scores: { goal_match: number };
+  /** Aggregate + per-insight scores by axis. The client uses
+   *  `goal_match.perInsight[insightKey]` to render score chips
+   *  without a separate GET. v0 ships goal_match only. */
+  scores: {
+    goal_match: {
+      stackAvg: number;
+      perInsight: Record<string, number>;
+    };
+  };
 }
 
 export async function runLabPipeline(
@@ -165,7 +172,12 @@ export async function runLabPipeline(
       runId,
       experimentId,
       insightCount: result.insights.length,
-      scores: { goal_match: goalMatchResult.stackAvg },
+      scores: {
+        goal_match: {
+          stackAvg: goalMatchResult.stackAvg,
+          perInsight: goalMatchResult.perInsight,
+        },
+      },
     };
   } catch (err) {
     // Mark experiment failed; don't throw from this branch's cleanup

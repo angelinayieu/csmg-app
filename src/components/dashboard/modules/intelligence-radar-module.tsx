@@ -380,6 +380,7 @@ export function IntelligenceRadarModule({
           )}
           {bottomTab === "operations" && (
             <OperationsPanel
+              spaceId={space.id}
               signals={radar.signals}
               onSignalAction={radar.updateSignalStatus}
               priorityDecisionsV2={radar.radarV2?.priority_decisions_v2 ?? []}

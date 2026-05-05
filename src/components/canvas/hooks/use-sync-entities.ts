@@ -18,6 +18,15 @@ function shapeIdForEdge(edgeId: string): TLShapeId {
   return createShapeId(`edge-${edgeId}`);
 }
 
+// SUB_/SUB2_ are decomposition leaves of an X-prefixed framework.
+// They live in the sidebar (nested under their X-parent), not on the
+// canvas. Mirrors the painter's suppression so live-paint and
+// post-persistence reconcile agree on what counts as visible.
+const SUB_ENTITY_PATTERN = /^SUB2?_x\d+_/;
+function isSubComponentEntity(e: Entity): boolean {
+  return !!e.entity_id && SUB_ENTITY_PATTERN.test(e.entity_id);
+}
+
 function tierForEntity(e: Entity, edgeCount: number): KGNodeShape["props"]["tier"] {
   if (e.is_leverage_point || e.is_master_bottleneck) return "hero";
   if (e.importance === "fundamental" || e.importance === "critical") return "hero";
@@ -62,6 +71,11 @@ export function useSyncEntities(editor: Editor | null, { entities, edges, enable
       return;
     }
 
+    // Filter out SUB_/SUB2_ decomposition leaves — they belong nested
+    // under their X-parent in the sidebar, not as standalone canvas
+    // nodes. Matches the painter's suppression in pipeline-event-painter.
+    const visibleEntities = entities.filter((e) => !isSubComponentEntity(e));
+
     // Count edges per entity for tier inference
     const edgeCount = new Map<string, number>();
     for (const e of edges) {
@@ -72,7 +86,7 @@ export function useSyncEntities(editor: Editor | null, { entities, edges, enable
     // Simple layered layout: group entities by layer (L0 top, L4 bottom)
     // inside each layer sort by leverage/tier then lay out in a row.
     const byLayer = new Map<string, Entity[]>();
-    for (const e of entities) {
+    for (const e of visibleEntities) {
       const layer = entityToLayerId(e);
       if (!byLayer.has(layer)) byLayer.set(layer, []);
       byLayer.get(layer)!.push(e);
@@ -129,6 +143,7 @@ export function useSyncEntities(editor: Editor | null, { entities, edges, enable
             isConvergence: false,
             isGhost: false,
             confirmedPulse: 0,
+            isExternal: c.entity.knowledge_layer === "external",
           },
         });
         cursorX += c.w + HORIZONTAL_GAP;
@@ -246,6 +261,7 @@ export function useSyncEntities(editor: Editor | null, { entities, edges, enable
 
     const patches: TLShapePartial<KGNodeShape>[] = [];
     for (const e of entities) {
+      if (isSubComponentEntity(e)) continue;
       const shape = shapeByEntityId.get(e.id);
       if (!shape) continue;
       const props = shape.props;
@@ -256,6 +272,7 @@ export function useSyncEntities(editor: Editor | null, { entities, edges, enable
       const isLeverage = !!e.is_leverage_point;
       const isRisk = !!e.is_risk_point;
       const isBottleneck = !!e.is_master_bottleneck;
+      const isExternal = e.knowledge_layer === "external";
       const name = e.name;
       const description = e.description ?? "";
 
@@ -268,6 +285,7 @@ export function useSyncEntities(editor: Editor | null, { entities, edges, enable
         props.isLeverage === isLeverage &&
         props.isRisk === isRisk &&
         props.isBottleneck === isBottleneck &&
+        props.isExternal === isExternal &&
         props.name === name &&
         props.description === description &&
         props.isGhost === false
@@ -288,6 +306,7 @@ export function useSyncEntities(editor: Editor | null, { entities, edges, enable
           isLeverage,
           isRisk,
           isBottleneck,
+          isExternal,
           isGhost: false,
         },
       });

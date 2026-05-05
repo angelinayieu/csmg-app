@@ -59,6 +59,12 @@ export type KGNodeShape = TLBaseShape<
     // renders a confidence halo whose opacity scales with this value
     // when isGhost && drillConfidence > 0. See KG_DEPTH_CRITIQUE §9 D5b.
     drillConfidence: number;
+    // True when the entity belongs to the external knowledge layer
+    // (Agent 7 / Domain Expert output: X-prefixed frameworks, XSIG_
+    // hidden signals). The view renders these with a distinct
+    // dashed-purple border + "ext" badge so users can tell field
+    // context apart from their own situation entities at a glance.
+    isExternal: boolean;
   }
 >;
 

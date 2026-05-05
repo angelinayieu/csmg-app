@@ -102,8 +102,29 @@ export interface ResolvePredictionResult {
   predicted_peak_week: number;
   actual_peak_week: number;
   calibrations_emitted: number;
+  /**
+   * Edges whose `strength` and/or `confidence` were actually mutated
+   * after the calibration row was emitted. Distinct from
+   * `calibrations_emitted` (which records the audit-row count) — an
+   * edge can have a calibration row written but skip the mutation
+   * when delta is zero (e.g. tag === "qualitative") or when clamping
+   * would no-op the change.
+   *
+   * This is the value that closes the self-correcting loop: the next
+   * trajectory run that uses these edges sees the calibrated weights.
+   */
+  edges_applied: number;
   errors: Array<{ edge_id: string; message: string }>;
 }
+
+/** Strength + confidence are clamped to this range so repeated
+ *  surprises can't zero out an edge (preventing recovery) and
+ *  repeated expected-resolutions can't drift values to 1.0
+ *  (which would read as "certain" even under many positive samples).
+ *  Mirrors the bounds applyConfidenceFromDeviation uses for the
+ *  diffuse path. */
+const EDGE_VALUE_MIN = 0.05;
+const EDGE_VALUE_MAX = 0.98;
 
 // ── Implementation ──
 
@@ -319,9 +340,13 @@ export async function resolveTrajectoryPrediction(
     };
   }
 
-  // 6. Emit edge_calibrations rows.
+  // 6. Emit edge_calibrations rows + APPLY the deltas back to the
+  //    edges row. Two-step (insert audit, then update edge) so the
+  //    audit row exists even if the apply step fails — the calibration
+  //    is replayable from the append-only audit table.
   const errors: Array<{ edge_id: string; message: string }> = [];
   let calibrationsEmitted = 0;
+  let edgesApplied = 0;
   const basisEdgeIds = (pred.predicted_basis_edge_ids ?? []) as string[];
   if (basisEdgeIds.length > 0) {
     const deltas = deltasForCalibration(tag, maxRelErr);
@@ -374,6 +399,43 @@ export async function resolveTrajectoryPrediction(
         continue;
       }
       calibrationsEmitted++;
+
+      // Apply the deltas to the live edge — this is the self-correcting
+      // step. Skipped when both deltas are zero (qualitative tag) or the
+      // edge wasn't in the snapshot (shouldn't happen but defensive).
+      if (
+        edge &&
+        (Math.abs(deltas.delta_strength) > 0 ||
+          Math.abs(deltas.delta_confidence) > 0)
+      ) {
+        const curStrength =
+          typeof edge.strength === "number" ? edge.strength : 0.5;
+        const curConfidence =
+          typeof edge.confidence === "number" ? edge.confidence : 0.5;
+        const nextStrength = clampEdgeValue(curStrength + deltas.delta_strength);
+        const nextConfidence = clampEdgeValue(curConfidence + deltas.delta_confidence);
+        // Skip the round-trip when clamping would no-op both fields.
+        const strengthChanged = Math.abs(nextStrength - curStrength) > 1e-6;
+        const confidenceChanged = Math.abs(nextConfidence - curConfidence) > 1e-6;
+        if (strengthChanged || confidenceChanged) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const update: Record<string, any> = {};
+          if (strengthChanged) update.strength = nextStrength;
+          if (confidenceChanged) update.confidence = nextConfidence;
+          const { error: applyErr } = await db
+            .from("edges")
+            .update(update)
+            .eq("id", edgeId);
+          if (applyErr) {
+            errors.push({
+              edge_id: edgeId,
+              message: `apply_failed: ${applyErr.message ?? "unknown"}`,
+            });
+          } else {
+            edgesApplied++;
+          }
+        }
+      }
     }
   }
 
@@ -386,6 +448,12 @@ export async function resolveTrajectoryPrediction(
     predicted_peak_week: predictedPeak,
     actual_peak_week: actualPeak,
     calibrations_emitted: calibrationsEmitted,
+    edges_applied: edgesApplied,
     errors,
   };
+}
+
+function clampEdgeValue(n: number): number {
+  if (!Number.isFinite(n)) return EDGE_VALUE_MIN;
+  return Math.max(EDGE_VALUE_MIN, Math.min(EDGE_VALUE_MAX, n));
 }
