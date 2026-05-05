@@ -21,6 +21,9 @@ import type {
   ResolutionLevel,
 } from "@/types/node-signature";
 import { NodeSignatureRing } from "./node-signature-ring";
+import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -94,6 +97,7 @@ export function NodeSignatureDetail({
   onSelectByCode,
   resolveEntityName,
 }: NodeSignatureDetailProps) {
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(signature !== null);
   return (
     <AnimatePresence>
       {signature && (
@@ -113,7 +117,10 @@ export function NodeSignatureDetail({
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: "100%", opacity: 0 }}
             transition={{ duration: 0.35, ease: EASE }}
-            className="fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col overflow-hidden border-l border-black/10 bg-white shadow-2xl"
+            className={cn(
+              "fixed right-0 top-0 z-50 flex h-full w-full flex-col overflow-hidden border-l border-black/10 bg-white shadow-2xl transition-[max-width] duration-200",
+              isFullscreen ? "max-w-none" : "max-w-md",
+            )}
             role="dialog"
             aria-label={`Signature detail ${signature.canonical_code}`}
           >
@@ -121,6 +128,8 @@ export function NodeSignatureDetail({
               signature={signature}
               entityName={entityName}
               onClose={onClose}
+              isFullscreen={isFullscreen}
+              onToggleFullscreen={toggleFullscreen}
             />
             <div className="flex-1 overflow-y-auto">
               <BasisSection basis={signature.basis} evidence={signature.evidence} />
@@ -148,10 +157,14 @@ function DrawerHeader({
   signature,
   entityName,
   onClose,
+  isFullscreen,
+  onToggleFullscreen,
 }: {
   signature: NodeSignature;
   entityName?: string;
   onClose: () => void;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
 }) {
   return (
     <header className="flex items-start gap-4 border-b border-black/5 bg-gradient-to-b from-gray-50 to-white px-6 py-5">
@@ -171,20 +184,27 @@ function DrawerHeader({
           {Math.round(signature.residual_uncertainty * 100)}%
         </div>
       </div>
-      <button
-        onClick={onClose}
-        className="rounded-full p-1.5 text-gray-400 transition-colors hover:bg-black/5 hover:text-gray-700"
-        aria-label="Close signature detail"
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
-          <path
-            d="M4 4l8 8M12 4l-8 8"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-        </svg>
-      </button>
+      <div className="flex flex-shrink-0 items-center gap-1.5">
+        <DrawerFullscreenButton
+          isFullscreen={isFullscreen}
+          onToggle={onToggleFullscreen}
+        />
+        <button
+          onClick={onClose}
+          className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+          aria-label="Close signature detail"
+          title="Close signature detail"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden>
+            <path
+              d="M4 4l8 8M12 4l-8 8"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </div>
     </header>
   );
 }

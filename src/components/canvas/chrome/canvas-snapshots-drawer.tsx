@@ -30,6 +30,8 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import type { TwinSnapshotMeta, SnapshotReason } from "@/types/snapshot";
 import type { ScenarioMeta } from "@/types/scenario";
 import type {
@@ -97,6 +99,7 @@ export function CanvasSnapshotsDrawer({
   const [loading, setLoading] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(open);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -192,7 +195,10 @@ export function CanvasSnapshotsDrawer({
         role="dialog"
         aria-modal="true"
         aria-label="Snapshots + scenarios"
-        className="pointer-events-auto fixed right-0 top-0 z-50 flex h-full w-full max-w-[420px] flex-col border-l border-gray-200 bg-white shadow-2xl"
+        className={cn(
+          "pointer-events-auto fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l border-gray-200 bg-white shadow-2xl transition-[max-width] duration-200 ease-out",
+          isFullscreen ? "max-w-none" : "max-w-[420px]",
+        )}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-3">
@@ -209,13 +215,20 @@ export function CanvasSnapshotsDrawer({
               to see the real before/after lift.
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1.5 text-gray-400 hover:bg-gray-50 hover:text-gray-700"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1.5">
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
+            <button
+              onClick={onClose}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-700"
+              title="Close"
+              aria-label="Close snapshots drawer"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {/* Capture bar */}

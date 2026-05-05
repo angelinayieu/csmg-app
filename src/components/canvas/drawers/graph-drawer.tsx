@@ -43,6 +43,7 @@ export function GraphDrawer({
       activeTab={tab}
       onTabChange={onTabChange}
       widthPx={780}
+      enableFullscreen
     >
       {open ? (
         <div className="h-full">

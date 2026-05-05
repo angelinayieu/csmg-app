@@ -74,6 +74,7 @@ export function SynthesisDrawer({
       activeTab={tab}
       onTabChange={onTabChange}
       widthPx={620}
+      enableFullscreen
     >
       {open ? <SynthesisDrawerBody tabId={tab} /> : null}
     </CanvasDrawer>

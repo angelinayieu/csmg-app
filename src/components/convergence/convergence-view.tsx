@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSpaceData } from "@/contexts/space-data-context";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import { rankFindings } from "@/lib/findings/rank-findings";
 import { tracePropagation } from "@/lib/findings/propagation-tracer";
 import type { SynthesisData } from "@/types/synthesis";
@@ -90,6 +92,7 @@ export function ConvergenceView() {
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [activeFilter, setActiveFilter] = useState<ConvergenceDepth | "all">("all");
   const [view, setView] = useState<ViewMode>("collapsed");
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(selectedFinding !== null);
 
   const findings = useMemo(() => {
     const synthRaw = ctx.space.synthesis_data;
@@ -214,12 +217,19 @@ export function ConvergenceView() {
 
       {/* ── Detail panel (fixed right side) ── */}
       {selectedFinding && (
-        <div className="fixed right-0 top-0 bottom-0 z-50 w-[360px] shadow-2xl">
+        <div
+          className={cn(
+            "fixed right-0 top-0 bottom-0 z-50 shadow-2xl transition-[width] duration-200 ease-out",
+            isFullscreen ? "w-screen" : "w-[360px]",
+          )}
+        >
           <DetailPanel
             finding={selectedFinding}
             entities={ctx.entities}
             edges={ctx.edges}
             onClose={() => setSelectedFinding(null)}
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={toggleFullscreen}
           />
         </div>
       )}
@@ -1126,11 +1136,15 @@ function DetailPanel({
   entities,
   edges,
   onClose,
+  isFullscreen,
+  onToggleFullscreen,
 }: {
   finding: Finding;
   entities: any[];
   edges: any[];
   onClose: () => void;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
 }) {
   const meta = LAYER_META[finding.layer];
 
@@ -1145,19 +1159,27 @@ function DetailPanel({
     <div className="flex h-full w-full flex-col overflow-hidden border-l border-gray-200 bg-white/95 backdrop-blur">
       {/* Header */}
       <div className="flex-shrink-0 border-b border-gray-100 px-5 py-4">
-        <div className="mb-2.5 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="mb-2.5 flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <span className="text-[10px] font-bold uppercase tracking-wider text-[#2563eb]">Selected Finding</span>
             <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-bold", meta.chipBg, meta.chipText)}>
               {finding.layer}
             </span>
           </div>
-          <button
-            onClick={onClose}
-            className="flex h-6 w-6 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-600"
-          >
-            <X className="h-3 w-3" />
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1.5">
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={onToggleFullscreen}
+            />
+            <button
+              onClick={onClose}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+              title="Close"
+              aria-label="Close finding"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
         <h3 className="text-sm font-bold leading-snug text-gray-900">{finding.title}</h3>
       </div>

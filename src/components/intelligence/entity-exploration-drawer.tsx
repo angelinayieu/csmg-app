@@ -22,6 +22,8 @@ import {
   ChevronUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import type { Entity, Edge } from "@/types";
 import type { AuthorityLevel } from "@/types/intelligence";
 import { AUTHORITY_CONFIG } from "@/types/intelligence";
@@ -490,6 +492,7 @@ export function EntityExplorationDrawer({
   // ── Render nothing when closed ──
 
   const isOpen = entityId !== null && entity !== null;
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(isOpen);
 
   return (
     <>
@@ -505,9 +508,10 @@ export function EntityExplorationDrawer({
       {/* Drawer */}
       <div
         className={cn(
-          "fixed right-0 top-0 h-full w-[420px] bg-white shadow-2xl border-l border-gray-200 z-50",
-          "transition-transform duration-300 ease-out",
+          "fixed right-0 top-0 h-full bg-white shadow-2xl border-l border-gray-200 z-50",
+          "transition-[transform,width] duration-300 ease-out",
           "flex flex-col",
+          isFullscreen ? "w-screen" : "w-[420px]",
           isOpen ? "translate-x-0" : "translate-x-full"
         )}
       >
@@ -552,13 +556,20 @@ export function EntityExplorationDrawer({
                   </h2>
                 </div>
 
-                <button
-                  onClick={onClose}
-                  className="mt-0.5 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
-                  title="Close"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <DrawerFullscreenButton
+                    isFullscreen={isFullscreen}
+                    onToggle={toggleFullscreen}
+                  />
+                  <button
+                    onClick={onClose}
+                    className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+                    title="Close"
+                    aria-label="Close drawer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
 
               {/* Breadcrumb path: layer > category > entity name */}

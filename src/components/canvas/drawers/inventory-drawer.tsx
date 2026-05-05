@@ -37,6 +37,7 @@ export function InventoryDrawer({
       activeTab={activeTab ?? "entities"}
       onTabChange={onTabChange}
       widthPx={640}
+      enableFullscreen
     >
       {open ? <InventoryDrawerBody /> : null}
     </CanvasDrawer>

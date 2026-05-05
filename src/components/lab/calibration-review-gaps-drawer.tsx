@@ -28,6 +28,9 @@
 
 import { useEffect, useState } from "react";
 import { X, AlertTriangle, HelpCircle, ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import type { Entity } from "@/types";
 import type { ReproductionAttempt } from "@/types/calibration";
 
@@ -109,6 +112,11 @@ export function CalibrationReviewGapsDrawer({
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
 
+  // Fullscreen toggle — useFullscreenDrawer manages Esc-to-restore
+  // and resets when the drawer closes. Hook MUST run on every render
+  // (even when !open) to keep hook order stable across renders.
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(open);
+
   if (!open) return null;
 
   const gaps = (attempts ?? []).filter((a) => a.verdict !== "reproduced");
@@ -129,7 +137,10 @@ export function CalibrationReviewGapsDrawer({
         role="dialog"
         aria-modal="true"
         aria-label="Review calibration gaps"
-        className="fixed right-0 top-0 z-50 flex h-full w-full max-w-[440px] flex-col border-l border-[var(--lab-border-strong)] bg-[var(--lab-panel-bg)] shadow-2xl"
+        className={cn(
+          "fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l border-[var(--lab-border-strong)] bg-[var(--lab-panel-bg)] shadow-2xl transition-[max-width] duration-200 ease-out",
+          isFullscreen ? "max-w-none" : "max-w-[440px]",
+        )}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-3 border-b border-[var(--lab-border)] px-4 py-3">
@@ -160,13 +171,19 @@ export function CalibrationReviewGapsDrawer({
               </div>
             )}
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1.5 text-[var(--lab-text-mid)] hover:bg-[var(--lab-panel-raised)] hover:text-[var(--lab-text)]"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1.5">
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
+            <button
+              onClick={onClose}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--lab-border)] bg-transparent text-[var(--lab-text-mid)] hover:bg-[var(--lab-panel-raised)] hover:text-[var(--lab-text)]"
+              aria-label="Close"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}

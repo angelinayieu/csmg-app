@@ -28,6 +28,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Cycle, Entity } from "@/types";
+import { useFullscreenDrawer } from "./use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "./drawer-fullscreen-button";
 
 export interface CycleDetailDrawerProps {
   cycleId: string | null;
@@ -50,6 +52,7 @@ export function CycleDetailDrawer({ cycleId, onClose }: CycleDetailDrawerProps) 
   const [data, setData] = useState<CycleDetailResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(cycleId !== null);
   // Phase 4 — "Save as system" gesture state. Tri-state: idle / saving /
   // saved (transient success badge for ~1.5s before resetting).
   const [savingState, setSavingState] = useState<
@@ -152,7 +155,10 @@ export function CycleDetailDrawer({ cycleId, onClose }: CycleDetailDrawerProps) 
   if (loading && !data) {
     return (
       <div
-        className="fixed right-0 top-0 z-50 flex h-full w-[380px] flex-col items-center justify-center border-l border-gray-200 bg-white shadow-lg"
+        className={cn(
+          "fixed right-0 top-0 z-50 flex h-full flex-col items-center justify-center border-l border-gray-200 bg-white shadow-lg",
+          isFullscreen ? "w-screen" : "w-[380px]",
+        )}
         style={{ animation: "slideInRight 300ms ease forwards" }}
       >
         <div className="text-[12px] text-gray-400">Loading cycle…</div>
@@ -168,7 +174,12 @@ export function CycleDetailDrawer({ cycleId, onClose }: CycleDetailDrawerProps) 
 
   if (error) {
     return (
-      <div className="fixed right-0 top-0 z-50 flex h-full w-[380px] flex-col items-center justify-center border-l border-gray-200 bg-white px-8 text-center shadow-lg">
+      <div
+        className={cn(
+          "fixed right-0 top-0 z-50 flex h-full flex-col items-center justify-center border-l border-gray-200 bg-white px-8 text-center shadow-lg",
+          isFullscreen ? "w-screen" : "w-[380px]",
+        )}
+      >
         <div className="mb-3 text-[13px] font-semibold text-gray-700">Couldn&apos;t load cycle</div>
         <div className="mb-4 text-[11px] text-gray-500">{error}</div>
         <button
@@ -204,7 +215,10 @@ export function CycleDetailDrawer({ cycleId, onClose }: CycleDetailDrawerProps) 
 
   return (
     <div
-      className="fixed right-0 top-0 z-50 flex h-full w-[380px] flex-col border-l border-gray-200 bg-white shadow-lg"
+      className={cn(
+        "fixed right-0 top-0 z-50 flex h-full flex-col border-l border-gray-200 bg-white shadow-lg transition-[width] duration-200 ease-out",
+        isFullscreen ? "w-screen" : "w-[380px]",
+      )}
       style={{ animation: "slideInRight 300ms ease forwards" }}
     >
       <div className="border-b border-gray-200 px-5 py-4">
@@ -218,7 +232,7 @@ export function CycleDetailDrawer({ cycleId, onClose }: CycleDetailDrawerProps) 
               {cycle.name ?? "(unnamed cycle)"}
             </h2>
           </div>
-          <div className="flex flex-shrink-0 items-center gap-1">
+          <div className="flex flex-shrink-0 items-center gap-1.5">
             {/* Phase 4 — promote this cycle to a saved system. */}
             <button
               onClick={handleSaveAsSystem}
@@ -250,11 +264,17 @@ export function CycleDetailDrawer({ cycleId, onClose }: CycleDetailDrawerProps) 
                   ? "Failed"
                   : "Save as system"}
             </button>
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
             <button
               onClick={handleClose}
-              className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+              title="Close drawer"
+              aria-label="Close drawer"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>

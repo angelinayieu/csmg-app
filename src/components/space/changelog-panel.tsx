@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { X, Sparkles, FileText, Loader2, GitFork, RefreshCw } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import type { SpaceChangelog } from "@/types";
 
 const changeTypeConfig: Record<
@@ -67,6 +70,7 @@ export function ChangelogPanel({
 }) {
   const [entries, setEntries] = useState<SpaceChangelog[]>([]);
   const [loading, setLoading] = useState(true);
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(true);
 
   useEffect(() => {
     async function load() {
@@ -103,16 +107,29 @@ export function ChangelogPanel({
       />
 
       {/* Panel */}
-      <div className="fixed right-0 top-0 z-50 flex h-full w-96 flex-col border-l border-gray-200 bg-white shadow-xl">
+      <div
+        className={cn(
+          "fixed right-0 top-0 z-50 flex h-full flex-col border-l border-gray-200 bg-white shadow-xl transition-[width] duration-200 ease-out",
+          isFullscreen ? "w-screen" : "w-96",
+        )}
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
           <h2 className="text-lg font-semibold">History</h2>
-          <button
-            onClick={onClose}
-            className="rounded p-1 text-gray-400 hover:text-gray-600"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1.5">
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
+            <button
+              onClick={onClose}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+              title="Close history"
+              aria-label="Close history"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}

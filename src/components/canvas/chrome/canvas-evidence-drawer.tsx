@@ -33,6 +33,8 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import type {
   EvidenceRegistryRow,
   EvidenceStatus,
@@ -102,6 +104,7 @@ export function CanvasEvidenceDrawer({
   );
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(open);
 
   // ── Load ─────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -213,7 +216,10 @@ export function CanvasEvidenceDrawer({
       />
       {/* Drawer */}
       <aside
-        className="fixed right-0 top-0 z-[70] flex h-screen w-[600px] max-w-full flex-col border-l border-slate-200 bg-white shadow-[0_24px_48px_-16px_rgba(15,23,42,0.18)]"
+        className={cn(
+          "fixed right-0 top-0 z-[70] flex h-screen max-w-full flex-col border-l border-slate-200 bg-white shadow-[0_24px_48px_-16px_rgba(15,23,42,0.18)] transition-[width] duration-200 ease-out",
+          isFullscreen ? "w-screen" : "w-[600px]",
+        )}
         role="dialog"
         aria-labelledby="canvas-evidence-title"
       >
@@ -238,13 +244,20 @@ export function CanvasEvidenceDrawer({
               downstream computation.
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1.5">
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
+            <button
+              onClick={onClose}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700"
+              title="Close"
+              aria-label="Close evidence drawer"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </header>
 
         {/* Status filter chips */}

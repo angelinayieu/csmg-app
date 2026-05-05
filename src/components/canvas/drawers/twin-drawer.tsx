@@ -59,6 +59,7 @@ export function TwinDrawer({
       activeTab={tab}
       onTabChange={onTabChange}
       widthPx={720}
+      enableFullscreen
     >
       {open ? <TwinDrawerBody tabId={tab as "design" | "analysis" | "live"} /> : null}
     </CanvasDrawer>

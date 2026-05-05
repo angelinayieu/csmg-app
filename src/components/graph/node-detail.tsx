@@ -14,6 +14,8 @@ import { CATEGORY_CONFIG, AUTHORITY_CONFIG } from "@/types/intelligence";
 import { EvidenceSection } from "@/components/entity/evidence-section";
 import { CausalRoleBadge } from "@/components/entity/causal-role-badge";
 import { EdgeVerdictWidget } from "@/components/graph/edge-verdict-widget";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 
 interface NodeDetailProps {
   entity: Entity;
@@ -57,6 +59,7 @@ export function NodeDetail({
 }: NodeDetailProps) {
   const isExternal = entity.knowledge_layer === "external";
   const colors = getNodeColor(entity.entity_category);
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(true);
 
   // Filter claims linked to this entity
   const entityClaims = claims.filter(
@@ -94,7 +97,11 @@ export function NodeDetail({
   };
 
   return (
-    <div className="fixed right-0 top-0 z-50 flex h-full w-[380px] flex-col border-l border-gray-200 bg-white shadow-lg"
+    <div
+      className={cn(
+        "fixed right-0 top-0 z-50 flex h-full flex-col border-l border-gray-200 bg-white shadow-lg transition-[width] duration-200 ease-out",
+        isFullscreen ? "w-screen" : "w-[380px]",
+      )}
       style={{
         animation: "slideInRight 300ms ease forwards",
       }}
@@ -107,11 +114,17 @@ export function NodeDetail({
           </h2>
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <Ring value={entity.confidence} size={38} />
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
             <button
               onClick={onClose}
-              className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+              title="Close drawer"
+              aria-label="Close drawer"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>

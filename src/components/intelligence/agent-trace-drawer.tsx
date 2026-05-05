@@ -2,6 +2,8 @@
 
 import { X, ArrowRight, ExternalLink, Search, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import type { ResearchAgent } from "@/types/intelligence";
 import type { SuggestedObjective, ImprovementGoal } from "@/types/goals";
 import type { Entity } from "@/types";
@@ -63,12 +65,17 @@ export function AgentTraceDrawer({
     .filter((e): e is Entity => !!e)
     .slice(0, 20);
 
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(mode === "drawer");
+
   return (
     <div
       className={cn(
-        "flex flex-col bg-white overflow-hidden",
+        "flex flex-col bg-white overflow-hidden transition-[width] duration-200 ease-out",
         mode === "drawer"
-          ? "fixed right-0 top-0 bottom-0 z-40 w-[480px] border-l border-gray-200 shadow-xl"
+          ? cn(
+              "fixed right-0 top-0 bottom-0 z-40 border-l border-gray-200 shadow-xl",
+              isFullscreen ? "w-screen" : "w-[480px]",
+            )
           : "h-full",
       )}
     >
@@ -89,12 +96,22 @@ export function AgentTraceDrawer({
             <p className="mt-0.5 text-[13px] text-gray-500">{agent.specialty}</p>
           )}
         </div>
-        <button
-          onClick={onClose}
-          className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex flex-shrink-0 items-center gap-1.5">
+          {mode === "drawer" && (
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
+          )}
+          <button
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+            title="Close drawer"
+            aria-label="Close drawer"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Scrollable body */}

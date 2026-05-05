@@ -38,6 +38,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import type { SituationBaseline } from "@/types/situation";
 
 export interface CanvasSituationDrawerProps {
@@ -60,6 +62,7 @@ export function CanvasSituationDrawer({
   const [error, setError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
   const [rerunFlash, setRerunFlash] = useState<string | null>(null);
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(open);
 
   const fetchBaseline = useCallback(async (): Promise<
     SituationBaseline | null
@@ -137,7 +140,10 @@ export function CanvasSituationDrawer({
     <div
       role="dialog"
       aria-label="Current state baseline"
-      className="fixed inset-y-0 right-0 z-50 flex w-[440px] max-w-full flex-col border-l border-slate-200 bg-white shadow-2xl"
+      className={cn(
+        "fixed inset-y-0 right-0 z-50 flex max-w-full flex-col border-l border-slate-200 bg-white shadow-2xl transition-[width] duration-200 ease-out",
+        isFullscreen ? "w-screen" : "w-[440px]",
+      )}
     >
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-3">
@@ -169,13 +175,18 @@ export function CanvasSituationDrawer({
             {rerunning ? "Re-running…" : "Re-run"}
           </button>
         )}
+        <DrawerFullscreenButton
+          isFullscreen={isFullscreen}
+          onToggle={toggleFullscreen}
+        />
         <button
           type="button"
           onClick={onClose}
           aria-label="Close baseline drawer"
-          className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+          className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+          title="Close"
         >
-          <X className="h-4 w-4" />
+          <X className="h-3.5 w-3.5" />
         </button>
       </div>
 

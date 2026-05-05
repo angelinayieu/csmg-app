@@ -25,6 +25,8 @@ import { BridgeDisplay } from "@/components/weaving/bridge-display";
 import { useAppStore } from "@/stores/store-provider";
 import type { Space } from "@/types";
 import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 
 export interface ConnectPanelProps {
   open: boolean;
@@ -43,6 +45,7 @@ export function ConnectPanel({
 }: ConnectPanelProps) {
   const [tab, setTab] = useState<Tab>("weave");
   const spaces = useAppStore((s) => s.spaces);
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(open);
 
   const otherSpaces = useMemo(
     () => spaces.filter((s) => s.id !== currentSpaceId),
@@ -63,7 +66,8 @@ export function ConnectPanel({
       {/* Panel — right-docked */}
       <aside
         className={cn(
-          "fixed right-0 top-0 z-[60] flex h-full w-[420px] max-w-[92vw] flex-col bg-white shadow-2xl transition-transform",
+          "fixed right-0 top-0 z-[60] flex h-full max-w-[92vw] flex-col bg-white shadow-2xl transition-[transform,width] duration-200",
+          isFullscreen ? "w-screen" : "w-[420px]",
           open ? "translate-x-0" : "translate-x-full",
         )}
         style={{ borderLeft: "1px solid rgba(0,0,0,0.08)" }}
@@ -78,13 +82,20 @@ export function ConnectPanel({
               {currentSpaceName}
             </h2>
           </div>
-          <button
-            onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
-            title="Close"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1.5">
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
+            <button
+              onClick={onClose}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+              title="Close"
+              aria-label="Close panel"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </header>
 
         {/* Tabs */}

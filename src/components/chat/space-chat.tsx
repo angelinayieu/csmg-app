@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import {
   useSpaceChat,
   type ChatOperation,
@@ -440,14 +442,18 @@ export function SpaceChat({
   const activeOp = OPERATIONS.find((o) => o.id === operation)!;
 
   const isInline = mode === "inline";
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(!isInline);
 
   const chatContent = (
     <div
       className={cn(
-        "flex flex-col bg-white",
+        "flex flex-col bg-white transition-[width] duration-200 ease-out",
         isInline
           ? "h-full"
-          : "fixed right-0 top-0 z-50 h-full w-[420px] border-l border-gray-200 shadow-xl"
+          : cn(
+              "fixed right-0 top-0 z-50 h-full border-l border-gray-200 shadow-xl",
+              isFullscreen ? "w-screen" : "w-[420px]",
+            ),
       )}
     >
       {/* Header */}
@@ -471,12 +477,20 @@ export function SpaceChat({
               <Trash2 className="h-3.5 w-3.5" />
             </button>
           )}
+          {!isInline && (
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
+          )}
           {!isInline && onClose && (
             <button
               onClick={onClose}
-              className="rounded p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+              title="Close chat"
+              aria-label="Close chat"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
             </button>
           )}
         </div>

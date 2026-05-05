@@ -8,11 +8,13 @@
 
 import { Radar, Sparkles, Cubes, Activity } from "./drawer-icons";
 import { CanvasDrawer, type DrawerTab } from "./canvas-drawer";
+import { DrawerStrategyHeader } from "./drawer-strategy-header";
 import { RadarPageShell } from "@/components/intelligence/radar-page-shell";
 import { ConvergenceView } from "@/components/convergence/convergence-view";
 import { AgentControlView } from "@/components/intelligence/agent-control-view";
 import { ReflexiveDashboardView } from "@/components/intelligence/reflexive-dashboard-view";
 import { useSpaceData } from "@/contexts/space-data-context";
+import { useIntelligenceSpine } from "@/lib/hooks/use-intelligence-spine";
 
 const TABS: DrawerTab[] = [
   { id: "radar", label: "Radar", icon: <Radar className="h-3 w-3" /> },
@@ -47,14 +49,16 @@ export function IntelligenceDrawer({
       activeTab={tab}
       onTabChange={onTabChange}
       widthPx={640}
+      enableFullscreen
     >
-      {open ? <IntelligenceDrawerBody tabId={tab} /> : null}
+      {open ? <IntelligenceDrawerBody open={open} tabId={tab} /> : null}
     </CanvasDrawer>
   );
 }
 
-function IntelligenceDrawerBody({ tabId }: { tabId: string }) {
+function IntelligenceDrawerBody({ open, tabId }: { open: boolean; tabId: string }) {
   const ctx = useSpaceData();
+  const { spine, loading, error } = useIntelligenceSpine(ctx.space.id, open);
 
   if (!ctx.hasSynthesis) {
     return (
@@ -64,9 +68,9 @@ function IntelligenceDrawerBody({ tabId }: { tabId: string }) {
     );
   }
 
-  if (tabId === "radar") {
-    return (
-      <div className="h-full">
+  const tabBody = (() => {
+    if (tabId === "radar") {
+      return (
         <RadarPageShell
           space={ctx.space}
           entities={ctx.entities}
@@ -75,33 +79,18 @@ function IntelligenceDrawerBody({ tabId }: { tabId: string }) {
           activeGoal={ctx.activeGoal}
           className="h-full"
         />
-      </div>
-    );
-  }
+      );
+    }
+    if (tabId === "convergence") return <ConvergenceView />;
+    if (tabId === "agents") return <AgentControlView />;
+    if (tabId === "reflexive") return <ReflexiveDashboardView />;
+    return null;
+  })();
 
-  if (tabId === "convergence") {
-    return (
-      <div className="h-full">
-        <ConvergenceView />
-      </div>
-    );
-  }
-
-  if (tabId === "agents") {
-    return (
-      <div className="h-full">
-        <AgentControlView />
-      </div>
-    );
-  }
-
-  if (tabId === "reflexive") {
-    return (
-      <div className="h-full">
-        <ReflexiveDashboardView />
-      </div>
-    );
-  }
-
-  return null;
+  return (
+    <div className="flex h-full flex-col">
+      <DrawerStrategyHeader spine={spine} loading={loading} error={error} />
+      <div className="min-h-0 flex-1 overflow-y-auto">{tabBody}</div>
+    </div>
+  );
 }

@@ -21,6 +21,8 @@ import { cn } from "@/lib/utils";
 import { Ring } from "@/components/ui/ring";
 import { EdgeTimingSection } from "@/components/flights/edge-timing-section";
 import type { Edge, Entity, Claim } from "@/types";
+import { useFullscreenDrawer } from "./use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "./drawer-fullscreen-button";
 
 export interface EdgeDetailDrawerProps {
   edgeId: string | null;
@@ -56,6 +58,7 @@ export function EdgeDetailDrawer({ edgeId, onClose }: EdgeDetailDrawerProps) {
   const [data, setData] = useState<EdgeDetailResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(edgeId !== null);
 
   useEffect(() => {
     if (!edgeId) {
@@ -99,7 +102,10 @@ export function EdgeDetailDrawer({ edgeId, onClose }: EdgeDetailDrawerProps) {
   if (loading && !data) {
     return (
       <div
-        className="fixed right-0 top-0 z-50 flex h-full w-[380px] flex-col items-center justify-center border-l border-gray-200 bg-white shadow-lg"
+        className={cn(
+          "fixed right-0 top-0 z-50 flex h-full flex-col items-center justify-center border-l border-gray-200 bg-white shadow-lg",
+          isFullscreen ? "w-screen" : "w-[380px]",
+        )}
         style={{ animation: "slideInRight 300ms ease forwards" }}
       >
         <div className="text-[12px] text-gray-400">Loading edge…</div>
@@ -115,7 +121,12 @@ export function EdgeDetailDrawer({ edgeId, onClose }: EdgeDetailDrawerProps) {
 
   if (error) {
     return (
-      <div className="fixed right-0 top-0 z-50 flex h-full w-[380px] flex-col items-center justify-center border-l border-gray-200 bg-white px-8 text-center shadow-lg">
+      <div
+        className={cn(
+          "fixed right-0 top-0 z-50 flex h-full flex-col items-center justify-center border-l border-gray-200 bg-white px-8 text-center shadow-lg",
+          isFullscreen ? "w-screen" : "w-[380px]",
+        )}
+      >
         <div className="mb-3 text-[13px] font-semibold text-gray-700">Couldn&apos;t load edge</div>
         <div className="mb-4 text-[11px] text-gray-500">{error}</div>
         <button
@@ -142,7 +153,10 @@ export function EdgeDetailDrawer({ edgeId, onClose }: EdgeDetailDrawerProps) {
 
   return (
     <div
-      className="fixed right-0 top-0 z-50 flex h-full w-[380px] flex-col border-l border-gray-200 bg-white shadow-lg"
+      className={cn(
+        "fixed right-0 top-0 z-50 flex h-full flex-col border-l border-gray-200 bg-white shadow-lg transition-[width] duration-200 ease-out",
+        isFullscreen ? "w-screen" : "w-[380px]",
+      )}
       style={{ animation: "slideInRight 300ms ease forwards" }}
     >
       <div className="border-b border-gray-200 px-5 py-4">
@@ -159,11 +173,17 @@ export function EdgeDetailDrawer({ edgeId, onClose }: EdgeDetailDrawerProps) {
           </div>
           <div className="flex flex-shrink-0 items-center gap-1.5">
             <Ring value={conf} size={38} />
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
             <button
               onClick={handleClose}
-              className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400 transition-colors hover:text-gray-700"
+              title="Close drawer"
+              aria-label="Close drawer"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>

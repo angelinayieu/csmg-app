@@ -17,8 +17,11 @@
 
 import { useEffect } from "react";
 import { X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { COMPONENTS, getComponent } from "../lib/components-defs";
 import type { Prediction, ActiveEffect } from "../lib/types";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 
 export interface ContextualInspectorProps {
   componentId: string | null;
@@ -37,8 +40,10 @@ export function ContextualInspector({
 }: ContextualInspectorProps) {
   const open = !!componentId;
   const component = componentId ? getComponent(componentId) : null;
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(open);
 
-  // Escape key closes the drawer.
+  // Escape key closes the drawer (useFullscreenDrawer intercepts Esc
+  // first when fullscreen, restoring instead of closing).
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -76,7 +81,10 @@ export function ContextualInspector({
 
       {/* Drawer */}
       <aside
-        className="fixed right-0 top-0 z-[100] flex h-screen w-[440px] max-w-[90vw] flex-col overflow-hidden border-l border-black/[0.08] bg-white shadow-[-20px_0_48px_rgba(0,0,0,0.12)]"
+        className={cn(
+          "fixed right-0 top-0 z-[100] flex h-screen flex-col overflow-hidden border-l border-black/[0.08] bg-white shadow-[-20px_0_48px_rgba(0,0,0,0.12)] transition-[width,max-width] duration-200 ease-out",
+          isFullscreen ? "w-screen max-w-none" : "w-[440px] max-w-[90vw]",
+        )}
         style={{ animation: "ctx-slide-in 0.3s cubic-bezier(0.25,0.1,0.25,1)" }}
       >
         {/* Header */}
@@ -86,14 +94,20 @@ export function ContextualInspector({
             background: `linear-gradient(180deg, ${component.color}10, #ffffff)`,
           }}
         >
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="absolute right-3.5 top-3.5 grid h-[30px] w-[30px] place-items-center rounded-[7px] bg-[#f2f2f4] text-[#6e6e73] transition-colors hover:bg-black/[0.08] hover:text-[#1d1d1f]"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          <div className="absolute right-3.5 top-3.5 flex items-center gap-1.5">
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="grid h-[28px] w-[28px] place-items-center rounded-[7px] border border-black/[0.05] bg-[#f2f2f4] text-[#6e6e73] transition-colors hover:bg-black/[0.08] hover:text-[#1d1d1f]"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
 
           <div
             className="mb-2.5 inline-flex items-center gap-1.5 rounded-[20px] border border-black/[0.05] bg-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.05em]"

@@ -50,6 +50,7 @@ export function ProbabilityDrawer({
       activeTab={tab}
       onTabChange={onTabChange}
       widthPx={720}
+      enableFullscreen
     >
       {open ? <ProbabilityDrawerBody tabId={tab} /> : null}
     </CanvasDrawer>

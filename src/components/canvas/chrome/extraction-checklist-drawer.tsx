@@ -34,6 +34,8 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useFullscreenDrawer } from "@/components/canvas/drawers/use-fullscreen-drawer";
+import { DrawerFullscreenButton } from "@/components/canvas/drawers/drawer-fullscreen-button";
 import {
   EXTRACTION_CATEGORIES,
   FOCUS_LEVELS,
@@ -183,6 +185,8 @@ export function ExtractionChecklistDrawer({
     }
     setSelectedIds(s);
   }, [previewKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(open);
 
   // ── Focus level + filter state ──
   const [focusLevel, setFocusLevel] = useState<FocusLevel>(DEFAULT_FOCUS_LEVEL);
@@ -344,7 +348,10 @@ export function ExtractionChecklistDrawer({
       />
       {/* Drawer */}
       <aside
-        className="fixed right-0 top-0 z-[70] flex h-screen w-[520px] max-w-full flex-col border-l border-slate-200 bg-white shadow-[0_24px_48px_-16px_rgba(15,23,42,0.18)]"
+        className={cn(
+          "fixed right-0 top-0 z-[70] flex h-screen max-w-full flex-col border-l border-slate-200 bg-white shadow-[0_24px_48px_-16px_rgba(15,23,42,0.18)] transition-[width] duration-200 ease-out",
+          isFullscreen ? "w-screen" : "w-[520px]",
+        )}
         role="dialog"
         aria-labelledby="extraction-checklist-title"
       >
@@ -370,14 +377,21 @@ export function ExtractionChecklistDrawer({
               {totalCandidates === 1 ? "" : "s"}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            disabled={submitting !== null}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1.5">
+            <DrawerFullscreenButton
+              isFullscreen={isFullscreen}
+              onToggle={toggleFullscreen}
+            />
+            <button
+              onClick={onClose}
+              disabled={submitting !== null}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
+              title="Close"
+              aria-label="Close extraction review"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </header>
 
         {/* ── Summary (asset-level, from preview) ── */}

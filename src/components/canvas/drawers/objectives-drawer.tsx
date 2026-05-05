@@ -41,6 +41,7 @@ export function ObjectivesDrawer({
       activeTab={activeTab ?? "tree"}
       onTabChange={onTabChange}
       widthPx={680}
+      enableFullscreen
     >
       {open ? <ObjectivesDrawerBody /> : null}
     </CanvasDrawer>
