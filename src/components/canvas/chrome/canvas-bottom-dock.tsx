@@ -130,8 +130,9 @@ export function CanvasBottomDock({
   const popoverRef = useRef<HTMLDivElement | null>(null);
   // Drag-over visual state. The dock placeholder advertises "drop a
   // file…" so the dock itself must accept drops — until this fix the
-  // <input type="text"> would eat the drop and the file vanished.
-  // Counter (not boolean) so dragenter/dragleave on nested children
+  // <input type="text"> would eat the drop event and the file would
+  // either bounce to file:// or vanish silently. We use a counter
+  // instead of a boolean so dragenter/dragleave on nested children
   // (file pills, paperclip button) don't clear the highlight while
   // the cursor is still over the dock.
   const [dragDepth, setDragDepth] = useState(0);

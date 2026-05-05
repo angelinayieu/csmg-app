@@ -233,6 +233,17 @@ export function InteraxisCanvas({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  // ── 2026-07-04 fix: drop-overlay was sticking because (a) the simple
+  // dragleave guard `currentTarget === target` misses transitions onto
+  // nested children (the tldraw editor surface fires its own enter/leave),
+  // and (b) early returns on empty `dataTransfer.files` left isDragOver
+  // true. Use the entry-counter pattern (industry-standard fix) plus a
+  // global dragend / Esc safety net so the overlay can never stick.
+  const dragEnterCount = useRef(0);
+  const clearDragOver = useCallback(() => {
+    dragEnterCount.current = 0;
+    setIsDragOver(false);
+  }, []);
   const [snapOn, setSnapOn] = useState(true);
   const [autoAI, setAutoAI] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -2699,13 +2710,27 @@ export function InteraxisCanvas({
       return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
-    if (hasFiles) setIsDragOver(true);
+  }, []);
+  // Entry-counter pattern: tldraw nests its own canvas/editor surface
+  // inside this wrapper, so dragenter/dragleave fire repeatedly as the
+  // pointer crosses each child. Track depth — show overlay when >0,
+  // hide at 0. This is the only correct way to drive a drop overlay
+  // over a deeply-nested DOM.
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    dragEnterCount.current += 1;
+    if (dragEnterCount.current === 1) setIsDragOver(true);
   }, []);
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    if (e.currentTarget === e.target) setIsDragOver(false);
+    if (!e.dataTransfer.types.includes("Files")) return;
+    dragEnterCount.current = Math.max(0, dragEnterCount.current - 1);
+    if (dragEnterCount.current === 0) setIsDragOver(false);
   }, []);
   const handleDrop = useCallback(
     async (e: React.DragEvent) => {
+      // Always tear down the overlay, no matter which branch we hit
+      // (or even if we early-return before reaching the file path).
+      clearDragOver();
       if (!editor) return;
       const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
       const pagePt = editor.screenToPage({
@@ -2902,7 +2927,7 @@ export function InteraxisCanvas({
       const files = Array.from(e.dataTransfer.files ?? []);
       if (files.length === 0) return;
       e.preventDefault();
-      setIsDragOver(false);
+      // (clearDragOver already ran at the top of handleDrop.)
       // Phase 41 — fire the bloom + anchor the processing ghost.
       setDropPoint({ x: burstX, y: burstY });
       setDropBurstKey((k) => k + 1); // re-fires animation on repeated drops
@@ -2916,8 +2941,30 @@ export function InteraxisCanvas({
         window.setTimeout(() => setDropPoint(null), 600);
       }
     },
-    [editor, ingestAndMaterialize, placeEntityShape],
+    [editor, ingestAndMaterialize, placeEntityShape, clearDragOver],
   );
+
+  // ── Drag safety net (2026-07-04) ───────────────────────────────────────
+  // Even with the entry-counter pattern, the browser can lose track of
+  // a drag (cursor exits the window during the drag, drag is cancelled
+  // mid-flight, source app dies, etc.) and never fire dragleave on the
+  // window. Listen for `dragend` on window and Esc on document so the
+  // overlay can never permanently stick. Also clear on any 'mouseup'
+  // outside an active drag — last-resort.
+  useEffect(() => {
+    const onDragEnd = () => clearDragOver();
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") clearDragOver();
+    };
+    window.addEventListener("dragend", onDragEnd);
+    window.addEventListener("drop", onDragEnd);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("dragend", onDragEnd);
+      window.removeEventListener("drop", onDragEnd);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [clearDragOver]);
 
   // ── Arc 4 Phase C: consume ?place_strategy={snapshot_id} on mount ──────
   // The strategy page "Open in canvas" button navigates here with the
@@ -3248,6 +3295,7 @@ export function InteraxisCanvas({
         background:
           "radial-gradient(circle at 30% 20%, #F8FAFF 0%, #F0F4FB 40%, #E9EEF8 100%)",
       }}
+      onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
