@@ -100,15 +100,17 @@ export function ProxyIndicatorList({ row }: { row: CascadeRowVM }) {
             </span>
             <span
               className="tabular-nums"
+              title={m.placeholder ? "Not yet measured" : undefined}
               style={{
                 fontSize: 11,
-                fontWeight: 700,
-                color: "#0B0D12",
+                fontWeight: m.placeholder ? 500 : 700,
+                color: m.placeholder ? "rgba(11,13,18,0.34)" : "#0B0D12",
                 letterSpacing: "-0.02em",
+                fontStyle: m.placeholder ? "italic" : undefined,
               }}
             >
               {m.value}
-              {m.unit && (
+              {m.unit && !m.placeholder && (
                 <span
                   style={{
                     fontSize: 9.5,

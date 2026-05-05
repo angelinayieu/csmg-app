@@ -6,6 +6,12 @@ import {
   buildBaselineQuestionPrompt,
   buildEffectTracePrompt,
 } from "@/lib/causal-chains/effect-propagator";
+import { loadChainEvidenceBundles } from "@/lib/causal-chains/evidence-bundles";
+import {
+  validateEvidenceCitations,
+  buildRetryPrompt,
+} from "@/lib/causal-chains/validate-trace-evidence";
+import { ENABLE_EVIDENCE_AWARE_TRACE } from "@/lib/feature-flags/subsystems";
 import type { SynthesisData } from "@/types/synthesis";
 import type { ImprovementGoal } from "@/types/goals";
 import type {
@@ -99,6 +105,13 @@ export async function POST(request: Request) {
     ...(answers ?? []),
   ];
 
+  const evidenceBundles = ENABLE_EVIDENCE_AWARE_TRACE
+    ? await loadChainEvidenceBundles(db, spaceId, chain).catch((err) => {
+        console.warn("[trace] evidence bundle load failed (soft-fail):", err);
+        return null;
+      })
+    : null;
+
   const propagatorInput = {
     chain,
     goal,
@@ -106,6 +119,7 @@ export async function POST(request: Request) {
     answeredQuestions: mergedAnswers,
     spaceName: spaceRow.name,
     spaceDescription: spaceRow.description,
+    evidenceBundles,
   };
 
   try {
@@ -152,12 +166,38 @@ export async function POST(request: Request) {
     type LLMTrace = Omit<CalculationTrace, "id" | "chain_id" | "generated_at" | "agent_name"> & {
       steps: TraceStep[];
     };
-    const traceRaw = await llmJSON<LLMTrace>({
+    let traceRaw = await llmJSON<LLMTrace>({
       system,
       user: userPrompt,
       temperature: 0.3,
       maxTokens: 6000,
     });
+
+    // Evidence-aware retry: if any "research" step lacks valid citations from
+    // the supplied bundle, retry once with explicit violation callouts. Skip
+    // when bundles are empty (no evidence available — nothing to cite).
+    if (
+      ENABLE_EVIDENCE_AWARE_TRACE &&
+      evidenceBundles &&
+      evidenceBundles.bundles.length > 0
+    ) {
+      const violations = validateEvidenceCitations(
+        traceRaw.steps ?? [],
+        evidenceBundles,
+      );
+      if (violations.length > 0) {
+        console.log(
+          `[trace] ${violations.length} evidence citation violation(s), retrying once`,
+        );
+        const retryUser = buildRetryPrompt(userPrompt, violations);
+        traceRaw = await llmJSON<LLMTrace>({
+          system,
+          user: retryUser,
+          temperature: 0.2,
+          maxTokens: 6000,
+        });
+      }
+    }
 
     const trace: CalculationTrace = {
       id: `trace-${chainId}-${Date.now()}`,

@@ -11,7 +11,28 @@ interface AgentListViewProps {
   selectedAgentId: string | null;
   onSelectAgent: (agent: ResearchAgent) => void;
   onCreateAgent?: () => void;
+  /**
+   * Optional map: short agent id (UUID, NOT the "agent-runtime-…" projection
+   * key) → app name. When provided, each agent row that resolves to an app
+   * renders a small "app: XYZ" badge. Sourced from the spine in
+   * AgentControlView; left undefined when the spine is unavailable so legacy
+   * standalone routes keep working.
+   */
+  appNameByAgentId?: Record<string, string>;
   className?: string;
+}
+
+/**
+ * useAgentRuntime projects every live agent into ResearchAgent.id =
+ * "agent-runtime-<uuid>" so it doesn't collide with synthesis-derived mock
+ * ids. To look an agent up in the spine.agents table (keyed by UUID), strip
+ * that prefix.
+ */
+function shortAgentId(researchAgentId: string): string {
+  const PREFIX = "agent-runtime-";
+  return researchAgentId.startsWith(PREFIX)
+    ? researchAgentId.slice(PREFIX.length)
+    : researchAgentId;
 }
 
 type SortKey = "callsign" | "derived_from" | "findings_count" | "signals_today" | "lifecycle";
@@ -40,6 +61,7 @@ export function AgentListView({
   selectedAgentId,
   onSelectAgent,
   onCreateAgent,
+  appNameByAgentId,
   className,
 }: AgentListViewProps) {
   const [query, setQuery] = useState("");
@@ -203,7 +225,7 @@ export function AgentListView({
 
                     {/* Main */}
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                         <span className="font-mono text-[12px] font-bold tracking-tight text-gray-900">
                           {agent.callsign ?? agent.name.slice(0, 16).toUpperCase()}
                         </span>
@@ -215,6 +237,17 @@ export function AgentListView({
                         >
                           {SOURCE_LABEL[agent.derived_from] ?? "Other"}
                         </span>
+                        {appNameByAgentId?.[shortAgentId(agent.id)] && (
+                          <span
+                            className="inline-flex max-w-[140px] items-center gap-0.5 truncate rounded px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700"
+                            title={`App: ${appNameByAgentId[shortAgentId(agent.id)]}`}
+                          >
+                            <span className="opacity-70">app·</span>
+                            <span className="truncate normal-case tracking-normal">
+                              {appNameByAgentId[shortAgentId(agent.id)]}
+                            </span>
+                          </span>
+                        )}
                         {lifecycle !== "active" && (
                           <span className="rounded px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500">
                             {lifecycle}

@@ -1699,20 +1699,29 @@ ${enrichedPrompt}`;
     // dominant_entity_ids overlaps the newly-inserted entities (direct)
     // or whose served-goal's entities overlap (via Wave A junction) gets
     // flagged stale_reason='kg_changed'. Non-fatal.
+    //
+    // Cascade auto-apply: notifyEntitiesChanged only flags apps with a
+    // DIRECT dependency on the inserted entities. But each new entity
+    // also affects everything DOWNSTREAM of it via the causal edge graph
+    // — apps depending on those 2-N hop downstream entities should also
+    // be flagged. Compute cascade reach and union the affected UUIDs into
+    // the notify set so the flag matches the full causal blast radius.
     // ──────────────────────────────────────────────────────────────────
     if (entityIdMap.size > 0) {
       try {
-        const { notifyEntitiesChanged } = await import("@/lib/apps/notify");
-        const insertedEntityIds = Array.from(entityIdMap.values());
-        const flagged = await notifyEntitiesChanged(
+        const { notifyEntitiesChangedWithCascade } = await import(
+          "@/lib/apps/notify"
+        );
+        const flagged = await notifyEntitiesChangedWithCascade(
           db,
           spaceId,
-          insertedEntityIds,
+          Array.from(entityIdMap.values()),
           "pipeline:decompose",
+          { entityDisplayIds: Array.from(entityIdMap.keys()) },
         );
         if (flagged.direct + flagged.via_objectives > 0) {
           console.log(
-            `[decompose/wave-b] flagged apps: direct=${flagged.direct} via_objectives=${flagged.via_objectives}`,
+            `[decompose/wave-b] flagged apps: direct=${flagged.direct} via_objectives=${flagged.via_objectives} (cascade extended set by ${flagged.cascade_extended})`,
           );
         }
       } catch (notifyErr) {

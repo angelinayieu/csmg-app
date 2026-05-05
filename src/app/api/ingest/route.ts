@@ -1,33 +1,42 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 import { validateFile, validateUrl, isImageMime, inferMimeFromName } from "@/lib/ingest/validate";
 import {
-  extractPdf,
-  extractDocx,
   extractText,
   extractUrl,
   type ExtractResult,
 } from "@/lib/ingest/extractors";
 import { normalizeText } from "@/lib/ingest/normalizer";
 import { inferAssetClass, type AssetClass } from "@/types/asset";
+import { parseAssetInBackground } from "@/lib/ingest/parse-worker";
 
-export const maxDuration = 90;
-// Node runtime needed: pdf-parse + jsdom don't run on edge.
+// Two-phase ingest: the route persists the row + schedules background
+// parse via after() and returns in <1s. The lambda stays alive until
+// after() completes (up to maxDuration), but the gateway sees the
+// response immediately so 504 is no longer possible from this route.
+export const maxDuration = 300;
+// Node runtime needed: pdf-parse + jsdom + normalizer don't run on edge.
 export const runtime = "nodejs";
 
 /**
  * POST /api/ingest
  *
  * Three accepted shapes:
- *   - multipart/form-data with a `file` field   → extract file
- *   - application/json { type: "url", url }      → fetch + extract article
- *   - application/json { type: "text", text }    → passthrough (so the same
- *                                                  endpoint can power future
- *                                                  "paste + normalize" flows)
+ *   - multipart/form-data with a `file` field   → upload + persist + schedule background parse
+ *   - application/json { type: "url", url }      → fetch + extract article (synchronous, fast)
+ *   - application/json { type: "text", text }    → passthrough (synchronous, fast)
  *
- * Returns normalized markdown ready for /api/analyze or /api/pipeline/scope.
- * Does NOT itself create a space — the caller submits the returned text
- * through the existing analysis flow.
+ * For multipart/form-data:
+ *   • PDF / DOCX files: parse runs in BACKGROUND. Response returns
+ *     ingested_file_id immediately with `awaiting_parse: true` and
+ *     empty `text`. Client polls /api/ingest/[id]/parse-status until
+ *     status='ready' (or 'error').
+ *   • text / markdown files: parsed synchronously inline (fast).
+ *   • images: synchronous empty-text return (existing two-phase
+ *     vision-extract pattern, unchanged).
+ *
+ * Returns normalized markdown ready for /api/analyze or /api/pipeline/scope
+ * (when synchronous), or a pending row reference (when background).
  */
 export async function POST(request: Request) {
   const { user, supabase, error: authError } = await safeAuth();
@@ -35,19 +44,11 @@ export async function POST(request: Request) {
 
   const contentType = request.headers.get("content-type") ?? "";
 
-  // Phase 2D — persistence. Track source metadata we'll write to
-  // ingested_files after the extraction succeeds. Captured per-branch
-  // below so the multipart / url / text paths each set them uniquely.
-  let sourceType: "file" | "url" | "text" = "file";
-  let sourceUrl: string | null = null;
-  let mimeType: string | null = null;
-  let extractionMethod: string | null = null;
-  let spaceIdForPersist: string | null = null;
-
-  let extraction: { ok: true; result: ExtractResult } | { ok: false; error: { code: string; message: string } };
-
+  // ── BACKGROUND PARSE PATH (multipart, PDF/DOCX) ──────────────────
+  // Handled separately because the response shape diverges (no text in
+  // body — client polls /parse-status). Other multipart MIMEs fall
+  // through to the synchronous path below.
   if (contentType.includes("multipart/form-data")) {
-    // ── File upload path ───────────────────────────────────────────
     let form: FormData;
     try {
       form = await request.formData();
@@ -67,61 +68,156 @@ export async function POST(request: Request) {
 
     const buf = Buffer.from(await file.arrayBuffer());
     const mime = check.resolvedType;
-
-    // Capture persistence metadata before extraction diverges by mime.
-    sourceType = "file";
-    mimeType = mime;
+    const filename = file.name || "uploaded-file";
     const formSpaceId = form.get("space_id");
-    if (typeof formSpaceId === "string" && formSpaceId) {
-      spaceIdForPersist = formSpaceId;
+    const spaceIdForPersist =
+      typeof formSpaceId === "string" && formSpaceId ? formSpaceId : null;
+
+    // Decide: background-parse or synchronous?
+    //   PDF + DOCX  → background (slow, the original 504 source)
+    //   text + md   → synchronous (fast, no LLM, just buffer.toString)
+    //   image       → synchronous empty-text (existing vision two-phase)
+    //   other       → blocked by validateFile already
+    const isBackgroundParse =
+      mime === "application/pdf" ||
+      mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+    if (isBackgroundParse) {
+      // Persist the row in 'pending' state with no normalized_text yet.
+      // The client polls /api/ingest/[id]/parse-status until ready.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = supabase as any;
+      const { data: inserted, error: insertErr } = await db
+        .from("ingested_files")
+        .insert({
+          user_id: user.id,
+          space_id: spaceIdForPersist,
+          source_type: "file",
+          source_name: filename,
+          mime_type: mime,
+          source_url: null,
+          // Empty until the worker writes the extracted text. Schema
+          // allows NULL; ops queries can filter on parse_status to
+          // know whether to expect content here.
+          normalized_text: null,
+          raw_chars: 0,
+          normalized_chars: 0,
+          extraction_method: "pending",
+          // Provisional asset class from filename + mime. Worker
+          // re-classifies with full content once parse completes.
+          asset_class: inferAssetClass({
+            sourceType: "file",
+            mimeType: mime,
+            sourceName: filename,
+            contentSnippet: "",
+          }),
+          metadata: { original_bytes: buf.byteLength },
+          parse_status: "pending",
+        })
+        .select("id, asset_class")
+        .single();
+
+      if (insertErr || !inserted) {
+        console.error("[ingest] persist (pending) failed:", insertErr);
+        return NextResponse.json(
+          { error: "Could not persist upload row" },
+          { status: 500 },
+        );
+      }
+
+      const ingestedFileId = (inserted as { id: string; asset_class: AssetClass }).id;
+      const initialAssetClass = (inserted as { id: string; asset_class: AssetClass }).asset_class;
+
+      // Schedule background parse. The lambda stays alive until this
+      // completes; the response below has already been sent so the
+      // gateway sees <1s.
+      after(async () => {
+        try {
+          await parseAssetInBackground(db, {
+            ingestedFileId,
+            buffer: buf,
+            filename,
+            mime,
+          });
+        } catch (err) {
+          // Worker has its own try/catch but defend the lambda from a
+          // throw escaping after().
+          console.error("[ingest] background parse threw:", err);
+        }
+      });
+
+      return NextResponse.json({
+        text: "",
+        source_name: filename,
+        metadata: { original_bytes: buf.byteLength },
+        ingested_file_id: ingestedFileId,
+        asset_class: initialAssetClass,
+        // Existing flag for image two-phase. Always false here — this
+        // is the parse two-phase, not the vision two-phase.
+        awaiting_vision: false,
+        // NEW: tells the client this row's text isn't ready yet. Client
+        // polls /api/ingest/[id]/parse-status until status='ready'.
+        awaiting_parse: true,
+        parse_status: "pending",
+        notice:
+          "Upload received. Parsing in background — we'll surface the extracted text when ready.",
+      });
     }
 
-    if (mime === "application/pdf") {
-      extractionMethod = "pdf-parse";
-      extraction = await extractPdf(buf, file.name || "document.pdf");
-    } else if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-      extractionMethod = "docx";
-      extraction = await extractDocx(buf, file.name || "document.docx");
+    // ── Synchronous file paths (text, markdown, image) ─────────────
+    let extraction:
+      | { ok: true; result: ExtractResult }
+      | { ok: false; error: { code: string; message: string } };
+    let extractionMethod: string;
+
+    if (mime === "text/plain" || mime === "text/markdown") {
+      extractionMethod = mime === "text/markdown" ? "markdown" : "text";
+      extraction = extractText(
+        buf.toString("utf-8"),
+        filename,
+        mime === "text/markdown" ? "markdown" : "text",
+      );
     } else if (isImageMime(mime)) {
       // Two-phase image ingest (2026-05-01): phase 1 returns
       // immediately with an empty result so the file-card lands on
       // canvas without a multi-second wait. The client follows up by
       // POSTing the same binary to /api/ingest/vision-extract which
       // populates image_description + extracted_entities + edges.
-      // Until the vision pass completes the row's normalized_text is
-      // empty — that's intentional; useMaterialize is a no-op until
-      // phase 2 fires (the file-card status badge handles the UX).
       extractionMethod = "image-pending-vision";
       extraction = {
         ok: true,
         result: {
           text: "",
-          source_name: file.name || "image",
+          source_name: filename,
           metadata: {
             source_type: "image",
             original_bytes: buf.byteLength,
             image_mime: mime,
-            // Phase 2 will overwrite this once the structured vision
-            // pass lands. Until then we conservatively report
-            // ocr_confident=false so any UI gating on it doesn't
-            // treat the empty row as authoritative.
             ocr_confident: false,
           },
         },
       };
-    } else if (mime === "text/plain" || mime === "text/markdown") {
-      extractionMethod = mime === "text/markdown" ? "markdown" : "text";
-      extraction = extractText(
-        buf.toString("utf-8"),
-        file.name || (mime === "text/markdown" ? "document.md" : "document.txt"),
-        mime === "text/markdown" ? "markdown" : "text",
-      );
     } else {
-      // Shouldn't reach here — validateFile already blocked it.
+      // validateFile should have blocked this; defensive guard.
       return NextResponse.json({ error: `Unsupported MIME: ${mime}` }, { status: 400 });
     }
-  } else if (contentType.includes("application/json")) {
-    // ── URL or text path ───────────────────────────────────────────
+
+    return await persistAndRespond({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      db: supabase as any,
+      userId: user.id,
+      spaceIdForPersist,
+      sourceType: "file",
+      sourceUrl: null,
+      mimeType: mime,
+      extractionMethod,
+      extraction,
+      awaitingVision: extractionMethod === "image-pending-vision",
+    });
+  }
+
+  // ── JSON path (URL / text) ─────────────────────────────────────────
+  if (contentType.includes("application/json")) {
     let body: { type?: string; url?: string; text?: string; space_id?: string };
     try {
       body = await request.json();
@@ -129,9 +225,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
     }
 
-    if (typeof body.space_id === "string" && body.space_id) {
-      spaceIdForPersist = body.space_id;
-    }
+    const spaceIdForPersist =
+      typeof body.space_id === "string" && body.space_id ? body.space_id : null;
+
+    let sourceType: "url" | "text" = "url";
+    let sourceUrl: string | null = null;
+    let mimeType = "text/html";
+    let extractionMethod = "url-fetch";
+    let extraction:
+      | { ok: true; result: ExtractResult }
+      | { ok: false; error: { code: string; message: string } };
 
     if (body.type === "url") {
       if (!body.url || typeof body.url !== "string") {
@@ -142,16 +245,14 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: check.error.message, code: check.error.code }, { status: 400 });
       }
       sourceType = "url";
-      // `check.url` is a parsed URL object; stringify for persistence.
       sourceUrl = String(check.url);
-      mimeType = "text/html";
-      extractionMethod = "url-fetch";
       extraction = await extractUrl(check.url);
     } else if (body.type === "text") {
       if (typeof body.text !== "string" || !body.text.trim()) {
         return NextResponse.json({ error: "Text missing." }, { status: 400 });
       }
       sourceType = "text";
+      sourceUrl = null;
       mimeType = "text/plain";
       extractionMethod = "paste";
       extraction = extractText(body.text, "pasted-text", "text");
@@ -161,15 +262,62 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-  } else {
-    return NextResponse.json(
-      {
-        error:
-          "Expected multipart/form-data (file upload) or application/json ({ type, url | text }).",
-      },
-      { status: 415 },
-    );
+
+    return await persistAndRespond({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      db: supabase as any,
+      userId: user.id,
+      spaceIdForPersist,
+      sourceType,
+      sourceUrl,
+      mimeType,
+      extractionMethod,
+      extraction,
+      awaitingVision: false,
+    });
   }
+
+  return NextResponse.json(
+    {
+      error:
+        "Expected multipart/form-data (file upload) or application/json ({ type, url | text }).",
+    },
+    { status: 415 },
+  );
+}
+
+// ── Synchronous-path persistence + response shaping ─────────────────
+//
+// Shared between the synchronous file paths (text/markdown/image) and
+// the JSON paths (URL/text). The background-parse path doesn't go
+// through here — it persists with parse_status='pending' before
+// scheduling the worker.
+
+async function persistAndRespond(opts: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any;
+  userId: string;
+  spaceIdForPersist: string | null;
+  sourceType: "file" | "url" | "text";
+  sourceUrl: string | null;
+  mimeType: string;
+  extractionMethod: string;
+  extraction:
+    | { ok: true; result: ExtractResult }
+    | { ok: false; error: { code: string; message: string } };
+  awaitingVision: boolean;
+}) {
+  const {
+    db,
+    userId,
+    spaceIdForPersist,
+    sourceType,
+    sourceUrl,
+    mimeType,
+    extractionMethod,
+    extraction,
+    awaitingVision,
+  } = opts;
 
   if (!extraction.ok) {
     return NextResponse.json(
@@ -178,14 +326,10 @@ export async function POST(request: Request) {
     );
   }
 
-  // ── Normalize ────────────────────────────────────────────────────
-  const { text: normalizedText, normalized, chunks } = await normalizeText(extraction.result.text);
+  const { text: normalizedText, normalized, chunks } = await normalizeText(
+    extraction.result.text,
+  );
 
-  // ── Asset class classification ───────────────────────────────────
-  // Filename + mime + first-500-char heuristic. Reliable enough for
-  // the obvious cases (PDFs named "research.pdf", spreadsheets, image
-  // diagrams). For ambiguous documents the LLM-driven situation
-  // analyzer downstream can re-classify — this is the cheap pre-pass.
   const assetClass: AssetClass = inferAssetClass({
     sourceType,
     mimeType,
@@ -193,18 +337,14 @@ export async function POST(request: Request) {
     contentSnippet: normalizedText.slice(0, 500),
   });
 
-  // Phase 2D — persist to ingested_files so the upload survives the
-  // parse/submit gap and surfaces in the Library's Files folder.
-  // Non-blocking: if the insert fails we still return the extracted
-  // text so the user isn't blocked on a storage hiccup.
+  // Persist. Soft-fails — if storage hiccups we still return the text
+  // so the caller can use it inline.
   let ingestedFileId: string | null = null;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const db = supabase as any;
     const { data: inserted, error: insertErr } = await db
       .from("ingested_files")
       .insert({
-        user_id: user.id,
+        user_id: userId,
         space_id: spaceIdForPersist,
         source_type: sourceType,
         source_name: extraction.result.source_name,
@@ -214,17 +354,16 @@ export async function POST(request: Request) {
         raw_chars: extraction.result.text.length,
         normalized_chars: normalizedText.length,
         extraction_method: extractionMethod,
-        // Asset class is set by inferAssetClass above. The situation
-        // analyzer reads this field downstream to decide whether to
-        // treat the file as evidence (research_pdf, prior_analysis),
-        // structure (spec_sheet, internal_doc), or observation
-        // (dataset). See src/types/asset.ts.
         asset_class: assetClass,
         metadata: {
           ...extraction.result.metadata,
           normalize_chunks: chunks,
           normalized,
         },
+        // Synchronous path: we already have the text. Mark ready
+        // immediately so polling clients see consistent state.
+        parse_status: "ready",
+        parse_completed_at: new Date().toISOString(),
       })
       .select("id")
       .single();
@@ -237,11 +376,6 @@ export async function POST(request: Request) {
     console.warn("[ingest] persist threw (non-fatal):", err);
   }
 
-  // Two-phase image ingest signal — when the request was an image
-  // and we deferred the vision pass, tell the client to follow up
-  // with /api/ingest/vision-extract using the same binary.
-  const awaitingVision = extractionMethod === "image-pending-vision";
-
   return NextResponse.json({
     text: normalizedText,
     source_name: extraction.result.source_name,
@@ -252,17 +386,12 @@ export async function POST(request: Request) {
       normalized,
       normalize_chunks: chunks,
     },
-    // New: row id so the client can reference this ingest in future
-    // calls (e.g. /api/analyze could link entities back to source).
     ingested_file_id: ingestedFileId,
-    // The classified asset class — UI can render the upload chip with
-    // the right color/label without a second roundtrip.
     asset_class: assetClass,
-    // Two-phase ingest: client should re-POST the same image binary
-    // to /api/ingest/vision-extract to populate description/entities/
-    // relationships. Non-image ingests get false here.
     awaiting_vision: awaitingVision,
-    // Small reminder to the client: text is editable before submit.
+    // Synchronous path is always ready by the time we respond.
+    awaiting_parse: false,
+    parse_status: "ready",
     notice:
       "Review the extracted text below. You can edit it before submitting for analysis.",
   });

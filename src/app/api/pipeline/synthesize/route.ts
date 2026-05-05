@@ -2708,6 +2708,29 @@ REQUIREMENTS FOR THIS PASS:
           "edges.agent_feedback stays empty; strategizer falls back to single-perspective signals",
         );
 
+        // ── Hop 0.7: extract-subsystems (deterministic + light LLM) ──
+        //
+        // Builds typed compositional units (loops, leverage clusters,
+        // L4 invariant chains, tension zones, master_bottleneck nodes,
+        // insight convergence clusters) from the now-stabilized graph
+        // and synthesis output. Persists to synthesis_data.subsystems[].
+        //
+        // Strategy-refresh consumes them as constraint-bearing atoms
+        // (every micro_tactic must name a target subsystem). Soft-fails:
+        // if this hop dies, strategy generation falls back to the flat
+        // axiom/convergence/leverage lists it currently uses.
+        //
+        // Gated behind ENABLE_SUBSYSTEMS_EXTRACTION; with the flag off
+        // the route returns immediately with skipped:"feature_disabled"
+        // and no DB I/O happens.
+        await runChainHop(
+          "extract-subsystems",
+          `${origin}/api/pipeline/extract-subsystems`,
+          { space_id: chainedSpaceId, run_id: chainedRunId },
+          60_000,
+          "synthesis_data.subsystems stays empty; strategy generation falls back to flat axiom/convergence/leverage lists",
+        );
+
         // ── Hop 1: root-trace (backward BFS, pure structure) ──────
         //
         // Now has the driver-deepened graph to walk. Writes

@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useRef, useState } from "react";
 import type { CascadeRowHandle } from "./cascade-row";
-import { palette, type PerspectiveKey } from "../strategy-palette";
+import { palette, type PaletteSlot } from "../strategy-palette";
 
 interface RoutingPath {
   d: string;
@@ -11,7 +11,7 @@ interface RoutingPath {
 
 interface CascadeRouterSvgProps {
   rowRefs: React.MutableRefObject<Array<React.RefObject<CascadeRowHandle | null>>>;
-  paletteKeys: PerspectiveKey[];
+  paletteKeys: PaletteSlot[];
   containerRef: React.RefObject<HTMLDivElement | null>;
   layoutVersion: number;
 }

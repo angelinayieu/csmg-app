@@ -138,13 +138,20 @@ export interface ExtractionChecklistDrawerProps {
   open: boolean;
   /** Called when the user closes via X / backdrop / Esc. */
   onClose: () => void;
-  /** Called with the selected candidate ids + focus level when the
-   *  user clicks Extract. Parent fires the POST and handles the
-   *  result + drawer close. Awaitable so the parent can show a
-   *  loading state. */
+  /** Called with the selected candidate ids + focus level + the
+   *  user's full-decompose preference when the user clicks Extract.
+   *  Parent fires the POST and handles the result + drawer close.
+   *  Awaitable so the parent can show a loading state.
+   *
+   *  fullDecompose (Phase 2a 2026-07-04): when true, the server chains
+   *  the HITL commit into /api/pipeline/decompose so the paper gets
+   *  multi-pass depth (cycles, bridges, framework overlays) on top of
+   *  the candidate-grounded entities. Defaults are toggled by asset
+   *  class — research_pdf + internal_doc default ON, others OFF. */
   onExtract: (
     selectedCandidateIds: string[],
     focusLevel: FocusLevel,
+    fullDecompose: boolean,
   ) => Promise<void>;
   /** Called when the user clicks Skip. Parent fires the POST and
    *  handles the close. */
@@ -190,6 +197,14 @@ export function ExtractionChecklistDrawer({
 
   // ── Focus level + filter state ──
   const [focusLevel, setFocusLevel] = useState<FocusLevel>(DEFAULT_FOCUS_LEVEL);
+
+  // ── Decompose-deeper toggle (Phase 2a 2026-07-04) ──
+  // Default ON for research_pdf + internal_doc — these benefit most
+  // from the multi-pass depth. Other classes default OFF so a small
+  // pasted note doesn't fire a 60-90s pipeline run unprompted.
+  const [fullDecompose, setFullDecompose] = useState<boolean>(
+    assetClass === "research_pdf" || assetClass === "internal_doc",
+  );
   const [activeFilters, setActiveFilters] = useState<Set<ExtractionCategory>>(
     new Set(),
   );
@@ -313,7 +328,7 @@ export function ExtractionChecklistDrawer({
     setSubmitting("extract");
     setSubmitError(null);
     try {
-      await onExtract(Array.from(selectedIds), focusLevel);
+      await onExtract(Array.from(selectedIds), focusLevel, fullDecompose);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -656,6 +671,49 @@ export function ExtractionChecklistDrawer({
           >
             {submitting === "skip" ? "Skipping…" : "Skip extraction"}
           </button>
+
+          {/* Decompose-deeper toggle (Phase 2a). Clicking the chip
+              flips the boolean. Hidden when submitting so the user
+              can't change their mind mid-call. */}
+          <label
+            className={cn(
+              "ml-auto mr-3 inline-flex select-none items-center gap-2 text-[11px] font-medium text-slate-700",
+              submitting !== null && "pointer-events-none opacity-50",
+            )}
+            title="When on, after the HITL commit the paper's full text is sent to the decompose pipeline so it contributes cycles, bridges, and structural edges — same depth a prompt gets."
+          >
+            <span
+              role="switch"
+              aria-checked={fullDecompose}
+              tabIndex={0}
+              onClick={() => setFullDecompose((v) => !v)}
+              onKeyDown={(e) => {
+                if (e.key === " " || e.key === "Enter") {
+                  e.preventDefault();
+                  setFullDecompose((v) => !v);
+                }
+              }}
+              className={cn(
+                "relative inline-flex h-[18px] w-[32px] cursor-pointer items-center rounded-full transition-colors",
+                fullDecompose ? "bg-slate-900" : "bg-slate-300",
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "inline-block h-[14px] w-[14px] transform rounded-full bg-white shadow transition-transform",
+                  fullDecompose ? "translate-x-[16px]" : "translate-x-[2px]",
+                )}
+              />
+            </span>
+            <span className="leading-tight">
+              Decompose deeper
+              <span className="ml-1 text-[10px] font-normal text-slate-500">
+                {fullDecompose ? "· chains into pipeline" : "· entities only"}
+              </span>
+            </span>
+          </label>
+
           <button
             onClick={handleExtract}
             disabled={submitting !== null || totalSelected === 0}
@@ -670,8 +728,10 @@ export function ExtractionChecklistDrawer({
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             )}
             {submitting === "extract"
-              ? "Extracting…"
-              : `Extract ${totalSelected} ${totalSelected === 1 ? "entity" : "entities"}`}
+              ? fullDecompose
+                ? "Extracting + decomposing…"
+                : "Extracting…"
+              : `${fullDecompose ? "Commit + Decompose" : "Extract"} ${totalSelected} ${totalSelected === 1 ? "entity" : "entities"}`}
           </button>
         </footer>
       </aside>

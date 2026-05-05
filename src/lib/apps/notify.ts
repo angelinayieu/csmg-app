@@ -70,6 +70,116 @@ export async function notifyEntitiesChanged(
 }
 
 /**
+ * Cascade-aware variant of notifyEntitiesChanged. Extends the staleness
+ * set by walking the causal edge graph downstream from each direct
+ * entity, then unions those reach UUIDs into the notify call.
+ *
+ * Why this matters: notifyEntitiesChanged alone only flags apps that
+ * DIRECTLY depend on the changed entities. But each changed entity
+ * also propagates causally to everything downstream — apps depending
+ * on those 2-N hop downstream entities should also be flagged so the
+ * stale chip matches the actual blast radius of the change.
+ *
+ * Use this from any mutation site that can trigger downstream effects
+ * (decompose, ingest extract, entity deepen, manual edit). Soft-fails
+ * the cascade compute (degrades to direct-only flagging) so a graph
+ * read failure never blocks the underlying mutation.
+ *
+ * Caller passes UUIDs only — display IDs are looked up internally from
+ * the entities snapshot we have to fetch anyway for cascade propagation.
+ * Optionally pass `entityDisplayIds` to skip the lookup (caller already
+ * has them at hand, e.g. from an entityIdMap).
+ */
+export async function notifyEntitiesChangedWithCascade(
+  db: DB,
+  spaceId: string,
+  entityDirectUuids: string[],
+  source: string,
+  opts: {
+    /** Display IDs ("C1", "X3", etc.) for the direct UUIDs. When omitted,
+     *  derived from the fetched entities snapshot. */
+    entityDisplayIds?: string[];
+    /** Stale reason. Default "kg_changed". */
+    reason?: "kg_changed" | "whiteboard_edit";
+    /** Max seed entities to walk cascade from (default 25). */
+    maxSeeds?: number;
+  } = {},
+): Promise<{
+  direct: number;
+  via_objectives: number;
+  cascade_extended: number;
+}> {
+  const allAffectedUuids = new Set<string>(entityDirectUuids);
+  let cascadeExtended = 0;
+  const maxSeeds = opts.maxSeeds ?? 25;
+  const reason = opts.reason ?? "kg_changed";
+
+  try {
+    const { computeCascadeFromEntity } = await import(
+      "@/lib/twin/cascade-propagation"
+    );
+    const [
+      { data: allEnts },
+      { data: allEdgs },
+      { data: allCycs },
+    ] = await Promise.all([
+      db.from("entities").select("*").eq("space_id", spaceId),
+      db.from("edges").select("*").eq("space_id", spaceId),
+      db.from("cycles").select("*").eq("space_id", spaceId),
+    ]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ents = (allEnts ?? []) as any[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const edgs = (allEdgs ?? []) as any[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cycs = (allCycs ?? []) as any[];
+
+    // Resolve display IDs. Caller-supplied wins; otherwise derive from
+    // the snapshot we just fetched (UUID → display via entity row lookup).
+    let seeds: string[];
+    if (opts.entityDisplayIds && opts.entityDisplayIds.length > 0) {
+      seeds = opts.entityDisplayIds.slice(0, maxSeeds);
+    } else {
+      const directUuidSet = new Set(entityDirectUuids);
+      seeds = ents
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .filter((e: any) => directUuidSet.has(e.id) && typeof e.entity_id === "string")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((e: any) => e.entity_id as string)
+        .slice(0, maxSeeds);
+    }
+
+    for (const displayId of seeds) {
+      const cascade = computeCascadeFromEntity(displayId, ents, edgs, cycs);
+      for (const hit of cascade.affected_entities) {
+        if (!allAffectedUuids.has(hit.entity_uuid)) {
+          allAffectedUuids.add(hit.entity_uuid);
+          cascadeExtended++;
+        }
+      }
+    }
+  } catch (cascadeErr) {
+    console.warn(
+      "[notify/cascade] reach computation failed (non-fatal, falling back to direct-only flagging):",
+      cascadeErr,
+    );
+  }
+
+  const flagged = await notifyEntitiesChanged(
+    db,
+    spaceId,
+    Array.from(allAffectedUuids),
+    source,
+    reason,
+  );
+  return {
+    direct: flagged.direct,
+    via_objectives: flagged.via_objectives,
+    cascade_extended: cascadeExtended,
+  };
+}
+
+/**
  * A metric_observations row was written for `trackerId`. Flag every app
  * tracking that metric so its health_score gets re-evaluated.
  */

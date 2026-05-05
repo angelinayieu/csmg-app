@@ -50,6 +50,7 @@ import { StrategyHeroCardShapeUtil } from "./shapes/strategy-hero-card-shape";
 import { StrategyAlternativeShapeUtil } from "./shapes/strategy-alternative-shape";
 import { StrategyObjectiveShapeUtil } from "./shapes/strategy-objective-shape";
 import { RoomShapeUtil } from "./shapes/room-shape";
+import { ProbeTrailShapeUtil } from "./shapes/probe-trail-shape";
 
 export const SHAPE_UTILS = [
   KGNodeShapeUtil,
@@ -168,4 +169,9 @@ export const SHAPE_UTILS = [
   // sends it to back so subsequent painted shapes (entities, axes,
   // proposals) layer on top, reading as "inside" the room.
   RoomShapeUtil,
+  // Probe rabbit-hole trail (2026-07-04) — spatial unfurl of a probe
+  // question, spawned by the dock:probe event listener (or per-card
+  // (+) menu's Probe action). Renders the agent's question-decomp
+  // tree using TrailNode + TrailEdge primitives.
+  ProbeTrailShapeUtil,
 ];

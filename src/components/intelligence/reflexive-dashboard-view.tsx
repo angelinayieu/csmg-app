@@ -34,13 +34,16 @@ import { ReflexiveLoopStats } from "@/components/intelligence/reflexive-loop-sta
 import { ProposedEdgesInbox } from "@/components/intelligence/proposed-edges-inbox";
 import { OpenQuestionsBoard } from "@/components/intelligence/open-questions-board";
 import { ActivityFeed } from "@/components/intelligence/activity-feed";
+import { RecentPipelineRunsStrip } from "@/components/intelligence/recent-pipeline-runs-strip";
 import { CoverageLandscapePanel } from "@/components/graph/coverage-landscape-panel";
+import { useIntelligenceSpineContext } from "@/contexts/intelligence-spine-context";
 import type { IntelligenceOverview } from "@/app/api/spaces/[id]/intelligence-overview/route";
 import type { CoverageLandscape } from "@/app/api/spaces/[id]/coverage-landscape/route";
 
 export function ReflexiveDashboardView() {
   const ctx = useSpaceData();
   const spaceId = ctx.space.id;
+  const spineCtx = useIntelligenceSpineContext();
 
   const [overview, setOverview] = useState<IntelligenceOverview | null>(null);
   const [landscape, setLandscape] = useState<CoverageLandscape | null>(null);
@@ -204,6 +207,15 @@ export function ReflexiveDashboardView() {
               {error}
             </div>
           )}
+
+          {/* Pipeline runs strip — surfaces decompose / research / synthesize /
+              strategy-refresh / generate-apps / critique runs from the spine
+              alongside the prospector activity feed below. Renders nothing
+              when the spine has no recent_runs. */}
+          <RecentPipelineRunsStrip
+            spaceId={spaceId}
+            runs={spineCtx?.spine?.recent_runs ?? null}
+          />
 
           {/* Scan now delta — auto-dismisses after 8s. Makes each prospector
               run legible: "examined N pairs, proposed M edges in X seconds".

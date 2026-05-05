@@ -1892,12 +1892,14 @@ export const MIND_BODY_COGNITION_TEMPLATE: ResearchTemplate = {
 // entries below.
 
 import { SLEEP_OPTIMIZATION_TEMPLATE } from "@/lib/templates/sleep-optimization/seed";
+import { COGNITIVE_PERFORMANCE_TEMPLATE } from "@/lib/templates/cognitive-performance/seed";
 
-export { SLEEP_OPTIMIZATION_TEMPLATE };
+export { SLEEP_OPTIMIZATION_TEMPLATE, COGNITIVE_PERFORMANCE_TEMPLATE };
 
 export const RESEARCH_TEMPLATES: Record<string, ResearchTemplate> = {
   mind_body_cognition: MIND_BODY_COGNITION_TEMPLATE,
   sleep_optimization: SLEEP_OPTIMIZATION_TEMPLATE,
+  cognitive_performance: COGNITIVE_PERFORMANCE_TEMPLATE,
 };
 
 export function getResearchTemplate(slug: string): ResearchTemplate | null {

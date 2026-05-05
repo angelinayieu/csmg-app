@@ -64,10 +64,18 @@ export interface UseExtractionReviewActions {
   }) => Promise<void>;
   /** Submit the user's selection. Returns the commit result so the
    *  parent can display a success toast. Drawer auto-closes on
-   *  success. */
+   *  success.
+   *
+   *  fullDecompose (Phase 2a 2026-07-04): when true, after the HITL
+   *  commit the server chains into /api/pipeline/decompose against
+   *  the paper's normalized_text so the paper contributes the same
+   *  multi-pass depth (cycles, bridges, framework overlays) as a
+   *  prompt would. Defaults to undefined — server picks per asset
+   *  class (research_pdf + internal_doc → on, others → off). */
   extract: (
     selectedCandidateIds: string[],
     focusLevel: FocusLevel,
+    fullDecompose?: boolean,
   ) => Promise<ExtractionCommitResult | null>;
   /** Skip extraction for the current asset. Drawer auto-closes. */
   skip: () => Promise<void>;
@@ -127,17 +135,21 @@ export function useExtractionReview(): UseExtractionReviewState &
   );
 
   const extract = useCallback<UseExtractionReviewActions["extract"]>(
-    async (selectedCandidateIds, focusLevel) => {
+    async (selectedCandidateIds, focusLevel, fullDecompose) => {
       if (!assetId) return null;
       setError(null);
       try {
+        const body: Record<string, unknown> = {
+          selected_candidate_ids: selectedCandidateIds,
+          focus_level: focusLevel,
+        };
+        if (typeof fullDecompose === "boolean") {
+          body.full_decompose = fullDecompose;
+        }
         const res = await fetch(`/api/ingest/${assetId}/extract`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            selected_candidate_ids: selectedCandidateIds,
-            focus_level: focusLevel,
-          }),
+          body: JSON.stringify(body),
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));

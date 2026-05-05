@@ -18,4 +18,5 @@ export {
   Network,
   CheckCircle2,
   Activity,
+  Power,
 } from "lucide-react";

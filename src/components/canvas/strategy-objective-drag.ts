@@ -5,9 +5,9 @@
 // file so the drawer (a non-tldraw component) can import it without
 // pulling tldraw runtime into the strategy bundle.
 
-import type { PerspectiveKey } from "./strategy-objective-drag-types";
+import type { PaletteSlot } from "./strategy-objective-drag-types";
 
-export type { PerspectiveKey };
+export type { PaletteSlot };
 
 export const STRATEGY_OBJECTIVE_DRAG_MIME =
   "application/x-interaxis-strategy-objective";
@@ -23,7 +23,7 @@ export interface StrategyObjectiveDragPayload {
   tag: "lead" | "lag";
   valueLabel: string | null;
   /** Drives accent color on the dropped card */
-  paletteKey: PerspectiveKey;
+  paletteKey: PaletteSlot;
   /** KG entities the objective references — handy for future linking */
   sourceEntityIds: string[];
   /** Display label for the parent perspective ("Internal", etc.) */

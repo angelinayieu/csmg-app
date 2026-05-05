@@ -36,12 +36,17 @@ export function useIntelligenceSpine(
   enabled: boolean,
 ): UseIntelligenceSpineState {
   const [spine, setSpine] = useState<IntelligenceSpine | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const cancelledRef = useRef(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Derived: we're "loading" iff the drawer is open with a space id and we
+  // haven't seen a spine yet (and aren't in an error state). Avoids storing
+  // a separate loading boolean that would force a synchronous setState in
+  // the mount effect — react-hooks/set-state-in-effect flags that pattern.
+  const loading = enabled && !!spaceId && spine === null && error === null;
 
   const fetchSpine = useCallback(
     async (id: string) => {
@@ -56,7 +61,6 @@ export function useIntelligenceSpine(
             | null;
           if (!cancelledRef.current) {
             setError(body?.error ?? `HTTP ${res.status}`);
-            setLoading(false);
           }
           return;
         }
@@ -64,11 +68,9 @@ export function useIntelligenceSpine(
         if (cancelledRef.current) return;
         setSpine(payload);
         setError(null);
-        setLoading(false);
       } catch (err) {
         if (!cancelledRef.current) {
           setError(err instanceof Error ? err.message : String(err));
-          setLoading(false);
         }
       }
     },
@@ -87,18 +89,18 @@ export function useIntelligenceSpine(
 
   useEffect(() => {
     if (!enabled || !spaceId) {
-      // Idle — don't load, don't subscribe. Reset state on disable so
-      // the next open starts fresh rather than flashing stale data.
-      if (!enabled) {
-        setSpine(null);
-        setError(null);
-      }
+      // Idle — don't load, don't subscribe. The drawer unmounts the
+      // hook's host on close, so stale state can't leak across opens;
+      // no explicit reset needed.
       return;
     }
 
     cancelledRef.current = false;
-    setLoading(true);
-    void fetchSpine(spaceId);
+    // Standard fetch-on-mount: every setState inside fetchSpine fires AFTER
+    // an `await`, so we never cascade renders synchronously. The lint rule
+    // can't prove that across the useCallback boundary, so suppress here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchSpine(spaceId);
 
     const supabase = createClient();
     const channel = supabase

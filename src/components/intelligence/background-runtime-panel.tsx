@@ -119,6 +119,19 @@ export function BackgroundRuntimePanel({ spaceId, className }: Props) {
     void load();
   }, [load]);
 
+  // P1.4 — auto-refresh once a minute so the countdown stays in sync
+  // with the actual cron runs. The server computes seconds_until_due on
+  // every fetch; the client also ticks locally between fetches via the
+  // useTickingCountdown hook below. 60s is a reasonable balance: cheap
+  // network, snappy enough for a sub-minute UX.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void load();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [load]);
+
   const patch = useCallback(
     async (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -197,15 +210,17 @@ export function BackgroundRuntimePanel({ spaceId, className }: Props) {
         title="Predictor agents"
         subtitle="LLM agents that emit forecasts about your apps"
         icon={<Zap className="h-3.5 w-3.5 text-amber-600" />}
+        spaceId={spaceId}
         setting={data.settings.agent_runtime}
         nextDue={data.next_due.agent_runtime}
-        lastRun={data.settings.last_runs.agent_runtime}
+        lastRun={data.last_runs.agent_runtime}
         cadenceOptions={AGENT_RUNTIME_CADENCE_OPTIONS}
         showPausePresets
         disabled={saving}
         onToggle={(enabled) => patch({ agent_runtime: { enabled } })}
         onCadence={(cadence_hours) => patch({ agent_runtime: { cadence_hours } })}
         onPause={(paused_until) => patch({ agent_runtime: { paused_until } })}
+        onAfterRun={() => void load()}
       />
 
       <div className="border-t border-gray-100" />
@@ -215,13 +230,15 @@ export function BackgroundRuntimePanel({ spaceId, className }: Props) {
         title="Prediction resolver"
         subtitle="Matures past-horizon predictions and fires KG calibration"
         icon={<Activity className="h-3.5 w-3.5 text-emerald-600" />}
+        spaceId={spaceId}
         setting={data.settings.predictions_resolve}
         nextDue={data.next_due.predictions_resolve}
-        lastRun={data.settings.last_runs.predictions_resolve}
+        lastRun={data.last_runs.predictions_resolve}
         cadenceOptions={PREDICTIONS_RESOLVE_CADENCE_OPTIONS}
         disabled={saving}
         onToggle={(enabled) => patch({ predictions_resolve: { enabled } })}
         onCadence={(cadence_hours) => patch({ predictions_resolve: { cadence_hours } })}
+        onAfterRun={() => void load()}
       />
 
       <div className="text-[9.5px] text-gray-400 leading-snug">
@@ -235,6 +252,7 @@ export function BackgroundRuntimePanel({ spaceId, className }: Props) {
 
 interface CronControlProps {
   kind: "agent_runtime" | "predictions_resolve";
+  spaceId: string;
   title: string;
   subtitle: string;
   icon: React.ReactNode;
@@ -247,9 +265,27 @@ interface CronControlProps {
   onToggle: (enabled: boolean) => void;
   onCadence: (cadence_hours: number) => void;
   onPause?: (paused_until: string | null) => void;
+  /** Refetch the parent's RuntimeSettings response after a successful run. */
+  onAfterRun?: () => void;
+}
+
+/** P1.4 — local seconds counter that decrements between server fetches.
+ *  Anchored on the load-time `secondsUntilDue` so it stays accurate within
+ *  the 60s gap between auto-refreshes. Negative when the cron is overdue. */
+function useTickingCountdown(secondsUntilDue: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  const targetMs = useMemo(() => Date.now() + secondsUntilDue * 1000, [secondsUntilDue]);
+  useEffect(() => {
+    if (secondsUntilDue < 0) return; // disabled / paused indefinitely
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [secondsUntilDue]);
+  return Math.max(-1, Math.ceil((targetMs - now) / 1000));
 }
 
 function CronControl({
+  kind,
+  spaceId,
   title,
   subtitle,
   icon,
@@ -262,22 +298,54 @@ function CronControl({
   onToggle,
   onCadence,
   onPause,
+  onAfterRun,
 }: CronControlProps) {
   const isPaused = !!setting.paused_until && Date.parse(setting.paused_until) > Date.now();
+  const ticking = useTickingCountdown(nextDue.seconds_until_due);
   const statusTone = !setting.enabled
     ? "bg-gray-100 text-gray-500 ring-gray-200"
     : isPaused
       ? "bg-amber-50 text-amber-700 ring-amber-200"
-      : nextDue.due
+      : ticking <= 0
         ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
         : "bg-indigo-50 text-indigo-700 ring-indigo-200";
   const statusLabel = !setting.enabled
     ? "Disabled"
     : isPaused
       ? "Paused"
-      : nextDue.due
+      : ticking <= 0
         ? "Ready to run"
-        : `Next in ${formatSeconds(nextDue.seconds_until_due)}`;
+        : `Next in ${formatSeconds(ticking)}`;
+
+  // P1.5 — manual trigger. Calls the run-now endpoint scoped to this
+  // (space, cron); on success the parent refetches so the lastRun chip
+  // and the countdown both reflect the immediate stamp.
+  const [triggering, setTriggering] = useState(false);
+  const [triggerError, setTriggerError] = useState<string | null>(null);
+  const onRunNow = async () => {
+    if (triggering || !setting.enabled || isPaused) return;
+    setTriggering(true);
+    setTriggerError(null);
+    try {
+      const res = await fetch(
+        `/api/spaces/${encodeURIComponent(spaceId)}/runtime-settings/run-now`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cron: kind }),
+        },
+      );
+      if (!res.ok) {
+        const err = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(err?.error ?? `HTTP ${res.status}`);
+      }
+      onAfterRun?.();
+    } catch (e) {
+      setTriggerError(e instanceof Error ? e.message : "Trigger failed");
+    } finally {
+      setTriggering(false);
+    }
+  };
 
   return (
     <div className="space-y-2.5">
@@ -311,7 +379,7 @@ function CronControl({
         </button>
       </div>
 
-      {/* Status chip */}
+      {/* Status chip + Run-now button */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-[1px] text-[9.5px] font-semibold ring-1 tabular-nums", statusTone)}>
           <Power className="h-2.5 w-2.5" />
@@ -327,6 +395,27 @@ function CronControl({
           <span className="text-[9.5px] text-gray-400">
             {nextDue.reason}
           </span>
+        )}
+        {/* P1.5 — manual trigger. Hidden when disabled/paused since the
+            backend rejects those anyway. Rate-limited server-side; the
+            client just shows a spinner. */}
+        {setting.enabled && !isPaused && (
+          <button
+            type="button"
+            onClick={onRunNow}
+            disabled={triggering || disabled}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full bg-white ring-1 ring-gray-200 px-2 py-[1px] text-[9.5px] font-semibold text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 hover:ring-indigo-200 transition-colors",
+              (triggering || disabled) && "opacity-50 cursor-not-allowed",
+            )}
+            title="Trigger this cron once for this space, ignoring cadence"
+          >
+            {triggering ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Play className="h-2.5 w-2.5" />}
+            Run now
+          </button>
+        )}
+        {triggerError && (
+          <span className="text-[9.5px] text-red-600 truncate">{triggerError}</span>
         )}
       </div>
 

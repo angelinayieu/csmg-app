@@ -9,6 +9,7 @@
 import type { CausalChain, BaselineQuestion, CalculationTrace } from "@/types/causal-chains";
 import type { ImprovementGoal } from "@/types/goals";
 import type { SynthesisData } from "@/types/synthesis";
+import type { ChainEvidenceBundles } from "@/types/evidence-bundles";
 
 export interface PropagatorInput {
   chain: CausalChain;
@@ -19,6 +20,11 @@ export interface PropagatorInput {
   // Space-level context
   spaceName: string;
   spaceDescription?: string | null;
+  // Real evidence pooled per chain entity. When non-null and bundles are
+  // present, the prompt forces the LLM to cite real evidence_ids instead
+  // of inventing paper labels. When null (flag off) or empty, falls back
+  // to the prior LLM-narrative behavior.
+  evidenceBundles?: ChainEvidenceBundles | null;
 }
 
 /**
@@ -142,12 +148,52 @@ OUTPUT JSON:
   return { system, user };
 }
 
+function buildEvidenceBlock(bundles: ChainEvidenceBundles | null | undefined): string {
+  if (!bundles || bundles.bundles.length === 0) {
+    const uncoveredNote =
+      bundles && bundles.uncovered_entity_ids.length > 0
+        ? ` Uncovered entities: ${bundles.uncovered_entity_ids.join(", ")}.`
+        : "";
+    return `## Evidence available for this chain
+No published evidence is attached to entities in this chain.${uncoveredNote} ALL "research" steps in your trace MUST use source.kind: "llm_estimate" (NOT "research") and explain the absence in the narrative. Do not invent paper citations.`;
+  }
+
+  const bundleList = bundles.bundles
+    .map((b) => {
+      const ci = `[${b.pooled.pooled_ci_lower.toFixed(3)}, ${b.pooled.pooled_ci_upper.toFixed(3)}]`;
+      const cites = b.citations.slice(0, 3).map((c) => c.evidence_id).join(", ");
+      const more = b.citations.length > 3 ? ` (+${b.citations.length - 3} more)` : "";
+      return `- entity ${b.attached_entity_id} (${b.entity_name}): pooled ${b.effect_metric} = ${b.pooled.pooled_effect.toFixed(3)} 95% CI ${ci}, n_studies=${b.pooled.n_studies}, τ²=${b.pooled.tau_squared.toFixed(4)}
+  evidence_ids: [${cites}]${more}`;
+    })
+    .join("\n");
+
+  const uncoveredLine =
+    bundles.uncovered_entity_ids.length > 0
+      ? `\nEntities with no evidence (mark these steps llm_estimate, explain in narrative): ${bundles.uncovered_entity_ids.join(", ")}`
+      : "";
+
+  return `## Evidence available for this chain (USE these — do not invent)
+${bundleList}${uncoveredLine}
+
+═══ HARD CITATION RULES ═══
+For every step where source.kind is "research":
+  - source.evidence_ids MUST be a non-empty array of IDs from the bundle above (UUIDs)
+  - source.label MUST refer to the cited evidence (paraphrase the entity / effect, do not make up an author name)
+  - The numeric value (effect_size, factor) MUST come from the pooled estimate, not invented
+For research-flavored steps where no bundle exists for the relevant entity:
+  - Set source.kind = "llm_estimate" (NOT "research")
+  - Explain the absence in narrative
+  - Cap reliability at 2`;
+}
+
 export function buildEffectTracePrompt(input: PropagatorInput): {
   system: string;
   user: string;
 } {
   const { chain, goal, spaceName, answeredQuestions = [] } = input;
   const synthData = input.synthesisData;
+  const evidenceBlock = buildEvidenceBlock(input.evidenceBundles);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const strategicRec = (synthData as any)?.strategic_recommendation as any;
@@ -195,7 +241,8 @@ IMPORTANT:
 
 Return ONLY JSON matching the schema.`;
 
-  const user = `
+  const user = `${evidenceBlock}
+
 CHAIN: ${chain.name}
   concept: ${chain.stages[0].title}
   research: ${chain.stages[1].title} (${chain.stages[1].meta})
@@ -234,17 +281,30 @@ OUTPUT JSON (keys must match exactly):
     {
       "num": 1, "kind": "input", "name": "Baseline <metric>",
       "description": "<one-sentence rationale>",
-      "source": { "kind": "user|research|model|history", "label": "<short>", "reliability": 1-5 },
+      "source": { "kind": "user|model|history|llm_estimate", "label": "<short>", "reliability": 1-5 },
       "graph": { "primitive": "distribution", "data": { "bins": [<heights 0-1>], "mean_index": <0-indexed> } },
       "value_display": "<e.g. 14.2%>", "value_unit": "%", "value_numeric": 14.2,
       "is_factor": false
     },
     {
       "num": 2, "kind": "input", "name": "<rule> effect",
-      "description": "<one sentence>",
-      "source": { "kind": "research", "label": "<paper name>", "reliability": 1-5 },
+      "description": "<one sentence — paraphrase the entity / mechanism, not an author name>",
+      "source": {
+        "kind": "research",
+        "label": "<short paraphrase, e.g. 'WM-capacity pooled effect'>",
+        "reliability": 1-5,
+        "evidence_ids": ["<UUID from bundle>", "..."],
+        "pooled_metadata": {
+          "n_studies": <int from bundle>,
+          "pooled_effect": <number from bundle>,
+          "pooled_ci_lower": <number from bundle>,
+          "pooled_ci_upper": <number from bundle>,
+          "tau_squared": <number from bundle>,
+          "effect_metric": "<from bundle>"
+        }
+      },
       "graph": { "primitive": "density", "data": { "center_pct": <0-100>, "spread": <small number>, "peak_value": <0-1> } },
-      "value_display": "<e.g. -41%>", "value_unit": "%", "value_numeric": -41, "is_factor": false
+      "value_display": "<e.g. -41%>", "value_unit": "%", "value_numeric": <use bundle pooled_effect>, "is_factor": false
     },
     {
       "num": 3, "kind": "transform", "name": "Population adjustment",

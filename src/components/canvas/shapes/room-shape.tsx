@@ -43,9 +43,45 @@ import {
   resizeBox,
 } from "tldraw";
 import { useEffect, useRef, useState } from "react";
-import { Plus, Check, Loader2 } from "lucide-react";
+import { Plus } from "lucide-react";
 import type { RoomShape } from "./types";
 import { STAGE_ROOMS } from "@/lib/whiteboard/room-layout";
+import type { PipelineStage } from "@/types/pipeline-events";
+import {
+  IntakeRoomIcon,
+  LandscapeRoomIcon,
+  KgRoomIcon,
+  ProposalRoomIcon,
+  LabRoomIcon,
+  ResultsRoomIcon,
+} from "@/components/canvas/icons";
+
+// Custom stage SVG icons replace the roman-numeral glyph. Matches the
+// rooms-strip pre-flight upgrade — geometric, lab-instrument feel
+// instead of generic numerals. Each icon hints at the stage's role
+// (funnel for intake, fan-of-three for landscape probability spaces,
+// connected-dots for KG, converge-lines for proposal, isometric box
+// for lab, check-in-circle for results).
+const STAGE_ICON: Record<
+  PipelineStage,
+  React.ComponentType<{ size?: number; style?: React.CSSProperties }>
+> = {
+  intake: IntakeRoomIcon,
+  landscape: LandscapeRoomIcon,
+  kg: KgRoomIcon,
+  proposal: ProposalRoomIcon,
+  lab: LabRoomIcon,
+  results: ResultsRoomIcon,
+};
+
+const STAGE_ORDER: PipelineStage[] = [
+  "intake",
+  "landscape",
+  "kg",
+  "proposal",
+  "lab",
+  "results",
+];
 
 // Defaults — match room-layout.ts ROOM_W; height varies by stage and
 // is set by the painter at spawn time.
@@ -167,7 +203,11 @@ function RoomView({ shape }: { shape: RoomShape }) {
     setExpanded((v) => !v);
   };
 
-  // State chip — shows working / complete / waiting glyph + label.
+  // State chip — monospace caps to match the rail vocabulary
+  // (rail-ambient-mode + rooms-strip use the same WORKING / DONE /
+  // PENDING chips, all on the same alphabet). The active chip uses a
+  // breathing dot at the kg-drill-halo cadence instead of a rotating
+  // spinner — quieter, less anxious, same cadence as the icon ring.
   const stateChip = (() => {
     if (state === "active") {
       return (
@@ -175,22 +215,29 @@ function RoomView({ shape }: { shape: RoomShape }) {
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 5,
-            padding: "3px 10px 3px 8px",
+            gap: 4,
+            padding: "2px 8px",
             borderRadius: 999,
             background: `color-mix(in srgb, ${accent} 14%, transparent)`,
-            border: `1px solid color-mix(in srgb, ${accent} 28%, transparent)`,
-            fontSize: 10.5,
+            border: `0.5px solid color-mix(in srgb, ${accent} 38%, transparent)`,
+            fontSize: 9,
             fontWeight: 700,
-            letterSpacing: "0.04em",
+            letterSpacing: "0.14em",
             color: accent,
+            fontFamily: '"SF Mono", ui-monospace, monospace',
           }}
         >
-          <Loader2
-            style={{ width: 11, height: 11 }}
-            className="animate-spin"
+          <span
+            aria-hidden
+            className="rail-streaming-breath"
+            style={{
+              width: 4,
+              height: 4,
+              borderRadius: "50%",
+              background: accent,
+            }}
           />
-          Working
+          WORKING
         </span>
       );
     }
@@ -200,19 +247,19 @@ function RoomView({ shape }: { shape: RoomShape }) {
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 5,
-            padding: "3px 10px 3px 8px",
+            gap: 3,
+            padding: "2px 8px",
             borderRadius: 999,
-            background: "rgba(16,185,129,0.12)",
-            border: "1px solid rgba(16,185,129,0.28)",
-            fontSize: 10.5,
+            background: "rgba(16,185,129,0.10)",
+            border: "0.5px solid rgba(16,185,129,0.32)",
+            fontSize: 9,
             fontWeight: 700,
-            letterSpacing: "0.04em",
+            letterSpacing: "0.14em",
             color: "#047857",
+            fontFamily: '"SF Mono", ui-monospace, monospace',
           }}
         >
-          <Check style={{ width: 11, height: 11 }} strokeWidth={3} />
-          Complete
+          DONE
         </span>
       );
     }
@@ -221,18 +268,18 @@ function RoomView({ shape }: { shape: RoomShape }) {
         style={{
           display: "inline-flex",
           alignItems: "center",
-          gap: 5,
-          padding: "3px 10px",
+          padding: "2px 8px",
           borderRadius: 999,
-          background: "rgba(148,163,184,0.10)",
-          border: "1px solid rgba(148,163,184,0.20)",
-          fontSize: 10.5,
+          background: "rgba(148,163,184,0.08)",
+          border: "0.5px solid rgba(148,163,184,0.22)",
+          fontSize: 9,
           fontWeight: 700,
-          letterSpacing: "0.04em",
+          letterSpacing: "0.14em",
           color: "#64748b",
+          fontFamily: '"SF Mono", ui-monospace, monospace',
         }}
       >
-        Waiting
+        PENDING
       </span>
     );
   })();
@@ -334,6 +381,52 @@ function RoomView({ shape }: { shape: RoomShape }) {
           transition: "border 220ms ease, box-shadow 220ms ease",
         }}
       >
+        {/* Top accent rail — gradient hairline that gives each room
+            its color identity without flooding the body. Sits ABOVE
+            the header content so it reads as the room's "edge of
+            instrument," not as a decoration. */}
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 28,
+            right: 28,
+            height: 2,
+            borderRadius: 2,
+            background: `linear-gradient(90deg, transparent 0%, color-mix(in srgb, ${accent} 56%, transparent) 50%, transparent 100%)`,
+            pointerEvents: "none",
+          }}
+        />
+
+        {/* Telemetry strip — instrument-readout feel: stage ID + clock.
+            Quiet monospace, tabular-nums, top-right. Reads as a lab
+            panel, not chrome. Only renders when the room is active or
+            complete — pending rooms keep the header simple. */}
+        {state !== "pending" && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 4,
+              fontSize: 9,
+              fontFamily: '"SF Mono", ui-monospace, monospace',
+              letterSpacing: "0.06em",
+              color: "rgba(85,100,121,0.75)",
+            }}
+          >
+            <span>
+              {stage.toUpperCase()}_R
+              {(STAGE_ORDER.indexOf(stage) + 1).toString().padStart(2, "0")}
+            </span>
+            <span style={{ color: "rgba(85,100,121,0.4)" }}>·</span>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>
+              {state === "complete" ? "DONE" : "WORKING"}
+            </span>
+          </div>
+        )}
+
         {/* Header row */}
         <div
           style={{
@@ -342,7 +435,11 @@ function RoomView({ shape }: { shape: RoomShape }) {
             gap: 14,
           }}
         >
-          {/* Room glyph badge */}
+          {/* Custom stage icon badge — replaces roman-numeral glyph.
+              Geometric SVG mark per stage (funnel for intake, fan-of-
+              three for landscape, connected-dots for kg, etc.). Active
+              state earns a breathing ring at the kg-drill-halo cadence
+              so the eye flows to the room being worked on. */}
           <div
             style={{
               flex: "0 0 auto",
@@ -356,15 +453,30 @@ function RoomView({ shape }: { shape: RoomShape }) {
                 color-mix(in srgb, ${accent} 18%, white) 0%,
                 color-mix(in srgb, ${accent} 8%, white) 100%)`,
               border: `1px solid color-mix(in srgb, ${accent} 26%, transparent)`,
-              fontSize: 22,
-              fontWeight: 700,
               color: accent,
-              letterSpacing: "-0.02em",
               boxShadow: `inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 6px color-mix(in srgb, ${accent} 12%, transparent)`,
+              position: "relative",
             }}
             aria-hidden
           >
-            {meta.glyph}
+            {(() => {
+              const Icon = STAGE_ICON[stage];
+              return <Icon size={22} />;
+            })()}
+            {state === "active" && (
+              <span
+                aria-hidden
+                className="rail-streaming-breath"
+                style={{
+                  position: "absolute",
+                  inset: -3,
+                  borderRadius: 16,
+                  border: `1.5px solid ${accent}`,
+                  opacity: 0.55,
+                  pointerEvents: "none",
+                }}
+              />
+            )}
           </div>
 
           {/* Title + subtitle */}

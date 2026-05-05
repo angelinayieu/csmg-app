@@ -391,6 +391,34 @@ export type RoomShape = TLBaseShape<
   }
 >;
 
+// Probe rabbit-hole trail (2026-07-04) — spatial unfurl of a probe
+// question into 2-4 sub-questions. Produced by /api/canvas/probe-
+// rabbit-hole, rendered by probe-trail-shape.tsx using the pre-flight
+// TrailNode + TrailEdge primitives.
+//
+// Trail data lives in `trailJson` as a stringified ProbeTrail (see
+// src/lib/pipeline/probe-orchestrator.ts) — tldraw's prop validators
+// require scalar fields, so structured trail data rides as JSON. The
+// shape util parses on render with a defensive fallback.
+export type ProbeTrailShape = TLBaseShape<
+  "probe-trail",
+  {
+    w: number;
+    h: number;
+    /** Stringified ProbeTrail. Mutating the trail (e.g., a sub-question
+     *  flips status to 'working' while research-deep runs) updates this
+     *  prop in place — the shape util re-parses + re-renders. */
+    trailJson: string;
+    /** Source kg-node entity id — preserved here so the shape knows
+     *  what card it tethers to even when the source moves around. */
+    sourceEntityId: string;
+    sourceEntityName: string;
+    rootQuestion: string;
+    /** ms epoch — used to play the entrance animation once. */
+    spawnedAt: number;
+  }
+>;
+
 // Phase B (intake redesign) — Strategy hero card.
 // See full doc on the matching entry in tldraw-shapes.d.ts. Lightweight
 // preview props; full StrategicRecommendation is fetched on mount via

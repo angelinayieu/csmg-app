@@ -217,6 +217,24 @@ export interface ExtractionCommitResult {
    *  materialized; 3 already existed." */
   skipped_count: number;
   committed_at: string;
+  /** Run id of the chained /api/pipeline/decompose call when
+   *  full_decompose=true. Lets the UI link to the canvas event HUD
+   *  for the deeper pass. Null when the chain didn't fire (asset
+   *  class doesn't warrant it, or normalized_text wasn't ready). */
+  decompose_run_id?: string | null;
+  /** Non-fatal error string when the decompose chain failed. The
+   *  HITL commit still succeeded — the user has their entities
+   *  already; we just couldn't run the multi-pass extraction. */
+  decompose_error?: string | null;
+  /** Whether the route requested a full_decompose chain. False when
+   *  the body explicitly disabled it OR the asset class isn't
+   *  research_pdf / internal_doc. */
+  full_decompose_requested?: boolean;
+  /** Initiative 2 — whether /extract-effect-sizes + /extract-temporal
+   *  were queued in `after()`. UI shows "extracting effect sizes…"
+   *  while this is true and no rows have landed yet; flips off once
+   *  evidence_registries rows for this asset arrive via realtime. */
+  auto_quantitative_queued?: boolean;
 }
 
 // ── Extraction status (mirrors DB enum) ──────────────────────────────

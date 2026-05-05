@@ -47,6 +47,14 @@ export interface AssetContributionStats {
   novelEntityCount: number;
   /** Total edges with this asset id in their literature_sources. */
   edgeCount: number;
+  /** Initiative 2 — effect_size-bearing evidence_registries rows
+   *  attributed to this asset. Surfaces "📊 N effects" on the card
+   *  once the auto-fired /extract-effect-sizes pass completes. */
+  effectSizeCount: number;
+  /** Initiative 2 — temporal-anchor evidence_registries rows
+   *  attributed to this asset (onset_days / peak_days / persistence_days
+   *  set). Surfaces as "⏱ M temporal" on the card. */
+  temporalCount: number;
 }
 
 /** P6 · per-asset bibliographic metadata extracted at preview time.
@@ -97,6 +105,18 @@ interface ApiEdgeRow {
   literature_sources: string[] | null;
 }
 
+/** Initiative 2 — minimal evidence_registries shape for asset bucketing.
+ *  Status filter applied at fetch time (only extracted/reviewed rows
+ *  count toward the visible badges; pending/rejected/superseded are
+ *  noise from the user's perspective). */
+interface ApiEvidenceRow {
+  ingested_file_id: string | null;
+  effect_size: number | null;
+  onset_days: number | null;
+  peak_days: number | null;
+  persistence_days: number | null;
+}
+
 const EMPTY_INDEX: AssetDerivedEntitiesIndex = {
   byAssetId: new Map(),
   statsByAssetId: new Map(),
@@ -135,13 +155,24 @@ export function useAssetDerivedEntities(
   const [entityRows, setEntityRows] = useState<ApiEntityRow[]>([]);
   const [edgeRows, setEdgeRows] = useState<ApiEdgeRow[]>([]);
   const [metadataRows, setMetadataRows] = useState<AssetMetadata[]>([]);
+  const [evidenceRows, setEvidenceRows] = useState<ApiEvidenceRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!spaceId) {
+      // Standard reset-on-disable pattern — clear each list to []
+      // when there's no space to subscribe to. React batches these
+      // four setState calls into one render; the lint rule flags
+      // unconditional setState in effects for cascading-render
+      // safety, but here the previous list is usually already []
+      // (no actual render happens) and even when not, the four-call
+      // batch resolves in one frame. See use-intelligence-spine.ts
+      // for the same pattern.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEntityRows([]);
       setEdgeRows([]);
       setMetadataRows([]);
+      setEvidenceRows([]);
       return;
     }
     const ctrl = new AbortController();
@@ -193,12 +224,33 @@ export function useAssetDerivedEntities(
         setMetadataRows(Array.isArray(data?.assets) ? data.assets : []);
       });
 
-    Promise.all([entitiesPromise, metadataPromise])
+    // Initiative 2 · parallel fetch for evidence_registries rows so
+    // each asset card can show "📊 N effects · ⏱ M temporal" badges
+    // once the auto-fired extraction passes complete. Filter to
+    // extracted/reviewed only — pending/rejected/superseded are noise.
+    const evidencePromise = fetch(
+      `/api/spaces/${encodeURIComponent(spaceId)}/evidence?status=extracted,reviewed&limit=2000`,
+      { signal: ctrl.signal, credentials: "include" },
+    )
+      .then(async (r) => {
+        if (!r.ok) return { rows: [] };
+        try {
+          return await r.json();
+        } catch {
+          return { rows: [] };
+        }
+      })
+      .then((data: { rows?: ApiEvidenceRow[] }) => {
+        setEvidenceRows(Array.isArray(data?.rows) ? data.rows : []);
+      });
+
+    Promise.all([entitiesPromise, metadataPromise, evidencePromise])
       .catch((err) => {
         if ((err as { name?: string })?.name === "AbortError") return;
         setEntityRows([]);
         setEdgeRows([]);
         setMetadataRows([]);
+        setEvidenceRows([]);
       })
       .finally(() => setLoading(false));
 
@@ -223,7 +275,13 @@ export function useAssetDerivedEntities(
     const ensureStats = (aid: string): AssetContributionStats => {
       let s = statsByAssetId.get(aid);
       if (!s) {
-        s = { entityCount: 0, novelEntityCount: 0, edgeCount: 0 };
+        s = {
+          entityCount: 0,
+          novelEntityCount: 0,
+          edgeCount: 0,
+          effectSizeCount: 0,
+          temporalCount: 0,
+        };
         statsByAssetId.set(aid, s);
       }
       return s;
@@ -264,6 +322,25 @@ export function useAssetDerivedEntities(
       }
     }
 
+    // Initiative 2 — bucket evidence rows. Effect-size count: rows
+    // with a non-null effect_size. Temporal count: rows with at least
+    // one of {onset, peak, persistence}_days set. A single row can
+    // contribute to BOTH counts (the two halves are independent).
+    for (const r of evidenceRows) {
+      if (!r.ingested_file_id) continue;
+      const stats = ensureStats(r.ingested_file_id);
+      if (r.effect_size !== null && r.effect_size !== undefined) {
+        stats.effectSizeCount += 1;
+      }
+      if (
+        r.onset_days != null ||
+        r.peak_days != null ||
+        r.persistence_days != null
+      ) {
+        stats.temporalCount += 1;
+      }
+    }
+
     // Sort each asset's bucket by confidence desc (ties: name asc).
     for (const bucket of byAssetId.values()) {
       bucket.sort((a, b) => {
@@ -281,5 +358,5 @@ export function useAssetDerivedEntities(
       total: entityRows.length,
       loading,
     };
-  }, [entityRows, edgeRows, metadataRows, loading]);
+  }, [entityRows, edgeRows, metadataRows, evidenceRows, loading]);
 }

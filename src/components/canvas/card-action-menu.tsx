@@ -26,6 +26,7 @@ import {
   X,
   ChevronRight,
   FlaskConical,
+  Focus,
 } from "lucide-react";
 import { useCardConnectMode } from "./card-connect-mode-context";
 import { ProposeBridgeModal, type BridgeType, type CouplingStrength, type CouplingDirection } from "./propose-bridge-modal";
@@ -108,7 +109,8 @@ type MenuPhase =
     }
   | { kind: "research-kicking-off" }
   | { kind: "research-started"; runId: string | null; questionCount: number }
-  | { kind: "research-error"; message: string };
+  | { kind: "research-error"; message: string }
+  | { kind: "probe-asking"; question: string };
 
 interface CardActionMenuProps {
   entityId: string;          // entity UUID
@@ -612,6 +614,7 @@ function CardActionMenuPanel({
               onDecompose={() => setPhase({ kind: "decompose-depths" })}
               onRelated={runRelatedSuggest}
               onResearch={runResearchSuggest}
+              onProbe={() => setPhase({ kind: "probe-asking", question: "" })}
               connectActiveOnSelf={connect.active?.entityId === entityId}
               subunitCount={subunitCount}
             />
@@ -722,6 +725,24 @@ function CardActionMenuPanel({
           onClose={() => onClose()}
         />
       )}
+
+      {phase.kind === "probe-asking" && (
+        <ProbeAskRow
+          question={phase.question}
+          onChange={(v) => setPhase({ kind: "probe-asking", question: v })}
+          onCancel={() => onClose()}
+          onSubmit={() => {
+            const q = phase.question.trim();
+            if (q.length < 4) return;
+            window.dispatchEvent(
+              new CustomEvent("dock:probe", {
+                detail: { entityId, question: q },
+              }),
+            );
+            onClose();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -733,6 +754,7 @@ function RootMenu({
   onDecompose,
   onRelated,
   onResearch,
+  onProbe,
   connectActiveOnSelf,
   subunitCount,
 }: {
@@ -740,6 +762,7 @@ function RootMenu({
   onDecompose: () => void;
   onRelated: () => void;
   onResearch: () => void;
+  onProbe: () => void;
   connectActiveOnSelf: boolean;
   subunitCount?: number;
 }) {
@@ -778,6 +801,12 @@ function RootMenu({
         label="Research"
         hint="Pick questions · run deep research"
         onClick={onResearch}
+      />
+      <ActionRow
+        icon={Focus}
+        label="Probe"
+        hint="Ask a focused question · spatial trail"
+        onClick={onProbe}
       />
     </div>
   );
@@ -1087,6 +1116,124 @@ function DecomposeDoneRow({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ProbeAskRow({
+  question,
+  onChange,
+  onCancel,
+  onSubmit,
+}: {
+  question: string;
+  onChange: (v: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  const canSubmit = question.trim().length >= 4;
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        padding: "10px 10px 8px 10px",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: "0.14em",
+          textTransform: "uppercase",
+          color: "rgba(85,100,121,0.85)",
+        }}
+      >
+        <Focus style={{ width: 11, height: 11, strokeWidth: 1.7 }} />
+        <span>Probe this card</span>
+      </div>
+      <textarea
+        autoFocus
+        value={question}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            if (canSubmit) onSubmit();
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        rows={3}
+        placeholder={
+          "What specific question should the agent decompose? E.g. 'What's the time-course of recovery after sleep deprivation?'"
+        }
+        className="w-full resize-none rounded-lg border bg-white px-2 py-1.5 text-[12px] leading-snug text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2"
+        style={{
+          borderColor: "rgba(15,23,42,0.10)",
+          fontFamily: '-apple-system, "SF Pro Text", system-ui',
+        }}
+      />
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          paddingTop: 2,
+        }}
+      >
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            flex: "0 0 auto",
+            padding: "4px 10px",
+            fontSize: 11,
+            fontWeight: 600,
+            color: "#556479",
+            background: "transparent",
+            border: 0,
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          Cancel
+        </button>
+        <span style={{ flex: 1 }} />
+        <span
+          style={{
+            fontSize: 9,
+            color: "rgba(85,100,121,0.6)",
+            letterSpacing: "0.04em",
+            fontFamily: '"SF Mono", ui-monospace, monospace',
+          }}
+        >
+          ⌘⏎
+        </span>
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={!canSubmit}
+          className={cn(
+            "btn-gradient-outline",
+            !canSubmit && "cursor-not-allowed opacity-50",
+          )}
+          style={{
+            padding: "5px 12px",
+            fontSize: 11,
+            fontWeight: 700,
+            borderRadius: 6,
+          }}
+        >
+          Probe
+        </button>
+      </div>
     </div>
   );
 }

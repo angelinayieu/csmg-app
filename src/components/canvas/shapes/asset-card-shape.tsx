@@ -552,7 +552,13 @@ function AssetContributionRow({
 }) {
   const { index } = useCanvasAssetDerivedEntities();
   const stats = index.statsByAssetId.get(assetId);
-  if (!stats || (stats.entityCount === 0 && stats.edgeCount === 0)) {
+  if (
+    !stats ||
+    (stats.entityCount === 0 &&
+      stats.edgeCount === 0 &&
+      stats.effectSizeCount === 0 &&
+      stats.temporalCount === 0)
+  ) {
     return null;
   }
   const sharedCount = Math.max(
@@ -565,6 +571,11 @@ function AssetContributionRow({
       ? `  · ${stats.novelEntityCount} novel · ${sharedCount} shared with other papers`
       : `  · all ${stats.entityCount} unique to this paper`,
   ];
+  if (stats.effectSizeCount > 0 || stats.temporalCount > 0) {
+    titleLines.push(
+      `Auto-extracted evidence: ${stats.effectSizeCount} effect sizes · ${stats.temporalCount} temporal anchors`,
+    );
+  }
 
   return (
     <div
@@ -572,6 +583,7 @@ function AssetContributionRow({
         display: "flex",
         alignItems: "center",
         gap: 10,
+        flexWrap: "wrap",
         marginTop: 6,
         marginBottom: 2,
         padding: "3px 6px",
@@ -584,26 +596,61 @@ function AssetContributionRow({
       }}
       title={titleLines.join("\n")}
     >
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-        <span style={{ fontSize: 11 }}>📦</span>
-        {stats.entityCount}
-        {sharedCount > 0 && (
-          <span
-            style={{
-              marginLeft: 2,
-              fontSize: 9,
-              fontWeight: 600,
-              color: `color-mix(in srgb, ${accent} 60%, #94a3b8)`,
-            }}
-          >
-            ({sharedCount} shared)
-          </span>
-        )}
-      </span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-        <span style={{ fontSize: 11 }}>🔗</span>
-        {stats.edgeCount}
-      </span>
+      {stats.entityCount > 0 && (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+          <span style={{ fontSize: 11 }}>📦</span>
+          {stats.entityCount}
+          {sharedCount > 0 && (
+            <span
+              style={{
+                marginLeft: 2,
+                fontSize: 9,
+                fontWeight: 600,
+                color: `color-mix(in srgb, ${accent} 60%, #94a3b8)`,
+              }}
+            >
+              ({sharedCount} shared)
+            </span>
+          )}
+        </span>
+      )}
+      {stats.edgeCount > 0 && (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+          <span style={{ fontSize: 11 }}>🔗</span>
+          {stats.edgeCount}
+        </span>
+      )}
+      {/* Initiative 2 — auto-extracted evidence counts. Each segment
+          renders only when present so single-pass papers stay terse.
+          Tone shifts to a "studied" purple accent so users can quickly
+          distinguish "this paper has been mined for numbers" from
+          plain entity contribution. */}
+      {stats.effectSizeCount > 0 && (
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 3,
+            color: "#6d28d9",
+          }}
+        >
+          <span style={{ fontSize: 11 }}>📊</span>
+          {stats.effectSizeCount}
+        </span>
+      )}
+      {stats.temporalCount > 0 && (
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 3,
+            color: "#0891b2",
+          }}
+        >
+          <span style={{ fontSize: 11 }}>⏱</span>
+          {stats.temporalCount}
+        </span>
+      )}
     </div>
   );
 }

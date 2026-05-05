@@ -96,6 +96,10 @@ export interface MicroTactic {
   inversion_ids_tested?: string[];
   /** Short slugs of hidden_signals this tactic addresses */
   hidden_signal_refs?: string[];
+  /** Subsystem IDs this tactic activates / influences. Drawn from
+   *  synthesis_data.subsystems. When subsystems are present, every tactic
+   *  must target at least one. Empty when subsystems are unavailable. */
+  subsystem_ids_targeted?: string[];
 }
 
 /**

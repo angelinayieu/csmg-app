@@ -48,6 +48,16 @@ export interface SpineApp {
   /** Most recent app_agent_runs.completed_at across this app's agents.
    *  Null when no agent has completed for this app yet. */
   last_run_at: string | null;
+  /** Initiative 1 — entities this app primarily acts on. Used to match
+   *  apps to findings whose `source_entity_ids` overlap, surfacing the
+   *  origin-app pill on convergence cards. Empty array when the app
+   *  was created without entity grounding. */
+  dominant_entity_ids: string[];
+  /** Initiative 1 — convergence cluster ids (`conv:N`) this app's
+   *  reasoning provenance claims to address. Cross-references with
+   *  `Finding.convergence_data.id` for direct origin matching on
+   *  convergence-type findings. Optional + may be empty. */
+  convergence_ids_addressed: string[];
 }
 
 export interface SpineAgentRunSummary {

@@ -68,7 +68,7 @@ export type GraphPrimitive =
   | "overlap"          // two-circle Venn
   | "comparison";      // side-by-side bars
 
-export type SourceKind = "user" | "research" | "model" | "history";
+export type SourceKind = "user" | "research" | "model" | "history" | "llm_estimate";
 
 export interface TraceSource {
   kind: SourceKind;
@@ -76,6 +76,19 @@ export interface TraceSource {
   reliability: 1 | 2 | 3 | 4 | 5;    // filled bars (5 = fully verified)
   href?: string;                     // clickthrough URL (entity detail, paper, etc.)
   entity_id?: string;                // if backed by a KG entity
+  /** evidence_registries.id values backing this step. REQUIRED when kind === "research"
+   *  (the validator rejects research steps with empty evidence_ids and triggers retry). */
+  evidence_ids?: string[];
+  /** Pooled metadata from edge-strength-pooler when evidence_ids non-empty.
+   *  Lets the UI render real CI bounds + study count instead of LLM-guessed reliability. */
+  pooled_metadata?: {
+    n_studies: number;
+    pooled_effect: number;
+    pooled_ci_lower: number;
+    pooled_ci_upper: number;
+    tau_squared: number;
+    effect_metric: string;           // "cohens_d" | "or" | "mixed" | ...
+  };
 }
 
 export interface TraceGraphData {

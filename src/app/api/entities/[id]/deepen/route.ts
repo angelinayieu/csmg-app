@@ -124,14 +124,21 @@ export async function POST(request: Request, ctx: Ctx) {
         }
 
         try {
-          const { notifyEntitiesChanged } = await import("@/lib/apps/notify");
+          const { notifyEntitiesChangedWithCascade } = await import(
+            "@/lib/apps/notify"
+          );
           const changedIds = [entity.id, ...flatNew.map((c) => c.id)];
-          await notifyEntitiesChanged(
+          const flagged = await notifyEntitiesChangedWithCascade(
             db,
             entity.space_id,
             changedIds,
             `user:deepen:${depth}:${user.id}`,
           );
+          if (flagged.direct + flagged.via_objectives > 0) {
+            console.log(
+              `[deepen-recursive] flagged apps: direct=${flagged.direct} via_objectives=${flagged.via_objectives} (cascade extended set by ${flagged.cascade_extended})`,
+            );
+          }
         } catch (notifyErr) {
           console.warn(
             "[deepen-recursive] app staleness notify failed (non-fatal):",
@@ -210,14 +217,21 @@ export async function POST(request: Request, ctx: Ctx) {
       // nodes. Flag apps that reference the parent OR whose served goal
       // depends on the parent via entity_objectives. Non-fatal.
       try {
-        const { notifyEntitiesChanged } = await import("@/lib/apps/notify");
+        const { notifyEntitiesChangedWithCascade } = await import(
+          "@/lib/apps/notify"
+        );
         const changedIds = [entity.id, ...result.children.map((c) => c.id)];
-        await notifyEntitiesChanged(
+        const flagged = await notifyEntitiesChangedWithCascade(
           db,
           entity.space_id,
           changedIds,
           `user:deepen:${user.id}`,
         );
+        if (flagged.direct + flagged.via_objectives > 0) {
+          console.log(
+            `[deepen] flagged apps: direct=${flagged.direct} via_objectives=${flagged.via_objectives} (cascade extended set by ${flagged.cascade_extended})`,
+          );
+        }
       } catch (notifyErr) {
         console.warn(
           "[deepen] app staleness notify failed (non-fatal):",

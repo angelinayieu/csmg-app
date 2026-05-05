@@ -9,6 +9,7 @@ import type { SynthesisData } from "@/types/synthesis";
 import type { ResearchAgent, IntelligenceSignal } from "@/types/intelligence";
 import { useIntelligenceRadar } from "@/lib/hooks/use-intelligence-radar";
 import { useAgentRuntime } from "@/lib/hooks/use-agent-runtime";
+import { useIntelligenceSpineContext } from "@/contexts/intelligence-spine-context";
 import { deriveWorkstreams } from "@/lib/intelligence/derive-workstreams";
 
 import { MissionHeroCard } from "./mission-hero-card";
@@ -39,11 +40,20 @@ export function RadarPageShell({
 }: RadarPageShellProps) {
   const radar = useIntelligenceRadar(space, entities, edges, goals);
   const runtime = useAgentRuntime(space.id);
-  // Prefer live agent runtime when populated; fall back to derived fleet
-  const fleetSource: ResearchAgent[] = useMemo(
-    () => (runtime.fleet.length > 0 ? runtime.fleet : radar.agentFleet),
-    [runtime.fleet, radar.agentFleet]
-  );
+  const spineCtx = useIntelligenceSpineContext();
+  // Fleet source priority:
+  //   1. live legacy `agents` table via useAgentRuntime — if it has rows
+  //   2. synthesis-derived MOCK fleet — only when no real agents exist
+  //      anywhere (legacy table OR new app_agent_runs surfaced via the
+  //      spine). Suppressing mocks when the spine has agents prevents
+  //      "fake agent rows next to real-strategy headers" — the user
+  //      sees "0 fleet rows" and the strategy header still surfaces the
+  //      real agent count + 7d run total.
+  const fleetSource: ResearchAgent[] = useMemo(() => {
+    if (runtime.fleet.length > 0) return runtime.fleet;
+    if ((spineCtx?.spine?.agents.length ?? 0) > 0) return [];
+    return radar.agentFleet;
+  }, [runtime.fleet, radar.agentFleet, spineCtx?.spine?.agents.length]);
   const [activeWorkstreamId, setActiveWorkstreamId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<ResearchAgent | null>(null);
 

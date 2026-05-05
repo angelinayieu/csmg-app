@@ -55,7 +55,7 @@ export function StackBuilder({
   onMoveDown: (idx: number) => void;
 }) {
   const noEntities = (activeSpace.entity_count ?? 0) === 0;
-  const isRunning = runState === "running" || runState === "submitting" || runState === "streaming";
+  const isRunning = runState === "submitting" || runState === "streaming";
   const isComplete = runState === "complete";
 
   return (

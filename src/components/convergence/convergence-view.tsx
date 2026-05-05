@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import {
   Check,
   ChevronRight,
@@ -28,6 +28,21 @@ import { tracePropagation } from "@/lib/findings/propagation-tracer";
 import type { SynthesisData } from "@/types/synthesis";
 import type { InteractionMetadata, ConvergenceDepth } from "@/types/interactions";
 import type { Finding } from "@/types/finding";
+// Initiative 1 — origin-app + staleness derivation against the
+// strategy spine. Falls back gracefully when the spine context isn't
+// mounted (this view also renders outside the Intelligence drawer).
+import { useIntelligenceSpineContext } from "@/contexts/intelligence-spine-context";
+import {
+  deriveOriginApps,
+  computeStaleness,
+  type OriginAppRef,
+  type StalenessReading,
+} from "@/lib/convergence/derive-origin-apps";
+import { OriginAppPill, StalenessPill } from "./finding-pills";
+// Initiative 3 — surfaces recurring claims, contradictions, and
+// under-supported critical entities computed from evidence_registries
+// rows accumulated across uploaded papers in this space.
+import { CrossPaperStrip } from "./cross-paper-strip";
 
 // ── Layer design tokens (mapped to Research Ops "workstreams") ──
 
@@ -89,9 +104,16 @@ type ViewMode = "collapsed" | "expanded";
 
 export function ConvergenceView() {
   const ctx = useSpaceData();
+  // Spine context is null when this view renders outside the Intelligence
+  // drawer (it's also mounted from the dashboard). The pills self-render
+  // null for empty data so this view degrades gracefully.
+  const spineCtx = useIntelligenceSpineContext();
+  const spine = spineCtx?.spine ?? null;
+
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [activeFilter, setActiveFilter] = useState<ConvergenceDepth | "all">("all");
   const [view, setView] = useState<ViewMode>("collapsed");
+  const [regenerating, setRegenerating] = useState(false);
   const { isFullscreen, toggleFullscreen } = useFullscreenDrawer(selectedFinding !== null);
 
   const findings = useMemo(() => {
@@ -110,6 +132,53 @@ export function ConvergenceView() {
       return [];
     }
   }, [ctx.space.synthesis_data, ctx.entities, ctx.activeGoal]);
+
+  // Initiative 1 — derive origin-app refs once per (findings × spine.apps)
+  // change. Map keyed on finding.id so renderers can index O(1).
+  const originAppsByFinding = useMemo(() => {
+    const map = new Map<string, OriginAppRef[]>();
+    if (!spine || spine.apps.length === 0) return map;
+    for (const f of findings) {
+      const refs = deriveOriginApps(f, spine.apps);
+      if (refs.length > 0) map.set(f.id, refs);
+    }
+    return map;
+  }, [findings, spine]);
+
+  // Single staleness reading for the whole view — anchored to the most
+  // recent synthesize / synthesize-layered / strategy-refresh run.
+  const staleness = useMemo<StalenessReading>(
+    () => computeStaleness(spine?.recent_runs ?? []),
+    [spine?.recent_runs],
+  );
+
+  // Regenerate handler for the stale-pill action. Fires
+  // strategy-refresh, refreshes the spine on completion (so the
+  // staleness pill flips back to "fresh"), and surfaces errors via
+  // the regenerating state flag.
+  const handleRegenerate = useCallback(async () => {
+    if (regenerating) return;
+    setRegenerating(true);
+    try {
+      const res = await fetch("/api/pipeline/strategy-refresh", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ spaceId: ctx.space.id }),
+      });
+      if (!res.ok) {
+        console.warn(`[convergence] strategy-refresh HTTP ${res.status}`);
+      }
+      // Trigger a spine refresh so the staleness pill recomputes
+      // against the new pipeline_runs row. router.refresh() also
+      // re-hydrates synthesis_data on the next render.
+      spineCtx?.refresh?.();
+      ctx.refresh();
+    } catch (err) {
+      console.warn("[convergence] regenerate failed:", err);
+    } finally {
+      setRegenerating(false);
+    }
+  }, [ctx, regenerating, spineCtx]);
 
   const filtered = useMemo(
     () => (activeFilter === "all" ? findings : findings.filter((f) => f.layer === activeFilter)),
@@ -180,6 +249,14 @@ export function ConvergenceView() {
             highImpactCount={highImpactCount}
           />
 
+          {/* Initiative 3 — cross-paper synthesis strip. Self-renders
+              null when the space has no papers; shows a soft CTA on
+              single-paper spaces; renders the three-column grid once
+              ≥2 papers have been extracted. */}
+          <div className="px-7 pt-5">
+            <CrossPaperStrip spaceId={ctx.space.id} />
+          </div>
+
           {/* Pending top finding "decision" card */}
           {hero && (
             <div className="px-7 pt-6 pb-1">
@@ -187,6 +264,10 @@ export function ConvergenceView() {
                 finding={hero}
                 selected={selectedFinding?.id === hero.id}
                 onSelect={() => setSelectedFinding(hero)}
+                originApps={originAppsByFinding.get(hero.id) ?? []}
+                staleness={staleness}
+                regenerating={regenerating}
+                onRegenerate={handleRegenerate}
               />
             </div>
           )}
@@ -201,6 +282,7 @@ export function ConvergenceView() {
               selectedId={selectedFinding?.id ?? null}
               onSelect={setSelectedFinding}
               onExpand={() => setView("expanded")}
+              originAppsByFinding={originAppsByFinding}
             />
           ) : (
             <ExpandedView
@@ -210,6 +292,7 @@ export function ConvergenceView() {
               layerCounts={layerCounts}
               selectedId={selectedFinding?.id ?? null}
               onSelect={setSelectedFinding}
+              originAppsByFinding={originAppsByFinding}
             />
           )}
         </div>
@@ -462,10 +545,26 @@ function TopFindingCard({
   finding,
   selected,
   onSelect,
+  originApps = [],
+  staleness,
+  regenerating,
+  onRegenerate,
 }: {
   finding: Finding;
   selected: boolean;
   onSelect: () => void;
+  /** Initiative 1 — apps in the active strategy that claim provenance
+   *  over this finding (via convergence_id or entity overlap). */
+  originApps?: OriginAppRef[];
+  /** Single reading shared across all findings in the view — anchored
+   *  to the most recent synthesize run. */
+  staleness?: StalenessReading;
+  /** True while strategy-refresh is in flight; disables the regenerate
+   *  button. */
+  regenerating?: boolean;
+  /** Triggers strategy-refresh — only invoked from the stale-bucket
+   *  inline action. */
+  onRegenerate?: () => void;
 }) {
   const meta = LAYER_META[finding.layer];
   const domains = finding.domains.slice(0, 3);
@@ -503,6 +602,25 @@ function TopFindingCard({
               </>
             )}
           </div>
+
+          {/* Initiative 1 — origin-app + staleness pills. Both render
+              null when their data is empty / unknown so the row hides
+              entirely on legacy spaces with no spine context. */}
+          {(originApps.length > 0 || (staleness && staleness.bucket !== "unknown")) && (
+            <div
+              className="mb-2.5 flex flex-wrap items-center gap-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <OriginAppPill apps={originApps} />
+              {staleness && (
+                <StalenessPill
+                  reading={staleness}
+                  regenerating={regenerating}
+                  onRegenerate={onRegenerate}
+                />
+              )}
+            </div>
+          )}
 
           {/* Headline */}
           <div className="mb-3.5 text-[17px] font-medium leading-snug tracking-tight text-gray-900">
@@ -608,6 +726,7 @@ function CollapsedView({
   selectedId,
   onSelect,
   onExpand,
+  originAppsByFinding,
 }: {
   findings: Finding[];
   filtered: Finding[];
@@ -616,6 +735,9 @@ function CollapsedView({
   selectedId: string | null;
   onSelect: (f: Finding) => void;
   onExpand: () => void;
+  /** Initiative 1 — origin-app refs per finding id. MiniRow renders
+   *  a compact "📦 N" indicator + tooltip when present. */
+  originAppsByFinding: Map<string, OriginAppRef[]>;
 }) {
   // Quick strip stats
   const avgImpact = findings.length
@@ -677,6 +799,7 @@ function CollapsedView({
             selected={selectedId === f.id}
             onSelect={() => onSelect(f)}
             isLast={i === Math.min(2, rest.length - 1)}
+            originApps={originAppsByFinding.get(f.id) ?? []}
           />
         ))}
         {rest.length === 0 && (
@@ -717,6 +840,7 @@ function ExpandedView({
   layerCounts,
   selectedId,
   onSelect,
+  originAppsByFinding,
 }: {
   findings: Finding[];
   filtered: Finding[];
@@ -724,6 +848,10 @@ function ExpandedView({
   layerCounts: Record<ConvergenceDepth, number>;
   selectedId: string | null;
   onSelect: (f: Finding) => void;
+  /** Initiative 1 — origin-app refs per finding id. Threaded into
+   *  the StreamRow lane so per-row pills are consistent across both
+   *  views. */
+  originAppsByFinding: Map<string, OriginAppRef[]>;
 }) {
   // Domain map
   const domainCounts = new Map<string, number>();
@@ -824,6 +952,7 @@ function ExpandedView({
                 selected={selectedId === f.id}
                 onSelect={() => onSelect(f)}
                 isFresh={i === 0}
+                originApps={originAppsByFinding.get(f.id) ?? []}
               />
             ))}
           </div>
@@ -1014,11 +1143,16 @@ function MiniRow({
   selected,
   onSelect,
   isLast,
+  originApps = [],
 }: {
   finding: Finding;
   selected: boolean;
   onSelect: () => void;
   isLast: boolean;
+  /** Initiative 1 — compact origin-app indicator. Renders nothing
+   *  when empty; otherwise a "📦 N" chip with tooltip listing
+   *  matched apps. Space-constrained so we don't render full names. */
+  originApps?: OriginAppRef[];
 }) {
   const meta = LAYER_META[finding.layer];
   return (
@@ -1047,6 +1181,7 @@ function MiniRow({
             <span className="max-w-[60px] truncate">{d}</span>
           </span>
         ))}
+        <CompactOriginApps apps={originApps} />
       </div>
       <div className="inline-flex items-center gap-2.5 whitespace-nowrap text-[11.5px] text-gray-500">
         <span className={cn(finding.impact_pct >= 2 ? "font-semibold text-[#b91c1c]" : "font-semibold text-[#0284c7]")}>
@@ -1058,6 +1193,28 @@ function MiniRow({
   );
 }
 
+/** Compact "📦 N" origin-app indicator for space-constrained row variants
+ *  (MiniRow, StreamRow). Renders nothing when no origin apps are matched.
+ *  Hover tooltip lists matched app names + match reason for full context. */
+function CompactOriginApps({ apps }: { apps: OriginAppRef[] }) {
+  if (apps.length === 0) return null;
+  const tooltip = apps
+    .map(
+      (a) =>
+        `${a.name} (${a.match_reason === "convergence_id" ? "addresses convergence" : "acts on shared entity"})`,
+    )
+    .join("\n");
+  return (
+    <span
+      title={tooltip}
+      className="flex h-[22px] items-center gap-1 rounded-md ring-1 ring-indigo-100 bg-indigo-50/70 px-1.5 text-[10px] font-semibold text-indigo-700 tabular-nums"
+    >
+      <span className="text-[11px] leading-none">📦</span>
+      {apps.length}
+    </span>
+  );
+}
+
 // ── Stream row ──
 
 function StreamRow({
@@ -1065,11 +1222,16 @@ function StreamRow({
   selected,
   onSelect,
   isFresh,
+  originApps = [],
 }: {
   finding: Finding;
   selected: boolean;
   onSelect: () => void;
   isFresh: boolean;
+  /** Initiative 1 — compact origin-app indicator. Slots between
+   *  layer chip and detected_by so it sits in the meta row, not
+   *  the title row. */
+  originApps?: OriginAppRef[];
 }) {
   const meta = LAYER_META[finding.layer];
   return (
@@ -1085,6 +1247,7 @@ function StreamRow({
         <span className={cn("rounded px-2 py-[3px] text-[10px] font-bold tracking-wide", meta.chipBg, meta.chipText)}>
           {finding.layer}
         </span>
+        <CompactOriginApps apps={originApps} />
         {finding.detected_by && (
           <span className="ml-auto font-mono text-[11px] font-medium text-gray-500">{finding.detected_by}</span>
         )}

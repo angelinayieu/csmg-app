@@ -511,6 +511,12 @@ export interface SynthesisData {
   // Convergence workspace: pre-ranked findings list
   findings?: import("./finding").Finding[];
 
+  // Subsystems — typed compositional units extracted post-synthesis. Each
+  // subsystem groups entities + edges + cycles + axioms into a recognizable
+  // functional unit (loop, leverage_cluster, invariant_chain, etc.) that
+  // strategy generation operates on as a typed atom rather than free text.
+  subsystems?: import("./subsystems").Subsystem[];
+
   // Causal Chains (L4 invariant → goal contribution trajectories)
   causal_chains?: import("./causal-chains").CausalChain[];
   // Calculation traces keyed by chain id

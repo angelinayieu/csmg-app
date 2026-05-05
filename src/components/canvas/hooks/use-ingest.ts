@@ -28,6 +28,24 @@ interface IngestApiResponse {
   ingested_file_id: string | null;
   asset_class: string | null;
   awaiting_vision?: boolean;
+  /** Two-phase parse signal (Phase 1, 2026-07-04). When true, `text`
+   *  is empty and the row is in parse_status='pending'. The hook
+   *  silently polls /api/ingest/[id]/parse-status until the worker
+   *  finishes; consumers see the same IngestedContent shape they did
+   *  pre-two-phase. */
+  awaiting_parse?: boolean;
+  parse_status?: "pending" | "parsing" | "ready" | "error" | "skipped";
+}
+
+interface ParseStatusResponse {
+  asset_id: string;
+  status: "pending" | "parsing" | "ready" | "error" | "skipped";
+  error: string | null;
+  text: string | null;
+  source_name: string | null;
+  asset_class: string | null;
+  raw_chars: number | null;
+  normalized_chars: number | null;
 }
 
 interface VisionExtractResponse {
@@ -37,6 +55,13 @@ interface VisionExtractResponse {
   relationship_count: number;
   duration_ms: number;
 }
+
+// Poll cadence + timeout for the background parse path. Most PDFs
+// resolve in 5-30s; 90s is the practical cap before we surface an
+// error. Polling every 1.2s keeps the load light without the user
+// waiting noticeably between updates.
+const PARSE_POLL_INTERVAL_MS = 1200;
+const PARSE_POLL_TIMEOUT_MS = 90_000;
 
 /**
  * Fire-and-forget phase 2 dispatch. Re-uploads the same image
@@ -96,8 +121,117 @@ async function fireVisionPhase2(
   }
 }
 
+/**
+ * Poll /api/ingest/[id]/parse-status every PARSE_POLL_INTERVAL_MS
+ * until the row reaches a terminal state ('ready' | 'error' |
+ * 'skipped') or the timeout elapses. Used for the PDF/DOCX
+ * background-parse path so callers of ingestFile() see the same
+ * IngestedContent shape regardless of synchronous vs. async parse.
+ *
+ * Also broadcasts window events on each poll tick so file-card UIs
+ * can show a parse-progress chip without re-fetching themselves:
+ *   • ingested-file:parse-tick   { ingestedFileId, status }
+ *   • ingested-file:parse-ready  { ingestedFileId, text, source_name }
+ *   • ingested-file:parse-error  { ingestedFileId, error }
+ */
+async function pollParseStatus(
+  ingestedFileId: string,
+): Promise<ParseStatusResponse> {
+  const startedAt = Date.now();
+  let last: ParseStatusResponse | null = null;
+
+  while (Date.now() - startedAt < PARSE_POLL_TIMEOUT_MS) {
+    let res: Response;
+    try {
+      res = await fetch(`/api/ingest/${ingestedFileId}/parse-status`, {
+        method: "GET",
+      });
+    } catch {
+      // Network blip — wait one interval and retry. Don't fail the
+      // whole upload on a transient.
+      await sleep(PARSE_POLL_INTERVAL_MS);
+      continue;
+    }
+
+    if (res.ok) {
+      last = (await res.json()) as ParseStatusResponse;
+      // Broadcast the tick so the file-card can render a status chip
+      // without re-fetching this endpoint itself.
+      window.dispatchEvent(
+        new CustomEvent("ingested-file:parse-tick", {
+          detail: { ingestedFileId, status: last.status },
+        }),
+      );
+
+      if (last.status === "ready") {
+        window.dispatchEvent(
+          new CustomEvent("ingested-file:parse-ready", {
+            detail: {
+              ingestedFileId,
+              text: last.text ?? "",
+              sourceName: last.source_name,
+            },
+          }),
+        );
+        return last;
+      }
+      if (last.status === "error") {
+        window.dispatchEvent(
+          new CustomEvent("ingested-file:parse-error", {
+            detail: { ingestedFileId, error: last.error ?? "Parse failed" },
+          }),
+        );
+        return last;
+      }
+      if (last.status === "skipped") {
+        return last;
+      }
+    } else if (res.status === 404) {
+      // Row went missing? Unrecoverable — return a synthetic error.
+      return {
+        asset_id: ingestedFileId,
+        status: "error",
+        error: "Asset row was deleted before parse completed",
+        text: null,
+        source_name: null,
+        asset_class: null,
+        raw_chars: null,
+        normalized_chars: null,
+      };
+    }
+    // 401/403/500 etc → transient, keep polling
+
+    await sleep(PARSE_POLL_INTERVAL_MS);
+  }
+
+  // Timeout reached. Return the last observation we got, or a
+  // synthetic 'pending' if we never got a response.
+  return (
+    last ?? {
+      asset_id: ingestedFileId,
+      status: "pending",
+      error: null,
+      text: null,
+      source_name: null,
+      asset_class: null,
+      raw_chars: null,
+      normalized_chars: null,
+    }
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 // Thin wrapper around /api/ingest. Handles URL fetch and file upload.
 // Returns normalized text ready to pass to the materialize endpoint.
+//
+// For PDF/DOCX uploads the route returns immediately with parse_status=
+// 'pending' and empty text; this hook silently polls /parse-status
+// until the background worker finishes, then resolves with the same
+// IngestedContent shape callers expect. Callers don't need to know
+// the difference — they just await ingestFile() as before.
 export function useIngest(spaceId?: string | null) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -152,7 +286,9 @@ export function useIngest(spaceId?: string | null) {
         }
         const payload = (await res.json()) as IngestApiResponse;
         const awaitingVision = !!payload.awaiting_vision;
-        // ── Two-phase image ingest ──
+        const awaitingParse = !!payload.awaiting_parse;
+
+        // ── Two-phase image ingest (existing) ──
         // Phase 1 returned with empty text + awaiting_vision=true.
         // Re-upload the binary to /api/ingest/vision-extract so the
         // structured Claude vision pass populates description +
@@ -164,6 +300,33 @@ export function useIngest(spaceId?: string | null) {
           // react when phase 2 finishes.
           void fireVisionPhase2(file, payload.ingested_file_id);
         }
+
+        // ── Two-phase parse ingest (PDF / DOCX) ──
+        // The route persisted the row in parse_status='pending' and
+        // scheduled pdf-parse / docx via Next 16 after(). Poll
+        // /parse-status until the worker writes 'ready' (or 'error')
+        // — this kills the original 504 path because the user-facing
+        // request returned in <1s; we just block the hook's promise
+        // until the background work completes.
+        if (awaitingParse && payload.ingested_file_id) {
+          const finalStatus = await pollParseStatus(payload.ingested_file_id);
+          if (finalStatus.status === "error") {
+            throw new Error(finalStatus.error ?? "Parse failed");
+          }
+          if (finalStatus.status !== "ready") {
+            throw new Error(
+              `Parse did not complete within ${Math.round(PARSE_POLL_TIMEOUT_MS / 1000)}s (status=${finalStatus.status})`,
+            );
+          }
+          return {
+            text: finalStatus.text ?? "",
+            sourceName: finalStatus.source_name ?? payload.source_name,
+            ingestedFileId: payload.ingested_file_id,
+            assetClass: finalStatus.asset_class ?? payload.asset_class ?? null,
+            awaitingVision,
+          };
+        }
+
         return {
           text: payload.text,
           sourceName: payload.source_name,

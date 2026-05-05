@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { useIntelligenceRadar } from "@/lib/hooks/use-intelligence-radar";
 import { useAgentRuntime } from "@/lib/hooks/use-agent-runtime";
+import { useIntelligenceSpineContext } from "@/contexts/intelligence-spine-context";
 import type { ResearchAgent, AgentOverrides } from "@/types/intelligence";
 import type { SynthesisData } from "@/types/synthesis";
 import type { SuggestedObjective } from "@/types/goals";
@@ -16,6 +17,26 @@ export function AgentControlView() {
   const ctx = useSpaceData();
   const radar = useIntelligenceRadar(ctx.space, ctx.entities, ctx.edges, ctx.goalList);
   const runtime = useAgentRuntime(ctx.space.id);
+  const spineCtx = useIntelligenceSpineContext();
+
+  // Build a UUID → app name lookup so the agent list can render an "app:
+  // …" badge per agent. Only populated when the spine resolved at least
+  // one app + agent — otherwise the lookup is empty and AgentListView
+  // skips the badge entirely.
+  const appNameByAgentId = useMemo<Record<string, string>>(() => {
+    const spine = spineCtx?.spine;
+    if (!spine || spine.agents.length === 0 || spine.apps.length === 0) {
+      return {};
+    }
+    const appNameById = new Map<string, string>();
+    for (const a of spine.apps) appNameById.set(a.id, a.name);
+    const out: Record<string, string> = {};
+    for (const ag of spine.agents) {
+      const name = appNameById.get(ag.app_id);
+      if (name) out[ag.id] = name;
+    }
+    return out;
+  }, [spineCtx?.spine]);
 
   // Prefer live runtime agents when present; fall back to mock derivation.
   // Live fleet represents actual persisted agent_runs; mock represents
@@ -149,6 +170,7 @@ export function AgentControlView() {
           overridesByAgentId={overridesByAgentId}
           selectedAgentId={selectedAgent?.id ?? null}
           onSelectAgent={setSelectedAgent}
+          appNameByAgentId={appNameByAgentId}
           className="w-[340px] flex-shrink-0"
         />
 

@@ -48,6 +48,12 @@ interface AppRowMin {
   status: AppStatus;
   health_score: number | null;
   last_refreshed_at: string | null;
+  /** Selected for Initiative 1 origin-app matching — entities this
+   *  app primarily acts on. */
+  dominant_entity_ids: string[] | null;
+  /** Selected for Initiative 1 origin-app matching — JSONB column,
+   *  parsed below for `reasoning_provenance.convergence_ids_addressed`. */
+  config: unknown;
 }
 
 interface AppAgentRunRowMin {
@@ -82,7 +88,6 @@ export async function GET(
     return NextResponse.json({ error: "Space not found" }, { status: 404 });
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
   // Fan out the four reads in parallel. Each is independently soft-fail
@@ -99,7 +104,9 @@ export async function GET(
       .single(),
     db
       .from("apps")
-      .select("id, name, status, health_score, last_refreshed_at")
+      .select(
+        "id, name, status, health_score, last_refreshed_at, dominant_entity_ids, config",
+      )
       .eq("space_id", spaceId)
       .eq("user_id", user.id)
       .neq("status", "retired")
@@ -192,8 +199,7 @@ function extractStrategy(row: SpaceCronRow | null): SpineStrategy | null {
   if (!sd || typeof sd !== "object") return null;
   // synthesis_data.strategic_recommendation can be StrategicRecommendationData
   // (has .recommendation) or directly the StrategicRecommendation. Handle both.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rec = (sd as any).strategic_recommendation as
+  const rec = (sd as Record<string, unknown>).strategic_recommendation as
     | StrategicRecommendationData
     | undefined;
   if (!rec) return null;
@@ -308,5 +314,25 @@ function hydrateApps(
     last_refreshed_at: a.last_refreshed_at,
     agent_count: distinctAgentsByApp.get(a.id)?.size ?? 0,
     last_run_at: lastRunByApp.get(a.id) ?? null,
+    dominant_entity_ids: Array.isArray(a.dominant_entity_ids)
+      ? a.dominant_entity_ids
+      : [],
+    convergence_ids_addressed: extractConvergenceIds(a.config),
   }));
+}
+
+/**
+ * Pulls `config.reasoning_provenance.convergence_ids_addressed` out of
+ * the JSONB config blob. Defensive: any shape mismatch returns []
+ * rather than throwing — a malformed config row shouldn't break the
+ * spine for unrelated callers.
+ */
+function extractConvergenceIds(config: unknown): string[] {
+  if (!config || typeof config !== "object") return [];
+  const c = config as Record<string, unknown>;
+  const prov = c.reasoning_provenance as Record<string, unknown> | undefined;
+  if (!prov || typeof prov !== "object") return [];
+  const ids = prov.convergence_ids_addressed;
+  if (!Array.isArray(ids)) return [];
+  return ids.filter((x): x is string => typeof x === "string");
 }

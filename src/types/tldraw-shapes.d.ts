@@ -644,6 +644,28 @@ declare module "@tldraw/tlschema" {
        *  endpoint (add info, ask query, sub-objective). */
       spaceId: string;
     };
+    // Probe rabbit-hole trail (2026-07-04) — spatial unfurl of a probe
+    // question into 2-4 sub-questions. Spawned by the dock:probe event
+    // listener (or per-card (+) menu's Probe action) right after the
+    // /api/canvas/probe-rabbit-hole endpoint returns. Renders the
+    // agent's question-decomp tree using TrailNode + TrailEdge
+    // primitives. Trail data lives as a stringified ProbeTrail JSON in
+    // the trailJson prop because tldraw's prop validators require
+    // scalar fields; the shape util parses on render.
+    "probe-trail": {
+      w: number;
+      h: number;
+      /** Stringified ProbeTrail (see probe-orchestrator.ts). Mutating
+       *  the trail (e.g., flipping a sub-question to 'working' while
+       *  research-deep runs) updates this prop in place. */
+      trailJson: string;
+      /** Source kg-node entity id — the card the trail tethers to. */
+      sourceEntityId: string;
+      sourceEntityName: string;
+      rootQuestion: string;
+      /** Spawned-at ms epoch — drives the one-shot entrance animation. */
+      spawnedAt: number;
+    };
     // Phase B (intake redesign) — STRATEGY HERO CARD.
     //
     // The single persistent on-canvas surface for the user's top-ranked

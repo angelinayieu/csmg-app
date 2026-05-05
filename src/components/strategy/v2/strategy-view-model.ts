@@ -283,6 +283,12 @@ function deriveConfidence(
   return null;
 }
 
+function leadLagFromTimeframe(tf: string | undefined): "lead" | "lag" | null {
+  if (tf === "now" || tf === "short_term") return "lead";
+  if (tf === "medium_term" || tf === "long_term") return "lag";
+  return null;
+}
+
 // Lead vs Lag — only assign when the perspective gives us a real signal:
 //   - explicit key_metric.trend_direction → "lead" (we're tracking direction)
 //   - first action timeframe = now/short_term → "lead" (forward-looking work)
@@ -293,10 +299,7 @@ function deriveConfidence(
 // regex name-mapper in strategy-palette.ts.
 function deriveLeadLag(p: StrategyPerspective): "lead" | "lag" | null {
   if (p.key_metric?.trend_direction) return "lead";
-  const tf = p.actions?.[0]?.timeframe;
-  if (tf === "now" || tf === "short_term") return "lead";
-  if (tf === "medium_term" || tf === "long_term") return "lag";
-  return null;
+  return leadLagFromTimeframe(p.actions?.[0]?.timeframe);
 }
 
 // True when a metric value is a placeholder (LLM-emitted "Baseline" /
@@ -383,9 +386,10 @@ export function buildCascadeRow(
   recommendation: StrategicRecommendation,
   causalChains: CausalChain[],
 ): CascadeRowVM {
-  const paletteKey = perspectiveKey(p.name, i);
+  const paletteKey = paletteSlot(i);
   const weight = deriveWeight(p);
-  const leadLag = deriveLeadLag(p, i);
+  const confidence = deriveConfidence(p);
+  const leadLag = deriveLeadLag(p);
   const progress = objectiveProgress(p);
 
   // Primary objective = the perspective's key_metric aspiration
@@ -394,15 +398,27 @@ export function buildCascadeRow(
 
   const objectives: CascadeObjective[] = [];
   if (p.key_metric) {
+    // Only render the value label when at least one side is a real number,
+    // so we don't ship "Baseline → 95%" or "Baseline → Baseline" as a metric.
+    const km = p.key_metric;
+    const kmCurrentReal = !isPlaceholderValue(km.current);
+    const kmTargetReal = !isPlaceholderValue(km.target);
+    const kmUnit = km.unit ? ` ${km.unit}` : "";
+    let kmValueLabel: string | undefined;
+    if (kmCurrentReal && kmTargetReal) {
+      kmValueLabel = `${km.current} → ${km.target}${kmUnit}`;
+    } else if (kmTargetReal) {
+      kmValueLabel = `Target: ${km.target}${kmUnit}`;
+    } else if (kmCurrentReal) {
+      kmValueLabel = `${km.current}${kmUnit}`;
+    }
+
     objectives.push({
       id: primaryId,
       title: p.objective ?? p.key_metric.name,
       progressPct: progress,
       tag: leadLag,
-      valueLabel:
-        p.key_metric.current && p.key_metric.target
-          ? `${p.key_metric.current} → ${p.key_metric.target}${p.key_metric.unit ? ` ${p.key_metric.unit}` : ""}`
-          : undefined,
+      valueLabel: kmValueLabel,
       description: p.rationale,
       matchedChainId: matchedChain?.id,
       sourceEntityIds: [
@@ -424,7 +440,7 @@ export function buildCascadeRow(
       id: `p${i + 1}-obj-fallback`,
       title: a.text,
       progressPct: undefined,
-      tag: a.timeframe === "long_term" || a.timeframe === "medium_term" ? "lag" : "lead",
+      tag: leadLagFromTimeframe(a.timeframe),
       description: a.infrastructure_note,
       matchedChainId: matchedChain?.id,
       sourceEntityIds: a.entity_id ? [a.entity_id] : [],
@@ -462,11 +478,13 @@ export function buildCascadeRow(
     proxies.push(proxy);
   };
   if (p.key_metric) {
+    const isPh = isPlaceholderValue(p.key_metric.current);
     pushProxy({
       name: p.key_metric.name,
-      value: p.key_metric.current,
+      value: isPh ? "—" : p.key_metric.current,
       unit: p.key_metric.unit,
       trend: p.key_metric.trend_direction,
+      placeholder: isPh || undefined,
     });
   }
   const relevantTactics = (recommendation.micro_tactics ?? []).filter((t) => {
@@ -480,12 +498,15 @@ export function buildCascadeRow(
   for (const t of relevantTactics) {
     if (!t.metric) continue;
     if (proxies.length >= 4 + (p.key_metric ? 1 : 0)) break;
+    const rawValue =
+      t.metric.current_value !== undefined ? String(t.metric.current_value) : t.metric.target;
+    const isPh = isPlaceholderValue(rawValue);
     pushProxy({
       name: t.metric.name,
-      value:
-        t.metric.current_value !== undefined ? String(t.metric.current_value) : t.metric.target,
+      value: isPh ? "—" : rawValue,
       unit: t.metric.unit,
       trend: t.metric.trend,
+      placeholder: isPh || undefined,
     });
   }
 
@@ -496,6 +517,7 @@ export function buildCascadeRow(
     question: p.objective ?? "",
     categoryLabel: p.name,
     weight,
+    confidence,
     objectives,
     tactics,
     proxies,

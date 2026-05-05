@@ -2373,18 +2373,114 @@ export function InteraxisCanvas({
     [editor, ingestFile, materialize, placeMaterializedEntity, aiReceipts, extractionReview],
   );
 
-  // ── Bottom dock submit: text/URL/files → materialize ──
+  // ── Bottom dock submit (Phase 4): mode-aware routing ──────────────
+  //
+  // Mode taxonomy:
+  //   add       — single entity (calls /api/canvas/materialize, the
+  //               default behavior the dock had before but unnamed)
+  //   decompose — full multi-pass pipeline against existing space
+  //               (calls /api/pipeline/decompose with existingSpaceId
+  //               and the user's chosen reasoningDepth — this is
+  //               the path that wasn't reachable from the dock before)
+  //   solve     — same endpoint as decompose, with a "solve" intent
+  //               so Phase 8 framework router can apply the right
+  //               overlays. Gated on KG having ≥10 entities (no
+  //               substrate to solve over otherwise).
+  //   probe     — gated on a card being selected; opens the per-card
+  //               (+) menu's research/probe path. The dock dispatches
+  //               a window event the kg-node listens for. (No new
+  //               orchestrator yet — reuses the per-card flow.)
   const handleBottomSubmit = useCallback(
-    async (text: string, files: File[]) => {
+    async (
+      text: string,
+      files: File[],
+      opts?: { mode: "add" | "decompose" | "solve" | "probe"; depth: "quick" | "standard" | "deep" },
+    ) => {
       if (!editor) return;
 
       const viewport = editor.getViewportPageBounds();
       const center = { x: Math.round(viewport.midX), y: Math.round(viewport.midY) };
+      const mode = opts?.mode ?? "add";
+      const depth = opts?.depth ?? "standard";
 
       setDecomposing(true);
       try {
-        // 1. Text or URL submission
+        // ── Probe mode ─────────────────────────────────────────────
+        if (mode === "probe") {
+          // Anchor to the currently-selected kg-node. We dispatch a
+          // window event the per-card menu listens for so the existing
+          // research-questions flow fires for that entity. If multiple
+          // cards are selected, fall through to the first.
+          const selected = editor.getSelectedShapes();
+          const kgSel = selected.find((s) => s.type === "kg-node");
+          if (kgSel && "props" in kgSel) {
+            window.dispatchEvent(
+              new CustomEvent("dock:probe", {
+                detail: {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  entityId: (kgSel.props as any).entityId,
+                  question: text || null,
+                },
+              }),
+            );
+          }
+          return;
+        }
+
+        // ── File submissions ───────────────────────────────────────
+        // For add mode: each file becomes one entity (current behavior).
+        // For decompose mode: same upload path, but the HITL drawer's
+        // "Decompose deeper" toggle is on by default for research_pdf
+        // (Phase 2a we shipped earlier) so the chain runs end-to-end
+        // without an extra UI step.
+        if (files.length > 0) {
+          await ingestAndMaterialize(files, center);
+        }
+
+        // ── Text / URL submissions ─────────────────────────────────
         if (text) {
+          // Decompose / solve modes: fire the full pipeline against
+          // the existing space. Both share the same endpoint; the
+          // intent param differentiates so Phase 8 routing can pick
+          // the right framework overlays.
+          if (mode === "decompose" || mode === "solve") {
+            try {
+              const res = await fetch("/api/pipeline/decompose", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  text,
+                  existingSpaceId: space.id,
+                  reasoningDepth: depth,
+                  intent:
+                    mode === "solve"
+                      ? { kind: "solve_query", query: text }
+                      : { kind: "decompose_canvas", source: "bottom_dock" },
+                }),
+              });
+              if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                console.warn(
+                  `[dock] decompose chain failed: ${err.error ?? res.status}`,
+                );
+                // Fall back to materialize so the user still gets
+                // SOMETHING on canvas instead of silent failure.
+                const response = await materialize(text, center);
+                if (response) placeMaterializedEntity(response, center);
+              }
+              // Decompose returns its runId; the canvas SSE stream is
+              // already subscribed to existingSpaceId's run, so the
+              // entities/edges fan in via the event painter.
+            } catch (err) {
+              console.warn("[dock] decompose threw:", err);
+              const response = await materialize(text, center);
+              if (response) placeMaterializedEntity(response, center);
+            }
+            return;
+          }
+
+          // Add mode (default): single-entity materialize. URL gets
+          // pre-extracted to article text first.
           if (looksLikeUrl(text)) {
             const ingested = await ingestUrl(text);
             if (ingested) {
@@ -2399,14 +2495,11 @@ export function InteraxisCanvas({
             if (response) placeMaterializedEntity(response, center);
           }
         }
-
-        // 2. File submissions — each becomes its own KG node
-        await ingestAndMaterialize(files, center);
       } finally {
         setDecomposing(false);
       }
     },
-    [editor, ingestUrl, ingestFile, materialize, placeMaterializedEntity],
+    [editor, ingestUrl, ingestFile, materialize, placeMaterializedEntity, space.id],
   );
 
   // ── Place an existing entity as a KG-node shape (library drop) ──
@@ -2803,6 +2896,111 @@ export function InteraxisCanvas({
     // Only run once per editor-mount + space change. Re-fetches on space nav.
   }, [editor, space.id, placeStrategyShape]);
 
+  // ── Probe rabbit-hole listener (2026-07-04) ───────────────────────
+  //
+  // The bottom dock's "Probe" mode dispatches `dock:probe` window
+  // events with { entityId, question }. The per-card (+) menu's
+  // Probe action does the same. This effect listens, posts to the
+  // probe-rabbit-hole orchestrator, and spawns a probe-trail shape
+  // adjacent to the source kg-node.
+  //
+  // Spawn strategy: place the trail to the RIGHT of the source card
+  // (at sourceCard.maxX + 40, sourceCard.midY - trailHeight/2). If
+  // there's no source kg-node on canvas (rare — the dock fired Probe
+  // without selection), fall back to viewport mid.
+  useEffect(() => {
+    if (!editor) return;
+    type Detail = {
+      entityId?: string;
+      question?: string | null;
+    };
+    const handler = async (ev: Event) => {
+      const d = (ev as CustomEvent<Detail>).detail;
+      const entityId = typeof d?.entityId === "string" ? d.entityId : null;
+      const question = typeof d?.question === "string" ? d.question.trim() : "";
+      if (!entityId || question.length < 4) {
+        toast.error("Probe needs a question (≥4 chars)");
+        return;
+      }
+      // POST the orchestrator
+      let trailJson = "";
+      let trailRoot: { id: string; source_entity_name: string; root_question: string };
+      try {
+        const res = await fetch(`/api/canvas/probe-rabbit-hole`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ entity_id: entityId, question }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          toast.error("Probe failed", { description: err.error ?? `HTTP ${res.status}` });
+          return;
+        }
+        const trail = (await res.json()) as {
+          id: string;
+          source_entity_name: string;
+          root_question: string;
+        };
+        trailJson = JSON.stringify(trail);
+        trailRoot = trail;
+      } catch (err) {
+        toast.error("Probe failed", {
+          description: err instanceof Error ? err.message : "network",
+        });
+        return;
+      }
+      // Find the source kg-node shape so we can spawn the trail next to it
+      const allShapes = editor.getCurrentPageShapes();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sourceShape = allShapes.find(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (s: any) => s.type === "kg-node" && s.props?.entityId === entityId,
+      );
+      const trailW = 560;
+      const trailH = 220;
+      let spawnX: number;
+      let spawnY: number;
+      if (sourceShape) {
+        const bounds = editor.getShapePageBounds(sourceShape.id);
+        if (bounds) {
+          spawnX = Math.round(bounds.maxX + 60);
+          spawnY = Math.round(bounds.midY - trailH / 2);
+        } else {
+          const viewport = editor.getViewportPageBounds();
+          spawnX = Math.round(viewport.midX);
+          spawnY = Math.round(viewport.midY);
+        }
+      } else {
+        const viewport = editor.getViewportPageBounds();
+        spawnX = Math.round(viewport.midX);
+        spawnY = Math.round(viewport.midY);
+      }
+      const shapeId = createShapeId(`probe-trail-${trailRoot.id}`);
+      editor.createShapes([
+        {
+          id: shapeId,
+          type: "probe-trail",
+          x: spawnX,
+          y: spawnY,
+          props: {
+            w: trailW,
+            h: trailH,
+            trailJson,
+            sourceEntityId: entityId,
+            sourceEntityName: trailRoot.source_entity_name,
+            rootQuestion: trailRoot.root_question,
+            spawnedAt: Date.now(),
+          },
+        },
+      ]);
+      // Bring focus + selection so the user sees the new trail.
+      editor.select(shapeId);
+      editor.zoomToSelection({ animation: { duration: 360 } });
+    };
+    window.addEventListener("dock:probe", handler);
+    return () => window.removeEventListener("dock:probe", handler);
+  }, [editor]);
+
   return (
     <CanvasAssetCatalogProvider spaceId={space.id}>
     <CanvasHierarchyContext.Provider value={hierarchyContextValue}>
@@ -3141,7 +3339,7 @@ export function InteraxisCanvas({
           assetClass={extractionReview.assetClass}
           open={extractionReview.isOpen}
           onClose={extractionReview.close}
-          onExtract={async (selected, focus) => {
+          onExtract={async (selected, focus, fullDecompose) => {
             // Reflect the in-flight commit visibly on the asset
             // card before the network roundtrip completes — pulls
             // the badge into the "Extracting…" state immediately.
@@ -3151,7 +3349,11 @@ export function InteraxisCanvas({
                 extractionStatus: "extracting",
               });
             }
-            const result = await extractionReview.extract(selected, focus);
+            const result = await extractionReview.extract(
+              selected,
+              focus,
+              fullDecompose,
+            );
             // On success, paint the final state. The result carries
             // entity_ids[] (already-deduped) — we display its
             // length as the entity count.
@@ -3321,12 +3523,25 @@ export function InteraxisCanvas({
           existing in-canvas strategy-hero-card-shape continues to
           paint at y=1080 as a draggable canvas anchor — this bar is
           the always-visible promo, the shape is the canvas tether. */}
-      <StrategyHeroBar
-        spaceId={space.id}
-        runId={activeRunId}
-        placedRanks={placedStrategyAltRanks}
-        onZoomToRank={handleZoomToStrategyAlt}
-      />
+      {/* StrategyHeroBar removed (2026-07-04): the floating top bar
+          duplicated the rail's "Active strategy" State-zone card and
+          blocked the canvas. Strategy now lives in the right rail's
+          Ambient mode (rail-ambient-mode.tsx → "Active strategy"
+          section) which reads from the same twin-proposal data via
+          /api/spaces/[id]/rail-pulse. The in-canvas strategy-hero-
+          card-shape (a draggable anchor) is unchanged.
+          References preserved so the unused-import linter doesn't
+          drop the symbol — they're kept for the alternative-drop
+          handler below. */}
+      {/* eslint-disable-next-line @typescript-eslint/no-unused-expressions */}
+      {false && (
+        <StrategyHeroBar
+          spaceId={space.id}
+          runId={activeRunId}
+          placedRanks={placedStrategyAltRanks}
+          onZoomToRank={handleZoomToStrategyAlt}
+        />
+      )}
 
       {/* Origin prompt card is now a real tldraw shape (`origin-prompt`,
           painted by PipelineEventPainter at the top of the canvas) so
@@ -3547,6 +3762,22 @@ export function InteraxisCanvas({
           }
           onOpenAdvancedContext={() => setAdvancedContextOpen(true)}
           hasContextOverride={!!(contextOverride?.customText || contextOverride?.sourceOverrides || contextOverride?.scopeOverride)}
+          // Phase 4 gating signals — derived from already-tracked state
+          // so the dock doesn't reach into the canvas itself.
+          kgEntityCount={
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (space as any).entity_count ?? 0
+          }
+          hasSelectedCard={selectedShapes.some((s) => s.type === "kg-node")}
+          defaultDepth={(() => {
+            const rs =
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (space as any).reasoning_settings as
+                | { depth?: "quick" | "standard" | "deep" }
+                | null
+                | undefined;
+            return rs?.depth ?? "standard";
+          })()}
         />
       )}
 

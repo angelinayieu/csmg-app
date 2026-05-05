@@ -64,7 +64,10 @@ export function CascadeObjectiveCard({
         // qualitative / untracked objectives drop on the canvas at 0% and
         // the user can update it once execution data exists.
         progressPct: objective.progressPct ?? 0,
-        tag: objective.tag,
+        // Drag payload contract still requires a definite tag for shape
+        // styling — when the cascade row chose to hide the chip (null),
+        // default the dropped canvas card to "lead" rather than failing.
+        tag: objective.tag ?? "lead",
         valueLabel: objective.valueLabel ?? null,
         paletteKey: row.paletteKey,
         sourceEntityIds: objective.sourceEntityIds,
@@ -193,26 +196,32 @@ export function CascadeObjectiveCard({
               {objective.progressPct}%
             </span>
           )}
-          <span
-            className="rounded px-1.5 py-0.5"
-            style={{
-              fontSize: 8.5,
-              fontWeight: 700,
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-              background:
-                objective.tag === "lead"
-                  ? "rgba(var(--accent-rgb), 0.08)"
-                  : "rgba(251,191,36,0.1)",
-              color: objective.tag === "lead" ? "var(--accent-700)" : "#B45309",
-              border:
-                objective.tag === "lead"
-                  ? "1px solid rgba(var(--accent-rgb), 0.2)"
-                  : "1px solid rgba(251,191,36,0.3)",
-            }}
-          >
-            {objective.tag}
-          </span>
+          {/* LEAD/LAG chip only renders when the perspective gives us a real
+              signal (trend_direction or action timeframe). Defaulting to
+              "lead" when neither was present — the previous behaviour — was
+              misleading on action-derived objectives that had no direction. */}
+          {objective.tag && (
+            <span
+              className="rounded px-1.5 py-0.5"
+              style={{
+                fontSize: 8.5,
+                fontWeight: 700,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                background:
+                  objective.tag === "lead"
+                    ? "rgba(var(--accent-rgb), 0.08)"
+                    : "rgba(251,191,36,0.1)",
+                color: objective.tag === "lead" ? "var(--accent-700)" : "#B45309",
+                border:
+                  objective.tag === "lead"
+                    ? "1px solid rgba(var(--accent-rgb), 0.2)"
+                    : "1px solid rgba(251,191,36,0.3)",
+              }}
+            >
+              {objective.tag}
+            </span>
+          )}
           <span
             className={cn(
               "w-5 h-5 rounded flex items-center justify-center transition-all",

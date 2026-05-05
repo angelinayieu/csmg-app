@@ -35,6 +35,7 @@ import { SidecarTabInsights } from "./sidecar-tab-insights";
 import { SidecarTabKnowledge } from "./sidecar-tab-knowledge";
 import { SidecarTabWeb } from "./sidecar-tab-web";
 import { CardChatbox } from "./card-chatbox";
+import { RailAmbientMode } from "./rail-ambient-mode";
 import type {
   ThreadNoteShape,
   StickyNoteShape,
@@ -151,131 +152,173 @@ export function CardSidecar({ editor, selectedShape, spaceId, onClose }: Props) 
 
   const ctx = useCardSidecarContext({ editor, selectedShape });
   const desc = useMemo(() => describeShape(selectedShape), [selectedShape]);
-  const isVisible = !!selectedShape;
+  const isCardSelected = !!selectedShape;
+  // Ambient mode is the new always-visible state — when no card is
+  // selected the rail surfaces KG snapshot + active strategy + locked
+  // insights + live items instead of disappearing. Card mode (the
+  // existing 3-tab UI) takes over when a shape is selected.
+  const isVisible = true;
+
+  // Always mount on first render — Ambient mode wants to be visible
+  // from canvas mount, not deferred until selection.
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   if (!mounted && !isVisible) return null;
 
   return (
     <aside
       role="complementary"
-      aria-label="Card insights"
+      aria-label={isCardSelected ? "Card insights" : "Ambient rail"}
       className={cn(
         "pointer-events-auto absolute top-0 right-0 bottom-0 z-30 flex w-[340px] flex-col",
         "bg-white/82 backdrop-blur-xl",
         "shadow-[inset_1px_0_0_rgba(148,163,184,0.18),_0_4px_24px_rgba(15,23,42,0.06)]",
         !reducedMotion && "transition-[transform,opacity] duration-220 ease-out",
-        isVisible
-          ? "translate-x-0 opacity-100"
-          : "translate-x-4 opacity-0 pointer-events-none",
+        // Always positioned in-view — ambient mode is persistent.
+        "translate-x-0 opacity-100",
       )}
       style={{
         // Custom duration — Tailwind doesn't ship 220ms by default.
         transitionDuration: reducedMotion ? "0ms" : "220ms",
       }}
     >
-      {/* Header */}
+      {/* Header — only shows the card-context chip when a card is
+          selected; in ambient mode the header is minimal so the rail
+          content has more breathing room. */}
       <header className="flex h-12 flex-shrink-0 items-center gap-2.5 border-b border-gray-100/70 px-4">
-        <span
-          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-xl"
-          style={{ background: desc.tint }}
-        >
-          <desc.Icon className="h-3.5 w-3.5 text-slate-700" />
-        </span>
-        <div className="flex min-w-0 flex-1 flex-col leading-none">
-          <span className="truncate text-[13px] font-semibold text-slate-900">
-            {desc.title || "Select a card"}
-          </span>
-          <span className="truncate text-[10px] font-medium uppercase tracking-[0.08em] text-slate-400">
-            {desc.kind || ""}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close card sidecar"
-          className={cn(
-            "flex h-7 w-7 items-center justify-center rounded-full text-slate-400 hover:bg-gray-100/80 hover:text-slate-700",
-            !reducedMotion && "transition-colors duration-150",
-          )}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        {isCardSelected ? (
+          <>
+            <span
+              className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-xl"
+              style={{ background: desc.tint }}
+            >
+              <desc.Icon className="h-3.5 w-3.5 text-slate-700" />
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col leading-none">
+              <span className="truncate text-[13px] font-semibold text-slate-900">
+                {desc.title || "Select a card"}
+              </span>
+              <span className="truncate text-[10px] font-medium uppercase tracking-[0.08em] text-slate-400">
+                {desc.kind || ""}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close card sidecar"
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-full text-slate-400 hover:bg-gray-100/80 hover:text-slate-700",
+                !reducedMotion && "transition-colors duration-150",
+              )}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </>
+        ) : (
+          <div className="flex flex-1 items-center justify-between">
+            <span
+              className="text-[10px] font-bold uppercase tracking-[0.16em]"
+              style={{ color: "rgba(85,100,121,0.85)" }}
+            >
+              Right rail
+            </span>
+            <span className="text-[10px] text-slate-400">
+              Select a card for insights
+            </span>
+          </div>
+        )}
       </header>
 
-      {/* Tab bar */}
-      <nav
-        role="tablist"
-        aria-label="Sidecar sections"
-        className="flex flex-shrink-0 gap-1 border-b border-gray-100/70 px-3 py-2"
-      >
-        <SidecarTabButton
-          label="Insights"
-          icon={<Sparkles className="h-3 w-3" />}
-          active={activeTab === "insights" && !chatHistoryVisible}
-          reducedMotion={reducedMotion}
-          onClick={() => {
-            setActiveTab("insights");
-            setChatHistoryVisible(false);
-          }}
-        />
-        <SidecarTabButton
-          label="Knowledge"
-          icon={<GitBranch className="h-3 w-3" />}
-          active={activeTab === "knowledge" && !chatHistoryVisible}
-          reducedMotion={reducedMotion}
-          onClick={() => {
-            setActiveTab("knowledge");
-            setChatHistoryVisible(false);
-          }}
-        />
-        <SidecarTabButton
-          label="Web"
-          icon={<Globe className="h-3 w-3" />}
-          active={activeTab === "web" && !chatHistoryVisible}
-          reducedMotion={reducedMotion}
-          onClick={() => {
-            setActiveTab("web");
-            setChatHistoryVisible(false);
-          }}
-        />
-      </nav>
+      {/* Tab bar — shown only in Card mode. Ambient mode has no tabs;
+          its content is a single scrollable rail. */}
+      {isCardSelected && (
+        <nav
+          role="tablist"
+          aria-label="Sidecar sections"
+          className="flex flex-shrink-0 gap-1 border-b border-gray-100/70 px-3 py-2"
+        >
+          <SidecarTabButton
+            label="Insights"
+            icon={<Sparkles className="h-3 w-3" />}
+            active={activeTab === "insights" && !chatHistoryVisible}
+            reducedMotion={reducedMotion}
+            onClick={() => {
+              setActiveTab("insights");
+              setChatHistoryVisible(false);
+            }}
+          />
+          <SidecarTabButton
+            label="Knowledge"
+            icon={<GitBranch className="h-3 w-3" />}
+            active={activeTab === "knowledge" && !chatHistoryVisible}
+            reducedMotion={reducedMotion}
+            onClick={() => {
+              setActiveTab("knowledge");
+              setChatHistoryVisible(false);
+            }}
+          />
+          <SidecarTabButton
+            label="Web"
+            icon={<Globe className="h-3 w-3" />}
+            active={activeTab === "web" && !chatHistoryVisible}
+            reducedMotion={reducedMotion}
+            onClick={() => {
+              setActiveTab("web");
+              setChatHistoryVisible(false);
+            }}
+          />
+        </nav>
+      )}
 
-      {/* Active tab content — padded bottom by 64px to leave room for the chat input bar */}
+      {/* Content — Ambient when no selection, Card tabs when something
+          is selected. Ambient mode skips the chatbox padding because
+          the chat input is hidden in that state. */}
       <section
         role="tabpanel"
-        className="flex-1 overflow-y-auto px-4 py-4 pb-20"
-        aria-label={`${activeTab} tab content`}
+        className={cn(
+          "flex-1 overflow-y-auto",
+          isCardSelected ? "px-4 py-4 pb-20" : "p-0",
+        )}
+        aria-label={
+          isCardSelected ? `${activeTab} tab content` : "Ambient rail content"
+        }
       >
-        {!ctx && (
+        {!isCardSelected && <RailAmbientMode spaceId={spaceId} />}
+        {isCardSelected && !ctx && (
           <EmptyState
-            title="No card selected"
-            body="Click a sticky, strategy card, entity, or thread on the canvas to see AI insights here."
+            title="No context yet"
+            body="The selected shape is loading its context. If this persists, the shape may not have an entity attached."
           />
         )}
-        {ctx && activeTab === "insights" && (
+        {isCardSelected && ctx && activeTab === "insights" && (
           <SidecarTabInsights
             context={ctx}
             spaceId={spaceId}
             onAskProbe={(question) => setChatPrefill(question)}
           />
         )}
-        {ctx && activeTab === "knowledge" && (
+        {isCardSelected && ctx && activeTab === "knowledge" && (
           <SidecarTabKnowledge context={ctx} spaceId={spaceId} />
         )}
-        {ctx && activeTab === "web" && (
+        {isCardSelected && ctx && activeTab === "web" && (
           <SidecarTabWeb context={ctx} spaceId={spaceId} />
         )}
       </section>
 
-      {/* Arc 5C: Chatbox — history overlay + bottom input bar */}
-      <CardChatbox
-        spaceId={spaceId}
-        context={ctx}
-        historyVisible={chatHistoryVisible}
-        onHistoryVisibleChange={setChatHistoryVisible}
-        prefillText={chatPrefill}
-        onPrefillConsumed={() => setChatPrefill(null)}
-      />
+      {/* Arc 5C: Chatbox — history overlay + bottom input bar. Hidden
+          in Ambient mode since there's no card to chat about. */}
+      {isCardSelected && (
+        <CardChatbox
+          spaceId={spaceId}
+          context={ctx}
+          historyVisible={chatHistoryVisible}
+          onHistoryVisibleChange={setChatHistoryVisible}
+          prefillText={chatPrefill}
+          onPrefillConsumed={() => setChatPrefill(null)}
+        />
+      )}
     </aside>
   );
 }
