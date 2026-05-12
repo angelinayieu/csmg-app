@@ -19,6 +19,7 @@ import {
   EXTRACT_COMPONENTS_SCHEMA,
   EXTRACT_COMPONENTS_SYSTEM,
 } from "@/lib/synergy/process-prompts";
+import { collectAuthoritativePlans } from "@/lib/synergy/plan-meta";
 
 export const maxDuration = 60;
 
@@ -79,7 +80,17 @@ export async function POST(_request: Request, ctx: RouteContext) {
     );
   }
 
-  const boardSummary = visible
+  // Pull authoritative plans first — these are the user's converged
+  // synthesis artifacts and carry strong signals for upstream
+  // (plan.resources) and downstream (plan.steps / outputs implied by
+  // success_criteria). The LLM still does the extraction but with a
+  // clear hint that plan content is canonical.
+  const authoritativePlans = collectAuthoritativePlans(nodes);
+
+  // Exclude plan-kind nodes from the prose summary — they get their
+  // own structured block below to avoid double-counting.
+  const boardForSummary = visible.filter((n) => n.kind !== "plan");
+  const boardSummary = boardForSummary
     .map((n) => {
       const parent = nodes.find((p) => p.id === n.parent_id);
       const parentHint = parent ? ` (under: ${parent.label})` : "";
@@ -88,10 +99,29 @@ export async function POST(_request: Request, ctx: RouteContext) {
     })
     .join("\n");
 
+  const authoritativePlanBlock = authoritativePlans.length
+    ? "\n\nAUTHORITATIVE PLANS (user-converged synthesis — treat resources as upstream, success criteria + step outputs as downstream):\n" +
+      authoritativePlans
+        .map(({ source, plan }, idx) => {
+          const stepsList = plan.steps.map((s, i) => `    ${i + 1}. ${s.label}`).join("\n");
+          const resourcesList = plan.resources.length
+            ? `\n  Resources (likely upstream):\n    - ${plan.resources.join("\n    - ")}`
+            : "";
+          const successList = plan.success_criteria.length
+            ? `\n  Success criteria (likely downstream metrics):\n    - ${plan.success_criteria.join("\n    - ")}`
+            : "";
+          return `Plan #${idx + 1} (from "${source.label}"):
+  Goal: ${plan.goal}
+  Steps:
+${stepsList}${resourcesList}${successList}`;
+        })
+        .join("\n\n")
+    : "";
+
   const objectiveBlock = session.objective_statement
     ? `\n\nObjective: ${session.objective_statement}\nConstraints: ${(session.objective_constraints ?? []).join("; ")}\nSuccess criteria: ${(session.objective_success_criteria ?? []).join("; ")}`
     : "";
-  const userMsg = `Brainstorm title: ${session.title}${objectiveBlock}\n\nBoard contents:\n${boardSummary}`;
+  const userMsg = `Brainstorm title: ${session.title}${objectiveBlock}${authoritativePlanBlock}\n\nBoard contents (non-plan nodes):\n${boardSummary}`;
 
   let extracted: ExtractedComponents;
   try {

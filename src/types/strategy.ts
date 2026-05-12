@@ -20,6 +20,22 @@ export interface StrategyPerspective {
     trend_delta?: string;
     /** Estimated contribution to twin health score, 0-100 — used for lab card size & edge weight */
     contribution_to_health?: number;
+    /**
+     * Experimental-design role of this metric. Drives variable_proposals
+     * classification on strategy approval (replaces the heuristic
+     * classifier in extract-variable-proposals.ts when populated).
+     * Default: "dependent" (most key_metrics are what you measure).
+     */
+    variable_role?:
+      | "independent"
+      | "dependent"
+      | "controlled"
+      | "confounding"
+      | "outcome"
+      | "mediator"
+      | "modifier"
+      | "instrument"
+      | "condition";
   };
   supporting_entities: string[]; // entity IDs (C-prefixed and X-prefixed)
   /** Optional entity refs for lab card click-through (usually same as supporting_entities) */
@@ -69,6 +85,23 @@ export interface MicroTactic {
     current_value?: string | number;
     /** Direction of recent change */
     trend?: "up" | "down" | "stable";
+    /**
+     * Experimental-design role of this metric. For micro_tactics whose
+     * infrastructure_action is "build" or "configure", the LLM should
+     * mark this "independent" (the manipulable variable). For "monitor"
+     * tactics it's typically "dependent". Drives variable_proposals
+     * classification on strategy approval.
+     */
+    variable_role?:
+      | "independent"
+      | "dependent"
+      | "controlled"
+      | "confounding"
+      | "outcome"
+      | "mediator"
+      | "modifier"
+      | "instrument"
+      | "condition";
   };
   dependencies: string[]; // entity IDs that must be addressed first
   timeframe: "now" | "short_term" | "medium_term" | "long_term";
@@ -195,6 +228,23 @@ export interface StrategyLearningLoop {
     yellow_reading: string;
     red_reading: string;
     connects_to_policy_element: string;
+    /**
+     * Experimental-design role. Leading indicators are typically
+     * "dependent" (what you measure to predict the lagging outcome),
+     * but the LLM may classify a particular indicator as "independent"
+     * when it represents a manipulable input the strategy is gating
+     * the lagging outcome on.
+     */
+    variable_role?:
+      | "independent"
+      | "dependent"
+      | "controlled"
+      | "confounding"
+      | "outcome"
+      | "mediator"
+      | "modifier"
+      | "instrument"
+      | "condition";
   }>;
   /** How often to check and review */
   review_cadence: {
@@ -543,6 +593,61 @@ export interface InfrastructureProposal {
    * prediction_panel, validation_lab, baseline_deviation_tracker, etc.).
    */
   mechanism_hints?: MechanismHint[];
+  /**
+   * Sprint W5.5 — per-app IV/DV/control/mediator/moderator contract the
+   * LLM proposes alongside this app. Each entry maps to one
+   * variable_proposals row (source_field='infrastructure_proposal.
+   * app_variable'). Reviewed in the same surface as perspective and
+   * learning_loop variable proposals, then materialized into the
+   * partition that derive-app-variables consumes.
+   *
+   * Optional + backward-compatible: strategies generated before W5.5
+   * have this absent; the app-generator treats absence as "fall back
+   * to perspective + learning-loop derivation only."
+   */
+  app_variables?: AppVariableProposal[];
+}
+
+/**
+ * Sprint W5.5 — variable contract entry on an InfrastructureProposal.
+ * The LLM produces these per-app; the extractor maps them into
+ * variable_proposals rows for the user to review/approve.
+ */
+export interface AppVariableProposal {
+  /** Plain-language name. Same shape as VariableMetricDefinition.name. */
+  name: string;
+  /** Optional 1-sentence description of what this variable represents. */
+  description?: string;
+  /** Role assignment from the LLM. Same VariableRole enum the partition uses. */
+  role:
+    | "independent"
+    | "dependent"
+    | "controlled"
+    | "confounding"
+    | "outcome"
+    | "mediator"
+    | "modifier"
+    | "instrument"
+    | "condition"
+    | "unclassified";
+  /** Optional measurable definition — unit, cadence, threshold bands, etc. */
+  metric_definition?: {
+    name: string;
+    current?: string | null;
+    target?: string | null;
+    unit?: string | null;
+    measurement_method?: string | null;
+    cadence?: "daily" | "weekly" | "biweekly" | "monthly" | string | null;
+    threshold_green?: string | null;
+    threshold_yellow?: string | null;
+    threshold_red?: string | null;
+  };
+  /** Why this variable belongs in this app's contract. */
+  justification?: string;
+  /** 0..1 — LLM confidence in the role/relevance pairing. */
+  confidence?: number;
+  /** Entity codes (e.g. "C3") this variable depends on or is measured against. */
+  depends_on_entity_ids?: string[];
 }
 
 // ── Mechanisms (first-class, PR1) ──────────────────────────────────────

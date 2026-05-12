@@ -127,6 +127,10 @@ export function CanvasSubjectCardHydrator({ spaceId }: { spaceId: string }) {
             focusLabel: subj.focus_label,
             scopeSummary: null,
             conditionCount: Object.keys(subj.conditions ?? {}).length,
+            // A4 — surface the conditions bag for the chip strip
+            // (renders "Sleep 4h" / "Stress 8/10" / etc. value pills
+            // instead of the legacy "N conditions" summary).
+            conditionsJson: JSON.stringify(subj.conditions ?? {}),
             artifactState: toArtifactState(subj.artifact_state),
             needsReview: false,
           },

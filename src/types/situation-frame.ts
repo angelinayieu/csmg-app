@@ -214,6 +214,49 @@ export interface LoadBearingAssumption {
 
 export type FrameGateStatus = "pass" | "needs_user_input" | "needs_more_lenses";
 
+// ── Per-lens whole framing (Phase 1 diverge-converge) ────────────────
+//
+// The competing problem framings emitted by each lens. Defined here
+// (not in @/lib/prompts/framing-lenses) so SituationFrame can reference
+// the type without a circular import — framing-lenses already imports
+// from this file. The shape is intentionally minimal so the consensus
+// pass can pass these through verbatim; merging happens at the picker
+// UI level (or auto-pick by confidence today), not in the type system.
+//
+// See framing-lenses.ts for the prompt instructions that generate
+// these and the validator (coerceWholeFraming) that normalizes them.
+
+export interface LensWholeFraming {
+  /** Stable snake_case slug — sortable, dedupable. Examples:
+   *  "mechanism_bottleneck", "framing_misalignment",
+   *  "operational_friction", "physical_constraint_binding",
+   *  "precedent_mismatch". */
+  framing_id: string;
+  /** 2-5 word headline rendered in the user-facing card. */
+  framing_title: string;
+  /** 1-2 sentences naming the REAL problem this lens sees. NOT the
+   *  user's stated goal — the lens's competing interpretation. */
+  chosen_approach: string;
+  /** What falls apart if this framing is wrong. ≤200 chars. */
+  load_bearing_assumption: string;
+  /** Short phrase describing when this framing wins over the others. */
+  when_it_wins: string;
+  /** Short phrase describing when this framing fails / is wrong fit. */
+  when_it_fails: string;
+  /** Concrete sub-problems this framing implies. 2-5 items, each ≤160
+   *  chars. These become the sub-objectives of the downstream
+   *  twin/strategy if the user picks this framing. */
+  sub_problems: string[];
+  /** 0..1 — confidence in THIS framing (not the overall lens
+   *  confidence). A lens can be highly confident in cells/axes but
+   *  only moderately confident in its whole-framing pick. */
+  confidence: number;
+  /** Which lens emitted this framing. Stamped by the consensus pass
+   *  so the user can see "Framed by the Skeptic lens" attribution
+   *  even after the per-lens outputs are discarded. */
+  lens_id: string;
+}
+
 // ── The frame itself ─────────────────────────────────────────────────
 
 export interface SituationFrame {
@@ -237,6 +280,14 @@ export interface SituationFrame {
   divergences: FramingDivergence[];
   /** Load-bearing assumptions flagged by at least one lens. */
   load_bearing_assumptions: LoadBearingAssumption[];
+  /** Phase 1 diverge-converge — the per-lens competing problem
+   *  framings. NOT merged: each lens's framing is surfaced verbatim
+   *  so the user (or the auto-pick by confidence) can choose. Empty
+   *  array when no lens emitted a candidate_whole_framing (legacy
+   *  responses or all lenses declined). When populated, the highest-
+   *  confidence framing becomes chosen_rank=1 in the downstream
+   *  problem_twin payload. */
+  candidate_framings: LensWholeFraming[];
   /** Aggregate confidence in the framing, 0..1. Composite of per-
    *  cell confidence and inverse of divergence count. */
   framing_confidence: number;

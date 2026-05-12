@@ -1843,6 +1843,31 @@ export async function POST(request: Request) {
       // fast after the keystone drivers.
       .slice(0, 6);
 
+    // Phase 1 — load chosen problem framing ONCE for this space.
+    // All objectives in the refresh share the same framing (it's a
+    // space-level commitment, not goal-specific). The block is
+    // injected into both the diagnosis and synthesis prompts inside
+    // generateMultiStepStrategy. Empty string when no problem_twin
+    // exists or it's a fallback merged frame — engine continues with
+    // its diagnosis-only behavior. Dynamic-import to keep route
+    // startup cost flat for callers that don't have a problem_twin yet.
+    const { loadChosenFramingForSpace, formatChosenFramingForPrompt } =
+      await import("@/lib/framing/load-chosen-framing");
+    const refreshChosenFraming = await loadChosenFramingForSpace(
+      db,
+      spaceId,
+      user.id,
+    );
+    const refreshChosenFramingBlock = formatChosenFramingForPrompt(
+      refreshChosenFraming,
+      "synthesis",
+    );
+    if (refreshChosenFraming) {
+      console.log(
+        `[strategy-refresh] conditioned on framing space=${spaceId} framing_id=${refreshChosenFraming.framing_id} rank=${refreshChosenFraming.chosen_rank}/${refreshChosenFraming.option_count}`,
+      );
+    }
+
     // Strategy silent-zone heartbeat. generateMultiStepStrategy runs
     // Diagnose → Synthesize → Verify (3 LLM calls) + MC sim per
     // strategy = 60-120s typical. Without this the HUD sits on
@@ -1898,6 +1923,10 @@ export async function POST(request: Request) {
             // inside strategy-engine; honored both at prompt time
             // and as a final slice on ranked_strategies.
             strategyCount: reasoningSettings.strategyCount,
+            // Phase 1 — chosen problem framing (space-level, shared
+            // across all objectives in this refresh). Engine routes
+            // it into diagnosis + synthesis prompts.
+            chosenFramingBlock: refreshChosenFramingBlock,
           });
           return { objective, goal, result };
         }),
@@ -2349,6 +2378,30 @@ export async function POST(request: Request) {
       console.log(
         `[strategy-refresh] Wired twin_proposal (${wireResult.twinProposalId ?? "none"}) + ${wireResult.mechanismsInserted} new mechanisms across ${wireResult.mechanismIdsByProposal.size} proposals`,
       );
+
+      // A3 — emit twin_proposal_ready so the canvas painter can spawn a
+      // twin-snapshot inside the Twin room while the run is still live.
+      // Soft-fail: a missing event doesn't block strategy generation.
+      if (wireResult.twinProposalId && pipelineRunId && wireResult.justification) {
+        try {
+          await emitStructuralEvent(db, pipelineRunId, {
+            type: "twin_proposal_ready",
+            proposalId: wireResult.twinProposalId,
+            spaceId,
+            mechanismCount: wireResult.justification.mechanism_ids?.length ?? 0,
+            confidence:
+              typeof wireResult.justification.confidence === "number"
+                ? wireResult.justification.confidence
+                : 0,
+            chosenApproach:
+              typeof wireResult.justification.chosen_approach === "string"
+                ? wireResult.justification.chosen_approach
+                : "",
+          });
+        } catch (err) {
+          console.warn("[strategy-refresh] twin_proposal_ready emit failed (non-fatal):", err);
+        }
+      }
 
       const { generateAppsAndInterventions } = await import(
         "@/lib/pipeline/app-generator"
@@ -2952,8 +3005,54 @@ export async function POST(request: Request) {
             `[strategy-refresh] DoWhy contract for strategy ${r.rank ?? i + 1} failed (non-fatal):`,
             dowhyErr,
           );
+
+          // Sprint C2c — surface DoWhy failures through the SSE
+          // stream so the chrome banner can show "rank N proposal
+          // has degraded rigor — DoWhy identification/refute step
+          // failed." Non-fatal: the proposal still emits (just
+          // without the dowhy contract field). Banner renders as
+          // amber chip with the error message.
+          //
+          // Soft-fail the EMIT itself: if surfacing the warning
+          // throws, we don't want to derail the proposal_ready
+          // emission below. catch() swallows quietly — pipeline
+          // continues with degraded UX rather than failing here.
+          await emitStructuralEvent(db, pipelineRunId, {
+            type: "pipeline_warning",
+            stage: "strategy-refresh.dowhy",
+            code: "dowhy_failed",
+            message: `DoWhy causal contract for strategy rank ${r.rank ?? i + 1} failed — proposal renders without identification verdict.`,
+            details: {
+              rank: r.rank ?? i + 1,
+              error_message:
+                dowhyErr instanceof Error ? dowhyErr.message : String(dowhyErr),
+            },
+          }).catch(() => {
+            // emit-of-warning failed — non-fatal twice over. Skip.
+          });
         }
       }
+
+      // Sprint A3 — emit LLM-self-reported confidence so the right-
+      // rail ring card has a fallback when distribution is absent.
+      // Without this, proposal_ready events without a resolvable
+      // lever-target chain (sparse KG, abstract prompts) are silently
+      // filtered out at canvas-proposal-rings.tsx:89 → user sees
+      // nothing despite the LLM having produced ranked strategies.
+      //
+      // Cast through `unknown` because the local narrow type for
+      // `r.recommendation` in this scope omits `confidence` even
+      // though the runtime data carries it (logged elsewhere at
+      // strategy-refresh:2242, persisted at :709). Defensive read
+      // matches the existing pattern used for other recommendation
+      // fields in this loop.
+      const recForConf = (r.recommendation ?? null) as
+        | { confidence?: unknown }
+        | null;
+      const llmConfidence =
+        recForConf && typeof recForConf.confidence === "number"
+          ? recForConf.confidence
+          : undefined;
 
       await emitStructuralEvent(db, pipelineRunId, {
         type: "proposal_ready",
@@ -2962,12 +3061,38 @@ export async function POST(request: Request) {
         title: (r.recommendation?.title ?? `Strategy rank ${r.rank ?? i + 1}`).slice(0, 200),
         ...(emitHeadline ? { headline: emitHeadline.slice(0, 220) } : {}),
         ...(emitReasoning ? { reasoning: emitReasoning.slice(0, 1200) } : {}),
+        ...(llmConfidence !== undefined ? { confidence: llmConfidence } : {}),
         ...(distribution ? { distribution } : {}),
         ...(targetUuid ? { targetEntityId: targetUuid } : {}),
         ...(axesUsed.length > 0 ? { axes_used: axesUsed } : {}),
         ...(chain ? { chain } : {}),
         ...(dowhyContract ? { dowhy: dowhyContract } : {}),
       });
+
+      // Sprint C2b — surface narrative-mode proposals as a warning so
+      // the chrome banner explains WHY this rank-i strategy doesn't
+      // have a Monte Carlo distribution. Sparse KGs and abstract
+      // prompts hit this path: the LLM reasoned and ranked, but no
+      // resolvable lever-target chain meant no sample-derived
+      // confidence interval. The ring card renders the LLM's
+      // self-reported confidence with an amber "Narrative grounding"
+      // badge (Sprint A3) — this warning explains the badge.
+      //
+      // Emit ONCE per affected rank, not per attempted simulation,
+      // to keep banner noise proportional to user-facing impact.
+      if (!distribution) {
+        await emitStructuralEvent(db, pipelineRunId, {
+          type: "pipeline_warning",
+          stage: "strategy-refresh.simulation",
+          code: "no_simulation_chain",
+          message: `Strategy rank ${r.rank ?? i + 1} renders in narrative-grounding mode — no resolvable lever→target chain for Monte Carlo simulation.`,
+          details: {
+            rank: r.rank ?? i + 1,
+            target_resolved: Boolean(targetUuid),
+            llm_confidence: llmConfidence ?? null,
+          },
+        });
+      }
 
       // Persist the simulation to prediction_ledger + emit
       // prediction_recorded so the resolver-cron can later compare
@@ -3105,6 +3230,56 @@ export async function POST(request: Request) {
     }
 
     await completePipelineRun(db, pipelineRunId, "completed");
+
+    // ── POST-RUN PHASE 2: LAB DIVERGE-CONVERGE AUTO-FIRE ───────────
+    // Sprint W4.11 — once the strategy_twin lands, fire the 5-stance
+    // lab-design panel automatically. Gated on
+    // reasoningSettings.runLab (intake-time toggle) so users who
+    // explicitly disabled lab simulation don't get the lab gate they
+    // didn't ask for. Same gate already used at strategy-refresh:534
+    // for skipLabSimulation.
+    //
+    // Soft-fail throughout. A lab-options route failure logs but
+    // doesn't roll back the strategy approval. Worst case the user
+    // sees a strategy without a lab proposal; they can manually
+    // re-fire generate-lab-options later.
+    //
+    // Why an after() block: same reason memory write-back +
+    // causal-chain propagation use after() — the response goes back
+    // to the client immediately; lab generation runs ~3-4s and
+    // shouldn't block the strategy response.
+    if (reasoningSettings.runLab) {
+      after(async () => {
+        try {
+          const cookieHeader = request.headers.get("cookie") ?? "";
+          const origin = new URL(request.url).origin;
+          const labRes = await fetch(
+            `${origin}/api/pipeline/generate-lab-options`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Cookie: cookieHeader,
+              },
+              body: JSON.stringify({
+                space_id: spaceId,
+                run_id: pipelineRunId,
+              }),
+            },
+          );
+          if (!labRes.ok) {
+            console.warn(
+              `[strategy-refresh] generate-lab-options non-OK status ${labRes.status} ${labRes.statusText}`,
+            );
+          }
+        } catch (labErr) {
+          console.warn(
+            "[strategy-refresh] generate-lab-options dispatch failed (non-fatal):",
+            labErr instanceof Error ? labErr.message : labErr,
+          );
+        }
+      });
+    }
 
     // ── POST-RUN MEMORY WRITE-BACK ─────────────────────────────────
     // Fire-and-forget — index the space's entities + synthesis summary

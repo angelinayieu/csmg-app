@@ -12,7 +12,11 @@ export type NodeKind =
   | "user"
   | "variation"
   | "ranking"
-  | "plan";
+  | "plan"
+  // Synergy synthesize output — a polyhierarchy child of two source
+  // cards capturing what they create together. Distinct from "insight"
+  // because it represents a derived combination, not a fresh observation.
+  | "synergy";
 
 export interface BrainstormSession {
   id: string;
@@ -56,7 +60,23 @@ export interface ClientNode {
   y: number;
   label: string;
   kind: NodeKind;
+  /**
+   * Primary parent — drives the standard tree-edge render + radial
+   * layout. Stable single source of truth for "where in the hierarchy
+   * does this node live?"
+   */
   parent?: string | null;
+  /**
+   * Synergy-synthesize introduces polyhierarchy: a "synergy" node has
+   * two source cards as logical parents. `parent` keeps the primary
+   * (for layout); `parents` carries the full lineage. The secondary
+   * parents render as curved amber edges (same visual lexicon as
+   * lateral edges) — primary stays a straight dashed tree edge.
+   *
+   * For non-synergy nodes this is omitted. V1 in-memory only; the
+   * brainstorm_nodes table only has a single parent_id column.
+   */
+  parents?: string[];
   meta?: string;
 }
 
@@ -64,6 +84,25 @@ export interface ClientStroke {
   id: string;
   points: Array<[number, number]>;
   color: string;
+}
+
+/**
+ * Lateral (non-tree) edge between two nodes — drawn by the user via
+ * the Connect tool. Distinct from parent-child edges (which are
+ * implicit from `node.parent`) because lateral edges encode "these
+ * two relate" without nesting one under the other.
+ *
+ * V1 has only one kind ("lateral"). Typed sub-kinds (reinforces /
+ * conflicts / depends_on / synthesizes_with) come once we see what
+ * users actually want to say with their connections.
+ *
+ * V1 is in-memory only — not persisted. Page reload loses lateral
+ * edges. Persistence schema lands once the UX is validated.
+ */
+export interface ClientLateralEdge {
+  id: string;
+  from: string; // ClientNode.id
+  to: string;   // ClientNode.id
 }
 
 // ── AI augmentation mode responses ──
@@ -79,7 +118,11 @@ export type AugmentMode =
   | "variations"
   | "rank"
   | "clarify"
-  | "plan";
+  | "plan"
+  // Synergy synthesize: given two source cards, emit a single new
+  // idea that captures what they create together. The new node is
+  // wired as a polyhierarchy child of BOTH source cards.
+  | "synthesize";
 
 export interface AugmentResult {
   nodes: Array<{
@@ -100,6 +143,13 @@ export interface DecomposeResult {
 
 export interface QuestionsResult {
   questions: string[];
+}
+
+export interface SynthesizeResult {
+  /** 4-10 word label for the new synergy card. */
+  label: string;
+  /** 1-3 sentence explanation of what the two sources create together. */
+  why: string;
 }
 
 export interface ResearchDirection {
@@ -166,7 +216,8 @@ export type AugmentResponse =
   | { mode: "variations"; result: VariationsResult }
   | { mode: "rank"; result: RankResult }
   | { mode: "clarify"; result: ClarifyResult }
-  | { mode: "plan"; result: PlanResult };
+  | { mode: "plan"; result: PlanResult }
+  | { mode: "synthesize"; result: SynthesizeResult };
 
 // ── History buckets (right rail dedup) ──
 //
@@ -256,19 +307,45 @@ export interface SynergyStrategy {
 // Block-type-specific structured fields live in `meta`. The unions below
 // are non-exhaustive and not strictly enforced — they're hints for the
 // renderer. The DB column is jsonb and additive.
+
+export interface ChallengeItem {
+  weakness: string;
+  severity: "high" | "medium" | "low";
+  suggestion: string;
+}
+
+export interface SubStep {
+  title: string;
+  detail: string;
+}
+
+export interface MitigationTactic {
+  tactic: string;
+  kind: "prevent" | "detect" | "respond";
+}
+
 export interface PlanStepMeta {
   title?: string;
-  sub_steps?: string[];
+  // AI-op-produced sub-steps via /expand
+  sub_steps?: SubStep[];
+  // AI-op-produced adversarial weaknesses via /challenge
+  challenges?: ChallengeItem[];
   evidence_urls?: string[];
 }
 export interface RiskMeta {
   title?: string;
   severity?: "high" | "medium" | "low";
   mitigation?: string;
+  // AI-op-produced additional mitigations via /mitigate
+  additional_mitigations?: MitigationTactic[];
 }
 export interface HypothesisMeta {
   rationale?: string;
   evidence_status?: "untested" | "supported" | "refuted";
+  // AI-op-produced deeper rationales via /expand
+  supporting_rationales?: string[];
+  // AI-op-produced adversarial weaknesses via /challenge
+  challenges?: ChallengeItem[];
   supporting_urls?: string[];
 }
 export interface EvidenceMeta {

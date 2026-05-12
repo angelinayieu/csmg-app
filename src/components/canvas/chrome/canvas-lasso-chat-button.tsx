@@ -17,12 +17,13 @@
 // about any of it.
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useEditor, useValue } from "tldraw";
-import { MessageSquare, Send, Loader2, X } from "lucide-react";
+import { useEditor, useValue, createShapeId, type TLShapeId } from "tldraw";
+import { MessageSquare, Send, Loader2, Sprout, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   extractShapeContent,
   describeSelection,
+  type ExtractedSelection,
 } from "@/lib/canvas/extract-shape-content";
 
 interface ChatTurn {
@@ -42,6 +43,15 @@ export function CanvasLassoChatButton({ spaceId }: Props) {
   const [input, setInput] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [sending, setSending] = useState(false);
+  // Path A.3 — snapshot the extracted selection when the chat opens so
+  // "Plant on canvas" lands the response next to the originally-lassoed
+  // shapes even if the user later deselects or moves them. Cleared on
+  // close. Without this, planting after a stray click on the canvas
+  // would put the sticky in the wrong place (or nowhere).
+  const [frozenSelection, setFrozenSelection] =
+    useState<ExtractedSelection | null>(null);
+  // Tracks which assistant turn is currently being planted (for spinner).
+  const [plantingIdx, setPlantingIdx] = useState<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -114,7 +124,139 @@ export function CanvasLassoChatButton({ spaceId }: Props) {
     setOpen(false);
     setTurns([]);
     setInput("");
+    setFrozenSelection(null);
   }, []);
+
+  // Path A.3 — open snapshots the current selection. We freeze the
+  // ExtractedSelection (items + bounds) at the moment the chat opens so
+  // the plant action below has a stable target. Re-opening starts a
+  // fresh snapshot.
+  const handleToggle = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setFrozenSelection(extracted);
+      } else {
+        setFrozenSelection(null);
+        setTurns([]);
+        setInput("");
+      }
+      return next;
+    });
+  }, [extracted]);
+
+  // Path A.3 — plant an assistant response on canvas as a sticky note,
+  // with dotted-violet arrows from every source shape in the frozen
+  // selection back to the new sticky. Mirrors the deep-dive panel's
+  // origin→planted arrow pattern + the lasso-summarize source→summary
+  // arrow pattern. The sticky is labeled with the user prompt + AI
+  // answer so it stays self-explanatory after the chat is dismissed.
+  const handlePlantTurn = useCallback(
+    async (assistantIdx: number) => {
+      if (!editor || !frozenSelection) return;
+      const assistantTurn = turns[assistantIdx];
+      if (!assistantTurn || assistantTurn.role !== "assistant") return;
+      // Find the user turn that prompted this response (most recent
+      // user turn before the assistant turn). Falls back to a generic
+      // label if the chat starts with an assistant turn for any reason.
+      let promptText = "AI response";
+      for (let i = assistantIdx - 1; i >= 0; i--) {
+        if (turns[i].role === "user") {
+          promptText = turns[i].text;
+          break;
+        }
+      }
+      setPlantingIdx(assistantIdx);
+      try {
+        const sb = frozenSelection.selectionBounds;
+        // Place to the RIGHT of the selection bbox, vertically centered.
+        // Lasso-summarize plants BELOW the bbox; we go right so the two
+        // actions don't crash into each other when both are used.
+        const stickyW = 240;
+        const stickyH = 240;
+        const placeX = sb ? Math.round(sb.x + sb.w + 80) : 0;
+        const placeY = sb
+          ? Math.round(sb.y + sb.h / 2 - stickyH / 2)
+          : 0;
+        const stickyId = createShapeId();
+        const stickyText =
+          `Q: ${promptText.slice(0, 240)}\n\n${assistantTurn.text}`.slice(
+            0,
+            1800,
+          );
+        editor.createShapes([
+          {
+            id: stickyId,
+            type: "sticky-note" as const,
+            x: placeX,
+            y: placeY,
+            props: {
+              text: stickyText,
+              color: "blue" as const,
+              w: stickyW,
+              h: stickyH,
+              aiTagged: true,
+              entityId: null,
+              dimension: "insight" as const,
+            },
+          },
+        ]);
+        // Connect every source shape back to the new sticky with the
+        // same dotted-violet style the deep-dive panel uses, so the
+        // user can read provenance at a glance: "this insight came from
+        // those three highlighted things".
+        for (const item of frozenSelection.items) {
+          try {
+            const arrowId = createShapeId();
+            editor.createShapes([
+              {
+                id: arrowId,
+                type: "arrow",
+                props: {
+                  color: "light-violet",
+                  size: "s",
+                  dash: "dotted",
+                },
+              },
+            ]);
+            editor.createBindings([
+              {
+                fromId: arrowId,
+                toId: item.shapeId as TLShapeId,
+                type: "arrow",
+                props: {
+                  terminal: "start",
+                  normalizedAnchor: { x: 0.5, y: 0.5 },
+                  isExact: false,
+                  isPrecise: false,
+                },
+                meta: {},
+              },
+              {
+                fromId: arrowId,
+                toId: stickyId,
+                type: "arrow",
+                props: {
+                  terminal: "end",
+                  normalizedAnchor: { x: 0.5, y: 0.5 },
+                  isExact: false,
+                  isPrecise: false,
+                },
+                meta: {},
+              },
+            ]);
+          } catch {
+            // Per-arrow failure shouldn't break the plant — same
+            // pattern lasso-summarize uses.
+          }
+        }
+        editor.select(stickyId);
+      } finally {
+        setPlantingIdx(null);
+      }
+    },
+    [editor, frozenSelection, turns],
+  );
 
   if (!showButton) return null;
 
@@ -127,7 +269,7 @@ export function CanvasLassoChatButton({ spaceId }: Props) {
       <div className="pointer-events-none absolute right-[22rem] top-3 z-[45]">
         <button
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={handleToggle}
           className={cn(
             "pointer-events-auto flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
             open
@@ -209,26 +351,56 @@ export function CanvasLassoChatButton({ spaceId }: Props) {
                 grounded in your selection.
               </div>
             )}
-            {turns.map((t, i) => (
-              <div
-                key={i}
-                className={cn(
-                  "flex",
-                  t.role === "user" ? "justify-end" : "justify-start",
-                )}
-              >
+            {turns.map((t, i) => {
+              const isAssistant = t.role === "assistant";
+              const isPlanting = plantingIdx === i;
+              return (
                 <div
+                  key={i}
                   className={cn(
-                    "max-w-[85%] rounded-2xl px-3 py-2 text-[11.5px] leading-relaxed",
-                    t.role === "user"
-                      ? "rounded-tr-sm bg-blue-600 text-white"
-                      : "rounded-tl-sm bg-gray-100 text-gray-800",
+                    "flex flex-col gap-1",
+                    t.role === "user" ? "items-end" : "items-start",
                   )}
                 >
-                  {t.text}
+                  <div
+                    className={cn(
+                      "max-w-[85%] rounded-2xl px-3 py-2 text-[11.5px] leading-relaxed",
+                      t.role === "user"
+                        ? "rounded-tr-sm bg-blue-600 text-white"
+                        : "rounded-tl-sm bg-gray-100 text-gray-800",
+                    )}
+                  >
+                    {t.text}
+                  </div>
+                  {/* Path A.3 — per-assistant-turn Plant action. Drops the
+                      response as a sticky note next to the originally-
+                      lassoed selection with dotted-violet arrows back to
+                      every source shape, so the user can promote chat
+                      insights into canvas artifacts in one click. */}
+                  {isAssistant && frozenSelection && (
+                    <button
+                      type="button"
+                      onClick={() => handlePlantTurn(i)}
+                      disabled={isPlanting}
+                      title="Plant this response as a sticky note linked to the selection"
+                      className={cn(
+                        "flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold transition-colors disabled:cursor-wait",
+                        isPlanting
+                          ? "bg-violet-100 text-violet-500"
+                          : "bg-violet-50 text-violet-700 hover:bg-violet-100",
+                      )}
+                    >
+                      {isPlanting ? (
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                      ) : (
+                        <Sprout className="h-2.5 w-2.5" />
+                      )}
+                      {isPlanting ? "Planting…" : "Plant on canvas"}
+                    </button>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {sending && (
               <div className="flex justify-start">
                 <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-sm bg-gray-100 px-3 py-2">

@@ -1432,6 +1432,30 @@ REQUIREMENTS FOR THIS PASS:
           stratBenchmark = suggestedObjs[0].benchmark;
         }
 
+        // Phase 1 — load chosen problem framing for the ROOT space.
+        // generateMultiStepStrategy passes this verbatim into the
+        // diagnosis + synthesis prompts so every strategy option
+        // targets the framing's sub_objectives. Empty string when no
+        // problem_twin exists or it's a fallback merged frame — the
+        // engine falls back to its diagnosis-only behavior with no
+        // regression. Soft-fail throughout.
+        const { loadChosenFramingForSpace, formatChosenFramingForPrompt } =
+          await import("@/lib/framing/load-chosen-framing");
+        const stratChosenFraming = await loadChosenFramingForSpace(
+          db,
+          rootSpaceId,
+          user.id,
+        );
+        const stratChosenFramingBlock = formatChosenFramingForPrompt(
+          stratChosenFraming,
+          "synthesis",
+        );
+        if (stratChosenFraming) {
+          console.log(
+            `[synthesize] strategy conditioned on framing space=${rootSpaceId} framing_id=${stratChosenFraming.framing_id} rank=${stratChosenFraming.chosen_rank}/${stratChosenFraming.option_count}`,
+          );
+        }
+
         // Fetch expansion data for probability space computation
         let expansionsMap: Map<string, { sub_components: unknown; internal_pathways: unknown; internal_dynamics: unknown }> | undefined;
         try {
@@ -1468,6 +1492,9 @@ REQUIREMENTS FOR THIS PASS:
           // Plumbs into both the synthesis prompt's option count and
           // the final ranked_strategies slice in strategy-engine.
           strategyCount: cachedReasoningSettings.strategyCount,
+          // Phase 1 — chosen framing block; engine threads it into
+          // diagnosis + synthesis prompts.
+          chosenFramingBlock: stratChosenFramingBlock,
         });
 
         strategicRecommendation = multiStepResult.recommendation;
@@ -2499,6 +2526,27 @@ REQUIREMENTS FOR THIS PASS:
         { chain_depth: 0 },
         epistemicClassification,
       );
+
+      // Sprint C2a — surface no-trigger decisions through the SSE
+      // stream so users know WHY no strategy regenerated this cycle.
+      // Without this, the chrome banner can't distinguish "still
+      // processing" from "decided not to regenerate." A2's
+      // !existingStrategy condition means this only fires on
+      // subsequent passes where existing strategy + nothing changed —
+      // which is the LEGITIMATE quiet path. Emit it as warning, not
+      // error: the system correctly chose not to re-run.
+      if (chainDecision && !chainDecision.should_trigger_next) {
+        await emitStructuralEvent(db, pipelineRunId, {
+          type: "pipeline_warning",
+          stage: "synthesize.chain_decision",
+          code: "no_strategy_trigger",
+          message: chainDecision.reason || "No strategy trigger condition met",
+          details: {
+            chain_depth: chainDecision.chain_depth,
+            conditions_met: chainDecision.conditions_met,
+          },
+        });
+      }
     } catch (chainErr) {
       console.warn("[synthesize] Chain decision evaluation failed (non-fatal):", chainErr);
     }

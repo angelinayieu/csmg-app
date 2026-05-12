@@ -67,6 +67,7 @@ import type {
   IVDecompositionShape,
   VariantCarouselShape,
   StageNodeShape,
+  TwinSnapshotShape,
 } from "./shapes/types";
 import {
   ORIGIN_PROMPT_DEFAULT_H,
@@ -575,6 +576,10 @@ function paintSpaceOpened(
         merging: false,
         scoreJson: "",
         pulse: 0,
+        // B3 — ad-hoc / custom axes get the dashed-border + custom
+        // chip treatment. Defaults to false for legacy events emitted
+        // before the field existed.
+        isCustom: event.isCustom === true,
       },
     });
     state.spaceShellShapeIds.set(event.spaceKey, shapeId);
@@ -942,6 +947,116 @@ function paintTaxonomy(
   }
 }
 
+// ── Twin snapshot card (A3 — operational whiteboard) ──
+//
+// Fired on `twin_proposal_ready` after wireTwinProposalAndMechanisms
+// inserts a twin_proposals row at the end of strategy generation. Spawns
+// a twin-snapshot card inside the Twin room so users watching the run
+// LIVE see the committed Twin/Strategy/Workflow land before the run
+// completes.
+//
+// Cached preview props ride on the shape (chosenApproach + confidence)
+// so the card renders instantly. The full TwinMacroState (entities,
+// edges, leverage, risks, dynamics) is refreshed by the operational
+// seed-spawner on next canvas mount via /api/spaces/[id]/twin-state —
+// painter doesn't fetch here, just lays down a placeholder that says
+// "twin committed, here's why."
+//
+// Idempotent via deterministic shape ID keyed on proposalId: re-emits
+// (e.g. retries on regen) update in place rather than stacking duplicate
+// snapshot cards.
+
+const TWIN_SNAPSHOT_CARD_W = 360;
+const TWIN_SNAPSHOT_CARD_H = 320;
+
+function paintTwinProposalReady(
+  editor: Editor,
+  event: Extract<StructuralEvent, { type: "twin_proposal_ready" }>,
+  state: PainterState,
+) {
+  if (!state.anchor) return;
+
+  // Deterministic id so re-emit upserts. Includes spaceId for safety
+  // (deterministic ids that collide across spaces would be a footgun
+  // in a multi-space session).
+  const shapeId = createShapeId(`twin-snapshot-${event.spaceId}-${event.proposalId}`);
+
+  // Map confidence (0-100) onto the four-band healthLabel the shape
+  // accepts so the card has an honest readout from the moment it lands.
+  // The seed-spawner will overwrite these once real twin-state is
+  // available; we just need a sensible start.
+  const score = Math.max(0, Math.min(100, event.confidence));
+  const healthLabel: TwinSnapshotShape["props"]["healthLabel"] =
+    score >= 80 ? "strong"
+    : score >= 60 ? "developing"
+    : score >= 40 ? "fragile"
+    : "critical";
+
+  const propsBase: TwinSnapshotShape["props"] = {
+    w: TWIN_SNAPSHOT_CARD_W,
+    h: TWIN_SNAPSHOT_CARD_H,
+    spaceId: event.spaceId,
+    spaceName: "",
+    snappedAt: new Date().toISOString(),
+    healthScore: Math.round(score),
+    healthLabel,
+    maturity: "actionable_now",
+    // Counts default to 0 — the seed-spawner refreshes from twin-state
+    // on next canvas mount. The chosenApproach text is the user-facing
+    // anchor in the meantime.
+    entitiesCount: 0,
+    edgesCount: 0,
+    cyclesCount: 0,
+    leveragePoints: 0,
+    riskPoints: 0,
+    reinforcingPositive: 0,
+    reinforcingNegative: 0,
+    balancing: 0,
+    bottleneckName: event.chosenApproach.slice(0, 80) || null,
+    bottleneckShare: null,
+  };
+
+  const existing = editor.getShape(shapeId);
+  if (existing) {
+    try {
+      editor.updateShape<TwinSnapshotShape>({
+        id: shapeId,
+        type: "twin-snapshot",
+        props: propsBase,
+      });
+    } catch (err) {
+      console.warn("[pipeline-painter] twin-snapshot update failed:", err);
+    }
+    return;
+  }
+
+  // Place inside the Twin room. The twin room has order=4 (between
+  // proposal and lab). placeInsideRoom handles room creation if the
+  // room hasn't been spawned yet.
+  const placement = placeInsideRoom("twin", state.anchor, 0, 16);
+  const x = placement.x - TWIN_SNAPSHOT_CARD_W / 2;
+  const y = placement.y;
+
+  try {
+    editor.createShape<TwinSnapshotShape>({
+      id: shapeId,
+      type: "twin-snapshot",
+      x,
+      y,
+      props: propsBase,
+      meta: { source: "pipeline-event:twin-proposal-ready" },
+    });
+    recordChildBottomForStage(
+      editor,
+      state,
+      "twin",
+      y + TWIN_SNAPSHOT_CARD_H,
+    );
+  } catch (err) {
+    console.warn("[pipeline-painter] twin-snapshot create failed:", err);
+  }
+}
+
 // ── Variant card helpers (VP Project report — Phase 3, Batch 2e) ──
 //
 // Painted on `variant_proposed` events from the writer-path. The
@@ -1204,9 +1319,38 @@ export function PipelineEventPainter({
   // canvas mount which only changes on space switch. We mirror it
   // into PainterState on every render so the proposal_ready handler
   // (deeply nested + not React-aware) always reads the latest value.
+  //
+  // Sprint A5 — race fix: if a strategy-kind proposal_ready arrived
+  // BEFORE this mirror set the spaceId, `paintProposal` stashed the
+  // event into `state.pendingStrategyHeroEvent` and skipped spawn.
+  // Replay the spawn now that we have spaceId + the stashed event.
+  // Guard against `!editor` (mirror can run before the editor mounts)
+  // and against `strategyHeroShapeId` already being set (defensive —
+  // shouldn't happen since the stash only fires when shapeId is null).
   useEffect(() => {
-    stateRef.current.strategyHeroSpaceId = spaceId ?? null;
-  }, [spaceId]);
+    const state = stateRef.current;
+    state.strategyHeroSpaceId = spaceId ?? null;
+
+    if (
+      editor &&
+      spaceId &&
+      state.pendingStrategyHeroEvent &&
+      !state.strategyHeroShapeId
+    ) {
+      try {
+        upsertStrategyHero(editor, state.pendingStrategyHeroEvent, state);
+      } catch (err) {
+        console.warn(
+          "[pipeline-painter] strategy-hero replay (Sprint A5) failed:",
+          err,
+        );
+      } finally {
+        // Clear the stash regardless of success — a failed replay
+        // shouldn't loop the spawn attempt on every render.
+        state.pendingStrategyHeroEvent = null;
+      }
+    }
+  }, [spaceId, editor]);
 
   // Enqueue newly-arrived events onto the stagger queue + ensure the
   // drain loop is running. The ACTUAL paint happens in the drain
@@ -1325,6 +1469,12 @@ export function PipelineEventPainter({
         "synthesis-intersection-card",
         "asset-card",
         "situation-card",
+        // Sprint A4 — strategy-hero-card was missing from this set, so
+        // re-runs left ghost heroes from prior runs on the canvas.
+        // Combined with the random-ID bug at upsertStrategyHero (now
+        // fixed with deterministic ID), the cross-run sweep is the
+        // safety net that guarantees only ONE hero per active run.
+        "strategy-hero-card",
       ]);
       // Connector arrows + ribbons that the painter tags with a
       // source string — sweep these too, otherwise dangling arrows
@@ -1489,54 +1639,55 @@ export function PipelineEventPainter({
       }
     }
 
+    // Run-completion cleanup policy.
+    //
+    // Operational-whiteboard vision (A1): the canvas is the durable
+    // system view of this space — rooms + cards survive runs so users
+    // returning later see the operational architecture, not an empty
+    // sheet. Shapes that ARE the system narrative now persist; only
+    // genuinely transient choreography (ghost edges, proposal
+    // breadcrumbs, formation overlays) gets cleared.
+    //
+    // PERSIST after run-complete:
+    //   • situation-card     — intake baseline (the "where you started")
+    //   • asset-card(s)      — what the user fed in
+    //   • taxonomy-card      — domain frame for synthesis
+    //   • synthesis-card     — bottleneck/leverage/risk convergence
+    //   • probability-space-shell, origin-prompt, app-result,
+    //     iv-decomposition, variant-carousel, stage-node
+    //     (already persistent — see comments in their respective
+    //     sections below or in the painter helpers)
+    //
+    // DELETE — purely transient choreography with no narrative value
+    // post-run:
     const shapeIds: TLShapeId[] = [
-      // Delete arrows first — they have bindings to the node shapes.
+      // Ghost edges/bridges between kg-nodes — visual decoration of
+      // the entity graph during reveal. Real edges live in the `edges`
+      // table and are rendered by useSyncEntities post-run.
       ...state.ghostEdgesByPair.values(),
       ...state.ghostBridgesByPair.values(),
-      // Project-Overview origin connectors bound to the KG formation
-      // card + proposal snapshots. Must delete before the shapes
-      // themselves to avoid dangling binding errors.
+      // Origin connectors — pointed at the (now-deleted) kg-formation
+      // overlay. Must clear before the formation shape itself to avoid
+      // dangling bindings.
       ...state.originArrowIds,
-      // Phase 2E · PR 4 — proposal snapshots + their connector arrows
-      // clean up alongside ghosts. Proposals remain accessible via the
-      // right-rail canvas-proposal-rings overlay; their forked-card
-      // presence was for the run duration only. Connector arrows
-      // bound to now-deleted ghost shapes would otherwise dangle.
+      // Proposal snapshots + their chain ribbons + experiment-design
+      // cards — these were live forking breadcrumbs. The committed
+      // operational view uses strategy-hero-card / final-plan-card /
+      // experiment_taxonomies, so the breadcrumbs would duplicate the
+      // canonical narrative.
       ...state.proposalsById.values(),
-      // Project-Overview design pass — chain ribbons live alongside
-      // their snapshot cards and share the same run-scoped lifetime.
       ...state.chainRibbonsByProposal.values(),
-      // 5-column experiment-design cards painted only for
-      // experiment-kind proposals; same run-scoped lifetime.
       ...state.experimentDesignByProposal.values(),
-      // Synthesis intersection card — single per run, anchors all
-      // the proposals. Cleared with the rest so a fresh run can
-      // re-paint with new convergence data.
-      ...(state.synthesisCardShapeId ? [state.synthesisCardShapeId] : []),
-      // Asset chips + situation card — input layer. Cleared on run
-      // completion so a fresh run paints fresh asset chips for any
-      // newly-uploaded files and re-runs the situation analyzer.
-      ...state.assetCardShapeIds.values(),
-      ...(state.situationCardShapeId ? [state.situationCardShapeId] : []),
-      // Project-Overview live landscape — ephemeral, lives only during
-      // the run. The post-run canvas has the real KG visible via the
-      // sync-entities layout, so keeping this overlay would double-
-      // count the information.
+      // KG formation overlay — replaced post-run by the persistent
+      // kg-overview-card. Keeping both would double-count the same
+      // graph summary.
       ...(state.kgFormationShapeId ? [state.kgFormationShapeId] : []),
-      // VP Project report (Phase 3) — the taxonomy card is also run-
-      // scoped. After completion the canonical row in
-      // `experiment_taxonomies` drives the App page's IV decomposition
-      // widget, so we don't need the canvas ghost hanging around.
-      ...(state.taxonomyCardShapeId ? [state.taxonomyCardShapeId] : []),
-      // VP Project report (Phase 3, Batch 2e) — variant flashcards are
-      // ghost geometry only. The canonical source is
-      // `experiment_variants` + the VariantCarousel widget on the App
-      // detail page, which hydrates directly on mount.
+      // Variant flashcards — ghost geometry; the canonical source is
+      // experiment_variants + the VariantCarousel widget on the App
+      // detail page.
       ...state.variantCardShapeIds.values(),
-      // Sprint B — row tether arrows are transient breadcrumbs, drawn
-      // to help the user read the vertical flow during the unfurl.
-      // After the run completes the shapes themselves are enough; the
-      // tethers would clutter the post-run canvas.
+      // Row tether arrows — transient reading aids during the unfurl;
+      // would clutter the post-run canvas.
       ...state.rowTetherArrowIds,
     ];
     // Sprint A shapes themselves (app-result, iv-decomposition,
@@ -2455,6 +2606,12 @@ function paintEvent(
       // as a descendant of the landscape rather than floating in space.
       paintTaxonomy(editor, event, state);
       return;
+    case "twin_proposal_ready":
+      // A3 — paint the committed Twin/Strategy/Workflow inside the Twin
+      // room so users watching the run LIVE see the twin land before
+      // the run completes. Idempotent upsert keyed on proposalId.
+      paintTwinProposalReady(editor, event, state);
+      return;
     case "space_opened":
       // Intake axis lens (ACTORS / TIMELINE / CULTURAL / ASSUMPTIONS /
       // RISK / …). Paints a probability-space-shell card and tethers
@@ -2542,24 +2699,18 @@ function paintEvent(
       // so the StructuralEvent switch stays exhaustive; otherwise
       // TS would complain about an unhandled discriminant.
       return;
-    case "causal_stage_ready":
-      // Sprint B — one stage card per causal chain stage; lays out
-      // horizontally within the synthesis row. Inter-stage arrows
-      // form the causal spine.
-      //
-      // NOTE (pipeline audit 2026-04-24): no backend currently emits
-      // `causal_stage_ready` — grep confirms zero call sites. This
-      // handler + the `paintCausalStageReady` helper + its state
-      // fields (`stageNodeShapesByKey`, `stageNodesByChain`,
-      // `stageArrowsByKey`) are effectively dead code until the
-      // synthesize chain wires an emitter. Keeping them wired so
-      // they're ready the moment the backend lands — logging if
-      // the event ever arrives so we see the link-up happen.
-      console.info(
-        "[pipeline-painter] causal_stage_ready received — painter emitter is now live",
-      );
-      paintCausalStageReady(editor, event, state);
-      return;
+    // Sprint B3 — `causal_stage_ready` painter case removed. Audit
+    // dated 2026-04-24 already noted "no backend currently emits this
+    // — grep confirms zero call sites." Three weeks later still zero
+    // emitters. Falls through to `default` → NO_OP_TYPES (the type is
+    // explicitly listed in that set below) → silent no-op.
+    //
+    // The `paintCausalStageReady` helper + the three state fields
+    // (`stageNodeShapesByKey`, `stageNodesByChain`, `stageArrowsByKey`)
+    // remain in the file as zero-cost scaffolding (empty maps; the
+    // camera-fit at line ~1566 iterates an always-empty values()).
+    // When the synthesize chain finally wires an emitter, restoring
+    // this case is a 3-line copy.
     case "stage_boundary":
       // Phase C (cascade rooms) — spawn / update the room for this
       // stage. On phase=enter we ensure the room exists (idempotent)
@@ -2617,6 +2768,244 @@ function paintEvent(
         }
       }
       return;
+    case "framing_proposed":
+      // Problem-framing diverge-converge (Phase 1) — the framing panel
+      // has just persisted a twin_proposals(kind='problem_twin') row
+      // representing the chosen problem statement that anchors the
+      // downstream KG. v0 emits this with optionCount: 1 (the merged
+      // SituationFrame as a single option); v1+ will rise to N when
+      // the lens output schema is extended to emit per-lens whole
+      // framings.
+      //
+      // No tldraw shape painted — the framing card is a chrome
+      // overlay, parallel to the kg-plan-review-gate pattern. When
+      // the (future) FramingProposalGate chrome component lands, it
+      // listens for this exact event name to pop the card up
+      // immediately instead of waiting on polling. Today no listener
+      // exists; the dispatch is harmless and the data accumulates in
+      // pipeline_run_events for audit.
+      if (typeof window !== "undefined") {
+        try {
+          const fpEvent = event as Extract<
+            StructuralEvent,
+            { type: "framing_proposed" }
+          >;
+          window.dispatchEvent(
+            new CustomEvent("interaxis:framing-proposed", {
+              detail: {
+                spaceId: fpEvent.spaceId,
+                proposalId: fpEvent.proposalId,
+                optionCount: fpEvent.optionCount,
+                chosenRank: fpEvent.chosenRank,
+                chosenApproach: fpEvent.chosenApproach,
+                supportingLenses: fpEvent.supportingLenses,
+                framingConfidence: fpEvent.framingConfidence,
+              },
+            }),
+          );
+        } catch (err) {
+          console.warn(
+            "[painter] framing_proposed window event dispatch failed:",
+            err,
+          );
+        }
+      }
+      return;
+    case "framing_approved":
+      // The problem_twin row's user_status flipped to 'approved' —
+      // either auto-approved by frame-panel/route.ts (today's
+      // default path) or by the user clicking Approve on the gate.
+      // approvalMode: "auto" vs "user" disambiguates.
+      //
+      // No tldraw shape painted. When the FramingProposalGate exists
+      // it can listen for this event to flip its card from "proposed"
+      // to "approved" with a green confirmation pill — no refetch
+      // needed.
+      //
+      // Downstream stages (decompose, frame-extractor, propose-plan)
+      // do NOT need to listen — they continue reading from
+      // spaces.situation_frame, which was written before the events
+      // fired. This event is purely a UI signal.
+      if (typeof window !== "undefined") {
+        try {
+          const faEvent = event as Extract<
+            StructuralEvent,
+            { type: "framing_approved" }
+          >;
+          window.dispatchEvent(
+            new CustomEvent("interaxis:framing-approved", {
+              detail: {
+                spaceId: faEvent.spaceId,
+                proposalId: faEvent.proposalId,
+                approvalMode: faEvent.approvalMode,
+                chosenApproach: faEvent.chosenApproach,
+              },
+            }),
+          );
+        } catch (err) {
+          console.warn(
+            "[painter] framing_approved window event dispatch failed:",
+            err,
+          );
+        }
+      }
+      return;
+    case "framing_selected":
+      // User picked a different framing on the /framing gate page.
+      // Re-rank only — the row stays 'approved'; only chosen_rank
+      // and the rejected_options[] audit log change. The pick page
+      // already has the updated payload (it refreshes itself); this
+      // event tells the canvas chrome card to refresh its preview
+      // and tells future downstream listeners "the chosen approach
+      // has changed; refetch your conditioning."
+      //
+      // cascadeSupersededProposalIds carries the IDs of any
+      // strategy_twin / executable_twin rows the select route just
+      // marked 'superseded'. Non-empty means downstream UI should
+      // show a "regenerate strategy" hint (the prior strategies were
+      // built against a different framing).
+      if (typeof window !== "undefined") {
+        try {
+          const fsEvent = event as Extract<
+            StructuralEvent,
+            { type: "framing_selected" }
+          >;
+          window.dispatchEvent(
+            new CustomEvent("interaxis:framing-selected", {
+              detail: {
+                spaceId: fsEvent.spaceId,
+                proposalId: fsEvent.proposalId,
+                chosenFramingId: fsEvent.chosenFramingId,
+                chosenApproach: fsEvent.chosenApproach,
+                chosenRank: fsEvent.chosenRank,
+                previousChosenRank: fsEvent.previousChosenRank,
+                cascadeSupersededProposalIds:
+                  fsEvent.cascadeSupersededProposalIds,
+              },
+            }),
+          );
+        } catch (err) {
+          console.warn(
+            "[painter] framing_selected window event dispatch failed:",
+            err,
+          );
+        }
+      }
+      return;
+    // ── Phase 2 lab events (Week 4 / W4.8) ─────────────────────────
+    //
+    // Mirror the framing dispatcher pattern. Each lab event becomes a
+    // window CustomEvent that the lab-proposal-gate chrome card (to be
+    // built in W4.9) consumes. No tldraw shape painted — labs are
+    // chrome-only, parallel to the framing surface.
+    case "lab_proposed":
+      // The /api/pipeline/generate-lab-options route has persisted a
+      // twin_proposals(kind='lab_twin') row carrying 1-5 stance-
+      // flavored lab designs. Today's flow either auto-approves
+      // (fallback path; immediately followed by lab_approved) or
+      // stays 'proposed' (divergent path; user reviews via gate
+      // page). The chrome card surfaces a "Review N labs →" CTA
+      // when optionCount > 1.
+      if (typeof window !== "undefined") {
+        try {
+          const lpEvent = event as Extract<
+            StructuralEvent,
+            { type: "lab_proposed" }
+          >;
+          window.dispatchEvent(
+            new CustomEvent("interaxis:lab-proposed", {
+              detail: {
+                spaceId: lpEvent.spaceId,
+                proposalId: lpEvent.proposalId,
+                optionCount: lpEvent.optionCount,
+                chosenRank: lpEvent.chosenRank,
+                chosenApproach: lpEvent.chosenApproach,
+                chosenLens: lpEvent.chosenLens,
+                confidence: lpEvent.confidence,
+              },
+            }),
+          );
+        } catch (err) {
+          console.warn(
+            "[painter] lab_proposed window event dispatch failed:",
+            err,
+          );
+        }
+      }
+      return;
+    case "lab_approved":
+      // The lab_twin row flipped to user_status='approved' — either
+      // via /api/spaces/[id]/lab/select (user picked on the gate
+      // page, approvalMode='user') or via auto-approve from
+      // generate-lab-options (fallback path only, approvalMode='auto').
+      //
+      // flaggedAppsCount > 0 means downstream apps were marked
+      // stale_reason='lab_regen' as a side effect — the chrome card
+      // surfaces this as an amber notice "N apps flagged for regen
+      // against new lab."
+      if (typeof window !== "undefined") {
+        try {
+          const laEvent = event as Extract<
+            StructuralEvent,
+            { type: "lab_approved" }
+          >;
+          window.dispatchEvent(
+            new CustomEvent("interaxis:lab-approved", {
+              detail: {
+                spaceId: laEvent.spaceId,
+                proposalId: laEvent.proposalId,
+                approvalMode: laEvent.approvalMode,
+                chosenApproach: laEvent.chosenApproach,
+                flaggedAppsCount: laEvent.flaggedAppsCount,
+              },
+            }),
+          );
+        } catch (err) {
+          console.warn(
+            "[painter] lab_approved window event dispatch failed:",
+            err,
+          );
+        }
+      }
+      return;
+    case "lab_selected":
+      // User re-ranked the lab options on the gate page. The select
+      // route (W4.10) handles the re-rank + cascade-supersede of
+      // apps (apps.stale_reason='lab_regen') + status flip. This
+      // event tells the chrome card to refresh its preview to show
+      // the new rank-1 option.
+      //
+      // cascadeAppIds carries the apps marked stale by THIS pick.
+      // Empty array = no apps existed at pick time (lab pick happened
+      // before any apps materialized — common during a single
+      // intake's lifecycle).
+      if (typeof window !== "undefined") {
+        try {
+          const lsEvent = event as Extract<
+            StructuralEvent,
+            { type: "lab_selected" }
+          >;
+          window.dispatchEvent(
+            new CustomEvent("interaxis:lab-selected", {
+              detail: {
+                spaceId: lsEvent.spaceId,
+                proposalId: lsEvent.proposalId,
+                chosenLabId: lsEvent.chosenLabId,
+                chosenApproach: lsEvent.chosenApproach,
+                chosenRank: lsEvent.chosenRank,
+                previousChosenRank: lsEvent.previousChosenRank,
+                cascadeAppIds: lsEvent.cascadeAppIds,
+              },
+            }),
+          );
+        } catch (err) {
+          console.warn(
+            "[painter] lab_selected window event dispatch failed:",
+            err,
+          );
+        }
+      }
+      return;
     default:
       // Audit fix (docs/KG_DEPTH_CRITIQUE.md): the prior default
       // silently swallowed every unhandled event type. That created
@@ -2662,6 +3051,15 @@ function paintEvent(
         "structural_analog_found",
         "strategy_consensus_ready",
         "causal_stage_ready",
+        // Sprint C — pipeline error/warning events are chrome-only.
+        // They render in pipeline-error-banner.tsx via the run-event-
+        // store, not as tldraw shapes on the canvas.
+        "pipeline_warning",
+        "pipeline_error",
+        // Phase 2 lab events (Week 4) — REMOVED from NO_OP_TYPES in
+        // W4.8 once explicit case handlers landed above. They dispatch
+        // window CustomEvents (interaxis:lab-{proposed,approved,
+        // selected}) to the lab-proposal-gate chrome card.
       ]);
       if (typeof t === "string" && !NO_OP_TYPES.has(t)) {
         console.warn(
@@ -3481,6 +3879,12 @@ function bumpRoomCountFor(
     case "proposal_ready":
       counts.proposals += 1;
       break;
+    case "twin_proposal_ready":
+      // Twin room subtitle reads "Twin pinned · N strategies approved"
+      // from this counter. Each twin_proposal_ready event = one
+      // approved twin commitment landing in the twin room.
+      counts.proposals += 1;
+      break;
     case "variant_proposed":
       counts.variants += 1;
       break;
@@ -3574,8 +3978,20 @@ function upsertStrategyHero(
     return;
   }
 
+  // Sprint A4 — deterministic hero shape ID.
+  //
+  // Bug fixed: previously `createShapeId()` returned a random ID,
+  // so re-runs left stale heroes behind AND spawned fresh duplicates.
+  // Plus `strategy-hero-card` was NOT in PAINTER_SHAPE_TYPES (~line
+  // 1430), so the cross-run sweep didn't remove it. Two compounding
+  // bugs producing a "ghost forest" of hero cards on every re-run.
+  //
+  // Fix: deterministic ID derived from spaceId. Idempotent under
+  // re-emission. Cross-run cleanup is handled by adding
+  // `strategy-hero-card` to PAINTER_SHAPE_TYPES (separate edit below).
+  //
   // First strategy proposal — create the hero shape.
-  const heroShapeId = createShapeId();
+  const heroShapeId = createShapeId(`strategy-hero-${spaceId}`);
   try {
     const hero: TLShapePartial<StrategyHeroCardShape> = {
       id: heroShapeId,
@@ -3641,6 +4057,19 @@ function paintProposal(
   //   - spaceId isn't known (canvas mounted outside /app/space/[id]/)
   if (event.kind === "strategy" && state.strategyHeroSpaceId) {
     upsertStrategyHero(editor, event, state);
+  } else if (
+    event.kind === "strategy" &&
+    !state.strategyHeroSpaceId &&
+    !state.strategyHeroShapeId &&
+    !state.pendingStrategyHeroEvent
+  ) {
+    // Sprint A5 — race fix: stash the first strategy-kind proposal so
+    // the spaceId mirror effect can replay the spawn once it runs.
+    // Only stash if we haven't already spawned (strategyHeroShapeId)
+    // AND haven't already stashed (avoid overwriting with a later
+    // proposal — rank-1 should win the hero card). See PainterState
+    // comment for the full race description.
+    state.pendingStrategyHeroEvent = event;
   }
 
   // Ensure synthesis card exists. We pass through the event's space

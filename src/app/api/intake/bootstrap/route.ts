@@ -816,7 +816,19 @@ export async function POST(request: Request) {
     }
   });
 
-    return NextResponse.json({ spaceId, runId });
+    // C1 — proposal-gate redirect. When the plan-gate is on (default
+    // for thin prompts + opt-out only for long prompts), route the
+    // user through the dedicated /app/intake-proposal/[runId] page so
+    // they see the four-pane proposal BEFORE landing on the canvas.
+    // When skipPlanGate=true (legacy fast-path), go straight to the
+    // whiteboard. The client falls back to the whiteboard URL if the
+    // field is absent on the response (full backward-compat with old
+    // home builds that don't yet read redirectTo).
+    const redirectTo = skipPlanGate
+      ? `/app/space/${spaceId}/whiteboard${runId ? `?run=${runId}` : ""}`
+      : `/app/intake-proposal/${runId ?? spaceId}`;
+
+    return NextResponse.json({ spaceId, runId, redirectTo });
   } catch (outerErr) {
     // Guarantees the response is ALWAYS JSON. Without this, any
     // unhandled throw (Supabase SDK network error, credit-reservation

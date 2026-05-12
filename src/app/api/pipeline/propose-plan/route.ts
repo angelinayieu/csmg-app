@@ -50,6 +50,10 @@ import {
 import type { KgPlanMode, KgPlanHandoffContext } from "@/types/kg-generation-plan";
 import type { LayerOntologyTemplate } from "@/types/layer-ontology";
 import type { KgPlanProposedEvent } from "@/types/pipeline-events";
+import {
+  loadChosenFramingForSpace,
+  formatChosenFramingForPrompt,
+} from "@/lib/framing/load-chosen-framing";
 
 export const maxDuration = 180;
 export const runtime = "nodejs";
@@ -177,6 +181,28 @@ export async function POST(request: NextRequest) {
     message: "Generating KG generation plan…",
   });
 
+  // ── Load chosen problem framing (Phase 1) ──────────────────────
+  // The upstream framing panel may have already produced + auto-
+  // approved a problem_twin row. If so, condition the plan generator
+  // on the chosen framing instead of letting it re-derive the goal
+  // from prompt alone. Empty string when no framing exists (legacy
+  // spaces, fallback path, or first-time use); the planner falls
+  // back to its original prompt-only behavior. Pure soft-fail.
+  const chosenFraming = await loadChosenFramingForSpace(
+    db,
+    spaceId,
+    user.id,
+  );
+  const chosenFramingBlock = formatChosenFramingForPrompt(
+    chosenFraming,
+    "plan",
+  );
+  if (chosenFraming) {
+    console.log(
+      `[propose-plan] conditioning on chosen framing space=${spaceId} framing_id=${chosenFraming.framing_id} rank=${chosenFraming.chosen_rank}/${chosenFraming.option_count}`,
+    );
+  }
+
   // ── Generate the plan body (the heavy LLM work) ────────────────
   // Diagnostic timing: this is the single longest-running call in
   // the intake chain (one big LLM round-trip). When the bootstrap
@@ -198,6 +224,7 @@ export async function POST(request: NextRequest) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       existing_reasoning_settings: (spaceRow.reasoning_settings as any) ?? undefined,
       superseded_plan_id: supersedesId ?? undefined,
+      chosen_framing_block: chosenFramingBlock,
     });
     console.timeEnd(`[propose-plan] generatePlan space=${spaceId}`);
     console.log(

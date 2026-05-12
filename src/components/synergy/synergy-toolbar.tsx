@@ -10,6 +10,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Eraser,
+  Link2,
   Maximize2,
   MousePointer2,
   Pencil,
@@ -18,7 +19,7 @@ import {
   Trash2,
 } from "lucide-react";
 
-export type SynergyTool = "select" | "pen" | "note" | "eraser";
+export type SynergyTool = "select" | "pen" | "note" | "eraser" | "connect";
 
 interface Props {
   tool: SynergyTool;
@@ -72,6 +73,13 @@ export function SynergyToolbar({
           onClick={() => onToolChange("eraser")}
         >
           <Eraser className="h-4 w-4" />
+        </ToolBtn>
+        <ToolBtn
+          label="Connect (C) — click two cards to link"
+          active={tool === "connect"}
+          onClick={() => onToolChange("connect")}
+        >
+          <Link2 className="h-4 w-4" />
         </ToolBtn>
         <div className="my-1 h-px w-6 bg-gray-200" />
         <button

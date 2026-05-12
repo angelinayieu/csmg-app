@@ -387,6 +387,58 @@ export type Database = {
           created_at?: string;
         };
       };
+      // Migration 20260509_condition_modulators — per-(condition, edge)
+      // effect-size multipliers applied at simulation time when the
+      // active subject's conditions match. Closes the silent
+      // personalization gap. Spec: src/types/environment-definition.ts
+      // schema dep #8.
+      condition_modulators: {
+        Row: {
+          id: string;
+          space_id: string;
+          condition_key: string;
+          value_match: string | null;
+          target_edge_id: string;
+          multiplier_p10: number;
+          multiplier_p50: number;
+          multiplier_p90: number;
+          source_evidence_ids: string[];
+          rationale: string | null;
+          population_label: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          space_id: string;
+          condition_key: string;
+          value_match?: string | null;
+          target_edge_id: string;
+          multiplier_p10: number;
+          multiplier_p50: number;
+          multiplier_p90: number;
+          source_evidence_ids?: string[];
+          rationale?: string | null;
+          population_label?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          space_id?: string;
+          condition_key?: string;
+          value_match?: string | null;
+          target_edge_id?: string;
+          multiplier_p10?: number;
+          multiplier_p50?: number;
+          multiplier_p90?: number;
+          source_evidence_ids?: string[];
+          rationale?: string | null;
+          population_label?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
       credit_ledger: {
         Row: {
           id: string;
@@ -789,6 +841,14 @@ export type Database = {
           temporal_heterogeneity_i2: number | null;
           temporal_evidence_ids: string[];
           temporal_pooled_at: string | null;
+          // Migration 20260509_edges_causal_status — Pearl-hierarchy
+          // tag distinguishing established_causal / plausible_causal /
+          // correlational_only. Drives simulator trust weighting.
+          causal_status:
+            | "established_causal"
+            | "plausible_causal"
+            | "correlational_only"
+            | null;
         };
         Insert: {
           id?: string;
@@ -862,6 +922,11 @@ export type Database = {
           temporal_heterogeneity_i2?: number | null;
           temporal_evidence_ids?: string[];
           temporal_pooled_at?: string | null;
+          causal_status?:
+            | "established_causal"
+            | "plausible_causal"
+            | "correlational_only"
+            | null;
         };
         Update: {
           id?: string;
@@ -935,6 +1000,11 @@ export type Database = {
           temporal_heterogeneity_i2?: number | null;
           temporal_evidence_ids?: string[];
           temporal_pooled_at?: string | null;
+          causal_status?:
+            | "established_causal"
+            | "plausible_causal"
+            | "correlational_only"
+            | null;
         };
       };
       cycles: {
@@ -1650,6 +1720,11 @@ export type Database = {
           status: "active" | "achieved" | "abandoned" | "paused";
           created_at: string;
           updated_at: string;
+          // Migration 20260509_improvement_goals_rl_fields — RL math
+          // parameters. discount_per_week ∈ [0.7, 1.0] default 0.95;
+          // weight ≥ 0 default 1.0.
+          discount_per_week: number | null;
+          weight: number | null;
         };
         Insert: {
           id?: string;
@@ -1666,6 +1741,8 @@ export type Database = {
           status?: "active" | "achieved" | "abandoned" | "paused";
           created_at?: string;
           updated_at?: string;
+          discount_per_week?: number | null;
+          weight?: number | null;
         };
         Update: {
           id?: string;
@@ -1682,6 +1759,8 @@ export type Database = {
           status?: "active" | "achieved" | "abandoned" | "paused";
           created_at?: string;
           updated_at?: string;
+          discount_per_week?: number | null;
+          weight?: number | null;
         };
       };
       goal_progress: {

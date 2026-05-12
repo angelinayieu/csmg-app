@@ -24,7 +24,9 @@ const STAGE_LABELS: Record<PipelineStage, string> = {
   landscape: "Landscape scouting",
   kg: "Knowledge graph",
   proposal: "Proposals",
+  twin: "Digital twin",
   lab: "Lab execution",
+  reflexive: "Reflexive loop",
   results: "Results",
 };
 
@@ -252,7 +254,9 @@ export function digestStages(events: PipelineRunEventRow[]): StageDigest[] {
     "landscape",
     "kg",
     "proposal",
+    "twin",
     "lab",
+    "reflexive",
     "results",
   ];
   const result: StageDigest[] = [];

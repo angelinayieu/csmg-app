@@ -21,6 +21,8 @@ import { AppPairTetherOverlay } from "./chrome/app-pair-tether-overlay";
 import { CanvasLegendSidebar } from "./chrome/canvas-legend-sidebar";
 import { ResearchLibraryChip } from "./chrome/research-library-chip";
 import { CommunitiesChip } from "./chrome/communities-chip";
+import { CanvasBridgeGapsButton } from "./chrome/canvas-bridge-gaps-button";
+import { CanvasPreflightChip } from "./chrome/canvas-preflight-chip";
 import { CanvasStageIndicator } from "./chrome/canvas-stage-indicator";
 import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
 import { CanvasLassoSubjectButton } from "./chrome/canvas-lasso-subject-button";
@@ -36,6 +38,9 @@ import { CanvasImageVisionBridge } from "./chrome/canvas-image-vision-bridge";
 import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
 import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
 import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
+import { CanvasOperationalSeedSpawner } from "./chrome/canvas-operational-seed-spawner";
+import { CanvasRoomTransitionSpawner } from "./chrome/canvas-room-transition-spawner";
+import { CanvasCascadeConnectorSpawner } from "./chrome/canvas-cascade-connector-spawner";
 import { RelaxLayoutButton } from "./chrome/relax-layout-button";
 
 // Hide tldraw's stock UI — we supply our own chrome (top bar, left tool
@@ -107,6 +112,17 @@ function CanvasOverlays() {
           when no detection run has populated the table yet. Click a
           row → zooms to that community's entities on canvas. */}
       <CommunitiesChip spaceId={spaceId} />
+      {/* M6 — Mediator Proposal Engine review surface. Auto-hides
+          when no proposals are pending. Top-right floating chip;
+          click → side drawer with approve/reject per proposal +
+          "re-run bridge detection" button. */}
+      <CanvasBridgeGapsButton spaceId={spaceId} />
+      {/* Top-left chip surfacing preflight contract status:
+            • not-yet-approved → bright "Open preflight" CTA
+            • approved + matches → muted "Preflight approved" badge
+            • approved + drifted → amber warning to re-approve
+          Auto-hides when the space has too few entities for a contract. */}
+      <CanvasPreflightChip spaceId={spaceId} />
       <CanvasStageIndicator />
       <CanvasLassoSystemButton spaceId={spaceId} />
       {/* Phase 6C — sibling button: lasso → save-as-subject. Same
@@ -190,6 +206,27 @@ function CanvasOverlays() {
         entities={entities}
         edges={edges}
       />
+      {/* Operational view seeder — A4 (operational whiteboard track).
+          Reads durable data (twin-proposal ranked_strategies, twin-state
+          macro) and reconstructs the persistent strategy-hero-card +
+          twin-snapshot shapes if they're not already on the canvas.
+          Idempotent + respects user dismissal via localStorage flag,
+          matching the existing app-card / kg-overview cascade pattern. */}
+      <CanvasOperationalSeedSpawner spaceId={spaceId} />
+      {/* Room-transition connectors — B1 (operational whiteboard).
+          Watches the editor's room shapes; once two consecutive cascade
+          rooms exist (intake → landscape → kg → proposal → twin → lab
+          → reflexive → results), places an animated arrow between
+          them. Re-runs whenever a room is created, moved, or resized.
+          Idempotent via deterministic shape IDs. */}
+      <CanvasRoomTransitionSpawner spaceId={spaceId} />
+      {/* Cascade artifact connectors — B2 + B3 (operational whiteboard).
+          Watches for subject-card / strategy-hero-card / twin-snapshot
+          / app-card shapes and draws persistent elbow arrows between
+          them so the operational flow reads as
+          persona → strategy-hero → twin-snapshot → app-card.
+          Bindings track source/target positions automatically. */}
+      <CanvasCascadeConnectorSpawner spaceId={spaceId} />
       {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
           user-triggered force-directed reflow over the main KG.
           Lives in CanvasOverlays so it has the tldraw editor context

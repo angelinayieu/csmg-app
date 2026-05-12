@@ -72,6 +72,22 @@ If a clarifying answer is missing or empty, make a reasonable assumption and cal
 
 Return JSON.`;
 
+// Synergy synthesize — given two source cards, produce a single new
+// idea that captures what they create together. NOT a summary of
+// both, NOT a list of overlaps — a genuinely new artifact only
+// reachable by combining the two. Anchored against generic
+// "intersection" platitudes by requiring a concrete handle.
+const SYNTHESIZE_SYSTEM = `You are a synthesis catalyst. The user has connected two ideas and is asking what they create together — what NEW thing emerges that neither idea names on its own.
+
+Rules:
+- The output is ONE new idea. Not a list, not a summary, not a Venn-diagram description.
+- The label must name something CONCRETE — a mechanism, an artifact, a question, an experiment, an opportunity, a tension worth resolving. NOT "the intersection of X and Y" or "combining X with Y."
+- If the two ideas cancel each other (a real conflict), the synthesis can BE the tension — but state it as a concrete question or design constraint, not as "both X and Y matter."
+- 4-10 word label. 1-3 sentence \`why\` explaining HOW the combination produces this new thing (the mechanism of the synthesis, not a restatement of the inputs).
+- Use the kind and context of the two source cards to inform the synthesis — a synergy of (question + insight) reads differently from (action + branch).
+
+Return JSON.`;
+
 const SYSTEMS: Record<Exclude<AugmentMode, "variations">, string> = {
   augment: `You are a cognitive brainstorming partner. Given a stream of spoken thoughts plus the current board contents, extract NEW key concepts and structure them as a mindmap.
 
@@ -87,6 +103,7 @@ Labels under 6 words. Be incisive, not generic. The summary should be one senten
   rank: `You are a critical evaluator. Rank the provided variations from strongest to weakest based on feasibility, novelty, and impact. Score each 0-100 with one sentence of reasoning, ordered best first. Return JSON.`,
   clarify: CLARIFY_SYSTEM,
   plan: PLAN_SYSTEM,
+  synthesize: SYNTHESIZE_SYSTEM,
 };
 
 function variationsSystem(precision: number): string {
@@ -309,6 +326,19 @@ export const PLAN_SCHEMA = {
   },
 } as const;
 
+export const SYNTHESIZE_SCHEMA = {
+  name: "synergy_synthesize",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      label: { type: "string" },
+      why: { type: "string" },
+    },
+    required: ["label", "why"],
+  },
+} as const;
+
 export function schemaForMode(mode: AugmentMode) {
   switch (mode) {
     case "augment":
@@ -327,5 +357,7 @@ export function schemaForMode(mode: AugmentMode) {
       return CLARIFY_SCHEMA;
     case "plan":
       return PLAN_SCHEMA;
+    case "synthesize":
+      return SYNTHESIZE_SCHEMA;
   }
 }

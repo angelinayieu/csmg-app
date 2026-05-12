@@ -695,6 +695,44 @@ export async function POST(request: Request) {
         );
       }
 
+      // 2.5. Run the Mediator Proposal Engine — detect orphan clusters
+      //      in the seeded graph and stage bridging-mediator proposals
+      //      for user review. The cognitive-performance template seeds
+      //      27 entities + 23 edges with known orphan clusters (e.g.,
+      //      MDA, 8-OHdG, Oxidative Stress are degree-0 in the seed);
+      //      this pass detects them and proposes canonical bridges
+      //      (e.g., Reactive Oxygen Species) which surface on the
+      //      canvas via M6's Bridge-gaps chip.
+      //
+      //      Runs after the template-edge-augmenter so any edges the
+      //      augmenter could add are already in place — clusters
+      //      surfaced here are the structural gaps the augmenter
+      //      couldn't close (because they need a NEW intermediate
+      //      entity, not just an edge between existing ones).
+      //
+      //      Soft-fail wrapper: a failed engine run doesn't block the
+      //      research pipeline that follows. The engine's own internal
+      //      fallbacks degrade gracefully when context is partial
+      //      (synthesis_data not yet populated, etc.).
+      try {
+        const { runMediatorProposalEngine } = await import(
+          "@/lib/mediator-proposal/run-engine"
+        );
+        const mpResult = await runMediatorProposalEngine({
+          spaceId,
+          userId: user.id,
+          db,
+        });
+        console.log(
+          `[explore/create] mediator-proposal: status=${mpResult.status} clusters=${mpResult.clusters_detected} proposed=${mpResult.proposals_made} inserted=${mpResult.inserted} speculative=${mpResult.speculative} duplicates=${mpResult.duplicates}`,
+        );
+      } catch (mpErr) {
+        console.warn(
+          "[explore/create] mediator-proposal engine failed (non-fatal):",
+          mpErr,
+        );
+      }
+
       // 3. Fire RESEARCH with autoAdvance=true. Research's own after()
       //    block then fires synthesize (it already bypasses both gates
       //    for the autoAdvance path — see decompose→research handoff

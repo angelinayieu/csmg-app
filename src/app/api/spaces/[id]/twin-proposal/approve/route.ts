@@ -40,6 +40,8 @@ import { safeAuth, verifySpaceOwnership, safeJsonParse } from "@/lib/api-helpers
 import { captureSnapshot } from "@/lib/twin/snapshot-capture";
 import { commitScenarioToLiveKG } from "@/lib/twin/commit-scenario";
 import { persistProposedSpec } from "@/lib/twin/persist-proposed-spec";
+import { persistVariableProposalsFromSpace } from "@/lib/twin/persist-variable-proposals-from-space";
+import { persistHypothesisLaddersFromSpace } from "@/lib/twin/persist-hypothesis-ladders-from-space";
 import {
   isDiscoverySource,
   type DiscoveryProposalJustification,
@@ -387,6 +389,44 @@ export async function POST(
       if (!res.ok) {
         console.warn(
           `[twin-proposal approve] proposed_spec snapshot failed for ${targetId}: ${res.error}`,
+        );
+      }
+    }),
+  );
+
+  // Materialize LLM-proposed variables (perspective key_metrics +
+  // micro_tactic metrics + learning_loop indicators) into queryable
+  // variable_proposals rows so the user can review/approve them
+  // individually instead of seeing them only as strings inside the
+  // strategy JSONB. Async; soft-fails.
+  after(
+    persistVariableProposalsFromSpace({
+      db,
+      spaceId,
+      userId: user.id,
+    }).then((res) => {
+      if (!res.ok) {
+        console.warn(
+          `[twin-proposal approve] variable_proposals persist failed for ${targetId}: ${res.error}`,
+        );
+      }
+    }),
+  );
+
+  // Materialize hypothesis ladders from the strategy's pre_mortem
+  // entries (claim → mechanism → falsifier → verdict). Async;
+  // soft-fails. Lets the workflow display + canvas render the
+  // strategy's falsifiable claims as structured cards instead of
+  // narrative buried in the JSONB.
+  after(
+    persistHypothesisLaddersFromSpace({
+      db,
+      spaceId,
+      userId: user.id,
+    }).then((res) => {
+      if (!res.ok) {
+        console.warn(
+          `[twin-proposal approve] hypothesis_ladders persist failed for ${targetId}: ${res.error}`,
         );
       }
     }),

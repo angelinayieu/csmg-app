@@ -254,6 +254,55 @@ export function QuestionDeepDivePanel({
     });
 
     editor.createShapes(newShapes);
+
+    // Path A.1 — draw provenance arrows from the origin sticky out to
+    // each planted sub-question. Without these the planted cards float
+    // free and the user loses the "this came from that" relationship.
+    // Pattern + props mirror placeMaterializedEntity's link-arrow in
+    // interaxis-canvas.tsx (light-violet dotted, anchored center-to-
+    // center, soft-fail on binding errors so a single bad shape doesn't
+    // abort the whole plant batch).
+    for (const newShape of newShapes) {
+      try {
+        const linkArrowId = createShapeId();
+        editor.createShapes([
+          {
+            id: linkArrowId,
+            type: "arrow",
+            props: { color: "light-violet", size: "s", dash: "dotted" },
+          },
+        ]);
+        editor.createBindings([
+          {
+            fromId: linkArrowId,
+            toId: originShapeId as TLShapeId,
+            type: "arrow",
+            props: {
+              terminal: "start",
+              normalizedAnchor: { x: 0.5, y: 0.5 },
+              isExact: false,
+              isPrecise: false,
+            },
+            meta: {},
+          },
+          {
+            fromId: linkArrowId,
+            toId: newShape.id,
+            type: "arrow",
+            props: {
+              terminal: "end",
+              normalizedAnchor: { x: 0.5, y: 0.5 },
+              isExact: false,
+              isPrecise: false,
+            },
+            meta: {},
+          },
+        ]);
+      } catch {
+        // Non-fatal — selection feedback below still works without arrows.
+      }
+    }
+
     editor.select(...(newShapes.map((s) => s.id) as TLShapeId[]));
     setPlanting(false);
   }, [editor, originShapeId, selectedCount, subQuestions]);

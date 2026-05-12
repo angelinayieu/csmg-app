@@ -48,6 +48,13 @@ export function getDiagnosisPrompt(params: {
   }>;
   entityCount: number;
   edgeCount: number;
+  /** Phase 1 — chosen problem framing block from
+   *  formatChosenFramingForPrompt(framing, 'diagnosis'). When non-empty,
+   *  the diagnosis LLM must refine (not replace) the framing's
+   *  core_problem statement using KG structure. Empty string when no
+   *  framing exists; the LLM falls back to deriving from structure
+   *  alone. */
+  chosenFramingBlock?: string;
 }): { system: string; user: string } {
 
   const system = `You are a structural diagnostician. Your job is NOT to recommend strategy — it is to diagnose the REAL structural problem in this system.
@@ -74,6 +81,15 @@ Return ONLY valid JSON matching the StrategicDiagnosis schema.`;
 
   // Build user message with all data
   const parts: string[] = [];
+
+  // Phase 1 — chosen problem framing FIRST. The LLM reads the framing
+  // as the locked contract, then sees the KG structure as evidence
+  // that should REFINE (not contradict) the framing. Empty string is
+  // a no-op append; legacy flows unchanged.
+  if (params.chosenFramingBlock && params.chosenFramingBlock.length > 0) {
+    parts.push(params.chosenFramingBlock);
+    parts.push(""); // blank line separator
+  }
 
   // Graph structure
   parts.push(`GRAPH STRUCTURE (${params.entityCount} entities, ${params.edgeCount} edges, density: ${params.graphStructure.metrics.density}):`);
@@ -191,6 +207,12 @@ export function getSynthesisPrompt(params: {
    *  with no alternatives; when 5, a wider fan-out for users who
    *  want more comparison surface. */
   numOptions?: number;
+  /** Phase 1 — chosen problem framing block from
+   *  formatChosenFramingForPrompt(framing, 'synthesis'). When non-
+   *  empty, every option this prompt produces must target the
+   *  framing's sub_objectives. Empty string when no framing exists;
+   *  options are constrained only by the diagnosis as before. */
+  chosenFramingBlock?: string;
 }): { system: string; user: string } {
 
   // Clamp + default: matches STRATEGY_COUNT_MIN/MAX in
@@ -219,6 +241,15 @@ ${params.confirmedStrategy ? `NOTE: A strategy is already confirmed ("${params.c
 Return ONLY valid JSON matching the StrategySynthesisResult schema.`;
 
   const parts: string[] = [];
+
+  // Phase 1 — chosen problem framing FIRST. The synthesis LLM sees the
+  // framing as the locked contract that every option must target,
+  // BEFORE it sees the diagnosis (which refined that framing) and the
+  // KG signals. Empty string is a no-op append.
+  if (params.chosenFramingBlock && params.chosenFramingBlock.length > 0) {
+    parts.push(params.chosenFramingBlock);
+    parts.push(""); // blank line separator
+  }
 
   // Inject diagnosis
   parts.push(`STRUCTURAL DIAGNOSIS:`);

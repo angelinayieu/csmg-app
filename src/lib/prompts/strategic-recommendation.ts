@@ -325,7 +325,8 @@ RECOMMENDATION_SCHEMA (one per ranked strategy):
         "unit": "string or null",
         "trend_direction": "up | down | stable — recent direction of the current value",
         "trend_delta": "string or null — formatted delta like '↑ 4.2' or '↓ 12%'",
-        "contribution_to_health": "number 0-100 — how much this perspective's success contributes to overall twin health (used for lab card sizing)"
+        "contribution_to_health": "number 0-100 — how much this perspective's success contributes to overall twin health (used for lab card sizing)",
+        "variable_role": "string — REQUIRED. Experimental-design role of this metric. Use one of: independent (what we manipulate) | dependent (what we measure — most common for perspective key_metrics) | controlled (what we hold constant) | confounding (uncontrolled but influences DV) | outcome (terminal causal endpoint) | mediator | modifier | instrument | condition. Default to 'dependent' when this is the perspective's measured outcome."
       },
       "supporting_entities": ["C1", "X2"],
       "entity_refs": ["C1", "X2"],
@@ -355,7 +356,7 @@ RECOMMENDATION_SCHEMA (one per ranked strategy):
       "priority": 1,
       "effort": "low | medium | high",
       "impact": "low | medium | high",
-      "metric": { "name": "string", "target": "string", "unit": "string or null", "current_value": "string or number (optional)", "trend": "up | down | stable (optional)" },
+      "metric": { "name": "string", "target": "string", "unit": "string or null", "current_value": "string or number (optional)", "trend": "up | down | stable (optional)", "variable_role": "string — REQUIRED. Experimental-design role: independent (manipulable lever — typical for tactics with infrastructure_action='build'/'configure'/'strengthen') | dependent (measured outcome — typical for tactics with infrastructure_action='monitor') | controlled | confounding | outcome | mediator | modifier | instrument | condition." },
       "dependencies": ["entity IDs"],
       "timeframe": "now | short_term | medium_term | long_term",
       "implementation_intention": {
@@ -410,7 +411,8 @@ RECOMMENDATION_SCHEMA (one per ranked strategy):
         "green_reading": "string — what on-track looks like",
         "yellow_reading": "string — what warning looks like",
         "red_reading": "string — what triggers corrective action",
-        "connects_to_policy_element": "string — which guiding policy assumption this tests"
+        "connects_to_policy_element": "string — which guiding policy assumption this tests",
+        "variable_role": "string — REQUIRED. Typically 'dependent' (an early observable that predicts the lagging outcome) but use 'independent' when this indicator represents a manipulable input the lagging outcome is gated on. Same enum as key_metric.variable_role."
       }
     ],
     "review_cadence": {
@@ -549,8 +551,42 @@ INFRASTRUCTURE_PROPOSAL_SCHEMA (1-3 per strategy — concrete tools/apps for exe
     }
   ],
 
-  "mechanism_hints": ["simulation | prediction | validation | baseline_tracking | deviation_capture | game | ml_personalization"]
+  "mechanism_hints": ["simulation | prediction | validation | baseline_tracking | deviation_capture | game | ml_personalization"],
+
+  "app_variables": [
+    {
+      "name": "string — plain-language variable name (e.g. 'caffeine dose', 'sleep onset latency')",
+      "description": "string — 1 sentence what this represents (optional)",
+      "role": "independent | dependent | controlled | confounding | mediator | modifier | instrument | condition",
+      "metric_definition": {
+        "name": "string — measurable label",
+        "unit": "string (optional) — units of measurement",
+        "current": "string (optional) — current baseline",
+        "target": "string (optional) — target value",
+        "measurement_method": "string (optional) — how it's measured",
+        "cadence": "daily | weekly | biweekly | monthly (optional)"
+      },
+      "justification": "string — 1 sentence why this variable belongs in this app's contract",
+      "confidence": "number 0-1 — your confidence in the role assignment",
+      "depends_on_entity_ids": ["entity codes (e.g. 'C3') this variable depends on"]
+    }
+  ]
 }
+
+APP_VARIABLES RULES (mandatory — defines each app's experimental contract):
+- Every infrastructure_proposal MUST declare app_variables when its type is 'app', 'tool', or 'monitor'. Apps without explicit variables are dashboards with no measurable purpose.
+- Each app needs at least one 'independent' variable (the lever) and one 'dependent' variable (the outcome). Without that pair, the app cannot reason about cause-and-effect.
+- Roles must match what the app actually does:
+  · independent — the user-controllable lever this app helps manipulate
+  · dependent — the outcome this app measures or predicts
+  · controlled — variables this app holds constant during analysis
+  · confounding — common upstream causes this app must adjust for
+  · mediator — intermediate variable on the IV → DV path this app sits on
+  · modifier — interaction term that changes the IV → DV strength
+  · instrument — measurement tool / proxy this app uses
+  · condition — boundary constraint the app operates under
+- When a variable corresponds to an existing entity in the KG, list its code (e.g. 'C3') in depends_on_entity_ids. New variables proposed by the LLM omit this.
+- The app's variable contract should be coherent with the strategy's perspectives[].key_metric and learning_loop.{leading,lagging}_indicators — the LLM should NOT re-propose the strategy's lagging_indicator as a new app variable; instead, reference the same metric name so the extractor can dedupe.
 
 AGENT SPEC RULES (mandatory — this is how apps become more than dashboards):
 - Every infrastructure_proposal MUST declare at least 1 agent_spec. An app without an agent is a static dashboard, not a self-improving tool.

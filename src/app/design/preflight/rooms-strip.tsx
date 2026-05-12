@@ -28,6 +28,8 @@ import {
   ProposalRoomIcon,
   LabRoomIcon,
   ResultsRoomIcon,
+  TwinRoomIcon,
+  ReflexiveRoomIcon,
   NorthStarIcon,
   CycleIcon,
   BridgeIcon,
@@ -41,7 +43,9 @@ const STAGE_ICON: Record<
   landscape: LandscapeRoomIcon,
   kg: KgRoomIcon,
   proposal: ProposalRoomIcon,
+  twin: TwinRoomIcon,
   lab: LabRoomIcon,
+  reflexive: ReflexiveRoomIcon,
   results: ResultsRoomIcon,
 };
 
@@ -52,7 +56,9 @@ const STAGE_ORDER: PipelineStage[] = [
   "landscape",
   "kg",
   "proposal",
+  "twin",
   "lab",
+  "reflexive",
   "results",
 ];
 
@@ -63,7 +69,9 @@ const STAGE_DEMO_STATE: Record<PipelineStage, RoomState> = {
   landscape: "complete",
   kg: "complete",
   proposal: "active",
+  twin: "pending",
   lab: "pending",
+  reflexive: "pending",
   results: "pending",
 };
 
@@ -72,7 +80,9 @@ const STAGE_DEMO_COUNTS: Record<PipelineStage, Partial<RoomCounts>> = {
   landscape: { axes: 4, axesScored: 4 },
   kg: { entities: 34, edges: 87, cycles: 3, bridges: 1 },
   proposal: { proposals: 3 },
+  twin: { proposals: 0 },
   lab: { variants: 0 },
+  reflexive: {},
   results: { predictions: 0 },
 };
 
@@ -103,6 +113,16 @@ const STAGE_NOTES: Record<PipelineStage, string[]> = {
     "Lab-room icon is now an isometric chamber outline — reads as 'experiment vessel,' not flask cliché.",
     "Pending-state pill matches the rail's PENDING chip vocabulary so the visual grammar is one alphabet.",
     "Idle rooms render dimmer (0.78 opacity) so the eye flows past them to the active room.",
+  ],
+  twin: [
+    "Twin room renders the committed Workflow / Strategy / Twin once a proposal is approved.",
+    "Reads the proposed_spec snapshot to diff promised-vs-materialized counts.",
+    "Anchors the persona → strategy → app cascade on the operational whiteboard.",
+  ],
+  reflexive: [
+    "Always-on background pulse — prospector + radar + calibration tick between user visits.",
+    "Renders coverage / depth / calibration as compact telemetry in the rail.",
+    "Kept as a strip rather than a heavyweight room because it has no per-run lifecycle.",
   ],
   results: [
     "Final tier uses a clean check-in-circle mark, no checkmark cliché.",
@@ -1376,10 +1396,16 @@ function buildSampleSubtitle(
       const p = c.proposals ?? 0;
       return p > 0 ? `${p} ranked` : "Synthesizing…";
     }
+    case "twin": {
+      const p = c.proposals ?? 0;
+      return p > 0 ? `Twin pinned · ${p} approved` : "Composing twin…";
+    }
     case "lab": {
       const v = c.variants ?? 0;
       return v > 0 ? `${v} variants` : "Awaiting upstream";
     }
+    case "reflexive":
+      return "Background prospector · radar · calibration";
     case "results":
       return c.predictions ? `${c.predictions} recorded` : "Awaiting upstream";
   }

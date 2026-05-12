@@ -69,7 +69,9 @@ const STAGE_ORDER: PipelineStage[] = [
   "landscape",
   "kg",
   "proposal",
+  "twin",
   "lab",
+  "reflexive",
   "results",
 ];
 
@@ -78,7 +80,9 @@ const STAGE_SHORT: Record<PipelineStage, string> = {
   landscape: "Scan",
   kg: "Graph",
   proposal: "Propose",
+  twin: "Twin",
   lab: "Lab",
+  reflexive: "Loop",
   results: "Results",
 };
 
@@ -202,7 +206,9 @@ export function CanvasEventHud({ runId, onClose, onRetry, onResume }: CanvasEven
       landscape: "pending",
       kg: "pending",
       proposal: "pending",
+      twin: "pending",
       lab: "pending",
+      reflexive: "pending",
       results: "pending",
     };
     for (const s of events) {

@@ -4,6 +4,11 @@ import { safeAuth, safeJsonParse, verifySpaceOwnership } from "@/lib/api-helpers
 import { getExecutionBriefPrompt } from "@/lib/prompts/execution-brief";
 import { detectExecutionContext } from "@/lib/pipeline/context-detector";
 import { KNOWN_PROMPTS_TRUNCATED } from "@/lib/prompts/known-prompts";
+// Sprint W4.12 — condition the execution brief on the user-approved
+// lab_twin. Without this, the brief is lab-agnostic; with this, the
+// LLM produces a brief that respects the chosen experimental
+// architecture (design type, subjects, features, cadence, IV/DV).
+import { loadAndFormatChosenLab } from "@/lib/pipeline/load-chosen-lab";
 import type { Entity, Edge } from "@/types";
 import type { ExecutionBrief } from "@/types/execution-brief";
 import type { SynthesisData } from "@/types/synthesis";
@@ -181,9 +186,26 @@ export async function POST(request: Request) {
       userIntent: recommendationType,
     });
 
+    // Sprint W4.12 — append the chosen-lab context to the system
+    // prompt. Returns "" when no lab approved → no-op (brief
+    // generates legacy lab-agnostic behavior). When an approved
+    // lab_twin exists, the LLM sees the chosen design type +
+    // subjects + features + IV/DV and is instructed to respect
+    // them. The downstream effect: same recommendation can
+    // produce different briefs depending on which lab the user
+    // committed to (e.g., RCT-flavored vs naturalistic).
+    const labContextBlock = await loadAndFormatChosenLab(
+      db,
+      spaceId,
+      user.id,
+    );
+    const systemWithLab = labContextBlock
+      ? `${system}\n\n${labContextBlock}`
+      : system;
+
     // ── Call LLM ──
     const raw = await llmGenerate({
-      system,
+      system: systemWithLab,
       user: userPrompt,
       model: "gpt-4o-mini",
       temperature: 0.3,

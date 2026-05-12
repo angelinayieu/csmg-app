@@ -25,6 +25,7 @@ import {
   type FrameGateStatus,
   type FramingDivergence,
   type LayerCoverage,
+  type LensWholeFraming,
   type LoadBearingAssumption,
   type SituationFrame,
 } from "@/types/situation-frame";
@@ -54,6 +55,7 @@ export function emptyFrame(): SituationFrame {
     axes: [],
     divergences: [],
     load_bearing_assumptions: [],
+    candidate_framings: [],
     framing_confidence: 0,
     gate_status: "pass",
   };
@@ -103,6 +105,16 @@ export function validateFrame(raw: unknown): SituationFrame {
         .filter((a): a is LoadBearingAssumption => a !== null)
     : [];
 
+  // Phase 1 — per-lens candidate framings. Defaults to [] for legacy
+  // frames written before the field existed; coercer drops malformed
+  // entries silently so a bad JSONB row doesn't poison the whole
+  // frame validation.
+  const candidateFramings = Array.isArray(r.candidate_framings)
+    ? (r.candidate_framings as unknown[])
+        .map(coerceCandidateFraming)
+        .filter((f): f is LensWholeFraming => f !== null)
+    : [];
+
   // Layer coverage is recomputed from cells if missing or malformed
   // rather than trusted blindly — guards against a panel that reported
   // inconsistent numbers. If the raw has a valid coverage array we
@@ -132,6 +144,7 @@ export function validateFrame(raw: unknown): SituationFrame {
     axes,
     divergences,
     load_bearing_assumptions: loadBearing,
+    candidate_framings: candidateFramings,
     framing_confidence: framingConfidence,
     gate_status: gateStatus,
   };
@@ -398,6 +411,45 @@ function coerceLoadBearing(raw: unknown): LoadBearingAssumption | null {
       typeof r.if_false_implication === "string"
         ? r.if_false_implication.slice(0, 300)
         : "",
+  };
+}
+
+/** Coerce a raw candidate_framings entry. Mirrors the validator in
+ *  framing-lenses.ts (coerceWholeFraming) but takes lens_id from the
+ *  payload directly (the consensus pass stamped it before persistence,
+ *  so it's part of the stored shape — not synthesized here). */
+function coerceCandidateFraming(raw: unknown): LensWholeFraming | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.framing_id !== "string" || r.framing_id.length === 0) return null;
+  if (typeof r.framing_title !== "string" || r.framing_title.length === 0) {
+    return null;
+  }
+  if (typeof r.chosen_approach !== "string" || r.chosen_approach.length === 0) {
+    return null;
+  }
+  return {
+    framing_id: r.framing_id.slice(0, 80),
+    framing_title: r.framing_title.slice(0, 80),
+    chosen_approach: r.chosen_approach.slice(0, 600),
+    load_bearing_assumption:
+      typeof r.load_bearing_assumption === "string"
+        ? r.load_bearing_assumption.slice(0, 200)
+        : "",
+    when_it_wins:
+      typeof r.when_it_wins === "string" ? r.when_it_wins.slice(0, 200) : "",
+    when_it_fails:
+      typeof r.when_it_fails === "string"
+        ? r.when_it_fails.slice(0, 200)
+        : "",
+    sub_problems: Array.isArray(r.sub_problems)
+      ? (r.sub_problems as unknown[])
+          .filter((s): s is string => typeof s === "string" && s.length > 0)
+          .map((s) => s.slice(0, 160))
+          .slice(0, 6)
+      : [],
+    confidence: clamp01(typeof r.confidence === "number" ? r.confidence : 0),
+    lens_id: typeof r.lens_id === "string" ? r.lens_id.slice(0, 40) : "",
   };
 }
 

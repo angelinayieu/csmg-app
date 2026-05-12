@@ -25,6 +25,16 @@ export interface MaterializeMechanismsArgs {
   proposals: InfrastructureProposal[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any;
+  /**
+   * B4 — optional template-driven filter on which mechanism kinds are
+   * allowed to materialize. When populated, proposal.mechanism_hints[]
+   * is filtered through this list IN ADDITION to ALLOWED_KINDS — so
+   * "game" hints from a strategy are silently dropped on a clinical-
+   * research template that didn't declare "game" in its preferences.
+   * Null/undefined → no template filter, all 7 ALLOWED_KINDS pass
+   * through (legacy behavior preserved).
+   */
+  preferredKinds?: ReadonlySet<MechanismHint> | null;
 }
 
 export interface MaterializeMechanismsResult {
@@ -91,7 +101,8 @@ function rationaleForMechanism(proposal: InfrastructureProposal, kind: Mechanism
 export async function materializeMechanismsFromStrategy(
   args: MaterializeMechanismsArgs,
 ): Promise<MaterializeMechanismsResult> {
-  const { spaceId, userId, strategyVersion, proposals, db } = args;
+  const { spaceId, userId, strategyVersion, proposals, db, preferredKinds } =
+    args;
   const mechanismIdsByProposal = new Map<string, string[]>();
   let insertedCount = 0;
 
@@ -132,7 +143,16 @@ export async function materializeMechanismsFromStrategy(
 
   for (const proposal of proposals) {
     const hints = (proposal.mechanism_hints ?? []).filter(
-      (k): k is MechanismHint => ALLOWED_KINDS.has(k),
+      (k): k is MechanismHint => {
+        if (!ALLOWED_KINDS.has(k)) return false;
+        // B4 — apply template-driven filter when present. Empty set
+        // (defensive) is treated as "no filter" so a misconfigured
+        // template can't accidentally drop everything.
+        if (preferredKinds && preferredKinds.size > 0) {
+          return preferredKinds.has(k);
+        }
+        return true;
+      },
     );
     const proposalMechIds: string[] = [];
 

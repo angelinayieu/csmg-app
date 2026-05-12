@@ -181,6 +181,19 @@ export function CanvasAssetCatalogProvider({
     inflight.current.clear();
   }, [spaceId]);
 
+  // Listen for imperative refresh requests dispatched via window event.
+  // Used by ingestAndMaterialize (which runs outside the provider) to
+  // signal that a new file row landed in ingested_files.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const cls = (e as CustomEvent<{ class?: AssetClass }>).detail?.class;
+      if (cls) void refresh(cls);
+      else void refreshAll();
+    };
+    window.addEventListener("library:refresh", handler);
+    return () => window.removeEventListener("library:refresh", handler);
+  }, [refresh, refreshAll]);
+
   const value = useMemo<CanvasAssetCatalogValue>(
     () => ({ spaceId, state, ensure, refresh, refreshAll, seed }),
     [spaceId, state, ensure, refresh, refreshAll, seed],

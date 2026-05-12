@@ -351,6 +351,64 @@ export interface ResearchTemplate {
   /** Layer ontology to materialize. */
   ontology_layers: ResearchSeedLayer[];
 
+  /**
+   * Optional template override for which probability-space axes the
+   * frame extractor should select from.
+   *
+   * Why: the canonical 8 axes (financial / timeline / actors /
+   * causal_scenarios / evidence / assumptions / risk / cultural) are
+   * universal epistemic primitives — but for a research-template space
+   * like Cognitive Performance, "financial" is rarely relevant and
+   * the template knows better than the LLM what frames matter.
+   *
+   * When this field is populated, the frame extractor restricts the
+   * LLM's selection candidates to this list (still domain-adapted via
+   * display_name from A1). When omitted, the LLM picks freely from
+   * all 8 — preserving backward compat for templates that don't yet
+   * declare preferences.
+   *
+   * Use the canonical slugs ("financial" / "timeline" / etc.) — the
+   * adaptive display_name still adapts per prompt at LLM time.
+   */
+  preferred_probability_space_axes?: Array<
+    | "financial"
+    | "timeline"
+    | "actors"
+    | "causal_scenarios"
+    | "evidence"
+    | "assumptions"
+    | "risk"
+    | "cultural"
+  >;
+
+  /**
+   * Optional template override for which mechanism kinds the strategy
+   * materializer should create when an approved strategy is wired into
+   * the twin (B4).
+   *
+   * Why: `MechanismHint` carries 7 universal kinds (simulation /
+   * prediction / validation / baseline_tracking / deviation_capture /
+   * game / ml_personalization). Some don't fit every domain — e.g.
+   * "game" reads as out-of-place for clinical research, while
+   * "ml_personalization" assumes user-level data the template may not
+   * generate. The template knows better than the LLM which kinds are
+   * domain-natural.
+   *
+   * When this field is populated, `materializeMechanismsFromStrategy`
+   * filters proposal mechanism_hints through this list — kinds NOT in
+   * the template's preferences are silently dropped. When omitted (or
+   * empty), all 7 kinds remain valid (legacy behavior preserved).
+   */
+  preferred_mechanism_kinds?: Array<
+    | "simulation"
+    | "prediction"
+    | "validation"
+    | "baseline_tracking"
+    | "deviation_capture"
+    | "game"
+    | "ml_personalization"
+  >;
+
   /** All seed content. */
   seed_nodes: ResearchSeedNode[];
   seed_edges: ResearchSeedEdge[];

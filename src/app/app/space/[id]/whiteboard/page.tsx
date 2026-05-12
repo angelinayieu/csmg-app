@@ -42,6 +42,33 @@ import { CanvasLabProposalChip } from "@/components/canvas/chrome/canvas-lab-pro
 // run. See src/components/canvas/chrome/kg-plan-review-gate.tsx
 // and supabase/migrations/20260614_kg_generation_plans.sql.
 import { KgPlanReviewGate } from "@/components/canvas/chrome/kg-plan-review-gate";
+// Problem-framing diverge-converge gate (Phase 1, 2026-05) —
+// non-blocking floating card that surfaces the framing panel's
+// chosen problem statement as soon as frame-panel emits
+// `framing_proposed` / `framing_approved`. Today auto-dismisses on
+// the auto-approval that fires ~immediately after the proposal;
+// becomes a real "pick from N framings" CTA once the lens output
+// schema is extended to emit per-lens whole framings. See
+// src/components/canvas/chrome/framing-proposal-gate.tsx and
+// supabase/migrations/20260715_twin_proposals_kind_and_frame.sql.
+import { FramingProposalGate } from "@/components/canvas/chrome/framing-proposal-gate";
+// Phase 2 lab diverge-converge gate (Week 4, 2026-05) — non-blocking
+// floating card that surfaces the 5-stance lab-design panel's chosen
+// proposal as soon as generate-lab-options emits `lab_proposed`.
+// Today auto-dismisses on the auto-approval that fires for the
+// fallback path; becomes a real "pick from N labs" CTA when the
+// divergent path produces real stance options. See
+// src/components/canvas/chrome/lab-proposal-gate.tsx and
+// supabase/migrations/20260717_twin_proposals_lab_twin.sql.
+import { LabProposalGate } from "@/components/canvas/chrome/lab-proposal-gate";
+// Sprint C3 — pipeline error/warning banner. Subscribes to SSE
+// events via useRunEventStore, renders `pipeline_warning` (amber,
+// auto-dismissed on run-complete) and `pipeline_error` (rose,
+// requires user dismiss) accumulated trail. Together with C2's
+// emit sites at the 3 silent-fail paths in the strategy chain
+// (no-trigger, no-simulation, dowhy-failed), this turns invisible
+// degradation into observable signal.
+import { PipelineErrorBanner } from "@/components/canvas/chrome/pipeline-error-banner";
 // Phase 4 — manual authoring add buttons (+Subject, +Intervention,
 // +Variable, +Paper). Gated by spaces.manual_authoring_enabled so
 // the default LLM-driven mode stays uncluttered. Bridges to the
@@ -157,6 +184,34 @@ export default function WhiteboardPage() {
           open plan exists. Listens for `interaxis:kg-plan-proposed`
           window events so it pops up immediately when the bootstrap
           splash fires propose-plan. */}
+      {/* Problem-framing diverge-converge gate — Phase 1's chrome
+          listener for the upstream framing proposal events. Renders
+          nothing until frame-panel emits `interaxis:framing-proposed`
+          for this space. Non-blocking, dismissible, auto-fades on
+          approval. Mounted ABOVE KgPlanReviewGate so the framing
+          proposal is conceptually upstream of the plan proposal —
+          framing is "what problem are we solving" and plan is "what
+          KG should we build for that problem." */}
+      <FramingProposalGate spaceId={space.id} />
+
+      {/* Phase 2 (Week 4) — lab diverge-converge gate. Listens for
+          interaxis:lab-{proposed,approved,selected} window events and
+          surfaces a violet chrome card with "Review N labs →" CTA
+          when the 5-stance panel produces a divergent option set.
+          Auto-dismisses on the fallback path (no real divergence).
+          Mounted at the same z-40 as FramingProposalGate; the two
+          rarely render simultaneously (framing fires pre-decompose,
+          lab fires post-strategy) so a stacking conflict is unusual. */}
+      <LabProposalGate spaceId={space.id} />
+
+      {/* Sprint C3 — pipeline error/warning banner. Mounted BELOW
+          FramingProposalGate (z-30 vs z-40) so the framing card stays
+          in front when both surfaces are live simultaneously. Renders
+          nothing when no `pipeline_warning` / `pipeline_error` events
+          exist on the active run. The C2 emit sites in synthesize +
+          strategy-refresh feed it. */}
+      <PipelineErrorBanner />
+
       <KgPlanReviewGate
         spaceId={space.id}
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

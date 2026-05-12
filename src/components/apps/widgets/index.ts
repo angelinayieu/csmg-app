@@ -48,6 +48,7 @@ import { ChainDiscoveries } from "./chain-discoveries-widget";
 import { SignatureConstellation } from "./signature-constellation-widget";
 import { StrategyCarousel } from "./strategy-carousel-widget";
 import { ObjectiveTree } from "./objective-tree-widget";
+import { VariableContractCard } from "./variable-contract-card";
 
 let booted = false;
 
@@ -479,6 +480,23 @@ export function bootstrapWidgetRegistry(): void {
       accepted_sources: { tree: ["goal_tree", "literal"] },
     },
     ObjectiveTree
+  );
+
+  // ── Sprint W5.4 · Variable Contract card ──
+  //
+  // Renders the App's IV/DV/control/mediator/moderator contract from
+  // config.variables (W5.1/W5.2) and the parent-mechanism mediator
+  // light from config.mediator_light (W5.3). No bindings — the
+  // widget reads directly from context.app.config because variables
+  // are co-located with the app, not joined from elsewhere.
+  registerWidget(
+    {
+      type: "variable_contract_card",
+      description:
+        "Variable contract — IV/DV/control/mediator/moderator chips this app operates against, plus parent-mechanism mediator light.",
+      category: "core",
+    },
+    VariableContractCard
   );
 
   // ── Batch 8 · canonical signature UX ──

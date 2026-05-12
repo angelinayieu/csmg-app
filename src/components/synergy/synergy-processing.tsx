@@ -9,7 +9,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Sparkles, Target } from "lucide-react";
+import { ArrowLeft, ArrowRight, Sparkles, Target } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
 import {
   detectObjective,
@@ -203,6 +203,36 @@ export function SynergyProcessing({
           hasObjective={hasObjective}
           onScore={onScore}
         />
+
+        {/* Strategy Doc CTA — the converged endpoint of this flow.
+            Encouraged once an objective exists; usable any time. */}
+        <Link
+          href={`/app/synergy/${session.id}/strategy`}
+          className="group block rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50/60 to-cyan-50/60 p-6 transition hover:border-blue-400 hover:shadow-md"
+        >
+          <div className="flex items-start gap-4">
+            <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 shadow-sm">
+              <Sparkles className="h-5 w-5 text-white" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-blue-700">
+                <Target className="h-3 w-3" /> Next: crystallize
+              </div>
+              <h3 className="mt-1 text-lg font-semibold text-gray-900">
+                Generate your Strategy Doc
+              </h3>
+              <p className="mt-1 text-[13px] leading-relaxed text-gray-700">
+                Turn the brainstorm into a living strategy artifact —
+                statement, plan, risks, hypotheses, upstream needs, downstream
+                products. The doc you take with you and share with
+                collaborators.
+              </p>
+              <div className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-blue-700 transition group-hover:gap-2.5">
+                Open the Strategy Doc <ArrowRight className="h-3.5 w-3.5" />
+              </div>
+            </div>
+          </div>
+        </Link>
       </div>
     </div>
   );

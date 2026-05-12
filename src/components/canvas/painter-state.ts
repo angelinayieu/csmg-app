@@ -99,6 +99,20 @@ export interface PainterState {
    *  context (event.spaceId is not on every proposal_ready, so we
    *  derive from the painter's existing anchor logic). */
   strategyHeroSpaceId: string | null;
+  /** Sprint A5 — stash for "hero spawn was attempted but spaceId was
+   *  null." The bug: if a backlog `proposal_ready` event arrives in
+   *  the same React commit that loads the space, the spaceId mirror
+   *  effect hasn't run yet → `strategyHeroSpaceId` is null →
+   *  `paintProposal` skips the hero spawn. Subsequent proposals all
+   *  hit the existing-hero-refresh branch (because they assume the
+   *  hero already exists) → hero never spawns. Fix: stash the first
+   *  strategy-kind proposal event here when its spawn was skipped;
+   *  on the next mirror effect run that sets `strategyHeroSpaceId`,
+   *  re-fire `upsertStrategyHero` with the stashed event. Cleared
+   *  immediately on consumption so the replay doesn't repeat. */
+  pendingStrategyHeroEvent:
+    | Extract<StreamedEvent["event"], { type: "proposal_ready" }>
+    | null;
   // ── Cascade rooms (Phase C) ─────────────────────────────────────
   /** stage → room shape id. Spawned on stage_boundary(enter); kept
    *  pinned for the run; pulse-updated as artifact-count events
@@ -344,6 +358,7 @@ export function makeInitialState(): PainterState {
     proposalCount: 0,
     strategyHeroShapeId: null,
     strategyHeroSpaceId: null,
+    pendingStrategyHeroEvent: null,
     roomShapeIds: new Map(),
     roomCounts: new Map(),
     roomChildMaxY: new Map(),

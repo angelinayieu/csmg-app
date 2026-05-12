@@ -80,6 +80,213 @@ export type SynthesisCardShape = TLBaseShape<
   }
 >;
 
+/**
+ * Layer ontology stack — vertical visualization of a space's domain
+ * layers (e.g. for Cognitive Performance: Exogenous → Behaviors →
+ * Biomarkers → Pathways → Symptoms → Cognitive → Composite).
+ *
+ * One shape per space, anchored to the left edge of the KG room. Reads
+ * from `/api/spaces/[id]/layer-ontology` at spawn time and stashes the
+ * row JSON in `layersJson` (tldraw shape props are flat — array fields
+ * must be JSON-encoded; same pattern as ProbabilitySpaceShellShape's
+ * entitiesJson). View parses on render.
+ *
+ * Empty-state: spawner skips creating the shape when the ontology
+ * endpoint returns []. Legacy spaces and use-case templates without an
+ * ontology see no stack at all.
+ */
+export type LayerStackShape = TLBaseShape<
+  "layer-stack",
+  {
+    w: number;
+    h: number;
+    spaceId: string;
+    /**
+     * JSON-stringified Array<{
+     *   id, ordinal, slug, label, color (hex),
+     *   typical_node_kinds (string[])
+     * }>
+     * Sorted by ordinal ascending (1 = most foundational at top).
+     */
+    layersJson: string;
+  }
+>;
+
+/**
+ * Mechanism card — first-class canvas representation of a row in the
+ * `mechanisms` table. Mechanisms are the "cycle patterns" each twin runs
+ * (simulation / prediction / validation / baseline_tracking / etc.). One
+ * card per mechanism, anchored inside the twin room of the operational
+ * cascade so users can see "this twin is running 3 mechanisms" instead
+ * of having mechanisms be invisible supernodes the data layer carries.
+ */
+export type MechanismCardShape = TLBaseShape<
+  "mechanism-card",
+  {
+    w: number;
+    h: number;
+    /** mechanisms.id — the DB row this card represents. */
+    mechanismId: string;
+    /** Closed enum mirroring MechanismHint in src/types/strategy.ts. */
+    kind:
+      | "simulation"
+      | "prediction"
+      | "validation"
+      | "baseline_tracking"
+      | "deviation_capture"
+      | "game"
+      | "ml_personalization";
+    /** mechanisms.name — display label for this card. */
+    name: string;
+    /** mechanisms.cycle_pattern — free-text loop identifier (e.g.
+     *  "experiment_score_reprompt"). Null on legacy/sparse rows. */
+    cyclePattern: string | null;
+    /** mechanisms.rationale — why this mechanism for this twin. */
+    rationale: string | null;
+    /** Lifecycle: proposed → approved → active → paused → retired. */
+    status: "proposed" | "approved" | "active" | "paused" | "retired";
+    /** Count of agent rows in mechanisms.agent_assignments[]. */
+    agentCount: number;
+    /** Count of apps with apps.parent_mechanism_id = this mechanism. */
+    appCount: number;
+  }
+>;
+
+/**
+ * Trajectory fan card — Monte-Carlo-derived projection of a metric over
+ * time, rendered as a p10/p50/p90 fan chart. Spawned inside the twin
+ * room from rows in `prediction_ledger` where `prediction_kind="trajectory"`.
+ *
+ * trajectoryJson is a JSON-stringified Array<{ week, p10, p50, p90 }>
+ * (same flat-prop pattern as probability-space-shell.entitiesJson),
+ * because tldraw shape props can't carry nested arrays directly.
+ */
+
+/**
+ * Forest plot card — meta-analysis-style ranked findings with confidence
+ * intervals. Renders one row from `evidence_registries` per finding (top
+ * N by |effect_size|). Spawned inside the kg room of the operational
+ * cascade alongside the synthesis insight cards (bottleneck / leverage /
+ * risk) — closes the "where do I see findings ranked by confidence?" gap.
+ *
+ * findingsJson stores Array<ForestFinding> as a JSON string (same flat-
+ * prop pattern probability-space-shell uses for entitiesJson). The
+ * referenceMetric drives the vertical reference line: 0 for SMD-family
+ * (cohens_d / hedges_g / smd / beta / raw_mean_diff); 1 for ratio
+ * metrics (rr / or / hr / irr); null falls back to 0.
+ */
+export type ForestPlotShape = TLBaseShape<
+  "forest-plot",
+  {
+    w: number;
+    h: number;
+    findingsJson: string;
+    referenceMetric: string | null;
+    findingCount: number;
+  }
+>;
+
+/**
+ * Edge drift heatmap card — surfaces `edge_calibrations` deltas across
+ * the last N weeks as a rows × cols heatmap. Rows = top edges by
+ * cumulative |delta_strength|; columns = weekly buckets; cells = signed
+ * delta_strength applied that week.
+ *
+ * Spawned inside the reflexive room of the operational cascade so users
+ * see "which edges moved, in which direction, and how recently?" — the
+ * audit-room counterpart to the trajectory fan (which shows what the
+ * simulator predicts) and the forest plot (which shows what evidence
+ * supports). All three share the calibration loop: predict → compare
+ * to reality → drift edges → strategize again.
+ *
+ * driftJson stores Array<EdgeDriftRow> + weekLabels as a single JSON
+ * string (same flat-prop pattern probability-space-shell uses for
+ * entitiesJson).
+ */
+export type EdgeDriftHeatmapShape = TLBaseShape<
+  "edge-drift-heatmap",
+  {
+    w: number;
+    h: number;
+    driftJson: string;
+    /** Range of cell values (max |cell| across the matrix) — drives
+     *  color-scale normalization in the view. Stored so the view
+     *  doesn't have to re-walk the matrix on every render. */
+    maxAbsCell: number;
+    edgeCount: number;
+    weekCount: number;
+  }
+>;
+
+export type TrajectoryFanShape = TLBaseShape<
+  "trajectory-fan",
+  {
+    w: number;
+    h: number;
+    /** prediction_ledger.id — the row this card visualizes. */
+    predictionId: string;
+    /** Display label for the metric being projected. */
+    metricLabel: string;
+    /** Optional unit (e.g. "%", "z"). Null when not specified. */
+    metricUnit: string | null;
+    /** ISO timestamp of when the prediction lands. */
+    horizonAt: string | null;
+    /** ISO timestamp of when this prediction was computed. */
+    predictedAt: string;
+    /** 0–1 confidence; rendered as a small percent chip. */
+    confidence: number | null;
+    /** JSON-stringified trajectory steps. */
+    trajectoryJson: string;
+    /**
+     * Final-horizon distribution, JSON-stringified
+     * `{p10,p50,p90,mean,stddev}`. Drives the right-side terminal
+     * marker. Empty string when no terminal distribution was
+     * persisted.
+     */
+    finalDistributionJson: string;
+  }
+>;
+
+/**
+ * Hypothesis ladder card — claim → mechanism → falsifier → verdict.
+ *
+ * One card per hypothesis_ladders row. Spawned by the operational seeder
+ * inside the proposal room (alongside the strategy hero) so users see
+ * the falsifiable claims their strategy implicitly rests on as
+ * structured cards instead of pre_mortem prose buried in JSONB.
+ *
+ * mechanismChainJson is JSON-stringified Array<{entity_id, entity_name, role}>
+ * — same pattern probability-space-shell uses for entitiesJson, since
+ * tldraw shape props can't carry nested arrays directly.
+ */
+export type HypothesisLadderShape = TLBaseShape<
+  "hypothesis-ladder",
+  {
+    w: number;
+    h: number;
+    /** hypothesis_ladders.id */
+    ladderId: string;
+    /** ① CLAIM — implicit hypothesis the strategy rests on. */
+    claim: string;
+    /** ② MECHANISM — JSON-stringified Array<MechanismChainStep>. */
+    mechanismChainJson: string;
+    /** ③ FALSIFIER — observable that would refute the claim. */
+    falsifier: string | null;
+    /** ④ VERDICT — current state. Drives the verdict pill color. */
+    verdict: "pending" | "supported" | "refuted" | "contested";
+    /** pre_mortem.category. Drives card accent. Null on manual ladders. */
+    category:
+      | "internal"
+      | "structural"
+      | "competitive"
+      | "timing"
+      | "interaction"
+      | null;
+    severity: "catastrophic" | "major" | "moderate" | null;
+    probability: "high" | "moderate" | "low" | null;
+  }
+>;
+
 export type ClusterFrameShape = TLBaseShape<
   "cluster-frame",
   {
@@ -381,12 +588,51 @@ export type RoomShape = TLBaseShape<
       | "landscape"
       | "kg"
       | "proposal"
+      | "twin"
       | "lab"
+      | "reflexive"
       | "results";
     state: "active" | "complete" | "pending";
     subtitle: string;
     pulse: number;
     spawnedAt: number;
+    spaceId: string;
+  }
+>;
+
+// B1 (operational whiteboard) — directional connector between two rooms.
+// Spawned by canvas-room-transition-spawner once rooms exist on the canvas.
+// Renders an orthogonal arrow with a dashed-pulse animation that fires when
+// the source stage emits an event. Persistent across runs (the cascade is
+// the system's identity), so once spawned a connector lives in the tldraw
+// store until the user explicitly removes it.
+export type RoomTransitionShape = TLBaseShape<
+  "room-transition",
+  {
+    w: number;
+    h: number;
+    fromStage:
+      | "intake"
+      | "landscape"
+      | "kg"
+      | "proposal"
+      | "twin"
+      | "lab"
+      | "reflexive"
+      | "results";
+    toStage:
+      | "intake"
+      | "landscape"
+      | "kg"
+      | "proposal"
+      | "twin"
+      | "lab"
+      | "reflexive"
+      | "results";
+    accent: string;
+    /** Bumped by the painter when the source stage emits an event so the
+     *  shape's animation re-fires (matches the room.pulse pattern). */
+    pulse: number;
     spaceId: string;
   }
 >;
@@ -1374,6 +1620,14 @@ export type ProbabilitySpaceShellShape = TLBaseShape<
      *  errorMessage: string | null }` or empty string when still
      *  generating / succeeded. */
     failureJson: string;
+    /**
+     * B3 — true when this space was minted by the framing panel as an
+     * ad-hoc / custom axis (not one of the canonical 8). Drives the
+     * shell's "custom" chip + dashed-border treatment so users can
+     * tell at a glance which lenses came from the catalog vs. were
+     * created specifically for their situation. Defaults false.
+     */
+    isCustom: boolean;
     /** Monotonic pulse so React re-renders even when counts don't
      *  visually change (new entity with same name, etc.). */
     pulse: number;
@@ -1442,6 +1696,7 @@ export type CanvasCustomShape =
   | AssetCardShape
   | SituationCardShape
   | SubjectCardShape
+  | RoomTransitionShape
   | FinalPlanCardShape
   | KgOverviewCardShape;
 
@@ -1520,6 +1775,15 @@ export type SubjectCardShape = TLBaseShape<
     /** Number of conditions / modulators currently set. Drives a
      *  small chip count in the card footer. */
     conditionCount: number;
+    /**
+     * JSON-stringified Record<string, number> of subject.conditions —
+     * the modulator key→value bag (e.g. {"sleep_h": 4, "stress_0_10": 8}).
+     * Drives the per-chip value pills in the card body. Empty `"{}"` falls
+     * back to the legacy "N conditions" summary pill. Stored as JSON because
+     * tldraw shape props are flat (no record/object support); same pattern
+     * as probability-space-shell's entitiesJson + layer-stack's layersJson.
+     */
+    conditionsJson: string;
     /** subjects.artifact_state — bare_topic | partial_artifact |
      *  complete_artifact. Drives a soft badge on the card. */
     artifactState: "bare_topic" | "partial_artifact" | "complete_artifact";

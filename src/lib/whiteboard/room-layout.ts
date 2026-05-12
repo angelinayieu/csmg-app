@@ -106,20 +106,36 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
     accent: "#D97706",
     glyph: "④",
   },
-  lab: {
+  twin: {
     order: 4,
+    title: "Digital twin",
+    description:
+      "The committed Workflow/Strategy/Twin: causal stages, mechanism cascade, and the proposed-vs-actual diff.",
+    accent: "#7C3AED",
+    glyph: "⑤",
+  },
+  lab: {
+    order: 5,
     title: "Lab simulations",
     description:
       "Stress-testing strategies with Monte Carlo runs and counterfactual variants.",
     accent: "#EC4899",
-    glyph: "⑤",
+    glyph: "⑥",
+  },
+  reflexive: {
+    order: 6,
+    title: "Reflexive loop",
+    description:
+      "Background prospector + radar + calibration — the system continuously chips away at coverage between visits.",
+    accent: "#0EA5E9",
+    glyph: "⑦",
   },
   results: {
-    order: 5,
+    order: 7,
     title: "Results",
     description: "Final synthesis and approved next actions.",
     accent: "#475569",
-    glyph: "⑥",
+    glyph: "⑧",
   },
 };
 
@@ -142,23 +158,25 @@ export const ROOM_W = 1900;
  *  creates the results Room outside the SSE event stream) can size
  *  rooms consistently with the painter. */
 export const STAGE_HEIGHT: Record<PipelineStage, number> = {
-  intake: 280,
-  landscape: 420,
-  kg: 700,
-  proposal: 540,
-  lab: 460,
-  results: 320,
+  intake: 200,
+  landscape: 340,
+  kg: 620,
+  proposal: 460,
+  twin: 460,
+  lab: 400,
+  reflexive: 220,
+  results: 260,
 };
 
 /** Vertical breathing room between rooms — enough that the connector
  *  line + arrow head reads cleanly between them. */
-export const ROOM_GAP = 100;
+export const ROOM_GAP = 64;
 
 /** Y offset of the very first room from the painter's anchor. The
  *  painter places state.anchor.y near viewport mid-y; rooms start a
  *  bit above that so the first room's header is roughly at viewport
  *  top during the first paint. */
-export const FIRST_ROOM_Y_OFFSET = -200;
+export const FIRST_ROOM_Y_OFFSET = -160;
 
 /** Padding inside each room — header, body, footer. Used by the room
  *  shape's view component for layout, exposed here so the painter
@@ -311,6 +329,8 @@ export function roomForEventType(
     case "strategy_consensus_ready":
     case "target_outcome_identified":
       return "proposal";
+    case "twin_proposal_ready":
+      return "twin";
     case "variant_proposed":
     case "iv_decomposition_ready":
     case "variant_deck_ready":
@@ -378,9 +398,21 @@ export function buildRoomSubtitle(
       if (counts.proposals === 0) return "Synthesizing strategies…";
       return `${counts.proposals} ${counts.proposals === 1 ? "strategy" : "strategies"} ranked`;
     }
+    case "twin": {
+      if (counts.proposals === 0) return "Composing the workflow twin…";
+      return `Twin pinned · ${counts.proposals} ${counts.proposals === 1 ? "strategy" : "strategies"} approved`;
+    }
     case "lab": {
       if (counts.variants === 0) return "Running simulations…";
       return `${counts.variants} ${counts.variants === 1 ? "variant" : "variants"}`;
+    }
+    case "reflexive": {
+      // Reflexive subtitle is computed from the prospector's own
+      // metrics, not the per-run counts. Until we plumb a coverage
+      // field through, surface a generic state. (Track: T-reflexive-
+      // counts in the room-layout follow-up — we'd add a `coverage`
+      // field to RoomCounts and read prospector_runs.)
+      return "Background prospector · radar · calibration";
     }
     case "results": {
       if (counts.predictions === 0) return "Final synthesis…";

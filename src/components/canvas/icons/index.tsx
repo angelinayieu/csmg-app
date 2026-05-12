@@ -293,6 +293,34 @@ export function ResultsRoomIcon(props: IconProps) {
   });
 }
 
+/** Twin — two overlapping rounded squares, the right one offset, suggesting
+ *  a mirror / committed-vs-proposed pair. */
+export function TwinRoomIcon(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <rect x="3" y="3" width="7" height="7" rx="1.5" />
+        <rect x="6.5" y="6.5" width="7" height="7" rx="1.5" />
+      </>
+    ),
+  });
+}
+
+/** Reflexive — a circular loop arrow, the prospector's "chip away forever"
+ *  cycle. Open arc + arrowhead at the trailing end. */
+export function ReflexiveRoomIcon(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <path d="M13 8 A 5 5 0 1 1 8 3" />
+        <path d="M8 1.5 L 8 4.5 L 11 4.5" />
+      </>
+    ),
+  });
+}
+
 // ── Misc canvas vocabulary ─────────────────────────────────────────
 
 /** North star — strategy / locked active. Star with a horizontal underline. */

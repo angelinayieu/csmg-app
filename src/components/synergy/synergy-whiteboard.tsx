@@ -20,6 +20,7 @@ import {
   Check,
   Cloud,
   Loader2,
+  Sparkles,
   Target,
 } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
@@ -31,8 +32,10 @@ import {
   saveStrokes,
 } from "@/lib/synergy/client";
 import { placeNear, radialTreeLayout } from "@/lib/synergy/radial-layout";
+import { repelOnInsert, withRepel } from "@/lib/synergy/repel";
 import { normalizeKey, uid } from "@/lib/synergy/normalize";
 import type {
+  ClientLateralEdge,
   ClientNode,
   ClientStroke,
   DecomposeResult,
@@ -48,6 +51,8 @@ import { SynergyVoiceDock } from "./synergy-voice-dock";
 import { SynergyAIRail } from "./synergy-ai-rail";
 import { SynergyNode } from "./synergy-node";
 import { SynergyActionableModal } from "./synergy-actionable-modal";
+import { FocusModeOverlay } from "./focus-mode/focus-mode-overlay";
+import { useFocusMode } from "./focus-mode/use-focus-mode";
 import { useSpeech } from "@/hooks/synergy/use-speech";
 import type { AutopilotNewNode } from "@/hooks/synergy/use-autopilot";
 
@@ -74,6 +79,7 @@ const EDGE_COLOR_BY_KIND: Record<NodeKind, string> = {
   variation: "rgba(217, 70, 239, 0.40)", // fuchsia
   ranking: "rgba(249, 115, 22, 0.40)", // orange
   plan: "rgba(14, 165, 233, 0.50)", // sky — slightly stronger; plans are anchors
+  synergy: "rgba(245, 158, 11, 0.55)", // amber — matches lateral-edge color so the lineage reads visually
 };
 
 // Folder region tint by category label. The Decompose action spawns
@@ -107,9 +113,25 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
   const [autoMode, setAutoMode] = useState(true);
   const [nodes, setNodes] = useState<ClientNode[]>([]);
   const [strokes, setStrokes] = useState<ClientStroke[]>([]);
+  // Sprint synergy-3 — lateral edges. In-memory only (V1); page reload
+  // currently loses them. Persistence schema lands once the UX is
+  // validated. connectFromId tracks the first card the user clicked
+  // while the Connect tool is active.
+  const [lateralEdges, setLateralEdges] = useState<ClientLateralEdge[]>([]);
+  const [connectFromId, setConnectFromId] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [aiBusy, setAiBusy] = useState<string | null>(null);
+
+  // ── Focus Mode (Phase 3.5b) ──
+  // The immersive convergence overlay. Hook owns the phase machine
+  // and override state; rendering happens via <FocusModeOverlay/>
+  // below, gated on focus.phase !== "closed".
+  // hoveredNodeId is bidirectional — both the pane (Stage 1 row
+  // hovers) and the canvas (node hovers in focus mode) write to it,
+  // and both surfaces read it to highlight the corresponding peer.
+  // We attach a window-level pointermove handler in focus mode below
+  // for canvas-side hover propagation.
   const [questions, setQuestions] = useState<string[]>([]);
   const [research, setResearch] = useState<ResearchDirection[]>([]);
   const [decomp, setDecomp] = useState<DecomposeResult | null>(null);
@@ -283,7 +305,9 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
             kind,
             parent: seed.id,
           };
-          setSelectedId(next.id);
+          // Empty-board case: nothing to repel against. Keep selection
+          // null so the next panel-pick falls back to the core seed,
+          // making subsequent items siblings (not a chain).
           return [seed, next];
         }
         const siblings = prev.filter((n) => n.parent === parent.id).length;
@@ -296,8 +320,20 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
           kind,
           parent: parent.id,
         };
-        setSelectedId(newNode.id);
-        return [...prev, newNode];
+        // Chain-bug fix: do NOT call setSelectedId here. Auto-selecting
+        // the new node made every subsequent panel-pick chain off the
+        // previous addition, producing a vertical sequence that looked
+        // like a temporal/dependency order. By leaving the user's
+        // current selection in place, multiple picks correctly attach
+        // as siblings of the same parent.
+        //
+        // Insert-time repulsion: push any existing nodes that overlap
+        // or crowd the new node outward in one physics pass.
+        // Pure helper; the new node + core are anchored.
+        return repelOnInsert({
+          nodes: [...prev, newNode],
+          newIds: [newNode.id],
+        });
       });
       setTool("select");
       toast.info(`Added "${label.slice(0, 40)}"`);
@@ -338,7 +374,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
               parent: seed?.id,
             };
           });
-          return [...prev, ...created];
+          return withRepel(prev, [...prev, ...created]);
         });
         if (res.result.summary) toast.info(res.result.summary);
       } catch (e) {
@@ -386,16 +422,18 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
       const w = toWorld(e.clientX, e.clientY);
       const label = window.prompt("Note text:") ?? "";
       if (label.trim()) {
-        setNodes((p) => [
-          ...p,
-          {
-            id: uid(),
-            x: w.x,
-            y: w.y,
-            label: label.trim(),
-            kind: "branch",
-          },
-        ]);
+        setNodes((p) =>
+          withRepel(p, [
+            ...p,
+            {
+              id: uid(),
+              x: w.x,
+              y: w.y,
+              label: label.trim(),
+              kind: "branch",
+            },
+          ]),
+        );
       }
     }
   };
@@ -458,6 +496,12 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
           setActionableTargetId(null);
           return;
         }
+        // Connect-tool source cancel — release the in-flight connection
+        // before falling back to deselect.
+        if (connectFromId) {
+          setConnectFromId(null);
+          return;
+        }
         if (selectedId) {
           setSelectedId(null);
         }
@@ -472,7 +516,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [actionableTargetId, selectedId]);
+  }, [actionableTargetId, selectedId, connectFromId]);
 
   const onNodeClick = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -481,7 +525,39 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
     if (nodeDragRef.current?.hasMoved) return;
     if (tool === "eraser") {
       setNodes((p) => p.filter((n) => n.id !== id && n.parent !== id));
+      // Cascade: drop any lateral edges referencing the deleted node.
+      setLateralEdges((p) => p.filter((ed) => ed.from !== id && ed.to !== id));
       if (selectedId === id) setSelectedId(null);
+      if (connectFromId === id) setConnectFromId(null);
+      return;
+    }
+    if (tool === "connect") {
+      // First click captures the source; second click on a different
+      // card finalizes the edge and resets so the user can chain
+      // connections. Click the same card twice to cancel.
+      if (!connectFromId) {
+        setConnectFromId(id);
+        setSelectedId(id);
+        toast.info("Pick a second card to connect");
+        return;
+      }
+      if (connectFromId === id) {
+        setConnectFromId(null);
+        return;
+      }
+      const from = connectFromId;
+      const to = id;
+      setLateralEdges((prev) => {
+        const exists = prev.some(
+          (ed) =>
+            (ed.from === from && ed.to === to) ||
+            (ed.from === to && ed.to === from),
+        );
+        if (exists) return prev;
+        return [...prev, { id: uid(), from, to }];
+      });
+      setConnectFromId(null);
+      toast.success("Connection drawn");
       return;
     }
     setSelectedId(id);
@@ -633,20 +709,22 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
   // these), which is idempotent — IDs are preserved on the round-trip.
   const handleAutopilotRound = useCallback((newNodes: AutopilotNewNode[]) => {
     if (newNodes.length === 0) return;
-    setNodes((prev) => [
-      ...prev,
-      ...newNodes.map(
-        (n): ClientNode => ({
-          id: n.id,
-          x: n.x,
-          y: n.y,
-          label: n.label,
-          kind: n.kind,
-          parent: n.parent_id,
-          meta: n.meta ?? undefined,
-        }),
-      ),
-    ]);
+    setNodes((prev) =>
+      withRepel(prev, [
+        ...prev,
+        ...newNodes.map(
+          (n): ClientNode => ({
+            id: n.id,
+            x: n.x,
+            y: n.y,
+            label: n.label,
+            kind: n.kind,
+            parent: n.parent_id,
+            meta: n.meta ?? undefined,
+          }),
+        ),
+      ]),
+    );
   }, []);
 
   // Build the rich context block for a scoped action on a target node.
@@ -750,7 +828,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
             meta: `[Lv ${precision}] ${v.rationale}`,
           };
         });
-        return [...prev, ...created];
+        return withRepel(prev, [...prev, ...created]);
       });
       toast.success(`${list.length} variations added`);
     } catch (e) {
@@ -796,7 +874,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
           parent: parentId,
           meta,
         };
-        return [...prev, node];
+        return withRepel(prev, [...prev, node]);
       });
       toast.success("Variations ranked");
     } catch (e) {
@@ -878,7 +956,9 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
             });
           });
         });
-        return next;
+        // Batch insert: anchor all the new arrivals (categories + items)
+        // and push any existing nodes that crowd them outward.
+        return withRepel(prev, next);
       });
       toast.success(`Decomposed into ${totalItems} items across 4 categories`);
     } catch (e) {
@@ -924,7 +1004,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
             parent: targetId,
           };
         });
-        return [...prev, ...created];
+        return withRepel(prev, [...prev, ...created]);
       });
       toast.success(`${qs.length} sharper questions added`);
     } catch (e) {
@@ -972,7 +1052,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
             meta: `[${d.angle}] ${d.why}`,
           };
         });
-        return [...prev, ...created];
+        return withRepel(prev, [...prev, ...created]);
       });
       toast.success(`${ds.length} research directions added`);
     } catch (e) {
@@ -1011,7 +1091,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
           (n) => n.parent === target.id && n.kind === "plan",
         ).length;
         const pos = placeNear(target, existing, existing + 1, 260);
-        return [
+        return withRepel(prev, [
           ...prev,
           {
             id: uid(),
@@ -1025,11 +1105,81 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
             parent: target.id,
             meta: planMeta,
           },
-        ];
+        ]);
       });
       toast.success("Plan added to board");
     },
     [actionableTarget],
+  );
+
+  // ── Synthesize: combine two source cards into a new "synergy" node ──
+  //
+  // Triggered from the lateral-edge chip (rendered floating near each
+  // edge's midpoint). Sends both source cards' label + kind + ancestor
+  // chain to /api/synergy/augment?mode=synthesize. On response inserts
+  // a new synergy-kind node positioned between the two sources, wired
+  // as a polyhierarchy child (parent = a.id for layout; parents =
+  // [a.id, b.id] for full lineage). Repel pass anchors the new node so
+  // it stays exactly between A and B, pushing crowding cards outward.
+  const runSynthesize = useCallback(
+    async (aId: string, bId: string) => {
+      const a = nodes.find((n) => n.id === aId);
+      const b = nodes.find((n) => n.id === bId);
+      if (!a || !b) return;
+      // Use both nodes' rich context to anchor the synthesis — the
+      // LLM gets ancestor + siblings for each, so it can produce a
+      // synthesis that respects their respective domains instead of
+      // pivoting to an unrelated topic.
+      const ctxA = buildRichContext(a);
+      const ctxB = buildRichContext(b);
+      const transcript =
+        `Idea A (${a.kind}): ${a.label}\n` +
+        `Idea B (${b.kind}): ${b.label}\n\n` +
+        `What concrete new thing do these two create TOGETHER?`;
+      const context = [
+        ctxA ? `Context for A:\n${ctxA}` : null,
+        ctxB ? `Context for B:\n${ctxB}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      const busyKey = `synthesize:${aId}:${bId}`;
+      setAiBusy(busyKey);
+      try {
+        const res = await augment({
+          transcript,
+          mode: "synthesize",
+          context: context || undefined,
+        });
+        if (res.mode !== "synthesize") return;
+        const { label, why } = res.result;
+        // Midpoint between sources for the new node's position.
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        const newId = uid();
+        setNodes((prev) =>
+          withRepel(prev, [
+            ...prev,
+            {
+              id: newId,
+              x: mx,
+              y: my,
+              label,
+              kind: "synergy",
+              parent: a.id,
+              parents: [a.id, b.id],
+              meta: why,
+            },
+          ]),
+        );
+        setSelectedId(newId);
+        toast.success("Synergy created");
+      } catch (e) {
+        toast.error("Synthesize failed", { description: (e as Error).message });
+      } finally {
+        setAiBusy(null);
+      }
+    },
+    [nodes, buildRichContext],
   );
 
   // ── Dispatcher passed to SynergyNode ──
@@ -1076,6 +1226,88 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
         e !== null,
     );
 
+  // Lateral edges resolved to geometry. Drawn as quadratic curves
+  // (perpendicular bow ~12% of edge length) so they visually separate
+  // from the straight dashed tree edges even when overlapping the
+  // same node pair. Drop edges whose endpoints no longer exist
+  // (defensive — node deletion cascade should have cleared them
+  // already, but a stale edge would otherwise crash the SVG path).
+  // Also exposes the chip-anchor position (peak of the curve) so the
+  // Synthesize chip can render right on the edge.
+  const lateralEdgesGeom = lateralEdges
+    .map((ed) => {
+      const a = nodes.find((n) => n.id === ed.from);
+      const b = nodes.find((n) => n.id === ed.to);
+      if (!a || !b) return null;
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.sqrt(dx * dx + dy * dy) || 1;
+      const bow = Math.min(80, len * 0.12);
+      const cx = mx + (-dy / len) * bow;
+      const cy = my + (dx / len) * bow;
+      // Curve peak (t=0.5 on the quadratic) — where the chip sits.
+      const px = 0.25 * a.x + 0.5 * cx + 0.25 * b.x;
+      const py = 0.25 * a.y + 0.5 * cy + 0.25 * b.y;
+      return {
+        id: ed.id,
+        from: ed.from,
+        to: ed.to,
+        ax: a.x,
+        ay: a.y,
+        bx: b.x,
+        by: b.y,
+        cx,
+        cy,
+        px,
+        py,
+      };
+    })
+    .filter(
+      (g): g is {
+        id: string;
+        from: string;
+        to: string;
+        ax: number;
+        ay: number;
+        bx: number;
+        by: number;
+        cx: number;
+        cy: number;
+        px: number;
+        py: number;
+      } => g !== null,
+    );
+
+  // Secondary-parent edges: synergy nodes (and any future polyhierarchy
+  // kinds) carry parents[] beyond the primary `parent`. Render each
+  // secondary parent → child as a curved amber path matching lateral
+  // edges, so the visual lexicon stays consistent: straight dashed =
+  // primary tree, curved amber = "non-primary connection."
+  const secondaryParentEdges = nodes.flatMap((n) => {
+    if (!n.parents || n.parents.length <= 1) return [];
+    return n.parents
+      .filter((pid) => pid !== n.parent) // primary already drawn as tree edge
+      .map((pid) => {
+        const p = nodes.find((x) => x.id === pid);
+        if (!p) return null;
+        const mx = (p.x + n.x) / 2;
+        const my = (p.y + n.y) / 2;
+        const dx = n.x - p.x;
+        const dy = n.y - p.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const bow = Math.min(80, len * 0.12);
+        const cx = mx + (-dy / len) * bow;
+        const cy = my + (dx / len) * bow;
+        return { id: `${pid}-${n.id}-sp`, ax: p.x, ay: p.y, bx: n.x, by: n.y, cx, cy };
+      })
+      .filter(
+        (g): g is { id: string; ax: number; ay: number; bx: number; by: number; cx: number; cy: number } =>
+          g !== null,
+      );
+  });
+
   // Folder regions: any node tagged as a Decompose category (its meta
   // starts with "Decomposed from") gets a subtle containment region
   // rendered behind it + its direct children. This is the visual
@@ -1119,6 +1351,53 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
       !!selectedNode &&
       nodes.some((n) => n.parent === selectedNode.id && n.kind === "variation"),
     [nodes, selectedNode],
+  );
+
+  // ── Focus Mode hook + canvas dimming helpers ──
+  const focus = useFocusMode(nodes);
+  const focusActive =
+    focus.phase === "open" ||
+    focus.phase === "entering" ||
+    focus.phase === "publishing";
+
+  // Pan the canvas to a given node id — used by Stage 1 row clicks
+  // (pane → canvas linkage). Smooth-eases pan to center the node.
+  const recenterOnNode = useCallback(
+    (id: string) => {
+      const target = nodes.find((n) => n.id === id);
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!target || !rect) return;
+      // Pane reserves the right ~528px (480 + 24 inset + cushion), so
+      // visible center sits to the left of the geometric canvas center.
+      const visibleCenterX = (rect.width - 528) / 2;
+      const visibleCenterY = rect.height / 2;
+      setPan({
+        x: visibleCenterX - target.x * zoom,
+        y: visibleCenterY - target.y * zoom,
+      });
+    },
+    [nodes, zoom],
+  );
+
+  // Compute the per-node opacity + visual variant based on focus state.
+  // Plan nodes get the persistent cyan glow throughout focus mode.
+  // Hovered nodes (from either pane or canvas) jump to full opacity
+  // with a brighter cyan pulse ring.
+  const focusVisualFor = useCallback(
+    (n: ClientNode): { opacity: number; ring: string | null } => {
+      if (!focusActive) return { opacity: 1, ring: null };
+      const isPlan = focus.planIds.has(n.id);
+      const isHovered = focus.hoveredNodeId === n.id;
+      const isExcluded = focus.excludedIds.has(n.id);
+      const isKept = focus.keptIds.has(n.id);
+
+      if (isHovered) return { opacity: 1, ring: "hover" };
+      if (isPlan) return { opacity: 0.85, ring: "plan" };
+      if (isExcluded) return { opacity: 0.12, ring: null };
+      if (isKept) return { opacity: 0.55, ring: null };
+      return { opacity: 0.25, ring: null };
+    },
+    [focusActive, focus.planIds, focus.hoveredNodeId, focus.excludedIds, focus.keptIds],
   );
 
   return (
@@ -1167,12 +1446,19 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
           </div>
           <Link
             href={`/app/synergy/${sessionId}/process`}
-            title="Extract typed components + score rabbit holes"
-            className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-br from-blue-600 to-cyan-500 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+            title="Process page: components + scoring (utilitarian view)"
+            className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white/80 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-gray-600 backdrop-blur transition hover:text-gray-900"
           >
             <Target className="h-3 w-3" /> Process
-            <ArrowRight className="h-3 w-3" />
           </Link>
+          <button
+            onClick={focus.open}
+            title="Enter Focus Mode — converge + publish"
+            className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-br from-blue-600 to-cyan-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-[0_4px_20px_-4px_rgba(6,182,212,0.5)] transition hover:scale-[1.03]"
+          >
+            <Sparkles className="h-3 w-3" /> Focus & Publish
+            <ArrowRight className="h-3 w-3" />
+          </button>
         </div>
 
         {!loaded && (
@@ -1254,6 +1540,36 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
                   strokeDasharray="4 4"
                 />
               ))}
+              {/* Lateral edges — curved amber paths to differentiate
+                  from straight dashed tree edges. Solid stroke + arc
+                  bow = "these are related but not nested." */}
+              {lateralEdgesGeom.map((g) => (
+                <path
+                  key={`lat-${g.id}`}
+                  d={`M ${g.ax} ${g.ay} Q ${g.cx} ${g.cy} ${g.bx} ${g.by}`}
+                  fill="none"
+                  stroke="#f59e0b"
+                  strokeWidth={2}
+                  strokeOpacity={0.75}
+                  strokeLinecap="round"
+                />
+              ))}
+              {/* Secondary-parent edges (polyhierarchy lineage from
+                  Synthesize). Same curved amber lexicon as lateral
+                  edges; dashed lightly to distinguish "this is also
+                  a parent" from "these are related." */}
+              {secondaryParentEdges.map((g) => (
+                <path
+                  key={`sp-${g.id}`}
+                  d={`M ${g.ax} ${g.ay} Q ${g.cx} ${g.cy} ${g.bx} ${g.by}`}
+                  fill="none"
+                  stroke="#f59e0b"
+                  strokeWidth={1.5}
+                  strokeOpacity={0.6}
+                  strokeDasharray="6 4"
+                  strokeLinecap="round"
+                />
+              ))}
               {strokes.map((s) => (
                 <polyline
                   key={s.id}
@@ -1266,6 +1582,37 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
                 />
               ))}
             </svg>
+
+            {/* Synthesize chips — one per lateral edge, rendered at
+                the curve peak. Click to fire an LLM synthesis that
+                emits a new "synergy" node with both endpoints as
+                parents. Busy state matches the in-flight key. */}
+            {lateralEdgesGeom.map((g) => {
+              const busyKey = `synthesize:${g.from}:${g.to}`;
+              const busyKeyRev = `synthesize:${g.to}:${g.from}`;
+              const busy = aiBusy === busyKey || aiBusy === busyKeyRev;
+              return (
+                <button
+                  key={`chip-${g.id}`}
+                  type="button"
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    if (!busy) void runSynthesize(g.from, g.to);
+                  }}
+                  disabled={busy}
+                  className={[
+                    "absolute -translate-x-1/2 -translate-y-1/2 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider shadow-sm transition",
+                    busy
+                      ? "cursor-wait bg-amber-100 text-amber-700"
+                      : "bg-amber-500 text-white hover:bg-amber-600",
+                  ].join(" ")}
+                  style={{ left: g.px, top: g.py }}
+                  title="Synthesize a new idea from these two cards"
+                >
+                  {busy ? "…" : "Synthesize"}
+                </button>
+              );
+            })}
 
             {nodes.map((n) => {
               // busyAction is the in-flight action key for THIS node,
@@ -1336,6 +1683,18 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
           onAccept={spawnPlanFromModal}
         />
       )}
+
+      {/* ── Focus Mode immersive overlay (Phase 3.5b) ──
+          The overlay manages its own backdrop dimmer (covers the
+          canvas) + the glassmorphic pane (right side). Mounts only
+          when phase !== "closed"; the hook handles entrance/exit
+          animations and ESC-to-close. */}
+      <FocusModeOverlay
+        sessionId={sessionId}
+        nodes={nodes}
+        focus={focus}
+        onFocusNode={recenterOnNode}
+      />
     </div>
   );
 }

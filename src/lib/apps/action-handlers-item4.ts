@@ -587,3 +587,159 @@ registerActionHandler("resolve_predictions", async (ctx) => {
     change_summary: `Resolver ran: ${result.resolved} resolved, ${result.abandoned} abandoned`,
   };
 });
+
+// ── tune_variable (Sprint W5.8a — real implementation) ─────────────────
+//
+// Override drawer commits land here. The user picked a new role for
+// one variable in the app's contract; this handler:
+//
+//   1. Validates payload (entity_id + new_role required; reasoning
+//      optional but recommended)
+//   2. Upserts environment_overrides (override_kind='reclassify_variable',
+//      target_id=entity_id, override_value={role: new_role}) using the
+//      same delete-prior pattern the preflight overrides route uses
+//   3. Re-derives apps.config.variables for the entire space via
+//      redriveAppVariablesForSpace — every app touching this entity
+//      picks up the new role assignment
+//   4. Returns the FRESH version of this app so the renderer shows the
+//      updated contract immediately (no page refresh needed)
+//
+// Why re-derive the WHOLE space rather than just this app:
+//   environment_overrides is space-scoped (not app-scoped) — the user
+//   is saying "this entity plays role X in our model of the system."
+//   That's a partition-level signal; every app's contract derived
+//   from the same partition should reflect it. The redrive helper is
+//   already idempotent + soft-fails per app, so the blast radius is
+//   small.
+//
+// Payload contract:
+//   { entity_id: string;
+//     new_role: VariableRole;
+//     reasoning?: string }
+//
+// Errors:
+//   - 'entity_id_required' / 'new_role_required' — bad payload
+//   - 'invalid_role' — new_role not in the VariableRole union
+//   - 'override_write_failed' — DB insert errored (most likely RLS)
+//   - 'app_reload_failed' — couldn't fetch the updated app row
+import { VALID_VARIABLE_ROLES, type VariableRole } from "@/types/variable-proposals";
+import { redriveAppVariablesForSpace } from "@/lib/pipeline/redrive-app-variables-for-space";
+import { hydrateApp } from "@/types/app";
+
+registerActionHandler("tune_variable", async (ctx) => {
+  const p = ctx.payload;
+  const entityId = typeof p.entity_id === "string" ? p.entity_id : null;
+  const newRoleRaw = typeof p.new_role === "string" ? p.new_role : null;
+  const reasoning =
+    typeof p.reasoning === "string" && p.reasoning.trim().length > 0
+      ? p.reasoning.trim()
+      : null;
+
+  if (!entityId) {
+    return { ok: false, reason: "entity_id required" };
+  }
+  if (!newRoleRaw) {
+    return { ok: false, reason: "new_role required" };
+  }
+  const newRoleLower = newRoleRaw.toLowerCase();
+  // VALID_VARIABLE_ROLES is typed Set<VariableRole>; narrow the
+  // string via runtime check before casting.
+  if (!VALID_VARIABLE_ROLES.has(newRoleLower as VariableRole)) {
+    return { ok: false, reason: `invalid_role: ${newRoleRaw}` };
+  }
+  const newRole = newRoleLower as VariableRole;
+
+  // ── 1. Upsert the override (delete-prior + insert) ────────────────
+  // Same pattern as preflight overrides route: no unique constraint
+  // on (space_id, override_kind, target_id), so we delete-then-insert
+  // to keep one row per (space, target). Stacking would also work but
+  // requires the aggregator to find the latest — simpler this way.
+  try {
+    const { error: delErr } = await ctx.db
+      .from("environment_overrides")
+      .delete()
+      .eq("space_id", ctx.app.space_id)
+      .eq("override_kind", "reclassify_variable")
+      .eq("target_id", entityId);
+    if (delErr) {
+      console.warn(
+        "[action:tune_variable] delete-prior failed (proceeding):",
+        delErr.message ?? delErr,
+      );
+    }
+
+    const { error: insertErr } = await ctx.db
+      .from("environment_overrides")
+      .insert({
+        space_id: ctx.app.space_id,
+        override_kind: "reclassify_variable",
+        target_id: entityId,
+        override_value: { role: newRole },
+        reasoning,
+        created_by: ctx.userId,
+      });
+    if (insertErr) {
+      return {
+        ok: false,
+        reason: `override_write_failed: ${insertErr.message ?? "(unknown)"}`,
+      };
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `override_write_failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  // ── 2. Re-derive variables across the whole space ─────────────────
+  let redrive: { updated: number; skipped: number; errors: Array<{ app_id: string; reason: string }> } | null = null;
+  try {
+    redrive = await redriveAppVariablesForSpace(
+      ctx.db,
+      ctx.app.space_id,
+      ctx.userId,
+    );
+  } catch (err) {
+    console.warn(
+      "[action:tune_variable] redrive failed (override persisted, contract stale):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  // ── 3. Re-fetch the updated app row ───────────────────────────────
+  // redriveAppVariablesForSpace just wrote to apps.config — pull the
+  // fresh row so the dispatcher returns the new variables to the
+  // renderer.
+  let updatedApp = ctx.app;
+  try {
+    const { data: refreshed } = await ctx.db
+      .from("apps")
+      .select("*")
+      .eq("id", ctx.app.id)
+      .maybeSingle();
+    if (refreshed) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updatedApp = hydrateApp(refreshed as any);
+    }
+  } catch (err) {
+    console.warn(
+      "[action:tune_variable] app reload failed (returning stale ctx.app):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  return {
+    ok: true,
+    updated_app: updatedApp,
+    extra: {
+      override_kind: "reclassify_variable",
+      target_entity_id: entityId,
+      new_role: newRole,
+      redrive: redrive
+        ? { updated: redrive.updated, errors: redrive.errors.length }
+        : null,
+    },
+    change_type: "user_edit",
+    change_summary: `Reclassified variable ${entityId} → ${newRole}${reasoning ? ` (${reasoning.slice(0, 60)})` : ""}`,
+  };
+});

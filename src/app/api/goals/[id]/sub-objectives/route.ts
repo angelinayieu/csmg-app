@@ -106,6 +106,10 @@ export async function POST(
     description: goal.description,
     metric_name: goal.metric_name,
     metric_unit: goal.metric_unit,
+    // Sprint W5.7b — metric_entity_id is now a typed field on
+    // ImprovementGoal. Defaults to null when not yet anchored to a
+    // graph entity.
+    metric_entity_id: goal.metric_entity_id ?? null,
     target_value: goal.target_value,
     baseline_value: goal.baseline_value,
     current_value: goal.current_value,

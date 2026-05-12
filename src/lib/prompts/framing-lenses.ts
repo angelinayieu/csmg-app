@@ -48,6 +48,7 @@ import {
   isEntityCategory,
   isKnowledgeLayer,
   type EntityCategory,
+  type LensWholeFraming,
 } from "@/types/situation-frame";
 import type { DataPresenceTags } from "@/lib/prompts/data-presence-classifier";
 
@@ -107,6 +108,12 @@ export interface LensOutput {
    *  E.g. "user may be asking the wrong question" rather than
    *  "the plan could fail". */
   named_risks: string[];
+  /** Phase 1 diverge-converge — this lens's competing problem
+   *  framing. Nullable: a lens can decline to propose one when its
+   *  stance doesn't yield a sharp framing for this situation.
+   *  Surfaced verbatim into SituationFrame.candidate_framings (NOT
+   *  merged) so the user can pick. */
+  candidate_whole_framing: LensWholeFraming | null;
   /** 0..1 self-rated. Lenses report this honestly; consensus weights
    *  cells by lens confidence. Low confidence across all lenses
    *  drives gate_status=needs_more_lenses. */
@@ -186,11 +193,32 @@ const OUTPUT_SPEC = `STRICT JSON OUTPUT — no markdown, no prose outside the JS
   ],
   "load_bearing_assumption": "The single assumption the framing most depends on. If this is wrong, the analysis is wrong.",
   "named_risks": ["risks to the FRAMING itself, not to the user's situation"],
+  "candidate_whole_framing": {
+    "framing_id": "snake_case slug — e.g. 'mechanism_bottleneck', 'framing_misalignment', 'operational_friction', 'physical_constraint_binding', 'precedent_mismatch'",
+    "framing_title": "2-5 word headline (e.g. 'Mechanism Bottleneck', 'Wrong Question Asked')",
+    "chosen_approach": "1-2 sentences naming what YOU (this lens) think the REAL problem is. NOT a paraphrase of the user's stated goal — your stance's competing interpretation of what should anchor the analysis.",
+    "load_bearing_assumption": "≤200 chars — what falls apart if your framing is wrong",
+    "when_it_wins": "Short phrase — when this framing is the right one (e.g. 'when the binding constraint is upstream of the symptom the user named')",
+    "when_it_fails": "Short phrase — when this framing is wrong / wrong fit",
+    "sub_problems": [
+      "concrete sub-problem 1 (≤160 chars) — actionable, decomposed",
+      "concrete sub-problem 2 — what would need to be solved if this framing is right",
+      "...2-5 items total"
+    ],
+    "confidence": 0.0-1.0
+  },
   "confidence": 0.0-1.0
 }
 
 Canonical catalog axes (source=catalog): assumptions, causal_scenarios, risk, actors, timeline, evidence, cultural, financial.
-Ad-hoc axes (source=ad_hoc): propose freely with a snake_case id when no catalog axis fits.`;
+Ad-hoc axes (source=ad_hoc): propose freely with a snake_case id when no catalog axis fits.
+
+CRITICAL — candidate_whole_framing rules:
+- This is YOUR lens's COMPETING problem framing. It MUST differ from a naive paraphrase of the user's input — if your framing is the same as what the user typed, you have not done your job.
+- Each lens produces ONE framing. We will NOT merge framings across lenses — they will all be surfaced to the user side-by-side. So make yours sharp and stance-flavored.
+- If your stance genuinely yields no sharp framing for this situation, set candidate_whole_framing to null. Better to have 3 strong framings than 5 with 2 weak ones. Do not pad.
+- sub_problems must be CONCRETE — things the user could actually go work on, not abstractions. "Address the root cause" is wrong; "Identify which of {A, B, C} is the binding sleep-disruption driver" is right.
+- confidence here is SEPARATE from your overall confidence. You can be confident in your cells/axes but only 0.4 confident in your whole-framing pick. Report honestly.`;
 
 const CELL_DISCIPLINE = `CELL DISCIPLINE
 
@@ -387,6 +415,7 @@ export function validateLensOutput(lensId: LensId, raw: unknown): LensOutput {
     proposed_axes: [],
     load_bearing_assumption: "",
     named_risks: [],
+    candidate_whole_framing: null,
     confidence: 0,
   };
   if (!raw || typeof raw !== "object") return empty;
@@ -436,7 +465,68 @@ export function validateLensOutput(lensId: LensId, raw: unknown): LensOutput {
           .map((s) => s.slice(0, 200))
           .slice(0, 8)
       : [],
+    candidate_whole_framing: coerceWholeFraming(lensId, r.candidate_whole_framing),
     confidence: clamp01(typeof r.confidence === "number" ? r.confidence : 0),
+  };
+}
+
+/** Coerce a raw candidate_whole_framing payload. Returns null if any
+ *  required field is missing — better to lose one lens's framing than
+ *  surface a malformed one to the user. Each string is length-capped
+ *  matching the prompt directives. The lens_id field is stamped here
+ *  (not in the raw payload — lenses don't know their own ID; the
+ *  panel orchestrator does).
+ *
+ *  Required for a valid framing: framing_id, framing_title,
+ *  chosen_approach. The rest get defaults.
+ */
+function coerceWholeFraming(
+  lensId: LensId,
+  raw: unknown,
+): LensWholeFraming | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+
+  const framingId =
+    typeof r.framing_id === "string" && r.framing_id.length > 0
+      ? r.framing_id.slice(0, 80)
+      : null;
+  const framingTitle =
+    typeof r.framing_title === "string" && r.framing_title.length > 0
+      ? r.framing_title.slice(0, 80)
+      : null;
+  const chosenApproach =
+    typeof r.chosen_approach === "string" && r.chosen_approach.length > 0
+      ? r.chosen_approach.slice(0, 600)
+      : null;
+
+  if (!framingId || !framingTitle || !chosenApproach) return null;
+
+  const subProblems = Array.isArray(r.sub_problems)
+    ? (r.sub_problems as unknown[])
+        .filter((s): s is string => typeof s === "string" && s.length > 0)
+        .map((s) => s.slice(0, 160))
+        .slice(0, 6)
+    : [];
+
+  return {
+    framing_id: framingId,
+    framing_title: framingTitle,
+    chosen_approach: chosenApproach,
+    load_bearing_assumption:
+      typeof r.load_bearing_assumption === "string"
+        ? r.load_bearing_assumption.slice(0, 200)
+        : "",
+    when_it_wins:
+      typeof r.when_it_wins === "string" ? r.when_it_wins.slice(0, 200) : "",
+    when_it_fails:
+      typeof r.when_it_fails === "string"
+        ? r.when_it_fails.slice(0, 200)
+        : "",
+    sub_problems: subProblems,
+    confidence: clamp01(typeof r.confidence === "number" ? r.confidence : 0),
+    lens_id: lensId,
   };
 }
 

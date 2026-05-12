@@ -144,6 +144,41 @@ export interface EdgeSpec {
    * shape the literature reported.
    */
   temporal?: EdgeTemporalSpec | null;
+  /**
+   * Migration 20260509_edges_causal_status — Pearl-hierarchy tier.
+   *
+   * The simulator multiplies edge.strength by a `causalTrustWeight`
+   * derived from this field BEFORE propagation. Established_causal
+   * edges propagate at full strength (1.0); plausible_causal at 0.7;
+   * correlational_only at 0.4 — the explicit downweight that stops
+   * the engine treating a measured association as if it were a
+   * proven cause.
+   *
+   * Null (unset) defaults to "established_causal" weight 1.0, which
+   * matches pre-migration behavior. The aggregator surfaces non-
+   * null values per row so users can audit which edges contribute
+   * full vs reduced trust.
+   */
+  causalStatus?:
+    | "established_causal"
+    | "plausible_causal"
+    | "correlational_only"
+    | null;
+  /**
+   * Migration 20260509_condition_modulators — composed product of
+   * matching modulators' p50 values for the active subject's
+   * conditions. The simulator multiplies edge.strength by this
+   * factor BEFORE propagation, applying per-patient calibration
+   * (e.g., post_chemo×aerobic→BDNF carries 0.55 multiplier from
+   * Janelsins 2017).
+   *
+   * Defaults to 1.0 (no modulation) when no modulators match the
+   * subject's conditions, so pre-migration behavior is preserved.
+   * Computed by computeEdgeMultipliers() in
+   * @/lib/simulation/condition-modulators — caller resolves the
+   * product once and passes the scalar through here.
+   */
+  conditionMultiplier?: number;
 }
 
 export interface SimulationSpec {
@@ -411,10 +446,26 @@ export function runMonteCarlo(spec: SimulationSpec): SimulationResult {
               tDays !== null && edge.temporal
                 ? temporalRampFactor(tDays, edge.temporal)
                 : 1;
+            // Migration 20260509_edges_causal_status — Pearl-hierarchy
+            // downweight. Correlational-only edges contribute at 40%
+            // strength; plausible_causal at 70%; established_causal
+            // at 100%. The codebase's previous implicit assumption
+            // (every edge treated as established_causal) is now
+            // explicit and tunable per row.
+            const causalWeight = causalTrustWeight(edge.causalStatus);
+            // Migration 20260509_condition_modulators — per-patient
+            // calibration. 1.0 default = no modulation; values < 1
+            // dampen, > 1 amplify. Composed by the wrapper from all
+            // condition_modulator rows that match the active
+            // subject's conditions.
+            const condMult =
+              typeof edge.conditionMultiplier === "number"
+                ? edge.conditionMultiplier
+                : 1;
             const effect = applyDynamics(
               edge.dynamics,
               src,
-              edge.strength * polarSign * ramp,
+              edge.strength * polarSign * ramp * causalWeight * condMult,
               edge.params,
             );
             contribution += effect;
@@ -623,6 +674,45 @@ function applyDynamics(
     }
     default:
       return strength * source;
+  }
+}
+
+/**
+ * Pearl-hierarchy trust weight per edge. Multiplied into the per-step
+ * contribution so the simulator stops treating measured associations
+ * as if they were proven causal effects.
+ *
+ * The values are deliberate, conservative defaults — they encode
+ * "treat correlational evidence at less than half the propagation
+ * weight of established causal evidence." Tunable in one place if
+ * domain calibration suggests different defaults; today they're
+ * baked because there's no per-domain config layer yet.
+ *
+ * established_causal / null → 1.0 — propagate at full strength
+ * plausible_causal           → 0.7 — propagate but flag uncertainty
+ * correlational_only         → 0.4 — stiff downweight; surface warning
+ *
+ * Source: Migration 20260509_edges_causal_status. Read in the hot loop
+ * of runMonteCarlo.
+ */
+function causalTrustWeight(
+  status:
+    | "established_causal"
+    | "plausible_causal"
+    | "correlational_only"
+    | null
+    | undefined,
+): number {
+  switch (status) {
+    case "correlational_only":
+      return 0.4;
+    case "plausible_causal":
+      return 0.7;
+    case "established_causal":
+    case null:
+    case undefined:
+    default:
+      return 1.0;
   }
 }
 

@@ -55,29 +55,48 @@ interface ClarifyingQuestion {
   kind: "free_text";
 }
 
-const SYSTEM_PROMPT = `You are a research interviewer. The user has typed a draft prompt
-they're about to submit for analysis. Your job is to generate 3-5
-SHORT questions that, when answered, would substantially improve the
-analysis the system can do.
+/** What the system inferred about the user's situation from their prompt.
+ *  Rendered in the pre-flight UI so the user can confirm or correct
+ *  before the pipeline fires. */
+export interface InferredBaseline {
+  /** One sentence: what we think the user is currently dealing with. */
+  current_state_summary: string;
+  /** One sentence: what outcome they seem to be trying to achieve. */
+  primary_objective: string;
+  /** 2-3 load-bearing assumptions the analysis will make. */
+  key_assumptions: string[];
+}
 
-Discipline:
-1. Each question targets a CONCRETE gap. "What's your goal?" is too
-   vague — better: "Which metric do you want to move, and by when?"
-2. Prefer questions the user can answer in one sentence. No multi-
-   part essays.
-3. Include a rationale per question — why this matters. The UI
-   surfaces this as a tooltip.
-4. Skip questions whose answers can be inferred from the prompt
-   itself. Don't ask "What domain are you in?" if the prompt mentions
-   "my SaaS retention."
-5. Order by impact: the question whose answer would most clarify the
-   situation comes first.
-6. Match the lens bias when provided. With "engineer" active, lean
-   toward measurable specs / tolerances. With "historian," ask about
-   prior attempts. With "skeptic," surface assumptions worth testing.
+const SYSTEM_PROMPT = `You are a research strategist helping to set up a precision analysis.
+
+The user has submitted a draft prompt. You have TWO jobs:
+
+JOB 1 — INFER THE BASELINE (short, crisp)
+Summarize what you understood from the prompt in three parts:
+  - current_state_summary: One sentence — what is the user currently dealing with or trying to optimize?
+  - primary_objective: One sentence — what outcome do they want from this analysis?
+  - key_assumptions: 2-3 concrete assumptions the analysis will make (things that aren't stated but need to be true for the analysis to be valid)
+
+JOB 2 — GENERATE CLARIFYING QUESTIONS (3-5 questions)
+Generate short questions that target CONCRETE gaps. Rules:
+1. Each question fills a gap not answerable from the prompt itself.
+2. "What's your goal?" is too vague — better: "Which metric do you want to move, and by when?"
+3. User can answer in one sentence. No multi-part essays.
+4. Include a rationale — why this matters for the analysis.
+5. Order by impact: most gap-closing question first.
+6. Match the lens bias when provided. With "engineer" active, lean toward measurable specs. With "historian," ask about prior attempts. With "skeptic," surface assumptions worth testing.
 
 Return strict JSON:
-{ "questions": [ { "question": "...", "rationale": "...", "kind": "free_text" } ] }`;
+{
+  "inferred_baseline": {
+    "current_state_summary": "...",
+    "primary_objective": "...",
+    "key_assumptions": ["...", "..."]
+  },
+  "questions": [
+    { "question": "...", "rationale": "...", "kind": "free_text" }
+  ]
+}`;
 
 const RESPONSE_SCHEMA = {
   name: "clarifying_questions",
@@ -85,6 +104,16 @@ const RESPONSE_SCHEMA = {
     type: "object",
     additionalProperties: false,
     properties: {
+      inferred_baseline: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          current_state_summary: { type: "string" },
+          primary_objective: { type: "string" },
+          key_assumptions: { type: "array", items: { type: "string" } },
+        },
+        required: ["current_state_summary", "primary_objective", "key_assumptions"],
+      },
       questions: {
         type: "array",
         items: {
@@ -99,7 +128,7 @@ const RESPONSE_SCHEMA = {
         },
       },
     },
-    required: ["questions"],
+    required: ["inferred_baseline", "questions"],
   },
 } as const;
 
@@ -192,12 +221,15 @@ export async function POST(request: Request) {
       : null;
 
   try {
-    const raw = await llmJSON<{ questions: ClarifyingQuestion[] }>({
+    const raw = await llmJSON<{
+      inferred_baseline: InferredBaseline;
+      questions: ClarifyingQuestion[];
+    }>({
       system: SYSTEM_PROMPT,
       user: buildPrompt(text, lenses, unknowns, uncertaintyScore),
       responseSchema: RESPONSE_SCHEMA,
       temperature: 0.4,
-      maxTokens: 800,
+      maxTokens: 1200,
       model: body?.model,
     });
 
@@ -218,12 +250,28 @@ export async function POST(request: Request) {
           }))
       : [];
 
-    return NextResponse.json({ questions });
+    const inferred_baseline: InferredBaseline | null =
+      raw?.inferred_baseline &&
+      typeof raw.inferred_baseline.current_state_summary === "string" &&
+      typeof raw.inferred_baseline.primary_objective === "string" &&
+      Array.isArray(raw.inferred_baseline.key_assumptions)
+        ? {
+            current_state_summary: raw.inferred_baseline.current_state_summary.trim(),
+            primary_objective: raw.inferred_baseline.primary_objective.trim(),
+            key_assumptions: raw.inferred_baseline.key_assumptions
+              .filter((a): a is string => typeof a === "string" && a.trim().length > 0)
+              .map((a) => a.trim())
+              .slice(0, 4),
+          }
+        : null;
+
+    return NextResponse.json({ questions, inferred_baseline });
   } catch (err) {
     return NextResponse.json(
       {
         error: `clarifying-questions failed: ${sanitizeErrorMessage(err)}`,
         questions: [],
+        inferred_baseline: null,
       },
       { status: 500 },
     );

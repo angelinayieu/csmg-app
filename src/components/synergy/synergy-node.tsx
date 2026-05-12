@@ -116,6 +116,15 @@ const KIND_STYLES: Record<NodeKind, KindStyle> = {
     text: "text-sky-900",
     label: "plan",
   },
+  // Synergy synthesis output — child of two source cards. Warm amber
+  // family to echo the lateral-edge color, so the visual lineage
+  // ("this came from a connection") is immediate.
+  synergy: {
+    bg: "bg-amber-50",
+    ring: "ring-amber-400",
+    text: "text-amber-900",
+    label: "synergy",
+  },
 };
 
 interface SynergyNodeProps {

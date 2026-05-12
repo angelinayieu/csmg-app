@@ -101,6 +101,9 @@ export class ProbabilitySpaceShellShapeUtil extends BaseBoxShapeUtil<Probability
     scoreJson: T.string,
     failureJson: T.string,
     pulse: T.number,
+    /** B3 — set true for ad-hoc framing-panel axes; drives the
+     *  "custom" chip + dashed border in the view. */
+    isCustom: T.boolean,
   };
 
   override canResize = () => true;
@@ -142,6 +145,7 @@ export class ProbabilitySpaceShellShapeUtil extends BaseBoxShapeUtil<Probability
       scoreJson: "",
       failureJson: "",
       pulse: 0,
+      isCustom: false,
     };
   }
 
@@ -175,6 +179,7 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
     edgesJson,
     scoreJson,
     failureJson,
+    isCustom,
   } = shape.props;
   // Phase 3 — sidebar filter. When the user has selected a subset of
   // axes from the legend, dim shells outside that subset so the
@@ -258,7 +263,13 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
           borderRadius: 18,
           background: "rgba(255,255,255,0.85)",
           backdropFilter: "blur(16px)",
-          border: "1px solid rgba(15,23,42,0.06)",
+          // B3 — dashed accent-tinted border for ad-hoc / custom axes;
+          // canonical axes keep the subtle solid hairline. The dashed
+          // pattern reads as "this lens was hand-minted for your
+          // situation, not pulled from the standard catalog."
+          border: isCustom
+            ? `1.5px dashed color-mix(in srgb, ${accent} 55%, transparent)`
+            : "1px solid rgba(15,23,42,0.06)",
           boxShadow:
             "0 1px 2px rgba(16,24,40,0.04), 0 12px 32px -14px rgba(16,24,40,0.14)",
           padding: "14px 16px",
@@ -297,20 +308,75 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
             pointerEvents: "none",
           }}
         />
-        {/* Header */}
+        {/* Header — adaptive label (LLM-generated, domain-adapted) on
+            the left; canonical axis slug on the right as a small chip
+            so power users can see "ah, this adapted name maps to the
+            financial axis vocab" without the slug being the headline.
+            The catalog tagline stays as a secondary subtitle showing
+            the canonical frame's broad purpose. */}
         <div style={{ position: "relative", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div
-              style={{
-                fontSize: 9.5,
-                fontWeight: 700,
-                letterSpacing: "0.2em",
-                textTransform: "uppercase",
-                color: accent,
-              }}
-              title={label}
-            >
-              {label}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <div
+                style={{
+                  fontSize: 9.5,
+                  fontWeight: 700,
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  color: accent,
+                  minWidth: 0,
+                }}
+                title={label}
+              >
+                {label}
+              </div>
+              {axis && (
+                isCustom ? (
+                  // B3 — custom-axis chip. Sparkle glyph + accent-tinted
+                  // background so it visually pops from the gray
+                  // canonical chip; tooltip explains what "custom"
+                  // means + names the underlying axis_id slug.
+                  <span
+                    title={`Custom axis minted by the framing panel · slug: ${axis}`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 3,
+                      fontSize: 8,
+                      fontWeight: 700,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      color: accent,
+                      background: `color-mix(in srgb, ${accent} 12%, transparent)`,
+                      border: `1px dashed ${accent}`,
+                      borderRadius: 4,
+                      padding: "1px 5px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span style={{ fontSize: 9, lineHeight: 1 }}>✦</span>
+                    custom
+                  </span>
+                ) : (
+                  <span
+                    title={`Canonical axis: ${axis}`}
+                    style={{
+                      fontSize: 8,
+                      fontWeight: 600,
+                      letterSpacing: "0.06em",
+                      textTransform: "lowercase",
+                      color: "rgba(100, 116, 139, 0.85)",
+                      background: "rgba(100, 116, 139, 0.10)",
+                      border: "1px solid rgba(100, 116, 139, 0.20)",
+                      borderRadius: 4,
+                      padding: "1px 5px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {axis}
+                  </span>
+                )
+              )}
             </div>
             <div
               style={{

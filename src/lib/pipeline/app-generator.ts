@@ -43,6 +43,20 @@ import type { AppManifest } from "@/types/app-manifest";
 import type { AppSeed } from "@/types/use-case";
 import { getTemplate } from "@/lib/use-cases/library";
 import type { StructuralEvent } from "@/types/pipeline-events";
+// Sprint W5.2 — derive each app's variable contract (IV/DV/control/
+// mediator/moderator) from the preflight partition and persist on
+// apps.config.variables. Computed once per generate-apps run; reused
+// per-app inside materializeApps.
+import { partitionVariablesByRole } from "@/lib/preflight/partition-variables-by-role";
+import { deriveAppVariables } from "./derive-app-variables";
+import type { PreflightVariables, PreflightOverride } from "@/types/preflight";
+import type { Edge } from "@/types";
+import type { ImprovementGoal } from "@/types/goals";
+// Sprint W5.2.5 — chosen lab influences variable role assignment.
+// When the user picked an approved lab, its primary_iv/primary_dv
+// override the partition's role for those specific entities
+// (lab beats LLM proposal; user override still wins).
+import { loadChosenLabForSpace, type LoadedLab } from "./load-chosen-lab";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -168,6 +182,34 @@ export async function generateAppsAndInterventions(
     }
   }
 
+  // ── Sprint W5.3: mechanism lookup for mediator lights ────────────────
+  // Fetch all mechanisms in the space once → build a per-mechanism
+  // name+kind map. Per-app, when parent_mechanism_id resolves, the
+  // matching row is snapshotted into config.mediator_light so the
+  // App detail card can render "Mediator: <name>" without a join at
+  // render time. Soft-fail: empty map means no mediator lights this
+  // run (legacy apps still work).
+  const mechanismMetaById = new Map<
+    string,
+    { name: string; kind: string }
+  >();
+  try {
+    const { data: mechRows } = (await db
+      .from("mechanisms")
+      .select("id, name, kind")
+      .eq("space_id", spaceId)) as {
+      data: Array<{ id: string; name: string; kind: string }> | null;
+    };
+    for (const m of mechRows ?? []) {
+      mechanismMetaById.set(m.id, { name: m.name, kind: m.kind });
+    }
+  } catch (err) {
+    console.warn(
+      "[app-generator] mechanism prefetch failed; mediator lights skipped:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // ── Seam 2: load use-case app_seeds as manifest priors ───────────────
   // If this space was created from a UseCaseTemplate, the template may
   // ship app_seeds[] — hand-authored starter manifests for the kinds of
@@ -190,6 +232,96 @@ export async function generateAppsAndInterventions(
     /* template lookup is non-critical — generator still works with zero seeds */
   }
 
+  // ── Sprint W5.2: variable contract derivation prep ──────────────────
+  //
+  // Fetch the same five inputs preflight uses for its variable-role
+  // partition (edges, goals, variable_proposals, environment_overrides,
+  // metric_observations), then compute the partition ONCE for the whole
+  // generate-apps run. Each app's contract is filtered out of this
+  // shared partition inside materializeApps via deriveAppVariables.
+  //
+  // Soft-fail end-to-end: if any of the queries fail or return null,
+  // we fall back to a synthetic empty partition. Apps still materialize,
+  // they just don't get a populated `variables` array (legacy behavior).
+  let variablePartition: PreflightVariables | null = null;
+  let goalMetricByGoalId: Map<string, string> = new Map();
+  let chosenLab: LoadedLab | null = null;
+  // Sprint W5.8c — hoisted so materializeApps can thread `edges` into
+  // deriveAppVariables for per-app mediator/confounder scoping.
+  let partitionEdges: Edge[] = [];
+  try {
+    const [edgeRes, goalRes, vpRes, ovRes, obsRes] = await Promise.all([
+      db.from("edges").select("*").eq("space_id", spaceId),
+      db
+        .from("improvement_goals")
+        .select("*")
+        .eq("space_id", spaceId)
+        .eq("status", "active"),
+      db.from("variable_proposals").select("*").eq("space_id", spaceId),
+      db
+        .from("environment_overrides")
+        .select("*")
+        .eq("space_id", spaceId),
+      db
+        .from("metric_observations")
+        .select("metric_entity_id,value,recorded_at,source")
+        .eq("space_id", spaceId)
+        .order("recorded_at", { ascending: false }),
+    ]);
+    const edges = (edgeRes?.data ?? []) as Edge[];
+    partitionEdges = edges;
+    const goals = (goalRes?.data ?? []) as ImprovementGoal[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const variableProposals = ((vpRes?.data ?? []) as Array<any>).map((vp) => ({
+      entity_id: vp.entity_id as string,
+      variable_role: vp.variable_role as "independent" | "dependent" | "controlled" | "confounding" | "outcome" | "mediator" | "modifier" | "instrument" | "condition" | "unclassified",
+    }));
+    const overrides: PreflightOverride[] = (
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (ovRes?.data ?? []) as Array<any>
+    ).map((o) => ({
+      override_id: o.id as string,
+      override_kind: (o.override_kind ?? "reclassify_variable") as PreflightOverride["override_kind"],
+      target_id: (o.target_id ?? "") as string,
+      value: o.override_value,
+      applied_at: o.created_at as string,
+      applied_by: (o.created_by ?? userId) as string,
+      reasoning: (o.reasoning ?? null) as string | null,
+    }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const metricObservations = ((obsRes?.data ?? []) as Array<any>).map((m) => ({
+      metric_entity_id: m.metric_entity_id as string,
+      value: m.value as string | number | null,
+      recorded_at: m.recorded_at as string,
+    }));
+
+    variablePartition = partitionVariablesByRole({
+      entities,
+      edges,
+      goals,
+      variableProposals,
+      overrides,
+      metricObservations,
+    });
+
+    for (const g of goals) {
+      // Sprint W5.7b — typed via ImprovementGoal.metric_entity_id.
+      const metricEntityId = g.metric_entity_id ?? null;
+      if (metricEntityId) goalMetricByGoalId.set(g.id, metricEntityId);
+    }
+
+    // Sprint W5.2.5 — load the chosen lab (if any) once per run so
+    // each app's variable contract can promote the lab's IV/DV.
+    // Soft-fail: a load failure means apps fall back to partition
+    // priority (LLM proposal beats heuristics).
+    chosenLab = await loadChosenLabForSpace(db, spaceId, userId);
+  } catch (err) {
+    console.warn(
+      "[app-generator] variable-partition prep failed; apps will skip variable contract:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // ── Step 1: materialize Apps from infrastructure_proposals ───────────
   const appResults = await materializeApps({
     spaceId,
@@ -207,6 +339,11 @@ export async function generateAppsAndInterventions(
     triggeredBy,
     pipelineRunId: pipelineRunId ?? null,
     skipLabSimulation,
+    variablePartition,
+    goalMetricByGoalId,
+    chosenLab,
+    mechanismMetaById,
+    partitionEdges,
   });
 
   // ── Step 2: materialize Interventions from micro_tactics ─────────────
@@ -419,6 +556,24 @@ interface MaterializeAppsArgs {
    *  not populated; per-app proposal_ready events fire without
    *  distribution data. */
   skipLabSimulation?: boolean;
+  /** Sprint W5.2 — pre-computed preflight variable partition shared
+   *  across all apps in this batch. When null, the variable-contract
+   *  derivation soft-fails to an empty array. */
+  variablePartition: PreflightVariables | null;
+  /** Sprint W5.2 — goal_id → metric_entity_id lookup for resolving
+   *  each app's DV during variable derivation. */
+  goalMetricByGoalId: Map<string, string>;
+  /** Sprint W5.2.5 — chosen lab_twin (if any). Threaded into
+   *  deriveAppVariables so its primary_iv/primary_dv override the
+   *  partition's role for those entities. */
+  chosenLab: LoadedLab | null;
+  /** Sprint W5.3 — mechanism_id → {name, kind} lookup for snapshotting
+   *  config.mediator_light on apps with parent_mechanism_id. */
+  mechanismMetaById: Map<string, { name: string; kind: string }>;
+  /** Sprint W5.8c — edges used for per-app mediator/confounder
+   *  scoping inside deriveAppVariables. Empty array disables scoping
+   *  (legacy behavior: include the full bucket per app). */
+  partitionEdges: Edge[];
 }
 
 async function materializeApps(args: MaterializeAppsArgs) {
@@ -438,6 +593,11 @@ async function materializeApps(args: MaterializeAppsArgs) {
     triggeredBy,
     pipelineRunId,
     skipLabSimulation,
+    variablePartition,
+    goalMetricByGoalId,
+    chosenLab,
+    mechanismMetaById,
+    partitionEdges,
   } = args;
 
   // Build a perspective → entities map so dominant factors can fall back
@@ -520,6 +680,26 @@ async function materializeApps(args: MaterializeAppsArgs) {
       strategy_coverage_at_generation: recommendation.provenance?.coverage_pct_at_generation,
     };
 
+    // Sprint W5.2 — variable contract for this specific app. Derived
+    // from the shared preflight partition + this app's dominant
+    // entities + the goal-metric resolution. Empty array is valid
+    // (no partition / no resolvable dominants); legacy reads tolerate
+    // absent or empty.
+    const appGoalMetricEntityId = activeGoalId
+      ? goalMetricByGoalId.get(activeGoalId) ?? null
+      : null;
+    const variables = variablePartition
+      ? deriveAppVariables({
+          partition: variablePartition,
+          appDominantEntityIds: dominantUuids,
+          appGoalMetricEntityId,
+          chosenLab,
+          // W5.8c — pass edges so mediator/confounder buckets are
+          // scoped to entities on this app's IV → DV path.
+          edges: partitionEdges,
+        })
+      : [];
+
     const config: AppConfig = {
       // agent-authored fields survive regen
       agent_hints: priorConfig.agent_hints ?? [],
@@ -537,7 +717,25 @@ async function materializeApps(args: MaterializeAppsArgs) {
       // this app's parent tactics respect/address. Empty arrays are valid.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       reasoning_provenance: reasoningProvenance as any,
+      // Sprint W5.2 — IV/DV/control/mediator/moderator contract.
+      variables,
     };
+
+    // Sprint W5.3 — denormalize the parent mechanism's name + kind onto
+    // config.mediator_light so the App detail card can render the
+    // mediator without joining the mechanisms table at read time.
+    const mechIdsForLight = mechanismIdsByProposal?.get(proposal.id) ?? [];
+    const lightMechId = mechIdsForLight.length > 0 ? mechIdsForLight[0] : null;
+    if (lightMechId) {
+      const meta = mechanismMetaById.get(lightMechId);
+      if (meta) {
+        config.mediator_light = {
+          mechanism_id: lightMechId,
+          mechanism_name: meta.name,
+          mechanism_kind: meta.kind,
+        };
+      }
+    }
 
     // Preserve agent-written runtime state; only reset things we own.
     const priorState: AppState = existing ? asAppState(existing.state) : {};
@@ -626,6 +824,21 @@ async function materializeApps(args: MaterializeAppsArgs) {
             strategyVersion,
           });
 
+    // Sprint W5.2 — derive variables for the umbrella app too, using
+    // the recommendation's entity_references as the proxy "dominants."
+    const umbrellaGoalMetricEntityId = activeGoalId
+      ? goalMetricByGoalId.get(activeGoalId) ?? null
+      : null;
+    const umbrellaVariables = variablePartition
+      ? deriveAppVariables({
+          partition: variablePartition,
+          appDominantEntityIds: uuids,
+          appGoalMetricEntityId: umbrellaGoalMetricEntityId,
+          chosenLab,
+          edges: partitionEdges,
+        })
+      : [];
+
     rowsToUpsert.push({
       space_id: spaceId,
       user_id: userId,
@@ -648,6 +861,7 @@ async function materializeApps(args: MaterializeAppsArgs) {
           ? [recommendation.target_objective.title]
           : [],
         manifest: umbrellaManifest,
+        variables: umbrellaVariables,
       } as unknown as AppInsert["config"],
       state: priorState as unknown as AppInsert["state"],
       status: existing?.status ?? "proposed",

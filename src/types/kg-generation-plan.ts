@@ -346,4 +346,12 @@ export interface PlanGeneratorInput {
   existing_reasoning_settings?: KgPlanReasoningSettingsProposed;
   /** Optional version for iterative re-planning. */
   superseded_plan_id?: string;
+  /** Phase 1 — pre-formatted chosen-framing block from
+   *  formatChosenFramingForPrompt(loadChosenFramingForSpace(...), 'plan').
+   *  Empty string when no problem_twin row exists or the row was a
+   *  fallback merged frame with no real divergence. Injected verbatim
+   *  into the user prompt so the planner conditions the layer ontology
+   *  + axis proposals on the user's chosen framing instead of
+   *  re-deriving them from the raw goal_verbatim. */
+  chosen_framing_block?: string;
 }

@@ -51,6 +51,10 @@ export function CanvasSubjectCardSpawner({ spaceId }: { spaceId: string }) {
               conditionCount: Object.keys(
                 (subj.conditions ?? {}) as Record<string, unknown>,
               ).length,
+              // A4 — pass the actual conditions bag so the card can
+              // render value chips ("Sleep 4h", "Stress 8/10") instead
+              // of the legacy "N conditions" summary pill.
+              conditionsJson: JSON.stringify(subj.conditions ?? {}),
               artifactState: subj.artifact_state ?? "bare_topic",
               needsReview: false,
             },

@@ -24,7 +24,8 @@
 // Footer:
 //   [Reject]                           [Re-plan]  [Approve]
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import Link from "next/link";
 import {
   Loader2,
   ChevronDown,
@@ -40,6 +41,7 @@ import {
   FileText,
   ShieldCheck,
   ClipboardList,
+  ArrowUpRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
@@ -154,6 +156,19 @@ export function KgPlanReviewCard({
 
         {/* ── Body ── */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
+          {/* Sprint W2.3 — upstream framing CTA.
+              The KG plan is conceptually downstream of the problem framing:
+              "what KG to build" comes after "what problem are we solving."
+              The framing lives in twin_proposals(kind='problem_twin'), NOT
+              in kg_generation_plans, so it's not a PATCH section here. We
+              surface a link to the dedicated /framing gate page so users
+              can review / re-pick before approving this plan. The link
+              degrades cleanly: if the user never opened a framing (legacy
+              spaces with no problem_twin row), the gate page itself shows
+              a guidance state. Subtle styling — this is a "by the way"
+              affordance, not a primary action. */}
+          <FramingReviewCta spaceId={spaceId} />
+
           <PlanSection
             title="Scope & objectives"
             icon={<Compass className="h-3.5 w-3.5" />}
@@ -714,6 +729,159 @@ function Stat({ label, value }: { label: string; value: number }) {
       </div>
       <div className="text-[9.5px] uppercase tracking-wider text-gray-500">
         {label}
+      </div>
+    </div>
+  );
+}
+
+// ── Sprint W2.3 — Upstream framing review CTA ────────────────────────
+//
+// Lightweight banner at the top of the plan-review modal that links
+// the user to the framing gate page (/app/space/[id]/framing). The
+// problem framing is conceptually upstream of the KG plan, so the
+// user should be able to glance "what problem we picked" — and re-
+// pick before approving the plan if needed.
+//
+// Why fetch the framing here instead of just rendering a static
+// link: the preview is meaningful (chosen approach + candidate count
+// gives the user the context they need without leaving the modal).
+// Without it, the link would be opaque ("Review framings →" with no
+// indication of WHAT they'd be reviewing).
+//
+// Soft-fail: if the fetch errors or no problem_twin exists yet, we
+// render a generic "Review the upstream problem framing" link that
+// still works (the gate page handles the no-row case). The fetch
+// inflight state shows a subtle skeleton; we don't block the modal
+// on this completing.
+//
+// API: GET /api/spaces/[id]/twin-proposals/latest?kind=problem_twin
+// — added below as a sibling change. Returns null when no row.
+
+interface FramingCtaState {
+  loaded: boolean;
+  chosenApproach: string | null;
+  optionCount: number;
+  userStatus: string | null;
+}
+
+function FramingReviewCta({ spaceId }: { spaceId: string }) {
+  const [state, setState] = useState<FramingCtaState>({
+    loaded: false,
+    chosenApproach: null,
+    optionCount: 0,
+    userStatus: null,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/spaces/${encodeURIComponent(spaceId)}/twin-proposals/latest?kind=problem_twin`,
+          { credentials: "include" },
+        );
+        if (!res.ok) {
+          // 404 = no row yet; treat as "loaded with no framing."
+          if (!cancelled) {
+            setState({
+              loaded: true,
+              chosenApproach: null,
+              optionCount: 0,
+              userStatus: null,
+            });
+          }
+          return;
+        }
+        const data = (await res.json()) as {
+          proposal: {
+            user_status: string;
+            frame_payload: {
+              options: Array<{ chosen_approach: string }>;
+              chosen_rank: number;
+            } | null;
+          } | null;
+        };
+        if (cancelled) return;
+        if (!data.proposal || !data.proposal.frame_payload) {
+          setState({
+            loaded: true,
+            chosenApproach: null,
+            optionCount: 0,
+            userStatus: null,
+          });
+          return;
+        }
+        const payload = data.proposal.frame_payload;
+        const idx = Math.max(0, (payload.chosen_rank ?? 1) - 1);
+        const chosen = payload.options[idx];
+        setState({
+          loaded: true,
+          chosenApproach: chosen?.chosen_approach ?? null,
+          optionCount: payload.options.length,
+          userStatus: data.proposal.user_status,
+        });
+      } catch {
+        if (!cancelled) {
+          setState({
+            loaded: true,
+            chosenApproach: null,
+            optionCount: 0,
+            userStatus: null,
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId]);
+
+  const hasDivergence = state.optionCount > 1;
+  const hasFraming = state.chosenApproach !== null;
+
+  return (
+    <div className="mb-4 rounded-lg border border-indigo-100 bg-gradient-to-r from-indigo-50/60 to-violet-50/60 px-3 py-2.5">
+      <div className="flex items-start gap-2.5">
+        <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-600" />
+        <div className="flex-1 text-[11.5px] leading-snug">
+          <div className="flex items-baseline gap-2">
+            <span className="font-semibold text-indigo-900">
+              Upstream problem framing
+            </span>
+            {hasDivergence && (
+              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-800">
+                {state.optionCount} candidates
+              </span>
+            )}
+            {state.userStatus === "approved" && (
+              <span className="text-[9.5px] text-emerald-700">· approved</span>
+            )}
+            {state.userStatus === "proposed" && (
+              <span className="text-[9.5px] text-amber-700">
+                · awaiting confirm
+              </span>
+            )}
+          </div>
+          {!state.loaded ? (
+            <div className="mt-1 h-3 w-2/3 animate-pulse rounded bg-indigo-100/60" />
+          ) : hasFraming ? (
+            <div className="mt-0.5 line-clamp-2 text-indigo-800">
+              {state.chosenApproach}
+            </div>
+          ) : (
+            <div className="mt-0.5 text-indigo-700/70">
+              Review the framing the system picked for your problem
+              {hasDivergence ? " — or pick a different candidate." : "."}
+            </div>
+          )}
+        </div>
+        <Link
+          href={`/app/space/${encodeURIComponent(spaceId)}/framing`}
+          className="ml-1 flex shrink-0 items-center gap-1 rounded-md border border-indigo-300 bg-white px-2 py-1 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-50"
+        >
+          {state.userStatus === "proposed" ? "Review & confirm" : "Review"}
+          <ArrowUpRight className="h-3 w-3" />
+        </Link>
       </div>
     </div>
   );

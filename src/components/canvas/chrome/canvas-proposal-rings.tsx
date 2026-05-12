@@ -50,6 +50,14 @@ interface ProposalCard {
    *  expand chevron so the card stays scannable. Null → no chevron
    *  rendered, card stays compact. */
   reasoning: string | null;
+  /** Sprint A3 — distribution is now OPTIONAL. When the proposal has
+   *  no resolvable lever-target chain (sparse KG / abstract prompt),
+   *  there's no MC distribution to compute. Previously these were
+   *  silently filtered out at line 89 (`if (!s.event.distribution)
+   *  continue;`) — the user saw nothing despite the LLM having
+   *  produced a ranked strategy. Now the card renders in "narrative
+   *  grounding" mode using the LLM's self-reported `confidence`
+   *  below instead. See DIVERGE_CONVERGE_ARCHITECTURE_PLAN.md §4 #3. */
   distribution: {
     p10: number;
     p50: number;
@@ -63,7 +71,15 @@ interface ProposalCard {
       | "composite_computed"
       | "ode_rk4";
     sampleCount?: number | null;
-  };
+  } | null;
+  /** Sprint A3 — LLM-self-reported confidence 0-100. Fallback for the
+   *  numeric confidence chip when `distribution` is absent. The card
+   *  wears an amber "Narrative grounding" badge in that case so the
+   *  user knows the number is an LLM estimate, not MC-derived. Null
+   *  when the proposal_ready event predates the field addition (old
+   *  events in pipeline_run_events history) — chip rendering falls
+   *  back to a neutral grey state. */
+  confidence: number | null;
   targetEntityId: string | null;
   /** PR 5 — probability-space lenses that contributed supporting
    *  entities to this proposal. Rendered as axis-colored chips. */
@@ -86,7 +102,13 @@ export function CanvasProposalRings({ runId }: CanvasProposalRingsProps) {
     const cards: ProposalCard[] = [];
     for (const s of events) {
       if (s.event.type !== "proposal_ready") continue;
-      if (!s.event.distribution) continue;
+      // Sprint A3 — DROPPED filter `if (!s.event.distribution) continue;`
+      // that silently hid proposals without a MC distribution. Sparse KGs
+      // and abstract prompts can't resolve a lever-target chain so they
+      // emit proposals with valid LLM reasoning but no sample-derived
+      // distribution. Those proposals now render in narrative-grounding
+      // mode using `confidence` below. See A3 in
+      // DIVERGE_CONVERGE_ARCHITECTURE_PLAN.md §4.
       if (seen.has(s.event.proposalId)) continue;
       seen.add(s.event.proposalId);
       cards.push({
@@ -94,7 +116,9 @@ export function CanvasProposalRings({ runId }: CanvasProposalRingsProps) {
         title: s.event.title,
         headline: s.event.headline?.trim() || null,
         reasoning: s.event.reasoning?.trim() || null,
-        distribution: s.event.distribution,
+        distribution: s.event.distribution ?? null,
+        confidence:
+          typeof s.event.confidence === "number" ? s.event.confidence : null,
         targetEntityId: s.event.targetEntityId ?? null,
         axesUsed: (s.event.axes_used ?? []).filter(
           (a): a is ProbabilitySpaceAxis => a in AXIS_CATALOG,
@@ -131,10 +155,13 @@ export function CanvasProposalRings({ runId }: CanvasProposalRingsProps) {
 
   // Global min/max across all shown distributions → share the bar's
   // x-scale so cards are comparable at a glance.
+  // Sprint A3 — skip cards without distribution (narrative-mode cards
+  // don't render a bar, so they don't contribute to the scale).
   const [scaleMin, scaleMax] = useMemo(() => {
     let lo = Infinity;
     let hi = -Infinity;
     for (const p of visible) {
+      if (!p.distribution) continue;
       if (p.distribution.p10 < lo) lo = p.distribution.p10;
       if (p.distribution.p90 > hi) hi = p.distribution.p90;
     }
@@ -206,28 +233,59 @@ function ProposalCard({
   const hasReasoning = typeof card.reasoning === "string" && card.reasoning.length > 0;
   const topLine = card.headline ?? card.title;
 
-  const { p10, p50, p90, stddev, provenance, sampleCount } = card.distribution;
+  // Sprint A3 — branch on distribution presence. Two modes:
+  //   • DISTRIBUTION mode (full bar + numeric readout) — when MC
+  //     produced a real sample-derived distribution
+  //   • NARRATIVE mode (no bar, LLM confidence chip + amber badge)
+  //     — when no resolvable lever-target chain meant no simulation
+  //
+  // Both modes share the title, headline, reasoning, axes_used, dowhy
+  // surfaces. Only the certainty bar + numeric readout vary.
+  const hasDistribution = card.distribution !== null;
+
+  const { p10, p50, p90, stddev, provenance, sampleCount } =
+    card.distribution ?? {
+      p10: 0,
+      p50: 0,
+      p90: 0,
+      stddev: undefined,
+      provenance: undefined,
+      sampleCount: undefined,
+    };
   const span = Math.max(scaleMax - scaleMin, 0.0001);
-  const pctP10 = ((p10 - scaleMin) / span) * 100;
-  const pctP50 = ((p50 - scaleMin) / span) * 100;
-  const pctP90 = ((p90 - scaleMin) / span) * 100;
+  const pctP10 = hasDistribution ? ((p10 - scaleMin) / span) * 100 : 0;
+  const pctP50 = hasDistribution ? ((p50 - scaleMin) / span) * 100 : 0;
+  const pctP90 = hasDistribution ? ((p90 - scaleMin) / span) * 100 : 0;
   const bandWidth = Math.max(pctP90 - pctP10, 0.5);
 
-  const confidence = stddev !== undefined && Number.isFinite(stddev)
-    ? Math.max(0, Math.min(1, 1 / (1 + Math.abs(stddev))))
-    : 0.5;
-  const confPct = Math.round(confidence * 100);
-  // Provenance-aware tone. LLM-estimated distributions wear an amber
-  // ring regardless of the numeric confPct, because the number itself
-  // is LLM self-reported — a 95% confidence chip on an LLM-invented
-  // distribution should NOT visually outrank a 55% chip on a real MC
-  // run. Users need to see "this came from real math" vs "this is a
-  // guess" before reading the number.
+  // confPct derivation:
+  //   • DISTRIBUTION mode → derive from stddev (tight = high confidence)
+  //   • NARRATIVE mode → use LLM-self-reported confidence (0-100 from
+  //     r.recommendation.confidence in strategy-refresh) directly
+  //   • Missing both → neutral 50% so chip doesn't visually mislead
+  const confPct = hasDistribution
+    ? (() => {
+        const conf =
+          stddev !== undefined && Number.isFinite(stddev)
+            ? Math.max(0, Math.min(1, 1 / (1 + Math.abs(stddev))))
+            : 0.5;
+        return Math.round(conf * 100);
+      })()
+    : typeof card.confidence === "number"
+      ? Math.round(card.confidence)
+      : 50;
+
+  // Provenance-aware tone. LLM-estimated distributions AND narrative-
+  // mode cards wear an amber ring regardless of confPct because the
+  // number is LLM self-reported. A 95% chip on an LLM-invented number
+  // should NOT visually outrank a 55% chip on a real MC run. Users
+  // need to see "this came from real math" vs "this is a guess".
   const isComputed =
-    provenance === "mc_simulation" ||
-    provenance === "bootstrap" ||
-    provenance === "composite_computed" ||
-    provenance === "ode_rk4";
+    hasDistribution &&
+    (provenance === "mc_simulation" ||
+      provenance === "bootstrap" ||
+      provenance === "composite_computed" ||
+      provenance === "ode_rk4");
   const confTone = !isComputed
     ? "bg-amber-50 text-amber-700 ring-amber-200"
     : confPct >= 75
@@ -235,8 +293,9 @@ function ProposalCard({
       : confPct >= 50
         ? "bg-blue-50 text-blue-700 ring-blue-200"
         : "bg-amber-50 text-amber-700 ring-amber-200";
-  const provenanceLabel =
-    provenance === "ode_rk4"
+  const provenanceLabel = !hasDistribution
+    ? "Narrative grounding — LLM reasoning, no simulation"
+    : provenance === "ode_rk4"
       ? `Monte Carlo + RK4 ODE (${sampleCount ?? "—"} samples × continuous integration)`
       : provenance === "mc_simulation"
         ? `Monte Carlo (${sampleCount ?? "—"} samples)`
@@ -284,37 +343,70 @@ function ProposalCard({
         </span>
       </div>
 
-      {/* Certainty bar */}
-      <div className="relative mt-1 h-1.5 overflow-visible rounded-full bg-gray-100">
-        {/* p10→p90 span */}
-        <div
-          className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-blue-400 to-purple-400 opacity-80"
-          style={{ left: `${pctP10}%`, width: `${bandWidth}%` }}
-        />
-        {/* p50 tick */}
-        <div
-          className="absolute top-[-2px] h-[10px] w-[2px] -translate-x-1/2 rounded-full bg-gray-900 shadow"
-          style={{ left: `${pctP50}%` }}
-          title={`Median: ${p50.toFixed(3)}`}
-        />
-      </div>
+      {/* Sprint A3 — DISTRIBUTION mode: certainty bar + p10/p50/p90.
+          NARRATIVE mode: amber "Narrative grounding" badge in lieu of
+          the bar, no numeric readout. The card stays the same height
+          in both modes so the side rail layout doesn't jump. */}
+      {hasDistribution ? (
+        <>
+          {/* Certainty bar */}
+          <div className="relative mt-1 h-1.5 overflow-visible rounded-full bg-gray-100">
+            {/* p10→p90 span */}
+            <div
+              className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-blue-400 to-purple-400 opacity-80"
+              style={{ left: `${pctP10}%`, width: `${bandWidth}%` }}
+            />
+            {/* p50 tick */}
+            <div
+              className="absolute top-[-2px] h-[10px] w-[2px] -translate-x-1/2 rounded-full bg-gray-900 shadow"
+              style={{ left: `${pctP50}%` }}
+              title={`Median: ${p50.toFixed(3)}`}
+            />
+          </div>
 
-      {/* Numeric readout */}
-      <div className="mt-1.5 flex items-center justify-between text-[9.5px] text-gray-500">
-        <span className="flex items-center gap-1 font-mono tabular-nums">
-          <TrendingUp className="h-2.5 w-2.5 text-gray-400" />
-          <span className="text-gray-700">{num(p10)}</span>
-          <span className="text-gray-400">→</span>
-          <span className="font-bold text-gray-900">{num(p50)}</span>
-          <span className="text-gray-400">→</span>
-          <span className="text-gray-700">{num(p90)}</span>
-        </span>
-        {card.targetEntityId && (
-          <span className="font-mono text-gray-400" title={`Target entity ${card.targetEntityId}`}>
-            #{card.targetEntityId.slice(0, 4)}
-          </span>
-        )}
-      </div>
+          {/* Numeric readout */}
+          <div className="mt-1.5 flex items-center justify-between text-[9.5px] text-gray-500">
+            <span className="flex items-center gap-1 font-mono tabular-nums">
+              <TrendingUp className="h-2.5 w-2.5 text-gray-400" />
+              <span className="text-gray-700">{num(p10)}</span>
+              <span className="text-gray-400">→</span>
+              <span className="font-bold text-gray-900">{num(p50)}</span>
+              <span className="text-gray-400">→</span>
+              <span className="text-gray-700">{num(p90)}</span>
+            </span>
+            {card.targetEntityId && (
+              <span className="font-mono text-gray-400" title={`Target entity ${card.targetEntityId}`}>
+                #{card.targetEntityId.slice(0, 4)}
+              </span>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Narrative-grounding badge — substitutes for the certainty
+              bar when no MC distribution was computable. The amber tone
+              + Bot icon signals "LLM reasoning, not sample math" so a
+              user comparing two cards can tell at a glance which one
+              has empirical backing. */}
+          <div
+            className="mt-1 flex items-center gap-1.5 rounded-md bg-amber-50/60 px-2 py-1 ring-1 ring-amber-200/60"
+            title={provenanceLabel}
+          >
+            <Bot className="h-2.5 w-2.5 flex-shrink-0 text-amber-600" />
+            <span className="text-[9.5px] font-medium text-amber-800">
+              Narrative grounding — no simulation
+            </span>
+            {card.targetEntityId && (
+              <span
+                className="ml-auto font-mono text-[9px] text-amber-700"
+                title={`Target entity ${card.targetEntityId}`}
+              >
+                #{card.targetEntityId.slice(0, 4)}
+              </span>
+            )}
+          </div>
+        </>
+      )}
 
       {/* PR 5 — axis provenance strip. Matches the badge row on the
           tldraw proposal-snapshot shape so the right-rail view and

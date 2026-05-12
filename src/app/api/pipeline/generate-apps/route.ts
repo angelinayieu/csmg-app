@@ -13,6 +13,14 @@
 import { NextResponse, after } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { generateAppsAndInterventions } from "@/lib/pipeline/app-generator";
+// Sprint W4.12 — load the chosen lab so we can attribute generated
+// apps to the lab configuration they were materialized against.
+// generateAppsAndInterventions itself has no LLM call (apps come
+// from rankedStrategies[].infrastructure_proposals[] already baked
+// into the strategy), so the lab context is observability + future-
+// consumer substrate. Variant generation via writer-path is the
+// downstream consumer that uses this in subsequent increments.
+import { loadChosenLabForSpace } from "@/lib/pipeline/load-chosen-lab";
 import type { Entity } from "@/types";
 import type {
   StrategicRecommendation,
@@ -143,6 +151,27 @@ export async function POST(request: Request) {
       phase: "enter",
       message: "Materializing apps…",
     });
+
+    // Sprint W4.12 — load the user-approved lab_twin (if any) so the
+    // generation context can attribute apps to the lab. The chosen
+    // lab's design_type / measurement_cadence / IV/DV later inform
+    // execution-brief generation (already wired in this sprint) +
+    // variant generation (writer-path; future increment).
+    //
+    // Logged here for observability — when the next debugging round
+    // asks "why did this app get generated with these parameters?"
+    // the answer chain starts from this log line. Soft-fails: a load
+    // error returns null + we proceed lab-agnostic (legacy behavior).
+    const chosenLab = await loadChosenLabForSpace(db, spaceId, user.id);
+    if (chosenLab) {
+      console.log(
+        `[generate-apps] threading chosen lab: ` +
+        `lab_id=${chosenLab.option.lab_id} ` +
+        `lens=${chosenLab.option.lens_id} ` +
+        `design=${chosenLab.option.design_type} ` +
+        `space=${spaceId}`,
+      );
+    }
 
     const result = await generateAppsAndInterventions({
       spaceId,

@@ -62,7 +62,9 @@ const STAGE_ORDER: PipelineStage[] = [
   "landscape",
   "kg",
   "proposal",
+  "twin",
   "lab",
+  "reflexive",
   "results",
 ];
 
@@ -71,7 +73,9 @@ const STAGE_LABEL: Record<PipelineStage, string> = {
   landscape: "Landscape",
   kg: "KG",
   proposal: "Strategy",
+  twin: "Twin",
   lab: "Lab",
+  reflexive: "Reflexive",
   results: "Results",
 };
 

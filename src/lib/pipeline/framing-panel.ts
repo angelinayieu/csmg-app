@@ -61,6 +61,7 @@ import {
   type FrameCell,
   type FrameGateStatus,
   type FramingDivergence,
+  type LensWholeFraming,
   type LoadBearingAssumption,
   type SituationFrame,
 } from "@/types/situation-frame";
@@ -177,6 +178,7 @@ export function consensusMerge(
   const axes = mergeAxes(lensOutputs);
   const divergences = detectDivergences(lensOutputs, axes);
   const loadBearing = mergeLoadBearing(lensOutputs);
+  const candidateFramings = collectCandidateFramings(lensOutputs);
   const layerCoverage = computeLayerCoverage(cells, intentionalEmpties);
 
   const framingConfidence = computeFramingConfidence(
@@ -199,9 +201,46 @@ export function consensusMerge(
     axes,
     divergences,
     load_bearing_assumptions: loadBearing,
+    candidate_framings: candidateFramings,
     framing_confidence: framingConfidence,
     gate_status: gateStatus,
   };
+}
+
+// ── Per-lens whole-framing collection (Phase 1 diverge-converge) ─────
+//
+// Unlike load-bearing assumptions (which dedupe + credit), candidate
+// framings are kept VERBATIM as separate entries. The user is meant to
+// see "the skeptic thinks the real problem is X; the engineer thinks
+// it's Y" side-by-side, not "X and Y were merged into a hybrid Z."
+//
+// Two framings from different lenses can share a framing_id (snake_case
+// slug) — that's signal that two stances independently arrived at the
+// same framing. We preserve both rows so the picker UI can show "this
+// framing was proposed by 2 lenses" without losing either lens's
+// distinct chosen_approach phrasing.
+//
+// Sort: highest-confidence first, so chosen_rank=1 in the downstream
+// problem_twin payload naturally lands on the most confident framing
+// without further re-ranking work.
+
+function collectCandidateFramings(
+  lensOutputs: LensOutput[],
+): LensWholeFraming[] {
+  const framings: LensWholeFraming[] = [];
+  for (const lens of lensOutputs) {
+    if (lens.candidate_whole_framing) {
+      framings.push(lens.candidate_whole_framing);
+    }
+  }
+  // Stable sort: highest confidence first; ties broken by lens_id
+  // alphabetically so re-runs on the same input produce the same
+  // chosen_rank=1 winner.
+  framings.sort((a, b) => {
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+    return a.lens_id.localeCompare(b.lens_id);
+  });
+  return framings;
 }
 
 // ── Cell merge ───────────────────────────────────────────────────────

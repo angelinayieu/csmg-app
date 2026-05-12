@@ -34,9 +34,12 @@ import {
   Beaker,
   Variable as VariableIcon,
   FileUp,
+  Inbox,
 } from "lucide-react";
 import type { Subject, SubjectFocusKind } from "@/types/subject";
 import type { LayerOntologyRow } from "@/types/layer-ontology";
+import { useVariableProposals } from "@/lib/hooks/use-variable-proposals";
+import { VariableProposalsPanel } from "./variable-proposals-panel";
 
 // ── Window event payloads ────────────────────────────────────────
 // CanvasAddButtons mounts OUTSIDE the tldraw editor tree (it lives
@@ -73,6 +76,62 @@ export function CanvasAddButtons({
 }: CanvasAddButtonsProps) {
   const [open, setOpen] = useState(false);
   const [activeForm, setActiveForm] = useState<FormKind>(null);
+  const [proposalsOpen, setProposalsOpen] = useState(false);
+
+  // LLM-proposed variables awaiting review. Drives the badge on the
+  // +Variable button so the user knows the synthesis pipeline already
+  // proposed N variables — they're not stuck rebuilding manually what
+  // the strategy has already enumerated. Clicking the badge opens the
+  // proposals review drawer where each proposal can be approved
+  // (materializes an entity row) or rejected (audit-only).
+  const variableProposals = useVariableProposals(spaceId);
+  const pendingProposals = variableProposals.pendingCount;
+
+  const handleApproveProposal = useCallback(
+    async (proposalId: string) => {
+      try {
+        const res = await fetch(
+          `/api/spaces/${encodeURIComponent(spaceId)}/variable-proposals/${encodeURIComponent(proposalId)}/approve`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+        );
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as
+            | { error?: string }
+            | null;
+          throw new Error(body?.error ?? `HTTP ${res.status}`);
+        }
+        await variableProposals.refetch();
+      } catch (e) {
+        console.warn("[variable-proposal approve] failed:", e);
+      }
+    },
+    [spaceId, variableProposals],
+  );
+
+  const handleRejectProposal = useCallback(
+    async (proposalId: string, reason?: string) => {
+      try {
+        const res = await fetch(
+          `/api/spaces/${encodeURIComponent(spaceId)}/variable-proposals/${encodeURIComponent(proposalId)}/reject`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(reason ? { reason } : {}),
+          },
+        );
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as
+            | { error?: string }
+            | null;
+          throw new Error(body?.error ?? `HTTP ${res.status}`);
+        }
+        await variableProposals.refetch();
+      } catch (e) {
+        console.warn("[variable-proposal reject] failed:", e);
+      }
+    },
+    [spaceId, variableProposals],
+  );
 
   if (!enabled) return null;
 
@@ -97,6 +156,19 @@ export function CanvasAddButtons({
             icon={<VariableIcon className="h-3.5 w-3.5" />}
             onClick={() => setActiveForm("variable")}
             color="from-emerald-500 to-teal-500"
+            badge={
+              pendingProposals > 0
+                ? {
+                    count: pendingProposals,
+                    label: "proposed",
+                    onClick: () => {
+                      setProposalsOpen(true);
+                      setOpen(false);
+                    },
+                    title: `${pendingProposals} LLM-proposed variable${pendingProposals === 1 ? "" : "s"} awaiting review — click to inspect`,
+                  }
+                : undefined
+            }
           />
           {onTriggerPaperUpload && (
             <AddButton
@@ -162,33 +234,75 @@ export function CanvasAddButtons({
           }}
         />
       )}
+
+      {/* Review drawer for LLM-proposed variables. Approve materializes
+          an entity row in the KG; reject is audit-only. Both refetch
+          so the panel + +Variable badge update in place. */}
+      <VariableProposalsPanel
+        open={proposalsOpen}
+        onClose={() => setProposalsOpen(false)}
+        data={variableProposals.data}
+        loading={variableProposals.loading}
+        error={variableProposals.error}
+        onApprove={handleApproveProposal}
+        onReject={handleRejectProposal}
+      />
     </div>
   );
 }
 
 // ── Add button (atom) ────────────────────────────────────────────
 
+interface AddButtonBadge {
+  count: number;
+  /** Short label appended after the count, e.g. "proposed" or "pending". */
+  label: string;
+  /** Click handler for the badge itself. Stops propagation to the parent
+   *  button so clicking the badge opens the review drawer instead of
+   *  the manual-author form. */
+  onClick: () => void;
+  title?: string;
+}
+
 function AddButton({
   label,
   icon,
   onClick,
   color,
+  badge,
 }: {
   label: string;
   icon: React.ReactNode;
   onClick: () => void;
   color: string;
+  badge?: AddButtonBadge;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-full bg-gradient-to-br ${color} px-3 py-1.5 text-[11.5px] font-semibold text-white shadow-md transition-all hover:-translate-y-px hover:shadow-lg`}
-    >
-      <Plus className="h-3 w-3" />
-      {icon}
-      {label}
-    </button>
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={onClick}
+        className={`flex items-center gap-1.5 rounded-full bg-gradient-to-br ${color} px-3 py-1.5 text-[11.5px] font-semibold text-white shadow-md transition-all hover:-translate-y-px hover:shadow-lg`}
+      >
+        <Plus className="h-3 w-3" />
+        {icon}
+        {label}
+      </button>
+      {badge && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            badge.onClick();
+          }}
+          title={badge.title}
+          className="flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-800 shadow-sm transition-colors hover:bg-amber-100"
+        >
+          <Inbox className="h-2.5 w-2.5" />
+          {badge.count} {badge.label}
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -13,7 +13,9 @@ export type PipelineStage =
   | "landscape"
   | "kg"
   | "proposal"
+  | "twin"
   | "lab"
+  | "reflexive"
   | "results";
 
 export type StructuralEvent =
@@ -53,6 +55,12 @@ export type StructuralEvent =
   | IVDecompositionReadyEvent
   | VariantDeckReadyEvent
   | CausalStageReadyEvent
+  // Twin proposal materialized — fired by wireTwinProposalAndMechanisms
+  // when a twin_proposals row is inserted at the end of strategy
+  // generation. Painter spawns a `twin-snapshot` shape inside the Twin
+  // room so users watching live see the committed twin land before the
+  // run completes.
+  | TwinProposalReadyEvent
   // Situation analyzer (post data-presence, pre frame-extractor) emits
   // a single summary event when it lands. The canvas painter uses it
   // to spawn the situation-card shape with the correct counts; the
@@ -100,7 +108,41 @@ export type StructuralEvent =
   // for the matching DB CHECK and src/lib/insight-lab/ for the runtime.
   | LabStepStartedEvent
   | LabInsightEmittedEvent
-  | LabScoreRecordedEvent;
+  | LabScoreRecordedEvent
+  // ── Problem-framing diverge-converge (Phase 1, 2026-05) ──
+  // Events for the upstream diverge-converge cycle. The framing panel
+  // produces N candidate problem framings; the user picks one via the
+  // /app/space/[id]/framing gate. Today rank-1 is auto-approved
+  // immediately so downstream (decompose, frame-extractor) keeps
+  // working — framing_selected lets the user re-rank to a different
+  // option at any time, which the audit trail records.
+  // Persisted in twin_proposals(kind='problem_twin'); see
+  // 20260715_twin_proposals_kind_and_frame.sql.
+  | FramingProposedEvent
+  | FramingApprovedEvent
+  | FramingSelectedEvent
+  // ── Phase 2 lab diverge-converge (Week 4, 2026-05) ──
+  // Mirrors Phase 1's framing events. The lab-generation library
+  // runs 5 stance-flavored lab-design proposals after the strategy
+  // twin lands, persists them as twin_proposals(kind='lab_twin'),
+  // and emits these events so the chrome banner + gate page can
+  // render the divergence cloud. Lab pick cascade-supersedes apps
+  // via apps.stale_reason='lab_regen' (see 20260717_apps_stale_
+  // reason_lab_regen.sql).
+  | LabProposedEvent
+  | LabApprovedEvent
+  | LabSelectedEvent
+  // ── Sprint C — pipeline error/warning surfaces ──
+  // Until 2026-05, silent failures in the strategy chain (no-trigger
+  // chain decisions, simulation null returns, DoWhy non-fatal errors)
+  // were swallowed by console.warn with NO user-visible signal. The
+  // stabilization audit identified this as the cause of "the strategy
+  // cards never appeared and I don't know why" UX. These two event
+  // types surface failure modes through the SSE stream so the chrome
+  // banner can render an accumulated error/warning trail during the
+  // run. See DIVERGE_CONVERGE_ARCHITECTURE_PLAN.md §5 Sprint C.
+  | PipelineWarningEvent
+  | PipelineErrorEvent;
 
 // ── Phase 2E · Tier 2 — probability space axes ──
 //
@@ -172,6 +214,24 @@ export interface BridgeFormedEvent {
   confidence: number;
 }
 
+/**
+ * Emitted at the end of strategy generation when a twin_proposals row is
+ * inserted (see wire-twin-proposal.ts). Carries enough preview info for
+ * the painter to render an instant twin-snapshot card; the shape itself
+ * fetches full TwinMacroState on mount via /api/spaces/[id]/twin-state.
+ */
+export interface TwinProposalReadyEvent {
+  type: "twin_proposal_ready";
+  proposalId: string;
+  spaceId: string;
+  /** Number of mechanism rows the proposal commits to (justification.mechanism_ids.length). */
+  mechanismCount: number;
+  /** LLM-reported confidence 0-100, from justification.confidence. */
+  confidence: number;
+  /** One-line "what this twin is" — from justification.chosen_approach. */
+  chosenApproach: string;
+}
+
 export interface ProposalReadyEvent {
   type: "proposal_ready";
   proposalId: string;
@@ -192,6 +252,21 @@ export interface ProposalReadyEvent {
    */
   reasoning?: string;
   rankedStrategyIds?: string[];
+  /**
+   * Sprint A3 — LLM self-reported confidence (0-100) for this
+   * proposal. Emitted from `r.recommendation.confidence` in
+   * strategy-refresh. The canvas's right-rail rings card uses this
+   * as a fallback when `distribution` is absent (sparse KG / no
+   * resolvable lever-target chain) — without this field, proposals
+   * silently get filtered out, which is bug A3 in
+   * DIVERGE_CONVERGE_ARCHITECTURE_PLAN.md §4.
+   *
+   * Provenance is always "llm_estimate" semantically — this is what
+   * the strategy LLM self-reported, not a sample-derived number.
+   * The ring card visually distinguishes it from MC-backed confidence
+   * via an amber "Narrative grounding" badge.
+   */
+  confidence?: number;
   /**
    * Sample-derived distribution on the target outcome metric, produced
    * by running simulateEntityChain against the strategy's primary
@@ -407,6 +482,15 @@ export interface SpaceOpenedEvent {
    * modeling their situation this way.
    */
   rationale: string;
+  /**
+   * B3 — true when this space was minted by the framing panel as an
+   * ad-hoc / custom axis (not one of the canonical 8). Drives the
+   * shell shape's "custom" badge + dashed border treatment so the
+   * user can see "this lens was created specifically for my
+   * situation" vs "this is one of the standard 8 frames."
+   * Optional for backward-compat with events emitted before B3.
+   */
+  isCustom?: boolean;
 }
 
 /**
@@ -1503,4 +1587,291 @@ export interface LabScoreRecordedEvent {
   stackAvg: number;
   /** Number of insights that contributed to the stack average. */
   insightCount: number;
+}
+
+// ── Problem-framing diverge-converge (Phase 1) ─────────────────────────
+//
+// The first diverge-converge cycle in the pipeline operates on PROBLEM
+// FRAMINGS — multiple distinct ways to interpret what the user is
+// actually trying to solve. Currently the framing panel runs 5 lenses
+// in parallel and collapses their outputs into ONE merged
+// SituationFrame; these events surface that work as a divergence cloud
+// for downstream auditing + (future) user pick.
+//
+// Persistence: twin_proposals(kind='problem_twin'), frame_payload
+// shape documented in 20260715_twin_proposals_kind_and_frame.sql.
+//
+// Today's emit pattern (smallest reversible first step):
+//   1. frame-panel/route.ts emits framing_proposed when the merged
+//      SituationFrame is persisted.
+//   2. Same route auto-emits framing_approved immediately so
+//      downstream stages (decompose, frame-extractor) keep their
+//      contract on spaces.situation_frame.
+//
+// Future evolution: replace the auto-approve with a real gate page
+// at /app/space/[id]/framing that lets the user re-rank options.
+// The same framing_approved event fires when the user clicks
+// Approve; the painter cares only about the event, not who emitted
+// it.
+
+/** Emitted when the framing panel has produced a SituationFrame and
+ *  the corresponding twin_proposals(kind='problem_twin') row has been
+ *  inserted. Carries enough preview info for the painter to render
+ *  the framing-proposal card without a refetch; the shape itself can
+ *  fetch the full frame_payload on mount via the GET endpoint. */
+export interface FramingProposedEvent {
+  type: "framing_proposed";
+  /** twin_proposals.id of the inserted row. */
+  proposalId: string;
+  spaceId: string;
+  /** How many candidate framings are in frame_payload.options[]. v0
+   *  emits 1 (the merged SituationFrame as a single option) because
+   *  the 5-lens panel doesn't yet diverge on whole framings. When
+   *  the lens output schema is extended to emit per-lens framings,
+   *  this rises to N. */
+  optionCount: number;
+  /** Currently chosen rank (1-indexed). v0 is always 1 since there's
+   *  only one option; rises in meaning once the user can re-rank. */
+  chosenRank: number;
+  /** One-line "what this problem framing is" — derived from the
+   *  merged frame's load-bearing assumption or the chosen option's
+   *  framing_title. Renders on the card front. */
+  chosenApproach: string;
+  /** Lens IDs that participated (mirrors situation_frame.lenses_used).
+   *  Surfaces "framed by N lenses" badge on the card. */
+  supportingLenses: string[];
+  /** Aggregate framing confidence 0..1, from situation_frame
+   *  .framing_confidence. */
+  framingConfidence: number;
+}
+
+/** Emitted when a problem_twin proposal is approved — either by the
+ *  user via the /app/space/[id]/framing gate, or auto-approved by
+ *  the frame-panel emitter so the downstream pipeline keeps working
+ *  without a UI gate. Downstream stages (frame-extractor, decompose,
+ *  propose-plan) can subscribe to this event to know "the chosen
+ *  framing is now locked; condition your work on it."
+ *
+ *  Cascade behavior (future): a fresh framing_approved supersedes
+ *  any prior strategy_twin / executable_twin rows for the same space
+ *  via the existing twin_proposals.user_status='superseded' pattern. */
+export interface FramingApprovedEvent {
+  type: "framing_approved";
+  /** twin_proposals.id of the approved row. */
+  proposalId: string;
+  spaceId: string;
+  /** Whether this was a user-driven approval or an auto-approve.
+   *  Today: "auto" on the frame-panel emit; flips to "user" when
+   *  the framing gate page records a user pick. */
+  approvalMode: "auto" | "user";
+  /** Echo of the chosen framing's one-line description. Lets the
+   *  painter close out the proposal card with a green "approved:
+   *  {chosenApproach}" pill without a refetch. */
+  chosenApproach: string;
+}
+
+/** Emitted when the user picks a different framing on the
+ *  /app/space/[id]/framing gate page. Updates the audit trail without
+ *  changing the row's approval lifecycle — the row stays 'approved',
+ *  just with a different chosen_rank pointing at a different
+ *  option in frame_payload.options[]. Downstream stages that have
+ *  cached the prior chosen approach should refetch on this event.
+ *
+ *  This is distinct from framing_approved (which fires once when the
+ *  row first lands as approved). framing_selected fires every time
+ *  the user re-ranks AFTER the initial approval, giving us a clean
+ *  per-pick audit log. */
+export interface FramingSelectedEvent {
+  type: "framing_selected";
+  /** twin_proposals.id of the row whose chosen_rank changed. */
+  proposalId: string;
+  spaceId: string;
+  /** The framing_id slug that was just promoted to chosen_rank=1. */
+  chosenFramingId: string;
+  /** Echo of the newly-chosen framing's one-line description. */
+  chosenApproach: string;
+  /** New chosen_rank (always 1 today — the picked option moves to
+   *  rank 1 and the prior rank-1 demotes). Reserved for future
+   *  paths that allow non-1 picks (e.g., explicit "ignore all,
+   *  reject everything" surface). */
+  chosenRank: number;
+  /** Old chosen_rank that just got demoted. Lets the audit log
+   *  read "rank 1 → rank 3 swap" instead of just "rank 1 now". */
+  previousChosenRank: number;
+  /** twin_proposals.id values of any strategy_twin / executable_twin
+   *  rows that were cascade-superseded by this pick. Pessimistic
+   *  policy: every re-pick supersedes ALL downstream twins because
+   *  we don't currently track which framing a strategy was built
+   *  against. UI consumers (chrome card / strategy gallery) read
+   *  this list to show "your prior strategies were built against a
+   *  different framing — regenerate?" Empty array when no downstream
+   *  rows existed at pick time (first-time pick before strategy
+   *  generation). */
+  cascadeSupersededProposalIds: string[];
+}
+
+// ── Phase 2 lab diverge-converge events (Week 4, 2026-05) ─────────────
+//
+// Mirror the framing events. The lab-generation library produces 5
+// stance-flavored lab-design proposals after the strategy_twin lands,
+// persists as twin_proposals(kind='lab_twin'), emits these events.
+//
+// Persistence: twin_proposals.lab_payload (see
+// 20260717_twin_proposals_lab_twin.sql). The detailed lab_payload
+// shape + LabConfigOption type live in src/types/lab-options.ts so
+// pipeline-events.ts stays focused on event surface only.
+
+/** Lab-design stance — one of 5 epistemological stances that produce
+ *  competing lab-design proposals. Mirrors LensId for framing. */
+export type LabStanceLensId =
+  | "tight_experimentalist"
+  | "naturalistic_observer"
+  | "adaptive_designer"
+  | "pragmatist"
+  | "mechanistic_prober";
+
+/** Emitted when the lab-generation library has produced a set of
+ *  options + persisted the lab_twin row. The painter dispatches a
+ *  window CustomEvent (interaxis:lab-proposed) that
+ *  lab-proposal-gate chrome consumes. */
+export interface LabProposedEvent {
+  type: "lab_proposed";
+  /** twin_proposals.id of the inserted lab_twin row. */
+  proposalId: string;
+  spaceId: string;
+  /** How many options landed in lab_payload.options[]. */
+  optionCount: number;
+  /** Currently chosen rank (1-based; initially highest-confidence). */
+  chosenRank: number;
+  /** One-line description of the chosen option's lab_title +
+   *  chosen_approach prefix. Rendered on the chrome card. */
+  chosenApproach: string;
+  /** Which stance produced the chosen option. */
+  chosenLens: LabStanceLensId;
+  /** Aggregate confidence of the chosen option, 0..1. */
+  confidence: number;
+}
+
+/** Emitted when a lab_twin row's user_status flips to 'approved'.
+ *  Same dual-mode as framing_approved: 'auto' (no real divergence)
+ *  or 'user' (gate page pick). */
+export interface LabApprovedEvent {
+  type: "lab_approved";
+  proposalId: string;
+  spaceId: string;
+  approvalMode: "auto" | "user";
+  /** Echo of the chosen lab's title + approach. */
+  chosenApproach: string;
+  /** Whether downstream apps were flagged stale (lab_regen) as a
+   *  side effect of this approval. UI surfaces a banner
+   *  "N apps flagged for regen against new lab." */
+  flaggedAppsCount: number;
+}
+
+/** Emitted when the user re-ranks options on the gate page.
+ *  Mirrors FramingSelectedEvent. */
+export interface LabSelectedEvent {
+  type: "lab_selected";
+  proposalId: string;
+  spaceId: string;
+  chosenLabId: string;
+  chosenApproach: string;
+  chosenRank: number;
+  previousChosenRank: number;
+  /** Apps in this space that were marked 'lab_regen' as a result of
+   *  the re-pick. Empty array when no apps existed at pick time. */
+  cascadeAppIds: string[];
+}
+
+// ── Pipeline error/warning surfaces (Sprint C) ─────────────────────────
+//
+// Two event types that turn silent failures into observable signals.
+// Until now, the strategy chain had ~5 silent-fail paths:
+//   1. shouldAutoStrategyRefresh returns should_trigger_next=false
+//      → no event, user waits forever
+//   2. simulateEntityChain returns null distribution → silently
+//      filtered out at canvas-proposal-rings.tsx (now fixed by A3,
+//      but still worth emitting a warning so users know why a
+//      proposal landed in "narrative grounding" mode)
+//   3. DoWhy contract computation throws → console.warn only
+//   4. wire-twin-proposal supersede/insert errors → console.warn
+//   5. frame-panel persistAndEmitProblemTwin catch → console.warn
+//
+// All of these now emit through the SSE stream so the pipeline-error-
+// banner chrome listener can render them. The events are persisted
+// to pipeline_run_events like everything else; the banner subscribes
+// via useRunEventStore and shows a dismissible accumulated trail.
+//
+// Discipline:
+//   - WARNING = non-fatal, user can ignore (e.g., "narrative mode")
+//   - ERROR = blocked path, user needs to know (e.g., "strategy
+//     generation skipped: no trigger condition met")
+//   - Both carry a `code` for programmatic categorization +
+//     a `message` for direct display.
+
+/** Non-fatal pipeline signal — the run continues but something
+ *  degraded happened the user should know about. Examples:
+ *   • Sparse KG meant simulation couldn't run → strategy got
+ *     narrative-mode grounding instead of MC distribution
+ *   • DoWhy contract failed → strategy renders without identification
+ *     verdict (proposal still appears, just less rigorous)
+ *   • Mediator-proposer skipped because no orphan clusters detected
+ *
+ *  Renders in chrome banner as amber chip. Auto-dismissed when the
+ *  run completes successfully (no point camping warnings after the
+ *  output landed). User can dismiss earlier. */
+export interface PipelineWarningEvent {
+  type: "pipeline_warning";
+  /** Which pipeline stage produced the warning. Maps to the standard
+   *  PipelineStage union when applicable; free-form for sub-stages
+   *  (e.g. "synthesize.dowhy", "strategy-refresh.simulation"). */
+  stage: string;
+  /** Stable category code for programmatic handling. Examples:
+   *   • "no_simulation_chain"
+   *   • "dowhy_failed"
+   *   • "no_strategy_trigger"
+   *   • "sparse_kg"
+   *   • "mediator_proposer_skipped"
+   *  Keep snake_case. New codes are additive. */
+  code: string;
+  /** Human-readable one-liner for the chrome banner. ≤200 chars. */
+  message: string;
+  /** Optional structured details for debugging / future tooling.
+   *  Kept generic (record) so the banner doesn't need to know the
+   *  shape per code. */
+  details?: Record<string, unknown>;
+}
+
+/** Fatal pipeline signal — a path the user expected to produce a
+ *  visible artifact has failed. Examples:
+ *   • Strategy generation returned no ranked_strategies (LLM exhausted
+ *     retries)
+ *   • Twin proposal persistence threw (DB error, RLS rejection)
+ *   • Decompose Pass 2 produced 0 entities (extraction collapsed)
+ *
+ *  Renders in chrome banner as rose chip with "Investigate" CTA →
+ *  opens the run context panel with the error pre-selected. Persists
+ *  in the banner even after run completion until user dismisses. */
+export interface PipelineErrorEvent {
+  type: "pipeline_error";
+  /** Which pipeline stage produced the error. See PipelineWarningEvent.stage. */
+  stage: string;
+  /** Stable category code. Examples:
+   *   • "strategy_generation_empty"
+   *   • "twin_proposal_insert_failed"
+   *   • "decompose_zero_entities"
+   *   • "llm_exhausted_retries"
+   *  Keep snake_case. New codes are additive. */
+  code: string;
+  /** Human-readable one-liner. ≤200 chars. */
+  message: string;
+  /** Optional structured details. */
+  details?: Record<string, unknown>;
+  /** When the error is fatal-to-the-stage but the chain can continue
+   *  (e.g. one proposal failed to compute its DoWhy but others
+   *  succeeded), set to false so the banner shows a less-alarming
+   *  tone. When the whole pipeline run is cancelled by this error,
+   *  set to true so the banner blocks further pipeline progress
+   *  perceptually. Defaults to false when omitted. */
+  fatal?: boolean;
 }

@@ -478,7 +478,13 @@ const F4: StoryboardFrame = {
   t: "t=2m 30s",
   title: "Synthesis ready · ambient mode steady-state",
   caption:
-    "synthesize_layered emitted the strategy_consensus_ready event. The StrategyHeroCard materialized; synthesis_data populated with leverage_points, bottlenecks, axioms, action_plan, open_questions. The rail's State zone now anchors against settled artifacts; the Live zone keeps streaming low-noise updates. A user-clicked probe rabbit hole is unfurling from the Working Memory node.",
+    // Sprint B4 — caption updated to reflect post-StrategyHeroBar
+    // reality. The StrategyHeroBar (floating top chrome) was removed
+    // in Sprint B1; the in-canvas strategy-hero-card-shape painted
+    // by PipelineEventPainter is what materializes now. The rail's
+    // Ambient mode → "Active strategy" State-zone card renders the
+    // same twin-proposal data via /api/spaces/[id]/rail-pulse.
+    "synthesize_layered emitted the strategy_consensus_ready event. The strategy-hero-card-shape materialized on canvas; synthesis_data populated with leverage_points, bottlenecks, axioms, action_plan, open_questions. The rail's State zone (Ambient mode → 'Active strategy') now anchors against settled artifacts; the Live zone keeps streaming low-noise updates. A user-clicked probe rabbit hole is unfurling from the Working Memory node.",
   canvas: {
     originPrompt: { x: 60, y: 240, text: PROMPT_TEXT },
     nodes: [

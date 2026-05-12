@@ -35,6 +35,11 @@ import {
   type SimulationResult,
 } from "./monte-carlo";
 import { resolveConditionGate, type ConditionGateResult } from "./condition-gate";
+import {
+  computeEdgeMultipliers,
+  type ConditionModulatorRow,
+  type EdgeMultiplierApplied,
+} from "./condition-modulators";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyDb = SupabaseClient<any>;
@@ -182,6 +187,22 @@ export interface SimulateChainOpts {
    * trajectory chart — what the temporal-rigor plan needs in P5.
    */
   weeklyHorizon?: number | null;
+  /**
+   * Migration 20260509_condition_modulators — per-patient calibration.
+   *
+   * When set, the wrapper fetches the subject's conditions JSONB and
+   * all matching condition_modulator rows for the space, then composes
+   * per-edge multipliers via computeEdgeMultipliers() and passes them
+   * through to the engine. Without this opt, every edge gets
+   * multiplier 1.0 (the pre-migration behavior; population-mean
+   * predictions for everyone).
+   *
+   * Cost: one extra DB read for modulators (~ms; indexed by
+   * space_id + condition_key) + one for subjects.conditions. Worth it
+   * when the space has subjects + condition_modulator rows, no-op
+   * otherwise.
+   */
+  subjectId?: string | null;
 }
 
 /**
@@ -233,6 +254,59 @@ const MAX_DEPTH = 6;
 const DEFAULT_DEPTH = 3;
 
 /**
+ * Resolves per-edge condition multipliers for the active subject.
+ *
+ * Migration 20260509_condition_modulators created the table; this
+ * helper joins (subject.conditions × condition_modulators) and
+ * returns Map<edge_id, multiplier> per the spec's
+ * computeEdgeMultipliers contract. Empty map is the safe default —
+ * means "no personalization applied; edge.strength used as-is."
+ *
+ * Soft-fails throughout: missing subject, missing conditions, or
+ * missing condition_modulators table all return an empty map so the
+ * simulator degrades to population-mean predictions instead of
+ * throwing.
+ */
+async function fetchSubjectEdgeMultipliers(
+  db: AnyDb,
+  spaceId: string,
+  subjectId: string | null | undefined,
+): Promise<Map<string, EdgeMultiplierApplied>> {
+  if (!subjectId) return new Map();
+
+  // Fetch subject conditions JSONB.
+  const { data: subject } = await db
+    .from("subjects")
+    .select("conditions")
+    .eq("id", subjectId)
+    .eq("space_id", spaceId)
+    .maybeSingle();
+  const conditions =
+    (subject?.conditions as Record<string, unknown> | null | undefined) ?? null;
+  if (!conditions || Object.keys(conditions).length === 0) {
+    return new Map();
+  }
+
+  // Fetch all modulators for the space (indexed by space_id, fast).
+  // Wrapped in try/catch so older databases without the migration
+  // applied still get an empty map rather than a thrown error.
+  let modulators: ConditionModulatorRow[] = [];
+  try {
+    const { data } = await db
+      .from("condition_modulators")
+      .select(
+        "id, space_id, condition_key, value_match, target_edge_id, multiplier_p10, multiplier_p50, multiplier_p90, source_evidence_ids, rationale, population_label",
+      )
+      .eq("space_id", spaceId);
+    modulators = (data ?? []) as ConditionModulatorRow[];
+  } catch {
+    return new Map();
+  }
+
+  return computeEdgeMultipliers(conditions, modulators);
+}
+
+/**
  * Build + run a Monte Carlo simulation for one target entity's
  * upstream causal chain. Soft-fails: returns {error} rather than
  * throwing so callers can degrade gracefully when the subgraph is
@@ -253,6 +327,9 @@ export async function simulateEntityChain(
   }
 
   type EdgeRow = {
+    /** Migration 20260509_condition_modulators — needed so the
+     *  per-subject modulator product can be looked up by edge_id. */
+    id: string;
     source_entity_id: string;
     target_entity_id: string;
     strength: number;
@@ -263,6 +340,13 @@ export async function simulateEntityChain(
     /** Phase 3 §4.2 — gating condition for conditional polarity edges.
      *  Translated to a numeric conditionGate when wired into the MC. */
     conditions: string | null;
+    /** Migration 20260509_edges_causal_status — Pearl-hierarchy tier
+     *  passed through to EdgeSpec.causalStatus. */
+    causal_status?:
+      | "established_causal"
+      | "plausible_causal"
+      | "correlational_only"
+      | null;
   };
 
   // Verify target entity exists + belongs to the space.
@@ -285,7 +369,7 @@ export async function simulateEntityChain(
   // Larger spaces should slice per traversal level; defer to a future turn.
   const { data: allEdgesRaw, error: edgesErr } = await db
     .from("edges")
-    .select("source_entity_id, target_entity_id, strength, polarity, confidence, dynamics, dynamics_properties, conditions");
+    .select("id, source_entity_id, target_entity_id, strength, polarity, confidence, dynamics, dynamics_properties, conditions, causal_status");
   if (edgesErr) {
     return empty(`edges fetch: ${edgesErr.message}`);
   }
@@ -397,6 +481,15 @@ export async function simulateEntityChain(
     };
   });
 
+  // Migration 20260509_condition_modulators — fetch the per-edge
+  // multiplier product for the active subject ONCE before the map
+  // so each edge can look up its own multiplier in O(1).
+  const edgeMultipliers = await fetchSubjectEdgeMultipliers(
+    db,
+    opts.spaceId,
+    opts.subjectId,
+  );
+
   // Resolve conditional-edge gates ONCE per edge so we can both feed
   // the engine AND surface a per-edge audit row to callers. Doing the
   // resolution inline inside .map() and again to build the audit list
@@ -443,6 +536,13 @@ export async function simulateEntityChain(
     // a harmless no-op. Sourced from edges.{onset,peak,persistence}_days_p50
     // + decay_kinetics_modal (populated by Phase 3's temporal pooler).
     const temporal = edgeTemporalFromRow(e);
+    // Migrations 20260509 — pass causal_status (Pearl-hierarchy
+    // downweight) and per-subject conditionMultiplier through to the
+    // engine. Both default to "no effect" (full strength + multiplier
+    // 1.0) when the migrations haven't run or the subject is absent,
+    // so legacy behavior is preserved.
+    const conditionMultiplier =
+      edgeMultipliers.get(e.id)?.multiplier_product_p50 ?? 1;
     return {
       sourceId: e.source_entity_id,
       targetId: e.target_entity_id,
@@ -455,6 +555,8 @@ export async function simulateEntityChain(
           : undefined,
       conditionGate,
       ...(temporal ? { temporal } : {}),
+      causalStatus: e.causal_status ?? null,
+      conditionMultiplier,
     };
   });
 

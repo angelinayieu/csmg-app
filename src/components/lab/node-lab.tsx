@@ -13,8 +13,13 @@ import { LabChamberSpectrum } from "./lab-chamber-spectrum";
 import { LabChamberProximity } from "./lab-chamber-proximity";
 import { LabAnalysis } from "./lab-analysis";
 import { LabReactionNetwork } from "./lab-reaction-network";
-import { LabControlPanel } from "./lab-control-panel";
+// Phase C — control panel was K/τ/ρ/α dials. Generic labs now show entity
+// vitals (confidence + importance + connection count) by default with the
+// dial view tucked behind an "Advanced" toggle. The "Simulate change"
+// button on the new panel opens the existing semantic WhatIfPanel modal.
+import { LabEntityVitalsPanel } from "./lab-entity-vitals-panel";
 import { LabDistribution } from "./lab-distribution";
+import { WhatIfPanel } from "./what-if-panel";
 import { useEntityParameters } from "./hooks/use-entity-parameters";
 import { useLabUrlState } from "./hooks/use-lab-url-state";
 import {
@@ -112,6 +117,10 @@ export function NodeLab({
   const [hoveredSubunitId, setHoveredSubunitId] = useState<string | null>(null);
   const [mode, setMode] = useState<LabMode>("structure");
   const [reactTray, setReactTray] = useState<string[]>([]);
+  // Phase C — semantic What-If modal. Replaces the dial-based ghost mode
+  // as the primary "what if?" affordance for generic labs (the dials are
+  // still available under the panel's Advanced toggle).
+  const [whatIfOpen, setWhatIfOpen] = useState(false);
   // Phase 27: focusedReactionId + selectedSubunitId are URL-backed so lab
   // views are shareable (`?rxn=...&tune=...`).
   const {
@@ -300,18 +309,39 @@ export function NodeLab({
           onFocusReaction={setFocusedReactionId}
         />
         <LabDistribution parameters={parameters} />
-        <LabControlPanel
-          parameters={parameters}
-          onChange={setParameters}
-          saveStatus={paramSaveStatus}
+        <LabEntityVitalsPanel
+          confidence={tuningEntity.confidence as number | null}
+          importance={(tuningEntity.importance as string | null) ?? null}
+          blastRadius={tuningEntity.blast_radius as number | null}
+          connectionCount={upstreamEdges.length + downstreamEdges.length}
           tuningTargetName={tuningEntity.name}
           tuningSubunitSelected={selectedSubunitId !== null}
           onClearTuningTarget={() => setSelectedSubunitId(null)}
           tuningCategory={tuningEntity.entity_category as string | null}
+          parameters={parameters}
+          onChange={setParameters}
+          saveStatus={paramSaveStatus}
           ghostParams={ghostParams}
           onGhostParamsChange={setGhostParams}
+          onOpenSimulate={() => setWhatIfOpen(true)}
         />
       </div>
+
+      {/* Phase C — semantic What-If modal. Opens from "Simulate change"
+          on the vitals panel. Scopes targetable entities to the lab's
+          neighborhood (focal + subunits + bond partners) so the user
+          can't aim it at unrelated cross-space rows from this view. */}
+      {whatIfOpen && (
+        <WhatIfPanel
+          entities={[
+            focal,
+            ...subunits,
+            ...upstreamEdges.map((e) => e.partner),
+            ...downstreamEdges.map((e) => e.partner),
+          ]}
+          onClose={() => setWhatIfOpen(false)}
+        />
+      )}
 
       {/* Shared keyframes (global so child components like LabHeader can use them) */}
       <style jsx global>{`

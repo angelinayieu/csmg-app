@@ -172,6 +172,15 @@ function buildUserPrompt(input: PlanGeneratorRunInput): string {
 
   sections.push(`# User prompt\n${input.prompt}`);
 
+  // Phase 1 — chosen framing block. Sits between the verbatim prompt
+  // and the mode so the LLM reads "user said X" → "user picked framing
+  // Y" → "the plan is for audience Z." Empty string when no framing
+  // exists yet (legacy spaces, fallback path, or frame-panel didn't
+  // run); the planner falls back to deriving directly from the prompt.
+  if (input.chosen_framing_block && input.chosen_framing_block.length > 0) {
+    sections.push(input.chosen_framing_block);
+  }
+
   sections.push(`# Mode\n${input.mode}`);
 
   if (input.papers.length > 0) {

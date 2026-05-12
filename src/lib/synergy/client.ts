@@ -15,6 +15,9 @@ import type {
   ClientStroke,
   DetectedObjective,
   PromiseScore,
+  StrategyBundle,
+  SynergyStrategy,
+  SynergyStrategyBlock,
 } from "./types";
 
 async function asJson<T>(res: Response): Promise<T> {
@@ -204,4 +207,92 @@ export async function scorePromise(
   });
   const json = await asJson<{ scores: PromiseScore[] }>(res);
   return json.scores;
+}
+
+// ── Phase 3.5d — Strategy Doc wrappers ──
+
+export async function loadStrategy(sessionId: string): Promise<StrategyBundle> {
+  const res = await fetch(`/api/synergy/sessions/${sessionId}/strategy`, {
+    method: "GET",
+  });
+  return asJson<StrategyBundle>(res);
+}
+
+export async function generateStrategy(
+  sessionId: string,
+): Promise<StrategyBundle> {
+  const res = await fetch(
+    `/api/synergy/sessions/${sessionId}/strategy/generate`,
+    { method: "POST" },
+  );
+  return asJson<StrategyBundle>(res);
+}
+
+// ── Phase 3.5e — Block-level AI ops + inline edits ──
+
+export async function updateStrategyBlock(
+  blockId: string,
+  patch: { body?: string; meta_patch?: Record<string, unknown> },
+): Promise<SynergyStrategyBlock> {
+  const res = await fetch(`/api/synergy/strategy-blocks/${blockId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const json = await asJson<{ block: SynergyStrategyBlock }>(res);
+  return json.block;
+}
+
+export async function expandStrategyBlock(
+  blockId: string,
+): Promise<SynergyStrategyBlock> {
+  const res = await fetch(`/api/synergy/strategy-blocks/${blockId}/expand`, {
+    method: "POST",
+  });
+  const json = await asJson<{ block: SynergyStrategyBlock }>(res);
+  return json.block;
+}
+
+export async function challengeStrategyBlock(
+  blockId: string,
+): Promise<SynergyStrategyBlock> {
+  const res = await fetch(`/api/synergy/strategy-blocks/${blockId}/challenge`, {
+    method: "POST",
+  });
+  const json = await asJson<{ block: SynergyStrategyBlock }>(res);
+  return json.block;
+}
+
+export async function findEvidenceForBlock(
+  blockId: string,
+): Promise<SynergyStrategyBlock[]> {
+  const res = await fetch(
+    `/api/synergy/strategy-blocks/${blockId}/find-evidence`,
+    { method: "POST" },
+  );
+  const json = await asJson<{ evidence_blocks: SynergyStrategyBlock[] }>(res);
+  return json.evidence_blocks;
+}
+
+export async function mitigateStrategyBlock(
+  blockId: string,
+): Promise<SynergyStrategyBlock> {
+  const res = await fetch(`/api/synergy/strategy-blocks/${blockId}/mitigate`, {
+    method: "POST",
+  });
+  const json = await asJson<{ block: SynergyStrategyBlock }>(res);
+  return json.block;
+}
+
+export async function updateStrategy(
+  strategyId: string,
+  patch: { statement?: string; pitch?: string },
+): Promise<SynergyStrategy> {
+  const res = await fetch(`/api/synergy/strategies/${strategyId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const json = await asJson<{ strategy: SynergyStrategy }>(res);
+  return json.strategy;
 }

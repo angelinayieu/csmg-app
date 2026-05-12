@@ -850,6 +850,33 @@ export const COGNITIVE_PERFORMANCE_TEMPLATE: ResearchTemplate = {
   default_description:
     "Personal cognitive-performance workspace generated from the Cognitive Performance research template.",
   ontology_layers: LAYERS,
+  // B1 — restrict the frame extractor's axis pool to frames that
+  // actually fit cognitive-performance research. Drops `financial`
+  // (rarely relevant for personal/clinical cognition spaces) and
+  // `cultural` (only matters for cross-population comparisons we
+  // don't model here). Keeps the 5 frames that genuinely shape this
+  // domain: causal scenarios, evidence quality, load-bearing
+  // assumptions, risk profile, and the actor / individual-difference
+  // dimension. Adaptive display_name (A1) still kicks in per prompt.
+  preferred_probability_space_axes: [
+    "causal_scenarios",
+    "evidence",
+    "assumptions",
+    "risk",
+    "actors",
+    "timeline",
+  ],
+  // B4 — drop "game" (clinical research isn't engagement-mechanic-led)
+  // and "ml_personalization" (templates of this kind don't generate
+  // per-user behavioral telemetry yet). Keep the 5 kinds that are
+  // load-bearing for clinical / cognitive-performance work.
+  preferred_mechanism_kinds: [
+    "simulation",
+    "prediction",
+    "validation",
+    "baseline_tracking",
+    "deviation_capture",
+  ],
   seed_nodes: NODES,
   seed_edges: EDGES,
   seed_subjects: SUBJECTS,

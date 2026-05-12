@@ -191,6 +191,30 @@ export function shouldAutoStrategyRefresh(
 
   // Any structural change to the graph should justify strategy re-evaluation.
   const conditions: ChainDecision["conditions_met"] = [
+    // Sprint A2 — first-strategy guarantee.
+    //
+    // Bug fixed: every other condition below is delta-based — they
+    // compare current state against a prior strategy. On a brand-new
+    // space (existingStrategy === null), leverage_changed /
+    // bottleneck_changed / coverage_pct all derive from a null
+    // changeDetection, and quality_delta equals newQuality (oldQuality
+    // is 0), which only fires if newQuality > 5. The user can
+    // plausibly hit "no condition met" → chain stops dead at
+    // synthesize → strategy stage never runs → no event, no card, no
+    // feedback. The framing work from Phase 1 conditions strategy
+    // generation, but if strategy never fires, Phase 1's effect is
+    // invisible.
+    //
+    // Fix: the FIRST strategy run for any space is always justified —
+    // there is nothing to compare against, but the user has uploaded a
+    // prompt and decomposed a KG, so producing a strategy is the
+    // pipeline's whole point. This condition fires before any delta
+    // comparison can be evaluated.
+    {
+      condition: "no_existing_strategy",
+      met: !existingStrategy,
+      value: existingStrategy ? "has-strategy" : "fresh",
+    },
     {
       condition: "leverage_changed",
       met: input.leverage_changed,

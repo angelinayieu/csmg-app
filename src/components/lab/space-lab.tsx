@@ -27,7 +27,10 @@ import { LabScenarioLibrary } from "./lab-scenario-library";
 // Phase 6D — methodology disclosure overlay (researcher mode).
 import { LabMethodologyDisclosure } from "./lab-methodology-disclosure";
 import { LabReactionNetwork } from "./lab-reaction-network";
-import { LabControlPanel } from "./lab-control-panel";
+// Phase C — generic SpaceLab uses the new vitals panel by default;
+// dial mode lives behind the Advanced toggle inside the new component.
+import { LabEntityVitalsPanel } from "./lab-entity-vitals-panel";
+import { WhatIfPanel } from "./what-if-panel";
 import { LabDistribution } from "./lab-distribution";
 import { CalibrationStatusStrip } from "./calibration-status-strip";
 import { CalibrationReviewGapsDrawer } from "./calibration-review-gaps-drawer";
@@ -353,6 +356,8 @@ export function SpaceLab({
   const [hoveredSubunitId, setHoveredSubunitId] = useState<string | null>(null);
   const [mode, setMode] = useState<LabMode>("structure");
   const [reactTray, setReactTray] = useState<string[]>([]);
+  // Phase C — semantic What-If modal (opened from the new vitals panel).
+  const [whatIfOpen, setWhatIfOpen] = useState(false);
 
   // Gap B — pull the latest RealityCalibration so the strip shows a
   // real verdict instead of the `unknown` stub. Fire once on mount;
@@ -819,16 +824,21 @@ export function SpaceLab({
           onFocusReaction={setFocusedReactionId}
         />
         <LabDistribution parameters={parameters} />
-        <LabControlPanel
-          parameters={parameters}
-          onChange={setParameters}
-          saveStatus={paramSaveStatus}
+        <LabEntityVitalsPanel
+          confidence={tuningEntity.confidence as number | null}
+          importance={(tuningEntity.importance as string | null) ?? null}
+          blastRadius={tuningEntity.blast_radius as number | null}
+          connectionCount={upstreamEdges.length + downstreamEdges.length}
           tuningTargetName={tuningEntity.name}
           tuningSubunitSelected={selectedSubunitId !== null}
           onClearTuningTarget={() => setSelectedSubunitId(null)}
           tuningCategory={tuningEntity.entity_category as string | null}
+          parameters={parameters}
+          onChange={setParameters}
+          saveStatus={paramSaveStatus}
           ghostParams={ghostParams}
           onGhostParamsChange={setGhostParams}
+          onOpenSimulate={() => setWhatIfOpen(true)}
         />
         <LabScenarioLibrary spaceId={space.id} />
       </div>
@@ -877,6 +887,18 @@ export function SpaceLab({
         open={methodologyOpen}
         onClose={() => setMethodologyOpen(false)}
       />
+
+      {/* Phase C — semantic What-If modal opened by the vitals panel's
+          "Simulate change" button. Targetable entities = all entities
+          loaded in the space lab (heroes + their subunits + bond
+          partners) so the user can pivot the simulation across the
+          whole space rather than just the focal. */}
+      {whatIfOpen && (
+        <WhatIfPanel
+          entities={entities}
+          onClose={() => setWhatIfOpen(false)}
+        />
+      )}
 
       <style jsx global>{`
         @keyframes lab-spin {

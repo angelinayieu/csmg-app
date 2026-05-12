@@ -103,6 +103,7 @@ export function defaultActionLabel(kind: ActionKind): string {
     case "focus_entity": return "Open entity";
     case "focus_intervention": return "Open intervention";
     case "focus_goal": return "Open goal";
+    case "tune_variable": return "Tune variable";
     default:
       // custom:* — make it readable
       if (typeof kind === "string" && kind.startsWith("custom:")) {

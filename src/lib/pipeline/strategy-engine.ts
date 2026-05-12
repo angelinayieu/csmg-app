@@ -151,6 +151,19 @@ export interface MultiStepStrategyParams {
    *      N" in the prompt.
    */
   strategyCount?: number;
+  /**
+   * Phase 1 — pre-formatted chosen-framing block from
+   * formatChosenFramingForPrompt(loadChosenFramingForSpace(...), 'diagnosis').
+   * Empty string when no problem_twin row exists or the row was a
+   * fallback merged frame with no real divergence. Injected into the
+   * diagnosis prompt so getDiagnosisPrompt conditions its
+   * core_problem_statement on the user's chosen framing instead of
+   * re-deriving silently from KG structure alone. The same block
+   * (or a synthesis variant) flows into getSynthesisPrompt so every
+   * option targets the framing's sub_objectives, not a different
+   * problem the LLM would otherwise drift toward.
+   */
+  chosenFramingBlock?: string;
 }
 
 // ── Output ──
@@ -353,6 +366,10 @@ export async function generateMultiStepStrategy(
       convergences: params.pipelineCtx?.convergences,
       entityCount: params.entities.length,
       edgeCount: params.edges.length,
+      // Phase 1 — when the upstream problem-framing gate produced a
+      // chosen framing, the diagnosis LLM reads it as a locked
+      // contract to REFINE (not replace) with KG-structural insight.
+      chosenFramingBlock: params.chosenFramingBlock,
     });
 
     diagnosis = await llmJSON<StrategicDiagnosis>({
@@ -437,6 +454,10 @@ export async function generateMultiStepStrategy(
       // clamps to [1, 5]; default applied here so an undefined
       // strategyCount falls back to the legacy "around 3" behavior.
       numOptions: params.strategyCount,
+      // Phase 1 — every synthesized option must target the chosen
+      // framing's sub_objectives. Empty string when no framing is
+      // available; synthesis falls back to diagnosis-only conditioning.
+      chosenFramingBlock: params.chosenFramingBlock,
     });
 
     synthesisResult = await llmJSON<StrategySynthesisResult>({

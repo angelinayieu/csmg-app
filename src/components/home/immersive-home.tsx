@@ -45,6 +45,7 @@ import {
   Paperclip,
   Plus,
   Send,
+  Sliders,
   Sparkles,
   Table,
   Target,
@@ -53,6 +54,13 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import {
+  PreciseInputForm,
+  EMPTY_PRECISE_FIELDS,
+  buildPreciseSuffix,
+  preciseFieldsAreEmpty,
+  type PreciseFields,
+} from "@/components/home/precise-input-form";
 import { cn } from "@/lib/utils";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { AccentChip } from "@/components/ui/accent-chip";
@@ -310,6 +318,15 @@ export function ImmersiveHome({
   // session once the user explicitly skips, so it doesn't nag.
   const [thinPromptBannerDismissed, setThinPromptBannerDismissed] =
     useState(false);
+  // C5 — optional structured "precise framing" fields. Closed by
+  // default; toggle the Precise pill in the chip row to expand the
+  // form. Filled fields get appended to the prompt text at submit
+  // time as a markdown suffix the planner LLM consumes alongside the
+  // free-text prompt.
+  const [preciseOpen, setPreciseOpen] = useState(false);
+  const [preciseFields, setPreciseFields] = useState<PreciseFields>({
+    ...EMPTY_PRECISE_FIELDS,
+  });
   const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(
     null,
   );
@@ -438,10 +455,16 @@ export function ImmersiveHome({
         const data = asJson as unknown as {
           spaceId: string;
           runId: string | null;
+          /** C1 — server-decided redirect: proposal page when the
+           *  plan-gate is on, whiteboard when skipPlanGate=true.
+           *  Optional for backward-compat with older bootstrap builds. */
+          redirectTo?: string;
         };
-        const destination = data.runId
-          ? `/app/space/${data.spaceId}/whiteboard?run=${data.runId}`
-          : `/app/space/${data.spaceId}/whiteboard`;
+        const destination =
+          data.redirectTo ??
+          (data.runId
+            ? `/app/space/${data.spaceId}/whiteboard?run=${data.runId}`
+            : `/app/space/${data.spaceId}/whiteboard`);
         router.push(destination);
       } catch (err) {
         console.error("[ImmersiveHome] fireBootstrap failed:", err);
@@ -459,10 +482,11 @@ export function ImmersiveHome({
   // navigate to the new whiteboard; the SSE subscription picks up the
   // pipeline run.
   //
-  // When `reasoningSettings.askClarifyingQuestions` is true, we flip
-  // into the clarifier flow first — render the Q&A step, get answers,
-  // THEN call fireBootstrap with the augmented input.
-  const submitCreate = useCallback(async () => {
+  // Always opens the baseline-framing + clarifying-questions step before
+  // firing bootstrap. The step has Back + "Looks good, continue" buttons
+  // so power users can skip through without answering anything, but every
+  // user gets to see what we inferred before credits burn.
+  const submitCreate = useCallback(() => {
     const trimmed = prompt.trim();
     if (trimmed.length < 4 || createSubmitting) return;
     if (demoMode) {
@@ -470,21 +494,8 @@ export function ImmersiveHome({
       window.location.hash = "signup";
       return;
     }
-    if (reasoningSettings.askClarifyingQuestions) {
-      // Defer bootstrap until clarifier returns. ClarifyingQuestionsStep
-      // calls onContinue with answers, which fires fireBootstrap.
-      setClarifyingActive(true);
-      return;
-    }
-    await fireBootstrap(trimmed);
-  }, [
-    prompt,
-    depth,
-    createSubmitting,
-    demoMode,
-    reasoningSettings.askClarifyingQuestions,
-    fireBootstrap,
-  ]);
+    setClarifyingActive(true);
+  }, [prompt, depth, createSubmitting, demoMode]);
 
   // Ask mode: create an ask-kind whiteboard, trigger the cross-whiteboard
   // synthesis inngest job, navigate to the new space.
@@ -708,7 +719,11 @@ export function ImmersiveHome({
               lenses={reasoningSettings.lenses}
               onCancel={() => setClarifyingActive(false)}
               onContinue={(answers) => {
-                void fireBootstrap(prompt.trim(), answers);
+                const trimmed = prompt.trim();
+                const finalText = preciseFieldsAreEmpty(preciseFields)
+                  ? trimmed
+                  : `${trimmed}${buildPreciseSuffix(preciseFields)}`;
+                void fireBootstrap(finalText, answers);
               }}
             />
           ) : (
@@ -928,6 +943,30 @@ export function ImmersiveHome({
                           : "Plan review ON — approve the proposed scope/ontology/axes before generation"
                       }
                     />
+                    <OutputTogglePill
+                      label={
+                        preciseFieldsAreEmpty(preciseFields)
+                          ? "Precise"
+                          : `Precise · ${
+                              [
+                                preciseFields.outcome,
+                                preciseFields.target_delta,
+                                preciseFields.horizon,
+                                preciseFields.subject,
+                                preciseFields.constraints,
+                              ].filter((v) => v.trim().length > 0).length
+                            }`
+                      }
+                      Icon={Sliders}
+                      active={preciseOpen || !preciseFieldsAreEmpty(preciseFields)}
+                      onClick={() => setPreciseOpen((v) => !v)}
+                      activeBg="#0EA5E9"
+                      title={
+                        preciseOpen
+                          ? "Hide structured framing fields"
+                          : "Add precise framing — outcome, target, horizon, subject, constraints"
+                      }
+                    />
                     {/* Reasoning: Fast / Balanced / Deep — collapsed to
                         Brain icon. Hover dropdown reveals full selector
                         so the chip row stays inside the chat box. */}
@@ -1027,6 +1066,18 @@ export function ImmersiveHome({
                     </button>
                   </div>
                 </div>
+
+                {/* C5 — precise framing form (collapsible) */}
+                {preciseOpen && (
+                  <div
+                    style={{ borderTop: "1px dashed var(--glass-hairline)" }}
+                  >
+                    <PreciseInputForm
+                      fields={preciseFields}
+                      onChange={setPreciseFields}
+                    />
+                  </div>
+                )}
 
                 {/* Row 2: file chips (collapsible) */}
                 {filesOpen && (

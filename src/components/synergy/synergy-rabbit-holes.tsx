@@ -27,6 +27,7 @@ const KIND_TONE: Record<NodeKind, string> = {
   core: "bg-blue-100 text-blue-700",
   user: "bg-gray-100 text-gray-500",
   plan: "bg-sky-100 text-sky-700",
+  synergy: "bg-amber-100 text-amber-700",
 };
 
 interface Props {

@@ -59,6 +59,10 @@ import type {
 import type { SituationBaseline } from "@/types/situation";
 import { loadActivePlan } from "@/lib/pipeline/active-plan-loader";
 import type { KgPlanAxisProposal } from "@/types/kg-generation-plan";
+// B1 — research-template registry for resolving spaces.use_case_template_id
+// to a ResearchTemplate (whose preferred_probability_space_axes overrides
+// the LLM's candidate pool when populated).
+import { getResearchTemplate } from "@/lib/templates/mind-body-cognition/seed";
 
 export const maxDuration = 30;
 export const runtime = "nodejs";
@@ -71,6 +75,23 @@ interface FrameExtractorRequest {
 
 interface FrameSelection {
   axis: ProbabilitySpaceAxis;
+  /**
+   * LLM-generated domain-adapted label for THIS axis IN THIS space.
+   * 2-5 words, headline-cased. Replaces the catalog label as the
+   * user-visible shell header. The canonical `axis` slug stays as
+   * the routing key for per-axis prompt vocabulary.
+   *
+   * Examples (financial axis across different prompts):
+   *   • startup pitch  → "Runway & unit economics"
+   *   • personal habit → "Cost of failing"
+   *   • clinical trial → "Funding constraints"
+   *
+   * Optional in the type for backward-compat with old extractor
+   * responses; the prompt now requires it. Persistence layer
+   * handles null gracefully and the painter falls back to
+   * AXIS_CATALOG[axis].label.
+   */
+  display_name?: string;
   rationale: string;
   /** Variant hint from panel AxisProposal.prompt_variant. */
   variant?: string;
@@ -93,7 +114,7 @@ interface FrameResponse {
   adhoc_frame?: AdHocSelection[];
 }
 
-const SYSTEM_PROMPT = `You are a meta-analyst classifying a user's input to decide which lenses ("probability space axes") should be used to model the situation.
+const SYSTEM_PROMPT = `You are a meta-analyst classifying a user's input to decide which lenses ("probability space axes") should be used to model the situation, AND naming each lens in language adapted to this user's specific situation.
 
 Eight canonical axes exist:
 ${AXIS_ORDER.map((a) => {
@@ -104,17 +125,47 @@ ${AXIS_ORDER.map((a) => {
 Return strict JSON in this exact shape:
 {
   "frame": [
-    { "axis": "<one of the 8>", "rationale": "one short sentence why this lens applies to this input" }
+    {
+      "axis": "<one of the 8 canonical slugs above>",
+      "display_name": "<2-5 word DOMAIN-ADAPTED label for THIS user's situation>",
+      "rationale": "one short sentence why this lens applies to THIS input"
+    }
   ]
 }
 
-Rules:
+Selection rules:
 - Include ONLY axes that are genuinely relevant to this input. Omit axes that would produce generic / padded content.
 - Always include "assumptions" (every situation has load-bearing beliefs worth surfacing).
 - Order the frame by relevance — most central lens first, least central last.
 - Minimum 3 axes, maximum 7.
-- Each rationale is ONE sentence, under 20 words, specific to this input (not generic axis description).
-- Do NOT add preamble, markdown fences, or commentary around the JSON.`;
+
+display_name rules (CRITICAL — this is the user-visible label):
+- 2-5 words. Concrete and specific to the user's actual situation.
+- DO NOT use the canonical axis label verbatim ("Financial", "Risk", "Evidence", etc.) unless the user's prompt is literally about money / risk / evidence in those generic senses.
+- Should make the user think "yes, that's exactly what THIS axis is doing for me right now".
+- Headline-cased ("Runway & Unit Economics", not "runway and unit economics").
+- Examples for the financial axis across different prompts:
+  • startup pitch     → "Runway & Unit Economics"
+  • personal habit    → "Cost Of Failing"
+  • clinical trial    → "Funding Constraints"
+  • content strategy  → "Monetization Surface"
+- Examples for the risk axis:
+  • startup           → "Failure Modes"
+  • habit-tracker     → "Backslide Triggers"
+  • clinical trial    → "Adverse Events"
+- Examples for the evidence axis:
+  • research          → "What You Can Prove vs Guess"
+  • startup           → "Validated vs Assumed"
+  • policy            → "Empirical Track Record"
+- DO NOT default to catalog labels — always adapt.
+
+rationale rules:
+- ONE sentence, under 20 words.
+- Names what surfaced in THIS input that warranted this axis. Concrete, not abstract.
+- Good: "selected because revenue and pricing surfaced in the prompt".
+- Bad:  "this axis is important because financial considerations matter".
+
+Do NOT add preamble, markdown fences, or commentary around the JSON.`;
 
 function buildUserPrompt(inputText: string): string {
   return `Input:
@@ -386,15 +437,32 @@ function validateFrame(raw: unknown): FrameResponse {
     if (!item || typeof item !== "object") continue;
     const axis = (item as { axis?: unknown }).axis;
     const rationale = (item as { rationale?: unknown }).rationale;
+    const rawDisplayName = (item as { display_name?: unknown }).display_name;
     if (!isValidAxis(axis)) continue;
     if (typeof rationale !== "string") continue;
-    out.push({ axis, rationale: rationale.slice(0, 220) });
+    // display_name is required by the prompt but soft-fail on absence:
+    // keep the entry, persist null, downstream falls back to catalog
+    // label. Trim + cap at 60 chars to keep the shell header layout
+    // stable even if the LLM returns something verbose.
+    const displayName =
+      typeof rawDisplayName === "string" && rawDisplayName.trim().length > 0
+        ? rawDisplayName.trim().slice(0, 60)
+        : undefined;
+    out.push({
+      axis,
+      rationale: rationale.slice(0, 220),
+      display_name: displayName,
+    });
   }
-  // Always include assumptions as backstop.
+  // Always include assumptions as backstop. The fallback display_name
+  // is a generic phrase rather than the catalog "Assumptions" because
+  // even the backstop should read as something the user did, not a
+  // category label.
   for (const alwaysAxis of ALWAYS_APPLICABLE_AXES) {
     if (!out.some((f) => f.axis === alwaysAxis)) {
       out.push({
         axis: alwaysAxis,
+        display_name: "Load-Bearing Assumptions",
         rationale:
           "Surfaces the load-bearing assumptions underlying the situation.",
       });
@@ -464,12 +532,41 @@ export async function POST(request: Request) {
   let dataPresence: DataPresenceTags | null = null;
   let situationFrame: SituationFrame | null = null;
   let situationBaseline: SituationBaseline | null = null;
+  // B1 — template-declared preferred axes. When the space was
+  // instantiated from a research template that declared
+  // `preferred_probability_space_axes`, use that list as the
+  // authoritative axis pool (LLM still picks 3-7 of them per prompt;
+  // adaptive display_name from A1 still applies). For spaces without
+  // a template OR templates without preferences, fall through to the
+  // legacy applicableAxesFor() pool — full backward compat.
+  let templatePreferredAxes: ProbabilitySpaceAxis[] | null = null;
   try {
     const { data: spaceRow } = await db
       .from("spaces")
-      .select("data_presence, situation_frame, situation_baseline")
+      .select(
+        "data_presence, situation_frame, situation_baseline, use_case_template_id",
+      )
       .eq("id", spaceId)
       .maybeSingle();
+    // Resolve template's preferred axes (B1). use_case_template_id
+    // carries the research-template slug for spaces created via the
+    // /explore flow. getResearchTemplate returns null for unknown
+    // slugs (use-case templates, ad-hoc spaces) — graceful skip.
+    const templateSlug = (
+      spaceRow as { use_case_template_id?: unknown } | null
+    )?.use_case_template_id;
+    if (typeof templateSlug === "string" && templateSlug.length > 0) {
+      const tpl = getResearchTemplate(templateSlug);
+      if (tpl?.preferred_probability_space_axes?.length) {
+        // Filter out any slugs that aren't in the canonical 8 (defensive
+        // — the template type union enforces this at compile time but a
+        // hand-edited template might drift).
+        const valid = tpl.preferred_probability_space_axes.filter(
+          (a): a is ProbabilitySpaceAxis => a in AXIS_CATALOG,
+        );
+        if (valid.length > 0) templatePreferredAxes = valid;
+      }
+    }
     const raw = (spaceRow as { data_presence?: unknown } | null)?.data_presence;
     if (raw && typeof raw === "object") {
       const r = raw as Record<string, unknown>;
@@ -524,7 +621,26 @@ export async function POST(request: Request) {
     console.warn("[frame-extractor] space lookup failed:", err);
   }
 
-  const candidateAxes = applicableAxesFor(qType.type, qType.domain, dataPresence);
+  // B1 — template overrides: when the space's research template
+  // declared `preferred_probability_space_axes`, intersect the
+  // applicableAxesFor() pool with the template's list (so we still
+  // honor data-presence + question-type filtering, but never include
+  // an axis the template explicitly excluded). If the intersection is
+  // empty (rare — would mean the template's preferences don't match
+  // the question type at all), fall back to the template list directly
+  // so the LLM still has something to pick from.
+  const baseCandidates = applicableAxesFor(
+    qType.type,
+    qType.domain,
+    dataPresence,
+  );
+  let candidateAxes: ProbabilitySpaceAxis[] = baseCandidates;
+  if (templatePreferredAxes) {
+    const templateSet = new Set(templatePreferredAxes);
+    const intersected = baseCandidates.filter((a) => templateSet.has(a));
+    candidateAxes =
+      intersected.length > 0 ? intersected : templatePreferredAxes;
+  }
   const presenceHintBlock = dataPresence
     ? `\n\nDATA PRESENCE (classified upstream — the user's raw materials):\n- telemetry: ${dataPresence.has_telemetry}\n- historical output: ${dataPresence.has_historical_output}\n- baseline: ${dataPresence.has_baseline}\n- spec/description: ${dataPresence.has_spec}\n- only an idea: ${dataPresence.has_just_idea}\nDO NOT include axes that have no raw material (e.g. financial axis when no numbers were provided). Let the candidate axes constrain you.\n`
     : "";
@@ -543,8 +659,14 @@ export async function POST(request: Request) {
             "\n",
           )}\nUncertainty score: ${situationBaseline.uncertainty_score.toFixed(2)} (0=fully known, 1=fully unknown).\nPrefer axes that can plausibly produce evidence for the gaps above. When uncertainty >= 0.5, lean toward 4-5 axes (more lenses); when < 0.3, 3 axes is fine.\n`
       : "";
-  const candidateSetBlock =
-    qType.confidence >= 0.4
+  // When a template restricts the axis pool, the language is firmer
+  // than the question-type-only case — the user picked this template
+  // and the template's author already vetted which frames matter for
+  // this domain. The LLM should treat the candidate set as authoritative
+  // rather than a hint.
+  const candidateSetBlock = templatePreferredAxes
+    ? `\n\nCANDIDATE AXES (restricted by the space's template — these are the frames vetted for this domain): ${candidateAxes.join(", ")}.\nPick ONLY from these. Do not include axes outside this list.${presenceHintBlock}${baselineHintBlock}`
+    : qType.confidence >= 0.4
       ? `\n\nCANDIDATE AXES (derived from question type "${qType.type}" + domain "${qType.domain}"): ${candidateAxes.join(", ")}.\nPrefer these axes. Only include a non-candidate axis if there's a specific, input-grounded reason.${presenceHintBlock}${baselineHintBlock}`
       : presenceHintBlock + baselineHintBlock;
 
@@ -724,6 +846,11 @@ export async function POST(request: Request) {
     user_id: user.id,
     axis: sel.axis,
     rationale: sel.rationale,
+    // Persist the LLM-generated domain-adapted label + rationale so the
+    // shell painter can render adaptive headers without re-asking the
+    // LLM. Falls back to catalog label downstream when null (legacy).
+    display_name: sel.display_name ?? null,
+    adaptive_rationale: sel.rationale ?? null,
     order_index: idx,
     status: "pending" as const,
   }));
@@ -733,6 +860,17 @@ export async function POST(request: Request) {
     user_id: user.id,
     axis: sel.spec.axis_id,
     rationale: sel.rationale,
+    // Ad-hoc axes already have a fully custom AxisSpec.label — that
+    // IS the display name (the framing panel coined it). Mirror to
+    // display_name so reads of probability_space_runs see one
+    // consistent column for "what to show on the shell."
+    display_name: sel.spec.label,
+    adaptive_rationale: sel.rationale,
+    // B2 — discriminator + full spec for the shell painter (B3) so
+    // it can read label/accent/tagline from the spec without
+    // looking up AXIS_CATALOG (which doesn't have this axis).
+    is_custom: true,
+    custom_axis_spec: sel.spec,
     order_index: frame.frame.length + idx,
     status: "pending" as const,
   }));
@@ -791,20 +929,31 @@ export async function POST(request: Request) {
 
   // Emit space_opened events so the canvas paints shells in
   // real-time. Order matters — lower order_index = closer to the
-  // origin card, painted first. Catalog axes use AXIS_CATALOG meta;
-  // ad-hoc axes pull label/tagline/accent off their minted AxisSpec.
+  // origin card, painted first.
+  //
+  // Adaptive labels: catalog axes now ship the LLM-generated
+  // `display_name` as the shell label (was: catalog meta.label).
+  // The catalog tagline stays as a secondary subtitle showing the
+  // canonical frame's purpose. The canonical axis slug rides on
+  // `axis` for the new chip rendering on the shell header.
+  // Fallback to catalog label when display_name is missing
+  // (defensive — the prompt requires it but soft-fail).
   for (let i = 0; i < frame.frame.length; i++) {
     const sel = frame.frame[i];
     const meta = AXIS_CATALOG[sel.axis];
+    const adaptiveLabel = sel.display_name?.trim() || meta.label;
     await emitStructuralEvent(db, runId, {
       type: "space_opened",
       spaceKey: `${runId}:${sel.axis}`,
       axis: sel.axis,
-      label: meta.label,
+      label: adaptiveLabel,
       tagline: meta.tagline,
       accent: meta.accent,
       orderIndex: i,
       rationale: sel.rationale,
+      // B3 — canonical axis from the 8-axis catalog. Painter renders
+      // the standard `[financial]` lowercase chip + solid border.
+      isCustom: false,
     });
   }
   for (let j = 0; j < adhocList.length; j++) {
@@ -822,6 +971,11 @@ export async function POST(request: Request) {
       accent: sel.spec.accent,
       orderIndex: frame.frame.length + j,
       rationale: sel.rationale,
+      // B3 — ad-hoc framing-panel-minted axis. Painter renders the
+      // accent-tinted `[✦ custom]` chip + dashed border so the user
+      // can distinguish "this lens was created for my situation"
+      // from the canonical 8 frames.
+      isCustom: true,
     });
   }
 

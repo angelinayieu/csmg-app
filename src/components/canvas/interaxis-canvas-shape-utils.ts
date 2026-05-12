@@ -50,7 +50,14 @@ import { StrategyHeroCardShapeUtil } from "./shapes/strategy-hero-card-shape";
 import { StrategyAlternativeShapeUtil } from "./shapes/strategy-alternative-shape";
 import { StrategyObjectiveShapeUtil } from "./shapes/strategy-objective-shape";
 import { RoomShapeUtil } from "./shapes/room-shape";
+import { RoomTransitionShapeUtil } from "./shapes/room-transition-shape";
 import { ProbeTrailShapeUtil } from "./shapes/probe-trail-shape";
+import { MechanismCardShapeUtil } from "./shapes/mechanism-card-shape";
+import { LayerStackShapeUtil } from "./shapes/layer-stack-shape";
+import { HypothesisLadderShapeUtil } from "./shapes/hypothesis-ladder-shape";
+import { TrajectoryFanShapeUtil } from "./shapes/trajectory-fan-shape";
+import { ForestPlotShapeUtil } from "./shapes/forest-plot-shape";
+import { EdgeDriftHeatmapShapeUtil } from "./shapes/edge-drift-heatmap-shape";
 
 export const SHAPE_UTILS = [
   KGNodeShapeUtil,
@@ -169,9 +176,55 @@ export const SHAPE_UTILS = [
   // sends it to back so subsequent painted shapes (entities, axes,
   // proposals) layer on top, reading as "inside" the room.
   RoomShapeUtil,
+  // B1 — directional flow connector between consecutive cascade rooms.
+  // Spawned by canvas-room-transition-spawner once both endpoint rooms
+  // exist on the canvas. Pulse re-fires the dash-march animation when
+  // the source stage emits an event.
+  RoomTransitionShapeUtil,
   // Probe rabbit-hole trail (2026-07-04) — spatial unfurl of a probe
   // question, spawned by the dock:probe event listener (or per-card
   // (+) menu's Probe action). Renders the agent's question-decomp
   // tree using TrailNode + TrailEdge primitives.
   ProbeTrailShapeUtil,
+  // A2 — Mechanism cards inside the twin room. One card per row in
+  // the `mechanisms` table; spawned by canvas-operational-seed-spawner
+  // by reading /api/spaces/[id]/mechanisms after the twin room exists.
+  // Surfaces the cycle pattern + agent count + app count + status —
+  // closes the gap where mechanisms were first-class in the DB but
+  // invisible on the canvas.
+  MechanismCardShapeUtil,
+  // A3 — Layer ontology stack inside the KG room. One vertical card
+  // per space, listing the domain's layer hierarchy (e.g. for Cognitive
+  // Performance: Exogenous → Behaviors → ... → Composite). Spawned by
+  // canvas-operational-seed-spawner reading /api/spaces/[id]/layer-
+  // ontology. The ontology already drives entity-card color badges via
+  // useLayerOntology; this surfaces the FULL hierarchy.
+  LayerStackShapeUtil,
+  // T2 — Hypothesis ladder cards inside the proposal room. One card
+  // per row in the `hypothesis_ladders` table; spawned by canvas-
+  // operational-seed-spawner reading /api/spaces/[id]/hypothesis-
+  // ladders. Renders the strategy's pre_mortem entries as 4-rung
+  // claim → mechanism → falsifier → verdict cards — closes the rigor
+  // gap that variable_proposals didn't (variables = metrics; ladders
+  // = the falsifiable claims those metrics test).
+  HypothesisLadderShapeUtil,
+  // T5a — Trajectory fan cards inside the twin room. One card per
+  // recent trajectory prediction (`prediction_ledger` rows where
+  // `prediction_kind="trajectory"`). Renders the per-week p10/p50/p90
+  // fan as a compact SVG chart so users see the simulator's forward
+  // projection right next to the twin-snapshot, instead of having
+  // to navigate to the standalone TrajectoryPanel side-page.
+  TrajectoryFanShapeUtil,
+  // T4a — Forest plot inside the kg room. One card per space
+  // (singleton; aggregates top N evidence_registries rows by
+  // |effect_size|). Renders effect sizes with confidence intervals
+  // ranked vertically — the meta-analysis-style viz. Closes the
+  // "where do I see findings ranked by confidence?" gap.
+  ForestPlotShapeUtil,
+  // T6 — Edge drift heatmap inside the reflexive room. One card per
+  // space (singleton; aggregates `edge_calibrations` over the last
+  // N weeks). Visualizes which edges drifted, in which direction,
+  // and how recently as a rows × cols heatmap. The reflexive room's
+  // primary content — closes the audit-loop visualization gap.
+  EdgeDriftHeatmapShapeUtil,
 ];

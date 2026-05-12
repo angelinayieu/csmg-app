@@ -252,6 +252,12 @@ function dashboardWidgets(input: BuildManifestInput): WidgetInstance[] {
     },
   });
 
+  // Sprint W5.4 — Variable contract card. Reads
+  // config.variables (W5.2) + config.mediator_light (W5.3) directly;
+  // no bindings needed. Slot below the metrics sidebar so the user
+  // sees "what this app measures" without scrolling past everything.
+  widgets.push(variableContractWidget({ column: 3, order: 50 }));
+
   return widgets;
 }
 
@@ -301,6 +307,9 @@ function workflowWidgets(input: BuildManifestInput): WidgetInstance[] {
     },
     actions: { complete: "a-complete-int" },
   });
+
+  // Sprint W5.4 — Variable contract card in workflow layout.
+  widgets.push(variableContractWidget({ column: 1, span: 3, order: 40 }));
 
   return widgets;
 }
@@ -359,7 +368,29 @@ function monitorWidgets(input: BuildManifestInput): WidgetInstance[] {
     actions: { complete: "a-complete-int" },
   });
 
+  // Sprint W5.4 — Variable contract card in monitor layout.
+  widgets.push(variableContractWidget({ column: 1, span: 2, order: 40 }));
+
   return widgets;
+}
+
+// ── Sprint W5.4 helper — Variable Contract widget instance ────────────
+//
+// Returns a WidgetInstance for the variable_contract_card. Reads
+// AppConfig.variables (W5.2) + AppConfig.mediator_light (W5.3) directly
+// from context.app — no bindings. The actions map references the
+// shared "a-tune-variable" ActionBinding (registered in
+// defaultActions), so widgets can dispatch the tune_variable stub
+// (W5.6) until the override drawer ships.
+function variableContractWidget(
+  slot: { column: 1 | 2 | 3; span?: 1 | 2 | 3; order: number },
+): WidgetInstance {
+  return {
+    id: "w-variable-contract",
+    type: "variable_contract_card",
+    slot: { column: slot.column, span: slot.span ?? 1, order: slot.order },
+    actions: { primary: "a-tune-variable" },
+  };
 }
 
 // ── Actions (shared across layouts) ───────────────────────────────────
@@ -385,6 +416,14 @@ function defaultActions(): ActionBinding[] {
       id: "a-open-canvas",
       kind: "open_sub_whiteboard",
       label: "Open canvas",
+    },
+    // Sprint W5.6 — variable contract override entry point. Stub
+    // handler today (logs the request); real implementation opens
+    // the override drawer that writes environment_overrides.
+    {
+      id: "a-tune-variable",
+      kind: "tune_variable",
+      label: "Tune variable",
     },
   ];
 }

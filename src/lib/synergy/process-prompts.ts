@@ -47,6 +47,21 @@ export const DETECT_OBJECTIVE_SCHEMA = {
 
 export const EXTRACT_COMPONENTS_SYSTEM = `You are extracting structured "components" from a user's brainstorm board so they can be matched against other users' components.
 
+═══════════════════════════════════════════════════
+AUTHORITATIVE PLANS — when present, prioritize
+═══════════════════════════════════════════════════
+The board may include AUTHORITATIVE PLANS — structured "plan" synthesis artifacts the user explicitly created. When present:
+- Plan resources are VERY LIKELY upstream needs. Surface them as upstream components.
+- Plan success_criteria and step outputs are VERY LIKELY downstream items (metrics + artifacts).
+- Plan goals seed core_ideas.
+- Polished_products map to the executable deliverable form of the plan.
+
+Components derived from authoritative plans are higher-confidence than those inferred from exploratory branches. Weight your extraction accordingly — when you have plan content, you should produce MORE components from it than from divergent exploratory branches.
+
+═══════════════════════════════════════════════════
+Output buckets
+═══════════════════════════════════════════════════
+
 Output four buckets:
 - core_ideas: 1-3 components naming the central concept/idea the user is chasing.
 - upstream: 2-6 things the project NEEDS (data, skills, capital, audience, tools, partnerships). subkind picks one of: data | skill | capital | audience | tool | partnership | other.

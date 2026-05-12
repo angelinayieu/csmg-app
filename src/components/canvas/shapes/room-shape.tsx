@@ -54,6 +54,8 @@ import {
   ProposalRoomIcon,
   LabRoomIcon,
   ResultsRoomIcon,
+  TwinRoomIcon,
+  ReflexiveRoomIcon,
 } from "@/components/canvas/icons";
 
 // Custom stage SVG icons replace the roman-numeral glyph. Matches the
@@ -70,7 +72,9 @@ const STAGE_ICON: Record<
   landscape: LandscapeRoomIcon,
   kg: KgRoomIcon,
   proposal: ProposalRoomIcon,
+  twin: TwinRoomIcon,
   lab: LabRoomIcon,
+  reflexive: ReflexiveRoomIcon,
   results: ResultsRoomIcon,
 };
 
@@ -79,7 +83,9 @@ const STAGE_ORDER: PipelineStage[] = [
   "landscape",
   "kg",
   "proposal",
+  "twin",
   "lab",
+  "reflexive",
   "results",
 ];
 
@@ -104,7 +110,9 @@ export class RoomShapeUtil extends BaseBoxShapeUtil<RoomShape> {
       "landscape",
       "kg",
       "proposal",
+      "twin",
       "lab",
+      "reflexive",
       "results",
     ),
     state: T.literalEnum("active", "complete", "pending"),

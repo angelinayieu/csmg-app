@@ -32,7 +32,7 @@ import { CanvasRoomExtendPopover } from "./chrome/canvas-room-extend-popover";
 // its util into ./interaxis-canvas-shape-utils and append to the
 // array — interaxis-canvas itself doesn't need to know.
 import { SHAPE_UTILS } from "./interaxis-canvas-shape-utils";
-import type { StickyNoteShape, KGNodeShape, StrategyShape, AppCardShape } from "./shapes/types";
+import type { StickyNoteShape, KGNodeShape, StrategyShape, AppCardShape, AssetCardShape } from "./shapes/types";
 // CanvasOverlays + the components prop passed to <Tldraw>. Adding a
 // new in-canvas overlay (chip, lasso button, hydrator, etc.) means
 // importing it inside ./interaxis-canvas-overlays — interaxis-canvas
@@ -87,13 +87,11 @@ import { CanvasNudgeChip } from "./chrome/canvas-nudge-chip";
 import { CanvasCommandPalette, type PaletteCommandId } from "./chrome/canvas-command-palette";
 import { CanvasShortcutHelp } from "./chrome/canvas-shortcut-help";
 import { ENTITY_DRAG_MIME, type EntityDragPayload } from "./chrome/canvas-asset-drawer";
-import {
-  STRATEGY_ALTERNATIVE_DRAG_MIME,
-  strategyAlternativeShapeIdSeed,
-  STRATEGY_ALT_COMPACT_W,
-  STRATEGY_ALT_COMPACT_H,
-  type StrategyAlternativeDragPayload,
-} from "./shapes/strategy-alternative-shape";
+// Sprint B1 — strategy-alternative-shape imports removed. The shape
+// util itself is preserved (other modules may reference its type
+// literal "strategy-alternative-card"), but the canvas no longer
+// creates instances of it since the only drag source
+// (StrategyHeroBar) was deleted.
 import {
   STRATEGY_OBJECTIVE_DRAG_MIME,
   strategyObjectiveShapeIdSeed,
@@ -171,7 +169,13 @@ import { CanvasRunContextPanel } from "./chrome/canvas-run-context-panel";
 import { CanvasChainCompletionBanner } from "./chrome/canvas-chain-completion-banner";
 import { CanvasCreditExhaustionBanner } from "./chrome/canvas-credit-exhaustion-banner";
 import { CanvasReasoningTracePanel } from "./chrome/canvas-reasoning-trace-panel";
-import { StrategyHeroBar } from "./chrome/strategy-hero-bar";
+// Sprint B1 — StrategyHeroBar removed (was wrapped in `false &&` since
+// 2026-07-04 per its in-file removal comment). The right rail's Ambient
+// mode → "Active strategy" section reads from the same twin-proposal
+// data via /api/spaces/[id]/rail-pulse, and the in-canvas
+// strategy-hero-card-shape (a draggable anchor) continues to paint
+// from the painter. Removing 610 LOC of unreachable JSX + its drag
+// plumbing surface (drop handler, MIME check, two orphan callbacks).
 import { CanvasLayerToggle } from "./chrome/canvas-layer-toggle";
 import { CanvasProbabilityBadge } from "./chrome/canvas-probability-badge";
 import { useLayerFilterState } from "./drawers/use-layer-filter-state";
@@ -275,7 +279,63 @@ export function InteraxisCanvas({
   const runPathname = usePathname();
   const runSearchParams = useSearchParams();
   const runRouter = useNextRouter();
-  const activeRunId = runSearchParams.get("run");
+  const queryRunId = runSearchParams.get("run");
+
+  // ── Sprint A1 — runId fallback ────────────────────────────────────
+  //
+  // When the user navigates to /app/space/[id]/whiteboard WITHOUT
+  // a `?run=` param (e.g. navbar, bookmark, deep-link back from
+  // /framing/pick), `queryRunId` is null → SSE never subscribes →
+  // painter never receives events → cards from prior runs never
+  // repaint. To prevent this silent failure mode, fall back to the
+  // most-recent pipeline_run for this space via GET
+  // /api/spaces/[id]/latest-run.
+  //
+  // Soft-fail: a 404 / network error sets `fallbackRunId` to null,
+  // and the canvas behaves exactly as it does today (no SSE, no
+  // painted cards from prior runs). The fallback only IMPROVES the
+  // default; it never breaks the explicit `?run=` path.
+  //
+  // Effect dependency: re-runs only on space.id change. The latest
+  // run lookup is a one-time fetch per space; further updates land
+  // via the SSE stream itself once subscribed.
+  const [fallbackRunId, setFallbackRunId] = useState<string | null>(null);
+  useEffect(() => {
+    // Skip the fetch when the URL already carries an explicit
+    // run param — that's the authoritative source, no fallback
+    // needed. Also skip if we already resolved a fallback for
+    // this space (preserve across navigation that briefly clears
+    // the param).
+    if (queryRunId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/spaces/${space.id}/latest-run`, {
+          credentials: "include",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          run: { id: string; status: string } | null;
+        };
+        if (cancelled) return;
+        if (data.run?.id) {
+          setFallbackRunId(data.run.id);
+        }
+      } catch {
+        // Silent — fallback is best-effort; existing no-SSE behavior
+        // is preserved on failure.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [space.id, queryRunId]);
+
+  // Resolved run id: query param wins, fallback fills the gap. This
+  // is what every downstream consumer (RunEventStoreProvider, save
+  // status, persistence opts, etc.) reads.
+  const activeRunId = queryRunId ?? fallbackRunId;
+
   const dismissRun = useCallback(() => {
     const params = new URLSearchParams(runSearchParams.toString());
     params.delete("run");
@@ -283,6 +343,10 @@ export function InteraxisCanvas({
     runRouter.replace(qs ? `${runPathname}?${qs}` : runPathname, {
       scroll: false,
     });
+    // Also clear the fallback — the user explicitly dismissed the
+    // run HUD; resurrecting it from spaces.latest_run would
+    // override that intent.
+    setFallbackRunId(null);
   }, [runPathname, runSearchParams, runRouter]);
 
   // When a pipeline run ends, tell the space-data context to re-fetch
@@ -711,39 +775,12 @@ export function InteraxisCanvas({
     [editor],
   );
 
-  // Strategy hero bar — set of (entryRank) values for which a
-  // strategy-alternative-card already lives on the canvas. Drives the
-  // "ON CANVAS" pill on each hero-bar card.
-  const placedStrategyAltRanks = useValue<Set<number>>(
-    "placed strategy-alt ranks",
-    () => {
-      if (!editor) return new Set();
-      const ranks = new Set<number>();
-      for (const s of editor.getCurrentPageShapes()) {
-        if (s.type === "strategy-alternative-card") {
-          const rank = (s.props as { entryRank?: unknown }).entryRank;
-          if (typeof rank === "number") ranks.add(rank);
-        }
-      }
-      return ranks;
-    },
-    [editor],
-  );
-
-  const handleZoomToStrategyAlt = useCallback(
-    (entryRank: number) => {
-      if (!editor || !space?.id) return;
-      const shapeId = createShapeId(
-        strategyAlternativeShapeIdSeed(space.id, entryRank),
-      );
-      const shape = editor.getShape(shapeId);
-      if (shape) {
-        editor.select(shapeId);
-        editor.zoomToSelection({ animation: { duration: 250 } });
-      }
-    },
-    [editor, space?.id],
-  );
+  // Sprint B1 — removed `placedStrategyAltRanks` + `handleZoomToStrategyAlt`.
+  // Both existed ONLY to feed the StrategyHeroBar's `placedRanks` and
+  // `onZoomToRank` props. With the hero bar gone, they have no
+  // consumers. The strategy-alternative-card shape itself stays
+  // declared in shape-utils but no longer has a drag source (the
+  // drop handler is also removed below — see the dataTransfer block).
 
   // Strategy drawer ↔ canvas presence — set of CascadeObjective.id
   // values for which a strategy-objective-card lives on the page.
@@ -2366,53 +2403,106 @@ export function InteraxisCanvas({
   // completes it places its shape on the canvas — earlier files don't
   // block later ones.
   const ingestAndMaterialize = useCallback(
-    async (files: File[], dropPage?: { x: number; y: number }) => {
+    async (
+      files: File[],
+      dropPage?: { x: number; y: number },
+      mode?: "add" | "decompose" | "solve",
+      depth?: "quick" | "standard" | "deep",
+    ) => {
       if (!editor) return;
       const viewport = editor.getViewportPageBounds();
       const origin = dropPage ?? { x: Math.round(viewport.midX), y: Math.round(viewport.midY) };
-      // Phase 44 — collect created entity ids + source names for a
-      // single batch receipt after the whole drop resolves.
       const created: Array<{ id: string; name: string }> = [];
       const sourceNames: string[] = [];
+      // Texts collected for the decompose pipeline (decompose/solve modes).
+      const extractedTexts: string[] = [];
+
+      const ASSET_ACCENT: Record<string, string> = {
+        research_pdf: "#8B5CF6",
+        internal_doc: "#0891B2",
+        dataset: "#16A34A",
+        image_diagram: "#EA580C",
+        prior_analysis: "#0891B2",
+        spec_sheet: "#64748B",
+        web_article: "#64748B",
+        pasted_text: "#475569",
+      };
+
       await Promise.all(
         files.map(async (f, idx) => {
           const dropAt = { x: origin.x + idx * 340, y: origin.y };
           const ingested = await ingestFile(f);
           if (!ingested) return;
 
-          // ── HITL auto-open for research-class assets ─────────
+          // Fix 1 — place an asset-card shape on canvas immediately for
+          // any file that persisted with an ingestedFileId. This runs
+          // regardless of mode so the card always lands on canvas.
+          // Previously nothing appeared here because the standalone
+          // ingest route never emits asset_added (only intake/bootstrap
+          // does). Direct shape creation is the lightest fix.
+          if (ingested.ingestedFileId) {
+            const accent = ASSET_ACCENT[ingested.assetClass ?? ""] ?? "#0891B2";
+            const assetClass = (
+              ingested.assetClass === "research_pdf" ||
+              ingested.assetClass === "internal_doc" ||
+              ingested.assetClass === "dataset" ||
+              ingested.assetClass === "image_diagram" ||
+              ingested.assetClass === "prior_analysis" ||
+              ingested.assetClass === "spec_sheet" ||
+              ingested.assetClass === "web_article" ||
+              ingested.assetClass === "pasted_text"
+                ? ingested.assetClass
+                : "internal_doc"
+            ) as AssetCardShape["props"]["assetClass"];
+            try {
+              editor.createShape<AssetCardShape>({
+                type: "asset-card",
+                x: dropAt.x,
+                y: dropAt.y,
+                props: {
+                  w: 200,
+                  h: 88,
+                  assetId: ingested.ingestedFileId,
+                  spaceId: space.id,
+                  sourceName: ingested.sourceName.slice(0, 80),
+                  assetClass,
+                  charCount: ingested.text.length,
+                  accent,
+                  uploadedAt: new Date().toISOString(),
+                },
+              });
+            } catch (err) {
+              console.warn("[ingest] asset card create failed:", err);
+            }
+            sourceNames.push(ingested.sourceName);
+          }
+
+          // Fix 3 — in decompose/solve mode, skip the HITL drawer and
+          // collect extracted text for the decompose pipeline call below.
+          if (mode === "decompose" || mode === "solve") {
+            if (ingested.text) extractedTexts.push(ingested.text);
+            return;
+          }
+
+          // ── HITL auto-open for research-class assets (add mode) ──
           //
-          // Research PDFs and internal docs benefit most from the
-          // user controlling extraction (effect sizes vs methods
-          // vs claims). For these classes we SKIP the auto-
-          // materialize call and open the review drawer instead;
-          // the drawer's commit produces the entities. For other
-          // classes (image, dataset, web_article, pasted_text,
-          // spec_sheet) we keep the legacy auto-materialize
-          // behavior — those are usually one-shot context drops
-          // that don't need granular review.
-          //
-          // Only fires when the asset persisted with an
-          // ingested_file_id (without it the /preview route can't
-          // target the row). Falls back to legacy materialize if
-          // ingestedFileId is null.
+          // Research PDFs and internal docs open the extraction-review
+          // drawer so the user can pick which claims/effects to extract.
+          // Decompose mode bypasses this — it sends the full text to the
+          // pipeline instead. Falls back to legacy materialize if the
+          // file didn't get an ingestedFileId row.
           const shouldReview =
             ingested.ingestedFileId &&
             (ingested.assetClass === "research_pdf" ||
               ingested.assetClass === "internal_doc");
 
           if (shouldReview) {
-            // Defer to the extraction-review drawer. The asset card
-            // will be painted by pipeline-event-painter on
-            // asset_added (already fires from /api/ingest).
-            // Open the drawer so the user can review.
             void extractionReview.open({
               assetId: ingested.ingestedFileId!,
               assetName: ingested.sourceName,
               assetClass: ingested.assetClass ?? null,
             });
-            sourceNames.push(ingested.sourceName);
-            return; // Skip the legacy materialize path below.
+            return;
           }
 
           const response = await materialize(
@@ -2421,9 +2511,6 @@ export function InteraxisCanvas({
           );
           if (response) {
             placeMaterializedEntity(response, dropAt);
-            sourceNames.push(ingested.sourceName);
-            // response shape: we don't know its exact signature here —
-            // best-effort extract of the new entity's id/name.
             const r = response as unknown as {
               entity?: { id?: string; name?: string };
               id?: string;
@@ -2437,6 +2524,38 @@ export function InteraxisCanvas({
           }
         }),
       );
+
+      // Fix 2 — signal the library panel to refetch Files so newly
+      // uploaded rows appear without a manual reload.
+      window.dispatchEvent(
+        new CustomEvent("library:refresh", { detail: { class: "file" } }),
+      );
+
+      // Fix 3 — fire the decompose pipeline with all extracted text.
+      if ((mode === "decompose" || mode === "solve") && extractedTexts.length > 0) {
+        const combinedText = extractedTexts.join("\n\n---\n\n");
+        try {
+          const res = await fetch("/api/pipeline/decompose", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              text: combinedText,
+              existingSpaceId: space.id,
+              reasoningDepth: depth ?? "standard",
+              intent:
+                mode === "solve"
+                  ? { kind: "solve_query", query: combinedText.slice(0, 200) }
+                  : { kind: "decompose_canvas", source: "bottom_dock" },
+            }),
+          });
+          if (!res.ok) {
+            console.warn("[ingest] decompose call failed:", res.status);
+          }
+        } catch (err) {
+          console.warn("[ingest] decompose threw:", err);
+        }
+      }
+
       if (created.length > 0) {
         const createdIds = created.map((c) => c.id);
         aiReceipts.log({
@@ -2451,12 +2570,11 @@ export function InteraxisCanvas({
               : null,
           entity_ids: createdIds,
           undoable: true,
-          // Phase 46 — undo removes every materialized entity.
           undo_target_ids: createdIds,
         });
       }
     },
-    [editor, ingestFile, materialize, placeMaterializedEntity, aiReceipts, extractionReview],
+    [editor, ingestFile, materialize, placeMaterializedEntity, aiReceipts, extractionReview, space.id],
   );
 
   // ── Bottom dock submit (Phase 4): mode-aware routing ──────────────
@@ -2514,13 +2632,10 @@ export function InteraxisCanvas({
         }
 
         // ── File submissions ───────────────────────────────────────
-        // For add mode: each file becomes one entity (current behavior).
-        // For decompose mode: same upload path, but the HITL drawer's
-        // "Decompose deeper" toggle is on by default for research_pdf
-        // (Phase 2a we shipped earlier) so the chain runs end-to-end
-        // without an extra UI step.
+        // Mode is now forwarded: decompose/solve bypass the HITL drawer
+        // and fire the full pipeline; add mode uses the drawer as before.
         if (files.length > 0) {
-          await ingestAndMaterialize(files, center);
+          await ingestAndMaterialize(files, center, mode, depth);
         }
 
         // ── Text / URL submissions ─────────────────────────────────
@@ -2698,16 +2813,11 @@ export function InteraxisCanvas({
     const hasEntity = types.includes(ENTITY_DRAG_MIME);
     // Phase A1.0 — accept the unified library MIME envelope too.
     const hasAsset = types.includes(LIBRARY_ASSET_MIME);
-    const hasStrategyAlt = types.includes(STRATEGY_ALTERNATIVE_DRAG_MIME);
+    // Sprint B1 — STRATEGY_ALTERNATIVE_DRAG_MIME removed. Was the
+    // hero-bar's drag source MIME; with the hero bar deleted there's
+    // no source for this MIME anywhere in the app.
     const hasStrategyObjective = types.includes(STRATEGY_OBJECTIVE_DRAG_MIME);
-    if (
-      !hasFiles &&
-      !hasEntity &&
-      !hasAsset &&
-      !hasStrategyAlt &&
-      !hasStrategyObjective
-    )
-      return;
+    if (!hasFiles && !hasEntity && !hasAsset && !hasStrategyObjective) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
   }, []);
@@ -2743,52 +2853,14 @@ export function InteraxisCanvas({
       const burstX = e.clientX - rect.left;
       const burstY = e.clientY - rect.top;
 
-      // ── Strategy alternative drop (from StrategyHeroBar) ──
-      // Hero-bar entries aren't library items (they're live ranked
-      // proposals), so they ride a dedicated MIME. Dedupe by
-      // (spaceId, rank) so re-dropping the same alternative selects
-      // the existing card instead of stacking.
-      const strategyAltRaw = e.dataTransfer.getData(STRATEGY_ALTERNATIVE_DRAG_MIME);
-      if (strategyAltRaw) {
-        e.preventDefault();
-        try {
-          const payload = JSON.parse(strategyAltRaw) as StrategyAlternativeDragPayload;
-          const shapeId = createShapeId(
-            strategyAlternativeShapeIdSeed(payload.spaceId, payload.entryRank),
-          );
-          const existing = editor.getShape(shapeId);
-          if (existing) {
-            editor.select(shapeId);
-            editor.zoomToSelection({ animation: { duration: 200 } });
-          } else {
-            const w = STRATEGY_ALT_COMPACT_W;
-            const h = STRATEGY_ALT_COMPACT_H;
-            editor.createShape<StrategyAlternativeCardShape>({
-              id: shapeId,
-              type: "strategy-alternative-card",
-              x: Math.round(pagePt.x - w / 2),
-              y: Math.round(pagePt.y - h / 2),
-              props: {
-                w,
-                h,
-                spaceId: payload.spaceId,
-                entryRank: payload.entryRank,
-                posture: payload.posture,
-                title: payload.title,
-                summary: payload.summary,
-                confidence: payload.confidence,
-                wasPrimary: payload.isPrimary,
-                pinnedAt: new Date().toISOString(),
-                expanded: false,
-              },
-            });
-            editor.select(shapeId);
-          }
-        } catch (err) {
-          console.warn("[canvas] strategy-alternative drop parse failed", err);
-        }
-        return;
-      }
+      // Sprint B1 — strategy-alternative drop handler removed. The
+      // only drag source was StrategyHeroBar (deleted). The MIME +
+      // payload + shape still exist as exports but nothing dispatches
+      // a drag carrying this MIME, so the drop handler was
+      // unreachable. The strategy-alternative-card shape util is
+      // preserved (other code may reference its type literal) but no
+      // longer has a creation pathway.
+
 
       // ── Strategy objective drop (from cascade view in strategy drawer) ──
       // Same dedupe-by-id pattern as alternatives: re-dragging the same
@@ -3868,33 +3940,13 @@ export function InteraxisCanvas({
           silently dropped because no consumer listened. */}
       <CanvasRunSignalsBanner runId={activeRunId} />
 
-      {/* T1.1 — Strategy hero bar (docs/KG_DEPTH_CRITIQUE.md):
-          surfaces the synthesized strategy(ies) at the TOP of the
-          canvas viewport so users don't have to scroll past 90s of
-          KG unfurl to find them. Renders top-N side-by-side cards
-          (not chip-swapped) so users can compare at a glance. The
-          existing in-canvas strategy-hero-card-shape continues to
-          paint at y=1080 as a draggable canvas anchor — this bar is
-          the always-visible promo, the shape is the canvas tether. */}
-      {/* StrategyHeroBar removed (2026-07-04): the floating top bar
-          duplicated the rail's "Active strategy" State-zone card and
-          blocked the canvas. Strategy now lives in the right rail's
-          Ambient mode (rail-ambient-mode.tsx → "Active strategy"
-          section) which reads from the same twin-proposal data via
-          /api/spaces/[id]/rail-pulse. The in-canvas strategy-hero-
-          card-shape (a draggable anchor) is unchanged.
-          References preserved so the unused-import linter doesn't
-          drop the symbol — they're kept for the alternative-drop
-          handler below. */}
-      {/* eslint-disable-next-line @typescript-eslint/no-unused-expressions */}
-      {false && (
-        <StrategyHeroBar
-          spaceId={space.id}
-          runId={activeRunId}
-          placedRanks={placedStrategyAltRanks}
-          onZoomToRank={handleZoomToStrategyAlt}
-        />
-      )}
+      {/* Sprint B1 — StrategyHeroBar removed entirely (was 2026-07-04
+          `false && (...)` placeholder + 610 LOC of dead code). The
+          right rail's Ambient mode → "Active strategy" section reads
+          from the same twin-proposal data via
+          /api/spaces/[id]/rail-pulse. The in-canvas
+          strategy-hero-card-shape (a draggable canvas anchor painted
+          by PipelineEventPainter) is unchanged. */}
 
       {/* Origin prompt card is now a real tldraw shape (`origin-prompt`,
           painted by PipelineEventPainter at the top of the canvas) so

@@ -176,6 +176,16 @@ export type ActionKind =
   | "apply_validation_result"  // resolve a qualitative prediction from a validator
   | "record_deviation"         // manual deviation annotation on a resolved prediction
   | "escalate_to_research"     // deviation_signal_feed → research queue
+  // ── Sprint W5.6 — variable contract actions ───────────────────────
+  // Initial stub: routed to a placeholder handler that logs the
+  // request to AppState.recent_signals. Real implementation lands in
+  // a later sprint that opens the override drawer (writing
+  // environment_overrides with override_kind='reclassify_variable')
+  // and re-derives the app's variable contract on cascade. Wired here
+  // so widgets like variable-contract-card can declare the action in
+  // their manifest entries today; the placeholder handler keeps the
+  // dispatch path safe until the override drawer lands.
+  | "tune_variable"
   | `custom:${string}`;        // escape hatch — dynamic handlers
 
 export interface ActionBinding {
@@ -321,6 +331,20 @@ export interface WidgetInstance<Config = Record<string, unknown>> {
    * Widgets that don't support expand/collapse ignore this.
    */
   initial_expanded?: boolean;
+  /**
+   * Sprint W5.1 — optional pointer into AppConfig.variables. When set,
+   * the widget renders content tied to that specific variable entry
+   * (e.g. a metric widget bound to the DV, a control widget bound to
+   * the IV). The renderer looks up the entry by entity_id at render
+   * time — absent or stale ids degrade to "unbound" UI, never an error.
+   *
+   * Why string entity_id instead of the full VariableEntry: the entry
+   * lives in AppConfig.variables (single source of truth), so widgets
+   * carry a reference, not a duplicate. Keeps role/observability/
+   * importance changes from drifting between the contract and any
+   * widget snapshots.
+   */
+  binds_variable_id?: string;
 }
 
 // ── Refresh policy ──────────────────────────────────────────────────────

@@ -1866,6 +1866,28 @@ export const MIND_BODY_COGNITION_TEMPLATE: ResearchTemplate = {
     "Mind-body cognitive performance research workspace. Pre-populated with the CRCI 63-node knowledge graph, 4 starter subjects, 6 interventions, 6 cognitive instruments, and edge-level effect sizes from 74 papers.",
 
   ontology_layers: LAYER_DEFS,
+  // B1 — same axis filter as Cognitive Performance: drop `financial` +
+  // `cultural` (not load-bearing for clinical / mind-body research),
+  // keep the 6 frames that actually shape causal-mechanism reasoning
+  // in this domain. Adaptive display_name still adapts per prompt.
+  preferred_probability_space_axes: [
+    "causal_scenarios",
+    "evidence",
+    "assumptions",
+    "risk",
+    "actors",
+    "timeline",
+  ],
+  // B4 — same filter as Cognitive Performance: drop "game" +
+  // "ml_personalization" which don't fit clinical research; keep the
+  // 5 kinds that are load-bearing for mind-body / clinical work.
+  preferred_mechanism_kinds: [
+    "simulation",
+    "prediction",
+    "validation",
+    "baseline_tracking",
+    "deviation_capture",
+  ],
   seed_nodes: SEED_NODES,
   seed_edges: SEED_EDGES,
   seed_subjects: SEED_SUBJECTS,

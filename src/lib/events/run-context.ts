@@ -149,7 +149,9 @@ const PIPELINE_STAGES: PipelineStage[] = [
   "landscape",
   "kg",
   "proposal",
+  "twin",
   "lab",
+  "reflexive",
   "results",
 ];
 

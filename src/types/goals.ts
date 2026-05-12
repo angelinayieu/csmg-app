@@ -203,6 +203,15 @@ export interface ImprovementGoal {
   description: string | null;
   metric_name: string;
   metric_unit: string | null;
+  /**
+   * Sprint W5.7b — FK to entities.id. The canonical DV (outcome) this
+   * goal measures. Consumed by partition-variables-by-role (DV-set
+   * construction for backdoor/mediator walks) and derive-app-variables
+   * (per-app DV filter). NULL when the goal has not yet been anchored
+   * to a graph entity — code paths null-guard and degrade to "all
+   * dependents" / "empty DV set."
+   */
+  metric_entity_id: string | null;
   target_value: number;
   baseline_value: number;
   current_value: number;

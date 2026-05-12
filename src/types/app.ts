@@ -15,6 +15,26 @@
 import type { Database, Json } from "./database.types";
 import type { AppManifest } from "./app-manifest";
 import type { CardSpec } from "./card-spec";
+import type { VariableEntry } from "./preflight";
+import type { VariableRole } from "./variable-proposals";
+
+/**
+ * App-flavored variable entry. Reuses the preflight VariableEntry shape
+ * (entity_id, name, observability, rationale, etc.) but adds a `role`
+ * discriminator because apps store variables as a flat array — there's
+ * no bucket-by-role layer like preflight has.
+ *
+ * Producer: src/lib/pipeline/derive-app-variables.ts (W5.2) reads the
+ * preflight buckets via partitionVariablesByRole, then flattens them
+ * into role-tagged entries on apps.config.variables.
+ *
+ * Consumer: variable-contract-card.tsx (W5.4) groups by role for the
+ * "Variable contract" panel on the App detail page; reasoning agents
+ * read this in lieu of joining persisted artifacts.
+ */
+export interface AppVariableEntry extends VariableEntry {
+  role: VariableRole;
+}
 
 export type AppType = "dashboard" | "workflow" | "tool" | "monitor" | "integration";
 export type AppStatus = "proposed" | "approved" | "active" | "paused" | "retired";
@@ -29,7 +49,12 @@ export type AppStaleReason =
   | "new_research"        // deep-research loop produced new evidence
   | "user_feedback"       // user annotated / flagged the app
   | "strategy_regen"      // upstream strategy changed
-  | "whiteboard_edit";    // user edited the per-app whiteboard
+  | "whiteboard_edit"     // user edited the per-app whiteboard
+  | "lab_regen";          // Phase 2 (Week 4): user picked a different
+                          // lab_twin → execution_brief + variants are
+                          // no longer aligned. Matches the DB CHECK
+                          // value added in
+                          // 20260717_apps_stale_reason_lab_regen.sql.
 
 /** Row shape as stored in Postgres — mirrors database.types.ts `apps.Row`. */
 export type AppRow = Database["public"]["Tables"]["apps"]["Row"];
@@ -104,6 +129,56 @@ export interface AppConfig {
     coverage_gap_ids_closed?: string[];
     inversion_ids_tested?: string[];
     hidden_signal_refs?: string[];
+  };
+  /**
+   * Sprint W5.1 — App variable contract. The IV/DV/control/mediator/
+   * moderator set this app operates against, flattened from the preflight
+   * role buckets (partitionVariablesByRole) at app-generator time and
+   * re-derived on lab-pick / preflight-override change.
+   *
+   * Why on AppConfig (JSONB) and not a relational table:
+   *   Variables are derived from preflight role buckets which are
+   *   themselves recomputed per page load (no persisted role rows).
+   *   Persisting derived state in a relational table would require a
+   *   second source of truth that the cascade must keep in sync. JSONB
+   *   keeps the contract co-located with the app — when the app is
+   *   stale_reason='lab_regen', a single row update bumps both the
+   *   contract AND the staleness flag.
+   *
+   * Population path:
+   *   - W5.2 derive-app-variables.ts populates this from preflight
+   *     buckets after generateAppsAndInterventions clusters the
+   *     infrastructure proposals into Apps.
+   *   - W5.2.5 lab-pick reflows the role priority (lab IV/DV beats
+   *     LLM proposal but not user override) and re-derives.
+   *
+   * Optional + may be empty: legacy apps generated before W5.1 will
+   * simply have no variables field; UI surfaces (W5.4) treat absence
+   * as "contract not yet derived" rather than "no variables exist."
+   */
+  variables?: AppVariableEntry[];
+  /**
+   * Sprint W5.3 — Mediator light. The user-visible "this app sits on
+   * mechanism X" signal that the variable-contract-card (W5.4) renders.
+   *
+   * Why this exists as a denormalized snapshot:
+   *   apps.parent_mechanism_id is already the canonical pointer, but
+   *   reading it requires a join against the mechanisms table on
+   *   every render. Snapshotting name + kind into config keeps the
+   *   card render fast and stable when the parent mechanism is later
+   *   renamed (the app's contract snapshot stays consistent until the
+   *   next strategy regen, which is what users expect for an
+   *   approved app).
+   *
+   * Producer: app-generator's materializeApps populates this when
+   * parent_mechanism_id resolves. Absent when parent_mechanism_id is
+   * null (legacy apps; apps generated before Week 4's mechanism
+   * substrate).
+   */
+  mediator_light?: {
+    mechanism_id: string;
+    mechanism_name: string;
+    mechanism_kind: string;
   };
 }
 

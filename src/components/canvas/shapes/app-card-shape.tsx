@@ -79,6 +79,10 @@ const STALE_LABEL: Record<AppStaleReason, string> = {
   user_feedback: "Feedback",
   strategy_regen: "Strategy regen",
   whiteboard_edit: "Edited",
+  lab_regen: "Lab regen", // Phase 2 (Week 4) — user picked a
+                          // different lab_twin; this app's execution
+                          // brief + variants are misaligned with the
+                          // new lab configuration.
 };
 
 const VALID_TYPES: readonly AppType[] = [

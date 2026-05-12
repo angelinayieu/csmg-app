@@ -44,6 +44,8 @@ import {
   completePipelineRun,
 } from "@/lib/events/structural-event-bus";
 import { materializeAndEmitSignatures } from "@/lib/pipeline/materialize-signatures";
+// W6.3 — canonical concept linking for newly-decomposed entities.
+import { linkEntityToCanonicalConcept } from "@/lib/kg/canonical-concept-matcher";
 import {
   loadActivePlan,
   loadLayerOntology,
@@ -71,6 +73,97 @@ export const maxDuration = 300; // Deep tier: 2 large LLM passes, up to 50 entit
 // (`parsed = pass1Failed ? ... : await structureDecompositionJSON(...)`)
 // keeps working as a single expression.
 interface Pass2Signal { fellBack: boolean }
+
+// ── Sprint W3.6 — Proto-entity prompt block builder ─────────────────
+//
+// Formats the entities table's proto-entity rows (derived_from
+// non-null) into a system-prompt block. The block instructs Pass 1
+// to LINK to these existing entities rather than re-extract them,
+// AND to EXPAND them with mechanism intermediates that bridge them.
+//
+// The block is intentionally short (~600 chars + per-entity rows) so
+// it doesn't crowd out the actual decomposition reasoning budget.
+// Most intakes have 5-10 proto-entities — comfortably fits the
+// system prompt without budget pressure.
+//
+// Format:
+//   EXISTING ENTITIES (from problem framing)
+//   The user has already committed to a problem framing for this
+//   situation. These entities are persisted in the KG. Do NOT
+//   re-extract them — instead:
+//     • LINK by referencing exact names in your relationships
+//     • EXPAND by proposing mechanism intermediates that bridge
+//       them when the user's prompt names a causal pathway
+//   - "Mechanism Bottleneck" (epistemic, primary): The framing's
+//     central claim that ...
+//   - "REM sleep duration" (process, secondary): A sub-problem
+//     this framing decomposes into ...
+//   - "Sleep architecture is stable" (epistemic, secondary):
+//     Load-bearing assumption — if this is wrong, the framing fails.
+//
+// When the array is empty (legacy spaces, no framing approval yet,
+// fallback path's smallest_first_step=true), we return "" so the
+// block is omitted from planGuidanceSuffix entirely.
+
+function formatExistingEntitiesBlock(
+  protos: Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    category: string | null;
+    knowledge_layer: string | null;
+    importance: string | null;
+    derived_from: { source_type?: string; lens_id?: string } | null;
+  }>,
+): string {
+  if (protos.length === 0) return "";
+
+  const lines = protos.map((p) => {
+    const cat = p.category ?? "concrete";
+    const imp = p.importance ?? "secondary";
+    const srcType = p.derived_from?.source_type ?? "framing";
+    // Human-label the source type — "lens_framing" → "framing",
+    // "lens_subproblem" → "sub-problem", "lens_assumption" → "load-bearing assumption"
+    const srcLabel =
+      srcType === "lens_framing"
+        ? "framing"
+        : srcType === "lens_subproblem"
+          ? "sub-problem"
+          : srcType === "lens_assumption"
+            ? "load-bearing assumption"
+            : srcType;
+    const desc = (p.description ?? "").slice(0, 140).trim();
+    const descSuffix = desc.length > 0 ? `: ${desc}` : "";
+    return `  - "${p.name}" (${cat}, ${imp}, ${srcLabel})${descSuffix}`;
+  });
+
+  return [
+    "EXISTING ENTITIES (from approved problem framing — already persisted in the KG)",
+    "",
+    "The user reviewed the 5-lens framing panel's competing problem framings and",
+    "committed to one. The entities below were materialized at that approval",
+    "moment. They are NOT placeholders — they're real rows in the entities table",
+    "with edges between them. Decomposition must respect them:",
+    "",
+    "  1. LINK, do not duplicate. When your decomposition surfaces a concept",
+    "     that matches one of these entities (by name or close semantic match),",
+    "     REFERENCE it by exact name rather than emitting a fresh entity.",
+    "",
+    "  2. EXPAND with mechanism intermediates. When your decomposition traces",
+    "     a causal pathway between two existing entities, propose the",
+    "     mechanism intermediates that bridge them. These are NEW entities you",
+    "     emit; existing entities anchor the upstream and downstream endpoints.",
+    "",
+    "  3. RESPECT the framing's stance. The chosen framing's load-bearing",
+    "     assumption is the lens through which the user wants this analyzed.",
+    "     If your decomposition contradicts it, surface that as a separate",
+    "     entity in the `internal × epistemic` cell (a known unknown), don't",
+    "     silently override it.",
+    "",
+    "Existing entities:",
+    ...lines,
+  ].join("\n");
+}
 
 async function structureDecompositionJSON(opts: {
   decompositionText: string;
@@ -345,14 +438,72 @@ ${text}`;
         );
       }
     }
+    // Sprint W3.6 — proto-entity conditioning block.
+    //
+    // Loads entities materialized at framing-approval time (the
+    // chosen framing, sub-problems, load-bearing assumption — see
+    // persist-framing-protos.ts) and injects them into Pass 1's
+    // system prompt as `existing_entities[]`. Instructs the LLM to
+    // LINK to them rather than re-derive, and to EXPAND them with
+    // mechanism intermediates.
+    //
+    // This is what turns proto-entities from "persisted audit trail"
+    // into "actual seed for the KG." Without W3.6, the proto-entities
+    // exist as rows but decompose ignores them — Pass 1 re-derives
+    // the same concepts from text, producing duplicate name-matches
+    // that the dedupe pass later collapses (losing the upstream
+    // provenance + canonical_code stamping in the process).
+    //
+    // Soft-fail: load failure → empty block → Pass 1 proceeds with
+    // legacy behavior. No regression vs pre-W3.6.
+    //
+    // Query: the partial index idx_entities_derived_from_not_null
+    // (added in 20260716_canonical_hooks_and_proto_entities.sql)
+    // makes this O(log n) per space.
+    let existingEntitiesBlock = "";
+    if (existingSpaceId) {
+      try {
+        const { data: protoRows } = await db
+          .from("entities")
+          .select("id, name, description, category, knowledge_layer, importance, derived_from")
+          .eq("space_id", existingSpaceId)
+          .not("derived_from", "is", null)
+          .limit(50); // defensive cap — proto-entities are ~5-10 per
+                     // intake but the limit guards against pathological
+                     // re-runs accumulating duplicates.
+
+        const protos =
+          (protoRows as Array<{
+            id: string;
+            name: string;
+            description: string | null;
+            category: string | null;
+            knowledge_layer: string | null;
+            importance: string | null;
+            derived_from: { source_type?: string; lens_id?: string } | null;
+          }> | null) ?? [];
+
+        if (protos.length > 0) {
+          existingEntitiesBlock = formatExistingEntitiesBlock(protos);
+        }
+      } catch (existingErr) {
+        console.warn(
+          "[decompose] proto-entity load soft-failed; Pass 1 proceeds without existing-entities conditioning:",
+          existingErr,
+        );
+      }
+    }
+
     const planGuidanceSuffix =
-      activePlanOntologyBlock || activePlanAxes
-        ? `\n\n${[activePlanOntologyBlock, activePlanAxes].filter(Boolean).join("\n\n")}`
+      activePlanOntologyBlock || activePlanAxes || existingEntitiesBlock
+        ? `\n\n${[activePlanOntologyBlock, activePlanAxes, existingEntitiesBlock].filter(Boolean).join("\n\n")}`
         : "";
 
     // Build Pass 1 system prompt — base decomposition prompt optionally
     // extended with the memory context block when memory is enabled,
-    // plus the active-plan guidance block when an approved plan exists.
+    // plus the active-plan guidance block when an approved plan exists,
+    // plus the proto-entity conditioning block when prior framing-
+    // approval materialized entities for this space (Sprint W3.6).
     const pass1SystemPrompt = `${
       memoryPromptBlock
         ? `${getDecompositionPrompt(reasoningDepth)}\n\n${memoryPromptBlock}`
@@ -1206,6 +1357,45 @@ ${enrichedPrompt}`;
         });
       }
       await emitBatchEvents(db, runId, entityEvents);
+
+      // ── W6.3: Canonical concept linking ──────────────────────────
+      // For every newly-inserted entity, find-or-create its
+      // canonical_concepts row and write entities.canonical_concept_id.
+      // Soft-fails per entity: a failure leaves canonical_concept_id
+      // as NULL (entity still persisted; the badge UI reads "unique"
+      // for it). Runs sequentially to keep INSERT...ON CONFLICT
+      // contention low when the same canonical_code appears N times
+      // in a single batch (e.g. two entities both normalizing to
+      // 'cortisol' → first insert wins, second resolves via SELECT
+      // fallback). Wrapped in after() would be cleaner but the
+      // entity rows need canonical_concept_id stamped before
+      // downstream events fire that surface it.
+      try {
+        for (const e of dedupedEntities) {
+          const uuid = entityIdMap.get(e.entity_id);
+          if (!uuid) continue;
+          const sourceText = e.name;
+          if (!sourceText) continue;
+          const conceptId = await linkEntityToCanonicalConcept(db, {
+            sourceText,
+            displayName: sourceText,
+            description: e.description ?? undefined,
+            spaceId,
+            userId: user.id,
+          });
+          if (conceptId) {
+            await db
+              .from("entities")
+              .update({ canonical_concept_id: conceptId })
+              .eq("id", uuid);
+          }
+        }
+      } catch (canonErr) {
+        console.warn(
+          "[decompose] canonical concept linking failed (non-fatal):",
+          canonErr instanceof Error ? canonErr.message : canonErr,
+        );
+      }
 
       // Sprint 2 follow-up — memory-index new entities inline so ambient
       // retrieval surfaces them immediately. Previously this relied on the

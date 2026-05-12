@@ -26,6 +26,7 @@
 // shape is a frozen snapshot rendered on canvas. Mutations (rename,
 // edit conditions) round-trip through the API and re-paint the card.
 
+import { useMemo } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
@@ -49,6 +50,129 @@ import {
   Sliders,
 } from "lucide-react";
 import type { SubjectCardShape } from "./types";
+import {
+  STARTER_MODULATORS,
+  getModulatorSpec,
+  type ModulatorSpec,
+} from "@/lib/subjects/modulators";
+
+// ── Condition chip helpers ───────────────────────────────────────
+//
+// Subject conditions are a key→number bag (e.g. {"sleep_h": 4}). The
+// modulator catalog (STARTER_MODULATORS) carries display label, units,
+// range, and default value per key. We:
+//   1. Resolve each (key, value) to its ModulatorSpec for label + units
+//   2. Compute a normalized deviation from default → drives color tone
+//   3. Sort by |deviation| descending so the most distinctive
+//      conditions render first (the chips that actually tell the user
+//      "this subject is unusual on these dimensions")
+//   4. Cap at 3 visible chips + "+N more" overflow indicator
+
+interface ConditionRender {
+  key: string;
+  spec: ModulatorSpec | null;
+  value: number;
+  /** Normalized deviation from default in [-1, 1]. Null when spec
+   *  unknown (we still render the chip but as neutral). */
+  deviation: number | null;
+  /** Pre-formatted display value (e.g. "4h", "8/10", "200mg"). */
+  display: string;
+}
+
+function formatConditionValue(value: number, spec: ModulatorSpec | null): string {
+  if (!spec) return String(value);
+  // Stress is canonically rendered as "8/10" not "8 0–10".
+  if (spec.units === "0–10") return `${value}/10`;
+  // Round half-step values cleanly (sleep_h 7.5 → "7.5h" not "7.5h").
+  const rounded = Number.isInteger(value)
+    ? value
+    : Math.round(value * 10) / 10;
+  return `${rounded}${spec.units}`;
+}
+
+function deviationFromDefault(value: number, spec: ModulatorSpec | null): number | null {
+  if (!spec) return null;
+  const range = spec.range[1] - spec.range[0];
+  if (range <= 0) return 0;
+  const dev = (value - spec.default) / range;
+  return Math.max(-1, Math.min(1, dev));
+}
+
+/** Tone palette for the chip — three buckets keyed off normalized deviation:
+ *    |dev| < 0.10 → neutral (slate)
+ *    dev > 0      → above default (amber)
+ *    dev < 0      → below default (sky)
+ *  Unknown spec → neutral. */
+function chipTone(deviation: number | null): {
+  bg: string;
+  border: string;
+  fg: string;
+  labelFg: string;
+} {
+  if (deviation === null || Math.abs(deviation) < 0.1) {
+    return {
+      bg: "#F1F5F9",        // slate-100
+      border: "#E2E8F0",    // slate-200
+      fg: "#0F172A",        // slate-900
+      labelFg: "#64748B",   // slate-500
+    };
+  }
+  if (deviation > 0) {
+    return {
+      bg: "#FFFBEB",        // amber-50
+      border: "#FDE68A",    // amber-200
+      fg: "#92400E",        // amber-800
+      labelFg: "#B45309",   // amber-700
+    };
+  }
+  return {
+    bg: "#EFF6FF",          // blue-50
+    border: "#BFDBFE",      // blue-200
+    fg: "#1E40AF",          // blue-800
+    labelFg: "#2563EB",     // blue-600
+  };
+}
+
+function buildConditionRenders(
+  conditions: Record<string, number>,
+): ConditionRender[] {
+  const out: ConditionRender[] = [];
+  for (const [key, raw] of Object.entries(conditions)) {
+    if (typeof raw !== "number" || !Number.isFinite(raw)) continue;
+    const spec = getModulatorSpec(key, STARTER_MODULATORS) ?? null;
+    out.push({
+      key,
+      spec,
+      value: raw,
+      deviation: deviationFromDefault(raw, spec),
+      display: formatConditionValue(raw, spec),
+    });
+  }
+  // Sort by |deviation| desc; unknown (deviation === null) sorts last.
+  out.sort((a, b) => {
+    const da = a.deviation === null ? -Infinity : Math.abs(a.deviation);
+    const db = b.deviation === null ? -Infinity : Math.abs(b.deviation);
+    return db - da;
+  });
+  return out;
+}
+
+function safeParseConditions(raw: string): Record<string, number> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 // ── focus_kind → visual mapping ──────────────────────────────────
 
@@ -116,6 +240,7 @@ export class SubjectCardShapeUtil extends BaseBoxShapeUtil<SubjectCardShape> {
     focusLabel: T.string,
     scopeSummary: T.string.nullable(),
     conditionCount: T.number,
+    conditionsJson: T.string,
     artifactState: T.literalEnum(...VALID_ARTIFACT_STATES),
     needsReview: T.boolean,
   };
@@ -141,6 +266,7 @@ export class SubjectCardShapeUtil extends BaseBoxShapeUtil<SubjectCardShape> {
       focusLabel: "",
       scopeSummary: null,
       conditionCount: 0,
+      conditionsJson: "{}",
       artifactState: "bare_topic",
       needsReview: false,
     };
@@ -166,9 +292,26 @@ function SubjectCardShapeView({ shape }: { shape: SubjectCardShape }) {
     focusLabel,
     scopeSummary,
     conditionCount,
+    conditionsJson,
     artifactState,
     needsReview,
   } = shape.props;
+
+  // Parse conditions JSONB → render up to 3 chips sorted by |deviation
+  // from default| desc. Empty / parse-fail / no-modulator-spec rows fall
+  // back to the legacy "N conditions" summary pill so the card still
+  // surfaces SOMETHING when it doesn't have rich condition data (yet).
+  const conditionRenders = useMemo(
+    () => buildConditionRenders(safeParseConditions(conditionsJson ?? "{}")),
+    [conditionsJson],
+  );
+  const VISIBLE_CHIP_CAP = 3;
+  const visibleChips = conditionRenders.slice(0, VISIBLE_CHIP_CAP);
+  const overflowChipCount = Math.max(
+    0,
+    conditionRenders.length - visibleChips.length,
+  );
+  const hasRichChips = visibleChips.length > 0;
 
   const meta = metaForFocusKind(focusKind);
   const FocusIcon = meta.icon;
@@ -342,24 +485,98 @@ function SubjectCardShapeView({ shape }: { shape: SubjectCardShape }) {
               </span>
             </span>
           )}
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              padding: "3px 8px",
-              borderRadius: 999,
-              background: conditionCount > 0 ? "#ECFDF5" : "#f8fafc",
-              border: `1px solid ${conditionCount > 0 ? "#A7F3D0" : "#e2e8f0"}`,
-              color: conditionCount > 0 ? "#047857" : "#94a3b8",
-              fontSize: 10.5,
-              fontWeight: 500,
-            }}
-            title={`${conditionCount} condition${conditionCount === 1 ? "" : "s"} configured`}
-          >
-            <Sliders style={{ width: 10, height: 10 }} />
-            {conditionCount} condition{conditionCount === 1 ? "" : "s"}
-          </span>
+          {/* Condition chips — value pills sorted by deviation from
+              default. Each chip shows the modulator's display label
+              (e.g. "Sleep") next to the user's set value (e.g. "4h"),
+              tinted by direction:
+                · slate = within ±10% of default (neutral)
+                · amber = above default
+                · sky   = below default
+              Capped at 3 visible + a "+N" overflow chip. Falls back
+              to the legacy "N conditions" pill when no rich chips are
+              parseable (legacy data, post-creation lag, all-unknown
+              modulator keys). */}
+          {hasRichChips ? (
+            <>
+              {visibleChips.map((c) => {
+                const tone = chipTone(c.deviation);
+                return (
+                  <span
+                    key={c.key}
+                    title={
+                      c.spec
+                        ? `${c.spec.label}: ${c.value}${c.spec.units} (default ${c.spec.default}${c.spec.units}) — ${c.spec.description}`
+                        : `${c.key}: ${c.value}`
+                    }
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 5,
+                      padding: "3px 8px",
+                      borderRadius: 999,
+                      background: tone.bg,
+                      border: `1px solid ${tone.border}`,
+                      color: tone.fg,
+                      fontSize: 10.5,
+                      fontWeight: 500,
+                      lineHeight: 1.2,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: tone.labelFg,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {c.spec?.label ?? c.key}
+                    </span>
+                    <span style={{ fontWeight: 600 }}>{c.display}</span>
+                  </span>
+                );
+              })}
+              {overflowChipCount > 0 && (
+                <span
+                  title={`${overflowChipCount} more condition${
+                    overflowChipCount === 1 ? "" : "s"
+                  } configured`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: "3px 7px",
+                    borderRadius: 999,
+                    background: "#F8FAFC",
+                    border: "1px solid #E2E8F0",
+                    color: "#64748B",
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    lineHeight: 1.2,
+                  }}
+                >
+                  +{overflowChipCount}
+                </span>
+              )}
+            </>
+          ) : (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "3px 8px",
+                borderRadius: 999,
+                background: conditionCount > 0 ? "#ECFDF5" : "#f8fafc",
+                border: `1px solid ${conditionCount > 0 ? "#A7F3D0" : "#e2e8f0"}`,
+                color: conditionCount > 0 ? "#047857" : "#94a3b8",
+                fontSize: 10.5,
+                fontWeight: 500,
+              }}
+              title={`${conditionCount} condition${conditionCount === 1 ? "" : "s"} configured`}
+            >
+              <Sliders style={{ width: 10, height: 10 }} />
+              {conditionCount} condition{conditionCount === 1 ? "" : "s"}
+            </span>
+          )}
         </div>
 
         {/* Footer CTA */}
