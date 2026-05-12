@@ -1,29 +1,12 @@
-// ── /app/synergy/[id] — solo brainstorm whiteboard ──
+// ── /app/synergy/[id] — server route ──
 //
-// Thin server component shell that dynamic-imports the client whiteboard
-// (mirrors the /app/space/[id]/whiteboard pattern). Auth check rides on
-// /app/layout.tsx which redirects to /auth/login when getAuthUser() is null.
+// Resolves the route params + searchParams, then hands off to the
+// client shell. The dynamic-import-with-ssr:false lives in
+// synergy-page-client.tsx because Next.js 16 disallows `ssr: false`
+// in server components. Auth is enforced by /app/layout.tsx which
+// redirects to /auth/login when getAuthUser() returns null.
 
-import dynamic from "next/dynamic";
-import { Loader2 } from "lucide-react";
-
-const SynergyWhiteboard = dynamic(
-  () =>
-    import("@/components/synergy/synergy-whiteboard").then(
-      (m) => m.SynergyWhiteboard,
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="fixed inset-0 z-40 flex items-center justify-center bg-gray-50">
-        <div className="flex items-center gap-2 text-sm text-gray-500">
-          <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-          Loading whiteboard…
-        </div>
-      </div>
-    ),
-  },
-);
+import { SynergyPageClient } from "./synergy-page-client";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -33,5 +16,5 @@ interface PageProps {
 export default async function SynergyPage({ params, searchParams }: PageProps) {
   const { id } = await params;
   const { focus } = await searchParams;
-  return <SynergyWhiteboard sessionId={id} focusNodeId={focus} />;
+  return <SynergyPageClient sessionId={id} focusNodeId={focus} />;
 }
