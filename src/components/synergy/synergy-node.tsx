@@ -86,6 +86,15 @@ const KIND_STYLES: Record<NodeKind, KindStyle> = {
     text: "text-orange-900",
     label: "ranking",
   },
+  // 1.6d "Make actionable" produces a plan card: distinct sky tint
+  // so it reads as a deliverable / synthesis (a step beyond plain
+  // action). Plan content lives in `meta` as structured text.
+  plan: {
+    bg: "bg-sky-50",
+    ring: "ring-sky-400",
+    text: "text-sky-900",
+    label: "plan",
+  },
 };
 
 interface SynergyNodeProps {
@@ -177,8 +186,8 @@ export function SynergyNode({
         <div className="font-medium leading-snug whitespace-pre-wrap break-words">
           {node.label}
         </div>
-        {node.kind === "ranking" && node.meta && (
-          <pre className="mt-2 whitespace-pre-wrap font-sans text-[10px] leading-snug opacity-70 break-words">
+        {(node.kind === "ranking" || node.kind === "plan") && node.meta && (
+          <pre className="mt-2 whitespace-pre-wrap font-sans text-[10px] leading-snug opacity-80 break-words">
             {node.meta}
           </pre>
         )}

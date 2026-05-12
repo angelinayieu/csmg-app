@@ -11,7 +11,8 @@ export type NodeKind =
   | "action"
   | "user"
   | "variation"
-  | "ranking";
+  | "ranking"
+  | "plan";
 
 export interface BrainstormSession {
   id: string;
@@ -76,7 +77,9 @@ export type AugmentMode =
   | "questions"
   | "research"
   | "variations"
-  | "rank";
+  | "rank"
+  | "clarify"
+  | "plan";
 
 export interface AugmentResult {
   nodes: Array<{
@@ -128,13 +131,42 @@ export interface RankResult {
   ranked: RankedItem[];
 }
 
+// ── 1.6d: Idea → Actionable Plan ──
+
+export interface ClarifyResult {
+  // 3-4 questions the AI thinks are most worth asking the user to
+  // tighten before drafting a plan. Each carries an optional hint
+  // explaining why the question matters.
+  questions: Array<{ question: string; hint: string }>;
+}
+
+export interface PlanStep {
+  label: string;
+  rationale: string;
+}
+
+export interface PlanRisk {
+  risk: string;
+  mitigation: string;
+}
+
+export interface PlanResult {
+  goal: string;
+  steps: PlanStep[];
+  resources: string[];
+  success_criteria: string[];
+  risks: PlanRisk[];
+}
+
 export type AugmentResponse =
   | { mode: "augment"; result: AugmentResult }
   | { mode: "decompose"; result: DecomposeResult }
   | { mode: "questions"; result: QuestionsResult }
   | { mode: "research"; result: ResearchResult }
   | { mode: "variations"; result: VariationsResult }
-  | { mode: "rank"; result: RankResult };
+  | { mode: "rank"; result: RankResult }
+  | { mode: "clarify"; result: ClarifyResult }
+  | { mode: "plan"; result: PlanResult };
 
 // ── History buckets (right rail dedup) ──
 //
@@ -194,4 +226,75 @@ export interface PromiseScore {
   child_count: number;
   label: string;
   kind: NodeKind;
+}
+
+// ── Phase 3.5d — Strategy Doc types ──
+//
+// The converged artifact at the end of a brainstorm. One per session.
+// Blocks render in fixed-type sections (plan_step / risk / hypothesis /
+// evidence / note). Upstream + downstream sections aren't blocks — they
+// reference brainstorm_components rows directly.
+
+export type StrategyBlockType =
+  | "plan_step"
+  | "risk"
+  | "hypothesis"
+  | "evidence"
+  | "note";
+
+export interface SynergyStrategy {
+  id: string;
+  session_id: string;
+  statement: string | null;
+  pitch: string | null;
+  status: "draft" | "published" | "archived";
+  current_generation_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Block-type-specific structured fields live in `meta`. The unions below
+// are non-exhaustive and not strictly enforced — they're hints for the
+// renderer. The DB column is jsonb and additive.
+export interface PlanStepMeta {
+  title?: string;
+  sub_steps?: string[];
+  evidence_urls?: string[];
+}
+export interface RiskMeta {
+  title?: string;
+  severity?: "high" | "medium" | "low";
+  mitigation?: string;
+}
+export interface HypothesisMeta {
+  rationale?: string;
+  evidence_status?: "untested" | "supported" | "refuted";
+  supporting_urls?: string[];
+}
+export interface EvidenceMeta {
+  source_title?: string;
+  url?: string;
+  summary?: string;
+  supports_block_id?: string;
+}
+export type StrategyBlockMeta =
+  | PlanStepMeta
+  | RiskMeta
+  | HypothesisMeta
+  | EvidenceMeta
+  | Record<string, unknown>;
+
+export interface SynergyStrategyBlock {
+  id: string;
+  block_type: StrategyBlockType;
+  body: string;
+  sort_order: number;
+  meta: StrategyBlockMeta;
+  created_at: string;
+}
+
+export interface StrategyBundle {
+  strategy: SynergyStrategy | null;
+  blocks: SynergyStrategyBlock[];
+  components: BrainstormComponent[];
 }

@@ -35,6 +35,43 @@ const PRECISION_GUIDANCE: Record<number, string> = {
   5: "SURGICAL: Each variation specifies WHO (segment/audience), HOW (mechanism/method), and a measurable target (metric, number, timeframe, or constraint). Labels 6-10 words. Rationales MUST contain at least one quantified element (%, $, count, duration, or named metric).",
 };
 
+// ── 1.6d: Idea → Actionable Plan modes ──
+//
+// Two-step flow:
+//   1) clarify — ask 3-4 targeted questions before generating a plan.
+//      The point is to surface the missing decisions (audience, time
+//      horizon, success metric) so the plan doesn't fabricate them.
+//   2) plan — given the original concept + the user's clarifying
+//      answers, return a structured plan: refined goal, ordered steps,
+//      resources, success criteria, risks + mitigations.
+//
+// Both modes use the rich context block (ancestor chain + core +
+// siblings) the whiteboard builds for the target card — same anti-
+// drift anchoring as variations.
+
+const CLARIFY_SYSTEM = `You are helping a brainstormer turn a vague concept into an actionable plan. Before you draft the plan, you need 3-4 specific decisions clarified.
+
+Ask questions that surface concrete missing information — audience, time horizon, must-have outcomes, hard constraints, risk tolerance, success metric. Do NOT ask generic open-ended questions ("tell me more about your idea"). Each question should be answerable in 1-2 sentences and should noticeably change the plan if answered differently.
+
+Each question carries a 1-sentence hint explaining why this answer matters for the plan.
+
+Return JSON: { questions: [{ question, hint }, ...] } — 3 to 4 items. Return JSON.`;
+
+const PLAN_SYSTEM = `You are drafting a concrete, actionable plan from a brainstorm concept plus the user's clarifying answers.
+
+The plan must be specific enough that someone could start executing tomorrow. Avoid vague verbs (consider / explore / understand). Use concrete verbs (build / interview / measure / publish / ship).
+
+Output:
+- goal: One sentence restating the objective, refined by the clarifications.
+- steps: 4-7 ordered steps. Each has a short imperative label and a 1-sentence rationale (why this step, why now).
+- resources: 2-5 specific things needed (tools, data, people, capital). Be concrete — name the tool or skill, not "good resources".
+- success_criteria: 2-4 measurable outcomes. Prefer quantified targets when the answers hint at them.
+- risks: 2-4 likely blockers, each paired with a 1-sentence mitigation.
+
+If a clarifying answer is missing or empty, make a reasonable assumption and call it out in the relevant step's rationale ("assuming X; if Y instead, swap step 3").
+
+Return JSON.`;
+
 const SYSTEMS: Record<Exclude<AugmentMode, "variations">, string> = {
   augment: `You are a cognitive brainstorming partner. Given a stream of spoken thoughts plus the current board contents, extract NEW key concepts and structure them as a mindmap.
 
@@ -48,6 +85,8 @@ Labels under 6 words. Be incisive, not generic. The summary should be one senten
   questions: `You are a Socratic brainstorming coach. Given the user's current thinking, generate 4 sharp questions that expose hidden assumptions, force specificity, or reveal new angles. Return JSON.`,
   research: `Suggest 4 concrete research directions for the user's idea. Each one has an angle (validate, refute, extend, or alternative), a specific search query, and a one-sentence reason. Return JSON.`,
   rank: `You are a critical evaluator. Rank the provided variations from strongest to weakest based on feasibility, novelty, and impact. Score each 0-100 with one sentence of reasoning, ordered best first. Return JSON.`,
+  clarify: CLARIFY_SYSTEM,
+  plan: PLAN_SYSTEM,
 };
 
 function variationsSystem(precision: number): string {
@@ -209,6 +248,67 @@ export const RANK_SCHEMA = {
   },
 } as const;
 
+export const CLARIFY_SCHEMA = {
+  name: "synergy_clarify",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      questions: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            question: { type: "string" },
+            hint: { type: "string" },
+          },
+          required: ["question", "hint"],
+        },
+      },
+    },
+    required: ["questions"],
+  },
+} as const;
+
+export const PLAN_SCHEMA = {
+  name: "synergy_plan",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      goal: { type: "string" },
+      steps: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            label: { type: "string" },
+            rationale: { type: "string" },
+          },
+          required: ["label", "rationale"],
+        },
+      },
+      resources: { type: "array", items: { type: "string" } },
+      success_criteria: { type: "array", items: { type: "string" } },
+      risks: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            risk: { type: "string" },
+            mitigation: { type: "string" },
+          },
+          required: ["risk", "mitigation"],
+        },
+      },
+    },
+    required: ["goal", "steps", "resources", "success_criteria", "risks"],
+  },
+} as const;
+
 export function schemaForMode(mode: AugmentMode) {
   switch (mode) {
     case "augment":
@@ -223,5 +323,9 @@ export function schemaForMode(mode: AugmentMode) {
       return VARIATIONS_SCHEMA;
     case "rank":
       return RANK_SCHEMA;
+    case "clarify":
+      return CLARIFY_SCHEMA;
+    case "plan":
+      return PLAN_SCHEMA;
   }
 }

@@ -47,6 +47,7 @@ import { SynergyToolbar, type SynergyTool } from "./synergy-toolbar";
 import { SynergyVoiceDock } from "./synergy-voice-dock";
 import { SynergyAIRail } from "./synergy-ai-rail";
 import { SynergyNode } from "./synergy-node";
+import { SynergyActionableModal } from "./synergy-actionable-modal";
 import { useSpeech } from "@/hooks/synergy/use-speech";
 import type { AutopilotNewNode } from "@/hooks/synergy/use-autopilot";
 
@@ -72,6 +73,7 @@ const EDGE_COLOR_BY_KIND: Record<NodeKind, string> = {
   user: "rgba(107, 114, 128, 0.15)", // pale gray (legacy, hidden anyway)
   variation: "rgba(217, 70, 239, 0.40)", // fuchsia
   ranking: "rgba(249, 115, 22, 0.40)", // orange
+  plan: "rgba(14, 165, 233, 0.50)", // sky — slightly stronger; plans are anchors
 };
 
 // Folder region tint by category label. The Decompose action spawns
@@ -953,17 +955,55 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
     }
   };
 
-  // ── Stub: Make actionable ──
-  // Full implementation lands in 1.6d (clarifying-questions flow →
-  // structured plan card). Stubbed here so the hover-menu button
-  // exists and signals "coming soon" to live testers.
+  // ── Make actionable ──
+  // Opens a modal that walks the user through clarifying questions
+  // and then generates a structured plan. On accept the modal calls
+  // back into `spawnPlanFromModal` which inserts a plan-kind node
+  // as a child of the source card.
+  const [actionableTargetId, setActionableTargetId] = useState<string | null>(null);
   const runActionableOnNode = (targetId: string) => {
     const target = nodes.find((n) => n.id === targetId);
     if (!target) return;
-    toast.info("Make actionable — coming in 1.6d", {
-      description: "Will ask 2-3 clarifying questions, then generate a structured plan card.",
-    });
+    setActionableTargetId(targetId);
   };
+
+  const actionableTarget = useMemo(
+    () =>
+      actionableTargetId
+        ? nodes.find((n) => n.id === actionableTargetId) ?? null
+        : null,
+    [actionableTargetId, nodes],
+  );
+
+  const spawnPlanFromModal = useCallback(
+    (planLabel: string, planMeta: string) => {
+      if (!actionableTarget) return;
+      const target = actionableTarget;
+      setNodes((prev) => {
+        const existing = prev.filter(
+          (n) => n.parent === target.id && n.kind === "plan",
+        ).length;
+        const pos = placeNear(target, existing, existing + 1, 260);
+        return [
+          ...prev,
+          {
+            id: uid(),
+            x: pos.x,
+            y: pos.y,
+            // Use the refined goal as the card label so a glance shows
+            // the intent; the structured detail goes in meta and is
+            // rendered as the <pre> block under the label.
+            label: planLabel.slice(0, 200),
+            kind: "plan",
+            parent: target.id,
+            meta: planMeta,
+          },
+        ];
+      });
+      toast.success("Plan added to board");
+    },
+    [actionableTarget],
+  );
 
   // ── Dispatcher passed to SynergyNode ──
   // Centralizes routing so the node component just emits "this action
@@ -1259,6 +1299,16 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
         onToggleHistory={() => setHistoryOpen((v) => !v)}
         onAutopilotRound={handleAutopilotRound}
       />
+
+      {actionableTarget && (
+        <SynergyActionableModal
+          open={!!actionableTarget}
+          targetLabel={actionableTarget.label}
+          context={buildRichContext(actionableTarget)}
+          onClose={() => setActionableTargetId(null)}
+          onAccept={spawnPlanFromModal}
+        />
+      )}
     </div>
   );
 }
