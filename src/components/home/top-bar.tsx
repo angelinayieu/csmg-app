@@ -19,6 +19,7 @@ import {
   FlaskConical,
   LayoutGrid,
   LogOut,
+  Mic,
   Settings as SettingsIcon,
   Sparkles,
   Target,
@@ -138,6 +139,14 @@ export function TopBar({
           title="Explore — research-grade templates with pre-built KG, evidence-backed edges, starter twins, and configured labs"
         >
           Explore
+        </ChromeLink>
+
+        <ChromeLink
+          href="/app/synergy"
+          icon={<Mic className="h-3 w-3" strokeWidth={1.75} />}
+          title="Brainstorm — voice-augmented whiteboard with AI auto-expansion and Make Actionable plans"
+        >
+          Brainstorm
         </ChromeLink>
       </div>
 

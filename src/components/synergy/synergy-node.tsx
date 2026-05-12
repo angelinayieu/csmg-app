@@ -17,8 +17,9 @@
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Compass,
   HelpCircle,
   Loader2,
@@ -28,7 +29,27 @@ import {
   Sparkles,
   Trophy,
 } from "lucide-react";
-import type { ClientNode, NodeKind } from "@/lib/synergy/types";
+import type { ClientNode, NodeKind, PlanResult } from "@/lib/synergy/types";
+
+// ── Plan-meta parsing ──
+// The 1.6d modal serializes a PlanResult as `<<plan-v1>>${json}` into
+// brainstorm_nodes.meta. SynergyNode detects the marker and renders
+// structured sections instead of an opaque pre-block. Older "plan"
+// kind nodes (or future serializations that fail to parse) fall back
+// to the <pre> renderer so the user never sees nothing.
+const PLAN_META_PREFIX = "<<plan-v1>>";
+function tryParsePlanMeta(meta: string | undefined): PlanResult | null {
+  if (!meta || !meta.startsWith(PLAN_META_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(meta.slice(PLAN_META_PREFIX.length)) as PlanResult;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.steps)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 interface KindStyle {
   bg: string;
@@ -148,19 +169,47 @@ export function SynergyNode({
   onAction,
   onDragStart,
 }: SynergyNodeProps) {
+  // Hover-with-delay: 180ms before showing the menu prevents accidental
+  // opens on quick mouse-bys. Pointer-leave clears the pending timer
+  // immediately. Selection bypasses the delay (clicking a card is an
+  // intentional act, show actions instantly).
   const [hovered, setHovered] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const beginHover = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => setHovered(true), 180);
+  };
+  const endHover = () => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHovered(false);
+  };
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
 
   if (node.kind === "user") return null;
   const s = KIND_STYLES[node.kind];
   const isCoreOrSelected = node.kind === "core" || selected;
   const menuOpen = (hovered || selected) && showActions && node.kind !== "ranking";
 
+  // Structured plan rendering (1.6d). Plan cards are taller + wider
+  // to fit the formatted sections cleanly.
+  const planMeta = node.kind === "plan" ? tryParsePlanMeta(node.meta) : null;
+  const isStructuredPlan = planMeta !== null;
+  const cardMaxWidth = isStructuredPlan ? 380 : 320;
+  const cardMaxHeight = isStructuredPlan ? 360 : 220;
+
   return (
     <div
       className="absolute -translate-x-1/2 -translate-y-1/2"
       style={{ left: node.x, top: node.y }}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
+      onPointerEnter={beginHover}
+      onPointerLeave={endHover}
     >
       <div
         onPointerDown={(e) => onDragStart(e, node.id)}
@@ -175,8 +224,8 @@ export function SynergyNode({
         ].join(" ")}
         style={{
           minWidth: 180,
-          maxWidth: 320,
-          maxHeight: 220,
+          maxWidth: cardMaxWidth,
+          maxHeight: cardMaxHeight,
           overflowY: "auto",
         }}
       >
@@ -186,10 +235,15 @@ export function SynergyNode({
         <div className="font-medium leading-snug whitespace-pre-wrap break-words">
           {node.label}
         </div>
-        {(node.kind === "ranking" || node.kind === "plan") && node.meta && (
-          <pre className="mt-2 whitespace-pre-wrap font-sans text-[10px] leading-snug opacity-80 break-words">
-            {node.meta}
-          </pre>
+        {isStructuredPlan && planMeta ? (
+          <PlanSections plan={planMeta} />
+        ) : (
+          (node.kind === "ranking" || node.kind === "plan") &&
+          node.meta && (
+            <pre className="mt-2 whitespace-pre-wrap font-sans text-[10px] leading-snug opacity-80 break-words">
+              {node.meta}
+            </pre>
+          )
         )}
       </div>
 
@@ -268,3 +322,86 @@ function ActionChip({
 // can re-use the icon for its own "Make actionable" CTAs without
 // re-importing.
 export { Sparkles as MakeActionableIcon };
+
+// ── PlanSections: formatted render for a structured plan ──
+//
+// Renders the four-section layout matching the modal preview: goal
+// banner up top, ordered numbered steps, resources / success criteria
+// / risks. Each section is suppressed when its array is empty so
+// truncated plans don't leave dangling headers.
+function PlanSections({ plan }: { plan: PlanResult }) {
+  return (
+    <div className="mt-2 space-y-2 text-[10.5px] leading-snug">
+      {plan.goal && (
+        <div className="rounded-md bg-white/60 px-2 py-1.5 ring-1 ring-sky-200">
+          <div className="font-mono text-[8.5px] uppercase tracking-wider text-sky-700">
+            Goal
+          </div>
+          <div className="mt-0.5 font-medium text-sky-900">{plan.goal}</div>
+        </div>
+      )}
+      {plan.steps.length > 0 && (
+        <div>
+          <div className="font-mono text-[8.5px] uppercase tracking-wider opacity-60">
+            Steps
+          </div>
+          <ol className="mt-1 space-y-1">
+            {plan.steps.map((s, i) => (
+              <li key={i} className="flex items-start gap-1.5">
+                <span className="mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-sky-100 font-mono text-[8px] font-semibold text-sky-700">
+                  {i + 1}
+                </span>
+                <div className="min-w-0">
+                  <div className="font-semibold opacity-90">{s.label}</div>
+                  <div className="opacity-70">{s.rationale}</div>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {plan.resources.length > 0 && (
+        <div>
+          <div className="font-mono text-[8.5px] uppercase tracking-wider opacity-60">
+            Resources
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {plan.resources.map((r, i) => (
+              <li key={i} className="opacity-85">
+                · {r}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {plan.success_criteria.length > 0 && (
+        <div>
+          <div className="font-mono text-[8.5px] uppercase tracking-wider text-emerald-700">
+            Success criteria
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {plan.success_criteria.map((c, i) => (
+              <li key={i} className="text-emerald-900/90">
+                ✓ {c}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {plan.risks.length > 0 && (
+        <div>
+          <div className="flex items-center gap-1 font-mono text-[8.5px] uppercase tracking-wider text-amber-700">
+            <AlertTriangle className="h-2.5 w-2.5" /> Risks
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {plan.risks.map((r, i) => (
+              <li key={i} className="text-amber-900/90">
+                · {r.risk} <span className="opacity-70">→ {r.mitigation}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}

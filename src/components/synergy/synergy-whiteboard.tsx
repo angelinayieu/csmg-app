@@ -118,6 +118,13 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Drives the "Make actionable" modal. Set when the user clicks the
+  // hover-menu button; cleared on close or after the plan is accepted.
+  // Hoisted up here so the global Esc-keybind in the keydown useEffect
+  // (defined below) can reference it without use-before-declare lint.
+  const [actionableTargetId, setActionableTargetId] = useState<string | null>(
+    null,
+  );
 
   // Pan + zoom. World coordinates are what's stored on each node and
   // each stroke; pointer events convert via toWorld() before being
@@ -428,15 +435,32 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
     setZoom(nextZoom);
   };
 
-  // Track Space-as-pan-modifier
+  // Track Space-as-pan-modifier + Esc as close-everything.
+  // Esc clears the current selection AND closes the actionable modal
+  // — single mental model: "stop whatever menu/modal is open."
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const typing =
+        tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable;
       if (e.code === "Space" && !e.repeat) {
-        const target = e.target as HTMLElement | null;
-        const tag = target?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+        if (typing) return;
         spaceHeldRef.current = true;
         e.preventDefault();
+        return;
+      }
+      if (e.key === "Escape") {
+        // Don't intercept Esc inside form fields — let inputs handle it
+        // (e.g. clearing autocomplete). Only the canvas-level dismiss.
+        if (typing) return;
+        if (actionableTargetId) {
+          setActionableTargetId(null);
+          return;
+        }
+        if (selectedId) {
+          setSelectedId(null);
+        }
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -448,7 +472,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, []);
+  }, [actionableTargetId, selectedId]);
 
   const onNodeClick = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -822,11 +846,13 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
         categoryDefs.forEach((cat, catIdx) => {
           if (cat.items.length === 0) return;
           // Category folder node — placed in a wide ring around target.
+          // Bumped from 240→340 so the four folders + their items have
+          // room to breathe without overlapping the parent or each other.
           const catPos = placeNear(
             target,
             existingCategoryCount + catIdx,
             existingCategoryCount + categoryDefs.length,
-            240,
+            340,
           );
           const catNode: ClientNode = {
             id: uid(),
@@ -839,8 +865,9 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
           };
           next.push(catNode);
           // Items as children of the category node.
+          // 140→170 so items aren't crammed against the category card.
           cat.items.forEach((item, i) => {
-            const itemPos = placeNear(catNode, i, cat.items.length, 140);
+            const itemPos = placeNear(catNode, i, cat.items.length, 170);
             next.push({
               id: uid(),
               x: itemPos.x + (Math.random() - 0.5) * 20,
@@ -959,8 +986,8 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
   // Opens a modal that walks the user through clarifying questions
   // and then generates a structured plan. On accept the modal calls
   // back into `spawnPlanFromModal` which inserts a plan-kind node
-  // as a child of the source card.
-  const [actionableTargetId, setActionableTargetId] = useState<string | null>(null);
+  // as a child of the source card. (State is declared at the top of
+  // the component so the Esc keybind effect can reference it.)
   const runActionableOnNode = (targetId: string) => {
     const target = nodes.find((n) => n.id === targetId);
     if (!target) return;

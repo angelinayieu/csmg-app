@@ -409,36 +409,13 @@ function ErrorState({
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-// Serializes a structured plan into the human-readable meta text we
-// store on the brainstorm_nodes.meta column. Kept human-readable so
-// the canvas card's <pre> render is informative without any
-// special parsing.
+// Serializes a structured plan into the meta column. We prefix with
+// a version marker so SynergyNode can detect structured plan meta
+// and render formatted sections (goal / steps / resources / etc.)
+// instead of an opaque pre-block. Falls back to <pre> if the prefix
+// is absent or the JSON fails to parse — see SynergyNode.
+//
+// Marker format: "<<plan-v1>>" + JSON.stringify(PlanResult)
 function planToMeta(plan: PlanResult): string {
-  const lines: string[] = [];
-  lines.push("GOAL");
-  lines.push(plan.goal);
-  if (plan.steps.length > 0) {
-    lines.push("");
-    lines.push("STEPS");
-    plan.steps.forEach((s, i) => {
-      lines.push(`${i + 1}. ${s.label}`);
-      lines.push(`   — ${s.rationale}`);
-    });
-  }
-  if (plan.resources.length > 0) {
-    lines.push("");
-    lines.push("RESOURCES");
-    plan.resources.forEach((r) => lines.push(`- ${r}`));
-  }
-  if (plan.success_criteria.length > 0) {
-    lines.push("");
-    lines.push("SUCCESS CRITERIA");
-    plan.success_criteria.forEach((c) => lines.push(`- ${c}`));
-  }
-  if (plan.risks.length > 0) {
-    lines.push("");
-    lines.push("RISKS & MITIGATIONS");
-    plan.risks.forEach((r) => lines.push(`- ${r.risk} → ${r.mitigation}`));
-  }
-  return lines.join("\n");
+  return `<<plan-v1>>${JSON.stringify(plan)}`;
 }
