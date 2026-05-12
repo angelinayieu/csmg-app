@@ -92,6 +92,25 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const drawingRef = useRef<ClientStroke | null>(null);
 
+  // Node-drag bookkeeping. Window-level pointermove/up listeners attach
+  // on drag start (handleNodeDragStart) so the drag survives the cursor
+  // leaving the card. `hasMoved` lets onNodeClick distinguish a click
+  // from a drag-end so a small wiggle doesn't change the selection.
+  const nodeDragRef = useRef<{
+    nodeId: string;
+    startClientX: number;
+    startClientY: number;
+    startNodeX: number;
+    startNodeY: number;
+    hasMoved: boolean;
+  } | null>(null);
+  // Mirror of `zoom` for the window listener closure, which captures
+  // the value at subscribe time.
+  const zoomRef = useRef(1);
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
   const pickedKeys = useMemo(
     () => new Set(history.filter((h) => h.picked).map((h) => normalizeKey(h.bucket, h.text))),
     [history],
@@ -394,12 +413,68 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
 
   const onNodeClick = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    // If the pointer moved >4px between down and up, treat this as a
+    // drag-end rather than a click; selection stays where it was.
+    if (nodeDragRef.current?.hasMoved) return;
     if (tool === "eraser") {
       setNodes((p) => p.filter((n) => n.id !== id && n.parent !== id));
       if (selectedId === id) setSelectedId(null);
       return;
     }
     setSelectedId(id);
+  };
+
+  // Begin dragging a node. Eraser tool short-circuits (no drag — the
+  // pointerdown there means "delete on click"). Otherwise we install
+  // window listeners that update the node's world coords as the cursor
+  // moves; drag ends on pointerup.
+  const handleNodeDragStart = (e: React.PointerEvent, nodeId: string) => {
+    if (tool === "eraser") return;
+    e.stopPropagation();
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    nodeDragRef.current = {
+      nodeId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startNodeX: node.x,
+      startNodeY: node.y,
+      hasMoved: false,
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      const d = nodeDragRef.current;
+      if (!d) return;
+      const dxScreen = ev.clientX - d.startClientX;
+      const dyScreen = ev.clientY - d.startClientY;
+      if (!d.hasMoved && Math.hypot(dxScreen, dyScreen) > 4) {
+        d.hasMoved = true;
+      }
+      if (!d.hasMoved) return;
+      const dxWorld = dxScreen / zoomRef.current;
+      const dyWorld = dyScreen / zoomRef.current;
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === d.nodeId
+            ? { ...n, x: d.startNodeX + dxWorld, y: d.startNodeY + dyWorld }
+            : n,
+        ),
+      );
+    };
+
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      // Keep `hasMoved` set until after the synthetic click fires, so
+      // onNodeClick can suppress the click that follows a drag.
+      window.setTimeout(() => {
+        nodeDragRef.current = null;
+      }, 0);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   };
 
   const clearAll = () => {
@@ -516,10 +591,42 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
     if (!parent) return;
     setAiBusy(`var:${parentId}`);
     try {
-      const ctx = nodes
-        .filter((n) => n.id === parent.parent)
-        .map((n) => `parent: ${n.label}`)
-        .join("\n");
+      // Build richer context for variations. Off-topic drift (e.g.
+      // "AI ethics certification" emerging from a cognitive-modelling
+      // node) happens when the model only sees the target label. Pass:
+      //   - the full ancestor chain (root → parent) for domain anchor
+      //   - sibling labels so the LLM understands the granularity level
+      //     the new variations should match
+      //   - the core seed so the user's overarching concept is visible
+      const ancestorChain: string[] = [];
+      let cursor: ClientNode | undefined = parent;
+      const seen = new Set<string>();
+      while (cursor && !seen.has(cursor.id)) {
+        seen.add(cursor.id);
+        ancestorChain.unshift(`${cursor.kind}: ${cursor.label}`);
+        cursor = cursor.parent ? nodes.find((n) => n.id === cursor!.parent) : undefined;
+      }
+      const core = nodes.find((n) => n.kind === "core");
+      const siblings = nodes
+        .filter((n) => n.parent === parent.parent && n.id !== parent.id && n.kind !== "user")
+        .slice(0, 6)
+        .map((n) => `- ${n.label}`);
+
+      const ctxLines: string[] = [];
+      if (core && core.id !== parent.id) {
+        ctxLines.push(`Overarching brainstorm seed: ${core.label}`);
+      }
+      if (ancestorChain.length > 1) {
+        // Drop the last entry — that's the target itself.
+        ctxLines.push(
+          `Ancestor chain (root → target):\n${ancestorChain.slice(0, -1).join("\n")}`,
+        );
+      }
+      if (siblings.length > 0) {
+        ctxLines.push(`Sibling concepts at the same level:\n${siblings.join("\n")}`);
+      }
+      const ctx = ctxLines.join("\n\n");
+
       const res = await augment({
         transcript: parent.label,
         mode: "variations",
@@ -768,6 +875,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
                   e.stopPropagation();
                   runRank(n.id);
                 }}
+                onDragStart={handleNodeDragStart}
               />
             ))}
           </div>

@@ -51,7 +51,14 @@ Labels under 6 words. Be incisive, not generic. The summary should be one senten
 };
 
 function variationsSystem(precision: number): string {
-  return `Generate 4 distinct variations or alternative angles on the given concept. Each variation must take a meaningfully different approach (different scope, audience, mechanism, or framing) — do not produce near-duplicates.
+  return `Generate 4 distinct variations or alternative angles on the GIVEN CONCEPT.
+
+CRITICAL — STAY IN DOMAIN:
+- Variations must remain about the SAME underlying subject as the input concept. Use the parent context (if provided) to anchor what that subject is.
+- If the input is about cognitive states / biology / a specific mechanism, do NOT pivot to adjacent-but-unrelated topics (e.g., do not turn a cognitive-modelling node into "AI ethics certification programs"). A variation is a different ANGLE on the same problem, not a different problem.
+- A useful test: would a reader looking at the parent context immediately see how each variation belongs to it? If no, the variation is off-topic — discard it.
+
+Each variation must take a meaningfully different approach (different scope, audience, mechanism, or framing) — but the approach must address the SAME concept. No near-duplicates either.
 
 PRECISION LEVEL ${precision}/5 — ${PRECISION_GUIDANCE[precision]}
 

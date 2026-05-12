@@ -3,6 +3,23 @@
 // Renders one ClientNode plus its conditional floating action menu
 // (Variations + Rank) when selected. Color/typography is kind-driven;
 // see KIND_STYLES below for the light-theme palette.
+//
+// Sizing strategy:
+//   - min-width 180, max-width 320 (was 240) so cards don't squeeze
+//     into thin columns when users paste in longer thoughts via the
+//     sticky tool.
+//   - max-height 220 with overflow-y: auto so very long labels stay
+//     scrollable inside the card instead of bloating the canvas
+//     vertically.
+//
+// Drag:
+//   - Pointer-down on the card calls onDragStart(id, clientX, clientY).
+//     The parent installs window-level pointermove/up listeners and
+//     converts deltas to world-space via the canvas's toWorld(). This
+//     keeps disambiguation (click vs drag) and zoom-awareness in one
+//     place rather than per-node.
+//   - We stopPropagation so the canvas's pan/draw/select handlers
+//     don't fire while a node is being dragged.
 
 "use client";
 
@@ -16,9 +33,6 @@ interface KindStyle {
   label: string;
 }
 
-// Light-theme palette tuned to match the InteraxisCanvas (Apple-ish
-// surfaces, low-saturation tints). One distinct hue per kind so a
-// glance at the board surfaces the kind distribution.
 const KIND_STYLES: Record<NodeKind, KindStyle> = {
   core: {
     bg: "bg-blue-50",
@@ -51,8 +65,7 @@ const KIND_STYLES: Record<NodeKind, KindStyle> = {
     label: "action",
   },
   // Legacy "spoken transcript" nodes — not rendered (see SynergyWhiteboard
-  // where they are filtered out). Style retained for any old session
-  // that somehow surfaces one in a debug context.
+  // where they are filtered out). Style retained for forward-compat.
   user: {
     bg: "bg-gray-50",
     ring: "ring-gray-200",
@@ -76,16 +89,21 @@ const KIND_STYLES: Record<NodeKind, KindStyle> = {
 interface SynergyNodeProps {
   node: ClientNode;
   selected: boolean;
-  // Variations / Rank buttons. Hidden on "ranking" kind (the summary
-  // node itself can't sprout more variations).
+  // Per-node action chip (Variations + Rank) when selected. Hidden on
+  // "ranking" kind (the summary card itself can't sprout more).
   showActions: boolean;
   variationBusy: boolean;
   rankBusy: boolean;
-  // True when there are ≥2 variation children to rank.
   canRank: boolean;
+  // Click is fired on pointerup WITHOUT a preceding drag — the parent
+  // disambiguates via movement threshold so we never lose a select to
+  // accidental hand-shake.
   onClick: (e: React.MouseEvent) => void;
   onVariations: (e: React.MouseEvent) => void;
   onRank: (e: React.MouseEvent) => void;
+  // Pointer-down on the card body. Parent installs window listeners
+  // for the drag lifecycle; the node just opens the door.
+  onDragStart: (e: React.PointerEvent, nodeId: string) => void;
 }
 
 export function SynergyNode({
@@ -98,6 +116,7 @@ export function SynergyNode({
   onClick,
   onVariations,
   onRank,
+  onDragStart,
 }: SynergyNodeProps) {
   if (node.kind === "user") return null;
   const s = KIND_STYLES[node.kind];
@@ -109,32 +128,42 @@ export function SynergyNode({
       style={{ left: node.x, top: node.y }}
     >
       <div
+        onPointerDown={(e) => onDragStart(e, node.id)}
         onClick={onClick}
         title={node.meta}
         className={[
-          "select-none rounded-2xl px-3 py-2 text-xs shadow-sm transition cursor-pointer hover:scale-[1.03]",
+          "select-none rounded-2xl px-3 py-2 text-xs shadow-sm transition cursor-grab active:cursor-grabbing",
           s.bg,
           s.text,
           isCoreOrSelected ? "ring-2" : "ring-1",
           selected ? "ring-blue-500 shadow-md" : s.ring,
         ].join(" ")}
-        style={{ maxWidth: 240 }}
+        style={{
+          minWidth: 180,
+          maxWidth: 320,
+          maxHeight: 220,
+          overflowY: "auto",
+        }}
       >
-        <div className="mb-0.5 font-mono text-[9px] uppercase tracking-wider opacity-60">
-          {s.label}
+        <div className="sticky top-0 mb-0.5 flex items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-wider opacity-60">
+          <span>{s.label}</span>
         </div>
-        <div className="font-medium leading-snug whitespace-pre-wrap">
+        <div className="font-medium leading-snug whitespace-pre-wrap break-words">
           {node.label}
         </div>
         {node.kind === "ranking" && node.meta && (
-          <pre className="mt-2 max-w-[260px] whitespace-pre-wrap font-sans text-[10px] leading-snug opacity-70">
+          <pre className="mt-2 whitespace-pre-wrap font-sans text-[10px] leading-snug opacity-70 break-words">
             {node.meta}
           </pre>
         )}
       </div>
 
       {selected && showActions && node.kind !== "ranking" && (
-        <div className="absolute left-1/2 top-full z-10 mt-2 flex -translate-x-1/2 gap-1 rounded-lg border border-gray-200 bg-white/95 p-1 shadow-md backdrop-blur">
+        <div
+          className="absolute left-1/2 top-full z-10 mt-2 flex -translate-x-1/2 gap-1 rounded-lg border border-gray-200 bg-white/95 p-1 shadow-md backdrop-blur"
+          // Action chip must not initiate a drag of the underlying node
+          onPointerDown={(e) => e.stopPropagation()}
+        >
           <NodeAction
             icon={Shuffle}
             label="Variations"
