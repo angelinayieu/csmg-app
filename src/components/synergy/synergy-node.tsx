@@ -1,29 +1,33 @@
 // ── Single node on the synergy whiteboard ──
 //
-// Renders one ClientNode plus its conditional floating action menu
-// (Variations + Rank) when selected. Color/typography is kind-driven;
-// see KIND_STYLES below for the light-theme palette.
+// Renders one ClientNode plus its hover/selected action menu. Color
+// + typography are kind-driven (see KIND_STYLES).
 //
-// Sizing strategy:
-//   - min-width 180, max-width 320 (was 240) so cards don't squeeze
-//     into thin columns when users paste in longer thoughts via the
-//     sticky tool.
-//   - max-height 220 with overflow-y: auto so very long labels stay
-//     scrollable inside the card instead of bloating the canvas
-//     vertically.
+// Action menu surfaces when the card is hovered OR selected. Hover
+// applies to the wrapper div so moving onto the menu keeps it open
+// (the menu is a child of the wrapper). Selection persists across
+// hover transitions so the menu stays put while the user takes a
+// scoped action.
 //
-// Drag:
-//   - Pointer-down on the card calls onDragStart(id, clientX, clientY).
-//     The parent installs window-level pointermove/up listeners and
-//     converts deltas to world-space via the canvas's toWorld(). This
-//     keeps disambiguation (click vs drag) and zoom-awareness in one
-//     place rather than per-node.
-//   - We stopPropagation so the canvas's pan/draw/select handlers
-//     don't fire while a node is being dragged.
+// Action chips (Decompose this / Variations / Questions / Research /
+// Make actionable) each invoke a parent-level handler. The handlers
+// pass the node's id; the parent reuses its rich-context builder
+// (ancestor chain + core + siblings) so all five modes share the
+// same anti-drift anchoring used by Variations.
 
 "use client";
 
-import { Loader2, Shuffle, Trophy } from "lucide-react";
+import { useState } from "react";
+import {
+  Compass,
+  HelpCircle,
+  Loader2,
+  Network,
+  Search,
+  Shuffle,
+  Sparkles,
+  Trophy,
+} from "lucide-react";
 import type { ClientNode, NodeKind } from "@/lib/synergy/types";
 
 interface KindStyle {
@@ -64,8 +68,6 @@ const KIND_STYLES: Record<NodeKind, KindStyle> = {
     text: "text-emerald-900",
     label: "action",
   },
-  // Legacy "spoken transcript" nodes — not rendered (see SynergyWhiteboard
-  // where they are filtered out). Style retained for forward-compat.
   user: {
     bg: "bg-gray-50",
     ring: "ring-gray-200",
@@ -89,43 +91,67 @@ const KIND_STYLES: Record<NodeKind, KindStyle> = {
 interface SynergyNodeProps {
   node: ClientNode;
   selected: boolean;
-  // Per-node action chip (Variations + Rank) when selected. Hidden on
-  // "ranking" kind (the summary card itself can't sprout more).
   showActions: boolean;
-  variationBusy: boolean;
-  rankBusy: boolean;
+  // Which scoped action (if any) is currently in-flight for this
+  // node. Keyed by action name so multiple buttons can show their
+  // own loading state. e.g. "variations" | "decompose" | etc.
+  busyAction: string | null;
+  // True when there are ≥2 variation children to rank.
   canRank: boolean;
-  // Click is fired on pointerup WITHOUT a preceding drag — the parent
-  // disambiguates via movement threshold so we never lose a select to
-  // accidental hand-shake.
   onClick: (e: React.MouseEvent) => void;
-  onVariations: (e: React.MouseEvent) => void;
-  onRank: (e: React.MouseEvent) => void;
-  // Pointer-down on the card body. Parent installs window listeners
-  // for the drag lifecycle; the node just opens the door.
+  onAction: (action: SynergyNodeAction, nodeId: string) => void;
   onDragStart: (e: React.PointerEvent, nodeId: string) => void;
 }
+
+export type SynergyNodeAction =
+  | "decompose"
+  | "variations"
+  | "questions"
+  | "research"
+  | "actionable"
+  | "rank";
+
+interface ActionDef {
+  key: SynergyNodeAction;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+// Order chosen to mirror the user's mental flow: break it down first,
+// then explore alternatives, sharpen, research, and finally formalize
+// into a plan. Rank is the odd one out — gated to nodes with ≥2
+// variation children — so it sits at the end.
+const PRIMARY_ACTIONS: ActionDef[] = [
+  { key: "decompose", label: "Decompose this", icon: Network },
+  { key: "variations", label: "Variations", icon: Shuffle },
+  { key: "questions", label: "Questions", icon: HelpCircle },
+  { key: "research", label: "Research", icon: Search },
+  { key: "actionable", label: "Make actionable", icon: Compass },
+];
 
 export function SynergyNode({
   node,
   selected,
   showActions,
-  variationBusy,
-  rankBusy,
+  busyAction,
   canRank,
   onClick,
-  onVariations,
-  onRank,
+  onAction,
   onDragStart,
 }: SynergyNodeProps) {
+  const [hovered, setHovered] = useState(false);
+
   if (node.kind === "user") return null;
   const s = KIND_STYLES[node.kind];
   const isCoreOrSelected = node.kind === "core" || selected;
+  const menuOpen = (hovered || selected) && showActions && node.kind !== "ranking";
 
   return (
     <div
       className="absolute -translate-x-1/2 -translate-y-1/2"
       style={{ left: node.x, top: node.y }}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
     >
       <div
         onPointerDown={(e) => onDragStart(e, node.id)}
@@ -158,24 +184,38 @@ export function SynergyNode({
         )}
       </div>
 
-      {selected && showActions && node.kind !== "ranking" && (
+      {menuOpen && (
         <div
-          className="absolute left-1/2 top-full z-10 mt-2 flex -translate-x-1/2 gap-1 rounded-lg border border-gray-200 bg-white/95 p-1 shadow-md backdrop-blur"
-          // Action chip must not initiate a drag of the underlying node
+          className="absolute left-1/2 top-full z-10 mt-2 flex max-w-[480px] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-gray-200 bg-white/95 p-1 shadow-md backdrop-blur"
+          // Prevent the menu from initiating a drag of the underlying
+          // node, and prevent its mouseleave from closing itself.
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <NodeAction
-            icon={Shuffle}
-            label="Variations"
-            busy={variationBusy}
-            onClick={onVariations}
-          />
-          <NodeAction
+          {PRIMARY_ACTIONS.map((a) => (
+            <ActionChip
+              key={a.key}
+              icon={a.icon}
+              label={a.label}
+              busy={busyAction === a.key}
+              onClick={(e) => {
+                e.stopPropagation();
+                onAction(a.key, node.id);
+              }}
+            />
+          ))}
+          {/* Rank only when there are ≥2 variation children. Separated
+              by a divider so it's clear this is a downstream action. */}
+          <div className="mx-0.5 h-5 w-px bg-gray-200" aria-hidden />
+          <ActionChip
             icon={Trophy}
             label="Rank"
-            busy={rankBusy}
+            busy={busyAction === "rank"}
             disabled={!canRank}
-            onClick={onRank}
+            disabledTitle="Generate variations first"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAction("rank", node.id);
+            }}
           />
         </div>
       )}
@@ -183,32 +223,39 @@ export function SynergyNode({
   );
 }
 
-function NodeAction({
+function ActionChip({
   icon: Icon,
   label,
   busy,
   disabled,
+  disabledTitle,
   onClick,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   busy?: boolean;
   disabled?: boolean;
+  disabledTitle?: string;
   onClick: (e: React.MouseEvent) => void;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={busy || disabled}
-      title={disabled ? "Generate variations first" : label}
-      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40"
+      title={disabled ? disabledTitle : label}
+      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-medium text-gray-700 transition hover:bg-blue-50 hover:text-blue-700 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-700"
     >
       {busy ? (
         <Loader2 className="h-3 w-3 animate-spin" />
       ) : (
         <Icon className="h-3 w-3" />
       )}
-      {label}
+      <span className="whitespace-nowrap">{label}</span>
     </button>
   );
 }
+
+// Sparkles icon imported for forward-compat / re-export so the parent
+// can re-use the icon for its own "Make actionable" CTAs without
+// re-importing.
+export { Sparkles as MakeActionableIcon };

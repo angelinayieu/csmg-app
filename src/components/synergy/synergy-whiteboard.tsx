@@ -586,18 +586,53 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
     ]);
   }, []);
 
+  // Build the rich context block for a scoped action on a target node.
+  // Used by all five scoped actions (decompose/variations/questions/
+  // research/actionable) to prevent LLM domain-drift. Includes:
+  //   - the core seed (overarching concept)
+  //   - the full ancestor chain (root → target's parent)
+  //   - the target's siblings at the same hierarchy level
+  // The target's own label is sent as the `transcript`, not the context,
+  // so the prompt's "given concept" anchor stays explicit.
+  const buildRichContext = useCallback(
+    (target: ClientNode): string => {
+      const ancestorChain: string[] = [];
+      let cursor: ClientNode | undefined = target;
+      const seen = new Set<string>();
+      while (cursor && !seen.has(cursor.id)) {
+        seen.add(cursor.id);
+        ancestorChain.unshift(`${cursor.kind}: ${cursor.label}`);
+        cursor = cursor.parent ? nodes.find((n) => n.id === cursor!.parent) : undefined;
+      }
+      const core = nodes.find((n) => n.kind === "core");
+      const siblings = nodes
+        .filter((n) => n.parent === target.parent && n.id !== target.id && n.kind !== "user")
+        .slice(0, 6)
+        .map((n) => `- ${n.label}`);
+
+      const ctxLines: string[] = [];
+      if (core && core.id !== target.id) {
+        ctxLines.push(`Overarching brainstorm seed: ${core.label}`);
+      }
+      if (ancestorChain.length > 1) {
+        // Drop the last entry — that's the target itself.
+        ctxLines.push(
+          `Ancestor chain (root → target):\n${ancestorChain.slice(0, -1).join("\n")}`,
+        );
+      }
+      if (siblings.length > 0) {
+        ctxLines.push(`Sibling concepts at the same level:\n${siblings.join("\n")}`);
+      }
+      return ctxLines.join("\n\n");
+    },
+    [nodes],
+  );
+
   const runVariations = async (parentId: string) => {
     const parent = nodes.find((n) => n.id === parentId);
     if (!parent) return;
-    setAiBusy(`var:${parentId}`);
+    setAiBusy(`variations:${parentId}`);
     try {
-      // Build richer context for variations. Off-topic drift (e.g.
-      // "AI ethics certification" emerging from a cognitive-modelling
-      // node) happens when the model only sees the target label. Pass:
-      //   - the full ancestor chain (root → parent) for domain anchor
-      //   - sibling labels so the LLM understands the granularity level
-      //     the new variations should match
-      //   - the core seed so the user's overarching concept is visible
       const ancestorChain: string[] = [];
       let cursor: ClientNode | undefined = parent;
       const seen = new Set<string>();
@@ -617,7 +652,6 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
         ctxLines.push(`Overarching brainstorm seed: ${core.label}`);
       }
       if (ancestorChain.length > 1) {
-        // Drop the last entry — that's the target itself.
         ctxLines.push(
           `Ancestor chain (root → target):\n${ancestorChain.slice(0, -1).join("\n")}`,
         );
@@ -706,6 +740,220 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
       toast.error("Rank failed", { description: (e as Error).message });
     } finally {
       setAiBusy(null);
+    }
+  };
+
+  // ── Scoped Decompose ──
+  //
+  // Decompose just THIS card's concept. Spawns 4 category folder
+  // nodes (Upstream / Downstream / First principles / Variations) as
+  // direct children of the target, and the LLM's items as the
+  // grand-children under each category. The result is a natural
+  // 2-level tree that traces back to its origin card — addresses the
+  // "decomposed items don't trace back" feedback from live testing.
+  const runDecomposeOnNode = async (targetId: string) => {
+    const target = nodes.find((n) => n.id === targetId);
+    if (!target) return;
+    setAiBusy(`decompose:${targetId}`);
+    try {
+      const ctx = buildRichContext(target);
+      const res = await augment({
+        transcript: target.label,
+        mode: "decompose",
+        context: ctx || undefined,
+      });
+      if (res.mode !== "decompose") return;
+      const d = res.result;
+      const categoryDefs = [
+        { label: "Upstream needs", items: d.upstream, childKind: "branch" as NodeKind },
+        { label: "Downstream produces", items: d.downstream, childKind: "action" as NodeKind },
+        { label: "First principles", items: d.first_principles, childKind: "insight" as NodeKind },
+        { label: "Variations", items: d.variations, childKind: "variation" as NodeKind },
+      ];
+      const totalItems = categoryDefs.reduce((s, c) => s + c.items.length, 0);
+      if (totalItems === 0) {
+        toast.info("Decompose returned nothing — try adding more context to the card.");
+        return;
+      }
+      setNodes((prev) => {
+        const next = [...prev];
+        const existingCategoryCount = prev.filter(
+          (n) => n.parent === targetId && n.kind === "branch",
+        ).length;
+        categoryDefs.forEach((cat, catIdx) => {
+          if (cat.items.length === 0) return;
+          // Category folder node — placed in a wide ring around target.
+          const catPos = placeNear(
+            target,
+            existingCategoryCount + catIdx,
+            existingCategoryCount + categoryDefs.length,
+            240,
+          );
+          const catNode: ClientNode = {
+            id: uid(),
+            x: catPos.x,
+            y: catPos.y,
+            label: cat.label,
+            kind: "branch",
+            parent: targetId,
+            meta: `Decomposed from "${target.label.slice(0, 60)}"`,
+          };
+          next.push(catNode);
+          // Items as children of the category node.
+          cat.items.forEach((item, i) => {
+            const itemPos = placeNear(catNode, i, cat.items.length, 140);
+            next.push({
+              id: uid(),
+              x: itemPos.x + (Math.random() - 0.5) * 20,
+              y: itemPos.y + (Math.random() - 0.5) * 20,
+              label: item,
+              kind: cat.childKind,
+              parent: catNode.id,
+            });
+          });
+        });
+        return next;
+      });
+      toast.success(`Decomposed into ${totalItems} items across 4 categories`);
+    } catch (e) {
+      toast.error("Decompose failed", { description: (e as Error).message });
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  // ── Scoped Sharper Questions ──
+  // Generates 3-4 Socratic questions specifically about the target
+  // concept; spawns them as question-kind children. Different from
+  // the right-rail Questions mode (which is board-wide).
+  const runQuestionsOnNode = async (targetId: string) => {
+    const target = nodes.find((n) => n.id === targetId);
+    if (!target) return;
+    setAiBusy(`questions:${targetId}`);
+    try {
+      const ctx = buildRichContext(target);
+      const res = await augment({
+        transcript: target.label,
+        mode: "questions",
+        context: ctx || undefined,
+      });
+      if (res.mode !== "questions") return;
+      const qs = res.result.questions ?? [];
+      if (qs.length === 0) {
+        toast.info("No questions returned.");
+        return;
+      }
+      setNodes((prev) => {
+        const existing = prev.filter(
+          (n) => n.parent === targetId && n.kind === "question",
+        ).length;
+        const created: ClientNode[] = qs.map((q, i) => {
+          const pos = placeNear(target, existing + i, existing + qs.length, 180);
+          return {
+            id: uid(),
+            x: pos.x + (Math.random() - 0.5) * 25,
+            y: pos.y + (Math.random() - 0.5) * 25,
+            label: q,
+            kind: "question",
+            parent: targetId,
+          };
+        });
+        return [...prev, ...created];
+      });
+      toast.success(`${qs.length} sharper questions added`);
+    } catch (e) {
+      toast.error("Questions failed", { description: (e as Error).message });
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  // ── Scoped Research directions ──
+  // Generates concrete research directions specifically anchored to
+  // this card's concept; each direction carries an angle (validate /
+  // refute / extend / alternative) stored in the node's meta so the
+  // card can render the angle pill.
+  const runResearchOnNode = async (targetId: string) => {
+    const target = nodes.find((n) => n.id === targetId);
+    if (!target) return;
+    setAiBusy(`research:${targetId}`);
+    try {
+      const ctx = buildRichContext(target);
+      const res = await augment({
+        transcript: target.label,
+        mode: "research",
+        context: ctx || undefined,
+      });
+      if (res.mode !== "research") return;
+      const ds = res.result.directions ?? [];
+      if (ds.length === 0) {
+        toast.info("No research directions returned.");
+        return;
+      }
+      setNodes((prev) => {
+        const existing = prev.filter(
+          (n) => n.parent === targetId && n.kind === "insight",
+        ).length;
+        const created: ClientNode[] = ds.map((d, i) => {
+          const pos = placeNear(target, existing + i, existing + ds.length, 180);
+          return {
+            id: uid(),
+            x: pos.x + (Math.random() - 0.5) * 25,
+            y: pos.y + (Math.random() - 0.5) * 25,
+            label: d.prompt,
+            kind: "insight",
+            parent: targetId,
+            meta: `[${d.angle}] ${d.why}`,
+          };
+        });
+        return [...prev, ...created];
+      });
+      toast.success(`${ds.length} research directions added`);
+    } catch (e) {
+      toast.error("Research failed", { description: (e as Error).message });
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  // ── Stub: Make actionable ──
+  // Full implementation lands in 1.6d (clarifying-questions flow →
+  // structured plan card). Stubbed here so the hover-menu button
+  // exists and signals "coming soon" to live testers.
+  const runActionableOnNode = (targetId: string) => {
+    const target = nodes.find((n) => n.id === targetId);
+    if (!target) return;
+    toast.info("Make actionable — coming in 1.6d", {
+      description: "Will ask 2-3 clarifying questions, then generate a structured plan card.",
+    });
+  };
+
+  // ── Dispatcher passed to SynergyNode ──
+  // Centralizes routing so the node component just emits "this action
+  // for this node" and stays presentation-only.
+  const handleNodeAction = (
+    action:
+      | "decompose"
+      | "variations"
+      | "questions"
+      | "research"
+      | "actionable"
+      | "rank",
+    nodeId: string,
+  ) => {
+    switch (action) {
+      case "decompose":
+        return runDecomposeOnNode(nodeId);
+      case "variations":
+        return runVariations(nodeId);
+      case "questions":
+        return runQuestionsOnNode(nodeId);
+      case "research":
+        return runResearchOnNode(nodeId);
+      case "actionable":
+        return runActionableOnNode(nodeId);
+      case "rank":
+        return runRank(nodeId);
     }
   };
 
@@ -857,27 +1105,30 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
               ))}
             </svg>
 
-            {nodes.map((n) => (
-              <SynergyNode
-                key={n.id}
-                node={n}
-                selected={n.id === selectedId}
-                showActions={true}
-                variationBusy={aiBusy === `var:${n.id}`}
-                rankBusy={aiBusy === `rank:${n.id}`}
-                canRank={nodes.some((c) => c.parent === n.id && c.kind === "variation")}
-                onClick={(e) => onNodeClick(e, n.id)}
-                onVariations={(e) => {
-                  e.stopPropagation();
-                  runVariations(n.id);
-                }}
-                onRank={(e) => {
-                  e.stopPropagation();
-                  runRank(n.id);
-                }}
-                onDragStart={handleNodeDragStart}
-              />
-            ))}
+            {nodes.map((n) => {
+              // busyAction is the in-flight action key for THIS node,
+              // or null. The wire format is "<action>:<nodeId>"; we
+              // surface just the action name to the child.
+              const busyAction =
+                aiBusy && aiBusy.endsWith(`:${n.id}`)
+                  ? aiBusy.split(":")[0]
+                  : null;
+              return (
+                <SynergyNode
+                  key={n.id}
+                  node={n}
+                  selected={n.id === selectedId}
+                  showActions={true}
+                  busyAction={busyAction}
+                  canRank={nodes.some(
+                    (c) => c.parent === n.id && c.kind === "variation",
+                  )}
+                  onClick={(e) => onNodeClick(e, n.id)}
+                  onAction={handleNodeAction}
+                  onDragStart={handleNodeDragStart}
+                />
+              );
+            })}
           </div>
         </div>
 
