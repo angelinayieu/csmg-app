@@ -58,6 +58,43 @@ interface Transcript {
   at: number;
 }
 
+// ── Edge color by child kind ──
+// Each edge takes its color from the CHILD it points to, so every
+// subtree's connectors visually tag what they're producing (purple
+// for insights, emerald for actions, etc.). Helps the eye trace
+// "which thread is which" on a busy board.
+const EDGE_COLOR_BY_KIND: Record<NodeKind, string> = {
+  core: "rgba(59, 130, 246, 0.40)", // blue
+  branch: "rgba(107, 114, 128, 0.30)", // gray (neutral; branches are catch-all)
+  insight: "rgba(168, 85, 247, 0.40)", // purple
+  question: "rgba(245, 158, 11, 0.40)", // amber
+  action: "rgba(16, 185, 129, 0.40)", // emerald
+  user: "rgba(107, 114, 128, 0.15)", // pale gray (legacy, hidden anyway)
+  variation: "rgba(217, 70, 239, 0.40)", // fuchsia
+  ranking: "rgba(249, 115, 22, 0.40)", // orange
+};
+
+// Folder region tint by category label. The Decompose action spawns
+// four named categories — give each a faint background hue matching
+// the kind of items it contains, so the four folders are visually
+// distinguishable when they cluster around the same parent.
+function folderTintForLabel(label: string): { fill: string; stroke: string } {
+  if (label.startsWith("Upstream")) {
+    return { fill: "rgba(59, 130, 246, 0.05)", stroke: "rgba(59, 130, 246, 0.25)" };
+  }
+  if (label.startsWith("Downstream")) {
+    return { fill: "rgba(16, 185, 129, 0.05)", stroke: "rgba(16, 185, 129, 0.25)" };
+  }
+  if (label.startsWith("First principles")) {
+    return { fill: "rgba(168, 85, 247, 0.05)", stroke: "rgba(168, 85, 247, 0.25)" };
+  }
+  if (label.startsWith("Variations")) {
+    return { fill: "rgba(217, 70, 239, 0.05)", stroke: "rgba(217, 70, 239, 0.25)" };
+  }
+  // Unknown / future folder label — neutral gray tint.
+  return { fill: "rgba(107, 114, 128, 0.05)", stroke: "rgba(107, 114, 128, 0.20)" };
+}
+
 interface Props {
   sessionId: string;
   focusNodeId?: string;
@@ -957,14 +994,54 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
     }
   };
 
+  // Edges colored by child kind so each subtree's connectors visually
+  // tag what they produce (purple = insight, emerald = action, etc.).
+  // Makes the hierarchy parse at a glance.
   const edges = nodes
     .filter((n) => n.parent)
     .map((n) => {
       const p = nodes.find((x) => x.id === n.parent);
       if (!p) return null;
-      return { id: n.id, x1: p.x, y1: p.y, x2: n.x, y2: n.y };
+      return { id: n.id, x1: p.x, y1: p.y, x2: n.x, y2: n.y, kind: n.kind };
     })
-    .filter((e): e is { id: string; x1: number; y1: number; x2: number; y2: number } => e !== null);
+    .filter(
+      (e): e is { id: string; x1: number; y1: number; x2: number; y2: number; kind: NodeKind } =>
+        e !== null,
+    );
+
+  // Folder regions: any node tagged as a Decompose category (its meta
+  // starts with "Decomposed from") gets a subtle containment region
+  // rendered behind it + its direct children. This is the visual
+  // affordance for the "folder" pattern the scoped Decompose creates
+  // — the user can see at a glance which items came from which card.
+  const folderRegions = useMemo(() => {
+    return nodes
+      .filter((n) => n.meta?.startsWith("Decomposed from"))
+      .map((folder) => {
+        const children = nodes.filter((c) => c.parent === folder.id);
+        const all = [folder, ...children];
+        const xs = all.map((n) => n.x);
+        const ys = all.map((n) => n.y);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        // Padding accounts for ~280px-wide cards + 110px-tall typical
+        // cards rendered around the bbox centerpoints.
+        const padX = 170;
+        const padY = 95;
+        return {
+          id: folder.id,
+          x: minX - padX,
+          y: minY - padY,
+          width: maxX - minX + padX * 2,
+          height: maxY - minY + padY * 2,
+          // Tint by folder label so the four category folders read
+          // distinctly when they cluster around the same parent.
+          tint: folderTintForLabel(folder.label),
+        };
+      });
+  }, [nodes]);
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedId) ?? null,
@@ -1080,6 +1157,24 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
               width={1}
               height={1}
             >
+              {/* Folder containment regions render first so edges and
+                  nodes paint on top of them. Subtle fill + dashed
+                  border matching the category's hue. */}
+              {folderRegions.map((r) => (
+                <rect
+                  key={`folder-${r.id}`}
+                  x={r.x}
+                  y={r.y}
+                  width={r.width}
+                  height={r.height}
+                  rx={24}
+                  ry={24}
+                  fill={r.tint.fill}
+                  stroke={r.tint.stroke}
+                  strokeWidth={1}
+                  strokeDasharray="6 6"
+                />
+              ))}
               {edges.map((e) => (
                 <line
                   key={e.id}
@@ -1087,7 +1182,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
                   y1={e.y1}
                   x2={e.x2}
                   y2={e.y2}
-                  stroke="rgba(59, 130, 246, 0.35)"
+                  stroke={EDGE_COLOR_BY_KIND[e.kind]}
                   strokeWidth={1.5}
                   strokeDasharray="4 4"
                 />
