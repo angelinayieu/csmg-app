@@ -6,11 +6,17 @@
 // chip in the top bar. The Synergy dashboard is still reachable via
 // /app?synergy=1 and the dedicated /app/synergy/* routes.
 //
+// First-visit users (synergy_profiles.onboarding_completed_at is
+// null) see the glass <WelcomeOverlay /> mounted over the
+// whiteboard. Dismissing the overlay flips the flag so it doesn't
+// render again.
+//
 // `?style=gradient` swaps the canvas backdrop for the gradient one.
 
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { HomeShell } from "@/components/home/home-shell";
 import { SynergyDashboard } from "@/components/synergy/synergy-dashboard";
+import { WelcomeOverlay } from "@/components/synergy/welcome-overlay";
 import { TEMPLATE_LIST } from "@/lib/use-cases/library";
 import type { Space } from "@/types";
 
@@ -67,6 +73,28 @@ export default async function StudioPage({
 
   const greetingName = user?.email?.split("@")[0] ?? "there";
 
+  // ── First-visit gate ──
+  // Render the WelcomeOverlay on top of HomeShell when the user
+  // hasn't completed onboarding yet. We fetch a couple of synergy
+  // profile fields too so the optional profile reveal pre-fills
+  // sensibly.
+  let needsWelcome = false;
+  let suggestedDisplayName = "";
+  let existingBio = "";
+  if (user) {
+    const { data: synergyProfile } = await db
+      .from("synergy_profiles")
+      .select("display_name, bio, onboarding_completed_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    needsWelcome = !synergyProfile?.onboarding_completed_at;
+    const localPart = (user.email ?? "").split("@")[0] ?? "";
+    suggestedDisplayName =
+      synergyProfile?.display_name ??
+      (localPart.length >= 2 ? localPart.slice(0, 64) : "");
+    existingBio = synergyProfile?.bio ?? "";
+  }
+
   const templates = TEMPLATE_LIST.map((t) => ({
     id: t.id,
     name: t.name,
@@ -81,14 +109,22 @@ export default async function StudioPage({
   }));
 
   return (
-    <HomeShell
-      greetingName={greetingName}
-      templates={templates}
-      spaces={spaces}
-      mode={immersiveMode}
-      userEmail={user?.email ?? ""}
-      userId={user?.id ?? null}
-      creditBalance={creditBalance}
-    />
+    <>
+      <HomeShell
+        greetingName={greetingName}
+        templates={templates}
+        spaces={spaces}
+        mode={immersiveMode}
+        userEmail={user?.email ?? ""}
+        userId={user?.id ?? null}
+        creditBalance={creditBalance}
+      />
+      {needsWelcome ? (
+        <WelcomeOverlay
+          suggestedDisplayName={suggestedDisplayName}
+          existingBio={existingBio}
+        />
+      ) : null}
+    </>
   );
 }
