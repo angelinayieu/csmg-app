@@ -64,7 +64,13 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const matchKindFilter = searchParams.get("match_kind");
-  const minScore = Number(searchParams.get("min_score") ?? "0");
+  // Exploratory mode (Phase 4d+4 cold-start): when active, drops the
+  // floor to 30 (vs 60 default) so sparse pools still surface results.
+  // The UI labels these as "exploratory matches" so the user knows
+  // they're below the normal threshold.
+  const exploratory = searchParams.get("include_exploratory") === "1";
+  const minScoreRaw = Number(searchParams.get("min_score") ?? "0");
+  const minScore = exploratory ? Math.min(30, minScoreRaw) : minScoreRaw;
   const limit = Math.min(50, Math.max(1, Number(searchParams.get("limit") ?? "20")));
   const cursor = searchParams.get("cursor");
 
@@ -144,6 +150,79 @@ export async function GET(request: Request) {
     ((sessionRows ?? []) as SessionRow[]).map((s) => [s.id, s]),
   );
 
+  // ── request_state per match (Phase 4c v2) ──
+  // For each (my_component, their_component) pair surfaced in the
+  // discover feed, look up any existing match_request row in either
+  // direction so the UI can render Pending / Respond / Open Room
+  // states correctly across page reloads. One round-trip with `or`.
+  interface ReqStateRow {
+    id: string;
+    from_component: string;
+    to_component: string;
+    status: string;
+    expires_at: string;
+    direction: "outgoing" | "incoming";
+  }
+  const pairKeyRows: ReqStateRow[] = [];
+  {
+    // Build the OR clause as pairs of (from_component, to_component)
+    // for both directions, across all candidate match pairs in this
+    // page. Limited to ~30 pairs * 2 directions = 60 OR clauses,
+    // well within Supabase's query length budget.
+    const pairsForOr: string[] = [];
+    for (const m of matches) {
+      const a = componentById.get(m.component_a);
+      const b = componentById.get(m.component_b);
+      if (!a || !b) continue;
+      const mineIsA = a.owner_id === user.id;
+      const mine = mineIsA ? a : b;
+      const theirs = mineIsA ? b : a;
+      // outgoing: from=mine, to=theirs
+      pairsForOr.push(
+        `and(from_component.eq.${mine.id},to_component.eq.${theirs.id})`,
+      );
+      // incoming: from=theirs, to=mine
+      pairsForOr.push(
+        `and(from_component.eq.${theirs.id},to_component.eq.${mine.id})`,
+      );
+    }
+    if (pairsForOr.length > 0) {
+      const { data: reqRows } = await db
+        .from("match_requests")
+        .select("id, from_component, to_component, status, expires_at, from_user")
+        .or(pairsForOr.join(","));
+      const now = Date.now();
+      for (const r of (reqRows ?? []) as Array<{
+        id: string;
+        from_component: string;
+        to_component: string;
+        status: string;
+        expires_at: string;
+        from_user: string;
+      }>) {
+        // Effective expired projection
+        const effectiveStatus =
+          r.status === "pending" && new Date(r.expires_at).getTime() < now
+            ? "expired"
+            : r.status;
+        pairKeyRows.push({
+          id: r.id,
+          from_component: r.from_component,
+          to_component: r.to_component,
+          status: effectiveStatus,
+          expires_at: r.expires_at,
+          direction: r.from_user === user.id ? "outgoing" : "incoming",
+        });
+      }
+    }
+  }
+  // Lookup by mine.id+theirs.id (we'll set direction below)
+  const reqStateByPair = new Map<string, ReqStateRow>();
+  for (const r of pairKeyRows) {
+    // Canonical key: "from:to"
+    reqStateByPair.set(`${r.from_component}:${r.to_component}`, r);
+  }
+
   // Build redacted response rows
   const hydrated = matches
     .slice(0, limit)
@@ -177,6 +256,11 @@ export async function GET(request: Request) {
       const theirsNeedsMine =
         (mineIsA && m.match_kind === "b_needs_a") ||
         (!mineIsA && m.match_kind === "a_needs_b");
+
+      // request_state lookup — either direction
+      const outgoing = reqStateByPair.get(`${mine.id}:${theirs.id}`);
+      const incoming = reqStateByPair.get(`${theirs.id}:${mine.id}`);
+      const reqState = outgoing ?? incoming ?? null;
 
       return {
         id: m.id,
@@ -214,6 +298,16 @@ export async function GET(request: Request) {
         },
         rationale: m.rationale,
         computed_at: m.computed_at,
+        // Request state (Phase 4c v2): null if no request exists between
+        // these two components, else { id, status, expires_at, direction }
+        request_state: reqState
+          ? {
+              id: reqState.id,
+              status: reqState.status,
+              expires_at: reqState.expires_at,
+              direction: reqState.direction,
+            }
+          : null,
       };
     })
     .filter((r): r is NonNullable<typeof r> => r !== null);

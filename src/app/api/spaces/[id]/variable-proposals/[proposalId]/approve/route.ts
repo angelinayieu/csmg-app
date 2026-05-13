@@ -26,6 +26,8 @@ import type {
   VariableProposal,
   VariableRole,
 } from "@/types/variable-proposals";
+// W6.3 — canonical concept linking on entity materialization.
+import { linkEntityToCanonicalConcept } from "@/lib/kg/canonical-concept-matcher";
 
 export const runtime = "nodejs";
 
@@ -252,7 +254,7 @@ export async function POST(
     const { data: entityRow, error: insertErr } = await db
       .from("entities")
       .insert(insertPayload)
-      .select("entity_id")
+      .select("id, entity_id")
       .single();
 
     if (insertErr || !entityRow) {
@@ -264,6 +266,33 @@ export async function POST(
       );
     }
     materializedEntityId = (entityRow as { entity_id: string }).entity_id;
+
+    // W6.3 — link the materialized entity to its canonical concept.
+    // The proposal carries proposed_name + proposed_description, which
+    // we use as source text for the canonical_code derivation.
+    // Soft-fails: a null match leaves canonical_concept_id NULL (the
+    // entity is already persistent; downstream UI tolerates null).
+    try {
+      const uuid = (entityRow as { id: string }).id;
+      const conceptId = await linkEntityToCanonicalConcept(db, {
+        sourceText: proposal.proposed_name,
+        displayName: proposal.proposed_name,
+        description: proposal.proposed_description ?? undefined,
+        spaceId,
+        userId: user.id,
+      });
+      if (conceptId) {
+        await db
+          .from("entities")
+          .update({ canonical_concept_id: conceptId })
+          .eq("id", uuid);
+      }
+    } catch (canonErr) {
+      console.warn(
+        "[variable-proposals approve] canonical link failed (non-fatal):",
+        canonErr instanceof Error ? canonErr.message : canonErr,
+      );
+    }
   }
 
   // Flip the proposal to 'approved' + record the materialized entity id.

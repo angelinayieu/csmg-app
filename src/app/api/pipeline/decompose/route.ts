@@ -1372,14 +1372,20 @@ ${enrichedPrompt}`;
       // downstream events fire that surface it.
       try {
         for (const e of dedupedEntities) {
-          const uuid = entityIdMap.get(e.entity_id);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const anyE = e as any;
+          const entityCode: string | undefined = anyE.entity_id;
+          if (!entityCode) continue;
+          const uuid = entityIdMap.get(entityCode);
           if (!uuid) continue;
-          const sourceText = e.name;
+          const sourceText: string | undefined = anyE.name;
           if (!sourceText) continue;
+          const description: string | undefined =
+            typeof anyE.description === "string" ? anyE.description : undefined;
           const conceptId = await linkEntityToCanonicalConcept(db, {
             sourceText,
             displayName: sourceText,
-            description: e.description ?? undefined,
+            description,
             spaceId,
             userId: user.id,
           });

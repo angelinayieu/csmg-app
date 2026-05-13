@@ -12,6 +12,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
+import { sendRequestAcceptedEmail } from "@/lib/email/triggers";
 
 interface Body {
   action?: unknown;
@@ -158,6 +159,22 @@ export async function PATCH(request: Request, ctx: RouteContext) {
     } else if (room) {
       roomId = room.id;
     }
+
+    // ── Fire-and-forget acceptance email to the request sender ──
+    // The trigger respects the sender's per-event opt-in. At this
+    // point both sides see each other's profile, so the email
+    // includes the accepter's display_name + bio.
+    sendRequestAcceptedEmail({
+      from_user_id: existing.from_user,
+      from_component_id: existing.from_component,
+      to_user_id: existing.to_user,
+      room_id: roomId,
+    }).catch((err) =>
+      console.warn(
+        "[/api/synergy/requests/[id] PATCH] email trigger errored:",
+        err,
+      ),
+    );
   }
 
   return NextResponse.json({ request: updated, room_id: roomId });

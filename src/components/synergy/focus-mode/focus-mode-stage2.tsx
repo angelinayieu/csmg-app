@@ -20,11 +20,8 @@ import { useEffect, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
-  Globe,
   Lightbulb,
   Loader2,
-  Lock,
-  Network,
   Package,
   RefreshCw,
   Sparkles,
@@ -34,8 +31,8 @@ import { extractComponents, listComponents } from "@/lib/synergy/client";
 import type {
   BrainstormComponent,
   ComponentKind,
-  ComponentVisibility,
 } from "@/lib/synergy/types";
+import { VisibilityPopover } from "@/components/synergy/synergy-components-card";
 
 interface Props {
   sessionId: string;
@@ -237,7 +234,7 @@ export function FocusModeStage2({ sessionId, autoExtract }: Props) {
                           {c.description_public}
                         </p>
                       </div>
-                      <VisibilityChip visibility={c.visibility} />
+                      <VisibilityPopover component={c} />
                     </div>
                   </li>
                 ))}
@@ -247,35 +244,6 @@ export function FocusModeStage2({ sessionId, autoExtract }: Props) {
         })}
       </div>
     </div>
-  );
-}
-
-function VisibilityChip({ visibility }: { visibility: ComponentVisibility }) {
-  const meta = {
-    private: {
-      icon: Lock,
-      label: "private",
-      className: "bg-gray-100 text-gray-700",
-    },
-    matchable_only: {
-      icon: Network,
-      label: "matchable",
-      className: "bg-blue-100 text-blue-700",
-    },
-    public: {
-      icon: Globe,
-      label: "public",
-      className: "bg-emerald-100 text-emerald-700",
-    },
-  }[visibility];
-  const Icon = meta.icon;
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider ${meta.className}`}
-    >
-      <Icon className="h-3 w-3" />
-      {meta.label}
-    </span>
   );
 }
 

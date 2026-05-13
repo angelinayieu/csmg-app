@@ -199,6 +199,38 @@ export async function listComponents(
   return json.components;
 }
 
+// ── Component visibility / inline edit (Phase 4d+1) ──
+//
+// Owner-only PATCH on a brainstorm_components row. Common case:
+// flipping visibility to opt out of matching. The server cascades a
+// delete on component_matches when visibility goes to 'private' so
+// the component disappears from other users' discover feeds.
+
+export async function updateComponent(
+  componentId: string,
+  patch: Partial<{
+    visibility: BrainstormComponent["visibility"];
+    label_public: string;
+    description_public: string;
+    description_private: string;
+  }>,
+): Promise<BrainstormComponent> {
+  const res = await fetch(`/api/synergy/components/${componentId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const json = await asJson<{ component: BrainstormComponent }>(res);
+  return json.component;
+}
+
+export async function deleteComponent(componentId: string): Promise<void> {
+  const res = await fetch(`/api/synergy/components/${componentId}`, {
+    method: "DELETE",
+  });
+  await asJson<{ ok: true }>(res);
+}
+
 export async function scorePromise(
   sessionId: string,
 ): Promise<PromiseScore[]> {
@@ -280,6 +312,17 @@ export async function mitigateStrategyBlock(
   const res = await fetch(`/api/synergy/strategy-blocks/${blockId}/mitigate`, {
     method: "POST",
   });
+  const json = await asJson<{ block: SynergyStrategyBlock }>(res);
+  return json.block;
+}
+
+export async function designTestForBlock(
+  blockId: string,
+): Promise<SynergyStrategyBlock> {
+  const res = await fetch(
+    `/api/synergy/strategy-blocks/${blockId}/design-test`,
+    { method: "POST" },
+  );
   const json = await asJson<{ block: SynergyStrategyBlock }>(res);
   return json.block;
 }

@@ -24,6 +24,7 @@ import {
   RotateCcw,
   Search,
   Sparkles,
+  Target,
   Trophy,
   Wand2,
 } from "lucide-react";
@@ -50,6 +51,11 @@ interface Props {
   sessionId: string;
 
   selectedNode: ClientNode | null;
+  // The board's "seed" node (kind === "core") — used as the fallback
+  // attach target when nothing is selected. Surfaced in the
+  // "Will attach under" indicator so the user knows where the (+)
+  // suggestion will land without guessing.
+  seedNode: ClientNode | null;
   selectedHasVariations: boolean;
   precision: number;
   onPrecisionChange: (v: number) => void;
@@ -78,6 +84,7 @@ interface Props {
 export function SynergyAIRail({
   sessionId,
   selectedNode,
+  seedNode,
   selectedHasVariations,
   precision,
   onPrecisionChange,
@@ -107,29 +114,12 @@ export function SynergyAIRail({
         </div>
       </header>
 
-      <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/60 px-3 py-2 text-[11px] text-gray-600">
-        {selectedNode ? (
-          <>
-            Adding to:{" "}
-            <span className="font-medium text-gray-900">
-              {selectedNode.label.slice(0, 40)}
-            </span>
-          </>
-        ) : (
-          <>
-            Click any item below to drop it onto the board (linked to your
-            seed). Select a node on the board to add under it.
-          </>
-        )}
-        {selectedHasVariations && (
-          <button
-            onClick={onRankSelected}
-            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-orange-100 px-2 py-1 text-orange-800 ring-1 ring-orange-200 hover:bg-orange-200"
-          >
-            <Trophy className="h-3 w-3" /> Rank this node&apos;s variations
-          </button>
-        )}
-      </div>
+      <AttachTargetIndicator
+        selectedNode={selectedNode}
+        seedNode={seedNode}
+        selectedHasVariations={selectedHasVariations}
+        onRankSelected={onRankSelected}
+      />
 
       <SynergyPrecisionSlider value={precision} onChange={onPrecisionChange} />
 
@@ -332,6 +322,93 @@ export function SynergyAIRail({
     </aside>
   );
 }
+
+// ── Attach-target indicator ──
+//
+// Always-visible status line that shows where the (+) suggestions in
+// the rail buckets WILL land if clicked right now. Three cases:
+//   1. A node is selected on the canvas → "Will attach under: [label]"
+//      (the suggestion becomes a child of that card)
+//   2. Nothing selected, seed exists → "Will attach under: [seed label]
+//      (seed)" with a distinct "seed" tag (it's the central node)
+//   3. No nodes at all → "Will create a new seed" (the (+) creates a
+//      fresh core node and attaches the suggestion under it — see
+//      addNodeFromPanel's empty-board branch in synergy-whiteboard.tsx)
+//
+// This replaces the prior bipolar "Adding to: X" / long-paragraph
+// hint that obscured which fallback was in effect.
+function AttachTargetIndicator({
+  selectedNode,
+  seedNode,
+  selectedHasVariations,
+  onRankSelected,
+}: {
+  selectedNode: ClientNode | null;
+  seedNode: ClientNode | null;
+  selectedHasVariations: boolean;
+  onRankSelected: () => void;
+}) {
+  const usingSeed = !selectedNode && !!seedNode;
+  const usingSelection = !!selectedNode;
+  const empty = !selectedNode && !seedNode;
+
+  return (
+    <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/60 px-3 py-2 text-[11px] text-gray-700">
+      <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-gray-500">
+        <Target className="h-3 w-3 text-blue-600" />
+        Will attach under
+      </div>
+      <div className="mt-1 flex items-center gap-1.5">
+        {usingSelection && (
+          <>
+            <span className="truncate font-medium text-gray-900">
+              {selectedNode!.label.slice(0, 40)}
+            </span>
+            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-wider text-blue-700">
+              selected card
+            </span>
+          </>
+        )}
+        {usingSeed && (
+          <>
+            <span className="truncate font-medium text-gray-900">
+              {seedNode!.label.slice(0, 40)}
+            </span>
+            <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-wider text-amber-700">
+              seed · fallback
+            </span>
+          </>
+        )}
+        {empty && (
+          <>
+            <span className="font-medium italic text-gray-700">
+              A new seed
+            </span>
+            <span className="rounded-full bg-gray-100 px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-wider text-gray-600">
+              new
+            </span>
+          </>
+        )}
+      </div>
+      {usingSeed && (
+        <p className="mt-1.5 text-[10px] leading-snug text-gray-500">
+          Select a card on the canvas to attach under it instead.
+        </p>
+      )}
+      {selectedHasVariations && (
+        <button
+          onClick={onRankSelected}
+          className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-orange-100 px-2 py-1 text-orange-800 ring-1 ring-orange-200 hover:bg-orange-200"
+        >
+          <Trophy className="h-3 w-3" /> Rank this node&apos;s variations
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Below: AIBtn / Section / RegenerateButton / ClickableBucket helpers
+// used by the main rail above.
 
 function AIBtn({
   icon: Icon,

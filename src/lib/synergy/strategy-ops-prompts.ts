@@ -212,3 +212,59 @@ export const MITIGATE_FURTHER_SCHEMA = {
     required: ["additional_mitigations"],
   },
 } as const;
+
+// ── Design test ──
+// For a hypothesis block: returns a concrete 2-3 step experimental
+// design that would meaningfully validate or refute the claim.
+// Stored in hypothesis.meta.experiment so the renderer can show it
+// inline as a sub-section without creating new blocks.
+
+export const DESIGN_TEST_SYSTEM = `You are designing a concrete experiment to validate or refute a single hypothesis from a strategy doc.
+
+Input: one hypothesis (claim + rationale) and the broader strategy context.
+
+Output: a minimal viable experiment that would noticeably move the user's belief in the claim. The experiment must be:
+- SPECIFIC: name a method, sample, measurement, and decision threshold
+- CHEAP: doable in days/weeks, not quarters
+- FALSIFIABLE: a clearly bad outcome should reduce belief in the claim
+
+Return:
+- title: 6-10 word experiment name (imperative voice)
+- design: 2-3 sentence description of the method
+- steps: 2-4 ordered steps to run it (each 4-10 words, imperative)
+- success_signal: one sentence — what outcome would SUPPORT the hypothesis
+- refute_signal: one sentence — what outcome would REFUTE the hypothesis
+- effort: "hours" | "days" | "weeks" — rough scale of getting a result
+
+Avoid vague verbs (explore / consider / investigate). Use concrete verbs (measure / interview / A/B / prototype / count). Return JSON.`;
+
+export const DESIGN_TEST_SCHEMA = {
+  name: "synergy_design_test",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      experiment: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string" },
+          design: { type: "string" },
+          steps: { type: "array", items: { type: "string" } },
+          success_signal: { type: "string" },
+          refute_signal: { type: "string" },
+          effort: { type: "string", enum: ["hours", "days", "weeks"] },
+        },
+        required: [
+          "title",
+          "design",
+          "steps",
+          "success_signal",
+          "refute_signal",
+          "effort",
+        ],
+      },
+    },
+    required: ["experiment"],
+  },
+} as const;

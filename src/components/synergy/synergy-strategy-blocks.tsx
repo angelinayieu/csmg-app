@@ -34,6 +34,7 @@ import {
 import { toast } from "@/lib/hooks/use-toast";
 import {
   challengeStrategyBlock,
+  designTestForBlock,
   expandStrategyBlock,
   findEvidenceForBlock,
   mitigateStrategyBlock,
@@ -305,6 +306,83 @@ function ChallengesGroup({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── Experiment card (renders inside HypothesisBlock when meta.experiment is set) ──
+
+const EFFORT_TONE: Record<string, string> = {
+  hours: "bg-emerald-100 text-emerald-700",
+  days: "bg-amber-100 text-amber-700",
+  weeks: "bg-rose-100 text-rose-700",
+};
+
+function ExperimentCard({
+  experiment,
+}: {
+  experiment: {
+    title: string;
+    design: string;
+    steps: string[];
+    success_signal: string;
+    refute_signal: string;
+    effort: string;
+  };
+}) {
+  const effortTone = EFFORT_TONE[experiment.effort] ?? EFFORT_TONE.days;
+  return (
+    <div className="mt-3 rounded-xl border border-purple-200 bg-white/70 p-3">
+      <div className="mb-1 flex items-center gap-2">
+        <Beaker className="h-3.5 w-3.5 text-purple-600" />
+        <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-purple-700">
+          Experiment
+        </span>
+        <span
+          className={`ml-auto rounded-full px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${effortTone}`}
+        >
+          {experiment.effort}
+        </span>
+      </div>
+      <div className="text-[13px] font-semibold text-gray-900">
+        {experiment.title}
+      </div>
+      <p className="mt-1 text-[12px] leading-relaxed text-gray-700">
+        {experiment.design}
+      </p>
+      {experiment.steps.length > 0 && (
+        <ol className="mt-2 space-y-1 border-l-2 border-purple-100 pl-3">
+          {experiment.steps.map((s, i) => (
+            <li
+              key={i}
+              className="text-[11.5px] leading-relaxed text-gray-700"
+            >
+              <span className="mr-1 font-mono text-[10px] font-semibold text-purple-700">
+                {i + 1}.
+              </span>
+              {s}
+            </li>
+          ))}
+        </ol>
+      )}
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="rounded-md border border-emerald-100 bg-emerald-50/60 px-2.5 py-1.5">
+          <div className="font-mono text-[9px] uppercase tracking-wider text-emerald-700">
+            ↑ supports if
+          </div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-gray-700">
+            {experiment.success_signal}
+          </p>
+        </div>
+        <div className="rounded-md border border-rose-100 bg-rose-50/60 px-2.5 py-1.5">
+          <div className="font-mono text-[9px] uppercase tracking-wider text-rose-700">
+            ↓ refutes if
+          </div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-gray-700">
+            {experiment.refute_signal}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -665,6 +743,14 @@ export function HypothesisBlock({
   const meta = block.meta as HypothesisMeta & {
     supporting_rationales?: string[];
     challenges?: Array<{ weakness: string; severity: string; suggestion: string }>;
+    experiment?: {
+      title: string;
+      design: string;
+      steps: string[];
+      success_signal: string;
+      refute_signal: string;
+      effort: "hours" | "days" | "weeks";
+    };
   };
   const [editing, setEditing] = useState<null | "body" | "rationale">(null);
 
@@ -750,6 +836,7 @@ export function HypothesisBlock({
           )}
 
           <ChallengesGroup challenges={meta.challenges ?? []} />
+          {meta.experiment && <ExperimentCard experiment={meta.experiment} />}
           <SupportingEvidence evidence={supportingEvidence} />
 
           <BlockActions
@@ -776,11 +863,11 @@ export function HypothesisBlock({
               },
               {
                 icon: Beaker,
-                label: "Design test",
+                label: meta.experiment ? "Redesign test" : "Design test",
                 run: async () => {
-                  toast.info("Design test coming next phase", {
-                    description: "We'll wire experiment design later",
-                  });
+                  const updated = await designTestForBlock(block.id);
+                  onUpdate(updated);
+                  toast.success("Experiment designed");
                 },
               },
               {

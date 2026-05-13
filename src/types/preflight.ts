@@ -200,6 +200,22 @@ export interface VariableEntry {
   importance: "fundamental" | "critical" | "important" | "moderate" | null;
   /** Audit trail — why this entity is in this role bucket. */
   rationale: VariableRationale;
+  /**
+   * Sprint W6.8 — Tier 1 canonical concept link. Populated by
+   * partition-variables-by-role from the source entity's
+   * canonical_concept_id column. NULL when the entity is not yet
+   * linked (legacy entity pre-W6.7 backfill, name that fails to
+   * normalize, etc.). UI surfaces render a CanonicalConceptBadge
+   * when present.
+   */
+  canonical_concept_id?: string | null;
+  /**
+   * The canonical_code that resolved this entity to its concept.
+   * Read-only convenience for the badge component (it's the URL
+   * param for GET /api/canonical-concepts/[code]). Derived from
+   * the entity → canonical_concepts join at partition time.
+   */
+  canonical_code?: string | null;
 }
 
 export interface VariableRationale {

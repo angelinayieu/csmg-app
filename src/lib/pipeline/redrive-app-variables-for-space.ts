@@ -143,6 +143,26 @@ export async function redriveAppVariablesForSpace(
     recorded_at: m.recorded_at as string,
   }));
 
+  // W6.8 — canonical_code lookup for partition entries.
+  const canonicalConceptIds = entities
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((e) => ((e as any).canonical_concept_id as string | null) ?? null)
+    .filter((id): id is string => typeof id === "string");
+  const canonicalCodeById = new Map<string, string>();
+  if (canonicalConceptIds.length > 0) {
+    try {
+      const { data: codeRows } = await db
+        .from("canonical_concepts")
+        .select("id, canonical_code")
+        .in("id", Array.from(new Set(canonicalConceptIds)));
+      for (const r of (codeRows ?? []) as Array<{ id: string; canonical_code: string }>) {
+        canonicalCodeById.set(r.id, r.canonical_code);
+      }
+    } catch {
+      // Non-fatal — badges just render without the code link.
+    }
+  }
+
   let partition: PreflightVariables;
   try {
     partition = partitionVariablesByRole({
@@ -152,6 +172,7 @@ export async function redriveAppVariablesForSpace(
       variableProposals,
       overrides,
       metricObservations,
+      canonicalCodeById,
     });
   } catch (err) {
     result.errors.push({

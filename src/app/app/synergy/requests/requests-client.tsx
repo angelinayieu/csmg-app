@@ -14,6 +14,7 @@ import {
   ArrowLeftRight,
   ArrowRight,
   Check,
+  CheckCircle,
   Inbox,
   Loader2,
   MessageSquare,
@@ -29,12 +30,14 @@ import {
   type HydratedMatchRequest,
   type MatchRequestStatus,
 } from "@/lib/synergy/match-client";
+import { AcceptConfirmationModal } from "@/components/synergy/accept-confirmation-modal";
 
-type TabKey = "incoming" | "outgoing" | "history";
+type TabKey = "incoming" | "outgoing" | "connected" | "history";
 
 const TAB_LABEL: Record<TabKey, string> = {
   incoming: "Incoming",
   outgoing: "Outgoing",
+  connected: "Connected",
   history: "History",
 };
 
@@ -44,6 +47,10 @@ export function SynergyRequestsClient() {
   const [requests, setRequests] = useState<HydratedMatchRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Accept confirmation modal (Surface D) — opened by clicking Accept
+  // on an incoming pending row. Pre-fetches sender profile via
+  // /accept-preview; commits accept on confirm.
+  const [acceptTargetId, setAcceptTargetId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,14 +61,30 @@ export function SynergyRequestsClient() {
       } else if (tab === "outgoing") {
         const list = await listMatchRequests("outgoing", "pending");
         setRequests(list);
+      } else if (tab === "connected") {
+        // Accepted rows from both directions
+        const [inc, out] = await Promise.all([
+          listMatchRequests("incoming", "accepted"),
+          listMatchRequests("outgoing", "accepted"),
+        ]);
+        const combined = [...inc, ...out];
+        combined.sort(
+          (a, b) =>
+            new Date(b.responded_at ?? b.created_at).getTime() -
+            new Date(a.responded_at ?? a.created_at).getTime(),
+        );
+        setRequests(combined);
       } else {
-        // History: pull both directions excluding pending; combine
+        // History: terminal states (declined / expired / withdrawn)
         const [inc, out] = await Promise.all([
           listMatchRequests("incoming"),
           listMatchRequests("outgoing"),
         ]);
         const combined = [...inc, ...out].filter(
-          (r) => r.status !== "pending",
+          (r) =>
+            r.status === "declined" ||
+            r.status === "expired" ||
+            r.status === "withdrawn",
         );
         combined.sort(
           (a, b) =>
@@ -88,45 +111,24 @@ export function SynergyRequestsClient() {
     action: "accept" | "decline" | "withdraw",
   ) => {
     if (busyId) return;
+    // Accept is special: opens the confirmation modal (Surface D),
+    // doesn't commit immediately. The modal handles the PATCH +
+    // navigation when the user confirms.
+    if (action === "accept") {
+      setAcceptTargetId(id);
+      return;
+    }
     setBusyId(id);
     try {
-      // updateMatchRequest returns the new status; the PATCH endpoint
-      // also returns room_id when the action is "accept". We need the
-      // room id to navigate, so do a raw fetch here for the accept path.
-      if (action === "accept") {
-        const res = await fetch(`/api/synergy/requests/${id}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action: "accept" }),
-        });
-        if (!res.ok) {
-          throw new Error(
-            ((await res.json()) as { error?: string }).error ??
-              `${res.status} ${res.statusText}`,
-          );
-        }
-        const body = (await res.json()) as { room_id: string | null };
-        toast.success("Accepted — opening shared room", {
-          description: "Profile revealed both ways. Live co-edit ready.",
-        });
-        if (body.room_id) {
-          router.push(`/app/synergy/room/${body.room_id}`);
-        } else {
-          // Soft-fail: room creation didn't return an id. Drop the
-          // row from incoming, show in history later.
-          setRequests((prev) => prev.filter((r) => r.id !== id));
-        }
+      const newStatus = await updateMatchRequest(id, action);
+      const label = action === "decline" ? "Declined" : "Withdrawn";
+      toast.success(label);
+      if (tab === "history") {
+        setRequests((prev) =>
+          prev.map((r) => (r.id === id ? { ...r, status: newStatus } : r)),
+        );
       } else {
-        const newStatus = await updateMatchRequest(id, action);
-        const label = action === "decline" ? "Declined" : "Withdrawn";
-        toast.success(label);
-        if (tab === "history") {
-          setRequests((prev) =>
-            prev.map((r) => (r.id === id ? { ...r, status: newStatus } : r)),
-          );
-        } else {
-          setRequests((prev) => prev.filter((r) => r.id !== id));
-        }
+        setRequests((prev) => prev.filter((r) => r.id !== id));
       }
     } catch (e) {
       toast.error(`${action} failed`, { description: (e as Error).message });
@@ -135,10 +137,20 @@ export function SynergyRequestsClient() {
     }
   };
 
+  const handleAccepted = (roomId: string | null) => {
+    setAcceptTargetId(null);
+    if (roomId) {
+      router.push(`/app/synergy/room/${roomId}`);
+    } else {
+      // Soft-fail — drop row from incoming, refresh
+      load();
+    }
+  };
+
   return (
     <div>
       <div className="mb-5 inline-flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1">
-        {(["incoming", "outgoing", "history"] as TabKey[]).map((k) => (
+        {(["incoming", "outgoing", "connected", "history"] as TabKey[]).map((k) => (
           <button
             key={k}
             onClick={() => setTab(k)}
@@ -151,6 +163,7 @@ export function SynergyRequestsClient() {
           >
             {k === "incoming" && <Inbox className="h-3 w-3" />}
             {k === "outgoing" && <Send className="h-3 w-3" />}
+            {k === "connected" && <CheckCircle className="h-3 w-3" />}
             {k === "history" && <ArrowLeftRight className="h-3 w-3" />}
             {TAB_LABEL[k]}
           </button>
@@ -176,6 +189,15 @@ export function SynergyRequestsClient() {
           ))}
         </ul>
       )}
+
+      {acceptTargetId && (
+        <AcceptConfirmationModal
+          requestId={acceptTargetId}
+          open={!!acceptTargetId}
+          onClose={() => setAcceptTargetId(null)}
+          onAccepted={handleAccepted}
+        />
+      )}
     </div>
   );
 }
@@ -191,7 +213,7 @@ function EmptyState({ tab }: { tab: TabKey }) {
           </h2>
           <p className="mx-auto mt-2 max-w-md text-sm text-gray-600">
             When someone reaches out about one of your matchable components,
-            it&apos;ll appear here with their display name + bio.
+            it&apos;ll appear here. Profile reveals only when you accept.
           </p>
         </>
       )}
@@ -207,6 +229,18 @@ function EmptyState({ tab }: { tab: TabKey }) {
           </p>
         </>
       )}
+      {tab === "connected" && (
+        <>
+          <CheckCircle className="mx-auto mb-3 h-6 w-6 text-emerald-600" />
+          <h2 className="text-lg font-semibold text-gray-900">
+            No connections yet
+          </h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-gray-600">
+            Accepted matches will land here with a direct link to the shared
+            room.
+          </p>
+        </>
+      )}
       {tab === "history" && (
         <>
           <ArrowLeftRight className="mx-auto mb-3 h-6 w-6 text-gray-500" />
@@ -214,8 +248,7 @@ function EmptyState({ tab }: { tab: TabKey }) {
             Nothing in history yet
           </h2>
           <p className="mx-auto mt-2 max-w-md text-sm text-gray-600">
-            Accepted, declined, expired, and withdrawn requests will land
-            here.
+            Declined, expired, and withdrawn requests will appear here.
           </p>
         </>
       )}
@@ -283,8 +316,8 @@ function RequestCard({
         </span>
       </div>
 
-      {/* Profile (revealed for pending + accepted) */}
-      {request.other_party && (
+      {/* Profile (revealed for pending-outgoing + accepted only) */}
+      {request.other_party ? (
         <div className="mt-4 flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
           <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-200 to-cyan-200 text-blue-800">
             <UserCircle2 className="h-5 w-5" />
@@ -299,6 +332,75 @@ function RequestCard({
               </p>
             )}
           </div>
+        </div>
+      ) : (
+        // Incoming pending: profile is INTENTIONALLY hidden until the
+        // accept moment. Surface the anonymity guarantee explicitly so
+        // the user understands the project-not-person framing.
+        request.direction === "incoming" &&
+        request.status === "pending" && (
+          <div className="mt-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+            <UserCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div className="min-w-0 flex-1 text-[11px] leading-relaxed text-amber-900">
+              <span className="font-semibold">Anonymous sender.</span> Decide on
+              the project below — their display name + bio reveal at the moment
+              you tap Accept.
+            </div>
+          </div>
+        )
+      )}
+
+      {/* Match context (rationale + scores from the original match row) */}
+      {request.match && (
+        <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/40 px-3 py-2">
+          <div className="mb-1 flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.15em] text-blue-700">
+            <Sparkles className="h-3 w-3" /> Why matched
+          </div>
+          <p className="text-[12px] leading-relaxed text-gray-800">
+            {request.match.rationale}
+          </p>
+          <div className="mt-2 flex items-center gap-1">
+            <ScorePill label="final" value={Math.round(request.match.final_score)} tone="blue" />
+            <ScorePill
+              label="comp"
+              value={Math.round(request.match.complementarity_score)}
+              tone="emerald"
+            />
+            <ScorePill
+              label="goal"
+              value={Math.round(request.match.goal_alignment_score)}
+              tone="purple"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Additional components, if sender shared any */}
+      {request.additional_components.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
+            {request.direction === "incoming" ? "Sender also shared" : "You also shared"}
+          </div>
+          <ul className="space-y-1">
+            {request.additional_components.map((c, i) => (
+              <li
+                key={i}
+                className="flex items-start gap-2 rounded-md border border-gray-200 bg-white px-2 py-1"
+              >
+                <span className="mt-0.5 rounded-md bg-gray-100 px-1 py-0.5 font-mono text-[8px] uppercase tracking-wider text-gray-600">
+                  {c.kind}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-semibold text-gray-900">
+                    {c.label_public}
+                  </div>
+                  <p className="line-clamp-2 text-[10.5px] leading-snug text-gray-600">
+                    {c.description_public}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -394,6 +496,30 @@ function RequestCard({
         )}
       </div>
     </li>
+  );
+}
+
+function ScorePill({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "blue" | "emerald" | "purple";
+}) {
+  const toneClass = {
+    blue: "bg-blue-100 text-blue-700",
+    emerald: "bg-emerald-100 text-emerald-700",
+    purple: "bg-purple-100 text-purple-700",
+  }[tone];
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${toneClass}`}
+    >
+      <span>{label}</span>
+      <span>{value}</span>
+    </span>
   );
 }
 

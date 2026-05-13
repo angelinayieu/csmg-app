@@ -88,23 +88,102 @@ Rules:
 
 Return JSON.`;
 
-const SYSTEMS: Record<Exclude<AugmentMode, "variations">, string> = {
-  augment: `You are a cognitive brainstorming partner. Given a stream of spoken thoughts plus the current board contents, extract NEW key concepts and structure them as a mindmap.
+// ── Precision-aware system prompts ──
+//
+// Every AI augmentation mode (except clarify + plan, which have their
+// own targeted-Q&A shape) takes the precision slider as a real input.
+// The slider used to apply ONLY to variations — that was a UX lie
+// (sidebar slider didn't affect the Decompose/Questions/Research
+// buttons sitting next to it). Now every mode tunes its output
+// specificity to the level the user dialed.
+//
+// Precision moves on a single spectrum:
+//   Lv 1 — evocative / cross-domain / metaphorical
+//   Lv 5 — surgical / named entities / quantified targets
+//
+// Each mode prompt closes with a precision-applied directive
+// specifying what changes for THIS mode at the chosen level. The
+// generic PRECISION_GUIDANCE block describes the spectrum; the
+// per-mode tail tells the model how to translate it.
+
+function precisionBlock(precision: number): string {
+  return `PRECISION LEVEL ${precision}/5 — ${PRECISION_GUIDANCE[precision]}`;
+}
+
+function augmentSystem(precision: number): string {
+  return `You are a cognitive brainstorming partner. Given a stream of spoken thoughts plus the current board contents, extract NEW key concepts and structure them as a mindmap.
 
 CRITICAL deduplication rules:
 - The current board labels are listed in the context. DO NOT create a node whose label duplicates or near-duplicates an existing one (case-, tense-, and filler-word-insensitive — "Apps" and "apps" and "the apps" are the same).
 - Prefer 2-4 sharp NEW nodes over 6-8 mediocre ones. Returning an empty nodes list is correct when the thought is fully covered by existing nodes.
 - Each label should NAME something specific (a mechanism, audience, metric, tool, or constraint) — do not restate the parent's label or echo the user's words verbatim.
 
-Labels under 6 words. Be incisive, not generic. The summary should be one sentence on what was added (or skipped and why). Return JSON.`,
-  decompose: `Decompose the user's idea into upstream dependencies (what it needs) and downstream outputs (what it produces), plus first-principle components and alternative applications. 3-5 items per array. Return JSON.`,
-  questions: `You are a Socratic brainstorming coach. Given the user's current thinking, generate 4 sharp questions that expose hidden assumptions, force specificity, or reveal new angles. Return JSON.`,
-  research: `Suggest 4 concrete research directions for the user's idea. Each one has an angle (validate, refute, extend, or alternative), a specific search query, and a one-sentence reason. Return JSON.`,
-  rank: `You are a critical evaluator. Rank the provided variations from strongest to weakest based on feasibility, novelty, and impact. Score each 0-100 with one sentence of reasoning, ordered best first. Return JSON.`,
-  clarify: CLARIFY_SYSTEM,
-  plan: PLAN_SYSTEM,
-  synthesize: SYNTHESIZE_SYSTEM,
-};
+${precisionBlock(precision)}
+
+Apply the precision spectrum above to each node label you emit. At low precision, labels may be evocative or cross-domain; at high precision, labels must name a specific tool / segment / metric / measurable target. Labels stay under 6 words regardless of precision.
+
+The summary should be one sentence on what was added (or skipped and why). Return JSON.`;
+}
+
+function decomposeSystem(precision: number): string {
+  return `Decompose the user's idea into four buckets:
+- upstream: what the idea depends on / consumes
+- downstream: what it produces / enables
+- first_principles: irreducible components / fundamental building blocks
+- variations: alternative applications or framings
+
+3-5 items per bucket.
+
+${precisionBlock(precision)}
+
+Apply the precision spectrum above to EACH item in EACH bucket:
+- At Lv 1: cross-domain analogies, evocative concepts ("upstream: a wellspring of attention")
+- At Lv 3: clear plain-language descriptions of what's needed/produced
+- At Lv 5: name a specific tool / dataset / segment / quantity / vendor where the input supports it ("upstream: 10k labeled DICOM studies from neuro-radiology partners")
+
+Return JSON.`;
+}
+
+function questionsSystem(precision: number): string {
+  return `You are a Socratic brainstorming coach. Given the user's current thinking, generate 4 sharp questions that expose hidden assumptions, force specificity, or reveal new angles.
+
+${precisionBlock(precision)}
+
+Tune the QUESTION'S OWN RIGOR to the precision level:
+- At Lv 1: philosophical, what-if-the-opposite-were-true, cross-domain analogies
+- At Lv 3: questions that name a mechanism or scope to interrogate
+- At Lv 5: each question demands a SPECIFIC NUMBER / NAMED SEGMENT / NAMED TOOL / MEASURABLE THRESHOLD to answer — the answerer cannot reply in generalities
+
+Return JSON.`;
+}
+
+function researchSystem(precision: number): string {
+  return `Suggest 4 concrete research directions for the user's idea. Each carries an angle (validate, refute, extend, or alternative), a specific search query, and a one-sentence reason.
+
+${precisionBlock(precision)}
+
+Tune the SEARCH QUERY SPECIFICITY to the precision level:
+- At Lv 1: broad analogies, cross-disciplinary first-principles searches
+- At Lv 3: specific concepts paired with a domain (e.g., "vision transformer triage radiology")
+- At Lv 5: name a specific paper title, author, year, dataset, named benchmark, or named regulator — the query should be one you'd paste directly into Google Scholar with high signal expected
+
+The "why" sentence should also align with precision — vague at Lv 1, quantified at Lv 5.
+
+Return JSON.`;
+}
+
+function rankSystem(precision: number): string {
+  return `You are a critical evaluator. Rank the provided variations from strongest to weakest based on feasibility, novelty, and impact. Score each 0-100 with one sentence of reasoning, ordered best first.
+
+${precisionBlock(precision)}
+
+Tune the RIGOR OF THE SCORING REASONING to the precision level:
+- At Lv 1: impressionistic / vibes-based ranking; reasons can be broad
+- At Lv 3: each reason names the specific dimension that swung the score
+- At Lv 5: reasons MUST include a quantified comparison — a cost estimate, a time-to-ship range, a named market, a technical complexity expressed in a concrete unit
+
+Return JSON.`;
+}
 
 function variationsSystem(precision: number): string {
   return `Generate 4 distinct variations or alternative angles on the GIVEN CONCEPT.
@@ -116,14 +195,55 @@ CRITICAL — STAY IN DOMAIN:
 
 Each variation must take a meaningfully different approach (different scope, audience, mechanism, or framing) — but the approach must address the SAME concept. No near-duplicates either.
 
-PRECISION LEVEL ${precision}/5 — ${PRECISION_GUIDANCE[precision]}
+${precisionBlock(precision)}
 
 Return labels and rationales per the precision rules above. Return JSON.`;
 }
 
+function synthesizeSystem(precision: number): string {
+  return `${SYNTHESIZE_SYSTEM}
+
+${precisionBlock(precision)}
+
+Apply the precision spectrum to the synthesis label AND the "why" explanation:
+- At low precision, the synthesis can be a metaphor or cross-domain handle
+- At high precision, the synthesis names a concrete mechanism / artifact / experiment with quantified scope where the inputs support it
+
+Return JSON.`;
+}
+
+// Precision-agnostic modes — clarify + plan have their own structural
+// rigor baked into their schemas (Q&A and plan-step-with-rationale).
+// Threading precision through them is marginal; the structure does
+// the work. Left as-is.
+const PRECISION_AGNOSTIC: Partial<Record<AugmentMode, string>> = {
+  clarify: CLARIFY_SYSTEM,
+  plan: PLAN_SYSTEM,
+};
+
 export function systemForMode(mode: AugmentMode, precision: number): string {
-  if (mode === "variations") return variationsSystem(precision);
-  return SYSTEMS[mode];
+  const fixed = PRECISION_AGNOSTIC[mode];
+  if (fixed) return fixed;
+  switch (mode) {
+    case "augment":
+      return augmentSystem(precision);
+    case "decompose":
+      return decomposeSystem(precision);
+    case "questions":
+      return questionsSystem(precision);
+    case "research":
+      return researchSystem(precision);
+    case "variations":
+      return variationsSystem(precision);
+    case "rank":
+      return rankSystem(precision);
+    case "synthesize":
+      return synthesizeSystem(precision);
+    default:
+      // Exhaustiveness guard. If a new mode is added to AugmentMode
+      // without a branch here, TS catches it at compile time.
+      return CLARIFY_SYSTEM;
+  }
 }
 
 // ── OpenAI JSON schemas (strict mode) ──

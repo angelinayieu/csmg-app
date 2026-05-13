@@ -1,17 +1,23 @@
-// ── Variation precision slider (Lv 1-5) ──
+// ── AI precision slider (Lv 1-5) ──
 //
-// Native HTML range input — we don't need Radix for a 5-step slider.
-// The level/label/blurb come from PRECISION_LEVELS in prompts.ts so a
-// single source of truth shapes both the prompt guidance and the UI.
+// Universal precision control for ALL AI augmentation modes —
+// decompose, questions, research, variations, rank, synthesize, and
+// board-wide augment. (Clarify + plan have their own structural
+// rigor and are precision-agnostic by design.)
+//
+// Native HTML range input — no Radix dep for a 5-step slider. The
+// PRECISION_LEVELS list in prompts.ts is the single source of truth
+// for the label + blurb shown here.
 //
 // A "?" affordance opens an inline legend explaining all five levels
-// at once. This is the UX users keep asking for ("how does Lv 1 differ
-// from Lv 3?") — surface the spectrum, not just the current value.
+// + which actions the slider affects. This is the UX users keep
+// asking for ("how does Lv 1 differ from Lv 3?", "does this apply
+// to Decompose too?") — surface the spectrum and the scope.
 
 "use client";
 
 import { useState } from "react";
-import { HelpCircle, X } from "lucide-react";
+import { HelpCircle, Sparkles, X } from "lucide-react";
 import { PRECISION_LEVELS } from "@/lib/synergy/prompts";
 
 interface Props {
@@ -19,15 +25,16 @@ interface Props {
   onChange: (next: number) => void;
 }
 
-// One-line descriptions per level (kept tighter than the prompt
-// guidance — that's the formal definition, this is the at-a-glance
-// reference for the user). Mirrors the spirit of the prompt without
-// quoting it verbatim.
+// One-line descriptions per level. Mode-agnostic now that precision
+// drives every augment mode — the user sets the rigor; each mode
+// translates it to its own specifics (decompose item granularity,
+// question demands, search query precision, variation rigor, rank
+// scoring justification depth, etc).
 const LEVEL_HINTS: Record<number, string> = {
-  1: "Wild, cross-domain. Labels are evocative, even metaphorical.",
+  1: "Wild, cross-domain. Evocative or metaphorical phrasing.",
   2: "Imaginative but recognizable. Pushes past the obvious.",
-  3: "Distinct yet plausible. Each variation shifts mechanism, audience, or scope.",
-  4: "Concrete. Names a specific tool, mechanism, or population per variation.",
+  3: "Distinct yet plausible. Each output shifts mechanism, audience, or scope.",
+  4: "Concrete. Names a specific tool, mechanism, or population.",
   5: "Surgical. Who + how + a measurable target (%, $, count, duration).",
 };
 
@@ -39,14 +46,15 @@ export function SynergyPrecisionSlider({ value, onChange }: Props) {
     <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
+          <Sparkles className="h-3 w-3 text-blue-600" />
           <span className="text-xs font-semibold text-gray-900">
-            Variation precision
+            AI precision
           </span>
           <button
             onClick={() => setLegendOpen((v) => !v)}
             aria-label="Explain precision levels"
             className="inline-flex h-4 w-4 items-center justify-center rounded-full text-gray-400 transition hover:bg-gray-200 hover:text-gray-700"
-            title="What does each level mean?"
+            title="What does each level mean? What does it apply to?"
           >
             <HelpCircle className="h-3 w-3" />
           </button>
@@ -86,6 +94,14 @@ export function SynergyPrecisionSlider({ value, onChange }: Props) {
             >
               <X className="h-3 w-3" />
             </button>
+          </div>
+          <div className="mb-2 rounded-md border border-blue-100 bg-blue-50/60 px-2 py-1.5 text-blue-900">
+            <span className="font-mono text-[8.5px] uppercase tracking-wider text-blue-700">
+              Applies to →
+            </span>{" "}
+            Decompose · Questions · Research · Variations · Rank · Synthesize
+            · auto-augment from voice. Clarify and Plan use the slider as
+            tone-only context.
           </div>
           <ul className="space-y-1.5">
             {PRECISION_LEVELS.map((lvl, i) => {

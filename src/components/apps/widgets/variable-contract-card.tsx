@@ -33,6 +33,8 @@ import type { AppVariableEntry } from "@/types/app";
 import type { VariableRole } from "@/types/variable-proposals";
 import { Surface, WidgetTitle, WidgetEmpty } from "./shared";
 import { cn } from "@/lib/utils";
+// W6.8c — Tier 1 canonical concept badge on each variable chip.
+import { CanonicalConceptBadge } from "@/components/canonical/canonical-concept-badge";
 
 interface VariableContractConfig {
   /** Optional card title override. */
@@ -256,6 +258,15 @@ export function VariableContractCard({
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-gray-900">
                       {entry.name}
                     </span>
+                    {/* W6.8 — canonical concept badge. Clickable
+                        (stops propagation to the chip's own click).
+                        Renders nothing for entities not yet linked
+                        unless showUnlinked is set. */}
+                    <CanonicalConceptBadge
+                      canonicalConceptId={entry.canonical_concept_id ?? null}
+                      canonicalCode={entry.canonical_code ?? null}
+                      size="compact"
+                    />
                     {entry.observability !== "unknown" && (
                       <span className="flex-shrink-0 text-[10.5px] font-medium uppercase tracking-wide text-gray-400">
                         {entry.observability === "directly_observable"

@@ -23,6 +23,7 @@ import {
   MousePointer2,
   Sparkles,
   StickyNote,
+  Target,
   UserCircle2,
   X,
 } from "lucide-react";
@@ -36,6 +37,8 @@ import {
   type SynergyRoomBundle,
 } from "@/lib/synergy/room-client";
 import { useRoomRealtime } from "@/hooks/synergy/use-room-realtime";
+import { useRoomPresence } from "@/hooks/synergy/use-room-presence";
+import { AI_META_PREFIX, SynergyRoomAIDock } from "./synergy-room-ai-dock";
 
 type Tool = "select" | "sticky" | "erase";
 
@@ -51,6 +54,43 @@ export function SynergyRoomCanvas({ bundle }: Props) {
   const [nodes, setNodes] = useState<RoomNode[]>(bundle.nodes);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Inline-edit state: which node is the user currently text-editing?
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+
+  // ── Intersection objective ──
+  // Header banner. If the bundle came with one cached, use it
+  // immediately. Otherwise lazy-infer on mount via a single POST
+  // call. Idempotent; other room visits within the same row reuse
+  // the cached value (the endpoint short-circuits).
+  const [intersectionObjective, setIntersectionObjective] = useState<
+    string | null
+  >(bundle.room.intersection_objective);
+  useEffect(() => {
+    if (intersectionObjective) return;
+    if (!bundle.my_component || !bundle.their_component) return;
+    let cancelled = false;
+    fetch(`/api/synergy/rooms/${roomId}/infer-objective`, { method: "POST" })
+      .then((r) => r.json())
+      .then((body: { intersection_objective?: string; error?: string }) => {
+        if (cancelled) return;
+        if (body.intersection_objective) {
+          setIntersectionObjective(body.intersection_objective);
+        }
+      })
+      .catch(() => {
+        // Silent — banner just stays empty
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
+  // ── Presence ──
+  // Set of OTHER user_ids currently in this room channel.
+  // Single-other-user rooms in V1, so size is 0 or 1.
+  const otherPresent = useRoomPresence(roomId, myId);
+  const theyAreHere = otherPresent.has(theirId);
 
   // Pan + zoom (world-space; same pattern as solo whiteboard)
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -264,8 +304,34 @@ export function SynergyRoomCanvas({ bundle }: Props) {
       if (selectedId === id) setSelectedId(null);
       return;
     }
+    // Toggle inline edit on second click of an already-selected node
+    if (!archived && selectedId === id && !editingNodeId) {
+      setEditingNodeId(id);
+      return;
+    }
     setSelectedId(id);
   };
+
+  const commitNodeLabel = useCallback(
+    async (nodeId: string, label: string) => {
+      setEditingNodeId(null);
+      const trimmed = label.trim();
+      const target = nodes.find((n) => n.id === nodeId);
+      if (!target || trimmed === target.label) return;
+      // Optimistic local update
+      setNodes((prev) =>
+        prev.map((n) => (n.id === nodeId ? { ...n, label: trimmed } : n)),
+      );
+      try {
+        await updateRoomNode(roomId, nodeId, { label: trimmed });
+      } catch (e) {
+        toast.error("Couldn't save edit", {
+          description: (e as Error).message,
+        });
+      }
+    },
+    [nodes, roomId],
+  );
 
   // ── Node-drag (window-level for delivery beyond the card) ──
   const dragRef = useRef<{
@@ -421,44 +487,79 @@ export function SynergyRoomCanvas({ bundle }: Props) {
 
       {/* ── Main canvas + header ── */}
       <main className="relative flex-1 overflow-hidden">
-        {/* Header — co-editor identity + status */}
-        <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 border-b border-gray-200 bg-white/80 px-4 py-2.5 backdrop-blur">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-cyan-100 text-blue-700">
-              <Sparkles className="h-3.5 w-3.5" />
-            </span>
-            <div className="text-[12px] font-semibold text-gray-900">
-              Shared synergy room
-            </div>
-            {bundle.their_profile && (
-              <>
-                <span className="text-gray-300">·</span>
-                <div className="inline-flex items-center gap-1.5">
-                  <UserCircle2 className="h-3.5 w-3.5 text-gray-500" />
-                  <span className="text-[12px] text-gray-700">
-                    with{" "}
-                    <span className="font-semibold text-gray-900">
-                      {bundle.their_profile.display_name}
-                    </span>
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {archived && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-600">
-                <ArchiveX className="h-3 w-3" /> archived (read-only)
+        {/* Header — co-editor identity + presence + intersection objective */}
+        <div className="absolute inset-x-0 top-0 z-20 border-b border-gray-200 bg-white/85 px-4 py-2.5 backdrop-blur">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-cyan-100 text-blue-700">
+                <Sparkles className="h-3.5 w-3.5" />
               </span>
-            )}
-            <span
-              className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-emerald-700"
-              title="Realtime sync active"
-            >
-              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-              live
-            </span>
+              <div className="text-[12px] font-semibold text-gray-900">
+                Shared synergy room
+              </div>
+              {bundle.their_profile && (
+                <>
+                  <span className="text-gray-300">·</span>
+                  <div className="inline-flex items-center gap-1.5">
+                    <span className="relative inline-flex">
+                      <UserCircle2 className="h-3.5 w-3.5 text-gray-500" />
+                      {theyAreHere && (
+                        <span
+                          className="absolute -bottom-0.5 -right-0.5 inline-block h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white"
+                          style={{
+                            animation: "synergyPresencePulse 2s ease-in-out infinite",
+                          }}
+                        />
+                      )}
+                    </span>
+                    <span className="text-[12px] text-gray-700">
+                      with{" "}
+                      <span className="font-semibold text-gray-900">
+                        {bundle.their_profile.display_name}
+                      </span>
+                    </span>
+                    {theyAreHere && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-emerald-700">
+                        here now
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {archived && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-600">
+                  <ArchiveX className="h-3 w-3" /> archived (read-only)
+                </span>
+              )}
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-emerald-700"
+                title="Realtime sync active"
+              >
+                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                live
+              </span>
+            </div>
           </div>
+          {/* Intersection objective banner */}
+          {intersectionObjective && (
+            <div className="mt-2 flex items-start gap-2 rounded-lg border border-blue-100 bg-gradient-to-br from-blue-50/60 to-cyan-50/40 px-3 py-1.5">
+              <Target className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600" />
+              <p className="text-[12px] leading-snug text-gray-800">
+                <span className="font-mono text-[9px] uppercase tracking-wider text-blue-700">
+                  Together →{" "}
+                </span>
+                {intersectionObjective}
+              </p>
+            </div>
+          )}
+          <style jsx>{`
+            @keyframes synergyPresencePulse {
+              0%, 100% { transform: scale(1); opacity: 1; }
+              50% { transform: scale(1.3); opacity: 0.7; }
+            }
+          `}</style>
         </div>
 
         <div
@@ -526,23 +627,55 @@ export function SynergyRoomCanvas({ bundle }: Props) {
                 key={n.id}
                 node={n}
                 selected={n.id === selectedId}
+                editing={editingNodeId === n.id}
                 isMine={n.author_id === myId}
                 isTheirs={n.author_id === theirId}
+                archived={archived}
                 onClick={(e) => onNodeClick(e, n.id)}
                 onDragStart={(e) => beginDrag(e, n.id)}
+                onCommitEdit={(label) => commitNodeLabel(n.id, label)}
+                onCancelEdit={() => setEditingNodeId(null)}
               />
             ))}
           </div>
         </div>
 
-        {/* Footer help ribbon */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
-          <div className="pointer-events-auto rounded-full border border-gray-200 bg-white/85 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-gray-600 shadow-sm backdrop-blur">
-            <span className="text-blue-700">●</span> you ·{" "}
-            <span className="text-emerald-700">●</span> them · space + drag to
-            pan · wheel to zoom
-          </div>
-        </div>
+        {/* AI dock — appears at the bottom; replaces the static help
+            ribbon. Shows a selected-node header + 4 AI action chips
+            when a node is selected; falls back to a "select to call
+            the AI" hint when nothing is selected. */}
+        <SynergyRoomAIDock
+          roomId={roomId}
+          selectedNode={
+            selectedId ? nodes.find((n) => n.id === selectedId) ?? null : null
+          }
+          myAnchor={
+            bundle.my_component
+              ? {
+                  label: bundle.my_component.label_public,
+                  description: bundle.my_component.description_public,
+                }
+              : null
+          }
+          theirAnchor={
+            bundle.their_component
+              ? {
+                  label: bundle.their_component.label_public,
+                  description: bundle.their_component.description_public,
+                }
+              : null
+          }
+          roomNodes={nodes}
+          onNodeSpawned={(node) => {
+            // Realtime will eventually deliver this same row to both
+            // clients; we optimistically merge for instant feedback.
+            setNodes((prev) =>
+              prev.some((n) => n.id === node.id) ? prev : [...prev, node],
+            );
+          }}
+          onClearSelection={() => setSelectedId(null)}
+          disabled={archived}
+        />
       </main>
     </div>
   );
@@ -631,23 +764,43 @@ function AnchorCard({
 function RoomNodeCard({
   node,
   selected,
+  editing,
   isMine,
   isTheirs,
+  archived,
   onClick,
   onDragStart,
+  onCommitEdit,
+  onCancelEdit,
 }: {
   node: RoomNode;
   selected: boolean;
+  editing: boolean;
   isMine: boolean;
   isTheirs: boolean;
+  archived: boolean;
   onClick: (e: React.MouseEvent) => void;
   onDragStart: (e: React.PointerEvent) => void;
+  onCommitEdit: (label: string) => void;
+  onCancelEdit: () => void;
 }) {
-  const tone = isMine
-    ? "bg-blue-50 ring-blue-200 text-blue-900"
-    : isTheirs
-      ? "bg-emerald-50 ring-emerald-200 text-emerald-900"
-      : "bg-white ring-gray-200 text-gray-900";
+  // AI-generated nodes carry the AI_META_PREFIX in meta. We strip it
+  // for display + show a ✨ chip + soften the tint so AI-suggested
+  // cards visually distinguish from human contributions while still
+  // attributing the triggering user.
+  const isAiGenerated =
+    typeof node.meta === "string" && node.meta.startsWith(AI_META_PREFIX);
+  const aiHint = isAiGenerated
+    ? node.meta!.slice(AI_META_PREFIX.length).trim()
+    : null;
+  const tone = isAiGenerated
+    ? // AI cards lean amber-violet — distinct from both author tints
+      "bg-gradient-to-br from-purple-50 to-amber-50 ring-purple-200 text-gray-900"
+    : isMine
+      ? "bg-blue-50 ring-blue-200 text-blue-900"
+      : isTheirs
+        ? "bg-emerald-50 ring-emerald-200 text-emerald-900"
+        : "bg-white ring-gray-200 text-gray-900";
   return (
     <div
       className="absolute -translate-x-1/2 -translate-y-1/2"
@@ -655,34 +808,117 @@ function RoomNodeCard({
     >
       <div
         onClick={onClick}
-        onPointerDown={onDragStart}
+        // Dragging starts on the wrapper, but if we're editing,
+        // don't initiate drag — the user is typing inside.
+        onPointerDown={editing ? undefined : onDragStart}
         className={[
-          "select-none cursor-grab active:cursor-grabbing rounded-2xl px-3 py-2 text-xs shadow-sm ring-1 transition hover:scale-[1.02]",
+          "select-none rounded-2xl px-3 py-2 text-xs shadow-sm ring-1 transition",
+          editing
+            ? "cursor-text ring-2 ring-blue-500 shadow-md"
+            : "cursor-grab active:cursor-grabbing hover:scale-[1.02]",
           tone,
-          selected && "ring-2 ring-blue-500 shadow-md",
+          selected && !editing && "ring-2 ring-blue-500 shadow-md",
         ]
           .filter(Boolean)
           .join(" ")}
         style={{ minWidth: 160, maxWidth: 260 }}
+        title={aiHint ? `AI suggestion · ${aiHint}` : undefined}
       >
         <div className="mb-0.5 flex items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-wider opacity-60">
-          <span>{node.kind}</span>
-          {isMine && (
-            <span className="rounded-full bg-blue-500/15 px-1 text-[8px] text-blue-700">
-              you
+          <span className="flex items-center gap-1">
+            {isAiGenerated && (
+              <span className="text-purple-600" title="AI-suggested" aria-label="AI-suggested">
+                ✨
+              </span>
+            )}
+            {node.kind}
+          </span>
+          {isAiGenerated ? (
+            <span className="rounded-full bg-purple-500/15 px-1 text-[8px] text-purple-700">
+              {isMine ? "you · AI" : isTheirs ? "them · AI" : "AI"}
             </span>
-          )}
-          {isTheirs && (
-            <span className="rounded-full bg-emerald-500/15 px-1 text-[8px] text-emerald-700">
-              them
-            </span>
+          ) : (
+            <>
+              {isMine && (
+                <span className="rounded-full bg-blue-500/15 px-1 text-[8px] text-blue-700">
+                  you
+                </span>
+              )}
+              {isTheirs && (
+                <span className="rounded-full bg-emerald-500/15 px-1 text-[8px] text-emerald-700">
+                  them
+                </span>
+              )}
+            </>
           )}
         </div>
-        <div className="font-medium leading-snug whitespace-pre-wrap break-words">
-          {node.label}
-        </div>
+        {editing ? (
+          <InlineEditField
+            initial={node.label}
+            onCommit={onCommitEdit}
+            onCancel={onCancelEdit}
+          />
+        ) : (
+          <div
+            className="font-medium leading-snug whitespace-pre-wrap break-words"
+            title={!archived ? "Click to select; click again to edit" : undefined}
+          >
+            {node.label}
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+// ── Inline edit field ──
+// Autofocuses, autosizes vertically, commits on blur or Cmd+Enter,
+// cancels on Escape. Stops pointer-down propagation so dragging the
+// underlying card while editing doesn't fire.
+
+function InlineEditField({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.style.height = "auto";
+    ref.current.style.height = `${ref.current.scrollHeight}px`;
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onBlur={() => onCommit(value)}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+          e.preventDefault();
+          onCommit(value);
+        }
+      }}
+      rows={1}
+      className="w-full resize-none rounded border border-blue-300 bg-white px-1.5 py-1 text-[12px] font-medium leading-snug text-gray-900 outline-none ring-2 ring-blue-100"
+    />
   );
 }
 

@@ -10,11 +10,17 @@ import { SynergyPageClient } from "./synergy-page-client";
 
 interface PageProps {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ focus?: string }>;
+  searchParams: Promise<{ focus?: string; voice?: string }>;
 }
 
 export default async function SynergyPage({ params, searchParams }: PageProps) {
   const { id } = await params;
-  const { focus } = await searchParams;
-  return <SynergyPageClient sessionId={id} focusNodeId={focus} />;
+  const { focus, voice } = await searchParams;
+  return (
+    <SynergyPageClient
+      sessionId={id}
+      focusNodeId={focus}
+      autoStartVoice={voice === "1"}
+    />
+  );
 }

@@ -12,12 +12,16 @@
 
 "use client";
 
+import { useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
   Compass,
+  Globe,
   Lightbulb,
   Loader2,
+  Lock,
+  Network,
   Package,
   RefreshCw,
   Sparkles,
@@ -191,7 +195,7 @@ export function SynergyComponentsCard({
                           </details>
                         )}
                       </div>
-                      <VisibilityBadge visibility={c.visibility} />
+                      <VisibilityPopover component={c} />
                     </div>
                   </li>
                 ))}
@@ -204,24 +208,170 @@ export function SynergyComponentsCard({
   );
 }
 
-function VisibilityBadge({
-  visibility,
+// ── Visibility popover (Phase 4d+1) ──
+//
+// Click the chip → small dropdown reveals the three visibility
+// options with descriptions. Selecting a new value PATCHes the row
+// and shows a toast. Optimistic local update; rollback on error.
+//
+// Exported so focus-mode-stage2 and other surfaces can drop in the
+// same interactive chip without duplicating the popover logic.
+
+export function VisibilityPopover({
+  component,
 }: {
-  visibility: BrainstormComponent["visibility"];
+  component: BrainstormComponent;
 }) {
-  const meta = {
-    private: { label: "private", className: "bg-gray-100 text-gray-700" },
-    matchable_only: {
-      label: "matchable",
-      className: "bg-blue-100 text-blue-700",
-    },
-    public: { label: "public", className: "bg-emerald-100 text-emerald-700" },
-  }[visibility];
+  // We dynamic-import the toast + client to avoid pulling the whole
+  // synergy/client bundle into pages that never edit a component.
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState<BrainstormComponent["visibility"]>(
+    component.visibility,
+  );
+  const [busy, setBusy] = useState(false);
+  const meta = VISIBILITY_META[current];
+  const Icon = meta.icon;
+
+  const setVisibility = async (
+    next: BrainstormComponent["visibility"],
+  ) => {
+    if (busy || next === current) {
+      setOpen(false);
+      return;
+    }
+    setBusy(true);
+    const prev = current;
+    setCurrent(next); // optimistic
+    try {
+      const { updateComponent } = await import("@/lib/synergy/client");
+      const { toast } = await import("@/lib/hooks/use-toast");
+      await updateComponent(component.id, { visibility: next });
+      toast.success(`Visibility → ${VISIBILITY_META[next].label}`, {
+        description:
+          next === "private"
+            ? "Removed from match suggestions. Existing matches remain."
+            : next === "public"
+              ? "Visible in any future global feed."
+              : "Surfaces only to users with complementary needs.",
+      });
+    } catch (err) {
+      setCurrent(prev);
+      const { toast } = await import("@/lib/hooks/use-toast");
+      toast.error("Visibility update failed", {
+        description: (err as Error).message,
+      });
+    } finally {
+      setBusy(false);
+      setOpen(false);
+    }
+  };
+
   return (
-    <span
-      className={`rounded-full px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider ${meta.className}`}
-    >
-      {meta.label}
-    </span>
+    <div className="relative">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        disabled={busy}
+        title="Change visibility"
+        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider transition hover:scale-105 ${meta.className} disabled:opacity-60`}
+      >
+        <Icon className="h-2.5 w-2.5" />
+        {meta.label}
+        {busy && (
+          <span className="ml-0.5 inline-block h-1 w-1 animate-pulse rounded-full bg-current" />
+        )}
+      </button>
+      {open && (
+        <>
+          {/* Click-out scrim */}
+          <div
+            className="fixed inset-0 z-30"
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
+          />
+          <div className="absolute right-0 top-full z-40 mt-1.5 w-60 overflow-hidden rounded-xl border border-gray-200 bg-white/95 shadow-xl backdrop-blur-xl">
+            <div className="border-b border-gray-100 px-3 py-2 font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
+              Visibility
+            </div>
+            <ul>
+              {(
+                ["matchable_only", "private", "public"] as const
+              ).map((opt) => {
+                const m = VISIBILITY_META[opt];
+                const OIcon = m.icon;
+                const active = opt === current;
+                return (
+                  <li key={opt}>
+                    <button
+                      onClick={() => setVisibility(opt)}
+                      disabled={busy}
+                      className={[
+                        "flex w-full items-start gap-2 px-3 py-2 text-left transition",
+                        active ? "bg-blue-50/60" : "hover:bg-gray-50",
+                      ].join(" ")}
+                    >
+                      <OIcon
+                        className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${active ? "text-blue-700" : "text-gray-500"}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className={`flex items-center gap-1 text-[12px] font-semibold ${active ? "text-blue-900" : "text-gray-900"}`}
+                        >
+                          {m.label}
+                          {active && (
+                            <span className="font-mono text-[8px] uppercase tracking-wider text-blue-700">
+                              · current
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-[10.5px] leading-snug text-gray-600">
+                          {m.help}
+                        </p>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="border-t border-gray-100 bg-gray-50/50 px-3 py-1.5 font-mono text-[9px] leading-snug text-gray-500">
+              Going private removes the component from match suggestions.
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
+
+const VISIBILITY_META: Record<
+  BrainstormComponent["visibility"],
+  {
+    label: string;
+    className: string;
+    icon: React.ComponentType<{ className?: string }>;
+    help: string;
+  }
+> = {
+  private: {
+    label: "private",
+    className: "bg-gray-100 text-gray-700",
+    icon: Lock,
+    help: "Stays on your board only. Never enters the matching pool.",
+  },
+  matchable_only: {
+    label: "matchable",
+    className: "bg-blue-100 text-blue-700",
+    icon: Network,
+    help: "Surfaces to users with complementary components. Anonymous until accept.",
+  },
+  public: {
+    label: "public",
+    className: "bg-emerald-100 text-emerald-700",
+    icon: Globe,
+    help: "Visible in any future global feed (Phase 5+).",
+  },
+};

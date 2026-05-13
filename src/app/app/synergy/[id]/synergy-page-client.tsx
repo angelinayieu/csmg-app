@@ -34,8 +34,22 @@ const SynergyWhiteboard = dynamic(
 interface Props {
   sessionId: string;
   focusNodeId?: string;
+  // True when the route arrived with ?voice=1 from the dashboard's
+  // voice orb. The whiteboard reads this on mount and auto-starts
+  // listening so the conversation flows continuously.
+  autoStartVoice?: boolean;
 }
 
-export function SynergyPageClient({ sessionId, focusNodeId }: Props) {
-  return <SynergyWhiteboard sessionId={sessionId} focusNodeId={focusNodeId} />;
+export function SynergyPageClient({
+  sessionId,
+  focusNodeId,
+  autoStartVoice,
+}: Props) {
+  return (
+    <SynergyWhiteboard
+      sessionId={sessionId}
+      focusNodeId={focusNodeId}
+      autoStartVoice={autoStartVoice}
+    />
+  );
 }

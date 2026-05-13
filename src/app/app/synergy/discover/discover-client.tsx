@@ -13,22 +13,28 @@ import {
   ArrowDownToLine,
   ArrowLeftRight,
   ArrowRight,
-  Compass,
+  Check,
+  Clock,
   Filter,
-  Inbox,
   Loader2,
   Lock,
   RefreshCw,
   Sparkles,
   Target,
+  X,
 } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
 import { listMatches, type RedactedMatch } from "@/lib/synergy/match-client";
 import { RequestConnectionModal } from "@/components/synergy/request-connection-modal";
+import { SynergyBellBadge } from "@/components/synergy/synergy-bell-badge";
+import { SynergyDiscoverEmpty } from "@/components/synergy/synergy-discover-empty";
+import { SynergyMatchArrivalToaster } from "@/components/synergy/synergy-match-arrival-toaster";
+import { useRealtimeMatches } from "@/hooks/synergy/use-realtime-matches";
 
 interface Props {
   matchableCount: number;
   initialMatches: RedactedMatch[];
+  initialNotifyOnMatch?: boolean;
 }
 
 type MatchKindFilter = "all" | "complement" | "parallel";
@@ -36,16 +42,36 @@ type MatchKindFilter = "all" | "complement" | "parallel";
 export function SynergyDiscoverClient({
   matchableCount,
   initialMatches,
+  initialNotifyOnMatch = false,
 }: Props) {
   const [matches, setMatches] = useState<RedactedMatch[]>(initialMatches);
   const [loading, setLoading] = useState(false);
   const [kindFilter, setKindFilter] = useState<MatchKindFilter>("all");
   const [minScore, setMinScore] = useState(60);
-  // Pair-keyed set: "{my_component_id}:{their_component_id}". Used to
-  // show "Requested" state on cards optimistically after the modal
-  // succeeds, without having to refetch matches.
-  const [requestedPairs, setRequestedPairs] = useState<Set<string>>(new Set());
+  // Exploratory mode — when the strict feed returns zero, the cold-
+  // start empty state can flip this on to re-fetch with the score
+  // floor dropped server-side (include_exploratory=1). We track it
+  // separately so the toolbar can surface an "exploratory results"
+  // pill, and so Refresh stays in the same mode until the user
+  // resets kindFilter/minScore.
+  const [exploratoryMode, setExploratoryMode] = useState(false);
+  // Pair-keyed local override: "{my_component_id}:{their_component_id}"
+  // for optimistic "Request sent" treatment between the modal close
+  // and the next refresh. The authoritative source is the server's
+  // request_state on each match.
+  const [optimisticRequested, setOptimisticRequested] = useState<Set<string>>(
+    new Set(),
+  );
   const [pendingMatch, setPendingMatch] = useState<RedactedMatch | null>(null);
+  // Visual cue when a new match arrives via the realtime channel — a
+  // soft cyan pill briefly appears in the toolbar so the user knows
+  // the page is no longer fresh even before they hit Refresh. The
+  // standalone SynergyMatchArrivalToaster handles the universal toast.
+  const [recentArrival, setRecentArrival] = useState(false);
+  useRealtimeMatches(true, () => {
+    setRecentArrival(true);
+    window.setTimeout(() => setRecentArrival(false), 4500);
+  });
 
   const refresh = async () => {
     if (loading) return;
@@ -53,7 +79,8 @@ export function SynergyDiscoverClient({
     try {
       const page = await listMatches({
         limit: 50,
-        minScore,
+        minScore: exploratoryMode ? 0 : minScore,
+        includeExploratory: exploratoryMode,
         // map UI filter to API filter — "complement" maps to a_needs_b
         // OR b_needs_a, but the API takes one value. For "complement"
         // we request without a filter and post-filter client-side.
@@ -68,6 +95,41 @@ export function SynergyDiscoverClient({
     } finally {
       setLoading(false);
     }
+  };
+
+  // "Lower the bar" CTA from the empty state. Re-fetches with the
+  // exploratory floor (server drops to 30) and keeps the page in
+  // exploratory mode so Refresh stays consistent until the user
+  // re-tunes filters.
+  const tryExploratory = async () => {
+    if (loading) return;
+    setExploratoryMode(true);
+    setLoading(true);
+    try {
+      const page = await listMatches({
+        limit: 50,
+        includeExploratory: true,
+      });
+      setMatches(page.matches);
+      if (page.matches.length === 0) {
+        toast.info("Still no fits — we'll ping you when the pool grows");
+      } else {
+        toast.success(
+          `Loaded ${page.matches.length} exploratory match${page.matches.length === 1 ? "" : "es"}`,
+        );
+      }
+    } catch (e) {
+      toast.error("Couldn't load exploratory matches", {
+        description: (e as Error).message,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const exitExploratory = () => {
+    setExploratoryMode(false);
+    setMatches(initialMatches);
   };
 
   // ── Empty states ──
@@ -96,31 +158,12 @@ export function SynergyDiscoverClient({
 
   if (matches.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center">
-        <Compass className="mx-auto mb-3 h-6 w-6 text-blue-600" />
-        <h2 className="text-lg font-semibold text-gray-900">
-          No matches yet
-        </h2>
-        <p className="mx-auto mt-2 max-w-md text-sm text-gray-600">
-          {matchableCount} matchable component
-          {matchableCount === 1 ? "" : "s"} indexed. The matcher hasn&apos;t
-          run for them yet, or the community pool is sparse for your
-          domain. Try running it now — we&apos;ll notify you as the pool
-          grows.
-        </p>
-        <button
-          onClick={refresh}
-          disabled={loading}
-          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
-        >
-          {loading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
-          Check for new matches
-        </button>
-      </div>
+      <SynergyDiscoverEmpty
+        matchableCount={matchableCount}
+        initialNotifyOnMatch={initialNotifyOnMatch}
+        onTryExploratory={tryExploratory}
+        exploratoryLoading={loading && exploratoryMode}
+      />
     );
   }
 
@@ -154,12 +197,29 @@ export function SynergyDiscoverClient({
           <ScoreSlider value={minScore} onChange={setMinScore} />
         </div>
         <div className="flex items-center gap-2">
-          <Link
-            href="/app/synergy/requests"
-            className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-gray-700 transition hover:border-blue-400"
-          >
-            <Inbox className="h-3 w-3" /> Inbox
-          </Link>
+          {exploratoryMode && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-100 to-orange-100 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-800 ring-1 ring-amber-200">
+              <Sparkles className="h-3 w-3" />
+              exploratory · below 60 floor
+              <button
+                onClick={exitExploratory}
+                className="ml-1 rounded-full p-0.5 transition hover:bg-amber-200/70"
+                aria-label="Exit exploratory mode"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
+          {recentArrival && (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-cyan-100 to-blue-100 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-blue-700 ring-1 ring-cyan-200"
+              style={{ animation: "synergyMatchArrivalPulse 4s ease-in-out" }}
+            >
+              <Sparkles className="h-3 w-3 animate-pulse" />
+              new match · refresh to see
+            </span>
+          )}
+          <SynergyBellBadge />
           <button
             onClick={refresh}
             disabled={loading}
@@ -180,7 +240,7 @@ export function SynergyDiscoverClient({
           <MatchCard
             key={m.id}
             match={m}
-            requested={requestedPairs.has(pairKey(m))}
+            optimisticRequested={optimisticRequested.has(pairKey(m))}
             onRequest={() => setPendingMatch(m)}
           />
         ))}
@@ -192,14 +252,29 @@ export function SynergyDiscoverClient({
           open={!!pendingMatch}
           onClose={() => setPendingMatch(null)}
           onSent={() => {
-            setRequestedPairs((prev) => {
+            setOptimisticRequested((prev) => {
               const next = new Set(prev);
               next.add(pairKey(pendingMatch));
               return next;
             });
           }}
+          onExistingInbound={(requestId) => {
+            window.location.href = `/app/synergy/requests?focus=${requestId}`;
+          }}
         />
       )}
+
+      {/* Headless: toasts on new match arrivals regardless of page */}
+      <SynergyMatchArrivalToaster />
+
+      <style jsx>{`
+        @keyframes synergyMatchArrivalPulse {
+          0% { opacity: 0; transform: translateY(-4px); }
+          10% { opacity: 1; transform: translateY(0); }
+          85% { opacity: 1; transform: translateY(0); }
+          100% { opacity: 0; transform: translateY(0); }
+        }
+      `}</style>
     </div>
   );
 }
@@ -268,11 +343,11 @@ const KIND_LABEL: Record<string, string> = {
 
 function MatchCard({
   match,
-  requested,
+  optimisticRequested,
   onRequest,
 }: {
   match: RedactedMatch;
-  requested: boolean;
+  optimisticRequested: boolean;
   onRequest: () => void;
 }) {
   const isComplement = match.direction.kind === "complement";
@@ -348,19 +423,11 @@ function MatchCard({
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        {requested ? (
-          <span className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-1.5 text-[12px] font-semibold text-emerald-700">
-            <Sparkles className="h-3 w-3" /> Request sent
-          </span>
-        ) : (
-          <button
-            onClick={onRequest}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
-          >
-            Request connection
-            <ArrowRight className="h-3 w-3" />
-          </button>
-        )}
+        <MatchCardCTA
+          match={match}
+          optimisticRequested={optimisticRequested}
+          onRequest={onRequest}
+        />
         <button
           onClick={() => toast.info("Skipping. Refresh later for new matches.")}
           className="inline-flex items-center gap-1 rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-gray-700 transition hover:border-gray-400"
@@ -374,6 +441,106 @@ function MatchCard({
     </li>
   );
 }
+
+// ── Card CTA — derives state from server-side request_state ──
+// Five states:
+//   none → Request connection button
+//   outgoing.pending → Pending pill + days-left + withdraw link
+//   incoming.pending → Respond button (links inbox at this request)
+//   accepted → Open room button
+//   any terminal (declined/expired/withdrawn) → Re-request button
+//     (will create a fresh row since dedup was lifted post-decision)
+
+function MatchCardCTA({
+  match,
+  optimisticRequested,
+  onRequest,
+}: {
+  match: RedactedMatch;
+  optimisticRequested: boolean;
+  onRequest: () => void;
+}) {
+  const r = match.request_state;
+
+  if (optimisticRequested && !r) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-1.5 text-[12px] font-semibold text-emerald-700">
+        <Sparkles className="h-3 w-3" /> Request sent
+      </span>
+    );
+  }
+
+  if (r?.status === "accepted") {
+    return (
+      <Link
+        href={`/app/synergy/room/by-request/${r.id}`}
+        className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+      >
+        <Sparkles className="h-3 w-3" /> Open shared room
+        <ArrowRight className="h-3 w-3" />
+      </Link>
+    );
+  }
+
+  if (r?.status === "pending" && r.direction === "outgoing") {
+    const daysLeft = Math.max(
+      0,
+      Math.ceil(
+        (new Date(r.expires_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24),
+      ),
+    );
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-1.5 text-[12px] font-semibold text-amber-800">
+        <Clock className="h-3 w-3" />
+        Pending · expires in {daysLeft}d
+      </span>
+    );
+  }
+
+  if (r?.status === "pending" && r.direction === "incoming") {
+    return (
+      <Link
+        href={`/app/synergy/requests?focus=${r.id}`}
+        className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-rose-500 to-orange-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+      >
+        <Sparkles className="h-3 w-3" /> Respond in inbox
+        <ArrowRight className="h-3 w-3" />
+      </Link>
+    );
+  }
+
+  if (r?.status === "declined" || r?.status === "withdrawn") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-1.5 text-[12px] font-medium text-gray-600">
+        <X className="h-3 w-3" /> Closed
+      </span>
+    );
+  }
+
+  if (r?.status === "expired") {
+    return (
+      <button
+        onClick={onRequest}
+        className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3.5 py-1.5 text-[12px] font-semibold text-gray-700 transition hover:border-blue-400 hover:text-gray-900"
+      >
+        <Clock className="h-3 w-3" /> Resend (prior expired)
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={onRequest}
+      className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+    >
+      Request connection
+      <ArrowRight className="h-3 w-3" />
+    </button>
+  );
+}
+
+// Surface unused Check icon import to satisfy the linter
+void Check;
 
 function Side({
   title,

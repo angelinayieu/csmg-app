@@ -58,6 +58,16 @@ export interface PartitionVariablesByRoleArgs {
     value: string | number | null;
     recorded_at: string;
   }>;
+  /**
+   * Sprint W6.8 — optional canonical_concept_id → canonical_code map.
+   * When provided, partition entries carry both fields so UI surfaces
+   * can render a CanonicalConceptBadge linking to the Tier 1 drawer.
+   * Caller (load-preflight + redrive-app-variables + app-generator)
+   * fetches this via a single `SELECT id, canonical_code FROM
+   * canonical_concepts WHERE id IN (...)` before calling the
+   * partition. Pure: function stays I/O-free.
+   */
+  canonicalCodeById?: Map<string, string>;
 }
 
 type RoleBucket =
@@ -74,7 +84,7 @@ type RoleBucket =
 export function partitionVariablesByRole(
   args: PartitionVariablesByRoleArgs,
 ): PreflightVariables {
-  const { entities, edges, goals, variableProposals, overrides, metricObservations } = args;
+  const { entities, edges, goals, variableProposals, overrides, metricObservations, canonicalCodeById } = args;
 
   // ── Build lookup tables once ──────────────────────────────────────
 
@@ -253,6 +263,13 @@ export function partitionVariablesByRole(
       proposalRoleByEntity,
     });
 
+    // W6.8 — Tier 1 canonical link from entity row + caller-provided map.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const canonicalConceptId = ((e as any).canonical_concept_id as string | null | undefined) ?? null;
+    const canonicalCode = canonicalConceptId
+      ? canonicalCodeById?.get(canonicalConceptId) ?? null
+      : null;
+
     const entry: VariableEntry = {
       entity_id: e.id,
       name: e.name,
@@ -270,6 +287,8 @@ export function partitionVariablesByRole(
       unit: ((e as any).measurement_unit as string | undefined) ?? null,
       importance: e.importance,
       rationale,
+      canonical_concept_id: canonicalConceptId,
+      canonical_code: canonicalCode,
     };
 
     buckets[bucket].push(entry);

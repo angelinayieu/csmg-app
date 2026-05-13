@@ -8,6 +8,7 @@ import Link from "next/link";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { Plus, Sparkles } from "lucide-react";
+import { SynergyBellBadge } from "@/components/synergy/synergy-bell-badge";
 
 interface ListedSession {
   id: string;
@@ -69,13 +70,28 @@ export default async function SynergyListPage() {
             thinking into upstream needs and downstream outputs.
           </p>
         </div>
-        <Link
-          href="/app/synergy/new"
-          className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
-        >
-          <Plus className="h-4 w-4" />
-          New brainstorm
-        </Link>
+        <div className="flex items-center gap-2">
+          <SynergyBellBadge />
+          <Link
+            href="/app/synergy/discover"
+            className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-gray-700 transition hover:border-blue-400"
+          >
+            Discover
+          </Link>
+          <Link
+            href="/app/synergy/profile"
+            className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-gray-700 transition hover:border-blue-400"
+          >
+            Profile
+          </Link>
+          <Link
+            href="/app/synergy/new"
+            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+          >
+            <Plus className="h-4 w-4" />
+            New brainstorm
+          </Link>
+        </div>
       </header>
 
       {sessions.length === 0 ? (

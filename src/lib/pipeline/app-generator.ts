@@ -295,6 +295,31 @@ export async function generateAppsAndInterventions(
       recorded_at: m.recorded_at as string,
     }));
 
+    // W6.8 — load canonical_code per entity's linked canonical_concept_id
+    // so partition entries can carry the canonical_code for the
+    // CanonicalConceptBadge URL. Soft-fails to empty map.
+    const canonicalConceptIds = entities
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((e) => ((e as any).canonical_concept_id as string | null) ?? null)
+      .filter((id): id is string => typeof id === "string");
+    const canonicalCodeById = new Map<string, string>();
+    if (canonicalConceptIds.length > 0) {
+      try {
+        const { data: codeRows } = await db
+          .from("canonical_concepts")
+          .select("id, canonical_code")
+          .in("id", Array.from(new Set(canonicalConceptIds)));
+        for (const r of (codeRows ?? []) as Array<{ id: string; canonical_code: string }>) {
+          canonicalCodeById.set(r.id, r.canonical_code);
+        }
+      } catch (err) {
+        console.warn(
+          "[app-generator] canonical_code lookup failed (badges will render without code):",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     variablePartition = partitionVariablesByRole({
       entities,
       edges,
@@ -302,6 +327,7 @@ export async function generateAppsAndInterventions(
       variableProposals,
       overrides,
       metricObservations,
+      canonicalCodeById,
     });
 
     for (const g of goals) {

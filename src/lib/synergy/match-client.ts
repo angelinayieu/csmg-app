@@ -15,6 +15,13 @@ export interface RedactedMatchSide {
   objective_statement?: string | null;
 }
 
+export interface MatchRequestState {
+  id: string;
+  status: "pending" | "accepted" | "declined" | "expired" | "withdrawn";
+  expires_at: string;
+  direction: "outgoing" | "incoming";
+}
+
 export interface RedactedMatch {
   id: string;
   mine: RedactedMatchSide;
@@ -32,6 +39,9 @@ export interface RedactedMatch {
   };
   rationale: string;
   computed_at: string;
+  // Phase 4c v2: any existing request between these two components.
+  // Null when none exists. Used by Discover to render correct state.
+  request_state: MatchRequestState | null;
 }
 
 export interface MatchesPage {
@@ -73,15 +83,35 @@ export async function listMatches(opts?: {
   limit?: number;
   matchKind?: "a_needs_b" | "b_needs_a" | "parallel";
   minScore?: number;
+  // Cold-start mode — drops the score floor to 30 server-side and
+  // tags rows as "exploratory" in the UI. Used by the discover
+  // empty state's "lower the bar" CTA.
+  includeExploratory?: boolean;
 }): Promise<MatchesPage> {
   const params = new URLSearchParams();
   if (opts?.cursor) params.set("cursor", opts.cursor);
   if (opts?.limit) params.set("limit", String(opts.limit));
   if (opts?.matchKind) params.set("match_kind", opts.matchKind);
   if (opts?.minScore != null) params.set("min_score", String(opts.minScore));
+  if (opts?.includeExploratory) params.set("include_exploratory", "1");
   const qs = params.toString();
   const res = await fetch(`/api/synergy/matches${qs ? "?" + qs : ""}`);
   return asJson<MatchesPage>(res);
+}
+
+// Marketplace stats for the cold-start empty state. All aggregated,
+// no PII. Cheap to call.
+export interface MarketplaceStats {
+  total_matchable_components: number;
+  recent_publishes_24h: number;
+  active_rooms_7d: number;
+  kind_distribution: Array<{ kind: string; count: number }>;
+  recent_activity_score: number;
+}
+
+export async function getMarketplaceStats(): Promise<MarketplaceStats> {
+  const res = await fetch("/api/synergy/marketplace/stats");
+  return asJson<MarketplaceStats>(res);
 }
 
 // ── Phase 4c — match request wrappers ──
@@ -110,13 +140,29 @@ export interface HydratedMatchRequest {
   direction: "incoming" | "outgoing";
   status: MatchRequestStatus;
   message: string | null;
+  additional_components: MatchRequestComponentRef[];
+  match: MatchRequestMatchContext | null;
   created_at: string;
   responded_at: string | null;
   expires_at: string;
+  seen_at: string | null;
   my_component: MatchRequestComponentRef | null;
   their_component: MatchRequestComponentRef | null;
-  // Revealed only when status is 'pending' or 'accepted'
+  // Privacy-gated (Phase 4c v2):
+  //   - Incoming PENDING:  null (project-not-person decision)
+  //   - Outgoing PENDING:  revealed (sender already chose to engage)
+  //   - Accepted:          revealed both ways
+  //   - Declined/expired/withdrawn: null
+  // The Accept confirmation modal calls /accept-preview to surface the
+  // sender's profile at the moment-of-decision instead.
   other_party: MatchRequestOtherParty | null;
+}
+
+export interface MatchRequestMatchContext {
+  rationale: string;
+  final_score: number;
+  complementarity_score: number;
+  goal_alignment_score: number;
 }
 
 export interface CreatedRequest {
@@ -126,22 +172,66 @@ export interface CreatedRequest {
   expires_at: string;
 }
 
+export interface AcceptPreviewResponse {
+  sender_profile: MatchRequestOtherParty | null;
+  my_profile: MatchRequestOtherParty | null;
+  additional_components: MatchRequestComponentRef[];
+  expires_at: string;
+}
+
+export interface ExistingInboundResponse {
+  kind: "existing_inbound";
+  message: string;
+  request_id: string;
+}
+
 export async function createMatchRequest(input: {
   fromComponentId: string;
   toComponentId: string;
+  matchId?: string;
   message?: string;
-}): Promise<CreatedRequest> {
+  additionalComponentIds?: string[];
+}): Promise<CreatedRequest | ExistingInboundResponse> {
   const res = await fetch("/api/synergy/requests", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       from_component_id: input.fromComponentId,
       to_component_id: input.toComponentId,
+      match_id: input.matchId,
       message: input.message,
+      additional_component_ids: input.additionalComponentIds,
     }),
   });
+  // Bidirectional resolve: 409 + { kind: "existing_inbound" } means
+  // the second sender should respond to the existing request instead.
+  if (res.status === 409) {
+    const body = (await res.json()) as
+      | ExistingInboundResponse
+      | { error: string; code?: string };
+    if ("kind" in body && body.kind === "existing_inbound") {
+      return body;
+    }
+    throw new Error("error" in body ? body.error : "Conflict");
+  }
   const json = await asJson<{ request: CreatedRequest }>(res);
   return json.request;
+}
+
+export async function acceptPreview(
+  requestId: string,
+): Promise<AcceptPreviewResponse> {
+  const res = await fetch(
+    `/api/synergy/requests/${requestId}/accept-preview`,
+    { method: "POST" },
+  );
+  return asJson<AcceptPreviewResponse>(res);
+}
+
+export async function getNotificationCount(): Promise<number> {
+  const res = await fetch("/api/synergy/notifications/count");
+  const json = await asJson<{ unseen_incoming: number }>(res);
+  return json.unseen_incoming;
 }
 
 export async function listMatchRequests(

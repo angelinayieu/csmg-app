@@ -106,9 +106,16 @@ function folderTintForLabel(label: string): { fill: string; stroke: string } {
 interface Props {
   sessionId: string;
   focusNodeId?: string;
+  // Set when the user arrived from the dashboard voice orb — auto-
+  // starts the mic on mount so the conversation continues seamlessly.
+  autoStartVoice?: boolean;
 }
 
-export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
+export function SynergyWhiteboard({
+  sessionId,
+  focusNodeId,
+  autoStartVoice = false,
+}: Props) {
   const [tool, setTool] = useState<SynergyTool>("select");
   const [autoMode, setAutoMode] = useState(true);
   const [nodes, setNodes] = useState<ClientNode[]>([]);
@@ -353,7 +360,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
           .filter((n) => n.kind !== "user")
           .map((n) => `${n.kind}: ${n.label}`)
           .join("\n");
-        const res = await augment({ transcript, mode: "augment", context: ctx });
+        const res = await augment({ transcript, mode: "augment", context: ctx, precision });
         if (res.mode !== "augment") return;
         const newNodes = res.result.nodes ?? [];
         if (newNodes.length === 0) {
@@ -387,6 +394,28 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
   );
 
   const speech = useSpeech(handleAIAugment);
+
+  // ── Auto-start voice on arrival from the dashboard voice orb ──
+  // When the user arrived with ?voice=1, the dashboard orb already
+  // handled the initial spoken phrase (and committed it as the seed
+  // node). The whiteboard takes over by immediately starting its own
+  // mic so the user can keep talking without re-clicking. Fires once,
+  // gated on `loaded` so the board is rendered first.
+  const voiceAutoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!autoStartVoice) return;
+    if (voiceAutoStartedRef.current) return;
+    if (!loaded) return;
+    if (!speech.supported) return;
+    voiceAutoStartedRef.current = true;
+    // Slight delay lets the previous mic stream (orb's analyser) fully
+    // release before the whiteboard requests a new one.
+    const t = window.setTimeout(() => {
+      if (!speech.listening) speech.start();
+    }, 380);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStartVoice, loaded, speech.supported]);
 
   const toggleMic = () => {
     if (!speech.supported) {
@@ -661,7 +690,10 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
     }
     setAiBusy(mode);
     try {
-      const res = await augment({ transcript, mode });
+      // Pass the precision slider through — Lv 1 = wild cross-domain,
+      // Lv 5 = surgical (named entities + quantified targets). Used to
+      // be a Variations-only knob; now all augment modes respect it.
+      const res = await augment({ transcript, mode, precision });
       if (mode === "questions" && res.mode === "questions") {
         const qs = res.result.questions ?? [];
         setQuestions(qs);
@@ -851,7 +883,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
       const transcript = `Concept: ${parent.label}\nVariations:\n${variations
         .map((v) => `- ${v.label}${v.meta ? ` — ${v.meta}` : ""}`)
         .join("\n")}`;
-      const res = await augment({ transcript, mode: "rank" });
+      const res = await augment({ transcript, mode: "rank", precision });
       if (res.mode !== "rank") return;
       const ranked: RankedItem[] = res.result.ranked ?? [];
       if (!ranked.length) {
@@ -902,6 +934,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
         transcript: target.label,
         mode: "decompose",
         context: ctx || undefined,
+        precision,
       });
       if (res.mode !== "decompose") return;
       const d = res.result;
@@ -982,6 +1015,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
         transcript: target.label,
         mode: "questions",
         context: ctx || undefined,
+        precision,
       });
       if (res.mode !== "questions") return;
       const qs = res.result.questions ?? [];
@@ -1029,6 +1063,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
         transcript: target.label,
         mode: "research",
         context: ctx || undefined,
+        precision,
       });
       if (res.mode !== "research") return;
       const ds = res.result.directions ?? [];
@@ -1149,6 +1184,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
           transcript,
           mode: "synthesize",
           context: context || undefined,
+          precision,
         });
         if (res.mode !== "synthesize") return;
         const { label, why } = res.result;
@@ -1345,6 +1381,13 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedId) ?? null,
     [nodes, selectedId],
+  );
+  // Surfaced in the AI rail's "Will attach under" indicator as the
+  // fallback target when no card is selected. Mirrors the resolution
+  // chain inside addNodeFromPanel (selectedId → core seed → nodes[0]).
+  const seedNode = useMemo(
+    () => nodes.find((n) => n.kind === "core") ?? null,
+    [nodes],
   );
   const selectedHasVariations = useMemo(
     () =>
@@ -1655,6 +1698,7 @@ export function SynergyWhiteboard({ sessionId, focusNodeId }: Props) {
       <SynergyAIRail
         sessionId={sessionId}
         selectedNode={selectedNode}
+        seedNode={seedNode}
         selectedHasVariations={selectedHasVariations}
         precision={precision}
         onPrecisionChange={setPrecision}

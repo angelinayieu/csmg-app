@@ -211,6 +211,27 @@ export async function loadPreflightView(
     overrides: overridesNormalized,
   });
 
+  // W6.8 — fetch canonical_code per linked canonical_concept_id so
+  // the partition entries carry the code (powers the badge link).
+  const canonicalConceptIds = entities
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((e) => ((e as any).canonical_concept_id as string | null) ?? null)
+    .filter((id): id is string => typeof id === "string");
+  const canonicalCodeById = new Map<string, string>();
+  if (canonicalConceptIds.length > 0) {
+    try {
+      const { data: codeRows } = await dbAny
+        .from("canonical_concepts")
+        .select("id, canonical_code")
+        .in("id", Array.from(new Set(canonicalConceptIds)));
+      for (const r of (codeRows ?? []) as Array<{ id: string; canonical_code: string }>) {
+        canonicalCodeById.set(r.id, r.canonical_code);
+      }
+    } catch {
+      // Non-fatal — badges render without the code link.
+    }
+  }
+
   const variables = await partitionVariablesByRole({
     entities,
     edges,
@@ -218,6 +239,7 @@ export async function loadPreflightView(
     variableProposals,
     overrides: overridesNormalized,
     metricObservations,
+    canonicalCodeById,
   });
 
   // ── M1 + M2 + M3 in preview mode (no persistence) ─────────────────

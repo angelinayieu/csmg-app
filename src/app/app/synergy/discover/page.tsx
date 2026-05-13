@@ -31,6 +31,16 @@ export default async function SynergyDiscoverPage() {
     .eq("owner_id", user.id)
     .neq("visibility", "private");
 
+  // Pre-hydrate the notify_on_match flag so the empty-state's "Notify
+  // me by email" toggle reflects the persisted choice without an
+  // initial flash. Missing profile → false (the default).
+  const { data: profile } = await db
+    .from("synergy_profiles")
+    .select("notify_on_match")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const initialNotifyOnMatch = !!profile?.notify_on_match;
+
   // Pre-hydrate first 20 matches via the same path as the client
   // wrapper would — we just construct the redacted shape directly
   // here using the API route's logic via the DB so we don't have to
@@ -83,6 +93,7 @@ export default async function SynergyDiscoverPage() {
       <SynergyDiscoverClient
         matchableCount={matchableCount ?? 0}
         initialMatches={initialMatches}
+        initialNotifyOnMatch={initialNotifyOnMatch}
       />
     </div>
   );
