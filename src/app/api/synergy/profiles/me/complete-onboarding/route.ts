@@ -13,7 +13,11 @@ import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers
 interface Body {
   display_name?: unknown;
   bio?: unknown;
+  use_cases?: unknown;
 }
+
+const USE_CASE_MAX = 10;
+const USE_CASE_VALUE_MAX = 40;
 
 export async function POST(request: Request) {
   const { supabase, user, error: authError } = await safeAuth();
@@ -46,6 +50,38 @@ export async function POST(request: Request) {
     }
     update.bio = body.bio.trim() || null;
   }
+  if (Array.isArray(body.use_cases)) {
+    if (body.use_cases.length > USE_CASE_MAX) {
+      return NextResponse.json(
+        { error: `use_cases must have ≤ ${USE_CASE_MAX} entries` },
+        { status: 400 },
+      );
+    }
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of body.use_cases) {
+      if (typeof raw !== "string") {
+        return NextResponse.json(
+          { error: "use_cases entries must be strings" },
+          { status: 400 },
+        );
+      }
+      const trimmed = raw.trim();
+      if (trimmed.length < 1 || trimmed.length > USE_CASE_VALUE_MAX) {
+        return NextResponse.json(
+          {
+            error: `each use_case must be 1-${USE_CASE_VALUE_MAX} characters`,
+          },
+          { status: 400 },
+        );
+      }
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cleaned.push(trimmed);
+    }
+    update.use_cases = cleaned;
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
@@ -65,7 +101,7 @@ export async function POST(request: Request) {
       .update(update)
       .eq("user_id", user.id)
       .select(
-        "user_id, display_name, bio, avatar_url, matching_enabled, max_pending_requests, onboarding_completed_at",
+        "user_id, display_name, bio, avatar_url, matching_enabled, max_pending_requests, use_cases, onboarding_completed_at",
       )
       .single();
     if (error || !updated) {
@@ -92,7 +128,7 @@ export async function POST(request: Request) {
       ...update,
     })
     .select(
-      "user_id, display_name, bio, avatar_url, matching_enabled, max_pending_requests, onboarding_completed_at",
+      "user_id, display_name, bio, avatar_url, matching_enabled, max_pending_requests, use_cases, onboarding_completed_at",
     )
     .single();
   if (insertErr || !inserted) {
