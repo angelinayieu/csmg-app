@@ -435,14 +435,48 @@ export function PlanStepBlock({
   };
 
   return (
-    <div className="group relative grid grid-cols-[32px_1fr] gap-3">
-      <div className="relative flex flex-col items-center">
-        <div className="z-10 flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-[11px] font-semibold text-white shadow-sm">
-          {index + 1}
-        </div>
-        <div className="absolute top-7 bottom-[-12px] w-px bg-gradient-to-b from-blue-200 to-transparent" />
+    // ── Step row ──
+    // Apple-style restraint: drop the loud blue numbered circle for a
+    // mono "STEP 0N" caps label that lets the title carry the row. The
+    // vertical connector becomes a faint dotted spine — present enough
+    // to imply sequence, quiet enough not to compete with content.
+    // The whole row lifts subtly on hover for that "this is a tile
+    // floating in space" visionOS read.
+    <div className="group relative grid grid-cols-[14px_1fr] gap-4 pl-1 transition">
+      {/* Dashed spine — faint vertical dashes (3px tall every 7px),
+          fading toward the bottom. Visually quieter than a solid line
+          but still tells the eye "these are sequential." */}
+      <div className="relative flex justify-center">
+        <div
+          aria-hidden
+          className="absolute top-6 bottom-[-12px] w-px"
+          style={{
+            backgroundImage:
+              "linear-gradient(to bottom, rgba(15,23,42,0.16) 50%, transparent 50%)",
+            backgroundSize: "1px 7px",
+            backgroundRepeat: "repeat-y",
+            maskImage:
+              "linear-gradient(to bottom, black 0%, black 70%, transparent 100%)",
+            WebkitMaskImage:
+              "linear-gradient(to bottom, black 0%, black 70%, transparent 100%)",
+          }}
+        />
+        {/* Step glyph: a tiny ring marking this step's anchor. Sits
+            flush with the "STEP 0N" caps label on the right so the eye
+            reads them together. */}
+        <span
+          aria-hidden
+          className="relative z-10 mt-[7px] inline-flex h-2 w-2 items-center justify-center rounded-full bg-white ring-1 ring-gray-300 transition group-hover:ring-gray-400"
+        />
       </div>
-      <div className="pb-3">
+
+      <div className="pb-5">
+        {/* STEP 0N caps label — mono, very small, gray-400. Tells you
+            sequence without making it the loudest pixel on the page. */}
+        <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.18em] text-gray-400">
+          Step {String(index + 1).padStart(2, "0")}
+        </div>
+
         {editing === "title" ? (
           <EditTextarea
             initialValue={meta.title ?? ""}
@@ -451,12 +485,12 @@ export function PlanStepBlock({
             placeholder="Step title"
             multiline={false}
             rows={1}
-            className="font-semibold text-gray-900"
+            className="text-[16px] font-semibold leading-snug text-gray-900"
           />
         ) : (
           <div
             onClick={() => setEditing("title")}
-            className="cursor-text rounded font-semibold text-gray-900 transition hover:bg-blue-50/50"
+            className="-mx-1 cursor-text rounded-md px-1 text-[16px] font-semibold leading-snug tracking-tight text-gray-900 transition hover:bg-black/[0.025]"
             title="Click to edit"
           >
             {meta.title || "Step"}
@@ -468,12 +502,12 @@ export function PlanStepBlock({
             onSave={saveBody}
             onCancel={() => setEditing(null)}
             placeholder="What does this step entail?"
-            className="mt-1 text-[13px] leading-relaxed text-gray-700"
+            className="mt-1 text-[14px] leading-[1.6] text-gray-600"
           />
         ) : (
           <p
             onClick={() => setEditing("body")}
-            className="mt-1 cursor-text rounded text-[13px] leading-relaxed text-gray-700 transition hover:bg-blue-50/50"
+            className="-mx-1 mt-1 cursor-text rounded-md px-1 text-[14px] leading-[1.6] text-gray-600 transition hover:bg-black/[0.025]"
             title="Click to edit"
           >
             {block.body}
@@ -481,7 +515,7 @@ export function PlanStepBlock({
         )}
 
         {meta.sub_steps && meta.sub_steps.length > 0 && (
-          <ul className="mt-3 space-y-1.5 border-l-2 border-blue-100 pl-3">
+          <ul className="mt-3 space-y-1.5 border-l border-gray-200 pl-3">
             {meta.sub_steps.map((s, i) => (
               <li key={i} className="text-[12px] leading-relaxed">
                 <div className="font-semibold text-gray-800">{s.title}</div>

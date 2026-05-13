@@ -480,30 +480,48 @@ function DocBody({
   const evidenceFor = (id: string) => evidenceBySource.get(id) ?? [];
 
   return (
+    // ── Outer surface ──
+    // Frosted-glass panel that picks up the scene background behind it
+    // (the discover/rooms/profile pages set the SynergySceneBackground
+    // at the layout level; here we just let it bleed through). No
+    // cyan glow, no hard border — a barely-visible inner ring + a
+    // soft neutral shadow does the lifting.
     <article
-      className="rounded-2xl border border-gray-200 bg-white shadow-sm"
+      className="relative overflow-hidden rounded-3xl bg-white/85 ring-1 ring-black/[0.04] backdrop-blur-2xl"
       style={{
         boxShadow: animate
-          ? "0 0 40px -10px rgba(6,182,212,0.25), 0 0 0 1px rgba(6,182,212,0.1)"
-          : undefined,
+          ? "0 24px 60px -24px rgba(15,23,42,0.18), 0 1px 0 rgba(255,255,255,0.6) inset"
+          : "0 16px 40px -20px rgba(15,23,42,0.12), 0 1px 0 rgba(255,255,255,0.6) inset",
         transition: "box-shadow 600ms ease",
       }}
     >
-      <div className="px-10 py-10">
-        {/* Statement */}
+      {/* Subtle top-edge highlight — visionOS "light from above" cue */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/80 to-transparent"
+      />
+
+      {/* Floating Regenerate — circular icon, top-right of the card.
+          Hover reveals the label via a tooltip-style pill. */}
+      <button
+        onClick={onRegenerate}
+        title="Regenerate the whole strategy from the current board"
+        aria-label="Regenerate strategy"
+        className="group absolute right-5 top-5 z-20 inline-flex h-9 items-center gap-2 rounded-full bg-white/70 px-2.5 text-[12px] font-medium text-gray-600 ring-1 ring-black/[0.06] backdrop-blur-md transition hover:bg-white hover:text-gray-900 hover:ring-black/[0.1]"
+      >
+        <RefreshCw
+          className="h-3.5 w-3.5 transition group-hover:rotate-[-90deg]"
+          strokeWidth={1.75}
+        />
+        <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:max-w-[120px] group-hover:pr-1 group-hover:opacity-100">
+          Regenerate
+        </span>
+      </button>
+
+      <div className="px-10 pb-10 pt-12">
+        {/* Statement — the document headline. No "STATEMENT" label
+            cluttering it; the title carries itself at display size. */}
         <StaggerSection animate={animate} delay={0}>
-          <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-gray-500">
-            <Target className="h-3 w-3 text-blue-600" /> Statement
-            <span className="ml-auto inline-flex items-center gap-2">
-              <button
-                onClick={onRegenerate}
-                title="Regenerate the whole strategy from the current board"
-                className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-0.5 text-[10px] font-medium text-gray-600 transition hover:border-blue-400 hover:text-gray-900"
-              >
-                <RefreshCw className="h-3 w-3" /> Regenerate
-              </button>
-            </span>
-          </div>
           <EditableTitle
             value={strategy.statement ?? ""}
             placeholder="(no statement yet)"
@@ -511,12 +529,19 @@ function DocBody({
           />
         </StaggerSection>
 
-        {/* Pitch */}
+        {/* Pitch — promoted to a lead paragraph. A 3px blue accent rail
+            at the left edge is the only chrome; no fill, no border. The
+            megaphone glyph sits inline as a discreet marker. */}
         {strategy.pitch !== null && (
           <StaggerSection animate={animate} delay={1}>
-            <div className="mt-6 rounded-xl border border-blue-100 bg-blue-50/40 p-4">
-              <div className="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-blue-700">
-                <Megaphone className="h-3 w-3" /> Elevator pitch
+            <div className="relative mt-6 pl-5">
+              <span
+                aria-hidden
+                className="absolute left-0 top-1 bottom-1 w-[3px] rounded-full bg-blue-600/80"
+              />
+              <div className="mb-1.5 inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-gray-400">
+                <Megaphone className="h-3 w-3" strokeWidth={1.5} />
+                Elevator pitch
               </div>
               <EditablePitch
                 value={strategy.pitch ?? ""}
@@ -737,10 +762,20 @@ function SectionTitle({
   sub: string;
 }) {
   return (
-    <div className="mb-4 flex items-baseline gap-2">
-      <Icon className="h-4 w-4 self-center text-blue-600" />
-      <h3 className="text-lg font-semibold text-gray-900">{label}</h3>
-      {sub && <span className="text-[12px] text-gray-500">— {sub}</span>}
+    // Section header — quieter than before. The icon shrinks to 12px
+    // and goes neutral (no blue accent), the label drops to 15px
+    // medium, the sub-count moves to a mono caps pill so it reads as
+    // metadata rather than narration.
+    <div className="mb-5 flex items-center gap-2.5">
+      <Icon className="h-3 w-3 text-gray-500" />
+      <h3 className="text-[15px] font-medium tracking-tight text-gray-900">
+        {label}
+      </h3>
+      {sub && (
+        <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-400">
+          {sub}
+        </span>
+      )}
     </div>
   );
 }
@@ -891,7 +926,7 @@ function EditableTitle({
       <h1
         onClick={() => setEditing(true)}
         title="Click to edit"
-        className="font-display-tight cursor-text rounded text-3xl font-semibold leading-snug text-gray-900 transition hover:bg-blue-50/40"
+        className="font-display-tight -mx-1.5 cursor-text rounded-lg px-1.5 text-[34px] font-semibold leading-[1.12] tracking-tight text-gray-900 transition hover:bg-black/[0.02]"
       >
         {value || placeholder}
       </h1>
@@ -919,7 +954,7 @@ function EditableTitle({
       }}
       placeholder={placeholder}
       rows={2}
-      className="font-display-tight w-full resize-none rounded-md border border-blue-300 bg-white px-2 py-1.5 text-3xl font-semibold leading-snug text-gray-900 outline-none ring-2 ring-blue-100"
+      className="font-display-tight -mx-1.5 w-[calc(100%+0.75rem)] resize-none rounded-lg bg-white/80 px-1.5 py-1 text-[34px] font-semibold leading-[1.12] tracking-tight text-gray-900 outline-none ring-1 ring-black/[0.08] focus:ring-2 focus:ring-blue-500/40"
     />
   );
 }
@@ -954,7 +989,7 @@ function EditablePitch({
       <p
         onClick={() => setEditing(true)}
         title="Click to edit"
-        className="cursor-text rounded text-[14px] leading-relaxed text-gray-800 transition hover:bg-white/60"
+        className="-mx-1 cursor-text rounded-lg px-1 text-[17px] font-normal leading-[1.55] text-gray-700 transition hover:bg-black/[0.02]"
       >
         {value || "(no pitch yet — click to add)"}
       </p>
@@ -980,8 +1015,8 @@ function EditablePitch({
           commit();
         }
       }}
-      rows={2}
-      className="w-full resize-none rounded-md border border-blue-300 bg-white px-2 py-1.5 text-[14px] leading-relaxed text-gray-800 outline-none ring-2 ring-blue-100"
+      rows={3}
+      className="-mx-1 w-[calc(100%+0.5rem)] resize-none rounded-lg bg-white/80 px-1 py-1 text-[17px] font-normal leading-[1.55] text-gray-700 outline-none ring-1 ring-black/[0.08] focus:ring-2 focus:ring-blue-500/40"
     />
   );
 }
