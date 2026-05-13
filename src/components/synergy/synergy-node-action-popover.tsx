@@ -28,7 +28,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Mic, MicOff, Send } from "lucide-react";
+import { Focus, Loader2, Mic, MicOff, Send } from "lucide-react";
 import {
   DecomposeIcon,
   PlanIcon,
@@ -98,6 +98,10 @@ interface Props {
   onAction: (action: SynergyAction, nodeId: string) => void;
   // Called when the user submits free-text in "Or describe…".
   onDescribe: (instruction: string, nodeId: string) => void;
+  // Called when the user taps the "Focus thread" affordance. Drops
+  // the rest of the board into a soft blur and opens Focus Mode
+  // scoped to this node's thread.
+  onFocusThread?: (nodeId: string) => void;
 }
 
 export function SynergyNodeActionPopover({
@@ -108,6 +112,7 @@ export function SynergyNodeActionPopover({
   canTidy,
   onAction,
   onDescribe,
+  onFocusThread,
 }: Props) {
   const [describeText, setDescribeText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -158,13 +163,26 @@ export function SynergyNodeActionPopover({
       // the menu's parent hover state.
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="mb-2 px-1">
-        <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
-          Expand this card
+      <div className="mb-2 flex items-start justify-between gap-2 px-1">
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
+            Expand this card
+          </div>
+          <div className="truncate text-[11.5px] font-medium text-gray-800">
+            {targetLabel}
+          </div>
         </div>
-        <div className="truncate text-[11.5px] font-medium text-gray-800">
-          {targetLabel}
-        </div>
+        {onFocusThread && (
+          <button
+            type="button"
+            onClick={() => onFocusThread(nodeId)}
+            title="Focus this thread — soft-blur the rest of the board and open Focus Mode scoped here"
+            className="group inline-flex shrink-0 items-center gap-1 rounded-md border border-gray-200/80 bg-white px-1.5 py-1 text-[10px] font-medium text-gray-600 transition hover:border-gray-300 hover:text-gray-900"
+          >
+            <Focus className="h-2.5 w-2.5" strokeWidth={1.75} />
+            Focus thread
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-1">

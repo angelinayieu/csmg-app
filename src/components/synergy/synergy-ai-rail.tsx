@@ -106,13 +106,19 @@ export function SynergyAIRail({
   const showEmpty = !decomp && questions.length === 0 && research.length === 0;
 
   return (
-    <aside className="flex w-80 flex-col gap-3 overflow-y-auto border-l border-gray-200 bg-white/80 p-4 backdrop-blur">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-blue-600" />
-          <span className="text-sm font-semibold text-gray-900">AI augmentation</span>
-        </div>
-      </header>
+    <aside
+      className="flex w-80 flex-col gap-4 overflow-y-auto p-4"
+      style={{
+        // Apple-style translucent sidebar (NSVisualEffectView analog).
+        // Page content blurred through; subtle hairline left border.
+        background: "rgba(252, 252, 253, 0.78)",
+        backdropFilter: "blur(24px) saturate(180%)",
+        WebkitBackdropFilter: "blur(24px) saturate(180%)",
+        borderLeft: "1px solid rgba(0, 0, 0, 0.06)",
+      }}
+    >
+      {/* No "AI augmentation" title bar — the sidebar just IS the AI
+          surface. Apple sidebars don't announce themselves. */}
 
       <AttachTargetIndicator
         selectedNode={selectedNode}
@@ -123,27 +129,56 @@ export function SynergyAIRail({
 
       <SynergyPrecisionSlider value={precision} onChange={onPrecisionChange} />
 
+      {/* Thin separator before the action surface */}
+      <div className="h-px w-full bg-black/5" />
+
+      {/* The mode actions: text-link row, not button grid. Apple-style —
+          the command bar (which lives in the parent voice dock) is the
+          primary surface; these are quick shortcuts. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-gray-700">
+        <ModeLink
+          label="Decompose"
+          busy={aiBusy === "decompose"}
+          onClick={() => onRunMode("decompose")}
+        />
+        <span className="text-gray-300" aria-hidden>·</span>
+        <ModeLink
+          label="Questions"
+          busy={aiBusy === "questions"}
+          onClick={() => onRunMode("questions")}
+        />
+        <span className="text-gray-300" aria-hidden>·</span>
+        <ModeLink
+          label="Research"
+          busy={aiBusy === "research"}
+          onClick={() => onRunMode("research")}
+        />
+      </div>
+
       {transcripts.length > 0 && (
-        <section className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs font-semibold text-gray-900">
-              <Mic className="h-3.5 w-3.5 text-blue-600" /> Recent thoughts
-            </div>
+        <section>
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
+              Recent thoughts
+            </span>
             <button
               onClick={onClearTranscripts}
-              className="font-mono text-[9px] uppercase tracking-wider text-gray-500 transition hover:text-gray-900"
+              className="font-mono text-[9px] uppercase tracking-[0.15em] text-gray-400 transition hover:text-gray-700"
             >
               clear
             </button>
           </div>
-          <ul className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
+          <ul className="max-h-48 space-y-1 overflow-y-auto pr-1">
             {transcripts
               .slice()
               .reverse()
               .map((t) => (
                 <li
                   key={t.id}
-                  className="rounded-md border border-gray-200 bg-white px-2 py-1.5 text-[11px] leading-snug text-gray-700"
+                  className="rounded-md bg-white px-2 py-1.5 text-[11px] leading-snug text-gray-700"
+                  style={{
+                    boxShadow: "0 0 0 1px rgba(0, 0, 0, 0.04)",
+                  }}
                 >
                   {t.text}
                 </li>
@@ -151,27 +186,6 @@ export function SynergyAIRail({
           </ul>
         </section>
       )}
-
-      <div className="grid grid-cols-3 gap-2">
-        <AIBtn
-          icon={Layers}
-          label="Decompose"
-          busy={aiBusy === "decompose"}
-          onClick={() => onRunMode("decompose")}
-        />
-        <AIBtn
-          icon={HelpCircle}
-          label="Questions"
-          busy={aiBusy === "questions"}
-          onClick={() => onRunMode("questions")}
-        />
-        <AIBtn
-          icon={Search}
-          label="Research"
-          busy={aiBusy === "research"}
-          onClick={() => onRunMode("research")}
-        />
-      </div>
 
       {decomp && (
         <Section
@@ -316,7 +330,7 @@ export function SynergyAIRail({
 
       <SynergyAutopilotPanel
         sessionId={sessionId}
-        defaultPrecision={precision}
+        precision={precision}
         onRound={({ newNodes }) => onAutopilotRound(newNodes)}
       />
     </aside>
@@ -337,6 +351,13 @@ export function SynergyAIRail({
 //
 // This replaces the prior bipolar "Adding to: X" / long-paragraph
 // hint that obscured which fallback was in effect.
+// ── Attach-target indicator (Apple-style soft card) ──
+//
+// Replaces the prior dashed-border noisy treatment with a soft white
+// card. No icon color tint, no boxed badges — the source of truth is
+// the label itself, with a mono-cap status line above. Subtle inner
+// shadow for depth (no full border).
+
 function AttachTargetIndicator({
   selectedNode,
   seedNode,
@@ -352,58 +373,79 @@ function AttachTargetIndicator({
   const usingSelection = !!selectedNode;
   const empty = !selectedNode && !seedNode;
 
+  const label = usingSelection
+    ? selectedNode!.label
+    : usingSeed
+      ? seedNode!.label
+      : "A new seed";
+  const statusKey = usingSelection
+    ? "Selected card"
+    : usingSeed
+      ? "Seed · fallback"
+      : "New";
+
   return (
-    <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/60 px-3 py-2 text-[11px] text-gray-700">
-      <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-gray-500">
-        <Target className="h-3 w-3 text-blue-600" />
-        Will attach under
+    <div
+      className="rounded-xl bg-white px-3 py-2.5"
+      style={{
+        boxShadow:
+          "0 0 0 1px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.04)",
+      }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
+          Will attach under
+        </span>
+        <span className="font-mono text-[9px] uppercase tracking-[0.15em] text-gray-400">
+          {statusKey}
+        </span>
       </div>
-      <div className="mt-1 flex items-center gap-1.5">
-        {usingSelection && (
-          <>
-            <span className="truncate font-medium text-gray-900">
-              {selectedNode!.label.slice(0, 40)}
-            </span>
-            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-wider text-blue-700">
-              selected card
-            </span>
-          </>
-        )}
-        {usingSeed && (
-          <>
-            <span className="truncate font-medium text-gray-900">
-              {seedNode!.label.slice(0, 40)}
-            </span>
-            <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-wider text-amber-700">
-              seed · fallback
-            </span>
-          </>
-        )}
-        {empty && (
-          <>
-            <span className="font-medium italic text-gray-700">
-              A new seed
-            </span>
-            <span className="rounded-full bg-gray-100 px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-wider text-gray-600">
-              new
-            </span>
-          </>
-        )}
+      <div className="mt-1 truncate text-[13px] font-medium text-gray-900">
+        {label}
       </div>
       {usingSeed && (
-        <p className="mt-1.5 text-[10px] leading-snug text-gray-500">
+        <p className="mt-1 text-[10.5px] leading-snug text-gray-500">
           Select a card on the canvas to attach under it instead.
         </p>
       )}
       {selectedHasVariations && (
         <button
           onClick={onRankSelected}
-          className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-orange-100 px-2 py-1 text-orange-800 ring-1 ring-orange-200 hover:bg-orange-200"
+          className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-gray-700 transition hover:text-gray-900"
         >
-          <Trophy className="h-3 w-3" /> Rank this node&apos;s variations
+          <Trophy className="h-3 w-3" strokeWidth={1.5} />
+          Rank this node&apos;s variations
         </button>
       )}
     </div>
+  );
+}
+
+// ── ModeLink: text-link AI action ──
+//
+// Apple-style restraint — Decompose / Questions / Research are
+// inline text links, not button cards. Underline on hover, spinner
+// inline when busy. Used in the rail header row above the
+// suggestion buckets.
+
+function ModeLink({
+  label,
+  busy,
+  onClick,
+}: {
+  label: string;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={busy}
+      className="group inline-flex items-center gap-1 font-medium text-gray-700 transition hover:text-gray-900 disabled:opacity-60"
+    >
+      {busy && <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.5} />}
+      <span className="underline-offset-4 group-hover:underline">{label}</span>
+    </button>
   );
 }
 

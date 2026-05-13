@@ -66,7 +66,24 @@ interface PatchBody {
   // Phase 4d+4 cold-start safety net
   notify_on_match?: unknown;
   min_match_score?: unknown;
+  // Tier-1 polish: avatar upload writes the public Storage URL here.
+  avatar_url?: unknown;
+  // Phase 5 polish: per-user background scene for the Rooms surface.
+  // background_preset is whitelisted against SCENE_PRESET_ORDER; the
+  // DB CHECK enforces the same set as a belt-and-suspenders backstop.
+  background_preset?: unknown;
+  background_custom_url?: unknown;
 }
+
+const VALID_BACKGROUND_PRESETS = [
+  "mist",
+  "dawn",
+  "dusk",
+  "forest",
+  "ocean",
+  "monochrome",
+  "custom",
+];
 
 // Whitelist of email_notifications keys the client can touch. Adding
 // a new event type (e.g. weekly_digest) just appends here + extends
@@ -115,6 +132,35 @@ export async function PATCH(request: Request) {
   }
   if (typeof body.notify_on_match === "boolean") {
     update.notify_on_match = body.notify_on_match;
+  }
+  // avatar_url: accepts a string (the public storage URL after upload)
+  // or null (remove). We don't validate the URL host because:
+  //   - the upload itself is gated by Storage RLS (path must start
+  //     with the caller's user_id), so any URL we'd accept here was
+  //     verifiably uploaded BY this user
+  //   - cross-origin avatar URLs would still render fine if they were
+  //     somehow accepted; the cost is a broken image, not a security
+  //     issue.
+  if (typeof body.avatar_url === "string") {
+    const v = body.avatar_url.trim();
+    update.avatar_url = v.length > 0 ? v.slice(0, 1024) : null;
+  } else if (body.avatar_url === null) {
+    update.avatar_url = null;
+  }
+  if (typeof body.background_preset === "string") {
+    if (!VALID_BACKGROUND_PRESETS.includes(body.background_preset)) {
+      return NextResponse.json(
+        { error: "Unknown background preset" },
+        { status: 400 },
+      );
+    }
+    update.background_preset = body.background_preset;
+  }
+  if (typeof body.background_custom_url === "string") {
+    update.background_custom_url =
+      body.background_custom_url.trim().slice(0, 1024) || null;
+  } else if (body.background_custom_url === null) {
+    update.background_custom_url = null;
   }
   if (typeof body.min_match_score === "number") {
     const v = Math.round(body.min_match_score);

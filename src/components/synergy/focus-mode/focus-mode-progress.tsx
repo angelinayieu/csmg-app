@@ -46,8 +46,8 @@ export function FocusModeProgress({ stage, onJump }: Props) {
               onClick={() => canJump && onJump(s.num)}
               className={[
                 "h-1.5 flex-1 overflow-hidden rounded-full transition",
-                done && "bg-gradient-to-r from-blue-500 to-cyan-400",
-                current && "bg-gradient-to-r from-blue-400 to-cyan-300",
+                done && "bg-blue-500",
+                current && "bg-blue-400",
                 future && "bg-gray-200",
                 canJump && "cursor-pointer hover:opacity-90",
               ]
@@ -75,7 +75,7 @@ export function FocusModeProgress({ stage, onJump }: Props) {
                 className={[
                   "inline-flex h-5 w-5 items-center justify-center rounded-full transition",
                   done
-                    ? "bg-gradient-to-br from-blue-600 to-cyan-500 text-white shadow-sm"
+                    ? "bg-blue-600 text-white shadow-sm"
                     : current
                       ? "bg-blue-100 text-blue-700 ring-2 ring-blue-200"
                       : "bg-gray-100 text-gray-400",

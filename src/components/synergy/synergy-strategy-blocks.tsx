@@ -437,7 +437,7 @@ export function PlanStepBlock({
   return (
     <div className="group relative grid grid-cols-[32px_1fr] gap-3">
       <div className="relative flex flex-col items-center">
-        <div className="z-10 flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-600 to-cyan-500 text-[11px] font-semibold text-white shadow-sm">
+        <div className="z-10 flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-[11px] font-semibold text-white shadow-sm">
           {index + 1}
         </div>
         <div className="absolute top-7 bottom-[-12px] w-px bg-gradient-to-b from-blue-200 to-transparent" />

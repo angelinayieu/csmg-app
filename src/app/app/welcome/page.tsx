@@ -57,8 +57,10 @@ export default async function SynergyWelcomePage() {
 
       <div className="mx-auto max-w-2xl py-10">
         <SynergyWelcomeClient
+          userId={user.id}
           suggestedDisplayName={suggestedDisplayName}
           existingBio={profile?.bio ?? ""}
+          existingAvatarUrl={profile?.avatar_url ?? null}
         />
       </div>
     </div>

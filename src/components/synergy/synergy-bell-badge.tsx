@@ -56,8 +56,9 @@ export function SynergyBellBadge({ initialCount = 0 }: Props) {
       <Bell className="h-4 w-4" />
       {count > 0 && (
         <span
-          className="absolute -top-1 -right-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-gradient-to-br from-rose-500 to-rose-600 px-1 font-mono text-[9px] font-semibold text-white shadow-sm"
+          className="absolute -top-1 -right-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 font-mono text-[9px] font-semibold text-white"
           style={{
+            boxShadow: "0 0 0 1.5px rgba(255,255,255,0.92), 0 1px 2px rgba(0,0,0,0.08)",
             animation: "synergyBellPulse 1.8s ease-in-out infinite",
           }}
         >

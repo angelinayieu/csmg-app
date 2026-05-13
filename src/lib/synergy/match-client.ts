@@ -130,6 +130,10 @@ export interface MatchRequestComponentRef {
 }
 
 export interface MatchRequestOtherParty {
+  // Tier 2.3: user_id is exposed only when the server-side
+  // profileReveal gate allows it (outgoing-pending OR accepted).
+  // Used by the inbox to deep-link to the public profile route.
+  user_id?: string;
   display_name: string;
   bio: string | null;
   avatar_url: string | null;

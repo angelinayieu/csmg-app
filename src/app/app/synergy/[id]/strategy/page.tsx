@@ -32,7 +32,7 @@ export default async function SynergyStrategyPage({ params }: PageProps) {
   const [sessionRes, strategyRes, componentsRes, nodeCountRes] = await Promise.all([
     db
       .from("brainstorm_sessions")
-      .select("id, title")
+      .select("id, title, last_extracted_at, last_extracted_node_count")
       .eq("id", id)
       .single(),
     db
@@ -69,7 +69,12 @@ export default async function SynergyStrategyPage({ params }: PageProps) {
     );
   }
 
-  const session = sessionRes.data as { id: string; title: string };
+  const session = sessionRes.data as {
+    id: string;
+    title: string;
+    last_extracted_at: string | null;
+    last_extracted_node_count: number | null;
+  };
   const strategy = (strategyRes.data ?? null) as SynergyStrategyRow | null;
   const components = (componentsRes.data ?? []) as BrainstormComponent[];
 
@@ -87,12 +92,29 @@ export default async function SynergyStrategyPage({ params }: PageProps) {
 
   const bundle: StrategyBundle = { strategy, blocks, components };
 
+  // ── Re-extraction staleness signal ──
+  // Surface a soft banner when the board has grown materially since
+  // the last extraction, or when last_extracted_at is > 7 days old.
+  const currentNodes = nodeCountRes.count ?? 0;
+  const lastNodes = session.last_extracted_node_count ?? 0;
+  const lastExtractedAt = session.last_extracted_at
+    ? new Date(session.last_extracted_at).getTime()
+    : 0;
+  const growthRatio = lastNodes > 0 ? (currentNodes - lastNodes) / lastNodes : 0;
+  const ageDays =
+    lastExtractedAt > 0 ? (Date.now() - lastExtractedAt) / 86_400_000 : 0;
+  const reextractAdvised =
+    components.length > 0 && (growthRatio > 0.3 || ageDays > 7);
+
   return (
     <SynergyStrategy
       sessionId={id}
       sessionTitle={session.title}
       initialBundle={bundle}
-      initialNodeCount={nodeCountRes.count ?? 0}
+      initialNodeCount={currentNodes}
+      reextractAdvised={reextractAdvised}
+      lastExtractedNodeCount={lastNodes}
+      lastExtractedAt={session.last_extracted_at}
     />
   );
 }

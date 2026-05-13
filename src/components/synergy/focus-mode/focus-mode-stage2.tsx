@@ -32,7 +32,11 @@ import type {
   BrainstormComponent,
   ComponentKind,
 } from "@/lib/synergy/types";
-import { VisibilityPopover } from "@/components/synergy/synergy-components-card";
+// Use the polished ExpandableComponentRow from the same surface
+// the processing page renders. Unifies the visual language across
+// surfaces — match-availability badge, regenerate button, anonymous
+// avatar peek, and "Open room" CTA all behave identically here.
+import { ExpandableComponentRow } from "@/components/synergy/synergy-components-card";
 
 interface Props {
   sessionId: string;
@@ -45,25 +49,30 @@ const KIND_META: Record<
   ComponentKind,
   { label: string; icon: React.ComponentType<{ className?: string }>; tone: string }
 > = {
+  // Apple-style restraint: uniform white card across all four kinds.
+  // Kind distinction lives in the section header icon + label only,
+  // not in the card chrome. Mirrors the unified treatment in
+  // synergy-components-card.tsx so the Focus Mode pane and the
+  // processing-page render look identical row-by-row.
   core_idea: {
     label: "Core ideas",
     icon: Lightbulb,
-    tone: "border-blue-200 bg-blue-50/40",
+    tone: "border-gray-200 bg-white",
   },
   upstream: {
     label: "Upstream — what this needs",
     icon: ArrowUp,
-    tone: "border-amber-200 bg-amber-50/40",
+    tone: "border-gray-200 bg-white",
   },
   downstream: {
     label: "Downstream — what this produces",
     icon: ArrowDown,
-    tone: "border-emerald-200 bg-emerald-50/40",
+    tone: "border-gray-200 bg-white",
   },
   polished_product: {
     label: "Polished products",
     icon: Package,
-    tone: "border-purple-200 bg-purple-50/40",
+    tone: "border-gray-200 bg-white",
   },
 };
 
@@ -119,7 +128,7 @@ export function FocusModeStage2({ sessionId, autoExtract }: Props) {
   if (loading || (components === null && !extracting)) {
     return (
       <div className="px-6 pb-32 pt-2">
-        <h1 className="text-[26px] font-semibold leading-snug tracking-tight text-gray-900">
+        <h1 className="font-display-tight text-[28px] font-semibold leading-[1.1] text-gray-900">
           Here&apos;s what we extracted
         </h1>
         <div className="mt-8 flex items-center gap-2 text-sm text-gray-500">
@@ -137,17 +146,17 @@ export function FocusModeStage2({ sessionId, autoExtract }: Props) {
   if (!components || components.length === 0) {
     return (
       <div className="px-6 pb-32 pt-2">
-        <h1 className="text-[26px] font-semibold leading-snug tracking-tight text-gray-900">
+        <h1 className="font-display-tight text-[28px] font-semibold leading-[1.1] text-gray-900">
           Extract your components
         </h1>
         <p className="mt-2 text-[13px] leading-relaxed text-gray-600">
-          Distill the kept threads into typed upstream needs, downstream
-          outputs, polished products, and core ideas.
+          Type the kept threads into upstream needs, downstream outputs,
+          products, and core ideas.
         </p>
         <button
           onClick={runExtract}
           disabled={extracting}
-          className="mt-6 inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-md transition hover:scale-[1.02] disabled:opacity-60"
+          className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md transition hover:scale-[1.02] disabled:opacity-60"
         >
           {extracting ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -175,29 +184,29 @@ export function FocusModeStage2({ sessionId, autoExtract }: Props) {
 
   return (
     <div className="px-6 pb-32 pt-2">
-      <h1 className="text-[26px] font-semibold leading-snug tracking-tight text-gray-900">
+      <h1 className="font-display-tight text-[28px] font-semibold leading-[1.1] text-gray-900">
         Here&apos;s what we extracted
       </h1>
-      <p className="mt-2 text-[13px] leading-relaxed text-gray-600">
-        {components.length} components ready. Mark any private to hide them
-        from the matching marketplace.
+      <p className="mt-2 text-[13px] leading-relaxed text-gray-500">
+        {components.length} components ready. Expand any card to regenerate,
+        set visibility, or open its room.
       </p>
-      <div className="mt-3">
+      <div className="mt-4">
         <button
           onClick={runExtract}
           disabled={extracting}
-          className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-gray-700 transition hover:border-blue-400 disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 text-[12px] font-medium text-gray-600 transition hover:text-gray-900 disabled:opacity-60"
         >
           {extracting ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.5} />
           ) : (
-            <RefreshCw className="h-3 w-3" />
+            <RefreshCw className="h-3 w-3" strokeWidth={1.5} />
           )}
-          Re-extract from current focus
+          Re-extract
         </button>
       </div>
 
-      <div className="mt-6 space-y-5">
+      <div className="mt-7 space-y-7">
         {orderedKinds.map((kind) => {
           const list = grouped.get(kind);
           if (!list || list.length === 0) return null;
@@ -205,38 +214,22 @@ export function FocusModeStage2({ sessionId, autoExtract }: Props) {
           const Icon = meta.icon;
           return (
             <section key={kind}>
-              <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.15em] text-gray-700">
-                <Icon className="h-3.5 w-3.5 text-blue-600" />
-                {meta.label}
-                <span className="ml-auto rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] text-gray-500">
+              <div className="mb-3 flex items-baseline gap-2.5">
+                <Icon className="h-3.5 w-3.5 self-center text-gray-600" />
+                <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-700">
+                  {meta.label}
+                </span>
+                <span className="rounded-full bg-gray-100 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-500">
                   {list.length}
                 </span>
               </div>
               <ul className="space-y-2">
                 {list.map((c) => (
-                  <li
+                  <ExpandableComponentRow
                     key={c.id}
-                    className={`rounded-lg border ${meta.tone} p-3`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <div className="text-[13px] font-semibold text-gray-900">
-                            {c.label_public}
-                          </div>
-                          {c.subkind && (
-                            <span className="rounded-full bg-white px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-600">
-                              {c.subkind}
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-1 text-[12px] leading-relaxed text-gray-700">
-                          {c.description_public}
-                        </p>
-                      </div>
-                      <VisibilityPopover component={c} />
-                    </div>
-                  </li>
+                    component={c}
+                    toneClass={meta.tone}
+                  />
                 ))}
               </ul>
             </section>
@@ -250,12 +243,11 @@ export function FocusModeStage2({ sessionId, autoExtract }: Props) {
 function Crystallizing({ label }: { label: string }) {
   return (
     <div className="px-6 pb-32 pt-2">
-      <h1 className="text-[26px] font-semibold leading-snug tracking-tight text-gray-900">
+      <h1 className="font-display-tight text-[28px] font-semibold leading-[1.1] text-gray-900">
         Distilling components
       </h1>
       <p className="mt-2 text-[13px] leading-relaxed text-gray-600">
-        Reading plan synthesis + kept threads. Typing upstream / downstream /
-        products.
+        Reading the plan. Typing each component.
       </p>
       <div className="mt-6 flex items-center gap-2 text-sm text-gray-700">
         <Loader2 className="h-4 w-4 animate-spin text-blue-600" />

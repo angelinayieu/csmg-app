@@ -62,11 +62,11 @@ export default async function SynergyListPage() {
           <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1 text-[11px] font-medium text-gray-600">
             <Sparkles className="h-3 w-3 text-blue-600" /> Synergy
           </div>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-gray-900">
+          <h1 className="font-display-tight mt-3 text-3xl font-semibold text-gray-900">
             Brainstorms
           </h1>
           <p className="mt-1 text-sm text-gray-600">
-            Voice-augmented solo boards. Speak, sketch, and let the AI map your
+            Solo boards with voice. Speak or sketch — the AI maps your
             thinking into upstream needs and downstream outputs.
           </p>
         </div>
@@ -79,6 +79,12 @@ export default async function SynergyListPage() {
             Discover
           </Link>
           <Link
+            href="/app/synergy/feed"
+            className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-gray-700 transition hover:border-blue-400"
+          >
+            Feed
+          </Link>
+          <Link
             href="/app/synergy/profile"
             className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-gray-700 transition hover:border-blue-400"
           >
@@ -86,7 +92,7 @@ export default async function SynergyListPage() {
           </Link>
           <Link
             href="/app/synergy/new"
-            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
           >
             <Plus className="h-4 w-4" />
             New brainstorm
@@ -106,7 +112,7 @@ export default async function SynergyListPage() {
           </p>
           <Link
             href="/app/synergy/new"
-            className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+            className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
           >
             <Plus className="h-4 w-4" /> Start your first brainstorm
           </Link>

@@ -264,7 +264,11 @@ ${stepsList}${resourcesList}${successList}`;
   // Flag the session as processed so the list view can sort/filter.
   await db
     .from("brainstorm_sessions")
-    .update({ state: "processed" })
+    .update({
+      state: "processed",
+      last_extracted_at: new Date().toISOString(),
+      last_extracted_node_count: nodes.length,
+    })
     .eq("id", sessionId);
 
   return NextResponse.json({ components: inserted ?? [] });

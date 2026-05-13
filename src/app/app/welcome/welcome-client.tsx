@@ -22,22 +22,27 @@ import {
   Network,
   Sparkles,
   UserCircle2,
-  Users,
 } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
+import { SynergyAvatarUploader } from "@/components/synergy/synergy-avatar-uploader";
 
 interface Props {
+  userId: string;
   suggestedDisplayName: string;
   existingBio: string;
+  existingAvatarUrl: string | null;
 }
 
 export function SynergyWelcomeClient({
+  userId,
   suggestedDisplayName,
   existingBio,
+  existingAvatarUrl,
 }: Props) {
   const router = useRouter();
   const [displayName, setDisplayName] = useState(suggestedDisplayName);
   const [bio, setBio] = useState(existingBio);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(existingAvatarUrl);
   const [savingMode, setSavingMode] = useState<null | "save" | "skip">(null);
 
   const complete = async (mode: "save" | "skip") => {
@@ -81,8 +86,8 @@ export function SynergyWelcomeClient({
   return (
     <div className="space-y-6">
       {/* ── Hero ── */}
-      <section className="overflow-hidden rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50/80 to-cyan-50/60 p-8 text-center shadow-sm">
-        <div className="mx-auto mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-500 shadow-md">
+      <section className="overflow-hidden rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50/80 to-blue-50/60 p-8 text-center shadow-sm">
+        <div className="mx-auto mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 shadow-md">
           <Sparkles className="h-6 w-6 text-white" />
         </div>
         <h1 className="text-3xl font-semibold tracking-tight text-gray-900">
@@ -132,13 +137,18 @@ export function SynergyWelcomeClient({
           Only revealed after a match is mutually accepted.
         </p>
 
-        {/* Preview */}
-        <div className="mt-5 flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-          <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-200 to-cyan-200 text-blue-800">
-            <UserCircle2 className="h-6 w-6" />
-          </div>
+        {/* Avatar upload + live preview row */}
+        <div className="mt-5 flex items-start gap-4 rounded-xl border border-blue-100 bg-blue-50/40 p-4">
+          <SynergyAvatarUploader
+            userId={userId}
+            currentUrl={avatarUrl}
+            onChanged={setAvatarUrl}
+          />
           <div className="min-w-0 flex-1">
-            <div className="text-[14px] font-semibold text-gray-900">
+            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
+              Live preview · how matched collaborators see you
+            </div>
+            <div className="mt-1.5 text-[14px] font-semibold text-gray-900">
               {displayName.trim() || "(display name)"}
             </div>
             {bio.trim() ? (
@@ -208,7 +218,7 @@ export function SynergyWelcomeClient({
         <button
           onClick={() => complete("save")}
           disabled={!!savingMode}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-5 py-2.5 text-[13px] font-semibold text-white shadow-[0_8px_24px_-8px_rgba(6,182,212,0.5)] transition hover:scale-[1.02] disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2.5 text-[13px] font-semibold text-white shadow-[0_8px_24px_-8px_rgba(6,182,212,0.5)] transition hover:scale-[1.02] disabled:opacity-60"
         >
           {savingMode === "save" ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -248,11 +258,11 @@ function ExplainCard({
   const toneClasses = {
     blue: {
       ring: "ring-blue-100",
-      grad: "from-blue-100 to-cyan-100 text-blue-700",
+      grad: "from-blue-100 to-blue-100 text-blue-700",
     },
     emerald: {
       ring: "ring-emerald-100",
-      grad: "from-emerald-100 to-cyan-100 text-emerald-700",
+      grad: "from-emerald-100 to-blue-100 text-emerald-700",
     },
     amber: {
       ring: "ring-amber-100",
@@ -274,6 +284,3 @@ function ExplainCard({
   );
 }
 
-// Suppress unused import — Users is forward-compat for an "Activity"
-// section we might add later.
-void Users;

@@ -199,6 +199,24 @@ export async function listComponents(
   return json.components;
 }
 
+// Single-component regenerate: re-extracts label/description/private
+// context for ONE component without touching its siblings, then
+// re-embeds and re-runs the matcher for just this one. Returns the
+// updated component row plus the fresh match count.
+export async function regenerateComponent(
+  componentId: string,
+): Promise<{
+  component: BrainstormComponent;
+  match_count: number;
+  candidates_considered: number;
+}> {
+  const res = await fetch(
+    `/api/synergy/components/${componentId}/regenerate`,
+    { method: "POST" },
+  );
+  return asJson(res);
+}
+
 // ── Component visibility / inline edit (Phase 4d+1) ──
 //
 // Owner-only PATCH on a brainstorm_components row. Common case:
@@ -338,4 +356,95 @@ export async function updateStrategy(
   });
   const json = await asJson<{ strategy: SynergyStrategy }>(res);
   return json.strategy;
+}
+
+// ── Public components feed (Tier-2 2.2) ──
+
+export type PublicComponentKind =
+  | "core_idea"
+  | "upstream"
+  | "downstream"
+  | "polished_product";
+
+export interface PublicComponentItem {
+  id: string;
+  kind: PublicComponentKind;
+  subkind: string | null;
+  label_public: string;
+  description_public: string;
+  created_at: string;
+  owner: {
+    user_id: string;
+    display_name: string;
+    avatar_url: string | null;
+  };
+}
+
+export interface PublicComponentsPage {
+  items: PublicComponentItem[];
+  next_cursor: string | null;
+}
+
+export async function listPublicComponents(opts?: {
+  cursor?: string;
+  limit?: number;
+  kind?: PublicComponentKind;
+  q?: string;
+}): Promise<PublicComponentsPage> {
+  const params = new URLSearchParams();
+  if (opts?.cursor) params.set("cursor", opts.cursor);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.kind) params.set("kind", opts.kind);
+  if (opts?.q) params.set("q", opts.q);
+  const qs = params.toString();
+  const res = await fetch(
+    `/api/synergy/marketplace/feed${qs ? "?" + qs : ""}`,
+  );
+  return asJson<PublicComponentsPage>(res);
+}
+
+// ── Share tokens (Tier-2 2.4) ──
+
+export interface StrategyShareToken {
+  id: string;
+  token: string;
+  label: string | null;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_viewed_at: string | null;
+  view_count: number;
+}
+
+export async function listStrategyShares(
+  strategyId: string,
+): Promise<StrategyShareToken[]> {
+  const res = await fetch(`/api/synergy/strategies/${strategyId}/share`);
+  const json = await asJson<{ shares: StrategyShareToken[] }>(res);
+  return json.shares;
+}
+
+export async function createStrategyShare(
+  strategyId: string,
+  opts?: { label?: string; expires_at?: string },
+): Promise<StrategyShareToken> {
+  const res = await fetch(`/api/synergy/strategies/${strategyId}/share`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(opts ?? {}),
+  });
+  const json = await asJson<{ share: StrategyShareToken }>(res);
+  return json.share;
+}
+
+export async function revokeStrategyShare(
+  strategyId: string,
+  tokenId: string,
+): Promise<StrategyShareToken> {
+  const res = await fetch(
+    `/api/synergy/strategies/${strategyId}/share?token_id=${encodeURIComponent(tokenId)}`,
+    { method: "DELETE" },
+  );
+  const json = await asJson<{ share: StrategyShareToken }>(res);
+  return json.share;
 }

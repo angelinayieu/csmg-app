@@ -37,6 +37,13 @@ export type FocusPhase =
 
 export type FocusStage = 1 | 2 | 3 | 4;
 
+export interface FocusOpenOptions {
+  // When set, Focus Mode scopes its convergence + canvas blur to this
+  // node's thread (the node itself + ancestor chain to seed + all
+  // descendants). When null/omitted, the full board is in scope.
+  scopeNodeId?: string | null;
+}
+
 export interface UseFocusModeReturn {
   phase: FocusPhase;
   stage: FocusStage;
@@ -51,8 +58,13 @@ export interface UseFocusModeReturn {
   // Node ids that are kind === 'plan' — used by the canvas to apply
   // the persistent cyan glow ring.
   planIds: Set<string>;
+  // Thread-scoped focus: when non-null, only nodes whose id is in
+  // `scopedIds` should remain sharp on the canvas; everything else
+  // gets the blur+dim treatment. When null, the full board is in scope.
+  scopeNodeId: string | null;
+  scopedIds: Set<string> | null;
   // Actions
-  open: () => void;
+  open: (opts?: FocusOpenOptions) => void;
   close: () => void;
   goToStage: (next: FocusStage) => void;
   next: () => void;
@@ -68,15 +80,61 @@ export function useFocusMode(nodes: ClientNode[]): UseFocusModeReturn {
   const [stage, setStage] = useState<FocusStage>(1);
   const [overrides, setOverrides] = useState<FocusOverrides>(new Map());
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [scopeNodeId, setScopeNodeId] = useState<string | null>(null);
 
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Resolve the thread scope into a closed set of node ids: the scope
+  // root + its full ancestor chain (for orientation) + its full
+  // descendant subtree (what the user actually wants to converge on).
+  // Returns null when no scope is set — callers treat null as "full
+  // board in scope".
+  const scopedIds = useMemo(() => {
+    if (!scopeNodeId) return null;
+    const byId = new Map<string, ClientNode>();
+    const childrenOf = new Map<string, string[]>();
+    for (const n of nodes) {
+      byId.set(n.id, n);
+      if (n.parent) {
+        const arr = childrenOf.get(n.parent) ?? [];
+        arr.push(n.id);
+        childrenOf.set(n.parent, arr);
+      }
+    }
+    const out = new Set<string>();
+    // Walk descendants (BFS) from the scope root.
+    const queue: string[] = [scopeNodeId];
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (out.has(id)) continue;
+      out.add(id);
+      const kids = childrenOf.get(id);
+      if (kids) queue.push(...kids);
+    }
+    // Walk ancestors up to root.
+    let cursor: string | null = scopeNodeId;
+    while (cursor) {
+      const node = byId.get(cursor);
+      if (!node) break;
+      out.add(node.id);
+      cursor = node.parent ?? null;
+    }
+    return out;
+  }, [scopeNodeId, nodes]);
 
   // Recompute auto-mark whenever the node list changes. In practice
   // this is rare while Focus Mode is open (the user can't edit the
   // board), but if the underlying SynergyWhiteboard hot-reloads or
   // the user adds nodes between sessions, we want fresh marks.
-  const marks = useMemo(() => autoMarkBoard(nodes), [nodes]);
+  // When scoped, restrict auto-mark to the scoped subset so the kept
+  // set + buckets only reflect the thread the user is converging on.
+  const marks = useMemo(() => {
+    const subset = scopedIds
+      ? nodes.filter((n) => scopedIds.has(n.id))
+      : nodes;
+    return autoMarkBoard(subset);
+  }, [nodes, scopedIds]);
 
   const keptIds = useMemo(
     () => computeKeptIds(marks, overrides),
@@ -99,14 +157,18 @@ export function useFocusMode(nodes: ClientNode[]): UseFocusModeReturn {
     return out;
   }, [marks]);
 
-  const open = useCallback(() => {
-    if (phase !== "closed") return;
-    setPhase("entering");
-    setStage(1);
-    setOverrides(new Map());
-    if (enterTimer.current) clearTimeout(enterTimer.current);
-    enterTimer.current = setTimeout(() => setPhase("open"), 700);
-  }, [phase]);
+  const open = useCallback(
+    (opts?: FocusOpenOptions) => {
+      if (phase !== "closed") return;
+      setPhase("entering");
+      setStage(1);
+      setOverrides(new Map());
+      setScopeNodeId(opts?.scopeNodeId ?? null);
+      if (enterTimer.current) clearTimeout(enterTimer.current);
+      enterTimer.current = setTimeout(() => setPhase("open"), 700);
+    },
+    [phase],
+  );
 
   const close = useCallback(() => {
     if (phase === "closed" || phase === "exiting") return;
@@ -115,6 +177,7 @@ export function useFocusMode(nodes: ClientNode[]): UseFocusModeReturn {
     exitTimer.current = setTimeout(() => {
       setPhase("closed");
       setHoveredNodeId(null);
+      setScopeNodeId(null);
     }, 400);
   }, [phase]);
 
@@ -186,6 +249,8 @@ export function useFocusMode(nodes: ClientNode[]): UseFocusModeReturn {
     keptIds,
     excludedIds,
     planIds,
+    scopeNodeId,
+    scopedIds,
     open,
     close,
     goToStage,

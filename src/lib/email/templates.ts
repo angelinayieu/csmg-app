@@ -190,6 +190,61 @@ export function requestAcceptedEmail(args: {
   };
 }
 
+export function matchSurfacedEmail(args: {
+  display_name: string;
+  new_match_count: number;
+  highlight_component_label: string | null;
+  highlight_score: number | null;
+  discover_url: string;
+  preferences_url: string;
+  unsubscribe_url: string;
+}): { subject: string; preheader: string; html: string } {
+  const subject =
+    args.new_match_count === 1
+      ? `A new high-fit collaborator surfaced on Synergy`
+      : `${args.new_match_count} new high-fit collaborators surfaced on Synergy`;
+  const preheader =
+    args.highlight_component_label && args.highlight_score
+      ? `Top match for "${args.highlight_component_label.slice(0, 70)}" scored ${Math.round(args.highlight_score)}/100.`
+      : "Open Synergy to review — they stay anonymous until you connect.";
+  const highlight = args.highlight_component_label
+    ? `<p style="margin: 16px 0 0; padding: 12px 14px; background-color: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; font-size: 13px; color: #0c4a6e; line-height: 1.55;">
+        <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: #075985;">top match</span><br/>
+        Component: <strong>${escapeHtml(args.highlight_component_label)}</strong>${
+          args.highlight_score
+            ? ` &middot; fit ${Math.round(args.highlight_score)}/100`
+            : ""
+        }
+      </p>`
+    : "";
+
+  const body_html = `
+    <h1 style="margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #111827; line-height: 1.3;">
+      ${args.new_match_count === 1 ? "A new match for your project" : `${args.new_match_count} new matches`}
+    </h1>
+    <p style="margin: 0; font-size: 14px; color: #374151; line-height: 1.6;">
+      Synergy's matcher surfaced ${args.new_match_count === 1 ? "a candidate" : args.new_match_count + " candidates"} whose components complement yours.
+      Identity stays anonymous until you send (or accept) a connection request.
+    </p>
+    ${highlight}
+    <p style="margin: 20px 0 0; font-size: 12px; color: #6b7280;">
+      You'll get this email at most once every 24 hours.
+    </p>
+  `;
+  return {
+    subject,
+    preheader,
+    html: wrapEmail({
+      subject,
+      preheader,
+      body_html,
+      cta: { label: "Browse matches", href: args.discover_url },
+      unsubscribe_url: args.unsubscribe_url,
+      preferences_url: args.preferences_url,
+    }),
+  };
+}
+
 export function testEmail(args: {
   display_name: string;
   preferences_url: string;

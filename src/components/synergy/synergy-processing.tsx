@@ -154,7 +154,7 @@ export function SynergyProcessing({
       </header>
 
       <div className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight text-gray-900">
+        <h1 className="font-display-tight text-3xl font-semibold text-gray-900">
           {session.title}
         </h1>
         <p className="mt-1 font-mono text-[11px] uppercase tracking-wider text-gray-500">
@@ -208,10 +208,10 @@ export function SynergyProcessing({
             Encouraged once an objective exists; usable any time. */}
         <Link
           href={`/app/synergy/${session.id}/strategy`}
-          className="group block rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50/60 to-cyan-50/60 p-6 transition hover:border-blue-400 hover:shadow-md"
+          className="group block rounded-2xl border border-blue-200 bg-blue-50/40 p-6 transition hover:border-blue-400 hover:shadow-md"
         >
           <div className="flex items-start gap-4">
-            <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 shadow-sm">
+            <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 shadow-sm">
               <Sparkles className="h-5 w-5 text-white" />
             </div>
             <div className="min-w-0 flex-1">

@@ -70,7 +70,7 @@ export function SynergyVoiceDock({
           className={[
             "group inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold transition disabled:opacity-50",
             listening
-              ? "bg-rose-600 text-white animate-pulse"
+              ? "bg-gray-900 text-white"
               : "bg-blue-600 text-white hover:scale-[1.02]",
           ].join(" ")}
         >

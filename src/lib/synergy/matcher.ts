@@ -208,6 +208,81 @@ export async function matchOneComponent(db: any, source: MatchSourceComponent): 
     throw new Error(upsertErr.message);
   }
 
+  // ── Fire-and-forget notify-on-match emails ──
+  //
+  // For each new persisted row with final_score ≥ 70, both sides'
+  // owners are candidates for a match-surfaced email. The trigger
+  // itself enforces the per-user `notify_on_match` preference + 24h
+  // throttle, so we can fan out unconditionally here. We only
+  // surface the SOURCE side's best match in the email (we know the
+  // source's component label inline; the candidate side requires
+  // another lookup the trigger handles).
+  const highFit = rows.filter((r) => r.final_score >= 70);
+  if (highFit.length > 0) {
+    const bestScore = Math.max(...highFit.map((r) => r.final_score));
+    // Source side: we have the source's owner + label directly.
+    // Dynamically import to avoid pulling email infra into matcher's
+    // serverless bundle for the cold-path case.
+    import("@/lib/email/triggers")
+      .then(({ sendMatchSurfacedEmail }) =>
+        sendMatchSurfacedEmail({
+          owner_user_id: source.owner_id,
+          highlight_component_label: source.label_public,
+          highlight_score: bestScore,
+          new_match_count: highFit.length,
+        }),
+      )
+      .catch((err) =>
+        console.warn(
+          "[matcher] notify-on-match (source) trigger errored:",
+          err,
+        ),
+      );
+
+    // Candidate side: notify each candidate-owner about THEIR side's
+    // new match. We surface their component's label as the highlight.
+    // De-duped by owner — one email per matched candidate-owner per
+    // batch (their best score across rows where they were the
+    // candidate).
+    const byOwner = new Map<
+      string,
+      { label: string; score: number; count: number }
+    >();
+    for (const r of highFit) {
+      const candIsB = r.component_b !== source.id;
+      const candId = candIsB ? r.component_b : r.component_a;
+      const cand = candidates.find((c) => c.id === candId);
+      if (!cand) continue;
+      const prev = byOwner.get(cand.owner_id);
+      if (!prev || r.final_score > prev.score) {
+        byOwner.set(cand.owner_id, {
+          label: cand.label_public,
+          score: r.final_score,
+          count: (prev?.count ?? 0) + 1,
+        });
+      } else {
+        prev.count += 1;
+      }
+    }
+    for (const [ownerId, agg] of byOwner) {
+      import("@/lib/email/triggers")
+        .then(({ sendMatchSurfacedEmail }) =>
+          sendMatchSurfacedEmail({
+            owner_user_id: ownerId,
+            highlight_component_label: agg.label,
+            highlight_score: agg.score,
+            new_match_count: agg.count,
+          }),
+        )
+        .catch((err) =>
+          console.warn(
+            "[matcher] notify-on-match (candidate) trigger errored:",
+            err,
+          ),
+        );
+    }
+  }
+
   return {
     candidates_considered: candidates.length,
     matches_persisted: rows.length,

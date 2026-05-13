@@ -306,7 +306,7 @@ function RequestCard({
             {tone.label}
           </span>
           {isAccepted && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-blue-100 to-cyan-100 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-blue-700">
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-blue-700">
               <Sparkles className="h-3 w-3" /> revealed
             </span>
           )}
@@ -319,13 +319,38 @@ function RequestCard({
       {/* Profile (revealed for pending-outgoing + accepted only) */}
       {request.other_party ? (
         <div className="mt-4 flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-          <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-200 to-cyan-200 text-blue-800">
-            <UserCircle2 className="h-5 w-5" />
-          </div>
+          <Link
+            href={
+              request.other_party.user_id
+                ? `/app/synergy/profile/${request.other_party.user_id}`
+                : "#"
+            }
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-blue-100 text-blue-800 transition hover:ring-2 hover:ring-blue-300"
+          >
+            {request.other_party.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={request.other_party.avatar_url}
+                alt={`${request.other_party.display_name} avatar`}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <UserCircle2 className="h-5 w-5" />
+            )}
+          </Link>
           <div className="min-w-0 flex-1">
-            <div className="text-[14px] font-semibold text-gray-900">
-              {request.other_party.display_name}
-            </div>
+            {request.other_party.user_id ? (
+              <Link
+                href={`/app/synergy/profile/${request.other_party.user_id}`}
+                className="text-[14px] font-semibold text-gray-900 underline-offset-2 hover:text-blue-700 hover:underline"
+              >
+                {request.other_party.display_name}
+              </Link>
+            ) : (
+              <div className="text-[14px] font-semibold text-gray-900">
+                {request.other_party.display_name}
+              </div>
+            )}
             {request.other_party.bio && (
               <p className="mt-0.5 text-[12px] leading-relaxed text-gray-700">
                 {request.other_party.bio}
@@ -416,7 +441,7 @@ function RequestCard({
           tone="emerald"
         />
         <div className="hidden items-center justify-center md:flex">
-          <div className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-cyan-100">
+          <div className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-blue-50">
             <ArrowRight className="h-4 w-4 text-blue-600" />
           </div>
         </div>
@@ -448,7 +473,7 @@ function RequestCard({
             <button
               onClick={() => onAction(request.id, "accept")}
               disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
             >
               {busy ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -483,7 +508,7 @@ function RequestCard({
         {isAccepted && (
           <Link
             href={`/app/synergy/room/by-request/${request.id}`}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
           >
             <Sparkles className="h-3 w-3" /> Open shared room
             <ArrowRight className="h-3 w-3" />

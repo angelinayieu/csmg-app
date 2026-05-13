@@ -145,9 +145,52 @@ export async function safeJsonParse<T = any>(
 /**
  * Sanitize error messages for API responses.
  * Strips internal details (org IDs, model names, TPM limits) that shouldn't be exposed to users.
+ *
+ * Coercion rules for unknown error shapes:
+ *   • Error instance         → use .message
+ *   • Plain object with .message (Supabase PostgrestError, etc.) → use .message
+ *   • Plain object with .error_description / .error / .detail / .hint → use first non-empty
+ *   • Plain object with neither → JSON-stringify (so the user gets readable detail,
+ *     not "[object Object]")
+ *   • Anything else           → String(err)
+ *
+ * Why this matters: Supabase JS client throws/returns plain objects with the
+ * shape { message, details, hint, code } — they're NOT Error instances. Doing
+ * `String(err)` on them yields the useless "[object Object]" that hides real
+ * failures (e.g., "relation does not exist", "permission denied", FK violations).
  */
 export function sanitizeErrorMessage(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
+  let msg: string;
+  if (err instanceof Error) {
+    msg = err.message;
+  } else if (err && typeof err === "object") {
+    // Try common error-shape fields in priority order.
+    const e = err as Record<string, unknown>;
+    const candidates = [
+      e.message,
+      e.error_description,
+      e.error,
+      e.detail,
+      e.details,
+      e.hint,
+    ];
+    const found = candidates.find(
+      (v): v is string => typeof v === "string" && v.trim().length > 0,
+    );
+    if (found) {
+      msg = found;
+    } else {
+      // Last resort: JSON-stringify so the user sees the actual shape rather
+      // than the useless "[object Object]" from String(obj).
+      try {
+        msg = JSON.stringify(err);
+      } catch {
+        msg = "(unrecognized error)";
+      }
+    }
+  } else {
+    msg = String(err);
+  }
 
   // Rate limit — hide org/model details
   if (msg.includes("429") || msg.toLowerCase().includes("rate limit")) {

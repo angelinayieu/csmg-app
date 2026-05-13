@@ -123,22 +123,21 @@ export function SynergyDiscoverEmpty({
       className="rounded-2xl border border-gray-200 bg-white/80 p-8 backdrop-blur"
       style={{
         boxShadow:
-          "inset 0 1px 0 rgba(255,255,255,0.7), 0 12px 32px -10px rgba(15, 23, 42, 0.08), 0 0 40px -12px rgba(6, 182, 212, 0.15)",
+          "inset 0 1px 0 rgba(255,255,255,0.7), 0 12px 32px -10px rgba(15, 23, 42, 0.08)",
       }}
     >
       {/* Hero */}
       <div className="flex items-start gap-4">
-        <div className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 via-cyan-500 to-indigo-500 shadow-[0_8px_24px_-8px_rgba(6,182,212,0.5)]">
-          <Compass className="h-6 w-6 text-white" />
+        <div className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gray-900">
+          <Compass className="h-6 w-6 text-white" strokeWidth={1.5} />
         </div>
         <div className="min-w-0 flex-1">
-          <h2 className="text-[22px] font-semibold leading-snug tracking-tight text-gray-900">
+          <h2 className="font-display text-[22px] font-semibold leading-snug text-gray-900">
             Your {matchableCount} component{matchableCount === 1 ? " is" : "s are"} indexed
           </h2>
           <p className="mt-1 max-w-xl text-[13px] leading-relaxed text-gray-600">
-            We&apos;re scanning the cross-user pool for complementary fits.
-            Strong matches will surface here as the community grows. In the
-            meantime — explore wider, or tell us to ping you.
+            Scanning the cross-user pool for complementary fits. Strong
+            matches surface here as the community grows.
           </p>
         </div>
       </div>
@@ -148,14 +147,14 @@ export function SynergyDiscoverEmpty({
         <ActivityStat
           loading={statsLoading}
           icon={Package}
-          tone="from-blue-100 to-cyan-100 text-blue-700"
+          tone="from-blue-100 to-blue-100 text-blue-700"
           value={totalActivity}
           label="Matchable components"
         />
         <ActivityStat
           loading={statsLoading}
           icon={Sparkles}
-          tone="from-emerald-100 to-cyan-100 text-emerald-700"
+          tone="from-emerald-100 to-blue-100 text-emerald-700"
           value={recent24h}
           label="Published past 24h"
         />
@@ -208,7 +207,7 @@ export function SynergyDiscoverEmpty({
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <ActionCard
           icon={Lightbulb}
-          tone="border-blue-200 from-blue-50 to-cyan-50/40 ring-blue-100"
+          tone="border-blue-200 from-blue-50 to-blue-50/40 ring-blue-100"
           title="Lower the bar"
           body="Surface exploratory matches below the 60-score floor — parallel ideators and weaker complements still worth a look."
           cta={exploratoryLoading ? "Loading…" : "Try exploratory matches"}
@@ -220,7 +219,7 @@ export function SynergyDiscoverEmpty({
           icon={Bell}
           tone={
             notifyOnMatch
-              ? "border-emerald-200 from-emerald-50 to-cyan-50/40 ring-emerald-100"
+              ? "border-emerald-200 from-emerald-50 to-blue-50/40 ring-emerald-100"
               : "border-purple-200 from-purple-50 to-indigo-50/40 ring-purple-100"
           }
           title={notifyOnMatch ? "We’ll email you" : "Get a ping later"}
@@ -281,11 +280,11 @@ function ActivityStat({
   return (
     <div className="rounded-xl border border-gray-200 bg-white/60 p-3 text-center">
       <div
-        className={`mx-auto mb-1.5 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br ${tone}`}
+        className={`mx-auto mb-1.5 inline-flex h-8 w-8 items-center justify-center rounded-lg ${tone}`}
       >
         <Icon className="h-4 w-4" />
       </div>
-      <div className="text-[22px] font-semibold text-gray-900">
+      <div className="font-display font-numerical text-[22px] font-semibold tabular-nums text-gray-900">
         {loading ? (
           <Loader2 className="mx-auto h-4 w-4 animate-spin text-gray-400" />
         ) : (
@@ -320,7 +319,7 @@ function ActionCard({
 }) {
   return (
     <div
-      className={`rounded-xl border bg-gradient-to-br p-4 ring-1 ${tone}`}
+      className={`rounded-xl border p-4 ring-1 ${tone}`}
     >
       <div className="flex items-start gap-2.5">
         <div className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/80">

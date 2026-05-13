@@ -63,7 +63,7 @@ export function SynergyRabbitHoles({
           onClick={onScore}
           disabled={loading || !hasObjective}
           title={!hasObjective ? "Detect an objective first" : "Run promise scoring"}
-          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
+          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
         >
           {loading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -127,7 +127,7 @@ function RabbitHoleRow({
   const kindTone = KIND_TONE[score.kind] ?? "bg-gray-100 text-gray-700";
   return (
     <li className="group flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50/60 p-3 transition hover:border-blue-400">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-100 to-cyan-100 text-base font-semibold text-gray-900">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-base font-semibold text-gray-900">
         {rank}
       </div>
       <div className="min-w-0 flex-1">

@@ -24,15 +24,14 @@ export default async function SynergyRequestsPage() {
       <header className="mb-8 flex items-center justify-between">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1 text-[11px] font-medium text-gray-700">
-            <span className="h-1.5 w-1.5 rounded-full bg-gradient-to-br from-blue-600 to-cyan-500" />
+            <span className="h-1.5 w-1.5 rounded-full bg-blue-600" />
             Synergy · Inbox
           </div>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-gray-900">
+          <h1 className="font-display-tight mt-3 text-3xl font-semibold text-gray-900">
             Connection requests
           </h1>
           <p className="mt-1 max-w-xl text-sm text-gray-600">
-            Profile reveals when a request lands so you can make an informed
-            accept/decline. Declines stay private.
+            Profiles unlock when a request lands. Declines stay private.
           </p>
         </div>
         <div className="flex items-center gap-2">

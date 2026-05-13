@@ -18,6 +18,7 @@ import {
   UserCircle2,
 } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
+import { SynergyAvatarUploader } from "@/components/synergy/synergy-avatar-uploader";
 
 interface EmailNotifPrefs {
   new_request?: boolean;
@@ -119,13 +120,22 @@ export function SynergyProfileClient() {
   return (
     <div className="space-y-6">
       {/* Preview card — what the other person will see */}
-      <section className="rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50/60 to-cyan-50/40 p-5">
+      <section className="rounded-2xl border border-blue-200 bg-blue-50/40 p-5">
         <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.15em] text-blue-700">
           <Sparkles className="h-3 w-3" /> Preview — what they&apos;ll see
         </div>
         <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-white px-4 py-3">
-          <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-200 to-cyan-200 text-blue-800">
-            <UserCircle2 className="h-6 w-6" />
+          <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-blue-100 text-blue-800">
+            {profile?.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={profile.avatar_url}
+                alt="Avatar preview"
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <UserCircle2 className="h-6 w-6" />
+            )}
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-[14px] font-semibold text-gray-900">
@@ -143,6 +153,25 @@ export function SynergyProfileClient() {
           </div>
         </div>
       </section>
+
+      {/* Avatar uploader */}
+      {profile && (
+        <section className="rounded-2xl border border-gray-200 bg-white p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <UserCircle2 className="h-4 w-4 text-blue-600" />
+            <h2 className="text-[15px] font-semibold text-gray-900">
+              Avatar
+            </h2>
+          </div>
+          <SynergyAvatarUploader
+            userId={profile.user_id}
+            currentUrl={profile.avatar_url}
+            onChanged={(url) =>
+              setProfile((p) => (p ? { ...p, avatar_url: url } : p))
+            }
+          />
+        </section>
+      )}
 
       {/* Editor */}
       <section className="rounded-2xl border border-gray-200 bg-white p-6">
@@ -218,7 +247,7 @@ export function SynergyProfileClient() {
           <button
             onClick={save}
             disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
           >
             {saving ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -420,7 +449,7 @@ function EmailSection({
         <button
           onClick={sendTest}
           disabled={sendingTest}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
         >
           {sendingTest ? (
             <Loader2 className="h-3 w-3 animate-spin" />

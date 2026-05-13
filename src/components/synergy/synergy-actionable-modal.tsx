@@ -247,7 +247,7 @@ function AnsweringState({
       <div className="flex justify-end pt-1">
         <button
           onClick={() => onSubmit(answers)}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
         >
           <Sparkles className="h-3.5 w-3.5" />
           Generate plan
@@ -376,7 +376,7 @@ function ReviewingState({
         </button>
         <button
           onClick={onAccept}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-sky-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800"
         >
           <Check className="h-3.5 w-3.5" />
           Add to board

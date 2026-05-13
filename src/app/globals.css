@@ -554,7 +554,52 @@
 }
 
 body {
-  font-family: system-ui, -apple-system, sans-serif;
+  /* Apple Pro typography stack:
+   *   On macOS/iOS: SF Pro Text + SF Pro Display via -apple-system /
+   *   BlinkMacSystemFont. Web SF fallbacks (system-ui catches Windows
+   *   Segoe; Helvetica Neue + Arial close it out for legacy Linux).
+   *
+   * Feature settings:
+   *   "ss01" + "cv11" enable Apple's character variants on SF Pro
+   *   (rounded six/nine, alternate alpha, etc.) — silently ignored
+   *   on non-Apple fonts so it's safe to leave on globally.
+   *
+   * Anti-aliasing + optimizeLegibility match Apple's web defaults so
+   * the brand reads as if rendered by macOS Safari regardless of the
+   * actual browser.
+   */
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Text",
+    "SF Pro Display",
+    system-ui,
+    "Segoe UI",
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Headline utility — tightens tracking the way Apple does on
+ * 28px+ display text. Apply to H1/H2 inside any "premium" surface
+ * (Rooms grid, Strategy doc, Focus Mode stages). */
+.font-display {
+  letter-spacing: -0.022em;
+}
+
+.font-display-tight {
+  letter-spacing: -0.03em;
+}
+
+/* Numerical figures with tabular spacing — for stat counts and
+ * timestamps that should align column-wise. */
+.font-numerical {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum", "lnum";
 }
 
 /* Page gradient background */

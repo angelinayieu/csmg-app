@@ -176,6 +176,10 @@ interface SynergyNodeProps {
   onAction: (action: SynergyNodeAction, nodeId: string) => void;
   // Fired when the user submits the popover's "Or describe…" field.
   onDescribe: (instruction: string, nodeId: string) => void;
+  // Optional — when present, the popover shows a "Focus thread"
+  // affordance that asks the whiteboard to enter Focus Mode scoped
+  // to this node's thread.
+  onFocusThread?: (nodeId: string) => void;
   onDragStart: (e: React.PointerEvent, nodeId: string) => void;
 }
 
@@ -194,6 +198,7 @@ export function SynergyNode({
   onClick,
   onAction,
   onDescribe,
+  onFocusThread,
   onDragStart,
 }: SynergyNodeProps) {
   // Hover-with-delay: 180ms before showing the menu prevents accidental
@@ -349,6 +354,7 @@ export function SynergyNode({
             canTidy={canTidy}
             onAction={onAction}
             onDescribe={onDescribe}
+            onFocusThread={onFocusThread}
           />
         </div>
       )}

@@ -20,6 +20,7 @@ import {
   Eraser,
   Loader2,
   Maximize2,
+  Mic,
   MousePointer2,
   Sparkles,
   StickyNote,
@@ -34,11 +35,18 @@ import {
   deleteRoomNode,
   updateRoomNode,
   type RoomNode,
+  type RoomNodeKind,
   type SynergyRoomBundle,
 } from "@/lib/synergy/room-client";
+import { augment } from "@/lib/synergy/client";
 import { useRoomRealtime } from "@/hooks/synergy/use-room-realtime";
 import { useRoomPresence } from "@/hooks/synergy/use-room-presence";
+import { useSpeech } from "@/hooks/synergy/use-speech";
 import { AI_META_PREFIX, SynergyRoomAIDock } from "./synergy-room-ai-dock";
+import {
+  SynergyRoomVoiceDock,
+  VOICE_META_PREFIX,
+} from "./synergy-room-voice-dock";
 
 type Tool = "select" | "sticky" | "erase";
 
@@ -96,6 +104,13 @@ export function SynergyRoomCanvas({ bundle }: Props) {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
+
+  // ── Voice (Tier-2 2.1) ──
+  // Free-flow toggle: when on, each speech-final phrase becomes a
+  // new node AND fires augment(decompose) to spawn AI children.
+  // Off, just the new node is added.
+  const [voiceFreeFlow, setVoiceFreeFlow] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const panStartRef = useRef<{
     clientX: number;
     clientY: number;
@@ -215,6 +230,156 @@ export function SynergyRoomCanvas({ bundle }: Props) {
     },
     [roomId, myId],
   );
+
+  // ── Voice → room node (Tier-2 2.1) ──
+  // Spawn a node at viewport center for each final phrase. With
+  // free-flow on, also augment(decompose) and spiral-spawn 4 AI
+  // children around the voice node. Realtime propagates each insert
+  // to the partner automatically.
+  const viewportCenterWorld = useCallback(() => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 600, y: 400 };
+    return {
+      x: (rect.width / 2 - pan.x) / zoom,
+      y: (rect.height / 2 - pan.y) / zoom,
+    };
+  }, [pan.x, pan.y, zoom]);
+
+  const placeSpiralAround = useCallback(
+    (cx: number, cy: number, i: number, total: number) => {
+      const radius = 170;
+      const angle = (i / Math.max(total, 1)) * Math.PI * 2 - Math.PI / 2;
+      const jitter = () => (Math.random() - 0.5) * 18;
+      return {
+        x: cx + Math.cos(angle) * radius + jitter(),
+        y: cy + Math.sin(angle) * radius + jitter(),
+      };
+    },
+    [],
+  );
+
+  const onVoiceFinal = useCallback(
+    async (text: string) => {
+      if (archived) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const c = viewportCenterWorld();
+      // Spiral so back-to-back phrases don't stack at the same point.
+      const offsetIdx = Math.floor(Math.random() * 6);
+      const spot = placeSpiralAround(c.x, c.y, offsetIdx, 6);
+      setVoiceBusy(true);
+      let voiceNode: RoomNode | null = null;
+      try {
+        voiceNode = await createRoomNode(roomId, {
+          kind: "branch",
+          label: trimmed,
+          meta: VOICE_META_PREFIX,
+          x: spot.x,
+          y: spot.y,
+        });
+        setNodes((prev) =>
+          prev.some((n) => n.id === voiceNode!.id) ? prev : [...prev, voiceNode!],
+        );
+      } catch (err) {
+        toast.error("Couldn't add voice note", {
+          description: (err as Error).message,
+        });
+        setVoiceBusy(false);
+        return;
+      }
+
+      if (!voiceFreeFlow || !voiceNode) {
+        setVoiceBusy(false);
+        return;
+      }
+
+      // Free-flow path: ask the augmenter to decompose this phrase
+      // and spawn 4 children. We pass a tiny context block so the LLM
+      // knows the anchors.
+      try {
+        const ctx: string[] = [];
+        if (bundle.my_component) {
+          ctx.push(
+            `MY ANCHOR: ${bundle.my_component.label_public} — ${bundle.my_component.description_public}`,
+          );
+        }
+        if (bundle.their_component) {
+          ctx.push(
+            `THEIR ANCHOR: ${bundle.their_component.label_public} — ${bundle.their_component.description_public}`,
+          );
+        }
+        const res = await augment({
+          transcript: trimmed,
+          mode: "decompose",
+          context: ctx.join("\n"),
+        });
+        if (res.mode !== "decompose") {
+          return;
+        }
+        const d = res.result;
+        const children: Array<{
+          label: string;
+          kind: RoomNodeKind;
+          metaInner: string;
+        }> = [
+          ...d.upstream.map((t) => ({
+            label: t,
+            kind: "branch" as RoomNodeKind,
+            metaInner: "upstream",
+          })),
+          ...d.downstream.map((t) => ({
+            label: t,
+            kind: "branch" as RoomNodeKind,
+            metaInner: "downstream",
+          })),
+        ];
+        // Cap at 4 so a chatty free-flow doesn't crowd the board.
+        const top = children.slice(0, 4);
+        for (let i = 0; i < top.length; i++) {
+          const item = top[i];
+          const pos = placeSpiralAround(spot.x, spot.y, i, top.length);
+          try {
+            const child = await createRoomNode(roomId, {
+              parent_id: voiceNode.id,
+              kind: item.kind,
+              label: item.label,
+              meta: `${AI_META_PREFIX} ${item.metaInner}`,
+              x: pos.x,
+              y: pos.y,
+            });
+            setNodes((prev) =>
+              prev.some((n) => n.id === child.id) ? prev : [...prev, child],
+            );
+          } catch {
+            // Per-child failure is non-fatal; the voice node is the
+            // load-bearing artifact.
+          }
+        }
+      } catch (err) {
+        toast.error("Augment failed", {
+          description: (err as Error).message,
+        });
+      } finally {
+        setVoiceBusy(false);
+      }
+    },
+    [
+      archived,
+      bundle.my_component,
+      bundle.their_component,
+      placeSpiralAround,
+      roomId,
+      viewportCenterWorld,
+      voiceFreeFlow,
+    ],
+  );
+
+  const speech = useSpeech(onVoiceFinal);
+
+  const toggleMic = useCallback(() => {
+    if (speech.listening) speech.stop();
+    else speech.start();
+  }, [speech]);
 
   // ── Pointer events ──
 
@@ -491,7 +656,7 @@ export function SynergyRoomCanvas({ bundle }: Props) {
         <div className="absolute inset-x-0 top-0 z-20 border-b border-gray-200 bg-white/85 px-4 py-2.5 backdrop-blur">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-cyan-100 text-blue-700">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-blue-50 text-blue-700">
                 <Sparkles className="h-3.5 w-3.5" />
               </span>
               <div className="text-[12px] font-semibold text-gray-900">
@@ -514,9 +679,13 @@ export function SynergyRoomCanvas({ bundle }: Props) {
                     </span>
                     <span className="text-[12px] text-gray-700">
                       with{" "}
-                      <span className="font-semibold text-gray-900">
+                      <Link
+                        href={`/app/synergy/profile/${theirId}`}
+                        className="font-semibold text-gray-900 underline-offset-2 hover:text-blue-700 hover:underline"
+                        title="View profile"
+                      >
                         {bundle.their_profile.display_name}
-                      </span>
+                      </Link>
                     </span>
                     {theyAreHere && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-emerald-700">
@@ -544,7 +713,7 @@ export function SynergyRoomCanvas({ bundle }: Props) {
           </div>
           {/* Intersection objective banner */}
           {intersectionObjective && (
-            <div className="mt-2 flex items-start gap-2 rounded-lg border border-blue-100 bg-gradient-to-br from-blue-50/60 to-cyan-50/40 px-3 py-1.5">
+            <div className="mt-2 flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50/40 px-3 py-1.5">
               <Target className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600" />
               <p className="text-[12px] leading-snug text-gray-800">
                 <span className="font-mono text-[9px] uppercase tracking-wider text-blue-700">
@@ -639,6 +808,20 @@ export function SynergyRoomCanvas({ bundle }: Props) {
             ))}
           </div>
         </div>
+
+        {/* Voice dock — bottom-LEFT mic + free-flow toggle. Each
+            speech-final spawns a node at viewport center; free-flow
+            additionally decomposes that node into 4 AI children. */}
+        <SynergyRoomVoiceDock
+          listening={speech.listening}
+          supported={speech.supported}
+          freeFlow={voiceFreeFlow}
+          interim={speech.interim}
+          busy={voiceBusy}
+          disabled={archived}
+          onToggleMic={toggleMic}
+          onFreeFlowChange={setVoiceFreeFlow}
+        />
 
         {/* AI dock — appears at the bottom; replaces the static help
             ribbon. Shows a selected-node header + 4 AI action chips
@@ -793,9 +976,13 @@ function RoomNodeCard({
   const aiHint = isAiGenerated
     ? node.meta!.slice(AI_META_PREFIX.length).trim()
     : null;
+  // Voice-captured nodes carry VOICE_META_PREFIX. Keep the author
+  // tint (it's human content), but stamp a 🎙 chip in the header.
+  const isVoice =
+    typeof node.meta === "string" && node.meta.startsWith(VOICE_META_PREFIX);
   const tone = isAiGenerated
-    ? // AI cards lean amber-violet — distinct from both author tints
-      "bg-gradient-to-br from-purple-50 to-amber-50 ring-purple-200 text-gray-900"
+    ? // AI cards: neutral soft surface, distinct from both author tints
+      "bg-gray-50 ring-gray-200 text-gray-900"
     : isMine
       ? "bg-blue-50 ring-blue-200 text-blue-900"
       : isTheirs
@@ -830,6 +1017,12 @@ function RoomNodeCard({
               <span className="text-purple-600" title="AI-suggested" aria-label="AI-suggested">
                 ✨
               </span>
+            )}
+            {isVoice && !isAiGenerated && (
+              <Mic
+                className="h-2.5 w-2.5 text-rose-600"
+                aria-label="Voice-captured"
+              />
             )}
             {node.kind}
           </span>

@@ -188,11 +188,29 @@ export interface RankResult {
 
 // ── 1.6d: Idea → Actionable Plan ──
 
+export interface ClarifyOption {
+  /** The option label rendered as a clickable card. 3-10 words. */
+  label: string;
+  /** Optional 1-sentence elaboration shown beneath the label on
+   *  hover/focus. Helps the user pick without re-reading the question. */
+  detail?: string;
+}
+
+export interface ClarifyQuestion {
+  question: string;
+  hint: string;
+  /** 3-5 MCQ options the LLM proposes. The UI always appends an
+   *  implicit "Other / custom" slot that reveals a textarea so the
+   *  user is never forced into a preset answer. */
+  options: ClarifyOption[];
+}
+
 export interface ClarifyResult {
   // 3-4 questions the AI thinks are most worth asking the user to
-  // tighten before drafting a plan. Each carries an optional hint
-  // explaining why the question matters.
-  questions: Array<{ question: string; hint: string }>;
+  // tighten before drafting a plan. Each carries a hint explaining why
+  // the question matters AND 3-5 MCQ options to make the answer quick
+  // — picking is faster than typing.
+  questions: ClarifyQuestion[];
 }
 
 export interface PlanStep {
@@ -271,6 +289,12 @@ export interface BrainstormComponent {
   description_private: string;
   visibility: ComponentVisibility;
   created_at: string;
+  // Populated by GET /api/synergy/sessions/[id]/components. Counts
+  // how many component_matches rows reference this component on
+  // either side. Drives the "N collaborators · room-ready" badge
+  // on the redesigned expandable card. May be undefined on cached
+  // payloads pre-augmentation; treat as 0 in that case.
+  match_count?: number;
 }
 
 export interface DetectedObjective {

@@ -50,12 +50,19 @@ import {
   RiskBlock,
 } from "./synergy-strategy-blocks";
 import { SynergyStrategyComponentList } from "./synergy-strategy-component-list";
+import { SynergyStrategyShareModal } from "./synergy-strategy-share-modal";
 
 interface Props {
   sessionId: string;
   sessionTitle: string;
   initialBundle: StrategyBundle;
   initialNodeCount: number;
+  // Tier-1 polish: staleness signals so the doc can surface a soft
+  // "re-extract" banner when the board has grown materially since
+  // the last extraction.
+  reextractAdvised?: boolean;
+  lastExtractedNodeCount?: number;
+  lastExtractedAt?: string | null;
 }
 
 export function SynergyStrategy({
@@ -63,6 +70,9 @@ export function SynergyStrategy({
   sessionTitle,
   initialBundle,
   initialNodeCount,
+  reextractAdvised = false,
+  lastExtractedNodeCount = 0,
+  lastExtractedAt = null,
 }: Props) {
   const [bundle, setBundle] = useState<StrategyBundle>(initialBundle);
   const [generating, setGenerating] = useState(false);
@@ -114,7 +124,11 @@ export function SynergyStrategy({
   if (generating) {
     return (
       <div className="mx-auto max-w-4xl py-12">
-        <Header sessionId={sessionId} sessionTitle={sessionTitle} />
+        <Header
+          sessionId={sessionId}
+          sessionTitle={sessionTitle}
+          strategyId={bundle.strategy.id}
+        />
         <Crystallizing />
       </div>
     );
@@ -160,7 +174,22 @@ export function SynergyStrategy({
 
   return (
     <div className="mx-auto max-w-4xl py-8">
-      <Header sessionId={sessionId} sessionTitle={sessionTitle} />
+      <Header
+        sessionId={sessionId}
+        sessionTitle={sessionTitle}
+        strategyId={bundle.strategy.id}
+      />
+      {reextractAdvised && (
+        <ReextractBanner
+          sessionId={sessionId}
+          currentNodeCount={initialNodeCount}
+          lastExtractedNodeCount={lastExtractedNodeCount}
+          lastExtractedAt={lastExtractedAt}
+          onReextracted={(components) =>
+            setBundle((prev) => ({ ...prev, components }))
+          }
+        />
+      )}
       <DocBody
         strategy={bundle.strategy}
         blocks={bundle.blocks}
@@ -180,10 +209,13 @@ export function SynergyStrategy({
 function Header({
   sessionId,
   sessionTitle,
+  strategyId,
 }: {
   sessionId: string;
   sessionTitle: string;
+  strategyId?: string;
 }) {
+  const [shareOpen, setShareOpen] = useState(false);
   return (
     <header className="mb-8 flex items-center justify-between">
       <div className="flex items-center gap-3">
@@ -196,9 +228,28 @@ function Header({
         <span className="text-gray-300">·</span>
         <span className="text-sm text-gray-500">{sessionTitle}</span>
       </div>
-      <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1 text-[11px] font-medium text-gray-700">
-        <Target className="h-3 w-3 text-blue-600" /> Strategy
+      <div className="flex items-center gap-2">
+        {strategyId && (
+          <button
+            onClick={() => setShareOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-[11px] font-medium text-blue-700 transition hover:scale-[1.02] hover:border-blue-400"
+            title="Mint a read-only link"
+          >
+            <Share2 className="h-3 w-3" />
+            Share
+          </button>
+        )}
+        <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1 text-[11px] font-medium text-gray-700">
+          <Target className="h-3 w-3 text-blue-600" /> Strategy
+        </div>
       </div>
+      {strategyId && (
+        <SynergyStrategyShareModal
+          strategyId={strategyId}
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
     </header>
   );
 }
@@ -216,7 +267,7 @@ function EmptyState({
 }) {
   return (
     <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-16 text-center">
-      <div className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-cyan-100">
+      <div className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-full bg-blue-50">
         <Sparkles className="h-5 w-5 text-blue-600" />
       </div>
       <h2 className="mt-4 text-xl font-semibold text-gray-900">
@@ -231,7 +282,7 @@ function EmptyState({
         onClick={onGenerate}
         disabled={generating || !hasNodes}
         title={!hasNodes ? "Add nodes to your board first" : "Generate strategy"}
-        className="mt-6 inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-5 py-3 text-sm font-semibold text-white shadow-md transition hover:scale-[1.02] disabled:opacity-60"
+        className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-md transition hover:scale-[1.02] disabled:opacity-60"
       >
         {generating ? (
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -240,6 +291,99 @@ function EmptyState({
         )}
         Generate strategy doc
       </button>
+    </div>
+  );
+}
+
+// ── Re-extract banner (Tier-1 polish) ──
+//
+// Soft amber-tinted nudge that appears above the doc when the board
+// has grown ≥30% or it's been >7 days since the last extraction.
+// One click re-runs extract; the freshly-returned components replace
+// the local bundle. Auto-dismisses on success.
+
+function ReextractBanner({
+  sessionId,
+  currentNodeCount,
+  lastExtractedNodeCount,
+  lastExtractedAt,
+  onReextracted,
+}: {
+  sessionId: string;
+  currentNodeCount: number;
+  lastExtractedNodeCount: number;
+  lastExtractedAt: string | null;
+  onReextracted: (components: BrainstormComponent[]) => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+
+  const grew = currentNodeCount - lastExtractedNodeCount;
+  const ageDays = lastExtractedAt
+    ? Math.round((Date.now() - new Date(lastExtractedAt).getTime()) / 86_400_000)
+    : null;
+
+  const onClick = async () => {
+    if (running) return;
+    setRunning(true);
+    try {
+      const { extractComponents } = await import("@/lib/synergy/client");
+      const components = await extractComponents(sessionId);
+      onReextracted(components);
+      toast.success(`Re-extracted ${components.length} components`);
+      setDismissed(true);
+    } catch (err) {
+      toast.error("Re-extraction failed", {
+        description: (err as Error).message,
+      });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+      <div className="flex items-start gap-3">
+        <div className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 ring-1 ring-amber-200">
+          <RefreshCw className="h-4 w-4 text-amber-700" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold text-amber-900">
+            Your board has grown since the last extraction
+          </div>
+          <p className="mt-0.5 text-[12px] leading-relaxed text-amber-800">
+            {grew > 0
+              ? `${grew} new node${grew === 1 ? "" : "s"} since the last run`
+              : "Extraction is stale"}
+            {ageDays !== null && ageDays > 0 ? ` · ${ageDays}d ago` : ""}
+            {". Components feeding the matcher and strategy doc may not reflect the latest content."}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={onClick}
+            disabled={running}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
+          >
+            {running ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3 w-3" />
+            )}
+            Re-extract now
+          </button>
+          <button
+            onClick={() => setDismissed(true)}
+            disabled={running}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-amber-700 transition hover:bg-amber-100 disabled:opacity-50"
+            aria-label="Dismiss"
+            title="Dismiss"
+          >
+            <Check className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -747,7 +891,7 @@ function EditableTitle({
       <h1
         onClick={() => setEditing(true)}
         title="Click to edit"
-        className="cursor-text rounded text-3xl font-semibold leading-snug tracking-tight text-gray-900 transition hover:bg-blue-50/40"
+        className="font-display-tight cursor-text rounded text-3xl font-semibold leading-snug text-gray-900 transition hover:bg-blue-50/40"
       >
         {value || placeholder}
       </h1>
@@ -775,7 +919,7 @@ function EditableTitle({
       }}
       placeholder={placeholder}
       rows={2}
-      className="w-full resize-none rounded-md border border-blue-300 bg-white px-2 py-1.5 text-3xl font-semibold leading-snug tracking-tight text-gray-900 outline-none ring-2 ring-blue-100"
+      className="font-display-tight w-full resize-none rounded-md border border-blue-300 bg-white px-2 py-1.5 text-3xl font-semibold leading-snug text-gray-900 outline-none ring-2 ring-blue-100"
     />
   );
 }
@@ -893,7 +1037,7 @@ function CollaboratorsSection({
         label="Collaborators needed"
         sub="live matches across the community"
       />
-      <div className="rounded-xl border border-gray-200 bg-gradient-to-br from-blue-50/30 to-cyan-50/30 p-4">
+      <div className="rounded-xl border border-gray-200 bg-blue-50/40 p-4">
         <p className="text-[12px] leading-relaxed text-gray-700">
           {matchable.length === 0
             ? "Mark some components as matchable to start finding collaborators."
@@ -927,7 +1071,7 @@ function CollaboratorsSection({
           <button
             onClick={runMatch}
             disabled={running || matchable.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-blue-600 to-cyan-500 px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
           >
             {running ? (
               <Loader2 className="h-3 w-3 animate-spin" />

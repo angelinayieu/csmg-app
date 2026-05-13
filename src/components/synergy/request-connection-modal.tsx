@@ -204,7 +204,7 @@ export function RequestConnectionModal({
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-200/60 px-6 pt-5 pb-3">
           <div className="flex items-center gap-2">
-            <div className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-cyan-500 shadow-sm">
+            <div className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 shadow-sm">
               <Send className="h-3.5 w-3.5 text-white" />
             </div>
             <div>
@@ -395,12 +395,12 @@ export function RequestConnectionModal({
           <button
             onClick={submit}
             disabled={sending}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2 text-[12px] font-semibold text-white shadow-[0_4px_20px_-4px_rgba(6,182,212,0.5)] transition hover:scale-[1.02] disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-gray-900 px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
           >
             {sending ? (
-              <Sparkles className="h-3 w-3 animate-pulse" />
+              <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.5} />
             ) : (
-              <Send className="h-3 w-3" />
+              <Send className="h-3 w-3" strokeWidth={1.5} />
             )}
             {sending ? "Sending…" : "Send request"}
             <ArrowRight className="h-3 w-3" />

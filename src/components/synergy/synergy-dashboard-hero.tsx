@@ -111,10 +111,9 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
             disabled={!!busy}
             title="Speak — opens the voice orb"
             aria-label="Open voice orb"
-            className="absolute right-3 top-1/2 -translate-y-1/2 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 via-indigo-500 to-violet-500 text-white transition hover:scale-[1.08] disabled:opacity-60"
+            className="absolute right-3 top-1/2 -translate-y-1/2 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gray-900 text-white transition hover:bg-gray-800 disabled:opacity-60"
             style={{
-              boxShadow: "0 4px 24px -4px rgba(99, 102, 241, 0.6)",
-              animation: "synergyHeroMicPulse 3s ease-in-out infinite",
+              boxShadow: "0 4px 16px -4px rgba(15, 23, 42, 0.25)",
             }}
           >
             <Mic className="h-4 w-4" />
@@ -137,7 +136,7 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
           <button
             onClick={() => void startBrainstorm()}
             disabled={!!busy}
-            className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2 text-[13px] font-semibold text-white shadow-[0_6px_20px_-6px_rgba(6,182,212,0.5)] transition hover:scale-[1.03] disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-full bg-blue-600 px-4 py-2 text-[13px] font-semibold text-white shadow-[0_6px_20px_-6px_rgba(6,182,212,0.5)] transition hover:scale-[1.03] disabled:opacity-60"
           >
             <Sparkles className="h-3.5 w-3.5" />
             {busy === "brainstorm" ? "Opening whiteboard…" : "Start brainstorming"}

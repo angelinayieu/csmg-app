@@ -64,7 +64,7 @@ export function FocusModeStage1({
 
   return (
     <div className="px-6 pb-32 pt-2">
-      <h1 className="text-[26px] font-semibold leading-snug tracking-tight text-gray-900">
+      <h1 className="font-display-tight text-[28px] font-semibold leading-[1.1] text-gray-900">
         What did you actually decide?
       </h1>
       <p className="mt-2 text-[13px] leading-relaxed text-gray-600">
@@ -259,12 +259,12 @@ function PlanCard({
         excluded
           ? "border border-gray-200 bg-gray-50 opacity-50"
           : hovered
-            ? "border border-cyan-300 bg-cyan-50/60 shadow-[0_0_20px_-5px_rgba(6,182,212,0.4)]"
-            : "border border-blue-200 bg-gradient-to-br from-blue-50/60 to-cyan-50/30",
+            ? "border border-blue-300 bg-blue-50/60 shadow-[0_0_20px_-5px_rgba(6,182,212,0.4)]"
+            : "border border-blue-200 bg-blue-50/40",
       ].join(" ")}
     >
       <div className="flex items-start gap-2">
-        <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-600 to-cyan-500 shadow-sm">
+        <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-600 shadow-sm">
           <Sparkles className="h-3 w-3 text-white" />
         </div>
         <div className="min-w-0 flex-1">
@@ -337,7 +337,7 @@ function NodeRow({
         excluded
           ? "border border-gray-200 bg-gray-50/40 opacity-60"
           : hovered
-            ? "border border-cyan-300 bg-cyan-50/60 shadow-[0_0_18px_-6px_rgba(6,182,212,0.35)]"
+            ? "border border-blue-300 bg-blue-50/60 shadow-[0_0_18px_-6px_rgba(6,182,212,0.35)]"
             : "border border-gray-200 bg-white hover:border-blue-300",
       ].join(" ")}
     >

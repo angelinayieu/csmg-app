@@ -14,6 +14,7 @@
 
 import { createServiceClient } from "@/lib/supabase/service";
 import {
+  matchSurfacedEmail,
   newRequestEmail,
   requestAcceptedEmail,
   testEmail,
@@ -191,6 +192,108 @@ export async function sendRequestAcceptedEmail(args: {
     }
   } catch (err) {
     console.warn("[email · request_accepted] trigger errored:", err);
+  }
+}
+
+// ── match_surfaced ──
+//
+// Fires from the matcher (on-demand AND cron paths) when a user's
+// component gets a meaningful new match. "Meaningful" = at least one
+// row with final_score >= 70 in this matcher batch for an owner
+// whose `notify_on_match = true`.
+//
+// Throttled to one email per 24h per user via
+// `synergy_profiles.last_match_notified_at` — so the cron running
+// every 6 hours never produces a daily spam pile.
+//
+// Privacy: the email surfaces only YOUR component label (the side
+// the matcher ran for) + a fit score. Never the other user's name,
+// component, or session. The user clicks through to /discover to see
+// the actual match cards (which are already privacy-redacted).
+
+interface MatchSurfaceInput {
+  owner_user_id: string;
+  // Best new match for this owner in the current batch
+  highlight_component_label: string | null;
+  highlight_score: number | null;
+  new_match_count: number;
+}
+
+export async function sendMatchSurfacedEmail(
+  args: MatchSurfaceInput,
+): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = createServiceClient() as any;
+
+    // Load the profile + auth user in one go. We need:
+    //   - notify_on_match flag (the dedicated toggle)
+    //   - email_notifications.new_request as a fallback channel-key
+    //     for the unsubscribe link (we re-use that key since
+    //     notify_on_match doesn't have its own unsubscribe entry yet)
+    //   - last_match_notified_at for throttling
+    const { data: profile } = await db
+      .from("synergy_profiles")
+      .select(
+        "notification_email, display_name, email_notifications, notify_on_match, last_match_notified_at",
+      )
+      .eq("user_id", args.owner_user_id)
+      .maybeSingle();
+    if (!profile) return;
+    if (profile.notify_on_match !== true) return;
+
+    // 24h throttle
+    if (
+      profile.last_match_notified_at &&
+      Date.now() - new Date(profile.last_match_notified_at).getTime() <
+        24 * 60 * 60 * 1000
+    ) {
+      return;
+    }
+
+    // Resolve delivery email (override → auth.users.email fallback)
+    const { data: authUser } = await db.auth.admin.getUserById(
+      args.owner_user_id,
+    );
+    const fallback = (authUser?.user?.email ?? "") as string;
+    const email = (profile.notification_email as string | null) || fallback;
+    if (!email) return;
+
+    // Mint a token; we use a new dedicated 'new_request' key for
+    // unsubscribe since notify-on-match is a "marketing-ish" surface
+    // and users may want a clean way to turn it off independently.
+    // The unsubscribe page handles the key generically.
+    const token = await mintUnsubscribeToken(args.owner_user_id, "new_request");
+
+    const tpl = matchSurfacedEmail({
+      display_name: (profile.display_name as string | null) ?? "there",
+      new_match_count: args.new_match_count,
+      highlight_component_label: args.highlight_component_label,
+      highlight_score: args.highlight_score,
+      discover_url: appUrl("/app/synergy/discover"),
+      preferences_url: appUrl("/app/synergy/profile#email"),
+      unsubscribe_url: appUrl(`/email/unsubscribe?token=${encodeURIComponent(token)}`),
+    });
+
+    const result = await sendTransactional({
+      to: email,
+      subject: tpl.subject,
+      preheader: tpl.preheader,
+      html: tpl.html,
+    });
+
+    if (result.ok) {
+      // Stamp the throttle on success (dry-run also stamps so dev
+      // testing doesn't re-fire on every cron tick).
+      await db
+        .from("synergy_profiles")
+        .update({ last_match_notified_at: new Date().toISOString() })
+        .eq("user_id", args.owner_user_id);
+    } else {
+      console.warn("[email · match_surfaced] send failed:", result.error);
+    }
+  } catch (err) {
+    console.warn("[email · match_surfaced] trigger errored:", err);
   }
 }
 

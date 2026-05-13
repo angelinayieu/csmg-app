@@ -16,12 +16,12 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
+  Focus,
   Loader2,
-  Sparkles,
   X,
 } from "lucide-react";
 import type { ClientNode } from "@/lib/synergy/types";
@@ -49,6 +49,15 @@ export function FocusModeOverlay({
   const [sharpeningAnswers, setSharpeningAnswers] = useState<
     Record<string, string>
   >({});
+
+  // When Focus Mode is scoped to a thread, every pane stage only sees
+  // the in-scope subset. Stage 1's bucketing, Stage 3's sharpening, and
+  // Stage 4's publish payload all operate on this filtered list so the
+  // ritual mirrors the canvas spotlight.
+  const scopedNodes = useMemo(() => {
+    if (!focus.scopedIds) return nodes;
+    return nodes.filter((n) => focus.scopedIds!.has(n.id));
+  }, [nodes, focus.scopedIds]);
 
   if (focus.phase === "closed") return null;
 
@@ -118,7 +127,7 @@ export function FocusModeOverlay({
                 : "transform 400ms ease, opacity 200ms ease",
         }}
       >
-        {/* Subtle inner cyan-tinted top edge for depth */}
+        {/* Subtle inner blue-tinted top edge for depth */}
         <div
           aria-hidden
           className="pointer-events-none absolute inset-x-0 top-0 h-px"
@@ -132,13 +141,16 @@ export function FocusModeOverlay({
           <PublishingSplash />
         ) : (
           <>
-            <Header onClose={focus.close} />
+            <Header
+              onClose={focus.close}
+              scoped={focus.scopedIds !== null}
+            />
             <FocusModeProgress stage={focus.stage} onJump={focus.goToStage} />
             <div className="relative flex-1 overflow-y-auto">
               <StageContent
                 stage={focus.stage}
                 sessionId={sessionId}
-                nodes={nodes}
+                nodes={scopedNodes}
                 hoveredNodeId={focus.hoveredNodeId}
                 onHover={focus.setHoveredNodeId}
                 onSetOverride={focus.setOverride}
@@ -175,32 +187,46 @@ export function FocusModeOverlay({
 
 // ── Header bar ──
 
-function Header({ onClose }: { onClose: () => void }) {
+function Header({
+  onClose,
+  scoped,
+}: {
+  onClose: () => void;
+  scoped: boolean;
+}) {
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-gray-200/60 px-6 pt-5 pb-3">
-      <div className="flex items-center gap-2">
-        <div className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-cyan-500 shadow-sm">
-          <Sparkles className="h-3.5 w-3.5 text-white" />
+    <div className="flex items-center justify-between gap-2 border-b border-gray-200/60 px-6 pt-5 pb-3.5">
+      <div className="flex items-center gap-2.5">
+        {/* Apple-style restrained tile — neutral dark fill, monochrome
+            glyph. The Focus icon (square corner brackets) literally
+            depicts the concept, no metaphor needed. */}
+        <div className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gray-900">
+          <Focus className="h-3.5 w-3.5 text-white" strokeWidth={1.75} />
         </div>
-        <div>
-          <div className="text-[13px] font-semibold text-gray-900">
+        <div className="flex items-baseline gap-2">
+          <div className="text-[14px] font-semibold tracking-tight text-gray-900">
             Focus mode
           </div>
-          <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
-            Convergence ritual
-          </div>
+          {scoped && (
+            <span
+              className="rounded-full bg-gray-100 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-gray-600"
+              title="Scoped to a thread — the rest of the board is dimmed"
+            >
+              Thread
+            </span>
+          )}
         </div>
       </div>
-      <div className="flex items-center gap-1">
-        <span className="rounded-md border border-gray-200 bg-white px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-500">
-          ESC
-        </span>
+      <div className="flex items-center gap-1.5">
+        <kbd className="rounded-md border border-gray-200 bg-white px-1.5 py-0.5 font-mono text-[9px] font-medium uppercase tracking-wider text-gray-500">
+          esc
+        </kbd>
         <button
           onClick={onClose}
           aria-label="Close focus mode"
-          className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-900"
         >
-          <X className="h-4 w-4" />
+          <X className="h-4 w-4" strokeWidth={1.75} />
         </button>
       </div>
     </div>
@@ -355,7 +381,7 @@ function Footer({ focus }: { focus: UseFocusModeReturn }) {
         {!onLastStage && (
           <button
             onClick={focus.next}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
           >
             Continue
             <ArrowRight className="h-3 w-3" />
@@ -373,47 +399,126 @@ function Footer({ focus }: { focus: UseFocusModeReturn }) {
 // emotional payoff the user is supposed to feel.
 
 function PublishingSplash() {
+  // ── Crystallization indicator ──
+  // Replaces the generic sparkle puck with a custom multi-layer indicator
+  // built in pure CSS:
+  //   1. Breathing halo behind         → the "energy" of the operation
+  //   2. Static hairline ring          → the container / structure
+  //   3. Conic-gradient rotating arc   → the AI processing signal
+  //      (same visual language as Apple Intelligence / voice modes)
+  //   4. Pulsing center node           → the strategy crystallizing
+  //   5. Six hexagonal vertex motes    → particles converging into a lattice
+  //
+  // No sparkle, no solid colored disc, no cyan leak — restrained and unique.
+  const vertices = [0, 60, 120, 180, 240, 300];
   return (
     <div
       className="relative flex flex-1 flex-col items-center justify-center px-8"
       style={{
         background:
-          "radial-gradient(circle at 50% 30%, rgba(6,182,212,0.18) 0%, transparent 70%)",
+          "radial-gradient(circle at 50% 35%, rgba(15,23,42,0.04) 0%, transparent 65%)",
       }}
     >
-      <div className="relative">
+      <div className="relative h-20 w-20">
+        {/* Breathing halo */}
         <div
-          className="absolute inset-0 -m-6 rounded-full"
+          className="absolute -inset-4 rounded-full"
           style={{
             background:
-              "radial-gradient(circle, rgba(6,182,212,0.35), transparent 60%)",
-            animation: "focusPublishPulse 2s ease-in-out infinite",
+              "radial-gradient(circle, rgba(15,23,42,0.10), transparent 65%)",
+            animation: "focusPublishHalo 2.4s ease-in-out infinite",
           }}
         />
-        <div className="relative inline-flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-blue-600 to-cyan-500 shadow-lg">
-          <Sparkles className="h-6 w-6 text-white" />
+        {/* Static hairline outer ring */}
+        <div className="absolute inset-0 rounded-full border border-gray-300/70" />
+        {/* Conic gradient rotating arc — the "AI working" signal */}
+        <div
+          className="absolute inset-0 rounded-full"
+          style={{
+            background:
+              "conic-gradient(from 0deg, transparent 0deg, transparent 220deg, rgba(15,23,42,0.85) 345deg, transparent 360deg)",
+            animation: "focusPublishSpin 1.6s linear infinite",
+            WebkitMaskImage:
+              "radial-gradient(circle, transparent 56%, black 58%, black 100%)",
+            maskImage:
+              "radial-gradient(circle, transparent 56%, black 58%, black 100%)",
+          }}
+        />
+        {/* Hexagonal vertex motes — particles forming a lattice */}
+        {vertices.map((angle, i) => {
+          const radius = 26; // px from center (box is 80x80, center is 40,40)
+          const x = 40 + radius * Math.cos((angle * Math.PI) / 180);
+          const y = 40 + radius * Math.sin((angle * Math.PI) / 180);
+          return (
+            <span
+              key={i}
+              className="absolute h-1 w-1 rounded-full bg-gray-900"
+              style={{
+                left: `${x}px`,
+                top: `${y}px`,
+                transform: "translate(-50%, -50%)",
+                animation: "focusPublishVertex 2.4s ease-in-out infinite",
+                animationDelay: `${i * 0.18}s`,
+              }}
+            />
+          );
+        })}
+        {/* Center node — the strategy crystallizing */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div
+            className="h-2.5 w-2.5 rounded-full bg-gray-900"
+            style={{ animation: "focusPublishCore 1.6s ease-in-out infinite" }}
+          />
         </div>
       </div>
-      <h2 className="mt-6 text-center text-[22px] font-semibold leading-snug tracking-tight text-gray-900">
+
+      <h2 className="font-display mt-8 text-center text-[22px] font-semibold leading-snug text-gray-900">
         Crystallizing your strategy…
       </h2>
-      <p className="mt-2 max-w-[320px] text-center text-[12px] leading-relaxed text-gray-600">
-        Reading plan synthesis. Mirroring decided steps. Indexing matchable
-        components into the marketplace.
+      <p className="mt-2 max-w-[320px] text-center text-[12px] leading-relaxed text-gray-500">
+        Reading the plan. Mirroring decisions. Indexing matchable components.
       </p>
-      <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white px-3 py-1.5 text-[11px] font-medium text-blue-700">
-        <Loader2 className="h-3 w-3 animate-spin" />
+      <div className="mt-7 inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-[11px] font-medium text-gray-700">
+        <Loader2
+          className="h-3 w-3 animate-spin text-gray-500"
+          strokeWidth={1.5}
+        />
         Almost there
       </div>
       <style jsx>{`
-        @keyframes focusPublishPulse {
+        @keyframes focusPublishHalo {
           0%, 100% {
-            opacity: 0.4;
+            opacity: 0.7;
             transform: scale(1);
           }
           50% {
-            opacity: 0.8;
-            transform: scale(1.2);
+            opacity: 1;
+            transform: scale(1.15);
+          }
+        }
+        @keyframes focusPublishSpin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+        @keyframes focusPublishCore {
+          0%, 100% {
+            transform: scale(1);
+            opacity: 1;
+          }
+          50% {
+            transform: scale(0.6);
+            opacity: 0.7;
+          }
+        }
+        @keyframes focusPublishVertex {
+          0%, 100% {
+            opacity: 0.25;
+            transform: translate(-50%, -50%) scale(1);
+          }
+          50% {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1.5);
           }
         }
       `}</style>

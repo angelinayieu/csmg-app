@@ -1675,21 +1675,51 @@ export function SynergyWhiteboard({
   // Plan nodes get the persistent cyan glow throughout focus mode.
   // Hovered nodes (from either pane or canvas) jump to full opacity
   // with a brighter cyan pulse ring.
+  //
+  // When Focus Mode is scoped to a thread (focus.scopedIds is non-null),
+  // nodes outside the thread get a stronger blur+dim treatment so the
+  // scoped thread reads as the active spotlight. Inside the thread,
+  // we skip the converged-set dimming entirely — the whole thread
+  // stays sharp until the user starts excluding individual nodes.
   const focusVisualFor = useCallback(
-    (n: ClientNode): { opacity: number; ring: string | null } => {
-      if (!focusActive) return { opacity: 1, ring: null };
+    (
+      n: ClientNode,
+    ): { opacity: number; ring: string | null; blurPx: number } => {
+      if (!focusActive) return { opacity: 1, ring: null, blurPx: 0 };
+
       const isPlan = focus.planIds.has(n.id);
       const isHovered = focus.hoveredNodeId === n.id;
       const isExcluded = focus.excludedIds.has(n.id);
       const isKept = focus.keptIds.has(n.id);
+      const scoped = focus.scopedIds;
+      const inScope = !scoped || scoped.has(n.id);
 
-      if (isHovered) return { opacity: 1, ring: "hover" };
-      if (isPlan) return { opacity: 0.85, ring: "plan" };
-      if (isExcluded) return { opacity: 0.12, ring: null };
-      if (isKept) return { opacity: 0.55, ring: null };
-      return { opacity: 0.25, ring: null };
+      // Out-of-scope thread spotlight treatment — wins over everything
+      // else; user-driven kept/excluded only applies within the scope.
+      if (!inScope) {
+        return { opacity: 0.12, ring: null, blurPx: 2.5 };
+      }
+
+      if (isHovered) return { opacity: 1, ring: "hover", blurPx: 0 };
+      if (isPlan) return { opacity: 0.95, ring: "plan", blurPx: 0 };
+      if (isExcluded) return { opacity: 0.18, ring: null, blurPx: 1 };
+      if (scoped) {
+        // In-scope nodes during a thread-spotlight stay sharp; the
+        // converged-set distinction is rendered through the pane,
+        // not via canvas dimming.
+        return { opacity: 1, ring: null, blurPx: 0 };
+      }
+      if (isKept) return { opacity: 0.6, ring: null, blurPx: 0 };
+      return { opacity: 0.28, ring: null, blurPx: 0 };
     },
-    [focusActive, focus.planIds, focus.hoveredNodeId, focus.excludedIds, focus.keptIds],
+    [
+      focusActive,
+      focus.planIds,
+      focus.hoveredNodeId,
+      focus.excludedIds,
+      focus.keptIds,
+      focus.scopedIds,
+    ],
   );
 
   return (
@@ -1744,7 +1774,7 @@ export function SynergyWhiteboard({
             <Target className="h-3 w-3" /> Process
           </Link>
           <button
-            onClick={focus.open}
+            onClick={() => focus.open()}
             title="Enter Focus Mode — converge + publish"
             className="inline-flex items-center gap-1.5 rounded-full bg-blue-600 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-[0_4px_20px_-4px_rgba(6,182,212,0.5)] transition hover:scale-[1.03]"
           >
@@ -1820,18 +1850,27 @@ export function SynergyWhiteboard({
                   strokeDasharray="6 6"
                 />
               ))}
-              {edges.map((e) => (
-                <line
-                  key={e.id}
-                  x1={e.x1}
-                  y1={e.y1}
-                  x2={e.x2}
-                  y2={e.y2}
-                  stroke={EDGE_COLOR_BY_KIND[e.kind]}
-                  strokeWidth={1.5}
-                  strokeDasharray="4 4"
-                />
-              ))}
+              {edges.map((e) => {
+                // Edge is in-scope if its child node is in-scope —
+                // since scope includes the full ancestor chain, the
+                // parent is guaranteed in-scope whenever the child is.
+                const inScope =
+                  !focus.scopedIds || focus.scopedIds.has(e.id);
+                return (
+                  <line
+                    key={e.id}
+                    x1={e.x1}
+                    y1={e.y1}
+                    x2={e.x2}
+                    y2={e.y2}
+                    stroke={EDGE_COLOR_BY_KIND[e.kind]}
+                    strokeWidth={1.5}
+                    strokeDasharray="4 4"
+                    opacity={focusActive && !inScope ? 0.12 : 1}
+                    style={{ transition: "opacity 350ms ease" }}
+                  />
+                );
+              })}
               {/* Lateral edges — curved amber paths to differentiate
                   from straight dashed tree edges. Solid stroke + arc
                   bow = "these are related but not nested." */}
@@ -1914,22 +1953,44 @@ export function SynergyWhiteboard({
                 aiBusy && aiBusy.endsWith(`:${n.id}`)
                   ? aiBusy.split(":")[0]
                   : null;
+              const visual = focusVisualFor(n);
               return (
-                <SynergyNode
+                <div
                   key={n.id}
-                  node={n}
-                  selected={n.id === selectedId}
-                  showActions={true}
-                  busyAction={busyAction}
-                  canRank={nodes.some(
-                    (c) => c.parent === n.id && c.kind === "variation",
-                  )}
-                  canTidy={nodes.some((c) => c.parent === n.id)}
-                  onClick={(e) => onNodeClick(e, n.id)}
-                  onAction={handleNodeAction}
-                  onDescribe={runDescribeOnNode}
-                  onDragStart={handleNodeDragStart}
-                />
+                  style={{
+                    opacity: visual.opacity,
+                    filter:
+                      visual.blurPx > 0
+                        ? `blur(${visual.blurPx}px)`
+                        : undefined,
+                    transition: "opacity 350ms ease, filter 350ms ease",
+                    // Out-of-scope nodes shouldn't accept clicks during
+                    // thread-spotlight — the user is concentrating on
+                    // the highlighted subtree.
+                    pointerEvents:
+                      focusActive && visual.opacity < 0.25
+                        ? "none"
+                        : undefined,
+                  }}
+                >
+                  <SynergyNode
+                    node={n}
+                    selected={n.id === selectedId}
+                    showActions={true}
+                    busyAction={busyAction}
+                    canRank={nodes.some(
+                      (c) => c.parent === n.id && c.kind === "variation",
+                    )}
+                    canTidy={nodes.some((c) => c.parent === n.id)}
+                    onClick={(e) => onNodeClick(e, n.id)}
+                    onAction={handleNodeAction}
+                    onDescribe={runDescribeOnNode}
+                    onFocusThread={(id) =>
+                      focus.open({ scopeNodeId: id })
+                    }
+                    onDragStart={handleNodeDragStart}
+                  />
+                </div>
               );
             })}
           </div>

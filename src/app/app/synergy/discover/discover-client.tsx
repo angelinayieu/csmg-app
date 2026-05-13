@@ -147,7 +147,7 @@ export function SynergyDiscoverClient({
         </p>
         <a
           href="/app/synergy"
-          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
         >
           <Sparkles className="h-4 w-4" />
           Go to your brainstorms
@@ -198,7 +198,7 @@ export function SynergyDiscoverClient({
         </div>
         <div className="flex items-center gap-2">
           {exploratoryMode && (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-100 to-orange-100 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-800 ring-1 ring-amber-200">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.15em] text-amber-700 ring-1 ring-amber-200">
               <Sparkles className="h-3 w-3" />
               exploratory · below 60 floor
               <button
@@ -212,10 +212,10 @@ export function SynergyDiscoverClient({
           )}
           {recentArrival && (
             <span
-              className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-cyan-100 to-blue-100 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-blue-700 ring-1 ring-cyan-200"
+              className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-blue-700 ring-1 ring-blue-200"
               style={{ animation: "synergyMatchArrivalPulse 4s ease-in-out" }}
             >
-              <Sparkles className="h-3 w-3 animate-pulse" />
+              <Sparkles className="h-3 w-3" strokeWidth={1.5} />
               new match · refresh to see
             </span>
           )}
@@ -382,7 +382,7 @@ function MatchCard({
             {flowLabel}
           </span>
           {highFit && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-blue-100 to-cyan-100 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-blue-700">
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-blue-700">
               <Sparkles className="h-3 w-3" /> high fit
             </span>
           )}
@@ -474,9 +474,9 @@ function MatchCardCTA({
     return (
       <Link
         href={`/app/synergy/room/by-request/${r.id}`}
-        className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+        className="inline-flex items-center gap-1.5 rounded-xl bg-gray-900 px-3.5 py-1.5 text-[12px] font-semibold text-white transition hover:bg-gray-800"
       >
-        <Sparkles className="h-3 w-3" /> Open shared room
+        Open shared room
         <ArrowRight className="h-3 w-3" />
       </Link>
     );
@@ -501,9 +501,9 @@ function MatchCardCTA({
     return (
       <Link
         href={`/app/synergy/requests?focus=${r.id}`}
-        className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-rose-500 to-orange-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+        className="inline-flex items-center gap-1.5 rounded-xl bg-gray-900 px-3.5 py-1.5 text-[12px] font-semibold text-white transition hover:bg-gray-800"
       >
-        <Sparkles className="h-3 w-3" /> Respond in inbox
+        Respond in inbox
         <ArrowRight className="h-3 w-3" />
       </Link>
     );
@@ -531,7 +531,7 @@ function MatchCardCTA({
   return (
     <button
       onClick={onRequest}
-      className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+      className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
     >
       Request connection
       <ArrowRight className="h-3 w-3" />
@@ -590,7 +590,7 @@ function Side({
 function FlowArrow({ direction }: { direction: "left" | "right" | "both" }) {
   return (
     <div className="hidden items-center justify-center md:flex">
-      <div className="relative inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-cyan-100">
+      <div className="relative inline-flex h-8 w-8 items-center justify-center rounded-full bg-blue-50">
         {direction === "right" ? (
           <ArrowRight className="h-4 w-4 text-blue-600" />
         ) : direction === "left" ? (

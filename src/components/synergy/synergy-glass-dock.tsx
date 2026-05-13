@@ -22,13 +22,14 @@ import {
   FileText,
   Home,
   Layers,
+  LayoutGrid,
 } from "lucide-react";
 import { getNotificationCount } from "@/lib/synergy/match-client";
 
 interface DockItem {
   href: string;
   label: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   match: (pathname: string) => boolean;
   showBadge?: boolean;
 }
@@ -47,6 +48,7 @@ const ITEMS: DockItem[] = [
     match: (p) =>
       p.startsWith("/app/synergy") &&
       !p.startsWith("/app/synergy/discover") &&
+      !p.startsWith("/app/synergy/rooms") &&
       !p.startsWith("/app/synergy/requests"),
   },
   {
@@ -60,6 +62,12 @@ const ITEMS: DockItem[] = [
     label: "Discover",
     icon: Compass,
     match: (p) => p.startsWith("/app/synergy/discover"),
+  },
+  {
+    href: "/app/synergy/rooms",
+    label: "Rooms",
+    icon: LayoutGrid,
+    match: (p) => p.startsWith("/app/synergy/rooms"),
   },
   {
     href: "/app/synergy/requests",
@@ -102,11 +110,14 @@ export function SynergyGlassDock() {
           background: "rgba(255, 255, 255, 0.65)",
           backdropFilter: "blur(24px) saturate(180%)",
           WebkitBackdropFilter: "blur(24px) saturate(180%)",
+          // Apple-style multi-layer ambient shadow. Inner-top highlight
+          // gives the dock a glass top edge; the soft outer shadows
+          // float it. No colored glow — the dock stays neutral so the
+          // page content's accent color reads as the brand.
           boxShadow: [
             "inset 0 1px 0 rgba(255, 255, 255, 0.7)",
             "0 1px 2px rgba(15, 23, 42, 0.06)",
             "0 12px 32px -8px rgba(15, 23, 42, 0.12)",
-            "0 0 40px -10px rgba(6, 182, 212, 0.25)",
           ].join(", "),
           border: "1px solid rgba(255, 255, 255, 0.5)",
         }}
@@ -123,9 +134,7 @@ export function SynergyGlassDock() {
               aria-current={active ? "page" : undefined}
               className="group relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200"
               style={{
-                background: active
-                  ? "linear-gradient(135deg, rgba(6, 182, 212, 0.15), rgba(99, 102, 241, 0.12))"
-                  : "transparent",
+                background: active ? "rgba(15, 23, 42, 0.06)" : "transparent",
                 transform: active ? "scale(1)" : undefined,
               }}
             >
@@ -136,20 +145,23 @@ export function SynergyGlassDock() {
                 <Icon
                   className={[
                     "h-4 w-4 transition-all",
-                    active ? "text-blue-700" : "text-gray-500 group-hover:text-gray-900",
+                    active ? "text-gray-900" : "text-gray-500 group-hover:text-gray-900",
                   ].join(" ")}
+                  strokeWidth={1.5}
                 />
               </span>
               {active && (
                 <span
                   aria-hidden
-                  className="absolute -bottom-1 left-1/2 inline-block h-1 w-1 -translate-x-1/2 rounded-full bg-gradient-to-br from-cyan-500 to-blue-500"
+                  className="absolute -bottom-1 left-1/2 inline-block h-1 w-1 -translate-x-1/2 rounded-full bg-gray-900"
                 />
               )}
               {item.showBadge && inboxCount > 0 && (
                 <span
-                  className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-gradient-to-br from-rose-500 to-rose-600 px-1 font-mono text-[9px] font-semibold text-white shadow-sm"
+                  className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 font-mono text-[9px] font-semibold text-white"
                   style={{
+                    boxShadow:
+                      "0 0 0 1.5px rgba(255,255,255,0.92), 0 1px 2px rgba(0,0,0,0.08)",
                     animation: "synergyDockBellPulse 1.8s ease-in-out infinite",
                   }}
                 >

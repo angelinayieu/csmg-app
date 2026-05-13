@@ -88,7 +88,7 @@ export function SynergyObjectiveCard({
         <button
           onClick={onDetect}
           disabled={detecting}
-          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
+          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
         >
           {detecting ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -160,7 +160,7 @@ export function SynergyObjectiveCard({
           <button
             onClick={save}
             disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-md bg-gradient-to-br from-blue-600 to-cyan-500 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition hover:scale-[1.02] disabled:opacity-60"
           >
             {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
             Save objective

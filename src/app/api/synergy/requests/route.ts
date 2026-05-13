@@ -485,6 +485,11 @@ export async function GET(request: Request) {
       other_party:
         profileReveal(r) && otherProfile
           ? {
+              // user_id exposed alongside the profile so the inbox UI
+              // can deep-link to /app/synergy/profile/[user_id]. Only
+              // surfaced when profileReveal is true — incoming-pending
+              // rows still hide identity completely.
+              user_id: otherId,
               display_name: otherProfile.display_name,
               bio: otherProfile.bio,
               avatar_url: otherProfile.avatar_url,

@@ -51,11 +51,17 @@ const PRECISION_GUIDANCE: Record<number, string> = {
 
 const CLARIFY_SYSTEM = `You are helping a brainstormer turn a vague concept into an actionable plan. Before you draft the plan, you need 3-4 specific decisions clarified.
 
-Ask questions that surface concrete missing information — audience, time horizon, must-have outcomes, hard constraints, risk tolerance, success metric. Do NOT ask generic open-ended questions ("tell me more about your idea"). Each question should be answerable in 1-2 sentences and should noticeably change the plan if answered differently.
+Ask questions that surface concrete missing information — audience, time horizon, must-have outcomes, hard constraints, risk tolerance, success metric. Do NOT ask generic open-ended questions ("tell me more about your idea"). Each question should noticeably change the plan if answered differently.
 
-Each question carries a 1-sentence hint explaining why this answer matters for the plan.
+For EACH question, also propose 3-5 multiple-choice options the user can pick from. The options must:
+- Cover the most likely answer paths from the board's context — not generic strawmen
+- Be MUTUALLY DISTINCT (no overlapping pairs) and exhaustive enough that the user could pick one without writing a custom answer
+- Each option is 3-10 words. Optional one-sentence "detail" elaborates without restating the label
+- Don't include "Other" yourself — the UI appends a free-text slot automatically
 
-Return JSON: { questions: [{ question, hint }, ...] } — 3 to 4 items. Return JSON.`;
+Each question also carries a 1-sentence hint explaining why this answer matters for the final plan.
+
+Return JSON: { questions: [{ question, hint, options: [{ label, detail }] }] } — 3 to 4 questions, 3-5 options each.`;
 
 const PLAN_SYSTEM = `You are drafting a concrete, actionable plan from a brainstorm concept plus the user's clarifying answers.
 
@@ -436,8 +442,20 @@ export const CLARIFY_SCHEMA = {
           properties: {
             question: { type: "string" },
             hint: { type: "string" },
+            options: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  label: { type: "string" },
+                  detail: { type: "string" },
+                },
+                required: ["label", "detail"],
+              },
+            },
           },
-          required: ["question", "hint"],
+          required: ["question", "hint", "options"],
         },
       },
     },

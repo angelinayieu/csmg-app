@@ -174,7 +174,7 @@ export async function SynergyDashboard() {
                   >
                     <DashboardGlassCard
                       icon={Layers}
-                      iconTone="from-blue-500 to-cyan-500"
+                      iconTone="from-blue-500 to-blue-500"
                       title={s.title || "Untitled"}
                       meta={`${s.node_count} ${s.node_count === 1 ? "node" : "nodes"} · ${formatRelative(s.updated_at)}`}
                     />
@@ -268,8 +268,8 @@ export async function SynergyDashboard() {
                     "inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 8px 24px -8px rgba(15, 23, 42, 0.06)",
                 }}
               >
-                <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-purple-500 shadow-sm">
-                  <FileText className="h-5 w-5 text-white" />
+                <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gray-900">
+                  <FileText className="h-5 w-5 text-white" strokeWidth={1.5} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-[14px] font-semibold text-gray-900">
@@ -395,7 +395,7 @@ function DashboardGlassCard({
       }}
     >
       <div
-        className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${iconTone} shadow-sm`}
+        className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${iconTone}`}
       >
         <Icon className="h-4 w-4 text-white" />
       </div>
@@ -408,7 +408,10 @@ function DashboardGlassCard({
         </div>
       </div>
       {badge && (
-        <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-gradient-to-br from-rose-500 to-rose-600 px-1 font-mono text-[10px] font-semibold text-white shadow-sm">
+        <span
+          className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-500 px-1 font-mono text-[10px] font-semibold text-white"
+          style={{ boxShadow: "0 0 0 1.5px rgba(255,255,255,0.92), 0 1px 2px rgba(0,0,0,0.08)" }}
+        >
           {badge}
         </span>
       )}

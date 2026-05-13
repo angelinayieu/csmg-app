@@ -121,7 +121,7 @@ function Card({
       <div className="mt-6 flex flex-wrap items-center gap-2">
         <Link
           href="/app/synergy/profile#email"
-          className="inline-flex items-center gap-1.5 rounded-md bg-gradient-to-br from-blue-600 to-cyan-500 px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
+          className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:scale-[1.02]"
         >
           Manage email preferences
         </Link>

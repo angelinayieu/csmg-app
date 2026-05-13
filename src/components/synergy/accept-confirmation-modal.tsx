@@ -141,7 +141,7 @@ export function AcceptConfirmationModal({
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-200/60 px-6 pt-5 pb-3">
           <div className="flex items-center gap-2">
-            <div className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-cyan-500 shadow-sm">
+            <div className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 shadow-sm">
               <Eye className="h-3.5 w-3.5 text-white" />
             </div>
             <div>
@@ -184,7 +184,7 @@ export function AcceptConfirmationModal({
                   About to connect with
                 </div>
                 <div className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50/60 p-3">
-                  <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-200 to-cyan-200 text-blue-800">
+                  <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-800">
                     <UserCircle2 className="h-6 w-6" />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -205,8 +205,8 @@ export function AcceptConfirmationModal({
                 <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
                   They&apos;ll see
                 </div>
-                <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
-                  <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-200 to-cyan-200 text-emerald-800">
+                <div className="flex items-start gap-3 rounded-xl bg-white p-3" style={{ boxShadow: "0 0 0 1px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)" }}>
+                  <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-700">
                     <UserCircle2 className="h-6 w-6" />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -296,7 +296,7 @@ export function AcceptConfirmationModal({
           <button
             onClick={confirm}
             disabled={confirming || loading || !!error}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 px-4 py-2 text-[12px] font-semibold text-white shadow-[0_4px_20px_-4px_rgba(6,182,212,0.5)] transition hover:scale-[1.02] disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-[12px] font-semibold text-white shadow-[0_4px_20px_-4px_rgba(6,182,212,0.5)] transition hover:scale-[1.02] disabled:opacity-60"
           >
             {confirming ? (
               <Loader2 className="h-3 w-3 animate-spin" />

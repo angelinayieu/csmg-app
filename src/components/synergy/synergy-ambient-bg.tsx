@@ -64,7 +64,7 @@ export function SynergyAmbientBg() {
         {Array.from({ length: 12 }).map((_, i) => (
           <span
             key={i}
-            className="absolute inline-block rounded-full bg-cyan-400/30"
+            className="absolute inline-block rounded-full bg-blue-400/30"
             style={{
               left: `${(i * 73) % 100}%`,
               top: `${(i * 47) % 100}%`,
