@@ -7,27 +7,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
-import dynamic from "next/dynamic";
-import { Loader2 } from "lucide-react";
 import type { SynergyRoomBundle } from "@/lib/synergy/room-client";
-
-const SynergyRoomCanvas = dynamic(
-  () =>
-    import("@/components/synergy/synergy-room-canvas").then(
-      (m) => m.SynergyRoomCanvas,
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="fixed inset-0 z-40 flex items-center justify-center bg-gray-50">
-        <div className="flex items-center gap-2 text-sm text-gray-500">
-          <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-          Loading shared room…
-        </div>
-      </div>
-    ),
-  },
-);
+// Dynamic-import-with-ssr:false lives in the client shell (Next.js 16
+// disallows it in server components). See synergy-room-page-client.tsx.
+import { SynergyRoomPageClient } from "./synergy-room-page-client";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -116,5 +99,5 @@ export default async function SynergyRoomPage({ params }: PageProps) {
     nodes: (nodesRes.data ?? []) as SynergyRoomBundle["nodes"],
   };
 
-  return <SynergyRoomCanvas bundle={bundle} />;
+  return <SynergyRoomPageClient bundle={bundle} />;
 }
