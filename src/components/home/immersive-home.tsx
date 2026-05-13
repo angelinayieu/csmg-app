@@ -114,7 +114,7 @@ const LANDING_ROTATING_WORDS = [
 ] as const;
 
 export type ImmersiveMode = "canvas" | "gradient";
-type PromptMode = "ask" | "create";
+type PromptMode = "ask" | "create" | "brainstorm";
 type ReasoningDepth = "quick" | "standard" | "deep";
 
 const REASONING_META: Record<
@@ -338,7 +338,8 @@ export function ImmersiveHome({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = window.sessionStorage.getItem("immersiveHome.mode");
-    if (saved === "ask" || saved === "create") setPromptMode(saved);
+    if (saved === "ask" || saved === "create" || saved === "brainstorm")
+      setPromptMode(saved);
   }, []);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -528,18 +529,35 @@ export function ImmersiveHome({
     }
   }, [prompt, askSubmitting, router, demoMode]);
 
+  // Brainstorm mode: hand the prompt to /app/synergy/new as a seed.
+  // The server component there creates a brainstorm_sessions row +
+  // core node, then redirects to /app/synergy/[id]. Demo mode stashes
+  // the intent in sessionStorage so post-signup picks it up.
+  const submitBrainstorm = useCallback(() => {
+    const seed = prompt.trim();
+    if (!seed) return;
+    if (demoMode) {
+      stashPendingIntake({ kind: "ask", prompt: seed });
+      window.location.hash = "signup";
+      return;
+    }
+    router.push(`/app/synergy/new?seed=${encodeURIComponent(seed)}`);
+  }, [prompt, router, demoMode]);
+
   const handlePromptKey = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         if (promptMode === "ask") {
           void submitAsk();
+        } else if (promptMode === "brainstorm") {
+          submitBrainstorm();
         } else {
           void submitCreate();
         }
       }
     },
-    [promptMode, submitCreate, submitAsk],
+    [promptMode, submitCreate, submitAsk, submitBrainstorm],
   );
 
   const createFromTemplate = useCallback(
@@ -705,6 +723,13 @@ export function ImmersiveHome({
                 label="Ask"
                 sublabel="across whiteboards"
               />
+              <ModeTab
+                active={promptMode === "brainstorm"}
+                onClick={() => setPromptMode("brainstorm")}
+                icon={<Mic className="h-3.5 w-3.5" />}
+                label="Brainstorm"
+                sublabel="voice whiteboard"
+              />
             </div>
           </div>
 
@@ -742,7 +767,9 @@ export function ImmersiveHome({
                 placeholder={
                   promptMode === "ask"
                     ? "Ask anything that touches your whiteboards — I'll stitch an answer from them."
-                    : "Ask anything, create anything"
+                    : promptMode === "brainstorm"
+                      ? "Drop an idea — we'll spin up a voice-augmented brainstorm room around it."
+                      : "Ask anything, create anything"
                 }
                 className={cn(
                   "w-full resize-none bg-transparent px-5 py-4 text-[15px] font-light leading-relaxed text-[color:var(--home-text)] placeholder:text-[color:var(--home-text-faint)]",
@@ -1102,6 +1129,37 @@ export function ImmersiveHome({
                     ))}
                   </div>
                 )}
+              </div>
+            ) : promptMode === "brainstorm" ? (
+              <div
+                className="flex items-center justify-between px-4 py-2.5"
+                style={{ borderTop: "1px solid var(--glass-hairline)" }}
+              >
+                <div className="flex items-center gap-3 text-[10.5px] font-medium text-[color:var(--home-text-faint)]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Mic className="h-3 w-3" />
+                    Opens a voice-augmented brainstorm room — speak, sketch, branch.
+                  </span>
+                </div>
+                <button
+                  onClick={() => submitBrainstorm()}
+                  disabled={!prompt.trim()}
+                  className="flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold transition-all"
+                  style={
+                    prompt.trim()
+                      ? {
+                          background: "var(--home-cta-bg)",
+                          color: "var(--home-cta-fg)",
+                        }
+                      : {
+                          background: "var(--home-chrome-fill)",
+                          color: "var(--home-text-faint)",
+                        }
+                  }
+                >
+                  <span>Open room</span>
+                  <ArrowRight className="h-3 w-3" />
+                </button>
               </div>
             ) : (
               <div
