@@ -143,6 +143,10 @@ export function SynergyWhiteboard({
   const [research, setResearch] = useState<ResearchDirection[]>([]);
   const [decomp, setDecomp] = useState<DecomposeResult | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Inline-edit state: which node is the user currently text-editing?
+  // Set immediately on sticky-tool create (replaces the old prompt())
+  // and cleared on commit/cancel.
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [precision, setPrecision] = useState(3);
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -265,6 +269,9 @@ export function SynergyWhiteboard({
   }, [loaded, focusNodeId]);
 
   // Auto-save: 750ms debounce after the most recent node/stroke mutation.
+  // Empty-label cards (transient inline-edit drafts) are excluded so a
+  // user who clicks-but-doesn't-type doesn't leave an empty card behind
+  // if they reload mid-edit.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -272,7 +279,13 @@ export function SynergyWhiteboard({
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       setSaveStatus("saving");
-      Promise.all([saveNodes(sessionId, nodes), saveStrokes(sessionId, strokes)])
+      const persistable = nodes.filter(
+        (n) => n.kind === "core" || n.label.trim().length > 0,
+      );
+      Promise.all([
+        saveNodes(sessionId, persistable),
+        saveStrokes(sessionId, strokes),
+      ])
         .then(() => {
           setSaveStatus("saved");
           if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
@@ -440,30 +453,38 @@ export function SynergyWhiteboard({
       (e.target as Element).setPointerCapture?.(e.pointerId);
       return;
     }
-    if (e.target === canvasRef.current || (e.target as HTMLElement).tagName === "svg") {
+    const onCanvasBackground =
+      e.target === canvasRef.current ||
+      (e.target as HTMLElement).tagName === "svg";
+    if (onCanvasBackground) {
       setSelectedId(null);
     }
     if (tool === "pen") {
       const w = toWorld(e.clientX, e.clientY);
       drawingRef.current = { id: uid(), points: [[w.x, w.y]], color: "#3b82f6" };
       setStrokes((p) => [...p, drawingRef.current!]);
-    } else if (tool === "note") {
+    } else if (tool === "note" && onCanvasBackground) {
+      // ── Inline note creation ──
+      // Drop an empty-label card at the cursor and immediately enter
+      // edit mode. The autofocused textarea inside <SynergyNode/>
+      // replaces the old window.prompt(). Empty commit / Escape
+      // removes the node (see commitInlineNote / cancelInlineNote).
       const w = toWorld(e.clientX, e.clientY);
-      const label = window.prompt("Note text:") ?? "";
-      if (label.trim()) {
-        setNodes((p) =>
-          withRepel(p, [
-            ...p,
-            {
-              id: uid(),
-              x: w.x,
-              y: w.y,
-              label: label.trim(),
-              kind: "branch",
-            },
-          ]),
-        );
-      }
+      const id = uid();
+      setNodes((p) =>
+        withRepel(p, [
+          ...p,
+          {
+            id,
+            x: w.x,
+            y: w.y,
+            label: "",
+            kind: "branch",
+          },
+        ]),
+      );
+      setSelectedId(id);
+      setEditingNodeId(id);
     }
   };
 
@@ -591,6 +612,44 @@ export function SynergyWhiteboard({
     }
     setSelectedId(id);
   };
+
+  // ── Inline-edit commit / cancel ──
+  // Commit: empty input removes the card (covers Esc-on-fresh-create
+  // and blur-without-typing). Non-empty trims and writes back. Cancel:
+  // always remove the card if it was a fresh empty-label create (the
+  // user never gave it content); otherwise just exit edit mode.
+  const commitInlineNote = useCallback(
+    (label: string, nodeId: string) => {
+      const trimmed = label.trim();
+      setEditingNodeId((cur) => (cur === nodeId ? null : cur));
+      if (!trimmed) {
+        setNodes((prev) => prev.filter((n) => n.id !== nodeId));
+        if (selectedId === nodeId) setSelectedId(null);
+        return;
+      }
+      setNodes((prev) =>
+        prev.map((n) => (n.id === nodeId ? { ...n, label: trimmed } : n)),
+      );
+    },
+    [selectedId],
+  );
+
+  const cancelInlineNote = useCallback(
+    (nodeId: string) => {
+      setEditingNodeId((cur) => (cur === nodeId ? null : cur));
+      setNodes((prev) => {
+        const target = prev.find((n) => n.id === nodeId);
+        // Fresh create with no content → drop the card. Existing card
+        // with content → leave it (forthcoming re-edit affordance).
+        if (target && !target.label.trim()) {
+          return prev.filter((n) => n.id !== nodeId);
+        }
+        return prev;
+      });
+      if (selectedId === nodeId) setSelectedId(null);
+    },
+    [selectedId],
+  );
 
   // Begin dragging a node. Eraser tool short-circuits (no drag — the
   // pointerdown there means "delete on click"). Otherwise we install
@@ -1746,10 +1805,13 @@ export function SynergyWhiteboard({
                   canRank={nodes.some(
                     (c) => c.parent === n.id && c.kind === "variation",
                   )}
+                  editing={editingNodeId === n.id}
                   onClick={(e) => onNodeClick(e, n.id)}
                   onAction={handleNodeAction}
                   onDescribe={runDescribeOnNode}
                   onDragStart={handleNodeDragStart}
+                  onCommitEdit={commitInlineNote}
+                  onCancelEdit={cancelInlineNote}
                 />
               );
             })}

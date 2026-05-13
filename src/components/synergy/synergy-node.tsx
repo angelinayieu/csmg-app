@@ -131,11 +131,20 @@ interface SynergyNodeProps {
   busyAction: string | null;
   // True when there are ≥2 variation children to rank.
   canRank: boolean;
+  // Inline-edit mode: when true, replaces the static label with an
+  // autofocused textarea. Used for both fresh-note creation (replacing
+  // the old window.prompt) and re-editing an existing label.
+  editing?: boolean;
   onClick: (e: React.MouseEvent) => void;
   onAction: (action: SynergyNodeAction, nodeId: string) => void;
   // Fired when the user submits the popover's "Or describe…" field.
   onDescribe: (instruction: string, nodeId: string) => void;
   onDragStart: (e: React.PointerEvent, nodeId: string) => void;
+  // Inline-edit callbacks. Commit fires on blur or ⌘↵; cancel fires on
+  // Escape. The parent decides what to do with empty values (typically
+  // remove the node if it was just created).
+  onCommitEdit?: (label: string, nodeId: string) => void;
+  onCancelEdit?: (nodeId: string) => void;
 }
 
 // Forwarded from the popover so the parent's dispatcher signature
@@ -149,10 +158,13 @@ export function SynergyNode({
   showActions,
   busyAction,
   canRank,
+  editing = false,
   onClick,
   onAction,
   onDescribe,
   onDragStart,
+  onCommitEdit,
+  onCancelEdit,
 }: SynergyNodeProps) {
   // Hover-with-delay: 180ms before showing the menu prevents accidental
   // opens on quick mouse-bys. Pointer-leave clears the pending timer
@@ -180,7 +192,10 @@ export function SynergyNode({
   if (node.kind === "user") return null;
   const s = KIND_STYLES[node.kind];
   const isCoreOrSelected = node.kind === "core" || selected;
-  const menuOpen = (hovered || selected) && showActions && node.kind !== "ranking";
+  // Suppress the action popover during inline-edit so the textarea
+  // isn't fighting the menu for clicks/focus.
+  const menuOpen =
+    !editing && (hovered || selected) && showActions && node.kind !== "ranking";
 
   // Structured plan rendering (1.6d). Plan cards are taller + wider
   // to fit the formatted sections cleanly.
@@ -197,38 +212,53 @@ export function SynergyNode({
       onPointerLeave={endHover}
     >
       <div
-        onPointerDown={(e) => onDragStart(e, node.id)}
+        onPointerDown={editing ? undefined : (e) => onDragStart(e, node.id)}
         onClick={onClick}
-        title={node.meta}
+        title={editing ? undefined : node.meta}
         className={[
-          "select-none rounded-2xl px-3 py-2 text-xs shadow-sm transition cursor-grab active:cursor-grabbing",
+          "select-none rounded-2xl px-3 py-2 text-xs shadow-sm transition",
+          editing ? "cursor-text" : "cursor-grab active:cursor-grabbing",
           s.bg,
           s.text,
-          isCoreOrSelected ? "ring-2" : "ring-1",
-          selected ? "ring-blue-500 shadow-md" : s.ring,
+          isCoreOrSelected || editing ? "ring-2" : "ring-1",
+          editing
+            ? "ring-blue-500 shadow-md"
+            : selected
+              ? "ring-blue-500 shadow-md"
+              : s.ring,
         ].join(" ")}
         style={{
           minWidth: 180,
           maxWidth: cardMaxWidth,
           maxHeight: cardMaxHeight,
-          overflowY: "auto",
+          overflowY: editing ? "visible" : "auto",
         }}
       >
         <div className="sticky top-0 mb-0.5 flex items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-wider opacity-60">
           <span>{s.label}</span>
         </div>
-        <div className="font-medium leading-snug whitespace-pre-wrap break-words">
-          {node.label}
-        </div>
-        {isStructuredPlan && planMeta ? (
-          <PlanSections plan={planMeta} />
+        {editing && onCommitEdit && onCancelEdit ? (
+          <SynergyNodeInlineEdit
+            initial={node.label}
+            onCommit={(value) => onCommitEdit(value, node.id)}
+            onCancel={() => onCancelEdit(node.id)}
+          />
         ) : (
-          (node.kind === "ranking" || node.kind === "plan") &&
-          node.meta && (
-            <pre className="mt-2 whitespace-pre-wrap font-sans text-[10px] leading-snug opacity-80 break-words">
-              {node.meta}
-            </pre>
-          )
+          <>
+            <div className="font-medium leading-snug whitespace-pre-wrap break-words">
+              {node.label}
+            </div>
+            {isStructuredPlan && planMeta ? (
+              <PlanSections plan={planMeta} />
+            ) : (
+              (node.kind === "ranking" || node.kind === "plan") &&
+              node.meta && (
+                <pre className="mt-2 whitespace-pre-wrap font-sans text-[10px] leading-snug opacity-80 break-words">
+                  {node.meta}
+                </pre>
+              )
+            )}
+          </>
         )}
       </div>
 
@@ -253,6 +283,57 @@ export function SynergyNode({
 // re-importing. (The tile-style action chips formerly defined here
 // now live in SynergyNodeActionPopover.)
 export { Sparkles as MakeActionableIcon };
+
+// ── Inline-edit field for a synergy card ──
+// Autofocuses on mount, autosizes vertically, commits on blur or
+// ⌘↵/Ctrl↵, cancels on Escape. Stops pointer/click propagation so
+// dragging or selection-clearing on the underlying card doesn't fire.
+function SynergyNodeInlineEdit({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.style.height = "auto";
+    ref.current.style.height = `${ref.current.scrollHeight}px`;
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onBlur={() => onCommit(value)}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+          e.preventDefault();
+          onCommit(value);
+        }
+      }}
+      rows={1}
+      placeholder="Type a note…  ⌘↵ to save · Esc to cancel"
+      className="w-full resize-none rounded border border-blue-300 bg-white/90 px-1.5 py-1 font-sans text-[12px] font-medium leading-snug text-gray-900 outline-none ring-2 ring-blue-100 placeholder:text-gray-400"
+    />
+  );
+}
 
 // ── PlanSections: formatted render for a structured plan ──
 //

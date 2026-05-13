@@ -178,11 +178,13 @@ export function SynergyRoomCanvas({ bundle }: Props) {
   }, [bundle.my_component, bundle.their_component]);
 
   // ── Tool: sticky-create ──
+  // Drops a local-only tmp: node with an empty label at the cursor and
+  // enters inline-edit mode. The server insert is deferred until the
+  // user actually commits text (see commitNodeLabel) — this prevents
+  // empty placeholder rows from being persisted (and from flickering
+  // into the co-editor's view via realtime).
   const addStickyAt = useCallback(
-    async (worldX: number, worldY: number) => {
-      const label = window.prompt("Note text:") ?? "";
-      if (!label.trim()) return;
-      // Optimistic local add
+    (worldX: number, worldY: number) => {
       const tempId = `tmp:${crypto.randomUUID()}`;
       const optimistic: RoomNode = {
         id: tempId,
@@ -190,7 +192,7 @@ export function SynergyRoomCanvas({ bundle }: Props) {
         author_id: myId,
         parent_id: null,
         kind: "branch",
-        label: label.trim(),
+        label: "",
         meta: null,
         x: worldX,
         y: worldY,
@@ -198,20 +200,8 @@ export function SynergyRoomCanvas({ bundle }: Props) {
         updated_at: new Date().toISOString(),
       };
       setNodes((prev) => [...prev, optimistic]);
-      try {
-        const real = await createRoomNode(roomId, {
-          kind: "branch",
-          label: label.trim(),
-          x: worldX,
-          y: worldY,
-        });
-        setNodes((prev) =>
-          prev.map((n) => (n.id === tempId ? real : n)),
-        );
-      } catch (e) {
-        setNodes((prev) => prev.filter((n) => n.id !== tempId));
-        toast.error("Couldn't add node", { description: (e as Error).message });
-      }
+      setSelectedId(tempId);
+      setEditingNodeId(tempId);
     },
     [roomId, myId],
   );
@@ -231,10 +221,16 @@ export function SynergyRoomCanvas({ bundle }: Props) {
       (e.target as Element).setPointerCapture?.(e.pointerId);
       return;
     }
-    if (e.target === canvasRef.current || (e.target as HTMLElement).tagName === "svg") {
+    const onCanvasBackground =
+      e.target === canvasRef.current ||
+      (e.target as HTMLElement).tagName === "svg";
+    if (onCanvasBackground) {
       setSelectedId(null);
     }
-    if (tool === "sticky") {
+    // Sticky tool only spawns on empty canvas; clicking on an existing
+    // card falls through so its own click/drag handlers run instead of
+    // dropping a fresh draft on top of it.
+    if (tool === "sticky" && onCanvasBackground) {
       const w = toWorld(e.clientX, e.clientY);
       addStickyAt(w.x, w.y);
     }
@@ -317,8 +313,43 @@ export function SynergyRoomCanvas({ bundle }: Props) {
       setEditingNodeId(null);
       const trimmed = label.trim();
       const target = nodes.find((n) => n.id === nodeId);
-      if (!target || trimmed === target.label) return;
-      // Optimistic local update
+      if (!target) return;
+      const isDraft = nodeId.startsWith("tmp:");
+      // Empty commit on a fresh draft → drop the card entirely. Empty
+      // commit on an existing node → ignore (don't clobber with empty).
+      if (!trimmed) {
+        if (isDraft) {
+          setNodes((prev) => prev.filter((n) => n.id !== nodeId));
+          if (selectedId === nodeId) setSelectedId(null);
+        }
+        return;
+      }
+      // Draft → first server insert. Swap the tmp id for the real row
+      // returned by the API so subsequent edits hit the right row.
+      if (isDraft) {
+        setNodes((prev) =>
+          prev.map((n) => (n.id === nodeId ? { ...n, label: trimmed } : n)),
+        );
+        try {
+          const real = await createRoomNode(roomId, {
+            kind: "branch",
+            label: trimmed,
+            x: target.x,
+            y: target.y,
+          });
+          setNodes((prev) => prev.map((n) => (n.id === nodeId ? real : n)));
+          setSelectedId((cur) => (cur === nodeId ? real.id : cur));
+        } catch (e) {
+          setNodes((prev) => prev.filter((n) => n.id !== nodeId));
+          if (selectedId === nodeId) setSelectedId(null);
+          toast.error("Couldn't add node", {
+            description: (e as Error).message,
+          });
+        }
+        return;
+      }
+      // Existing node — no-op if the label didn't change.
+      if (trimmed === target.label) return;
       setNodes((prev) =>
         prev.map((n) => (n.id === nodeId ? { ...n, label: trimmed } : n)),
       );
@@ -330,7 +361,21 @@ export function SynergyRoomCanvas({ bundle }: Props) {
         });
       }
     },
-    [nodes, roomId],
+    [nodes, roomId, selectedId],
+  );
+
+  // ── Cancel inline-edit ──
+  // Drops fresh drafts (tmp:* with no committed label); existing nodes
+  // just exit edit mode (their original label is intact).
+  const cancelNodeEdit = useCallback(
+    (nodeId: string) => {
+      setEditingNodeId(null);
+      if (nodeId.startsWith("tmp:")) {
+        setNodes((prev) => prev.filter((n) => n.id !== nodeId));
+        if (selectedId === nodeId) setSelectedId(null);
+      }
+    },
+    [selectedId],
   );
 
   // ── Node-drag (window-level for delivery beyond the card) ──
@@ -634,7 +679,7 @@ export function SynergyRoomCanvas({ bundle }: Props) {
                 onClick={(e) => onNodeClick(e, n.id)}
                 onDragStart={(e) => beginDrag(e, n.id)}
                 onCommitEdit={(label) => commitNodeLabel(n.id, label)}
-                onCancelEdit={() => setEditingNodeId(null)}
+                onCancelEdit={() => cancelNodeEdit(n.id)}
               />
             ))}
           </div>
