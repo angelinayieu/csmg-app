@@ -30,6 +30,7 @@ const VALID_MODES: AugmentMode[] = [
   "clarify",
   "plan",
   "synthesize",
+  "describe",
 ];
 
 interface Body {

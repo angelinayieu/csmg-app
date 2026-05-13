@@ -18,18 +18,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  Compass,
-  HelpCircle,
-  Loader2,
-  Network,
-  Search,
-  Shuffle,
-  Sparkles,
-  Trophy,
-} from "lucide-react";
+import { AlertTriangle, Loader2, Sparkles } from "lucide-react";
 import type { ClientNode, NodeKind, PlanResult } from "@/lib/synergy/types";
+import {
+  SynergyNodeActionPopover,
+  type SynergyAction as PopoverAction,
+} from "./synergy-node-action-popover";
 
 // ── Plan-meta parsing ──
 // The 1.6d modal serializes a PlanResult as `<<plan-v1>>${json}` into
@@ -132,41 +126,22 @@ interface SynergyNodeProps {
   selected: boolean;
   showActions: boolean;
   // Which scoped action (if any) is currently in-flight for this
-  // node. Keyed by action name so multiple buttons can show their
-  // own loading state. e.g. "variations" | "decompose" | etc.
+  // node. Keyed by action name so the popover can render per-tile
+  // spinners. e.g. "variations" | "decompose" | "describe" etc.
   busyAction: string | null;
   // True when there are ≥2 variation children to rank.
   canRank: boolean;
   onClick: (e: React.MouseEvent) => void;
   onAction: (action: SynergyNodeAction, nodeId: string) => void;
+  // Fired when the user submits the popover's "Or describe…" field.
+  onDescribe: (instruction: string, nodeId: string) => void;
   onDragStart: (e: React.PointerEvent, nodeId: string) => void;
 }
 
-export type SynergyNodeAction =
-  | "decompose"
-  | "variations"
-  | "questions"
-  | "research"
-  | "actionable"
-  | "rank";
-
-interface ActionDef {
-  key: SynergyNodeAction;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-}
-
-// Order chosen to mirror the user's mental flow: break it down first,
-// then explore alternatives, sharpen, research, and finally formalize
-// into a plan. Rank is the odd one out — gated to nodes with ≥2
-// variation children — so it sits at the end.
-const PRIMARY_ACTIONS: ActionDef[] = [
-  { key: "decompose", label: "Decompose this", icon: Network },
-  { key: "variations", label: "Variations", icon: Shuffle },
-  { key: "questions", label: "Questions", icon: HelpCircle },
-  { key: "research", label: "Research", icon: Search },
-  { key: "actionable", label: "Make actionable", icon: Compass },
-];
+// Forwarded from the popover so the parent's dispatcher signature
+// doesn't need to know about the popover internals. "describe" is
+// the free-form-instruction action; everything else is a tile pick.
+export type SynergyNodeAction = PopoverAction;
 
 export function SynergyNode({
   node,
@@ -176,6 +151,7 @@ export function SynergyNode({
   canRank,
   onClick,
   onAction,
+  onDescribe,
   onDragStart,
 }: SynergyNodeProps) {
   // Hover-with-delay: 180ms before showing the menu prevents accidental
@@ -257,37 +233,14 @@ export function SynergyNode({
       </div>
 
       {menuOpen && (
-        <div
-          className="absolute left-1/2 top-full z-10 mt-2 flex max-w-[480px] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-gray-200 bg-white/95 p-1 shadow-md backdrop-blur"
-          // Prevent the menu from initiating a drag of the underlying
-          // node, and prevent its mouseleave from closing itself.
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          {PRIMARY_ACTIONS.map((a) => (
-            <ActionChip
-              key={a.key}
-              icon={a.icon}
-              label={a.label}
-              busy={busyAction === a.key}
-              onClick={(e) => {
-                e.stopPropagation();
-                onAction(a.key, node.id);
-              }}
-            />
-          ))}
-          {/* Rank only when there are ≥2 variation children. Separated
-              by a divider so it's clear this is a downstream action. */}
-          <div className="mx-0.5 h-5 w-px bg-gray-200" aria-hidden />
-          <ActionChip
-            icon={Trophy}
-            label="Rank"
-            busy={busyAction === "rank"}
-            disabled={!canRank}
-            disabledTitle="Generate variations first"
-            onClick={(e) => {
-              e.stopPropagation();
-              onAction("rank", node.id);
-            }}
+        <div className="absolute left-1/2 top-full z-10 mt-2 -translate-x-1/2">
+          <SynergyNodeActionPopover
+            nodeId={node.id}
+            targetLabel={node.label}
+            busyAction={busyAction}
+            canRank={canRank}
+            onAction={onAction}
+            onDescribe={onDescribe}
           />
         </div>
       )}
@@ -295,41 +248,10 @@ export function SynergyNode({
   );
 }
 
-function ActionChip({
-  icon: Icon,
-  label,
-  busy,
-  disabled,
-  disabledTitle,
-  onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  busy?: boolean;
-  disabled?: boolean;
-  disabledTitle?: string;
-  onClick: (e: React.MouseEvent) => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={busy || disabled}
-      title={disabled ? disabledTitle : label}
-      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-medium text-gray-700 transition hover:bg-blue-50 hover:text-blue-700 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-700"
-    >
-      {busy ? (
-        <Loader2 className="h-3 w-3 animate-spin" />
-      ) : (
-        <Icon className="h-3 w-3" />
-      )}
-      <span className="whitespace-nowrap">{label}</span>
-    </button>
-  );
-}
-
 // Sparkles icon imported for forward-compat / re-export so the parent
 // can re-use the icon for its own "Make actionable" CTAs without
-// re-importing.
+// re-importing. (The tile-style action chips formerly defined here
+// now live in SynergyNodeActionPopover.)
 export { Sparkles as MakeActionableIcon };
 
 // ── PlanSections: formatted render for a structured plan ──

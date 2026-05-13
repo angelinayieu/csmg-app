@@ -122,7 +122,12 @@ export type AugmentMode =
   // Synergy synthesize: given two source cards, emit a single new
   // idea that captures what they create together. The new node is
   // wired as a polyhierarchy child of BOTH source cards.
-  | "synthesize";
+  | "synthesize"
+  // Describe: free-form user instruction scoped to one card. The
+  // popover's "Or describe what you want…" field. Backed by the
+  // AUGMENT_SCHEMA shape — emits 1-6 new child nodes that fulfill
+  // the user's prompt against the card's rich context.
+  | "describe";
 
 export interface AugmentResult {
   nodes: Array<{
@@ -217,7 +222,11 @@ export type AugmentResponse =
   | { mode: "rank"; result: RankResult }
   | { mode: "clarify"; result: ClarifyResult }
   | { mode: "plan"; result: PlanResult }
-  | { mode: "synthesize"; result: SynthesizeResult };
+  | { mode: "synthesize"; result: SynthesizeResult }
+  // Describe reuses AugmentResult — same shape (nodes[] + summary)
+  // but the system prompt routes through DESCRIBE_SYSTEM to honor
+  // the user's free-form instruction.
+  | { mode: "describe"; result: AugmentResult };
 
 // ── History buckets (right rail dedup) ──
 //

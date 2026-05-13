@@ -221,6 +221,41 @@ const PRECISION_AGNOSTIC: Partial<Record<AugmentMode, string>> = {
   plan: PLAN_SYSTEM,
 };
 
+// ── Describe ──
+//
+// The popover's "Or describe what you want…" field routes here. The
+// user has typed (or spoken) a free-form instruction that is not one
+// of the 6 predefined actions. We hand the instruction to the model
+// along with the rich context (ancestor chain + core + siblings) and
+// ask it to fulfill the instruction by spawning child nodes off the
+// target card.
+//
+// Critical anchoring: the instruction can ask for almost anything
+// ("3 counter-arguments", "a 30-day plan", "historical analogs",
+// "what would make this fail") — but it must STAY ABOUT THE TARGET
+// CARD'S SUBJECT. The prompt is explicit that off-topic pivots get
+// returned as an empty list with a summary explaining what went off-
+// rail, so the UI can surface the misfire without polluting the board.
+const DESCRIBE_SYSTEM = `You are expanding a specific concept on the user's brainstorm board based on their custom instruction.
+
+The user has selected one card and told you what they want done with it. Generate 1-6 new nodes that fulfill their instruction, scoped to the card's concept.
+
+CRITICAL anchoring:
+- The new nodes MUST address the SAME underlying subject as the target card. Use the ancestor chain and overarching seed (in the context) to identify what that subject is.
+- If the user's instruction would pivot to an unrelated domain (e.g., turning a cognitive-science node into "marketing strategies"), return an EMPTY nodes list and use the summary to explain the misfire ("Your instruction would pivot away from the card's concept; rephrase or pick a more specific node.").
+- Do NOT restate the target card. Each new node names something new — a step, a counter-argument, an analog, a constraint, a sub-system — driven by the user's instruction.
+
+Pick kinds appropriate to the instruction:
+- "counter-arguments", "questions to ask" → question
+- "historical analogs", "research directions" → insight
+- "concrete steps", "actions to take", "what to do next" → action
+- "alternative angles" → branch (or use the dedicated Variations mode)
+- "first principles", "underlying mechanisms" → insight
+
+Labels under 8 words. Be specific — name a mechanism, audience, tool, or metric per label. The summary is one sentence describing what you did (or skipped and why).
+
+Return JSON.`;
+
 export function systemForMode(mode: AugmentMode, precision: number): string {
   const fixed = PRECISION_AGNOSTIC[mode];
   if (fixed) return fixed;
@@ -239,6 +274,8 @@ export function systemForMode(mode: AugmentMode, precision: number): string {
       return rankSystem(precision);
     case "synthesize":
       return synthesizeSystem(precision);
+    case "describe":
+      return DESCRIBE_SYSTEM;
     default:
       // Exhaustiveness guard. If a new mode is added to AugmentMode
       // without a branch here, TS catches it at compile time.
@@ -479,5 +516,9 @@ export function schemaForMode(mode: AugmentMode) {
       return PLAN_SCHEMA;
     case "synthesize":
       return SYNTHESIZE_SCHEMA;
+    case "describe":
+      // Describe reuses the augment shape — both spawn child nodes
+      // from a free-form prompt. Keeps one schema across both modes.
+      return AUGMENT_SCHEMA;
   }
 }

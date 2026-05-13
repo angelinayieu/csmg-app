@@ -1218,9 +1218,74 @@ export function SynergyWhiteboard({
     [nodes, buildRichContext],
   );
 
+  // ── Scoped Describe (free-form instruction) ──
+  // Routes the popover's "Or describe what you want…" submission to
+  // the augment endpoint's `describe` mode. Reuses the rich-context
+  // builder so anti-drift anchoring is identical to other scoped
+  // actions. Spawns 1-6 new children of the target card with kinds
+  // chosen by the LLM based on the user's instruction.
+  const runDescribeOnNode = async (targetId: string, instruction: string) => {
+    const target = nodes.find((n) => n.id === targetId);
+    if (!target) return;
+    const trimmed = instruction.trim();
+    if (!trimmed) return;
+    setAiBusy(`describe:${targetId}`);
+    try {
+      const ctx = buildRichContext(target);
+      // The instruction is sent as the transcript so the system prompt
+      // sees it as the user's command. The card label goes in the
+      // context so the model knows what it's expanding.
+      const fullCtx = [
+        `Target card: ${target.label}`,
+        ctx,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      const res = await augment({
+        transcript: trimmed,
+        mode: "describe",
+        context: fullCtx || undefined,
+      });
+      if (res.mode !== "describe") return;
+      const newNodes = res.result.nodes ?? [];
+      if (newNodes.length === 0) {
+        toast.info(
+          res.result.summary ||
+            "No new nodes — try rephrasing or picking a more specific card.",
+        );
+        return;
+      }
+      setNodes((prev) => {
+        const existing = prev.filter((n) => n.parent === targetId).length;
+        const created: ClientNode[] = newNodes.map((n, i) => {
+          const pos = placeNear(target, existing + i, existing + newNodes.length, 200);
+          return {
+            id: uid(),
+            x: pos.x + (Math.random() - 0.5) * 25,
+            y: pos.y + (Math.random() - 0.5) * 25,
+            label: n.label,
+            kind: n.kind,
+            parent: targetId,
+          };
+        });
+        return [...prev, ...created];
+      });
+      toast.success(
+        res.result.summary
+          ? `${newNodes.length} added · ${res.result.summary}`
+          : `${newNodes.length} new ${newNodes.length === 1 ? "card" : "cards"} added`,
+      );
+    } catch (e) {
+      toast.error("Describe failed", { description: (e as Error).message });
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
   // ── Dispatcher passed to SynergyNode ──
   // Centralizes routing so the node component just emits "this action
-  // for this node" and stays presentation-only.
+  // for this node" and stays presentation-only. Describe is handled
+  // separately via onDescribe because it carries an instruction string.
   const handleNodeAction = (
     action:
       | "decompose"
@@ -1228,7 +1293,8 @@ export function SynergyWhiteboard({
       | "questions"
       | "research"
       | "actionable"
-      | "rank",
+      | "rank"
+      | "describe",
     nodeId: string,
   ) => {
     switch (action) {
@@ -1244,6 +1310,11 @@ export function SynergyWhiteboard({
         return runActionableOnNode(nodeId);
       case "rank":
         return runRank(nodeId);
+      case "describe":
+        // Not invoked via tile click — describe flows through
+        // onDescribe (which carries the instruction text). This case
+        // exists only for type-exhaustiveness.
+        return;
     }
   };
 
@@ -1677,6 +1748,7 @@ export function SynergyWhiteboard({
                   )}
                   onClick={(e) => onNodeClick(e, n.id)}
                   onAction={handleNodeAction}
+                  onDescribe={runDescribeOnNode}
                   onDragStart={handleNodeDragStart}
                 />
               );
