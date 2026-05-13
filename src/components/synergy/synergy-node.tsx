@@ -18,12 +18,50 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, Loader2, Mic, Sparkles } from "lucide-react";
 import type { ClientNode, NodeKind, PlanResult } from "@/lib/synergy/types";
 import {
   SynergyNodeActionPopover,
   type SynergyAction as PopoverAction,
 } from "./synergy-node-action-popover";
+
+// ── Voice-transcript meta parsing ──
+//
+// Voice anchor nodes (kind === 'user') are spawned by handleAIAugment
+// each time a spoken thought comes in. They become the parent of the
+// AI-generated children for that utterance — so each thought gets its
+// own subtree instead of crowding the core seed.
+//
+// meta format: `voice:<unix_ms>` or `voice:<unix_ms>:author:<user_id>`
+// (the author tag is forward-compat for shared rooms where multiple
+// users record into the same canvas).
+const VOICE_META_PREFIX = "voice:";
+
+interface VoiceMeta {
+  recordedAt: number;
+  authorId?: string;
+}
+
+function parseVoiceMeta(meta: string | undefined | null): VoiceMeta | null {
+  if (!meta || !meta.startsWith(VOICE_META_PREFIX)) return null;
+  const rest = meta.slice(VOICE_META_PREFIX.length).split(":");
+  const ms = Number(rest[0]);
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  let authorId: string | undefined;
+  if (rest[1] === "author" && rest[2]) authorId = rest[2];
+  return { recordedAt: ms, authorId };
+}
+
+// HH:MM (24h) — stable across reloads because we render the stored
+// timestamp, not "now." A transcript recorded at 14:32 always shows
+// 14:32 no matter when the page is opened.
+function formatRecordedTime(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getHours().toString().padStart(2, "0")}:${d
+    .getMinutes()
+    .toString()
+    .padStart(2, "0")}`;
+}
 
 // ── Plan-meta parsing ──
 // The 1.6d modal serializes a PlanResult as `<<plan-v1>>${json}` into
@@ -131,6 +169,9 @@ interface SynergyNodeProps {
   busyAction: string | null;
   // True when there are ≥2 variation children to rank.
   canRank: boolean;
+  // True when the card has any descendants — drives Tidy visibility
+  // in the action popover.
+  canTidy: boolean;
   onClick: (e: React.MouseEvent) => void;
   onAction: (action: SynergyNodeAction, nodeId: string) => void;
   // Fired when the user submits the popover's "Or describe…" field.
@@ -149,6 +190,7 @@ export function SynergyNode({
   showActions,
   busyAction,
   canRank,
+  canTidy,
   onClick,
   onAction,
   onDescribe,
@@ -177,7 +219,72 @@ export function SynergyNode({
     };
   }, []);
 
-  if (node.kind === "user") return null;
+  // ── Voice transcript anchor render ──
+  // Spoken thoughts get their own distinct visual identity: a
+  // circular mic node, not a rectangle. The AI-augmented children
+  // for that utterance hang off this anchor — keeps the board from
+  // collapsing every voice thought under the "Your idea" seed.
+  if (node.kind === "user") {
+    const voice = parseVoiceMeta(node.meta);
+    const timeLabel = voice ? formatRecordedTime(voice.recordedAt) : null;
+    const ringClass = selected
+      ? "ring-2 ring-blue-500 shadow-md"
+      : "ring-1 ring-blue-200";
+    return (
+      <div
+        className="absolute -translate-x-1/2 -translate-y-1/2"
+        style={{ left: node.x, top: node.y }}
+        onPointerEnter={beginHover}
+        onPointerLeave={endHover}
+      >
+        <div
+          onPointerDown={(e) => onDragStart(e, node.id)}
+          onClick={onClick}
+          title={node.label}
+          className={[
+            "group relative inline-flex h-[68px] w-[68px] flex-col items-center justify-center rounded-full bg-white transition cursor-grab active:cursor-grabbing",
+            ringClass,
+          ].join(" ")}
+          style={{
+            boxShadow: selected
+              ? undefined
+              : "0 1px 2px rgba(15,23,42,0.04), 0 4px 12px -4px rgba(15,23,42,0.06)",
+          }}
+        >
+          <Mic
+            className="h-[18px] w-[18px] text-blue-600"
+            strokeWidth={1.75}
+          />
+          {timeLabel && (
+            <span className="mt-0.5 font-mono text-[8.5px] uppercase tracking-[0.1em] text-gray-500">
+              {timeLabel}
+            </span>
+          )}
+        </div>
+
+        {/* Transcript preview on hover or when selected. Apple-style
+            popover: white card, soft shadow, no border tint. */}
+        {(hovered || selected) && node.label && (
+          <div
+            className="absolute left-1/2 top-full z-20 mt-2 w-[260px] -translate-x-1/2 rounded-xl bg-white px-3 py-2"
+            style={{
+              boxShadow:
+                "0 1px 2px rgba(15,23,42,0.04), 0 12px 32px -8px rgba(15,23,42,0.16)",
+            }}
+          >
+            <div className="mb-1 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
+              <Mic className="h-3 w-3 text-blue-600" strokeWidth={1.5} />
+              Voice transcript {timeLabel && `· ${timeLabel}`}
+            </div>
+            <p className="text-[12px] leading-relaxed text-gray-800">
+              {node.label}
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const s = KIND_STYLES[node.kind];
   const isCoreOrSelected = node.kind === "core" || selected;
   const menuOpen = (hovered || selected) && showActions && node.kind !== "ranking";
@@ -239,6 +346,7 @@ export function SynergyNode({
             targetLabel={node.label}
             busyAction={busyAction}
             canRank={canRank}
+            canTidy={canTidy}
             onAction={onAction}
             onDescribe={onDescribe}
           />

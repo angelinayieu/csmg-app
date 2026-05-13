@@ -35,6 +35,7 @@ import {
   QuestionsIcon,
   RankIcon,
   ResearchIcon,
+  TidyIcon,
   VariationsIcon,
 } from "./icons/action-icons";
 import { useSpeech } from "@/hooks/synergy/use-speech";
@@ -46,26 +47,36 @@ export type SynergyAction =
   | "research"
   | "actionable"
   | "rank"
-  | "describe";
+  | "describe"
+  // Tidy this subtree: re-lay the target's descendants without
+  // disturbing the rest of the board. Surfaces in the popover only
+  // when the card has descendants (`canTidy` prop).
+  | "tidy";
 
 interface ActionDef {
   key: Exclude<SynergyAction, "describe">;
   label: string;
   Icon: React.ComponentType<{ className?: string; size?: number }>;
-  tileTint: string; // background tint behind the tile on hover
-  disabledWhen?: "noVariations";
+  disabledWhen?: "noVariations" | "noDescendants";
 }
 
 // Order chosen to match the user's mental flow: break it down,
-// alternatives, sharpen, research, formalize, rank. Six actions in
-// a 3×2 grid keeps the popover compact and scannable.
+// alternatives, sharpen, research, formalize, rank, tidy. Seven
+// actions; the grid still uses 3 columns so the last row hangs the
+// odd one (Tidy) on its own. Tidy is conditionally hidden when the
+// card has no descendants — so the common case is a clean 3×2.
+//
+// Per-action tile tints removed — Apple aesthetic. All tiles share
+// one neutral hover state; icons are monochrome (currentColor) so
+// the popover reads as a single cohesive surface.
 const ACTIONS: ActionDef[] = [
-  { key: "decompose", label: "Decompose", Icon: DecomposeIcon, tileTint: "hover:bg-indigo-50/70" },
-  { key: "variations", label: "Variations", Icon: VariationsIcon, tileTint: "hover:bg-fuchsia-50/70" },
-  { key: "questions", label: "Questions", Icon: QuestionsIcon, tileTint: "hover:bg-amber-50/70" },
-  { key: "research", label: "Research", Icon: ResearchIcon, tileTint: "hover:bg-purple-50/70" },
-  { key: "actionable", label: "Make a plan", Icon: PlanIcon, tileTint: "hover:bg-sky-50/70" },
-  { key: "rank", label: "Rank", Icon: RankIcon, tileTint: "hover:bg-orange-50/70", disabledWhen: "noVariations" },
+  { key: "decompose", label: "Decompose", Icon: DecomposeIcon },
+  { key: "variations", label: "Variations", Icon: VariationsIcon },
+  { key: "questions", label: "Questions", Icon: QuestionsIcon },
+  { key: "research", label: "Research", Icon: ResearchIcon },
+  { key: "actionable", label: "Make a plan", Icon: PlanIcon },
+  { key: "rank", label: "Rank", Icon: RankIcon, disabledWhen: "noVariations" },
+  { key: "tidy", label: "Tidy", Icon: TidyIcon, disabledWhen: "noDescendants" },
 ];
 
 interface Props {
@@ -81,6 +92,9 @@ interface Props {
   // Whether Rank should be enabled. False until the card has ≥2
   // variation children.
   canRank: boolean;
+  // Whether Tidy should be visible / enabled. False when the card
+  // has no descendants — nothing to re-lay out.
+  canTidy: boolean;
   onAction: (action: SynergyAction, nodeId: string) => void;
   // Called when the user submits free-text in "Or describe…".
   onDescribe: (instruction: string, nodeId: string) => void;
@@ -91,6 +105,7 @@ export function SynergyNodeActionPopover({
   targetLabel,
   busyAction,
   canRank,
+  canTidy,
   onAction,
   onDescribe,
 }: Props) {
@@ -125,26 +140,45 @@ export function SynergyNodeActionPopover({
 
   return (
     <div
-      className="w-[324px] rounded-2xl border border-gray-200 bg-white/96 p-3 shadow-lg backdrop-blur"
+      className="w-[324px] rounded-2xl p-3"
+      style={{
+        // Apple translucent popover — same vibrancy stack as the AI rail
+        background: "rgba(252, 252, 253, 0.92)",
+        backdropFilter: "blur(24px) saturate(180%)",
+        WebkitBackdropFilter: "blur(24px) saturate(180%)",
+        boxShadow: [
+          "inset 0 1px 0 rgba(255, 255, 255, 0.7)",
+          "0 1px 2px rgba(15, 23, 42, 0.05)",
+          "0 12px 32px -8px rgba(15, 23, 42, 0.18)",
+          "0 0 0 1px rgba(0, 0, 0, 0.06)",
+        ].join(", "),
+      }}
       // Don't propagate pointerdown — clicking inside the popover
       // should never initiate a drag on the underlying card or close
       // the menu's parent hover state.
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="mb-2 flex items-center justify-between gap-2 px-1">
-        <div className="min-w-0">
-          <div className="font-mono text-[9px] uppercase tracking-wider text-gray-500">
-            Expand this card
-          </div>
-          <div className="truncate text-[11px] font-medium text-gray-700">
-            {targetLabel}
-          </div>
+      <div className="mb-2 px-1">
+        <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
+          Expand this card
+        </div>
+        <div className="truncate text-[11.5px] font-medium text-gray-800">
+          {targetLabel}
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-1.5">
-        {ACTIONS.map((a) => {
-          const disabled = a.disabledWhen === "noVariations" ? !canRank : false;
+      <div className="grid grid-cols-3 gap-1">
+        {ACTIONS
+          // Hide Tidy entirely (don't render a dead tile) when there's
+          // nothing to tidy. The user only sees it when meaningful.
+          .filter((a) => a.disabledWhen !== "noDescendants" || canTidy)
+          .map((a) => {
+          const disabled =
+            a.disabledWhen === "noVariations"
+              ? !canRank
+              : a.disabledWhen === "noDescendants"
+                ? !canTidy
+                : false;
           const busy = busyAction === a.key;
           return (
             <button
@@ -157,31 +191,32 @@ export function SynergyNodeActionPopover({
                   : `${a.label} — scoped to this card`
               }
               className={[
-                "group flex flex-col items-center justify-center gap-1 rounded-xl border border-transparent bg-gray-50/50 px-1.5 py-2.5 transition",
-                a.tileTint,
-                "hover:border-gray-200 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-gray-50/50 disabled:hover:border-transparent",
+                // Monochrome icon (text-gray-700 → currentColor in the SVG)
+                "group flex flex-col items-center justify-center gap-1 rounded-xl px-1.5 py-2.5 text-gray-700 transition",
+                "hover:bg-gray-100 hover:text-gray-900",
+                "disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent",
               ].join(" ")}
             >
               <div className="relative flex h-7 w-7 items-center justify-center">
                 {busy ? (
-                  <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+                  <Loader2 className="h-5 w-5 animate-spin" strokeWidth={1.5} />
                 ) : (
-                  <a.Icon size={26} className="transition group-hover:scale-110" />
+                  <a.Icon size={26} className="transition" />
                 )}
               </div>
-              <div className="text-[10.5px] font-medium text-gray-700">
-                {a.label}
-              </div>
+              <div className="text-[10.5px] font-medium">{a.label}</div>
             </button>
           );
         })}
       </div>
 
-      {/* Or describe — the escape hatch. Anything the predefined
-          actions don't cover gets routed through a free-form
-          instruction that the backend treats as a custom expansion
-          of the target card. */}
-      <div className="mt-3 flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-2 py-1.5 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-200">
+      {/* Or describe — the escape hatch. Free-form instruction that
+          the backend treats as a custom expansion of the target card. */}
+      <div className="mt-3 flex items-center gap-1.5 rounded-xl bg-white px-2 py-1.5 transition focus-within:bg-white"
+        style={{
+          boxShadow: "0 0 0 1px rgba(0, 0, 0, 0.06)",
+        }}
+      >
         <input
           ref={inputRef}
           type="text"
@@ -215,27 +250,27 @@ export function SynergyNodeActionPopover({
           className={[
             "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition",
             speech.listening
-              ? "bg-rose-500 text-white animate-pulse"
+              ? "bg-gray-900 text-white"
               : "text-gray-500 hover:bg-gray-100 hover:text-gray-900",
             "disabled:opacity-30 disabled:hover:bg-transparent",
           ].join(" ")}
         >
           {speech.listening ? (
-            <MicOff className="h-3 w-3" />
+            <MicOff className="h-3 w-3" strokeWidth={1.5} />
           ) : (
-            <Mic className="h-3 w-3" />
+            <Mic className="h-3 w-3" strokeWidth={1.5} />
           )}
         </button>
         <button
           onClick={submit}
           disabled={!describeText.trim() || isDescribing}
           title="Send (Enter)"
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white transition hover:scale-105 disabled:bg-gray-300 disabled:hover:scale-100"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gray-900 text-white transition hover:bg-gray-800 disabled:bg-gray-200 disabled:text-gray-400"
         >
           {isDescribing ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.5} />
           ) : (
-            <Send className="h-3 w-3" />
+            <Send className="h-3 w-3" strokeWidth={1.5} />
           )}
         </button>
       </div>

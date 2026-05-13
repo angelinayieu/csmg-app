@@ -32,6 +32,13 @@ import {
   saveStrokes,
 } from "@/lib/synergy/client";
 import { placeNear, radialTreeLayout } from "@/lib/synergy/radial-layout";
+import {
+  collectDescendantIds,
+  computeFitToContent,
+  computeSubtreeBbox,
+  structuredGridLayout,
+  subtreeRadialLayout,
+} from "@/lib/synergy/layout-helpers";
 import { repelOnInsert, withRepel } from "@/lib/synergy/repel";
 import { normalizeKey, uid } from "@/lib/synergy/normalize";
 import type {
@@ -352,8 +359,10 @@ export function SynergyWhiteboard({
     async (transcript: string) => {
       if (!autoMode || !transcript.trim()) return;
       setAiBusy("augment");
+      const cleanTranscript = transcript.trim();
+      const recordedAt = Date.now();
       setTranscripts((prev) =>
-        [...prev, { id: uid(), text: transcript.trim(), at: Date.now() }].slice(-30),
+        [...prev, { id: uid(), text: cleanTranscript, at: recordedAt }].slice(-30),
       );
       try {
         const ctx = nodes
@@ -369,19 +378,61 @@ export function SynergyWhiteboard({
         }
         setNodes((prev) => {
           const seed = prev.find((n) => n.kind === "core") || prev[0];
-          const existingChildren = prev.filter((n) => n.parent === seed?.id).length;
+
+          // ── Spawn a voice transcript anchor for THIS utterance ──
+          // Each spoken thought becomes its own subtree. The anchor
+          // node (kind: 'user') is the parent of the AI-augmented
+          // children, NOT the core seed. Position it sequentially —
+          // either next to the most recent voice anchor or a fresh
+          // slot near the seed if it's the first one.
+          const existingVoice = prev.filter((n) => n.kind === "user");
+          const lastVoice = existingVoice[existingVoice.length - 1];
+          let anchorX: number;
+          let anchorY: number;
+          if (lastVoice) {
+            // Stagger to the right + slightly down so anchors form a
+            // readable timeline rather than overlapping.
+            anchorX = lastVoice.x + 280;
+            anchorY = lastVoice.y + 60;
+          } else if (seed) {
+            // First voice anchor: place above and to the right of the
+            // seed so it doesn't fight existing seed children.
+            anchorX = seed.x + 260;
+            anchorY = seed.y - 180;
+          } else {
+            anchorX = 600;
+            anchorY = 200;
+          }
+          const transcriptAnchor: ClientNode = {
+            id: uid(),
+            x: anchorX,
+            y: anchorY,
+            label: cleanTranscript.slice(0, 400),
+            kind: "user",
+            parent: seed?.id ?? null,
+            meta: `voice:${recordedAt}`,
+          };
+
+          // AI children fan out from the anchor (not the seed). Use
+          // placeNear with the anchor as the parent — gives the cluster
+          // its own little constellation rather than crowding the core.
           const created: ClientNode[] = newNodes.map((n, i) => {
-            const pos = placeNear(seed, existingChildren + i, existingChildren + newNodes.length);
+            const pos = placeNear(
+              transcriptAnchor,
+              i,
+              newNodes.length,
+              160,
+            );
             return {
               id: uid(),
-              x: pos.x + (Math.random() - 0.5) * 30,
-              y: pos.y + (Math.random() - 0.5) * 30,
+              x: pos.x + (Math.random() - 0.5) * 24,
+              y: pos.y + (Math.random() - 0.5) * 24,
               label: n.label,
               kind: n.kind,
-              parent: seed?.id,
+              parent: transcriptAnchor.id,
             };
           });
-          return withRepel(prev, [...prev, ...created]);
+          return withRepel(prev, [...prev, transcriptAnchor, ...created]);
         });
         if (res.result.summary) toast.info(res.result.summary);
       } catch (e) {
@@ -390,7 +441,7 @@ export function SynergyWhiteboard({
         setAiBusy(null);
       }
     },
-    [autoMode, nodes],
+    [autoMode, nodes, precision],
   );
 
   const speech = useSpeech(handleAIAugment);
@@ -801,6 +852,38 @@ export function SynergyWhiteboard({
     [nodes],
   );
 
+  // ── Auto-fit viewport to a set of newly-spawned/affected nodes ──
+  // Called after every scoped action so the user immediately sees what
+  // just happened instead of having to hunt across the canvas. Uses
+  // the layout-helpers' computeFitToContent which accounts for the
+  // left toolbar (64px) and right AI rail (320px) plus a small top
+  // inset for the zoom/sync indicators.
+  //
+  // We pad the bbox so the new subtree never touches the rail edges,
+  // and cap zoom at 1.0 so we don't dramatically zoom IN on a tiny
+  // subtree (would feel jarring after a click). A small subtree at
+  // close range is fine — just don't magnify it.
+  const autoFitToBbox = useCallback(
+    (bbox: ReturnType<typeof computeSubtreeBbox>) => {
+      if (!bbox) return;
+      const { pan: nextPan, zoom: nextZoom } = computeFitToContent(bbox, {
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        leftRail: 64,
+        rightRail: 320,
+        topInset: 64,
+        bottomInset: 100,
+      }, {
+        padding: 120,
+        maxZoom: 1.0,
+        minZoom: 0.35,
+      });
+      setPan(nextPan);
+      setZoom(nextZoom);
+    },
+    [],
+  );
+
   const runVariations = async (parentId: string) => {
     const parent = nodes.find((n) => n.id === parentId);
     if (!parent) return;
@@ -846,6 +929,7 @@ export function SynergyWhiteboard({
         toast.info("No variations returned.");
         return;
       }
+      const newlyAdded: ClientNode[] = [];
       setNodes((prev) => {
         const existing = prev.filter((n) => n.parent === parentId && n.kind === "variation").length;
         const created: ClientNode[] = list.map((v, i) => {
@@ -860,8 +944,10 @@ export function SynergyWhiteboard({
             meta: `[Lv ${precision}] ${v.rationale}`,
           };
         });
+        newlyAdded.push(...created);
         return withRepel(prev, [...prev, ...created]);
       });
+      autoFitToBbox(computeSubtreeBbox([parent, ...newlyAdded]));
       toast.success(`${list.length} variations added`);
     } catch (e) {
       toast.error("Variations failed", { description: (e as Error).message });
@@ -949,51 +1035,94 @@ export function SynergyWhiteboard({
         toast.info("Decompose returned nothing — try adding more context to the card.");
         return;
       }
+
+      // Track new nodes for auto-fit.
+      const newlyAdded: ClientNode[] = [];
+      let replacedCount = 0;
+
       setNodes((prev) => {
-        const next = [...prev];
-        const existingCategoryCount = prev.filter(
-          (n) => n.parent === targetId && n.kind === "branch",
-        ).length;
-        categoryDefs.forEach((cat, catIdx) => {
-          if (cat.items.length === 0) return;
-          // Category folder node — placed in a wide ring around target.
-          // Bumped from 240→340 so the four folders + their items have
-          // room to breathe without overlapping the parent or each other.
-          const catPos = placeNear(
-            target,
-            existingCategoryCount + catIdx,
-            existingCategoryCount + categoryDefs.length,
-            340,
+        // ── Replace existing decomposition on this card ──
+        // Re-decomposing means "give me a fresh take" — keeping the old
+        // categories stacked next to new ones is the messy outcome the
+        // user complained about. Find existing category folders (their
+        // meta starts with "Decomposed from") and drop them + their
+        // descendants in one pass.
+        const existingCategories = prev.filter(
+          (n) =>
+            n.parent === targetId &&
+            n.kind === "branch" &&
+            n.meta?.startsWith("Decomposed from"),
+        );
+        let cleaned = prev;
+        if (existingCategories.length > 0) {
+          const staleIds = collectDescendantIds(
+            existingCategories.map((n) => n.id),
+            prev,
+            { includeRoots: true },
           );
+          cleaned = prev.filter((n) => !staleIds.has(n.id));
+          replacedCount = existingCategories.length;
+        }
+
+        // ── Structured grid layout ──
+        // Categories in a horizontal row directly below the target,
+        // items stacked vertically under each category. Predictable,
+        // never self-overlaps, easy to skim.
+        const categoryIds = categoryDefs.map(() => uid());
+        const placements = structuredGridLayout(
+          target,
+          categoryDefs.map((c, i) => ({ catId: categoryIds[i], itemCount: c.items.length })),
+        );
+        const placementById = new Map(placements.map((p) => [p.catId, p]));
+
+        const created: ClientNode[] = [];
+        categoryDefs.forEach((cat, idx) => {
+          if (cat.items.length === 0) return;
+          const place = placementById.get(categoryIds[idx]);
+          if (!place) return;
           const catNode: ClientNode = {
-            id: uid(),
-            x: catPos.x,
-            y: catPos.y,
+            id: categoryIds[idx],
+            x: place.catX,
+            y: place.catY,
             label: cat.label,
             kind: "branch",
             parent: targetId,
             meta: `Decomposed from "${target.label.slice(0, 60)}"`,
           };
-          next.push(catNode);
-          // Items as children of the category node.
-          // 140→170 so items aren't crammed against the category card.
+          created.push(catNode);
           cat.items.forEach((item, i) => {
-            const itemPos = placeNear(catNode, i, cat.items.length, 170);
-            next.push({
+            const pos = place.itemPositions[i];
+            created.push({
               id: uid(),
-              x: itemPos.x + (Math.random() - 0.5) * 20,
-              y: itemPos.y + (Math.random() - 0.5) * 20,
+              x: pos.x,
+              y: pos.y,
               label: item,
               kind: cat.childKind,
               parent: catNode.id,
             });
           });
         });
-        // Batch insert: anchor all the new arrivals (categories + items)
-        // and push any existing nodes that crowd them outward.
-        return withRepel(prev, next);
+        newlyAdded.push(...created);
+
+        // Batch insert with repel — the structured grid is already
+        // collision-free internally; repel handles overlaps with
+        // any other content on the board.
+        return withRepel(cleaned, [...cleaned, ...created]);
       });
-      toast.success(`Decomposed into ${totalItems} items across 4 categories`);
+
+      // Auto-fit viewport to the new subtree (target + new arrivals).
+      // We have the planned positions in `newlyAdded`; combine with the
+      // target's known position for the bbox.
+      const fitBbox = computeSubtreeBbox([target, ...newlyAdded]);
+      autoFitToBbox(fitBbox);
+
+      if (replacedCount > 0) {
+        toast.success(
+          `Decomposed into ${totalItems} items · replaced previous decomposition`,
+        );
+      } else {
+        toast.success(`Decomposed into ${totalItems} items across 4 categories`);
+      }
     } catch (e) {
       toast.error("Decompose failed", { description: (e as Error).message });
     } finally {
@@ -1023,6 +1152,7 @@ export function SynergyWhiteboard({
         toast.info("No questions returned.");
         return;
       }
+      const newlyAdded: ClientNode[] = [];
       setNodes((prev) => {
         const existing = prev.filter(
           (n) => n.parent === targetId && n.kind === "question",
@@ -1038,8 +1168,10 @@ export function SynergyWhiteboard({
             parent: targetId,
           };
         });
+        newlyAdded.push(...created);
         return withRepel(prev, [...prev, ...created]);
       });
+      autoFitToBbox(computeSubtreeBbox([target, ...newlyAdded]));
       toast.success(`${qs.length} sharper questions added`);
     } catch (e) {
       toast.error("Questions failed", { description: (e as Error).message });
@@ -1071,6 +1203,7 @@ export function SynergyWhiteboard({
         toast.info("No research directions returned.");
         return;
       }
+      const newlyAdded: ClientNode[] = [];
       setNodes((prev) => {
         const existing = prev.filter(
           (n) => n.parent === targetId && n.kind === "insight",
@@ -1087,8 +1220,10 @@ export function SynergyWhiteboard({
             meta: `[${d.angle}] ${d.why}`,
           };
         });
+        newlyAdded.push(...created);
         return withRepel(prev, [...prev, ...created]);
       });
+      autoFitToBbox(computeSubtreeBbox([target, ...newlyAdded]));
       toast.success(`${ds.length} research directions added`);
     } catch (e) {
       toast.error("Research failed", { description: (e as Error).message });
@@ -1255,6 +1390,7 @@ export function SynergyWhiteboard({
         );
         return;
       }
+      const newlyAdded: ClientNode[] = [];
       setNodes((prev) => {
         const existing = prev.filter((n) => n.parent === targetId).length;
         const created: ClientNode[] = newNodes.map((n, i) => {
@@ -1268,8 +1404,10 @@ export function SynergyWhiteboard({
             parent: targetId,
           };
         });
-        return [...prev, ...created];
+        newlyAdded.push(...created);
+        return withRepel(prev, [...prev, ...created]);
       });
+      autoFitToBbox(computeSubtreeBbox([target, ...newlyAdded]));
       toast.success(
         res.result.summary
           ? `${newNodes.length} added · ${res.result.summary}`
@@ -1286,6 +1424,43 @@ export function SynergyWhiteboard({
   // Centralizes routing so the node component just emits "this action
   // for this node" and stays presentation-only. Describe is handled
   // separately via onDescribe because it carries an instruction string.
+  // ── Tidy this subtree ──
+  // Less-destructive cousin of the global Tidy button. Re-applies the
+  // radial-tree layout to JUST the target's subtree, anchored at the
+  // target's current position. Other nodes on the board stay put.
+  // Then auto-fit to the re-laid subtree so the user sees the result.
+  const tidySubtree = useCallback(
+    (targetId: string) => {
+      const target = nodes.find((n) => n.id === targetId);
+      if (!target) return;
+      const descIds = collectDescendantIds([targetId], nodes);
+      if (descIds.size === 0) {
+        toast.info("Nothing to tidy — this card has no descendants.");
+        return;
+      }
+      const positions = subtreeRadialLayout(targetId, nodes);
+      if (positions.size === 0) return;
+      setNodes((prev) =>
+        prev.map((n) => {
+          const p = positions.get(n.id);
+          return p ? { ...n, x: p.x, y: p.y } : n;
+        }),
+      );
+      // Compute bbox from the new positions and fit. Build a phantom
+      // subtree (current nodes with new positions applied) for the
+      // bbox calculation.
+      const laidOut = nodes
+        .filter((n) => n.id === targetId || descIds.has(n.id))
+        .map((n) => {
+          const p = positions.get(n.id);
+          return p ? { ...n, x: p.x, y: p.y } : n;
+        });
+      autoFitToBbox(computeSubtreeBbox(laidOut));
+      toast.success(`Tidied ${descIds.size} descendant${descIds.size === 1 ? "" : "s"}`);
+    },
+    [nodes, autoFitToBbox],
+  );
+
   const handleNodeAction = (
     action:
       | "decompose"
@@ -1294,7 +1469,8 @@ export function SynergyWhiteboard({
       | "research"
       | "actionable"
       | "rank"
-      | "describe",
+      | "describe"
+      | "tidy",
     nodeId: string,
   ) => {
     switch (action) {
@@ -1310,6 +1486,8 @@ export function SynergyWhiteboard({
         return runActionableOnNode(nodeId);
       case "rank":
         return runRank(nodeId);
+      case "tidy":
+        return tidySubtree(nodeId);
       case "describe":
         // Not invoked via tile click — describe flows through
         // onDescribe (which carries the instruction text). This case
@@ -1568,7 +1746,7 @@ export function SynergyWhiteboard({
           <button
             onClick={focus.open}
             title="Enter Focus Mode — converge + publish"
-            className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-br from-blue-600 to-cyan-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-[0_4px_20px_-4px_rgba(6,182,212,0.5)] transition hover:scale-[1.03]"
+            className="inline-flex items-center gap-1.5 rounded-full bg-blue-600 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-[0_4px_20px_-4px_rgba(6,182,212,0.5)] transition hover:scale-[1.03]"
           >
             <Sparkles className="h-3 w-3" /> Focus & Publish
             <ArrowRight className="h-3 w-3" />
@@ -1746,6 +1924,7 @@ export function SynergyWhiteboard({
                   canRank={nodes.some(
                     (c) => c.parent === n.id && c.kind === "variation",
                   )}
+                  canTidy={nodes.some((c) => c.parent === n.id)}
                   onClick={(e) => onNodeClick(e, n.id)}
                   onAction={handleNodeAction}
                   onDescribe={runDescribeOnNode}
