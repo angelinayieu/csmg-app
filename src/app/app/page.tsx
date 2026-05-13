@@ -1,17 +1,13 @@
-// ── /app — the Synergy home (Phase 4d+2) ──
+// ── /app — the Studio home (whiteboard surface) ──
 //
-// As of the Synergy launch this route is the Synergy dashboard:
-// time-aware greeting, prompt-driven brainstorm/strategy entry,
-// recent boards + connections + living strategies, floating glass
-// dock. The legacy Studio surface (HomeShell + Space-based
-// whiteboards) is reachable via /app?legacy=1 for the transition
-// period; default renders SynergyDashboard.
+// Default route renders the immersive whiteboard HomeShell:
+// time-aware greeting, floating template/space cards, reasoning-
+// depth selector (Quick / Standard / Deep), and the credit-balance
+// chip in the top bar. The Synergy dashboard is still reachable via
+// /app?synergy=1 and the dedicated /app/synergy/* routes.
 //
-// First-sign-in onboarding gate stays here — brand-new users with
-// null onboarding_completed_at redirect to /app/welcome before
-// landing on the dashboard.
+// `?style=gradient` swaps the canvas backdrop for the gradient one.
 
-import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { HomeShell } from "@/components/home/home-shell";
 import { SynergyDashboard } from "@/components/synergy/synergy-dashboard";
@@ -23,38 +19,25 @@ export const dynamic = "force-dynamic";
 export default async function StudioPage({
   searchParams,
 }: {
-  // `?legacy=1` falls back to the prior Studio surface (HomeShell)
-  // for users who want the Space-based whiteboards. Default route
-  // renders the Synergy dashboard.
-  // `?style=gradient` only applies to the legacy surface.
-  searchParams?: Promise<{ style?: string; legacy?: string }>;
+  // `?synergy=1` opts into the Synergy dashboard. Default renders
+  // the whiteboard HomeShell. `?style=gradient` swaps the canvas
+  // backdrop for the gradient.
+  searchParams?: Promise<{ style?: string; synergy?: string }>;
 }) {
   const params = await searchParams;
-  const showLegacy = params?.legacy === "1";
+  const showSynergy = params?.synergy === "1";
 
   const user = await getAuthUser();
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  // ── First-sign-in onboarding gate ──
-  if (user) {
-    const { data: profile } = await db
-      .from("synergy_profiles")
-      .select("onboarding_completed_at")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (!profile || profile.onboarding_completed_at === null) {
-      redirect("/app/welcome");
-    }
-  }
-
-  // ── Synergy dashboard (default) ──
-  if (!showLegacy) {
+  // ── Synergy dashboard — opt-in via ?synergy=1 ──
+  if (showSynergy) {
     return <SynergyDashboard />;
   }
 
-  // ── Legacy Studio surface — preserved via /app?legacy=1 ──
+  // ── Whiteboard HomeShell (default) ──
   const immersiveMode = params?.style === "gradient" ? "gradient" : "canvas";
 
   const richSpacesRes = await db
