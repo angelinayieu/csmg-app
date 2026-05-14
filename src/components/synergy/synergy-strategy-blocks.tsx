@@ -40,6 +40,7 @@ import {
   mitigateStrategyBlock,
   updateStrategyBlock,
 } from "@/lib/synergy/client";
+import { getStepIcon, getStepMetadata } from "@/lib/synergy/step-icons";
 import type {
   HypothesisMeta,
   PlanStepMeta,
@@ -189,7 +190,7 @@ function SupportingEvidence({
     <div className="mt-2">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-blue-700 transition hover:text-blue-900"
+        className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500 transition hover:text-gray-900"
       >
         {open ? (
           <ChevronDown className="h-3 w-3" />
@@ -216,10 +217,10 @@ function SupportingEvidence({
             return (
               <li
                 key={e.id}
-                className="rounded-md border border-blue-100 bg-blue-50/40 px-2.5 py-1.5"
+                className="rounded-md border border-gray-200 bg-gray-50/60 px-2.5 py-1.5"
               >
                 <div className="flex items-start gap-2">
-                  <Search className="mt-0.5 h-3 w-3 shrink-0 text-blue-600" />
+                  <Search className="mt-0.5 h-3 w-3 shrink-0 text-gray-500" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       {href ? (
@@ -260,10 +261,10 @@ function SupportingEvidence({
 // ── Challenges rendering ──
 // In-place red-tinted callouts beneath the block.
 
-const CHALLENGE_SEVERITY: Record<string, { bg: string; ring: string; text: string }> = {
-  high: { bg: "bg-rose-50", ring: "ring-rose-200", text: "text-rose-700" },
-  medium: { bg: "bg-amber-50", ring: "ring-amber-200", text: "text-amber-700" },
-  low: { bg: "bg-gray-50", ring: "ring-gray-200", text: "text-gray-700" },
+const CHALLENGE_SEVERITY: Record<string, { bar: string; text: string }> = {
+  high: { bar: "bg-rose-500", text: "text-rose-600" },
+  medium: { bar: "bg-amber-500", text: "text-amber-600" },
+  low: { bar: "bg-gray-300", text: "text-gray-500" },
 };
 
 function ChallengesGroup({
@@ -280,8 +281,12 @@ function ChallengesGroup({
         return (
           <div
             key={i}
-            className={`rounded-md ring-1 ${tone.ring} ${tone.bg} px-2.5 py-1.5`}
+            className="relative overflow-hidden rounded-md border border-gray-200 bg-white px-2.5 py-1.5 pl-3.5"
           >
+            <span
+              aria-hidden
+              className={`absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full ${tone.bar}`}
+            />
             <div className="flex items-start gap-2">
               <MessageSquareWarning
                 className={`mt-0.5 h-3 w-3 shrink-0 ${tone.text}`}
@@ -292,7 +297,7 @@ function ChallengesGroup({
                     Challenge
                   </span>
                   <span
-                    className={`rounded-full bg-white px-1.5 py-0 font-mono text-[8px] uppercase tracking-wider ${tone.text}`}
+                    className={`font-mono text-[8px] uppercase tracking-[0.15em] ${tone.text}`}
                   >
                     {c.severity}
                   </span>
@@ -312,10 +317,12 @@ function ChallengesGroup({
 
 // ── Experiment card (renders inside HypothesisBlock when meta.experiment is set) ──
 
+// Effort is a quiet dot+caps pair, not a colored pill. Hours = calm
+// gray, weeks = warmer accent. Read as metadata.
 const EFFORT_TONE: Record<string, string> = {
-  hours: "bg-emerald-100 text-emerald-700",
-  days: "bg-amber-100 text-amber-700",
-  weeks: "bg-rose-100 text-rose-700",
+  hours: "bg-emerald-500",
+  days: "bg-amber-500",
+  weeks: "bg-rose-500",
 };
 
 function ExperimentCard({
@@ -330,17 +337,16 @@ function ExperimentCard({
     effort: string;
   };
 }) {
-  const effortTone = EFFORT_TONE[experiment.effort] ?? EFFORT_TONE.days;
+  const effortDot = EFFORT_TONE[experiment.effort] ?? EFFORT_TONE.days;
   return (
-    <div className="mt-3 rounded-xl border border-purple-200 bg-white/70 p-3">
+    <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50/40 p-3">
       <div className="mb-1 flex items-center gap-2">
-        <Beaker className="h-3.5 w-3.5 text-purple-600" />
-        <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-purple-700">
+        <Beaker className="h-3.5 w-3.5 text-gray-500" />
+        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-gray-500">
           Experiment
         </span>
-        <span
-          className={`ml-auto rounded-full px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${effortTone}`}
-        >
+        <span className="ml-auto inline-flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${effortDot}`} />
           {experiment.effort}
         </span>
       </div>
@@ -351,14 +357,14 @@ function ExperimentCard({
         {experiment.design}
       </p>
       {experiment.steps.length > 0 && (
-        <ol className="mt-2 space-y-1 border-l-2 border-purple-100 pl-3">
+        <ol className="mt-2 space-y-1 border-l border-gray-200 pl-3">
           {experiment.steps.map((s, i) => (
             <li
               key={i}
               className="text-[11.5px] leading-relaxed text-gray-700"
             >
-              <span className="mr-1 font-mono text-[10px] font-semibold text-purple-700">
-                {i + 1}.
+              <span className="font-numerical mr-1 font-mono text-[10px] font-semibold tabular-nums text-gray-500">
+                {String(i + 1).padStart(2, "0")}.
               </span>
               {s}
             </li>
@@ -366,17 +372,25 @@ function ExperimentCard({
         </ol>
       )}
       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <div className="rounded-md border border-emerald-100 bg-emerald-50/60 px-2.5 py-1.5">
-          <div className="font-mono text-[9px] uppercase tracking-wider text-emerald-700">
-            ↑ supports if
+        <div className="relative overflow-hidden rounded-md border border-gray-200 bg-white px-2.5 py-1.5 pl-3.5">
+          <span
+            aria-hidden
+            className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-emerald-500"
+          />
+          <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-emerald-600">
+            supports if
           </div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-gray-700">
             {experiment.success_signal}
           </p>
         </div>
-        <div className="rounded-md border border-rose-100 bg-rose-50/60 px-2.5 py-1.5">
-          <div className="font-mono text-[9px] uppercase tracking-wider text-rose-700">
-            ↓ refutes if
+        <div className="relative overflow-hidden rounded-md border border-gray-200 bg-white px-2.5 py-1.5 pl-3.5">
+          <span
+            aria-hidden
+            className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-rose-500"
+          />
+          <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-rose-600">
+            refutes if
           </div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-gray-700">
             {experiment.refute_signal}
@@ -434,22 +448,30 @@ export function PlanStepBlock({
     }
   };
 
+  // ── Tier 2a + 2b: per-step icon + metadata pills ──
+  // Rule-based classifier in @/lib/synergy/step-icons. Inferred from
+  // the step's title + body — no LLM round trip, runs at render. If
+  // we later add an LLM-tagged `category` field to PlanStepMeta this
+  // becomes a fallback only.
+  const StepIcon = getStepIcon(meta.title ?? "", block.body);
+  const pills = getStepMetadata(block.body);
+
   return (
     // ── Step row ──
     // Apple-style restraint: drop the loud blue numbered circle for a
-    // mono "STEP 0N" caps label that lets the title carry the row. The
-    // vertical connector becomes a faint dotted spine — present enough
-    // to imply sequence, quiet enough not to compete with content.
-    // The whole row lifts subtly on hover for that "this is a tile
-    // floating in space" visionOS read.
-    <div className="group relative grid grid-cols-[14px_1fr] gap-4 pl-1 transition">
-      {/* Dashed spine — faint vertical dashes (3px tall every 7px),
-          fading toward the bottom. Visually quieter than a solid line
-          but still tells the eye "these are sequential." */}
+    // mono "STEP 0N" caps label + a small glyph tile that wears the
+    // step's activity kind (calendar / book / users / code / radio).
+    // The vertical connector becomes a faint dotted spine — present
+    // enough to imply sequence, quiet enough not to compete with
+    // content.
+    <div className="group relative grid grid-cols-[24px_1fr] gap-4 pl-1 transition">
+      {/* Dashed spine + icon tile — the line threads behind the tile
+          on its way down to the next step. Mask fades the line near
+          the bottom of the row so it softly hands off to the next. */}
       <div className="relative flex justify-center">
         <div
           aria-hidden
-          className="absolute top-6 bottom-[-12px] w-px"
+          className="absolute top-9 bottom-[-16px] w-px"
           style={{
             backgroundImage:
               "linear-gradient(to bottom, rgba(15,23,42,0.16) 50%, transparent 50%)",
@@ -461,13 +483,18 @@ export function PlanStepBlock({
               "linear-gradient(to bottom, black 0%, black 70%, transparent 100%)",
           }}
         />
-        {/* Step glyph: a tiny ring marking this step's anchor. Sits
-            flush with the "STEP 0N" caps label on the right so the eye
-            reads them together. */}
-        <span
-          aria-hidden
-          className="relative z-10 mt-[7px] inline-flex h-2 w-2 items-center justify-center rounded-full bg-white ring-1 ring-gray-300 transition group-hover:ring-gray-400"
-        />
+        {/* Glyph tile — 24×24 rounded square wearing the inferred icon.
+            Subtle inset highlight + soft drop shadow gives it the
+            "engraved chip" feel that visionOS controls use. */}
+        <div
+          className="relative z-10 mt-[2px] inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white text-gray-600 ring-1 ring-black/[0.06] transition group-hover:text-gray-900 group-hover:ring-black/[0.12]"
+          style={{
+            boxShadow:
+              "inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 2px rgba(15,23,42,0.04)",
+          }}
+        >
+          <StepIcon className="h-3 w-3" />
+        </div>
       </div>
 
       <div className="pb-5">
@@ -496,18 +523,38 @@ export function PlanStepBlock({
             {meta.title || "Step"}
           </div>
         )}
+
+        {/* Metadata pills — small mono caps badges (time/cadence/mode/
+            tools) extracted from the body. Empty array hides entirely. */}
+        {pills.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {pills.map((pill, i) => {
+              const PillIcon = pill.icon;
+              return (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 rounded-md bg-gray-50 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-gray-600 ring-1 ring-black/[0.04]"
+                >
+                  <PillIcon className="h-2.5 w-2.5" />
+                  {pill.label}
+                </span>
+              );
+            })}
+          </div>
+        )}
+
         {editing === "body" ? (
           <EditTextarea
             initialValue={block.body}
             onSave={saveBody}
             onCancel={() => setEditing(null)}
             placeholder="What does this step entail?"
-            className="mt-1 text-[14px] leading-[1.6] text-gray-600"
+            className="mt-2 text-[14px] leading-[1.6] text-gray-600"
           />
         ) : (
           <p
             onClick={() => setEditing("body")}
-            className="-mx-1 mt-1 cursor-text rounded-md px-1 text-[14px] leading-[1.6] text-gray-600 transition hover:bg-black/[0.025]"
+            className="-mx-1 mt-2 cursor-text rounded-md px-1 text-[14px] leading-[1.6] text-gray-600 transition hover:bg-black/[0.025]"
             title="Click to edit"
           >
             {block.body}
@@ -573,16 +620,25 @@ export function PlanStepBlock({
 
 // ── risk ──
 
-const RISK_SEVERITY_TONE: Record<string, { bg: string; ring: string; text: string }> = {
-  high: { bg: "bg-rose-50", ring: "ring-rose-200", text: "text-rose-700" },
-  medium: { bg: "bg-amber-50", ring: "ring-amber-200", text: "text-amber-700" },
-  low: { bg: "bg-gray-50", ring: "ring-gray-200", text: "text-gray-700" },
+// Severity is signaled by a 3px left-edge accent bar plus colored
+// mono caps text, not by a wash of color across the whole card. This
+// keeps the page calm — the eye can scan severity at a glance via
+// the bar, but the card itself reads as content, not alarm.
+const RISK_SEVERITY_TONE: Record<
+  string,
+  { bar: string; text: string }
+> = {
+  high: { bar: "bg-rose-500", text: "text-rose-600" },
+  medium: { bar: "bg-amber-500", text: "text-amber-600" },
+  low: { bar: "bg-gray-300", text: "text-gray-500" },
 };
 
+// Mitigation kind reads as a small lowercase tag — the kind itself
+// (prevent / detect / respond) is information, not visual hierarchy.
 const MITIGATION_KIND_TONE: Record<string, string> = {
-  prevent: "bg-blue-100 text-blue-700",
-  detect: "bg-purple-100 text-purple-700",
-  respond: "bg-emerald-100 text-emerald-700",
+  prevent: "text-blue-600",
+  detect: "text-purple-600",
+  respond: "text-emerald-600",
 };
 
 export function RiskBlock({
@@ -628,9 +684,12 @@ export function RiskBlock({
   };
 
   return (
-    <div
-      className={`group rounded-xl ring-1 ${tone.ring} ${tone.bg} p-3 transition`}
-    >
+    <div className="group relative overflow-hidden rounded-xl border border-gray-200 bg-white p-3 pl-4 transition hover:border-gray-300">
+      {/* Severity accent bar — the only color the card carries. */}
+      <span
+        aria-hidden
+        className={`absolute left-0 top-3 bottom-3 w-[3px] rounded-full ${tone.bar}`}
+      />
       <div className="flex items-start gap-2">
         <AlertTriangle className={`mt-0.5 h-4 w-4 shrink-0 ${tone.text}`} />
         <div className="min-w-0 flex-1">
@@ -648,14 +707,14 @@ export function RiskBlock({
             ) : (
               <div
                 onClick={() => setEditing("title")}
-                className="cursor-text rounded font-semibold text-gray-900 transition hover:bg-white/60"
+                className="cursor-text rounded font-semibold text-gray-900 transition hover:bg-gray-50"
                 title="Click to edit"
               >
                 {meta.title || "Risk"}
               </div>
             )}
             <span
-              className={`rounded-full bg-white px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${tone.text}`}
+              className={`font-mono text-[9px] uppercase tracking-[0.15em] ${tone.text}`}
             >
               {meta.severity ?? "medium"}
             </span>
@@ -670,7 +729,7 @@ export function RiskBlock({
           ) : (
             <p
               onClick={() => setEditing("body")}
-              className="mt-1 cursor-text rounded text-[12px] leading-relaxed text-gray-700 transition hover:bg-white/60"
+              className="mt-1 cursor-text rounded text-[12px] leading-relaxed text-gray-700 transition hover:bg-gray-50"
               title="Click to edit"
             >
               {block.body}
@@ -697,7 +756,7 @@ export function RiskBlock({
               ) : (
                 <p
                   onClick={() => setEditing("mitigation")}
-                  className="cursor-text rounded bg-white/60 p-2 text-[12px] leading-relaxed text-gray-800 transition hover:bg-white"
+                  className="cursor-text rounded bg-gray-50 p-2 text-[12px] leading-relaxed text-gray-800 transition hover:bg-gray-100"
                   title="Click to edit"
                 >
                   {meta.mitigation}
@@ -715,10 +774,10 @@ export function RiskBlock({
                 {meta.additional_mitigations.map((m, i) => (
                   <li
                     key={i}
-                    className="flex items-start gap-2 rounded-md bg-white/60 px-2 py-1"
+                    className="flex items-start gap-2 rounded-md bg-gray-50 px-2 py-1"
                   >
                     <span
-                      className={`shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider ${MITIGATION_KIND_TONE[m.kind] ?? "bg-gray-100 text-gray-600"}`}
+                      className={`shrink-0 font-mono text-[8px] uppercase tracking-[0.15em] ${MITIGATION_KIND_TONE[m.kind] ?? "text-gray-500"}`}
                     >
                       {m.kind}
                     </span>
@@ -810,7 +869,12 @@ export function HypothesisBlock({
   };
 
   return (
-    <div className="group rounded-xl ring-1 ring-purple-200 bg-purple-50/40 p-3 transition">
+    <div className="group relative overflow-hidden rounded-xl border border-gray-200 bg-white p-3 pl-4 transition hover:border-gray-300">
+      {/* Hairline left rule — quiet hypothesis accent. */}
+      <span
+        aria-hidden
+        className="absolute left-0 top-3 bottom-3 w-[3px] rounded-full bg-gray-300"
+      />
       <div className="flex items-start gap-2">
         <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-purple-600" />
         <div className="min-w-0 flex-1">
@@ -824,7 +888,7 @@ export function HypothesisBlock({
           ) : (
             <div
               onClick={() => setEditing("body")}
-              className="cursor-text rounded font-semibold text-gray-900 transition hover:bg-white/60"
+              className="cursor-text rounded font-semibold text-gray-900 transition hover:bg-gray-50"
               title="Click to edit"
             >
               {block.body}
@@ -832,7 +896,7 @@ export function HypothesisBlock({
           )}
 
           <div className="mt-1 text-[12px] leading-relaxed text-gray-700">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-purple-700">
+            <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-400">
               why
             </span>{" "}
             {editing === "rationale" ? (
@@ -845,7 +909,7 @@ export function HypothesisBlock({
             ) : (
               <span
                 onClick={() => setEditing("rationale")}
-                className="cursor-text rounded transition hover:bg-white/60"
+                className="cursor-text rounded transition hover:bg-gray-50"
                 title="Click to edit"
               >
                 {meta.rationale || "(no rationale)"}
@@ -854,7 +918,7 @@ export function HypothesisBlock({
           </div>
 
           {meta.supporting_rationales && meta.supporting_rationales.length > 0 && (
-            <ul className="mt-2 space-y-1 border-l-2 border-purple-100 pl-3">
+            <ul className="mt-2 space-y-1 border-l border-gray-200 pl-3">
               {meta.supporting_rationales.map((r, i) => (
                 <li key={i} className="text-[12px] leading-relaxed text-gray-700">
                   {r}
@@ -864,7 +928,7 @@ export function HypothesisBlock({
           )}
 
           {meta.evidence_status && (
-            <span className="mt-2 inline-block rounded-full bg-white px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-600">
+            <span className="mt-2 inline-block rounded-full bg-gray-50 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
               {meta.evidence_status}
             </span>
           )}
@@ -939,7 +1003,7 @@ export function EvidenceBlock({ block }: { block: SynergyStrategyBlock }) {
   return (
     <div className="group rounded-lg border border-gray-200 bg-white p-3">
       <div className="flex items-start gap-2">
-        <Search className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600" />
+        <Search className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-500" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             {href ? (
