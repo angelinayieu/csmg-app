@@ -75,6 +75,45 @@ import { PipelineErrorBanner } from "@/components/canvas/chrome/pipeline-error-b
 // in-canvas spawner via window events for shape creation.
 import { CanvasAddButtons } from "@/components/canvas/chrome/canvas-add-buttons";
 import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
+import {
+  isExperienceMode,
+  type ExperienceMode,
+} from "@/types/experience-mode";
+
+// ── Unified canvas chrome gating (Phase 1) ────────────────────────
+// The same whiteboard route serves all four dashboard pills now.
+// Different modes hide / show different chrome so brain_probe users
+// don't see KG-plan-review and digital_twin users don't get a hidden
+// operating-twin shell. Returns a small set of booleans the JSX
+// below reads directly. Modes default to "show everything" when
+// experienceMode is absent so existing spaces keep their behavior.
+function chromeForMode(mode: ExperienceMode | null) {
+  // brain_probe / brainstorm_speed are the lightweight brainstorm
+  // surfaces — they share the canvas but skip the heavy R&D gates.
+  const isLight = mode === "brain_probe" || mode === "brainstorm_speed";
+  // precise_rd is the full pipeline experience. digital_twin is
+  // precise_rd plus operating-twin emphasis (the chrome flag below).
+  const isDeep =
+    mode === "precise_rd" || mode === "digital_twin" || mode === null;
+  return {
+    showKgPlanGate: isDeep,
+    showFramingGate: isDeep,
+    showLabProposalGate: isDeep,
+    showLabProposalChip: isDeep,
+    showEvidenceLauncher: isDeep,
+    showBaselineLauncher: true, // baseline is useful in every mode
+    showSnapshotsLauncher: isDeep,
+    showConnectLauncher: true, // connect is cross-space, always useful
+    emphasizeTwin: mode === "digital_twin",
+    isLight,
+  };
+}
+
+function readExperienceMode(reasoningSettings: unknown): ExperienceMode | null {
+  if (!reasoningSettings || typeof reasoningSettings !== "object") return null;
+  const raw = (reasoningSettings as { experienceMode?: unknown }).experienceMode;
+  return isExperienceMode(raw) ? raw : null;
+}
 
 // Dynamic-import the canvas so tldraw (~600KB + Three.js neighbours)
 // ships only with the whiteboard route, not with the space dashboard.
@@ -100,6 +139,13 @@ export default function WhiteboardPage() {
   // (or a manual deep-link). The splash bridges the dead-looking
   // canvas window before the first SSE event paints.
   const runIdFromQuery = searchParams.get("run");
+
+  // Phase 1 unified canvas — chrome gating from the experience pill
+  // the user picked on the dashboard. Persisted into
+  // space.reasoning_settings.experienceMode by /api/intake/bootstrap.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const experienceMode = readExperienceMode((space as any)?.reasoning_settings);
+  const chrome = chromeForMode(experienceMode);
   const [connectOpen, setConnectOpen] = useState(false);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [situationOpen, setSituationOpen] = useState(false);
@@ -173,8 +219,10 @@ export default function WhiteboardPage() {
           status='proposed' lab_scaffolds row; when found, surfaces
           a floating chip that opens the wizard. After approval the
           wizard navigates to the lab pre-loaded with the first
-          new subject. */}
-      <CanvasLabProposalChip spaceId={space.id} />
+          new subject. Hidden in brainstorm modes — those users
+          aren't running a pipeline that would produce a lab
+          proposal anyway. */}
+      {chrome.showLabProposalChip && <CanvasLabProposalChip spaceId={space.id} />}
 
       {/* KG Generation Plan gate — blocking overlay when a plan is
           in 'proposed' or 'edited' state for this space. The card
@@ -192,7 +240,7 @@ export default function WhiteboardPage() {
           proposal is conceptually upstream of the plan proposal —
           framing is "what problem are we solving" and plan is "what
           KG should we build for that problem." */}
-      <FramingProposalGate spaceId={space.id} />
+      {chrome.showFramingGate && <FramingProposalGate spaceId={space.id} />}
 
       {/* Phase 2 (Week 4) — lab diverge-converge gate. Listens for
           interaxis:lab-{proposed,approved,selected} window events and
@@ -202,7 +250,7 @@ export default function WhiteboardPage() {
           Mounted at the same z-40 as FramingProposalGate; the two
           rarely render simultaneously (framing fires pre-decompose,
           lab fires post-strategy) so a stacking conflict is unusual. */}
-      <LabProposalGate spaceId={space.id} />
+      {chrome.showLabProposalGate && <LabProposalGate spaceId={space.id} />}
 
       {/* Sprint C3 — pipeline error/warning banner. Mounted BELOW
           FramingProposalGate (z-30 vs z-40) so the framing card stays
@@ -212,11 +260,13 @@ export default function WhiteboardPage() {
           strategy-refresh feed it. */}
       <PipelineErrorBanner />
 
-      <KgPlanReviewGate
-        spaceId={space.id}
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        initialPrompt={((space as any).input_text as string | undefined) ?? null}
-      />
+      {chrome.showKgPlanGate && (
+        <KgPlanReviewGate
+          spaceId={space.id}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          initialPrompt={((space as any).input_text as string | undefined) ?? null}
+        />
+      )}
 
       {/* Fresh-run splash — bridges the visual gap from "submit prompt"
           → "first entity paints". Only shows when `?run=` is present
@@ -257,26 +307,32 @@ export default function WhiteboardPage() {
           (rigorous mode). Stacked above Baseline. Surfaces the L2M-
           style effect-size extractions from research artifacts the
           user has attached, with full LLM × parser provenance and
-          approve/reject review actions. */}
-      <button
-        onClick={() => setEvidenceOpen(true)}
-        className="fixed bottom-[11rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-purple-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
-        title="Evidence registry — review effect sizes extracted from research artifacts (rigorous mode)"
-      >
-        <Beaker className="h-3.5 w-3.5 text-purple-600" />
-        Evidence
-      </button>
+          approve/reject review actions. Hidden in brainstorm modes
+          — there's no pipeline producing evidence rows. */}
+      {chrome.showEvidenceLauncher && (
+        <button
+          onClick={() => setEvidenceOpen(true)}
+          className="fixed bottom-[11rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-purple-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+          title="Evidence registry — review effect sizes extracted from research artifacts (rigorous mode)"
+        >
+          <Beaker className="h-3.5 w-3.5 text-purple-600" />
+          Evidence
+        </button>
+      )}
 
       {/* R5 Phase A — Snapshots launcher, stacked above Connect so
-          both bottom-right anchors have clear hit targets. */}
-      <button
-        onClick={() => setSnapshotsOpen(true)}
-        className="fixed bottom-20 right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
-        title="Snapshots & scenarios — freeze the KG and test interventions against it"
-      >
-        <Camera className="h-3.5 w-3.5 text-blue-600" />
-        Snapshots
-      </button>
+          both bottom-right anchors have clear hit targets. Hidden in
+          brainstorm modes — there's no KG to snapshot yet. */}
+      {chrome.showSnapshotsLauncher && (
+        <button
+          onClick={() => setSnapshotsOpen(true)}
+          className="fixed bottom-20 right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+          title="Snapshots & scenarios — freeze the KG and test interventions against it"
+        >
+          <Camera className="h-3.5 w-3.5 text-blue-600" />
+          Snapshots
+        </button>
+      )}
 
       {/* Connect launcher — bottom-right floating button. Opens the
           weave + bridges side panel for this whiteboard. */}

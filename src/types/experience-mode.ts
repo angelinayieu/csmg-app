@@ -51,6 +51,18 @@ export interface ExperienceModeMeta {
   };
 }
 
+// All four modes route through the SAME unified launcher
+// (/app/whiteboard/new) which calls /api/intake/bootstrap, creates a
+// `spaces` row with the mode persisted into reasoning_settings, and
+// lands the user on the InteraxisCanvas with mode-aware chrome
+// gating. brain_probe + brainstorm_speed pass skipPipeline=true so
+// they don't fire the heavy decompose chain; precise_rd +
+// digital_twin let the full pipeline run.
+//
+// `promptField` is preserved for the dashboard hero's URL builder so
+// the unified launcher reads either ?prompt or ?seed (legacy callers
+// may still hit the old routes during the transition window).
+
 export const EXPERIENCE_MODES: ExperienceModeMeta[] = [
   {
     id: "brain_probe",
@@ -61,7 +73,7 @@ export const EXPERIENCE_MODES: ExperienceModeMeta[] = [
     accent: "#06b6d4",
     accentSoft: "rgba(6, 182, 212, 0.18)",
     icon: "Brain",
-    destination: { route: "/app/synergy/new", promptField: "seed" },
+    destination: { route: "/app/whiteboard/new", promptField: "prompt" },
   },
   {
     id: "brainstorm_speed",
@@ -72,7 +84,7 @@ export const EXPERIENCE_MODES: ExperienceModeMeta[] = [
     accent: "#a855f7",
     accentSoft: "rgba(168, 85, 247, 0.18)",
     icon: "FastForward",
-    destination: { route: "/app/synergy/new", promptField: "seed" },
+    destination: { route: "/app/whiteboard/new", promptField: "prompt" },
   },
   {
     id: "precise_rd",
@@ -83,18 +95,18 @@ export const EXPERIENCE_MODES: ExperienceModeMeta[] = [
     accent: "#6366f1",
     accentSoft: "rgba(99, 102, 241, 0.18)",
     icon: "FlaskConical",
-    destination: { route: "/app/strategy/new", promptField: "prompt" },
+    destination: { route: "/app/whiteboard/new", promptField: "prompt" },
   },
   {
     id: "digital_twin",
     label: "Build Digital Twin",
-    tagline: "Casual model of a situation for prediction",
+    tagline: "Causal model of a situation for prediction",
     description:
       "Curates a focused knowledge graph for a set of conditions, situations, or data points and uses causal modeling to predict reality. Less about a specific application — more about modeling the system itself.",
     accent: "#10b981",
     accentSoft: "rgba(16, 185, 129, 0.18)",
     icon: "Layers3",
-    destination: { route: "/app/strategy/new", promptField: "prompt" },
+    destination: { route: "/app/whiteboard/new", promptField: "prompt" },
   },
 ];
 

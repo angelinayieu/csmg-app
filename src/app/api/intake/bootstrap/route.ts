@@ -80,6 +80,7 @@ export async function POST(request: Request) {
     skipPlanGate: rawSkipPlanGate,
     planMode: rawPlanMode,
     clarifying_qa_pairs: rawClarifyingPairs,
+    skipPipeline: rawSkipPipeline,
   } = (body ?? {}) as {
     text?: string;
     reasoningDepth?: string;
@@ -99,6 +100,14 @@ export async function POST(request: Request) {
      *  on the first run instead of always reading 0. Optional; absent
      *  when the user didn't toggle "ask clarifying questions". */
     clarifying_qa_pairs?: Array<{ question?: unknown; answer?: unknown }>;
+    /** Unified-canvas Phase 1 (2026-05) — when true, create the space
+     *  + pipeline_run row but DO NOT fire the heavy decompose chain.
+     *  The user lands on a quiet whiteboard they can drive themselves
+     *  (voice, manual seeds, on-demand augment). Used by the
+     *  brain_probe and brainstorm_speed experience modes from the
+     *  dashboard pills. Bypasses the credit reservation entirely
+     *  since no LLM work is scheduled. */
+    skipPipeline?: boolean;
   };
 
   // Sanitize clarifying pairs — drop empty pairs, trim, cap at 10.
@@ -207,13 +216,20 @@ export async function POST(request: Request) {
   // specific "need X credits, you have Y, buy Z pack" CTA instead of
   // a generic error. Terminal success commits the reservation
   // (charges the user); any catch on the chain cancels (refund).
+  //
+  // Phase 1 unified canvas: when skipPipeline=true (brain_probe /
+  // brainstorm_speed modes), no LLM work is scheduled — the user is
+  // driving the canvas themselves. Bypass the reservation entirely.
+  const skipPipeline = rawSkipPipeline === true;
   const tier: AnalysisTier =
     reasoningDepth === "quick"
       ? "quick"
       : reasoningDepth === "deep"
         ? "deep"
         : "standard";
-  const reservation = await reserveCredits(db, user.id, tier);
+  const reservation = skipPipeline
+    ? { success: true as const, reservationId: "skip_pipeline" }
+    : await reserveCredits(db, user.id, tier);
   if (!reservation.success) {
     // Distinguish real "insufficient credits" (402) from transient
     // Supabase outages (503). Without this, the Vercel error anomaly
@@ -494,6 +510,29 @@ export async function POST(request: Request) {
   // entire decompose duration, hit Node's default headers timeout on
   // slow runs, and erroneously marked the run failed — tearing down
   // the client's subscription while decompose was still working.
+  // ── Phase 1 unified canvas — early exit for skipPipeline ─────────
+  // brain_probe / brainstorm_speed modes create a space but don't
+  // schedule any LLM work. Mark the run complete so the SSE listener
+  // doesn't sit in "running" forever, then return immediately. No
+  // after() block, no credit cost, no decompose chain.
+  if (skipPipeline) {
+    try {
+      await emitStructuralEvent(db, runId, {
+        type: "stage_boundary",
+        stage: "intake",
+        phase: "exit",
+        message: "Quiet whiteboard — user-driven mode",
+      });
+      await completePipelineRun(db, runId, "completed");
+    } catch (err) {
+      console.warn(
+        "[intake/bootstrap] skipPipeline completion soft-fail:",
+        err,
+      );
+    }
+    return NextResponse.json({ spaceId, runId });
+  }
+
   after(async () => {
     // Outer safety net — everything below is individually soft-failed,
     // but an escape (e.g. a throw in setup or a deep unhandled

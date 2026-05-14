@@ -95,6 +95,18 @@ export interface ReasoningSettings {
    *  applies uniformly. When set, it OVERRIDES the LLM-inferred
    *  outcome_horizon — explicit user constraint wins. */
   solveBy?: string;
+  // ── Unified-canvas experience mode (Phase 1, 2026-05) ────────────
+  // The dashboard pill the user picked when they kicked off this
+  // space. Drives chrome gating on the unified whiteboard surface
+  // (/app/space/[id]/whiteboard) so the same canvas can render the
+  // brain-probe / brainstorm-speedrun / precise-R&D / digital-twin
+  // experiences without four parallel routes. Persisted to
+  // spaces.reasoning_settings JSONB — no separate column.
+  experienceMode?:
+    | "brain_probe"
+    | "brainstorm_speed"
+    | "precise_rd"
+    | "digital_twin";
 }
 
 export const DEFAULT_REASONING_SETTINGS: ReasoningSettings = {
@@ -214,6 +226,14 @@ export function coerceReasoningSettings(raw: unknown): ReasoningSettings {
       ? r.solveBy.trim().slice(0, 200)
       : undefined;
 
+  const experienceMode: ReasoningSettings["experienceMode"] =
+    r.experienceMode === "brain_probe" ||
+    r.experienceMode === "brainstorm_speed" ||
+    r.experienceMode === "precise_rd" ||
+    r.experienceMode === "digital_twin"
+      ? r.experienceMode
+      : undefined;
+
   return {
     lenses: lenses.length > 0 ? lenses : DEFAULT_REASONING_SETTINGS.lenses,
     depth,
@@ -229,6 +249,7 @@ export function coerceReasoningSettings(raw: unknown): ReasoningSettings {
     ...(costBudget !== undefined ? { costBudget } : {}),
     ...(costBudgetStrictness !== undefined ? { costBudgetStrictness } : {}),
     ...(solveBy !== undefined ? { solveBy } : {}),
+    ...(experienceMode !== undefined ? { experienceMode } : {}),
   };
 }
 
