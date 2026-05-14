@@ -423,6 +423,14 @@ export function PlanStepBlock({
     }>;
   };
   const [editing, setEditing] = useState<null | "title" | "body">(null);
+  // Tier 2c — progressive disclosure. Sub-steps, challenges, supporting
+  // evidence, and the per-step AI actions are hidden by default so the
+  // doc reads like a 5-step outline. Tap the chevron underneath the
+  // body to reveal them all together. When the step has no detail yet
+  // (fresh strategy, no expand/challenge/find-evidence runs yet), we
+  // skip the chevron and show the action chips inline so the user can
+  // trigger them without a wasted click.
+  const [expanded, setExpanded] = useState(false);
 
   const saveTitle = async (next: string) => {
     setEditing(null);
@@ -561,58 +569,135 @@ export function PlanStepBlock({
           </p>
         )}
 
-        {meta.sub_steps && meta.sub_steps.length > 0 && (
-          <ul className="mt-3 space-y-1.5 border-l border-gray-200 pl-3">
-            {meta.sub_steps.map((s, i) => (
-              <li key={i} className="text-[12px] leading-relaxed">
-                <div className="font-semibold text-gray-800">{s.title}</div>
-                <div className="text-gray-600">{s.detail}</div>
-              </li>
-            ))}
-          </ul>
-        )}
+        {/* ── Progressive disclosure (Tier 2c) ──
+            Counts what's currently hidden. If the step has any
+            sub-steps, challenges, or supporting evidence we show a
+            quiet chevron link with a "what's behind it" label
+            ("2 sub-steps · 1 challenge · 3 sources"). Tapping reveals
+            everything inside an animated panel. If the step has none
+            of those yet, we skip the chevron entirely and surface the
+            action chips inline — the actions are how the user GETS
+            content, so hiding them when there's nothing else here
+            would be a usability foot-gun. */}
+        {(() => {
+          const subStepCount = meta.sub_steps?.length ?? 0;
+          const challengeCount = meta.challenges?.length ?? 0;
+          const evidenceCount = supportingEvidence.length;
+          const hasDetail =
+            subStepCount + challengeCount + evidenceCount > 0;
 
-        <ChallengesGroup challenges={meta.challenges ?? []} />
-        <SupportingEvidence evidence={supportingEvidence} />
+          const actions = (
+            <BlockActions
+              actions={[
+                {
+                  icon: Maximize2,
+                  label: meta.sub_steps?.length ? "Re-expand" : "Expand",
+                  run: async () => {
+                    const updated = await expandStrategyBlock(block.id);
+                    onUpdate(updated);
+                    toast.success("Expanded into sub-steps");
+                  },
+                },
+                {
+                  icon: Search,
+                  label: "Find evidence",
+                  run: async () => {
+                    const created = await findEvidenceForBlock(block.id);
+                    onAppendBlocks(created);
+                    toast.success(`Found ${created.length} sources`);
+                  },
+                },
+                {
+                  icon: MessageSquareWarning,
+                  label: meta.challenges?.length ? "Re-challenge" : "Challenge",
+                  run: async () => {
+                    const updated = await challengeStrategyBlock(block.id);
+                    onUpdate(updated);
+                    toast.success("Challenges surfaced");
+                  },
+                },
+                {
+                  icon: Pencil,
+                  label: "Edit",
+                  run: async () => {
+                    setEditing("body");
+                  },
+                },
+              ]}
+            />
+          );
 
-        <BlockActions
-          actions={[
-            {
-              icon: Maximize2,
-              label: meta.sub_steps?.length ? "Re-expand" : "Expand",
-              run: async () => {
-                const updated = await expandStrategyBlock(block.id);
-                onUpdate(updated);
-                toast.success("Expanded into sub-steps");
-              },
-            },
-            {
-              icon: Search,
-              label: "Find evidence",
-              run: async () => {
-                const created = await findEvidenceForBlock(block.id);
-                onAppendBlocks(created);
-                toast.success(`Found ${created.length} sources`);
-              },
-            },
-            {
-              icon: MessageSquareWarning,
-              label: meta.challenges?.length ? "Re-challenge" : "Challenge",
-              run: async () => {
-                const updated = await challengeStrategyBlock(block.id);
-                onUpdate(updated);
-                toast.success("Challenges surfaced");
-              },
-            },
-            {
-              icon: Pencil,
-              label: "Edit",
-              run: async () => {
-                setEditing("body");
-              },
-            },
-          ]}
-        />
+          // ── No detail yet — actions live inline ──
+          if (!hasDetail) {
+            return <div className="mt-3">{actions}</div>;
+          }
+
+          // ── Has detail — render chevron + collapsible panel ──
+          const counterParts: string[] = [];
+          if (subStepCount > 0) {
+            counterParts.push(
+              `${subStepCount} sub-step${subStepCount === 1 ? "" : "s"}`,
+            );
+          }
+          if (challengeCount > 0) {
+            counterParts.push(
+              `${challengeCount} challenge${challengeCount === 1 ? "" : "s"}`,
+            );
+          }
+          if (evidenceCount > 0) {
+            counterParts.push(
+              `${evidenceCount} source${evidenceCount === 1 ? "" : "s"}`,
+            );
+          }
+          const counterLabel = counterParts.join(" · ");
+
+          return (
+            <>
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                aria-expanded={expanded}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-medium text-gray-500 transition hover:bg-black/[0.03] hover:text-gray-900"
+              >
+                <ChevronDown
+                  className={`h-3 w-3 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+                  strokeWidth={1.75}
+                />
+                {expanded ? "Hide details" : counterLabel}
+              </button>
+
+              {/* Grid-rows height animation — no JS lib needed. The
+                  inner overflow-hidden div is what visually clips
+                  the content while the grid row collapses 0fr → 1fr. */}
+              <div
+                className="grid transition-[grid-template-rows] duration-300 ease-out"
+                style={{
+                  gridTemplateRows: expanded ? "1fr" : "0fr",
+                }}
+                aria-hidden={!expanded}
+              >
+                <div className="overflow-hidden">
+                  {subStepCount > 0 && (
+                    <ul className="mt-3 space-y-1.5 border-l border-gray-200 pl-3">
+                      {meta.sub_steps!.map((s, i) => (
+                        <li key={i} className="text-[12px] leading-relaxed">
+                          <div className="font-semibold text-gray-800">
+                            {s.title}
+                          </div>
+                          <div className="text-gray-600">{s.detail}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <ChallengesGroup challenges={meta.challenges ?? []} />
+                  <SupportingEvidence evidence={supportingEvidence} />
+
+                  <div className="mt-3">{actions}</div>
+                </div>
+              </div>
+            </>
+          );
+        })()}
       </div>
     </div>
   );
