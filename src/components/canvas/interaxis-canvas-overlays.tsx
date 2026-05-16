@@ -28,6 +28,7 @@ import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
 import { CanvasLassoSubjectButton } from "./chrome/canvas-lasso-subject-button";
 import { CanvasLassoSummarizeButton } from "./chrome/canvas-lasso-summarize-button";
 import { CanvasLassoChatButton } from "./chrome/canvas-lasso-chat-button";
+import { CanvasSelectionPopover } from "./chrome/canvas-selection-popover";
 import { CanvasSummaryArrowFader } from "./chrome/canvas-summary-arrow-fader";
 import { CanvasSummaryCardActions } from "./chrome/canvas-summary-card-actions";
 import { CanvasRoomExtendHandler } from "./chrome/canvas-room-extend-handler";
@@ -137,12 +138,23 @@ function CanvasOverlays() {
           drops a SummaryCardShape below the selection bbox with
           tldraw-arrow connectors back to each source. */}
       <CanvasLassoSummarizeButton spaceId={spaceId} />
-      {/* Lasso → Chat. Mounts to the LEFT of the Summarize button.
-          Opens a floating chat panel scoped to the current selection —
-          the user can ask about patterns, gaps, hypotheses, or next
-          steps and get grounded AI responses referencing the actual
-          selected items. Self-contained state (no canvas root wiring). */}
+      {/* Lasso → Chat. Kept for now as a parallel surface — the new
+          unified selection popover (below) shows the 7 synergy
+          actions + a describe field that subsumes this button's
+          chat-with-selection capability. Deletion of this button
+          deferred until the popover graduates from MVP and we've
+          confirmed all chat-button flows work in the popover. */}
       <CanvasLassoChatButton spaceId={spaceId} />
+
+      {/* Phase 2a #1 — Unified selection popover. Appears whenever
+          ≥1 entity-bearing shape is selected. Surfaces the 7
+          synergy-flavored actions (decompose, variations, questions,
+          research, make-a-plan, rank, tidy) + a describe escape
+          hatch. Three actions wired in MVP: decompose, questions,
+          research. Variations / make-plan / rank disabled with
+          "soon" badges until Phase 2b ships their endpoints. Tidy
+          calls tldraw native align+distribute. */}
+      <CanvasSelectionPopover spaceId={spaceId} />
       {/* Tracks selection and dims/un-dims summary connector arrows so
           the fork only "lights up" when the user is interacting with
           the owning card or one of its sources. Returns null. */}
