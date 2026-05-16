@@ -456,13 +456,13 @@ export function PlanStepBlock({
     }
   };
 
-  // ── Tier 2a + 2b: per-step icon + metadata pills ──
-  // Rule-based classifier in @/lib/synergy/step-icons. Inferred from
-  // the step's title + body — no LLM round trip, runs at render. If
-  // we later add an LLM-tagged `category` field to PlanStepMeta this
-  // becomes a fallback only.
-  const StepIcon = getStepIcon(meta.title ?? "", block.body);
-  const pills = getStepMetadata(block.body);
+  // ── Per-step icon + metadata pills ──
+  // Phase 1 onward: prefers LLM-tagged meta.category / .duration_estimate
+  // / .effort_level when present (strategy generated post-upgrade).
+  // Falls back to regex heuristics for backward-compat with strategies
+  // generated before the schema upgrade.
+  const StepIcon = getStepIcon(meta, block.body);
+  const pills = getStepMetadata(meta, block.body);
 
   return (
     // ── Step row ──

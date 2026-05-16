@@ -34,7 +34,28 @@ interface RouteContext {
 interface GeneratedStrategy {
   statement: string;
   pitch: string;
-  plan_steps: Array<{ title: string; detail: string }>;
+  // ── Phase 1 LLM-tagged plan-step fields ──
+  // Schema in strategy-prompts.ts marks these as required so the LLM
+  // always produces them. The type system + UI tolerate missing fields
+  // for backward-compat with strategies generated before Phase 1.
+  plan_steps: Array<{
+    title: string;
+    detail: string;
+    category:
+      | "schedule"
+      | "research"
+      | "collaborate"
+      | "build"
+      | "publish"
+      | "iterate"
+      | "learn"
+      | "other";
+    duration_estimate: string;
+    effort_level: "light" | "medium" | "heavy";
+    first_action: string;
+    depends_on: number[];
+    success_signal: string;
+  }>;
   risks: Array<{
     severity: "high" | "medium" | "low";
     title: string;
@@ -310,6 +331,16 @@ ${boardSummary || "(empty)"}`;
 
   for (const step of generated.plan_steps ?? []) {
     const title = step.title.trim().slice(0, 160);
+    // ── Phase 1 LLM-tagged fields ──
+    // Defensive trims/slices/filters: even with structured output, we
+    // don't fully trust string lengths or array contents. We also keep
+    // the new fields optional on the type so backward-compat readers
+    // (older strategies in the DB) don't crash.
+    const dependsOn = Array.isArray(step.depends_on)
+      ? step.depends_on.filter(
+          (n) => Number.isInteger(n) && n >= 0 && n < generated.plan_steps.length,
+        )
+      : [];
     blocks.push({
       strategy_id: strategyId,
       generation_id: generationId,
@@ -317,7 +348,15 @@ ${boardSummary || "(empty)"}`;
       body: step.detail.trim().slice(0, 1200),
       source_node_id: attributeStepToPlan(title),
       sort_order: sortOrder++,
-      meta: { title },
+      meta: {
+        title,
+        category: step.category,
+        duration_estimate: step.duration_estimate?.trim().slice(0, 60),
+        effort_level: step.effort_level,
+        first_action: step.first_action?.trim().slice(0, 400),
+        depends_on: dependsOn,
+        success_signal: step.success_signal?.trim().slice(0, 400),
+      },
     });
   }
   for (const r of generated.risks ?? []) {

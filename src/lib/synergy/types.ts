@@ -357,12 +357,49 @@ export interface MitigationTactic {
   kind: "prevent" | "detect" | "respond";
 }
 
+// ── Phase 1: LLM-tagged plan-step categories ──
+//
+// Authored by the strategy-gen LLM at generation time so the UI can
+// render activity glyphs + duration/effort pills + dependency arrows
+// without falling back to client-side regex heuristics. The category
+// list maps 1:1 to icons in src/lib/synergy/step-icons.ts.
+export type PlanStepCategory =
+  | "schedule"
+  | "research"
+  | "collaborate"
+  | "build"
+  | "publish"
+  | "iterate"
+  | "learn"
+  | "other";
+
+export type PlanStepEffort = "light" | "medium" | "heavy";
+
+export type PlanStepStatus = "pending" | "in_progress" | "done";
+
 export interface PlanStepMeta {
   title?: string;
-  // AI-op-produced sub-steps via /expand
-  sub_steps?: SubStep[];
-  // AI-op-produced adversarial weaknesses via /challenge
-  challenges?: ChallengeItem[];
+
+  // ── Phase 1 LLM-tagged fields ──
+  // All optional on the TYPE for backward compat with strategies
+  // generated before the schema upgrade. The LLM schema marks them
+  // required so new generations always include them.
+  category?: PlanStepCategory;
+  duration_estimate?: string; // "30 min/day", "2 weeks total", "ongoing"
+  effort_level?: PlanStepEffort;
+  /** Single concrete action the user can take in the next hour. */
+  first_action?: string;
+  /** 0-based indices of plan steps that must be completed first. */
+  depends_on?: number[];
+  /** Observable evidence this step is complete. Checkable in 30s. */
+  success_signal?: string;
+
+  // ── Phase 2 user-authored state (added separately) ──
+  status?: PlanStepStatus;
+
+  // ── Existing AI-op-produced fields ──
+  sub_steps?: SubStep[]; // produced by /expand
+  challenges?: ChallengeItem[]; // produced by /challenge
   evidence_urls?: string[];
 }
 export interface RiskMeta {

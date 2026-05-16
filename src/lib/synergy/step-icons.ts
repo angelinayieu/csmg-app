@@ -2,25 +2,23 @@
 //
 // Plan steps are semantically very different activities — schedule a
 // time block, do research, collaborate with people, build something,
-// publish/share — but the strategy LLM doesn't tag them. We infer the
-// "kind" client-side from the step's title + body so each row can wear
-// a glyph that matches its activity, and a few small metadata pills
-// (time, cadence, mode, tools) that pull the key facts forward without
-// the user having to re-read the body.
+// publish/share. The Phase 1 LLM upgrade tags each step with a
+// `category` at generation time so the UI can render the right glyph
+// authoritatively. For backward-compat (strategies generated before
+// the schema upgrade) we keep a regex-based classifier as a fallback.
 //
 // Two exports:
-//   - getStepIcon(title, body) → Lucide component
-//   - getStepMetadata(body)    → small array of pills (icon + caps
-//                                label), max ~3
+//   - getStepIcon(meta, body) → Lucide component
+//   - getStepMetadata(meta, body) → small array of pills (max 3)
 //
-// Rule-based on purpose: zero latency, no token cost, runs at render.
-// If we later add an LLM-tagged `category` to PlanStepMeta, this stays
-// useful as a fallback.
+// Both functions prefer LLM-tagged fields when present, fall back to
+// regex-derived heuristics when not.
 
 import {
   BookOpen,
   CalendarClock,
   Code2,
+  Gauge,
   Lightbulb,
   Radio,
   Repeat2,
@@ -29,6 +27,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
+import type { PlanStepCategory, PlanStepMeta } from "@/lib/synergy/types";
 
 interface IconRule {
   icon: LucideIcon;
@@ -100,8 +99,35 @@ const ICON_RULES: IconRule[] = [
   },
 ];
 
-export function getStepIcon(title: string, body: string): LucideIcon {
-  const text = `${title} ${body}`;
+// Authoritative mapping: LLM category → Lucide icon. The category
+// enum lives in @/lib/synergy/types and is the source of truth for
+// Phase 1+. Anything not in this map (only "other" today) falls
+// through to the Sparkles fallback.
+const CATEGORY_ICON: Record<PlanStepCategory, LucideIcon> = {
+  schedule: CalendarClock,
+  research: BookOpen,
+  collaborate: Users,
+  build: Code2,
+  publish: Radio,
+  iterate: Wrench,
+  learn: Lightbulb,
+  other: Sparkles,
+};
+
+export function getStepIcon(
+  meta: PlanStepMeta,
+  body: string,
+): LucideIcon {
+  // ── Phase 1 — prefer LLM-tagged category ──
+  // When the strategy was generated post-Phase 1, meta.category is
+  // authoritative — it's the LLM's read of the activity kind based
+  // on full context, not a regex against a few keywords.
+  if (meta.category && CATEGORY_ICON[meta.category]) {
+    return CATEGORY_ICON[meta.category];
+  }
+
+  // ── Fallback (pre-Phase 1 strategies) — regex against title + body ──
+  const text = `${meta.title ?? ""} ${body}`;
   let best: IconRule | null = null;
   let bestPriority = -1;
   for (const rule of ICON_RULES) {
@@ -139,36 +165,38 @@ const TOOLS_WHITELIST = [
   "Excel",
 ];
 
-export function getStepMetadata(body: string): StepPill[] {
+export function getStepMetadata(
+  meta: PlanStepMeta,
+  body: string,
+): StepPill[] {
   const pills: StepPill[] = [];
 
-  // ── Time block — "30-minute" / "2 hours" / "1 hr/day" ──
-  // Captures the number + unit, then glues the cadence on as a suffix
-  // if the surrounding text says daily/weekly so the pill reads as a
-  // dose ("30 MIN/DAY") rather than a duration.
-  const timeMatch = body.match(
-    /\b(\d+)[-\s]?(minute|min|hour|hr|day|week)s?\b/i,
-  );
-  if (timeMatch) {
-    const n = timeMatch[1];
-    const u = timeMatch[2].toLowerCase();
-    let normalizedUnit: string;
-    if (u.startsWith("min")) normalizedUnit = "min";
-    else if (u === "hour" || u === "hr") normalizedUnit = "hr";
-    else normalizedUnit = u; // day | week
-    let label = `${n} ${normalizedUnit}`;
-    if (/\b(daily|each day|every day)\b/i.test(body)) {
-      label += "/day";
-    } else if (/\bweekly\b/i.test(body)) {
-      label += "/week";
-    }
-    pills.push({ icon: CalendarClock, label });
-  }
-
-  // ── Cadence — only if we didn't already glue it onto the time pill ──
-  const cadenceInTime = pills.some((p) => /\/(day|week)/.test(p.label));
-  if (!cadenceInTime) {
-    if (/\b(daily|each day|every day)\b/i.test(body)) {
+  // ── Duration ──
+  // Phase 1: prefer the LLM-authored duration_estimate. It's a string
+  // the LLM composed with full context ("30 min/day", "by Q3",
+  // "ongoing"), not a regex sample. Fall back to regex extraction
+  // from the body for backward-compat with pre-Phase 1 strategies.
+  if (meta.duration_estimate?.trim()) {
+    pills.push({ icon: CalendarClock, label: meta.duration_estimate.trim() });
+  } else {
+    const timeMatch = body.match(
+      /\b(\d+)[-\s]?(minute|min|hour|hr|day|week)s?\b/i,
+    );
+    if (timeMatch) {
+      const n = timeMatch[1];
+      const u = timeMatch[2].toLowerCase();
+      let normalizedUnit: string;
+      if (u.startsWith("min")) normalizedUnit = "min";
+      else if (u === "hour" || u === "hr") normalizedUnit = "hr";
+      else normalizedUnit = u; // day | week
+      let label = `${n} ${normalizedUnit}`;
+      if (/\b(daily|each day|every day)\b/i.test(body)) {
+        label += "/day";
+      } else if (/\bweekly\b/i.test(body)) {
+        label += "/week";
+      }
+      pills.push({ icon: CalendarClock, label });
+    } else if (/\b(daily|each day|every day)\b/i.test(body)) {
       pills.push({ icon: Repeat2, label: "Daily" });
     } else if (/\bweekly\b/i.test(body)) {
       pills.push({ icon: Repeat2, label: "Weekly" });
@@ -177,10 +205,20 @@ export function getStepMetadata(body: string): StepPill[] {
     }
   }
 
+  // ── Effort level ──
+  // LLM-only — there's no reliable regex proxy for "is this a heavy
+  // commitment." Renders as "Light", "Medium", or "Heavy" with a
+  // gauge glyph.
+  if (meta.effort_level) {
+    const labelMap = { light: "Light", medium: "Medium", heavy: "Heavy" };
+    pills.push({ icon: Gauge, label: labelMap[meta.effort_level] });
+  }
+
   // ── Mode — "with others" vs implicit solo ──
-  // Only emit when there's positive evidence of collaboration. We
-  // don't emit a "solo" pill — visual silence is enough for solo.
+  // Regex-only. Skipped if we'd push past 3 pills since duration +
+  // effort already give the highest-signal information.
   if (
+    pills.length < 3 &&
     /\b(collaborat|partner|team|together|community|stakeholder|expert|interview|coordinate)\b/i.test(
       body,
     )
@@ -189,22 +227,22 @@ export function getStepMetadata(body: string): StepPill[] {
   }
 
   // ── Tools mentioned ──
-  const tools: string[] = [];
-  for (const tool of TOOLS_WHITELIST) {
-    // Case-sensitive — "MATLAB" should match but "matlab" usually
-    // doesn't in real plan text, and we want to avoid casual mentions.
-    const escaped = tool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`\\b${escaped}\\b`).test(body)) tools.push(tool);
-  }
-  if (tools.length > 0) {
-    pills.push({
-      icon: Wrench,
-      label: tools.slice(0, 2).join(" · "),
-    });
+  // Regex-only. Will get crowded out by duration + effort + mode on
+  // collaboration-heavy steps; that's fine — tools is the least
+  // important of the four for at-a-glance reading.
+  if (pills.length < 3) {
+    const tools: string[] = [];
+    for (const tool of TOOLS_WHITELIST) {
+      const escaped = tool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`\\b${escaped}\\b`).test(body)) tools.push(tool);
+    }
+    if (tools.length > 0) {
+      pills.push({ icon: Wrench, label: tools.slice(0, 2).join(" · ") });
+    }
   }
 
-  // Cap at 3 pills — beyond that the row gets visually noisy. The
-  // ordering above means time/cadence wins over tools when there's a
-  // crunch, which matches what users want to see first.
+  // Hard cap at 3 — past that the row visually competes with the
+  // step title. Ordering above means duration/effort wins on
+  // crunch, which is what users want first.
   return pills.slice(0, 3);
 }
