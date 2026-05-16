@@ -57,6 +57,16 @@ interface ExtractionResult {
   rationale: string;
 }
 
+// Mirrors /api/pipeline/clarifying-questions response. The MCQ
+// options form is honored when present; otherwise we render a
+// free-text input.
+interface SharpenQuestion {
+  question: string;
+  rationale: string;
+  kind: "mcq" | "free_text";
+  options?: Array<{ label: string; detail: string }>;
+}
+
 const KIND_META: Record<
   ExtractionKind,
   { label: string; tone: string; emoji: string }
@@ -110,7 +120,7 @@ const STAGES: Array<{
     n: 3,
     label: "Sharpen",
     hint: "Three flashcard questions to tighten the objective.",
-    status: "soon",
+    status: "available",
   },
   {
     n: 4,
@@ -154,6 +164,20 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
   >(null);
   const [extractError, setExtractError] = useState<string | null>(null);
   const [extractTriggered, setExtractTriggered] = useState(false);
+
+  // Stage 3 — sharpening questions. 3 clarifying questions
+  // generated from a synthesized objective text derived from the
+  // kept entities + their Stage 2 classifications. Same endpoint
+  // and pattern as the dashboard clarify modal; rendered inline
+  // here rather than as a separate modal.
+  const [sharpenQuestions, setSharpenQuestions] = useState<
+    SharpenQuestion[] | null
+  >(null);
+  const [sharpenError, setSharpenError] = useState<string | null>(null);
+  const [sharpenTriggered, setSharpenTriggered] = useState(false);
+  const [sharpenAnswers, setSharpenAnswers] = useState<Record<number, string>>(
+    {},
+  );
 
   // ESC closes
   useEffect(() => {
@@ -251,6 +275,97 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
   const extracting =
     extractTriggered && extractions === null && extractError === null;
 
+  // ── Stage 3 sharpening ──
+  //
+  // Synthesizes a one-paragraph "objective" string from the kept
+  // entities + their extracted classifications, then POSTs to the
+  // existing clarifying-questions endpoint. Same endpoint used by
+  // the dashboard's pre-prompt clarifier — the questions adapt to
+  // the input text.
+  const triggerSharpening = useCallback(() => {
+    if (sharpenTriggered) return;
+    if (keptEntities.length === 0) return;
+    setSharpenTriggered(true);
+  }, [sharpenTriggered, keptEntities.length]);
+
+  const synthesizedObjective = useMemo(() => {
+    if (keptEntities.length === 0) return "";
+    const byKind: Record<ExtractionKind, string[]> = {
+      core_idea: [],
+      upstream_dependency: [],
+      downstream_output: [],
+      polished_product: [],
+      alternative: [],
+    };
+    for (const e of keptEntities) {
+      const eid = e.entity_id ?? e.id;
+      const cls = extractions?.[eid];
+      const name = e.name;
+      if (cls) byKind[cls.kind].push(name);
+      else byKind.core_idea.push(name);
+    }
+    const parts: string[] = [];
+    if (byKind.core_idea.length > 0) {
+      parts.push(`Core ideas: ${byKind.core_idea.join(", ")}.`);
+    }
+    if (byKind.polished_product.length > 0) {
+      parts.push(
+        `Polished deliverables: ${byKind.polished_product.join(", ")}.`,
+      );
+    }
+    if (byKind.upstream_dependency.length > 0) {
+      parts.push(`Upstream dependencies: ${byKind.upstream_dependency.join(", ")}.`);
+    }
+    if (byKind.downstream_output.length > 0) {
+      parts.push(`Downstream outputs: ${byKind.downstream_output.join(", ")}.`);
+    }
+    if (byKind.alternative.length > 0) {
+      parts.push(`Considering alternatives: ${byKind.alternative.join(", ")}.`);
+    }
+    return parts.join(" ");
+  }, [keptEntities, extractions]);
+
+  useEffect(() => {
+    if (!sharpenTriggered) return;
+    if (sharpenQuestions !== null || sharpenError !== null) return;
+    if (synthesizedObjective.length < 4) return;
+    let cancelled = false;
+    fetch("/api/pipeline/clarifying-questions", {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: synthesizedObjective }),
+    })
+      .then(async (r) => {
+        const json = (await r.json().catch(() => ({}))) as {
+          questions?: SharpenQuestion[];
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!r.ok || !Array.isArray(json.questions)) {
+          throw new Error(json.error ?? "No questions returned");
+        }
+        // Cap at 3 to match the flashcard pattern.
+        setSharpenQuestions(json.questions.slice(0, 3));
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setSharpenError(e instanceof Error ? e.message : String(e));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    sharpenTriggered,
+    sharpenQuestions,
+    sharpenError,
+    synthesizedObjective,
+  ]);
+
+  const sharpening =
+    sharpenTriggered && sharpenQuestions === null && sharpenError === null;
+
   const overrideKind = (entityId: string, kind: ExtractionKind) => {
     setExtractions((prev) => {
       if (!prev) return prev;
@@ -268,12 +383,12 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
     if (stage < 4) {
       const newStage = (stage + 1) as Stage;
       setStage(newStage);
-      // When transitioning into Stage 2, kick the extraction
-      // request. Done here as an event-handler side effect rather
-      // than in a useEffect to satisfy the set-state-in-effect
-      // lint rule and to keep "user clicked next" as the explicit
-      // trigger (vs an implicit reactive one).
+      // Kick the appropriate side-effect for the new stage as a
+      // direct event handler. Done here rather than in a useEffect
+      // to satisfy the set-state-in-effect lint rule and keep
+      // "user clicked next" as the explicit trigger.
       if (newStage === 2) triggerExtraction();
+      if (newStage === 3) triggerSharpening();
     }
   };
   const prev = () => {
@@ -352,6 +467,7 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
                   if (s.status !== "available") return;
                   setStage(s.n);
                   if (s.n === 2) triggerExtraction();
+                  if (s.n === 3) triggerSharpening();
                 }}
                 disabled={s.status === "soon"}
                 title={`${s.label} — ${s.hint}`}
@@ -407,7 +523,24 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
               }}
             />
           )}
-          {stage > 2 && <StagePlaceholder stage={stage} />}
+          {stage === 3 && (
+            <Stage3Sharpen
+              questions={sharpenQuestions}
+              answers={sharpenAnswers}
+              onAnswer={(idx, value) =>
+                setSharpenAnswers((s) => ({ ...s, [idx]: value }))
+              }
+              loading={sharpening}
+              error={sharpenError}
+              onRetry={() => {
+                setSharpenQuestions(null);
+                setSharpenError(null);
+                setSharpenTriggered(false);
+              }}
+              objectivePreview={synthesizedObjective}
+            />
+          )}
+          {stage > 3 && <StagePlaceholder stage={stage} />}
         </div>
 
         {/* Footer */}
@@ -751,7 +884,199 @@ function ExtractedRow({
   );
 }
 
-// ── Stage 3-4 placeholders ───────────────────────────────────────
+// ── Stage 3 — Sharpen ────────────────────────────────────────────
+
+function Stage3Sharpen({
+  questions,
+  answers,
+  onAnswer,
+  loading,
+  error,
+  onRetry,
+  objectivePreview,
+}: {
+  questions: SharpenQuestion[] | null;
+  answers: Record<number, string>;
+  onAnswer: (idx: number, value: string) => void;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+  objectivePreview: string;
+}) {
+  if (loading) {
+    return (
+      <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+        <p className="text-[12.5px] text-gray-600">Drafting questions…</p>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <p className="text-[12.5px] text-rose-700">
+          Couldn&apos;t draft questions: {error}
+        </p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="rounded-md bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-gray-800"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+  if (!questions || questions.length === 0) {
+    return (
+      <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <Sparkles className="h-6 w-6 text-gray-400" />
+        <p className="max-w-xs text-[12.5px] leading-relaxed text-gray-600">
+          Nothing to sharpen — your set was already specific enough.
+          Continue to publish.
+        </p>
+      </div>
+    );
+  }
+
+  const answeredCount = Object.values(answers).filter(
+    (v) => v.trim().length > 0,
+  ).length;
+
+  return (
+    <div>
+      <div className="mb-3">
+        <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-500">
+          Stage 3
+        </div>
+        <h3 className="font-display-tight mt-1 text-[18px] font-semibold leading-snug tracking-tight text-gray-900">
+          Sharpen the objective
+        </h3>
+        <p className="mt-1.5 text-[12px] leading-relaxed text-gray-600">
+          Three questions to tighten what you&apos;re actually trying
+          to ship. All optional — skip any.
+        </p>
+      </div>
+
+      {/* Synthesized objective preview */}
+      <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-2">
+        <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-gray-500">
+          working objective
+        </div>
+        <p className="mt-1 line-clamp-3 text-[11px] leading-relaxed text-gray-700">
+          {objectivePreview}
+        </p>
+      </div>
+
+      <ul className="space-y-3">
+        {questions.map((q, idx) => (
+          <li key={idx}>
+            <SharpenRow
+              index={idx}
+              total={questions.length}
+              question={q}
+              value={answers[idx] ?? ""}
+              onChange={(v) => onAnswer(idx, v)}
+            />
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-2 text-[10.5px] text-gray-600">
+        <strong className="font-semibold text-gray-800">
+          {answeredCount}
+        </strong>{" "}
+        of {questions.length} answered. Continue to publish — answers
+        will refine the final synthesis.
+      </div>
+    </div>
+  );
+}
+
+function SharpenRow({
+  index,
+  total,
+  question,
+  value,
+  onChange,
+}: {
+  index: number;
+  total: number;
+  question: SharpenQuestion;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const opts = question.options ?? [];
+  const hasOptions = question.kind === "mcq" && opts.length > 0;
+  const matchesOption = hasOptions && opts.some((o) => o.label === value);
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5">
+      <div className="mb-1 flex items-baseline gap-1.5">
+        <span className="font-mono text-[9.5px] tabular-nums text-gray-400">
+          {index + 1}/{total}
+        </span>
+        <span className="text-[12.5px] font-semibold leading-snug text-gray-900">
+          {question.question}
+        </span>
+      </div>
+      {question.rationale && (
+        <p className="mb-2 text-[10.5px] leading-snug text-gray-500">
+          {question.rationale}
+        </p>
+      )}
+      {hasOptions && (
+        <div className="mb-2 space-y-0.5">
+          {opts.map((opt) => {
+            const active = value === opt.label;
+            return (
+              <button
+                key={opt.label}
+                type="button"
+                onClick={() => onChange(opt.label)}
+                className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition ${
+                  active
+                    ? "bg-cyan-50 text-gray-900"
+                    : "hover:bg-gray-50 text-gray-700"
+                }`}
+              >
+                <span
+                  className={`mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full ${
+                    active ? "bg-cyan-600" : "bg-gray-200"
+                  }`}
+                >
+                  {active && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[11.5px] font-medium">
+                    {opt.label}
+                  </span>
+                  {opt.detail && (
+                    <span className="mt-0.5 block text-[10.5px] leading-snug text-gray-500">
+                      {opt.detail}
+                    </span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <input
+        type="text"
+        value={matchesOption ? "" : value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={
+          hasOptions ? "Or write your own answer…" : "Optional — skip freely"
+        }
+        className="w-full rounded-md border border-gray-200 bg-white px-2 py-1.5 text-[11.5px] text-gray-900 outline-none focus:border-cyan-500"
+      />
+    </div>
+  );
+}
+
+// ── Stage 4 placeholder ──────────────────────────────────────────
 
 function StagePlaceholder({ stage }: { stage: Stage }) {
   const meta = STAGES.find((s) => s.n === stage);
