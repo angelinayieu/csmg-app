@@ -2,99 +2,60 @@
 
 // ── ImmersiveLoader ──
 //
-// Replaces the boxy grey skeleton flicker between routes with something
-// that feels like the whiteboard catching its breath: dotted canvas, a
-// breathing brand mark, a quiet status line, and three ghost cards that
-// drift in from the periphery. Same vocabulary as the landing immersive
-// hero so route transitions feel continuous, not surgical.
-
-import { InterAxisLogo } from "@/components/brand/interaxis-logo";
+// Whiteboard surface with a wireframe 3D cube rotating at its center.
+// Pure CSS transforms — no Three.js mount delay, no canvas warmup, no
+// teal. Reads as an architect's sketch coming to life on a fresh page:
+// dotted grid, soft graphite ink, a single floating volume.
+//
+// API unchanged: same `label` prop the two route-level loading.tsx
+// files (app/loading.tsx, app/space/[id]/loading.tsx) already pass.
 
 interface ImmersiveLoaderProps {
-  /** Status line under the logo. Defaults to a generic one. */
+  /** Status line under the cube. Defaults to a generic one. */
   label?: string;
 }
 
-const GHOST_CARDS = [
-  { x: "12%", y: "22%", delay: 0, w: 180, h: 100, rot: -4 },
-  { x: "76%", y: "30%", delay: 0.4, w: 200, h: 110, rot: 3 },
-  { x: "20%", y: "72%", delay: 0.8, w: 170, h: 90, rot: 5 },
-  { x: "72%", y: "76%", delay: 1.1, w: 190, h: 105, rot: -3 },
-];
+const CUBE_SIZE = 132;
+const HALF = CUBE_SIZE / 2;
 
 export function ImmersiveLoader({
   label = "Setting up your whiteboard…",
 }: ImmersiveLoaderProps) {
   return (
-    <div className="relative flex min-h-[70vh] w-full items-center justify-center overflow-hidden">
-      {/* Dotted canvas background — same dot grid as landing */}
+    <div className="relative flex min-h-[70vh] w-full items-center justify-center overflow-hidden bg-[#fafbfc]">
+      {/* Dotted whiteboard grid — radial mask so it fades at edges */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-[0.55]"
+        className="pointer-events-none absolute inset-0"
         style={{
           backgroundImage:
-            "radial-gradient(circle at 1px 1px, rgba(15,23,42,0.10) 1px, transparent 0)",
+            "radial-gradient(circle at 1px 1px, rgba(15,23,42,0.07) 1px, transparent 0)",
           backgroundSize: "22px 22px",
           maskImage:
-            "radial-gradient(ellipse 70% 60% at 50% 50%, black 40%, transparent 90%)",
+            "radial-gradient(ellipse 65% 55% at 50% 50%, black 35%, transparent 88%)",
           WebkitMaskImage:
-            "radial-gradient(ellipse 70% 60% at 50% 50%, black 40%, transparent 90%)",
+            "radial-gradient(ellipse 65% 55% at 50% 50%, black 35%, transparent 88%)",
         }}
       />
 
-      {/* Soft teal aura behind the brand mark */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute left-1/2 top-1/2 h-[420px] w-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-        style={{
-          background:
-            "radial-gradient(closest-side, rgba(0,188,212,0.18), rgba(0,188,212,0) 70%)",
-          animation: "iaPulse 3.4s ease-in-out infinite",
-        }}
-      />
-
-      {/* Drifting ghost cards */}
-      {GHOST_CARDS.map((c, i) => (
-        <div
-          key={i}
-          aria-hidden
-          className="pointer-events-none absolute rounded-2xl border border-white/60 bg-white/55 shadow-[0_8px_30px_-12px_rgba(15,23,42,0.18)] backdrop-blur-md"
-          style={{
-            left: c.x,
-            top: c.y,
-            width: c.w,
-            height: c.h,
-            transform: `rotate(${c.rot}deg)`,
-            animation: `iaDrift 5.5s ease-in-out ${c.delay}s infinite alternate`,
-            opacity: 0.85,
-          }}
-        >
-          {/* Ghost content lines */}
-          <div className="flex h-full flex-col gap-2 p-4">
-            <div className="h-2.5 w-1/2 rounded-full bg-slate-200/80" />
-            <div className="h-2 w-3/4 rounded-full bg-slate-200/60" />
-            <div className="mt-auto h-2 w-1/3 rounded-full bg-interaxis-200/70" />
-          </div>
-        </div>
-      ))}
-
-      {/* Brand mark + status */}
+      {/* Cube + ground shadow */}
       <div className="relative z-10 flex flex-col items-center">
-        <div
-          className="rounded-2xl"
-          style={{
-            animation: "iaBreathe 2.6s ease-in-out infinite",
-            filter:
-              "drop-shadow(0 10px 30px rgba(0,188,212,0.25)) drop-shadow(0 4px 14px rgba(15,23,42,0.10))",
-          }}
-        >
-          <InterAxisLogo className="h-14 w-14" size={112} />
+        <div className="ia-stage">
+          <div className="ia-cube">
+            <div className="ia-face ia-face-front" />
+            <div className="ia-face ia-face-back" />
+            <div className="ia-face ia-face-right" />
+            <div className="ia-face ia-face-left" />
+            <div className="ia-face ia-face-top" />
+            <div className="ia-face ia-face-bottom" />
+          </div>
+          <div className="ia-shadow" aria-hidden />
         </div>
 
-        <div className="mt-6 flex items-center gap-2.5 rounded-full border border-slate-200/70 bg-white/70 px-4 py-1.5 backdrop-blur-md">
+        <div className="mt-10 flex items-center gap-2.5 rounded-full border border-slate-200/80 bg-white/80 px-4 py-1.5 backdrop-blur-md shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <span className="relative inline-flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-interaxis-500 opacity-60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-interaxis-500" />
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-slate-400 opacity-50" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-slate-500" />
           </span>
           <span className="text-[12.5px] font-medium tracking-tight text-slate-600">
             {label}
@@ -102,35 +63,81 @@ export function ImmersiveLoader({
         </div>
       </div>
 
-      <style jsx global>{`
-        @keyframes iaBreathe {
-          0%,
-          100% {
-            transform: scale(1);
-            opacity: 0.95;
-          }
-          50% {
-            transform: scale(1.05);
-            opacity: 1;
-          }
+      <style jsx>{`
+        .ia-stage {
+          position: relative;
+          width: ${CUBE_SIZE * 2}px;
+          height: ${CUBE_SIZE * 1.6}px;
+          perspective: 900px;
+          perspective-origin: 50% 45%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
-        @keyframes iaPulse {
-          0%,
-          100% {
-            opacity: 0.55;
-            transform: translate(-50%, -50%) scale(1);
-          }
-          50% {
-            opacity: 1;
-            transform: translate(-50%, -50%) scale(1.08);
-          }
+
+        .ia-cube {
+          position: relative;
+          width: ${CUBE_SIZE}px;
+          height: ${CUBE_SIZE}px;
+          transform-style: preserve-3d;
+          animation: ia-cube-spin 14s linear infinite;
+          will-change: transform;
         }
-        @keyframes iaDrift {
-          0% {
-            transform: translateY(0px) rotate(var(--rot, 0deg));
+
+        .ia-face {
+          position: absolute;
+          inset: 0;
+          background: rgba(255, 255, 255, 0.55);
+          border: 1px solid rgba(15, 23, 42, 0.55);
+          box-shadow:
+            inset 0 0 0 1px rgba(255, 255, 255, 0.7),
+            inset 0 18px 36px -18px rgba(15, 23, 42, 0.08);
+          backdrop-filter: blur(2px);
+          -webkit-backdrop-filter: blur(2px);
+        }
+
+        .ia-face-front  { transform: translateZ(${HALF}px); }
+        .ia-face-back   { transform: rotateY(180deg) translateZ(${HALF}px); }
+        .ia-face-right  { transform: rotateY(90deg)  translateZ(${HALF}px); }
+        .ia-face-left   { transform: rotateY(-90deg) translateZ(${HALF}px); }
+        .ia-face-top    { transform: rotateX(90deg)  translateZ(${HALF}px); }
+        .ia-face-bottom { transform: rotateX(-90deg) translateZ(${HALF}px); }
+
+        .ia-shadow {
+          position: absolute;
+          bottom: 6%;
+          left: 50%;
+          width: ${CUBE_SIZE * 1.4}px;
+          height: 22px;
+          transform: translateX(-50%);
+          background: radial-gradient(
+            ellipse at center,
+            rgba(15, 23, 42, 0.18) 0%,
+            rgba(15, 23, 42, 0.06) 45%,
+            transparent 75%
+          );
+          filter: blur(6px);
+          animation: ia-shadow-breathe 14s ease-in-out infinite;
+        }
+
+        @keyframes ia-cube-spin {
+          0%   { transform: rotateX(-22deg) rotateY(0deg);   }
+          50%  { transform: rotateX(-18deg) rotateY(180deg); }
+          100% { transform: rotateX(-22deg) rotateY(360deg); }
+        }
+
+        @keyframes ia-shadow-breathe {
+          0%, 100% { opacity: 0.9; transform: translateX(-50%) scaleX(1);    }
+          50%      { opacity: 0.7; transform: translateX(-50%) scaleX(0.88); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .ia-cube {
+            animation: none;
+            transform: rotateX(-22deg) rotateY(-28deg);
           }
-          100% {
-            transform: translateY(-10px) rotate(var(--rot, 0deg));
+          .ia-shadow {
+            animation: none;
           }
         }
       `}</style>
