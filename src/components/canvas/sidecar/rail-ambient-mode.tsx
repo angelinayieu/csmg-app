@@ -134,40 +134,79 @@ export function RailAmbientMode({ spaceId }: Props) {
           data.locked_insights.risk_top.length > 0) && (
           <RailSection title="Locked insights">
             {data.locked_insights.bottleneck && (
-              <StateCard
+              <InsightCard
                 eyebrow="Bottleneck"
-                title={data.locked_insights.bottleneck.summary || "Bottleneck"}
-                subtitle={
-                  data.locked_insights.bottleneck.blast_radius != null
-                    ? `blast radius ${data.locked_insights.bottleneck.blast_radius.toFixed(2)}`
-                    : undefined
+                entityName={data.locked_insights.bottleneck.entity_name}
+                summary={data.locked_insights.bottleneck.summary}
+                extraLine={
+                  data.locked_insights.bottleneck.unlock_summary
+                    ? `Unblocks: ${data.locked_insights.bottleneck.unlock_summary}`
+                    : data.locked_insights.bottleneck.scope_label ?? undefined
                 }
                 accent="#b42318"
               />
             )}
             {data.locked_insights.leverage_top.slice(0, 2).map((lp) => (
-              <StateCard
+              <InsightCard
                 key={lp.entity_id}
                 eyebrow="Leverage"
-                title={lp.title}
-                subtitle={lp.summary?.slice(0, 80)}
+                entityName={lp.entity_name}
+                summary={lp.summary}
                 accent="#15803d"
               />
             ))}
             {data.locked_insights.risk_top.slice(0, 1).map((rp) => (
-              <StateCard
+              <InsightCard
                 key={rp.entity_id}
                 eyebrow="Risk"
-                title={rp.title}
-                subtitle={rp.summary?.slice(0, 80)}
+                entityName={rp.entity_name}
+                summary={rp.summary}
                 accent="#a16207"
               />
             ))}
           </RailSection>
         )}
 
-      {/* No-synthesis guidance — quiet state, not anti-information */}
-      {data && !data.has_synthesis && (
+      {/* Synthesis-in-progress — KG has nodes but synthesis hasn't
+          landed yet. Replaces the silent "blank rail" window between
+          decompose finishing and synthesize writing back. */}
+      {data && data.synthesis_in_progress && (
+        <div
+          style={{
+            padding: "12px 14px",
+            borderRadius: 12,
+            background: "rgba(6,108,232,0.05)",
+            border: "1px solid rgba(6,108,232,0.18)",
+            fontSize: 11,
+            lineHeight: 1.5,
+            color: "rgba(85,100,121,0.95)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              marginBottom: 4,
+              color: "#086ce8",
+            }}
+          >
+            <StreamingDot status="running" />
+            <span>Synthesizing</span>
+          </div>
+          <span>
+            Strategy and insights land here once synthesis finishes — typically ~55s after decompose.
+          </span>
+        </div>
+      )}
+
+      {/* No-synthesis guidance — quiet state, not anti-information. Only
+          shown when there's no KG at all (truly empty workspace). */}
+      {data && !data.has_synthesis && !data.synthesis_in_progress && (
         <div
           style={{
             padding: "12px 14px",
@@ -362,6 +401,108 @@ export function RailAmbientMode({ spaceId }: Props) {
   );
 }
 
+// ── Insight card ─────────────────────────────────────────────────
+
+interface InsightCardProps {
+  eyebrow: string;
+  entityName: string | null;
+  summary: string;
+  extraLine?: string;
+  accent: string;
+}
+
+// One-card abstraction for bottleneck / leverage / risk rows. Picks
+// the right title source (entity name preferred, summary's first
+// sentence as a last resort) so we never render the eyebrow word
+// duplicated as the title or the same string in both slots.
+function InsightCard({
+  eyebrow,
+  entityName,
+  summary,
+  extraLine,
+  accent,
+}: InsightCardProps) {
+  const cleanSummary = (summary ?? "").trim();
+  const hasName = entityName != null && entityName.length > 0;
+
+  // Title: hydrated entity name when present, otherwise the first
+  // sentence of the summary (so we still surface SOMETHING readable
+  // when synthesis omits the name). Subtitle differs: when we use
+  // the summary as title, subtitle becomes the rest of the summary.
+  let title: string;
+  let subtitle: string | undefined;
+  if (hasName) {
+    title = entityName;
+    subtitle = truncateAtWord(cleanSummary, 110) || undefined;
+  } else if (cleanSummary.length > 0) {
+    const split = splitFirstSentence(cleanSummary);
+    title = split.first;
+    subtitle = split.rest
+      ? truncateAtWord(split.rest, 110)
+      : undefined;
+  } else {
+    // Nothing usable — render only the eyebrow with a tiny "(awaiting
+    // synthesis)" stub so the user knows the slot exists.
+    title = "—";
+    subtitle = "awaiting synthesis";
+  }
+
+  return (
+    <StateCard
+      eyebrow={eyebrow}
+      title={title}
+      subtitle={subtitle}
+      accent={accent}
+    >
+      {extraLine && (
+        <div
+          style={{
+            fontSize: 10.5,
+            fontWeight: 500,
+            color: "#556479",
+            lineHeight: 1.4,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {extraLine}
+        </div>
+      )}
+    </StateCard>
+  );
+}
+
+// Truncate at a word boundary, append "…". Never returns a string
+// with a half-broken word like "productivi".
+function truncateAtWord(text: string, maxLen: number): string {
+  const t = (text ?? "").trim();
+  if (t.length <= maxLen) return t;
+  const slice = t.slice(0, maxLen);
+  // Prefer a sentence-end inside the window when one exists; this
+  // produces nicer-looking subtitles than always cutting at a space.
+  const lastSentence = Math.max(
+    slice.lastIndexOf(". "),
+    slice.lastIndexOf("? "),
+    slice.lastIndexOf("! "),
+  );
+  if (lastSentence > maxLen * 0.55) {
+    return slice.slice(0, lastSentence + 1);
+  }
+  const lastSpace = slice.lastIndexOf(" ");
+  if (lastSpace > maxLen * 0.55) {
+    return slice.slice(0, lastSpace).trimEnd() + "…";
+  }
+  return slice.trimEnd() + "…";
+}
+
+// Split "Foo. Bar baz." → { first: "Foo.", rest: "Bar baz." }. When
+// there's no sentence boundary, returns the whole string as `first`.
+function splitFirstSentence(text: string): { first: string; rest: string } {
+  const t = text.trim();
+  const m = t.match(/^(.+?[.!?])\s+([\s\S]+)$/);
+  if (m) return { first: m[1].trim(), rest: m[2].trim() };
+  return { first: t, rest: "" };
+}
+
 // ── Activity feed projection ─────────────────────────────────────
 
 interface ActivityRow {
@@ -384,7 +525,21 @@ function buildActivityPreview(streamed: StreamedEvent[]): ActivityRow[] {
   // Last 5 persisted-artifact events from the SSE store. Drops
   // thinking-trace events (reasoning_chunk, etc.) per
   // feedback_structural_events_only memory rule.
+  //
+  // We do a single forward pass to build a name lookup from prior
+  // entity_added events so edge_added / cycle_detected rows can show
+  // the named endpoints ("linked X ↔ Y") instead of an opaque "+ edge".
   const persistedKinds = new Set(Object.keys(ACTIVITY_ICON));
+  const nameByEntityId = new Map<string, string>();
+  for (const s of streamed) {
+    if (s?.event.type === "entity_added") {
+      const ev = s.event as { entityId?: string; name?: string };
+      if (ev.entityId && typeof ev.name === "string" && ev.name.trim()) {
+        nameByEntityId.set(ev.entityId, ev.name.trim());
+      }
+    }
+  }
+
   const filtered: StreamedEvent[] = [];
   for (let i = streamed.length - 1; i >= 0 && filtered.length < 5; i--) {
     const s = streamed[i];
@@ -393,27 +548,64 @@ function buildActivityPreview(streamed: StreamedEvent[]): ActivityRow[] {
   }
   return filtered.map((s) => ({
     timestamp: s.emittedAt,
-    label: labelForEvent(s.event),
+    label: labelForEvent(s.event, nameByEntityId),
     Icon: ACTIVITY_ICON[s.event.type] ?? Sparkles,
   }));
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function labelForEvent(ev: any): string {
+function labelForEvent(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ev: any,
+  nameByEntityId: Map<string, string>,
+): string {
+  const nameOf = (id: string | undefined): string => {
+    if (!id) return "entity";
+    return nameByEntityId.get(id) ?? shortenId(id);
+  };
   switch (ev?.type) {
     case "entity_added":
       return `+ ${ev.name ?? "entity"}`;
-    case "edge_added":
-      return "+ edge";
-    case "cycle_detected":
-      return "Cycle detected";
-    case "bridge_formed":
-      return "Bridge formed";
+    case "edge_added": {
+      const src = nameOf(ev.sourceEntityId);
+      const tgt = nameOf(ev.targetEntityId);
+      const conf =
+        typeof ev.confidence === "number" && Number.isFinite(ev.confidence)
+          ? ` · ${Math.round(ev.confidence * 100)}%`
+          : "";
+      return `linked ${src} ↔ ${tgt}${conf}`;
+    }
+    case "cycle_detected": {
+      const ids = Array.isArray(ev.entityIds) ? ev.entityIds : [];
+      if (ids.length >= 2) {
+        const names = ids.slice(0, 3).map((id: string) => nameOf(id));
+        const tail = ids.length > 3 ? " → …" : "";
+        return `cycle: ${names.join(" → ")}${tail}`;
+      }
+      return "cycle detected";
+    }
+    case "bridge_formed": {
+      const src = nameOf(ev.sourceEntityId);
+      const tgt = nameOf(ev.targetEntityId);
+      return `bridge ${src} ⇄ ${tgt}`;
+    }
     case "strategy_consensus_ready":
-      return "Strategy locked";
+      return "strategy locked";
+    case "research_started":
+      return "research started";
+    case "proposal_ready":
+      return typeof ev.title === "string" && ev.title.length > 0
+        ? `proposal: ${ev.title}`
+        : "proposal ready";
     default:
       return String(ev?.type ?? "event").replace(/_/g, " ");
   }
+}
+
+// UUIDs are useless in the rail — when we don't have a name cached,
+// show a short stub instead so the row stays scannable.
+function shortenId(id: string): string {
+  if (id.length <= 8) return id;
+  return id.slice(0, 4) + "…" + id.slice(-3);
 }
 
 function ActivityRow({

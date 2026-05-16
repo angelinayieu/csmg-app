@@ -314,6 +314,22 @@ RULES:
 - ANTI-GENERIC CHECK: Before finalizing, re-read every finding. If any finding could apply to a random business/problem by swapping out entity names, it's too generic. Rewrite with specific details, numbers, frameworks, or domain knowledge.
 - ANTI-PARROTING CHECK (CRITICAL): The user already knows what they wrote. Your job is to tell them what they DON'T know. For every insight, ask: "Could the user have written this themselves without any analysis?" If yes → DELETE IT and replace with something from your domain expertise. Examples of parroting (NEVER DO THIS): "Hallucinations are a risk in legal AI" (user already said this), "You need to decide between small firms and enterprise" (user already said this), "Running out of money is a concern" (user already said this). Examples of ACTUAL insights: "Legal AI accuracy benchmarks show that 78% clause extraction puts you below the 92% threshold where law firms trust AI enough to reduce manual review — you're in the 'interesting demo but not deployable' zone", "Ironclad started with 3 pilot firms doing NDAs only before expanding to complex contracts — narrowing your contract type could get accuracy above 95% on a subset", "SOC 2 Type II takes 6-9 months minimum, but SOC 2 Type I takes ~3 months and many mid-market legal teams accept it for initial pilots."
 
+- ANTI-PLATITUDE CHECK (CRITICAL — read EVERY summary against this list before returning):
+  EVERY summary on master_bottleneck, leverage_points, risk_points MUST satisfy ALL of:
+    (a) Names a SPECIFIC entity from the input graph (use entity_name verbatim, not a paraphrase)
+    (b) States a SPECIFIC mechanism in this domain (not "improves X" or "reduces Y")
+    (c) Includes ≥1 concrete number, range, timeframe, or named instrument/framework
+  REJECT (NEVER WRITE) summaries that fit any of these shapes:
+    × "Optimizing [thing] enhances overall [vague_outcome]"
+    × "Accurate [thing] improves [domain] understanding"
+    × "Inefficient [thing] reduces [domain] effectiveness"
+    × "Better [X] drives [Y]"
+    × "Improving [X] is key to success"
+    × Any sentence that would survive replacing the topic noun with a random domain term
+  When you cannot meet bar (a)+(b)+(c) for a candidate leverage/risk, OMIT the point. A shorter list of substantive insights beats a long list of platitudes — the right-rail will render placeholders for missing slots, which is preferable to user-facing generic text.
+  EVERY leverage_point and risk_point MUST set "entity_name" to the actual entity name from the graph (e.g. "Whoop wrist strap", "EEG signal-to-noise"). Not "Leverage". Not "Risk". Not the category word.
+  EVERY summary MUST be ≥3 sentences and reference at least one named entity from the graph by name (not by entity_id alone). One-sentence summaries are rejected; the right-rail truncates long summaries cleanly, so write the substance and trust the renderer.
+
 MECHANISM GROUNDING RULES (D7 — distinguishes phenomenology from mechanism):
 - master_bottleneck, EVERY leverage_point, and EVERY risk_point MUST include a mechanism_grounding block.
 - "phenomenology" describes what is OBSERVED — the symptom, the surface pattern. Not the cause. (e.g. "users drop off after day 7", "engagement spikes 3× when users cross day-21", "trust collapses after first hallucinated answer")

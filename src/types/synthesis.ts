@@ -328,7 +328,17 @@ export type QualityFlag =
   | "weak_external_coverage"
   | "unexpanded_critical"
   | "missing_epistemic_framework"
-  | "causal_level_mismatch";
+  | "causal_level_mismatch"
+  /** A leverage/risk/bottleneck shipped without an entity_name or with
+   *  an empty summary. Forces the rail to fall back to placeholder
+   *  strings ("Bottleneck") or to render the same text in both the
+   *  title and the body. Always blocks ship. */
+  | "missing_insight_name"
+  | "empty_insight_summary"
+  /** Summary is generic enough that it would apply to any random
+   *  business / research problem — the synthesis prompt explicitly
+   *  forbids this. Detected via banned-phrase + n-gram-overlap heuristic. */
+  | "parroting_summary";
 
 export interface SynthesisQualityScore {
   overall: number; // 0-100
