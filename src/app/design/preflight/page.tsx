@@ -47,6 +47,7 @@ import {
 import { StoryboardFrame } from "./storyboard-frame";
 import { STORYBOARD_FRAMES } from "./storyboard-data";
 import { RoomsStripSection } from "./rooms-strip";
+import { AIRailThemesSection } from "./ai-rail-themes";
 
 export default function PreflightPage() {
   return (
@@ -78,6 +79,10 @@ export default function PreflightPage() {
         </div>
         <RailComposedColumn />
       </main>
+
+      {/* AI rail · 3 theme variants for the right-side popup. Picks
+          the surface treatment before we touch the production rail. */}
+      <AIRailThemesSection />
 
       {/* Stage Rooms — current production rendering vs upgraded design-
           system version. Same data, two materials. Sits above the
