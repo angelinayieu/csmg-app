@@ -23,6 +23,8 @@ import {
   Home,
   Layers,
   LayoutGrid,
+  Settings,
+  UserCircle2,
 } from "lucide-react";
 import { getNotificationCount } from "@/lib/synergy/match-client";
 
@@ -75,6 +77,22 @@ const ITEMS: DockItem[] = [
     icon: Bell,
     match: (p) => p.startsWith("/app/synergy/requests"),
     showBadge: true,
+  },
+  // ── User surfaces — added back in (Phase 4d+3) ──
+  // The dock is the only persistent nav, so profile + settings live
+  // here too. Keeps the rest of /app uncluttered while making the
+  // two destinations reachable from every page.
+  {
+    href: "/app/synergy/profile",
+    label: "Profile",
+    icon: UserCircle2,
+    match: (p) => p.startsWith("/app/synergy/profile"),
+  },
+  {
+    href: "/app/settings",
+    label: "Settings",
+    icon: Settings,
+    match: (p) => p.startsWith("/app/settings"),
   },
 ];
 
