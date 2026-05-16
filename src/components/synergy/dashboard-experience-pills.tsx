@@ -52,9 +52,9 @@ export function DashboardExperiencePills({
   };
 
   return (
-    <div className="relative mx-auto w-full max-w-2xl">
+    <div className="relative mx-auto w-full max-w-3xl">
       <div
-        className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+        className="flex flex-wrap items-center justify-center gap-2"
         role="radiogroup"
         aria-label="Experience mode"
       >
@@ -77,7 +77,7 @@ export function DashboardExperiencePills({
                 aria-describedby={`exp-pill-tip-${m.id}`}
                 disabled={disabled}
                 onClick={() => onChange(m.id)}
-                className="group relative w-full overflow-hidden rounded-full px-3 py-2 text-left transition disabled:opacity-50"
+                className="group relative inline-flex items-center gap-2 rounded-full px-3.5 py-2 text-left transition disabled:opacity-50"
                 style={{
                   background: isActive
                     ? `linear-gradient(135deg, ${m.accentSoft}, rgba(255, 255, 255, 0.55))`
@@ -98,35 +98,37 @@ export function DashboardExperiencePills({
                       ].join(", "),
                 }}
               >
-                <span className="flex items-center gap-2">
-                  <span
-                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition"
-                    style={{
-                      background: isActive ? m.accent : "rgba(15, 23, 42, 0.06)",
-                      color: isActive ? "white" : "rgb(55, 65, 81)",
-                    }}
-                  >
-                    <Icon className="h-3 w-3" strokeWidth={2} />
-                  </span>
-                  <span
-                    className="truncate text-[12px] font-semibold tracking-tight"
-                    style={{
-                      color: isActive ? m.accent : "rgb(31, 41, 55)",
-                    }}
-                  >
-                    {m.label}
-                  </span>
+                <span
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition"
+                  style={{
+                    background: isActive ? m.accent : "rgba(15, 23, 42, 0.06)",
+                    color: isActive ? "white" : "rgb(55, 65, 81)",
+                  }}
+                >
+                  <Icon className="h-3 w-3" strokeWidth={2} />
+                </span>
+                <span
+                  className="whitespace-nowrap text-[12.5px] font-semibold tracking-tight"
+                  style={{
+                    color: isActive ? m.accent : "rgb(31, 41, 55)",
+                  }}
+                >
+                  {m.label}
                 </span>
               </button>
 
-              {/* Tooltip card */}
+              {/* Tooltip card — anchored to the pill's own wrapper so
+                  it stays centered on the pill regardless of where the
+                  pill ended up in the flex-wrap. Width is constrained
+                  to 260px so it doesn't visually overflow into the
+                  neighbor pills' columns. */}
               {isOpen && (
                 <div
                   id={`exp-pill-tip-${m.id}`}
                   role="tooltip"
-                  className="pointer-events-none absolute left-1/2 top-full z-40 mt-2 w-[280px] -translate-x-1/2 rounded-2xl px-4 py-3 text-left"
+                  className="pointer-events-none absolute left-1/2 top-full z-40 mt-2 w-[260px] -translate-x-1/2 rounded-2xl px-4 py-3 text-left"
                   style={{
-                    background: "rgba(255, 255, 255, 0.92)",
+                    background: "rgba(255, 255, 255, 0.95)",
                     backdropFilter: "blur(24px) saturate(180%)",
                     WebkitBackdropFilter: "blur(24px) saturate(180%)",
                     border: `1px solid ${m.accent}33`,
