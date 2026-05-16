@@ -78,6 +78,7 @@ import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
 import {
   isExperienceMode,
   type ExperienceMode,
+  findExperienceMode,
 } from "@/types/experience-mode";
 // Phase 1 unified canvas — top-right mode chip + bottom-center
 // dock. The chip tells the user which experience mode this space
@@ -168,10 +169,10 @@ export default function WhiteboardPage() {
 
   const handleNewScenario = useCallback((snapshotId: string) => {
     setScenarioMode({ kind: "new", snapshotId });
-  }, []);
+  }, [setScenarioMode]);
   const handleOpenScenario = useCallback((scenarioId: string) => {
     setScenarioMode({ kind: "detail", scenarioId });
-  }, []);
+  }, [setScenarioMode]);
 
   // The situation-card shape inside tldraw can't directly call
   // setSituationOpen (it lives in a different React tree). We bridge
@@ -213,8 +214,18 @@ export default function WhiteboardPage() {
     }
   }, [space.id]);
 
+  // Per-mode accent flows into every canvas child via the
+  // `--canvas-accent` CSS variable. Any shape that calls
+  // <CanvasShapeGlass> without an explicit `accent` prop inherits it.
+  // Legacy spaces (no experienceMode) fall back to the system accent.
+  const modeMeta = findExperienceMode(experienceMode);
+  const canvasAccent = modeMeta?.accent ?? "var(--accent-500)";
+
   return (
-    <div className="fixed inset-0 z-40 overflow-hidden bg-white">
+    <div
+      className="fixed inset-0 z-40 overflow-hidden bg-white"
+      style={{ ["--canvas-accent" as string]: canvasAccent }}
+    >
       <InteraxisCanvas space={space} entities={entities} edges={edges} />
 
       {/* Phase 1 unified canvas — top-right experience mode chip.
