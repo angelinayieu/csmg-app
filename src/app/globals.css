@@ -2,19 +2,29 @@
 
 /* ─── Theme variable system ─── */
 :root {
-  /* Default theme: teal */
-  --accent-50: #E0F7FA;
-  --accent-100: #B2EBF2;
-  --accent-200: #80DEEA;
-  --accent-300: #4DD0E1;
-  --accent-400: #26C6DA;
-  --accent-500: #00BCD4;
-  --accent-600: #00ACC1;
-  --accent-700: #0097A7;
-  --accent-rgb: 0, 188, 212;
-  --gradient-name-end: #0097A7;
-  --gradient-page-start: #E0F7FA;
-  --gradient-page-mid: #F0FAFB;
+  /* Default theme — Apple Vision Pro pearl + system blue.
+   *
+   * Page background uses Apple's signature pearl (#F5F5F7) instead of
+   * a chromatic wash, so every surface inherits a warm-neutral substrate
+   * rather than the legacy pale teal. The accent family is Apple system
+   * blue (#0A84FF), reserved for active states and primary actions —
+   * never used to tint ambient backgrounds.
+   *
+   * The legacy teal/cyan palette is preserved in [data-theme="teal"]
+   * below for opt-in compatibility but is no longer the default.
+   */
+  --accent-50: #F0F6FF;
+  --accent-100: #DCEAFF;
+  --accent-200: #B9D5FF;
+  --accent-300: #8AB8FF;
+  --accent-400: #5C9CFF;
+  --accent-500: #0A84FF;
+  --accent-600: #006FE6;
+  --accent-700: #0058B8;
+  --accent-rgb: 10, 132, 255;
+  --gradient-name-end: #0058B8;
+  --gradient-page-start: #F5F5F7;
+  --gradient-page-mid: #FAFAFB;
 
   --sidebar-width: 272px;
   --sidebar-width-collapsed: 68px;
@@ -443,6 +453,24 @@
   --gradient-page-mid: #f4f7fb;
 }
 
+/* Legacy teal palette — preserved for opt-in but no longer the
+ * default. Apply via `<html data-theme="teal">` if a user
+ * specifically prefers the older aesthetic. */
+[data-theme="teal"] {
+  --accent-50: #E0F7FA;
+  --accent-100: #B2EBF2;
+  --accent-200: #80DEEA;
+  --accent-300: #4DD0E1;
+  --accent-400: #26C6DA;
+  --accent-500: #00BCD4;
+  --accent-600: #00ACC1;
+  --accent-700: #0097A7;
+  --accent-rgb: 0, 188, 212;
+  --gradient-name-end: #0097A7;
+  --gradient-page-start: #E0F7FA;
+  --gradient-page-mid: #F0FAFB;
+}
+
 /* ─── Lab surface variables ─── */
 /*
  * The Lab chrome (control panels, what-if modal, headers) used to be
@@ -602,14 +630,30 @@ body {
   font-feature-settings: "tnum", "lnum";
 }
 
-/* Page gradient background */
+/* Page gradient background — Apple Vision Pro pearl.
+ *
+ * Soft vertical pearl-to-white-to-pearl wash. The middle stop is
+ * slightly lighter than the edges so the page feels lit from the
+ * center, like a Vision Pro window over warm ambient light. No
+ * chromatic tinting — color is reserved for content. */
 .bg-gradient-page {
   background: linear-gradient(
     180deg,
     var(--gradient-page-start) 0%,
-    var(--gradient-page-mid) 45%,
+    var(--gradient-page-mid) 50%,
     var(--gradient-page-start) 100%
   );
+}
+
+/* When a SynergySceneBackground is mounted (it toggles
+ * .synergy-scene-active on the body), the layout's gradient steps
+ * aside so the user's chosen scene can actually show through. The
+ * scene already renders at fixed -z-10, so making the main
+ * background transparent is sufficient — content sits above it at
+ * normal z-index, the scene shows behind everything except the
+ * frosted-glass cards that pick it up via backdrop-blur. */
+body.synergy-scene-active .bg-gradient-page {
+  background: transparent;
 }
 
 /* Glassmorphism card */
@@ -1227,37 +1271,42 @@ body {
 /* ─── Toolbox Sphere v2 — solid glass sphere (bottom-right), pill tools fan up-left ─── */
 
 /* Soft radial glow that expands behind the fan area when open */
+/* Soft pearl glow when the toolbox is open — replaces the dark navy
+ * wash with a warm, near-invisible halo that hints at expansion. */
 .toolbox-glow {
   background: radial-gradient(
     circle at 85% 85%,
-    rgba(15, 22, 40, 0.38) 0%,
-    rgba(15, 22, 40, 0.22) 28%,
-    rgba(15, 22, 40, 0.08) 50%,
-    rgba(15, 22, 40, 0) 72%
+    rgba(15, 23, 42, 0.06) 0%,
+    rgba(15, 23, 42, 0.03) 32%,
+    rgba(15, 23, 42, 0) 70%
   );
-  filter: blur(8px);
+  filter: blur(12px);
   pointer-events: none;
 }
 
-/* Central sphere — solid & visible, sits at bottom-right */
+/* Toolbox sphere — Apple Vision Pro glass pill.
+ *
+ * Frosted-white glass surface with a hairline border, soft inner
+ * highlight, and a calm shadow. The icon inside is rendered in
+ * gray-900 so it reads as elegant restraint rather than a saturated
+ * chip floating in the corner. Hover bloom adds a quiet ring of
+ * Apple system blue, never a neon glow. */
 .toolbox-sphere-v2 {
-  background:
-    radial-gradient(circle at 30% 28%,
-      rgba(90, 115, 175, 0.98) 0%,
-      rgba(40, 55, 95, 0.98) 48%,
-      rgba(var(--accent-rgb), 0.92) 100%);
-  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(15, 23, 42, 0.08);
   box-shadow:
-    0 14px 32px rgba(8, 20, 50, 0.35),
-    0 6px 14px rgba(var(--accent-rgb), 0.4),
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.65),
-    inset 0 -8px 18px rgba(0, 0, 0, 0.25);
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 12px 28px -10px rgba(15, 23, 42, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
   cursor: pointer;
   transition:
-    transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1),
-    box-shadow 0.4s ease,
-    background 0.4s ease;
-  animation: sphere-idle-v2 4s ease-in-out infinite;
+    transform 0.36s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.36s ease,
+    background 0.36s ease,
+    border-color 0.36s ease;
+  animation: sphere-idle-v2 5s ease-in-out infinite;
   position: absolute;
   overflow: hidden;
 }
@@ -1265,34 +1314,32 @@ body {
 .toolbox-sphere-v2::before {
   content: '';
   position: absolute;
-  top: 12%;
+  top: 10%;
   left: 18%;
-  width: 40%;
+  width: 44%;
   height: 22%;
   border-radius: 50%;
+  /* Faint specular hint along the top edge — Vision Pro signature. */
   background: radial-gradient(ellipse at 40% 40%,
-    rgba(255, 255, 255, 0.8) 0%,
-    rgba(255, 255, 255, 0.35) 40%,
-    rgba(255, 255, 255, 0) 75%);
-  filter: blur(3px);
-  transform: rotate(-18deg);
+    rgba(255, 255, 255, 0.85) 0%,
+    rgba(255, 255, 255, 0.3) 45%,
+    rgba(255, 255, 255, 0) 80%);
+  filter: blur(2.5px);
+  transform: rotate(-12deg);
   pointer-events: none;
 }
 
 .toolbox-sphere-v2:hover,
 .toolbox-sphere-v2--active {
-  transform: scale(1.12);
+  transform: scale(1.06);
   animation-play-state: paused;
-  background:
-    radial-gradient(circle at 30% 28%,
-      rgba(110, 140, 200, 1) 0%,
-      rgba(50, 70, 115, 1) 48%,
-      rgba(var(--accent-rgb), 1) 100%);
+  background: rgba(255, 255, 255, 0.86);
+  border-color: rgba(var(--accent-rgb), 0.45);
   box-shadow:
-    0 20px 44px rgba(8, 20, 50, 0.45),
-    0 8px 20px rgba(var(--accent-rgb), 0.55),
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.7),
-    inset 0 -8px 18px rgba(0, 0, 0, 0.25);
+    0 1px 2px rgba(15, 23, 42, 0.08),
+    0 18px 36px -12px rgba(15, 23, 42, 0.24),
+    0 0 0 4px rgba(var(--accent-rgb), 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 @keyframes sphere-idle-v2 {
@@ -1300,43 +1347,53 @@ body {
   50%      { transform: translateY(-3px) scale(1.02); }
 }
 
-/* Tool pills that fan around the sphere */
+/* Tool pills — Apple Vision Pro frosted glass.
+ *
+ * White glass instead of dark navy. The label / icon / kbd badge
+ * inside must use dark text (gray-900) so they read on the new
+ * substrate; the .toolbox-pill style declares the surface, while
+ * the JS-side className flips the children to gray when this style
+ * is in effect (see toolbox-sphere.tsx). */
 .toolbox-pill {
-  background: linear-gradient(180deg, rgba(32, 40, 58, 0.75) 0%, rgba(22, 28, 44, 0.82) 100%);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(15, 23, 42, 0.06);
   box-shadow:
-    0 6px 18px rgba(0, 0, 0, 0.28),
-    0 2px 6px rgba(0, 0, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 8px 20px -10px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
   cursor: pointer;
+  color: #111827;
 }
 
 .toolbox-pill:hover,
 .toolbox-pill--active {
-  background: linear-gradient(180deg, rgba(42, 52, 72, 0.85) 0%, rgba(32, 40, 58, 0.9) 100%);
-  border-color: rgba(var(--accent-rgb), 0.5);
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(var(--accent-rgb), 0.4);
   box-shadow:
-    0 10px 24px rgba(0, 0, 0, 0.35),
-    0 4px 10px rgba(var(--accent-rgb), 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 12px 28px -12px rgba(15, 23, 42, 0.2),
+    0 0 0 3px rgba(var(--accent-rgb), 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 .toolbox-pill:active {
   transform-origin: center;
 }
 
-/* Keyboard shortcut badge on pill */
+/* Keyboard shortcut badge on pill — pearl chip on glass. */
 .kbd-badge {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  color: rgba(15, 23, 42, 0.55);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .toolbox-pill:hover .kbd-badge,
 .toolbox-pill--active .kbd-badge {
-  background: rgba(var(--accent-rgb), 0.25);
-  border-color: rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.1);
+  border-color: rgba(var(--accent-rgb), 0.2);
+  color: rgba(var(--accent-rgb), 0.85);
   color: rgba(255, 255, 255, 0.95);
 }
 
@@ -2025,5 +2082,41 @@ body {
   .trail-edge-draw {
     animation: none;
     stroke-dashoffset: 0;
+  }
+}
+
+/* ── Synergy parallel-path room (5c-2) ──
+ *
+ * Rail-dot bounce on check-in fill, checkmark fade-in on row check.
+ * Both animations live here (rather than inline JSX style) so the
+ * compositor batches them and so reduced-motion guards apply.
+ */
+@keyframes parallel-rail-pulse {
+  0%   { transform: scale(0.6); }
+  60%  { transform: scale(1.4); }
+  100% { transform: scale(1); }
+}
+@keyframes parallel-check-in {
+  0%   { opacity: 0; transform: scale(0.7); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.parallel-dot {
+  transition:
+    background 600ms ease,
+    border 600ms ease,
+    transform 200ms ease;
+}
+.parallel-dot--just-filled {
+  animation: parallel-rail-pulse 600ms ease-out;
+}
+.parallel-check-enter {
+  animation: parallel-check-in 200ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .parallel-dot,
+  .parallel-dot--just-filled,
+  .parallel-check-enter {
+    transition: none;
+    animation: none;
   }
 }
