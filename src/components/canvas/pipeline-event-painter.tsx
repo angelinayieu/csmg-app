@@ -947,13 +947,25 @@ function paintTaxonomy(
 
   const shapeId = createShapeId();
   try {
+    // Place inside the kg room, beside the kg-formation card. Was
+    // previously anchor-relative (anchor.x + 212, anchor.y - 360)
+    // which floated outside any room and let the card overlap
+    // arbitrary rooms above as the cascade shifted. Now lives inside
+    // kg next to kg-formation. The horizontal offset keeps the prior
+    // "landscape | IVs" pair reading.
+    const placement = placeInsideRoom(
+      "kg",
+      state.anchor,
+      TAXONOMY_CARD_OFFSET_X + TAXONOMY_CARD_W / 2,
+      16,
+    );
+    const x = placement.x - TAXONOMY_CARD_W / 2;
+    const y = placement.y;
     editor.createShape<TaxonomyCardShape>({
       id: shapeId,
       type: "taxonomy-card",
-      // Positioned to the right of the KG formation overview card so
-      // the two live artifacts read as a pair ("landscape | IVs").
-      x: state.anchor.x + TAXONOMY_CARD_OFFSET_X,
-      y: state.anchor.y - TAXONOMY_CARD_OFFSET_Y,
+      x,
+      y,
       props: {
         w: TAXONOMY_CARD_W,
         h: TAXONOMY_CARD_H,
@@ -969,6 +981,13 @@ function paintTaxonomy(
       },
     });
     state.taxonomyCardShapeId = shapeId;
+    registerRoomChild(state, "kg", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "kg",
+      y + TAXONOMY_CARD_H,
+    );
     // Tether DOWN from the KG formation card so the IV card reads as
     // "derived from the landscape" rather than floating. Mirrors the
     // backlink pattern in paintAppResultReady. Silent no-op if kg-
@@ -1154,12 +1173,24 @@ function paintVariant(
 
   const idx = state.variantCount;
   state.variantCount++;
-  const x =
-    state.anchor.x +
-    VARIANT_CARD_CENTER_X +
-    alternatingOffset(idx, VARIANT_CARD_SPACING) -
-    VARIANT_CARD_W / 2;
-  const y = state.anchor.y - VARIANT_CARD_OFFSET_Y;
+  // Place inside the kg room, beside-and-below the taxonomy card so
+  // variants read as "instances of the taxonomy." Was previously
+  // anchor.y - 116 + a left/right fan from VARIANT_CARD_CENTER_X —
+  // both floating outside any room.
+  //
+  // Taxonomy card sits at kg interior offset 16; we land variants
+  // below it (16 + TAXONOMY_CARD_H + 24).
+  const variantOffsetY = 16 + TAXONOMY_CARD_H + 24;
+  // Keep the fan layout (alternating left/right) but now centered on
+  // the kg room's interior, not the painter anchor.
+  const placement = placeInsideRoom(
+    "kg",
+    state.anchor,
+    VARIANT_CARD_CENTER_X + alternatingOffset(idx, VARIANT_CARD_SPACING),
+    variantOffsetY,
+  );
+  const x = placement.x - VARIANT_CARD_W / 2;
+  const y = placement.y;
 
   const shapeId = createShapeId();
   try {
@@ -1171,6 +1202,13 @@ function paintVariant(
       props,
     });
     state.variantCardShapeIds.set(event.variantId, shapeId);
+    registerRoomChild(state, "kg", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "kg",
+      y + VARIANT_CARD_H,
+    );
     // Tether the FIRST variant up to the taxonomy card so the deck
     // reads as "materialized from these IVs". Later variants rely on
     // sibling proximity — drawing an arrow from every one of them
@@ -1995,14 +2033,37 @@ function upsertRootCauseTree(editor: Editor, state: PainterState) {
   if (!state.anchor) return; // painter needs an anchor to position; try again on next event
   const shapeId = createShapeId();
   try {
+    // Place inside the kg room, to the left of the kg-formation card
+    // and below the room header. Was previously anchor.x - 800,
+    // anchor.y - 380 — floating 800px to the left and 380px above
+    // the painter anchor, totally orphaned from any room.
+    //
+    // ROOT_CAUSE_TREE_OFFSET_X is negative (-800), keeping the tree
+    // on the LEFT inside the kg room (matching prior left-of-formation
+    // positioning).
+    const placement = placeInsideRoom(
+      "kg",
+      state.anchor,
+      ROOT_CAUSE_TREE_OFFSET_X + ROOT_CAUSE_TREE_W / 2,
+      16,
+    );
+    const x = placement.x - ROOT_CAUSE_TREE_W / 2;
+    const y = placement.y;
     editor.createShape<RootCauseTreeShape>({
       id: shapeId,
       type: "root-cause-tree",
-      x: state.anchor.x + ROOT_CAUSE_TREE_OFFSET_X,
-      y: state.anchor.y - ROOT_CAUSE_TREE_OFFSET_Y,
+      x,
+      y,
       props,
     });
     state.rootCauseTreeShapeId = shapeId;
+    registerRoomChild(state, "kg", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "kg",
+      y + ROOT_CAUSE_TREE_H,
+    );
     // Tether the tree up to kg-formation so "drilling for root causes"
     // reads as descending from the landscape rather than appearing in
     // isolation off to the upper-left. Silent no-op if the formation
