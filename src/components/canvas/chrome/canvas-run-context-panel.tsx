@@ -28,7 +28,7 @@ import {
   Network,
   Link2,
   RefreshCw,
-  Sparkles,
+  Lightbulb,
   TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -50,6 +50,33 @@ interface RunHistoryItem {
 }
 
 const RUNNING_POLL_INTERVAL_MS = 8_000;
+
+// Human-readable labels for the internal pipeline names. Previously
+// surfaced raw — users saw "RUN CONTEXT · INTAKE_BOOTSTRAP" in the
+// panel header, which is the kind of implementation detail a polished
+// product hides. The fallback titlecases anything we haven't mapped
+// (e.g., a new pipeline added without an entry here) instead of
+// SHOUTING the raw key in all caps.
+const PIPELINE_LABELS: Record<string, string> = {
+  intake_bootstrap: "Setting up",
+  decompose_chain: "Decomposing",
+  synthesize: "Synthesizing",
+  strategy_refresh: "Refreshing strategies",
+  app_generator: "Building apps",
+  self_improving_loop: "Iterating",
+  preflight_evaluation: "Preflight",
+  reflexive_loop: "Reflexive loop",
+};
+
+function formatPipelineLabel(pipeline: string | null | undefined): string {
+  if (!pipeline) return "…";
+  const mapped = PIPELINE_LABELS[pipeline];
+  if (mapped) return mapped;
+  // Snake_case_value -> "Snake case value"
+  return pipeline
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export function CanvasRunContextPanel({
   runId,
@@ -202,7 +229,7 @@ export function CanvasRunContextPanel({
           <StatusIcon status={ctx?.status} fetching={fetching} />
           <div className="min-w-0 flex-1">
             <div className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-gray-500">
-              Run context · {ctx?.pipeline ?? "…"}
+              Run · {formatPipelineLabel(ctx?.pipeline)}
             </div>
             {ctx && (
               <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10.5px] text-gray-600">
@@ -210,7 +237,7 @@ export function CanvasRunContextPanel({
                 <CountPill icon={<Network className="h-2.5 w-2.5" />} value={ctx.counts.edges} label="edg" />
                 <CountPill icon={<RefreshCw className="h-2.5 w-2.5" />} value={ctx.counts.cycles} label="cyc" />
                 <CountPill icon={<Link2 className="h-2.5 w-2.5" />} value={ctx.counts.bridges} label="bri" />
-                <CountPill icon={<Sparkles className="h-2.5 w-2.5" />} value={ctx.counts.proposals} label="prop" />
+                <CountPill icon={<Lightbulb className="h-2.5 w-2.5" />} value={ctx.counts.proposals} label="prop" />
                 <CountPill icon={<TrendingUp className="h-2.5 w-2.5" />} value={ctx.counts.sources} label="src" />
               </div>
             )}
