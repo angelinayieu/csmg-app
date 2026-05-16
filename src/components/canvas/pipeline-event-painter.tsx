@@ -735,8 +735,10 @@ const TAXONOMY_CARD_OFFSET_X =
 const ASSET_CARD_W = 200;
 const ASSET_CARD_H = 88;
 const ASSET_CARD_GAP = 12;
-const ASSET_CARD_ROW_X_OFFSET = 360; // distance from anchor.x to start of row
-const ASSET_CARD_ROW_Y_OFFSET = -780; // above anchor (origin-prompt sits even higher)
+// Note: ASSET_CARD_ROW_{X,Y}_OFFSET were anchor-relative constants
+// removed when paintAssetAdded migrated to placeInsideRoom("intake").
+// Asset positioning now derives from the intake room's interior +
+// origin-prompt's width.
 
 const SITUATION_CARD_W = 560;
 const SITUATION_CARD_H = 240;
@@ -761,12 +763,31 @@ function paintAssetAdded(
   // Idempotent — re-emission of the same asset upserts.
   if (state.assetCardShapeIds.has(event.assetId)) return;
 
-  // Position in a horizontal row to the right of the origin-prompt.
-  // Index by current chip count so each new chip slots after the prior.
+  // Place inside the `intake` room as a horizontal row above the
+  // origin-prompt card. Was previously anchor.y - 780 (floating well
+  // outside the cascade); now lives inside intake so the row grows
+  // the room when assets pile in and downstream rooms shift in sync.
+  // Origin-prompt sits at room-top + 16; assets sit ROW above it
+  // (negative offsetYFromTop pulls upward inside the room's content
+  // area) at the right of the room's horizontal center so they read
+  // as "what the user brought" beside the prompt.
   const idx = state.assetCardShapeIds.size;
-  const x =
-    state.anchor.x + ASSET_CARD_ROW_X_OFFSET + idx * (ASSET_CARD_W + ASSET_CARD_GAP);
-  const y = state.anchor.y + ASSET_CARD_ROW_Y_OFFSET;
+  const ASSET_ROW_OFFSET_Y = 16; // top of intake content area
+  // Stack to the right of the prompt: prompt is centered at offsetX=0
+  // with width 420 (ORIGIN_PROMPT_DEFAULT_W). Start the asset row a
+  // gutter to its right.
+  const ASSET_ROW_X_FROM_CENTER =
+    ORIGIN_PROMPT_DEFAULT_W / 2 + 32; // 32px gutter past prompt's right edge
+  const offsetX =
+    ASSET_ROW_X_FROM_CENTER + idx * (ASSET_CARD_W + ASSET_CARD_GAP);
+  const placement = placeInsideRoom(
+    "intake",
+    state.anchor,
+    offsetX + ASSET_CARD_W / 2, // placeInsideRoom centers; shift to left-edge for left-anchored shape
+    ASSET_ROW_OFFSET_Y,
+  );
+  const x = placement.x - ASSET_CARD_W / 2;
+  const y = placement.y;
   const accent =
     ASSET_CLASS_ACCENT_LOOKUP[event.assetClass] ?? "#0891B2";
 
@@ -791,6 +812,13 @@ function paintAssetAdded(
       meta: { source: "pipeline-event" },
     });
     state.assetCardShapeIds.set(event.assetId, shapeId);
+    registerRoomChild(state, "intake", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "intake",
+      y + ASSET_CARD_H,
+    );
   } catch (err) {
     console.warn("[pipeline-painter] asset card paint failed:", err);
   }
