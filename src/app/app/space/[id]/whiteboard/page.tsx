@@ -86,6 +86,7 @@ import {
 // the persistent nav back to Home / Brainstorms / Profile /
 // Settings so users don't get stranded on the canvas.
 import { CanvasExperienceModeChip } from "@/components/canvas/chrome/canvas-experience-mode-chip";
+import { CanvasAutopilotPanel } from "@/components/canvas/chrome/canvas-autopilot-panel";
 import { SynergyGlassDock } from "@/components/synergy/synergy-glass-dock";
 
 // ── Unified canvas chrome gating (Phase 1) ────────────────────────
@@ -112,6 +113,11 @@ function chromeForMode(mode: ExperienceMode | null) {
     showBaselineLauncher: true, // baseline is useful in every mode
     showSnapshotsLauncher: isDeep,
     showConnectLauncher: true, // connect is cross-space, always useful
+    // Phase 2a #3 — Autopilot is the headline affordance for
+    // brainstorm_speed users. Also surface in brain_probe so a
+    // probe user can switch to autopilot mid-session without
+    // having to start a fresh whiteboard.
+    showAutopilotPanel: isLight,
     emphasizeTwin: mode === "digital_twin",
     isLight,
   };
@@ -238,6 +244,13 @@ export default function WhiteboardPage() {
           promptHint={((space as any).input_text as string | undefined) ?? undefined}
         />
       )}
+
+      {/* Phase 2a #3 — Autopilot panel. Only mounts for the
+          lightweight brainstorm modes (brain_probe + brainstorm_speed)
+          where the user is actively driving expansion. Deep R&D
+          modes have their own pipeline orchestration so an extra
+          autopilot would be redundant chrome. */}
+      {chrome.showAutopilotPanel && <CanvasAutopilotPanel spaceId={space.id} />}
 
       {/* Phase 2 — entity-detail drawer. Renders nothing until a
           `shell-graph:focus` or `root-cause-tree:focus` window event
