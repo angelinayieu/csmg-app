@@ -319,12 +319,19 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
               <div
                 style={{
-                  fontSize: 9.5,
-                  fontWeight: 700,
-                  letterSpacing: "0.2em",
-                  textTransform: "uppercase",
-                  color: accent,
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  letterSpacing: "-0.005em",
+                  color: "#0f172a",
+                  lineHeight: 1.25,
                   minWidth: 0,
+                  // Allow long axis names to wrap onto a second line
+                  // instead of clipping or pushing the axis chip off
+                  // the right edge of the shell.
+                  overflow: "hidden",
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
                 }}
                 title={label}
               >
