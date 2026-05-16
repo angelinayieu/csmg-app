@@ -68,11 +68,11 @@ interface ActionDef {
 
 const ACTIONS: ActionDef[] = [
   { key: "decompose", label: "Decompose", Icon: Layers, status: "available", defaultScope: "per_item" },
-  { key: "variations", label: "Variations", Icon: Shuffle, status: "soon", defaultScope: "per_item" },
+  { key: "variations", label: "Variations", Icon: Shuffle, status: "available", defaultScope: "per_item" },
   { key: "questions", label: "Questions", Icon: HelpCircle, status: "available", defaultScope: "per_item" },
   { key: "research", label: "Research", Icon: Search, status: "available", defaultScope: "collective" },
-  { key: "actionable", label: "Make a plan", Icon: Sparkles, status: "soon", defaultScope: "collective" },
-  { key: "rank", label: "Rank", Icon: Trophy, status: "soon", defaultScope: "collective" },
+  { key: "actionable", label: "Make a plan", Icon: Sparkles, status: "available", defaultScope: "collective" },
+  { key: "rank", label: "Rank", Icon: Trophy, status: "available", defaultScope: "collective" },
   { key: "tidy", label: "Tidy", Icon: Brain, status: "native", defaultScope: "collective" },
 ];
 
@@ -241,6 +241,113 @@ export function CanvasSelectionPopover({ spaceId }: Props) {
     }
   }, [entityIds, extracted.items, spaceId]);
 
+  const runVariations = useCallback(async () => {
+    if (entityIds.length > 6) {
+      toast.error("Too many for Variations", {
+        description: "Select 1–6 entities. Variations runs a separate LLM call per item.",
+      });
+      return;
+    }
+    setBusy("variations");
+    try {
+      const res = await fetch("/api/canvas/selection/variations", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ spaceId, entityIds }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `${res.status}`);
+      }
+      const json = (await res.json().catch(() => ({}))) as {
+        created?: { variation_ids?: string[] };
+      };
+      const count = json.created?.variation_ids?.length ?? 0;
+      toast.success("Variations created", {
+        description: `${count} new entities across ${entityIds.length} selected.`,
+      });
+    } catch (e) {
+      toast.error("Variations failed", { description: (e as Error).message });
+    } finally {
+      setBusy(null);
+    }
+  }, [entityIds, spaceId]);
+
+  const runMakePlan = useCallback(async () => {
+    if (entityIds.length < 2) {
+      toast.info("Plan needs ≥2 entities", {
+        description: "Select 2 or more items to weave them into a plan.",
+      });
+      return;
+    }
+    setBusy("actionable");
+    try {
+      const res = await fetch("/api/canvas/selection/plan", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ spaceId, entityIds }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `${res.status}`);
+      }
+      const json = (await res.json().catch(() => ({}))) as {
+        plan?: { step_entity_ids?: string[] };
+      };
+      const count = json.plan?.step_entity_ids?.length ?? 0;
+      toast.success("Plan generated", {
+        description: `${count} steps tying ${entityIds.length} entities together.`,
+      });
+    } catch (e) {
+      toast.error("Make-a-plan failed", { description: (e as Error).message });
+    } finally {
+      setBusy(null);
+    }
+  }, [entityIds, spaceId]);
+
+  const runRank = useCallback(async () => {
+    if (entityIds.length < 2) {
+      toast.info("Ranking needs ≥2 entities", {
+        description: "Select 2 or more items to compare them.",
+      });
+      return;
+    }
+    setBusy("rank");
+    try {
+      const res = await fetch("/api/canvas/selection/rank", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          spaceId,
+          entityIds,
+          // MVP — always rank by importance. A criterion picker
+          // lands in the next iteration of the popover.
+          criterion: "importance",
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `${res.status}`);
+      }
+      const json = (await res.json().catch(() => ({}))) as {
+        ranking?: Array<{ entity_id: string; score: number; rationale: string }>;
+      };
+      const top = json.ranking?.[0];
+      toast.success("Ranked by importance", {
+        description: top
+          ? `Top: "${top.entity_id}" (${top.score}/100) — ${top.rationale}`
+          : "No ranking returned.",
+      });
+    } catch (e) {
+      toast.error("Rank failed", { description: (e as Error).message });
+    } finally {
+      setBusy(null);
+    }
+  }, [entityIds, spaceId]);
+
   const runTidy = useCallback(() => {
     // Native tldraw layout — align + distribute the selected shapes.
     // No LLM, no API call.
@@ -302,21 +409,39 @@ export function CanvasSelectionPopover({ spaceId }: Props) {
         case "decompose":
           void runDecompose();
           break;
+        case "variations":
+          void runVariations();
+          break;
         case "questions":
           void runQuestions();
           break;
         case "research":
           void runResearch();
           break;
+        case "actionable":
+          void runMakePlan();
+          break;
+        case "rank":
+          void runRank();
+          break;
         case "tidy":
           runTidy();
           break;
         default:
-          // Disabled actions — no-op, the button is grayed out.
+          // Future actions — no-op until wired.
           break;
       }
     },
-    [busy, runDecompose, runQuestions, runResearch, runTidy],
+    [
+      busy,
+      runDecompose,
+      runVariations,
+      runQuestions,
+      runResearch,
+      runMakePlan,
+      runRank,
+      runTidy,
+    ],
   );
 
   if (!visible) return null;
