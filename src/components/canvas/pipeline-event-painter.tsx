@@ -3655,8 +3655,14 @@ function ensureSynthesisCard(
   }
 
   const shapeId = createShapeId();
-  const x = state.anchor.x - SYNTHESIS_W / 2;
-  const y = state.anchor.y + SYNTHESIS_Y_OFFSET;
+  // Place inside the `proposal` room — synthesis is the pivot every
+  // proposal card anchors to, so it lives at the room's interior top
+  // (~16px below the header). Was previously anchor.y + SYNTHESIS_Y_OFFSET
+  // which floated outside any room and let the proposal fan grow
+  // without bounding the cascade.
+  const placement = placeInsideRoom("proposal", state.anchor, 0, 16);
+  const x = placement.x - SYNTHESIS_W / 2;
+  const y = placement.y;
   try {
     editor.createShape<SynthesisIntersectionCardShape>({
       id: shapeId,
@@ -3677,6 +3683,13 @@ function ensureSynthesisCard(
       },
     });
     state.synthesisCardShapeId = shapeId;
+    registerRoomChild(state, "proposal", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "proposal",
+      y + SYNTHESIS_H,
+    );
     return shapeId;
   } catch (err) {
     console.warn("[pipeline-painter] synthesis card create failed:", err);
@@ -4250,11 +4263,14 @@ function paintProposal(
   // Alternate left/right so subsequent proposals fan to both sides.
   const side: "left" | "right" = state.proposalCount % 2 === 0 ? "right" : "left";
 
-  // Anchor proposalX/Y around the synthesis card. Right-side proposals
-  // sit to the right of the card; left-side to the left. Vertically
-  // staggered so multiple proposals on the same side don't overlap.
-  const synthesisX = state.anchor.x - SYNTHESIS_W / 2;
-  const synthesisY = state.anchor.y + SYNTHESIS_Y_OFFSET;
+  // Anchor proposalX/Y around the synthesis card's actual room-relative
+  // position. Was previously anchor.y + SYNTHESIS_Y_OFFSET which let
+  // the proposal stack drift outside the proposal room. Now both
+  // synthesis and proposals live inside the room and the cascade
+  // shifts downstream rooms (twin/lab/results) when this stack grows.
+  const synthPlacement = placeInsideRoom("proposal", state.anchor, 0, 16);
+  const synthesisX = synthPlacement.x - SYNTHESIS_W / 2;
+  const synthesisY = synthPlacement.y;
   const stackIndex = Math.floor(state.proposalCount / 2);
   const stackVOffset = stackIndex * (PROPOSAL_H + RIBBON_H + EXPERIMENT_DESIGN_H + 60);
   const proposalX =
@@ -4353,6 +4369,13 @@ function paintProposal(
     state.proposalsById.set(event.proposalId, proposalShapeId);
     state.proposalCount += 1;
     state.synthesisAppsCount += 1;
+    registerRoomChild(state, "proposal", proposalShapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "proposal",
+      proposalY + PROPOSAL_H,
+    );
     // Bump the appsProposedCount footer on the synthesis card so the
     // user sees the running tally tick up as proposals stream in.
     ensureSynthesisCard(editor, state, /* spaceId */ "");
@@ -4389,6 +4412,13 @@ function paintProposal(
         };
         editor.createShapes([ribbon]);
         state.chainRibbonsByProposal.set(event.proposalId, ribbonId);
+        registerRoomChild(state, "proposal", ribbonId);
+        recordChildBottomForStage(
+          editor,
+          state,
+          "proposal",
+          proposalY + PROPOSAL_H + RIBBON_VGAP + RIBBON_H,
+        );
       } catch (err) {
         // Non-fatal — the proposal card above still conveys the
         // proposal, the ribbon is a bonus.
@@ -4483,6 +4513,13 @@ function paintProposal(
         };
         editor.createShapes([design]);
         state.experimentDesignByProposal.set(event.proposalId, designId);
+        registerRoomChild(state, "proposal", designId);
+        recordChildBottomForStage(
+          editor,
+          state,
+          "proposal",
+          designY + EXPERIMENT_DESIGN_H,
+        );
       } catch (err) {
         // Non-fatal — the snapshot + ribbon above still convey the
         // proposal. The design card is a richer layer that some runs
