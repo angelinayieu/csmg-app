@@ -79,6 +79,13 @@ import {
   isExperienceMode,
   type ExperienceMode,
 } from "@/types/experience-mode";
+// Phase 1 unified canvas — top-right mode chip + bottom-center
+// dock. The chip tells the user which experience mode this space
+// is running in (and lets them jump to a fresh one); the dock is
+// the persistent nav back to Home / Brainstorms / Profile /
+// Settings so users don't get stranded on the canvas.
+import { CanvasExperienceModeChip } from "@/components/canvas/chrome/canvas-experience-mode-chip";
+import { SynergyGlassDock } from "@/components/synergy/synergy-glass-dock";
 
 // ── Unified canvas chrome gating (Phase 1) ────────────────────────
 // The same whiteboard route serves all four dashboard pills now.
@@ -209,6 +216,17 @@ export default function WhiteboardPage() {
   return (
     <div className="fixed inset-0 z-40 overflow-hidden bg-white">
       <InteraxisCanvas space={space} entities={entities} edges={edges} />
+
+      {/* Phase 1 unified canvas — top-right experience mode chip.
+          Renders only when the space was created with an explicit
+          mode (legacy spaces from before Phase 1 hide the chip). */}
+      {experienceMode && (
+        <CanvasExperienceModeChip
+          mode={experienceMode}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          promptHint={((space as any).input_text as string | undefined) ?? undefined}
+        />
+      )}
 
       {/* Phase 2 — entity-detail drawer. Renders nothing until a
           `shell-graph:focus` or `root-cause-tree:focus` window event
@@ -381,6 +399,13 @@ export default function WhiteboardPage() {
           mode={scenarioMode}
         />
       )}
+
+      {/* Phase 1 unified canvas — persistent dock. Without this the
+          user has no nav back to Home / Brainstorms / Profile /
+          Settings once they're on the canvas. The dock is bottom-
+          center and the existing chrome buttons (Connect, Snapshots,
+          Baseline, Evidence) are bottom-right, so they coexist. */}
+      <SynergyGlassDock />
     </div>
   );
 }

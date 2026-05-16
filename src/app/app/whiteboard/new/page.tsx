@@ -155,11 +155,14 @@ export default async function UnifiedWhiteboardNewPage({
     redirect("/app?error=bootstrap_unreachable");
   }
 
-  // Append ?run= for the SSE-bridging splash. Skipped pipelines have
-  // no run-id-side-effect to subscribe to, but the canvas tolerates
-  // either.
-  const target = bootstrap.runId
-    ? `/app/space/${bootstrap.spaceId}/whiteboard?run=${bootstrap.runId}`
-    : `/app/space/${bootstrap.spaceId}/whiteboard`;
+  // Append ?run= ONLY when the pipeline is actually running — the
+  // WhiteboardBootstrapSplash on the canvas watches that param and
+  // bridges the dead-canvas window until the first SSE event paints.
+  // Skipped pipelines (brain_probe / brainstorm_speed) have no
+  // events coming and would just flash the splash unnecessarily.
+  const target =
+    !skipPipeline && bootstrap.runId
+      ? `/app/space/${bootstrap.spaceId}/whiteboard?run=${bootstrap.runId}`
+      : `/app/space/${bootstrap.spaceId}/whiteboard`;
   redirect(target);
 }

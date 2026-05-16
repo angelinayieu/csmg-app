@@ -227,8 +227,11 @@ export async function POST(request: Request) {
       : reasoningDepth === "deep"
         ? "deep"
         : "standard";
+  // skipPipeline → no LLM work scheduled, no reservation needed.
+  // We use a nullable reservationId downstream so the cancel paths
+  // can no-op cleanly without inventing a sentinel string.
   const reservation = skipPipeline
-    ? { success: true as const, reservationId: "skip_pipeline" }
+    ? { success: true as const, reservationId: null as string | null }
     : await reserveCredits(db, user.id, tier);
   if (!reservation.success) {
     // Distinguish real "insufficient credits" (402) from transient
@@ -282,6 +285,15 @@ export async function POST(request: Request) {
     );
   }
   const reservationId = reservation.reservationId;
+  // Soft-fail wrapper around cancelReservation. No-ops when the
+  // reservation is null (skipPipeline path); always .catch()s the
+  // underlying call so the bootstrap chain isn't fragile to a
+  // single failed refund attempt. Matches the .catch(() => {})
+  // pattern that was inline at every prior call site.
+  const refundReservation = async (): Promise<void> => {
+    if (!reservationId) return;
+    await cancelReservation(db, reservationId).catch(() => {});
+  };
 
   // ── Step 0: in-flight dedup ─────────────────────────────────────
   //
@@ -330,7 +342,7 @@ export async function POST(request: Request) {
         );
         // Refund — we won't charge the second click for work already
         // in flight.
-        await cancelReservation(db, reservationId).catch(() => {});
+        await refundReservation();
         return NextResponse.json({
           spaceId: existingRun.space_id,
           runId: existingRun.id,
@@ -410,7 +422,7 @@ export async function POST(request: Request) {
     // Refund the reservation — we charged nothing because the pipeline
     // never started. Without this the credit is stuck in "reserved"
     // limbo forever.
-    await cancelReservation(db, reservationId).catch(() => {});
+    await refundReservation();
     return NextResponse.json(
       { error: "Space creation failed" },
       { status: 500 },
@@ -434,7 +446,7 @@ export async function POST(request: Request) {
     // "stream unavailable" state and fall back to post-completion
     // reload (which still works because entities get persisted).
     // Refund: no run means no pipeline, so no work to pay for.
-    await cancelReservation(db, reservationId).catch(() => {});
+    await refundReservation();
     return NextResponse.json({ spaceId, runId: null });
   }
 
@@ -532,6 +544,13 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ spaceId, runId });
   }
+
+  // `after()` only runs on the non-skipPipeline path (the skip
+  // branch early-returned above), so reservationId is guaranteed
+  // to be a string here. Capture it in a narrower local so TS
+  // doesn't widen the type back to `string | null` inside the
+  // async closure below.
+  const liveReservationId: string = reservationId ?? "";
 
   after(async () => {
     // Outer safety net — everything below is individually soft-failed,
@@ -741,7 +760,7 @@ export async function POST(request: Request) {
               // this the approve route can't rehydrate (no reservation,
               // no run linkage).
               pipeline_handoff_context: {
-                reservation_id: reservationId,
+                reservation_id: liveReservationId,
                 intake_run_id: runId,
                 decompose_input: {
                   text: trimmed,
@@ -829,7 +848,7 @@ export async function POST(request: Request) {
       // Real network failure during handoff — decompose never got
       // the request. Cancel the reservation so the user isn't
       // charged for work that never started.
-      await cancelReservation(db, reservationId).catch(() => {});
+      await refundReservation();
       await completePipelineRun(
         db,
         runId,
@@ -845,7 +864,7 @@ export async function POST(request: Request) {
         "[intake/bootstrap] after() chain escape (outer safety net):",
         outerErr,
       );
-      await cancelReservation(db, reservationId).catch(() => {});
+      await refundReservation();
       await completePipelineRun(
         db,
         runId,
