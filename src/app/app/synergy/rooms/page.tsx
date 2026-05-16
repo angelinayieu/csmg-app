@@ -19,6 +19,7 @@ import { SynergyScenePicker } from "@/components/synergy/synergy-scene-picker";
 import type { ScenePresetKey } from "@/lib/synergy/scene-presets";
 import { SynergyRoomsClient } from "./rooms-client";
 import type { RoomsBundle } from "./rooms-types";
+import { loadParallelBundle } from "@/lib/synergy/parallel-rooms-bundle";
 
 export default async function SynergyRoomsPage() {
   const user = await getAuthUser();
@@ -189,8 +190,29 @@ export default async function SynergyRoomsPage() {
     profileLookup = new Map((profiles ?? []).map((p: any) => [p.user_id, p]));
   }
 
+  // ── Parallel-path bundle (Phase 5b) ──
+  //
+  // Fetched independently of the collab data above. Soft-fails to an
+  // empty parallel slice if the migration hasn't been applied yet — so
+  // 5b can deploy ahead of the Supabase migration without breaking the
+  // surface.
+  let parallelSlice: Awaited<
+    ReturnType<typeof loadParallelBundle>
+  > = {
+    active: [],
+    invitations: [],
+    suggested: [],
+    my_strategies_count: 0,
+    my_matchable_published_count: 0,
+  };
+  try {
+    parallelSlice = await loadParallelBundle(db, user.id);
+  } catch {
+    // Tables not yet migrated — quietly fall back to empty.
+  }
+
   // ── Assemble the typed bundle ──
-  const bundle: RoomsBundle = {
+  const collabSlice = {
     active: activeRooms.map((r) => {
       const otherUserId = r.user_a === user.id ? r.user_b : r.user_a;
       const myComponentId =
@@ -239,6 +261,11 @@ export default async function SynergyRoomsPage() {
       match_count: c.match_count,
       session_id: c.session_id,
     })),
+  };
+
+  const bundle: RoomsBundle = {
+    collab: collabSlice,
+    parallel: parallelSlice,
   };
 
   return (

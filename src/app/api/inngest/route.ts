@@ -6,6 +6,10 @@ import {
   coordinatorTick,
   executeGoalResearch,
   askCrossSpace,
+  synergyMatchRefresh,
+  synergyStrategyMatcher,
+  synergyParallelDigestWeekly,
+  synergyParallelPathMatched,
 } from "@/inngest/functions";
 
 // Inngest functions can run for a long time. Vercel Pro caps a single
@@ -27,5 +31,17 @@ export const { GET, POST, PUT } = serve({
     coordinatorTick,
     executeGoalResearch,
     askCrossSpace,
+    // Synergy Phase 4 — component-match cron (was previously exported
+    // but not registered here; the cron silently wasn't running).
+    synergyMatchRefresh,
+    // Synergy Phase 5 — embed + parallel-path matcher on strategy
+    // publish ("synergy/strategy.generated" event).
+    synergyStrategyMatcher,
+    // Synergy Phase 5c-4 — weekly digest cron (Mondays 8:23 UTC).
+    // Writes room_digests rows for each active parallel-path room.
+    synergyParallelDigestWeekly,
+    // Synergy Phase 5-polish — email the requester when their
+    // parallel-path invitation is accepted.
+    synergyParallelPathMatched,
   ],
 });

@@ -277,6 +277,60 @@ export function testEmail(args: {
   };
 }
 
+// ── parallel_path_accepted ──
+//
+// Fired when the OTHER user accepts the recipient's parallel-path
+// invitation. Anonymity preserved: the email surfaces only the
+// shared_theme + a "open room" CTA — never the accepter's name or
+// avatar. Identity reveals happen inside the room itself (5c-3).
+
+export function parallelPathAcceptedEmail(args: {
+  shared_theme: string;
+  shared_pillars: string[];
+  room_url: string;
+  preferences_url: string;
+  unsubscribe_url: string;
+}): { subject: string; preheader: string; html: string } {
+  const subject = `Your parallel-path invitation was accepted`;
+  const themeShort = args.shared_theme.slice(0, 80);
+  const preheader = `Open the room to start tracking ${themeShort.toLowerCase()}.`;
+  const pillarsBlock =
+    args.shared_pillars.length > 0
+      ? `<p style="margin: 12px 0 0; font-size: 12px; color: #6b7280; line-height: 1.5;">
+          Shared pillars: <strong style="color: #374151;">${args.shared_pillars
+            .slice(0, 3)
+            .map((p) => escapeHtml(p))
+            .join(" · ")}</strong>
+        </p>`
+      : "";
+
+  const body_html = `
+    <h1 style="margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #111827; line-height: 1.3;">
+      Your parallel-path invitation was accepted
+    </h1>
+    <p style="margin: 0; font-size: 14px; color: #374151; line-height: 1.6;">
+      You now share a room on <strong>${escapeHtml(themeShort)}</strong> — track each other's plan steps, share reflections, and witness how the other is executing on the same goal via a possibly different routine.
+    </p>
+    ${pillarsBlock}
+    <p style="margin: 14px 0 0; font-size: 12px; color: #6b7280; line-height: 1.55;">
+      Both of you stay anonymous until you each opt into identity reveal inside the room.
+    </p>
+  `;
+
+  return {
+    subject,
+    preheader,
+    html: wrapEmail({
+      subject,
+      preheader,
+      body_html,
+      cta: { label: "Open parallel-path room", href: args.room_url },
+      unsubscribe_url: args.unsubscribe_url,
+      preferences_url: args.preferences_url,
+    }),
+  };
+}
+
 // ── Small HTML escape helpers ──
 // Email HTML is user-data-sensitive; we escape everything that
 // comes from the DB so display names with `<` don't break the email.

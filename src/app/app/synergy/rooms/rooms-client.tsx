@@ -1,24 +1,25 @@
 // ── Synergy Rooms — client composition ──
 //
-// Three sections, each rendered as a responsive grid:
-//   1. Pending invitations (incoming match requests — anonymous, top priority)
-//   2. Active rooms (already-accepted, both users revealed)
-//   3. Suggested rooms (my room-ready components — components with matches
-//      that haven't been initiated yet)
+// Top-level structure (Phase 5b):
 //
-// Visual language is intentionally restrained:
-//   - White cards on neutral gray-50 background
-//   - Subtle border + double-shadow (Apple-style)
-//   - No gradients on backgrounds or buttons
-//   - Single accent color (blue-600) used sparingly
-//   - Lucide icons, no emojis
-//   - Generous whitespace, type at 13-15px, mono microcopy at 10px tracking 0.15em
+//   [ Collaborations  •  Parallel paths ]   ← segmented control (room kind)
 //
-// Filters live as Apple-style pill toggles at the top.
+//   [ All | Invitations | Active | Suggested ]   ← sub-tabs (same on both kinds)
+//
+//   ─── Section: matches sub-tab ───
+//   Grid of cards specific to the selected kind
+//
+// The segmented control is the only NEW chrome over the prior version
+// of this surface. The existing 4-tab sub-nav is preserved verbatim
+// but its data source flips based on which segment is active.
+//
+// Visual language unchanged: white cards on neutral gray-50 background,
+// hairline borders, no gradients on actionable surfaces, single accent
+// (gray-900 for primary). Lucide icons, no emojis.
 
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -29,16 +30,22 @@ import {
   Users,
 } from "lucide-react";
 import { abstractAvatarFor } from "@/lib/synergy/abstract-avatar";
+import type { RoomKind } from "@/lib/synergy/types";
 import type {
   ActiveRoom,
   Invitation,
   RoomsBundle,
   SuggestedRoom,
 } from "./rooms-types";
+import { RoomKindSegmented } from "@/components/synergy/rooms/room-kind-segmented";
+import { ParallelSuggestedCard } from "@/components/synergy/rooms/parallel-suggested-card";
+import { ParallelInvitationCard } from "@/components/synergy/rooms/parallel-invitation-card";
+import { ParallelActiveCard } from "@/components/synergy/rooms/parallel-active-card";
+import { ParallelEmptyState } from "@/components/synergy/rooms/parallel-empty-state";
 
-type TabKey = "all" | "active" | "invitations" | "suggested";
+type SubTabKey = "all" | "active" | "invitations" | "suggested";
 
-const TABS: Array<{ key: TabKey; label: string }> = [
+const SUB_TABS: Array<{ key: SubTabKey; label: string }> = [
   { key: "all", label: "All" },
   { key: "invitations", label: "Invitations" },
   { key: "active", label: "Active" },
@@ -46,29 +53,98 @@ const TABS: Array<{ key: TabKey; label: string }> = [
 ];
 
 export function SynergyRoomsClient({ bundle }: { bundle: RoomsBundle }) {
-  const [tab, setTab] = useState<TabKey>("all");
+  const [kind, setKind] = useState<RoomKind>("collaboration");
+  const [tab, setTab] = useState<SubTabKey>("all");
+
+  // Local optimistic state: after a successful action on a parallel
+  // card, we remove it from the rendered list without waiting for a
+  // page refresh. Each set holds the IDs that should be hidden.
+  const [hiddenParallelSuggested, setHiddenParallelSuggested] = useState<
+    Set<string>
+  >(new Set());
+  const [hiddenParallelInvitations, setHiddenParallelInvitations] = useState<
+    Set<string>
+  >(new Set());
+
+  const collab = bundle.collab;
+  const parallel = bundle.parallel;
+
+  // Counts for the segmented control
+  const collabTotal =
+    collab.active.length + collab.invitations.length + collab.suggested.length;
+
+  const visibleParallelSuggested = useMemo(
+    () => parallel.suggested.filter((s) => !hiddenParallelSuggested.has(s.match_id)),
+    [parallel.suggested, hiddenParallelSuggested],
+  );
+  const visibleParallelInvitations = useMemo(
+    () =>
+      parallel.invitations.filter(
+        (i) => !hiddenParallelInvitations.has(i.request_id),
+      ),
+    [parallel.invitations, hiddenParallelInvitations],
+  );
+  const parallelTotal =
+    parallel.active.length +
+    visibleParallelInvitations.length +
+    visibleParallelSuggested.length;
 
   const showInvitations = tab === "all" || tab === "invitations";
   const showActive = tab === "all" || tab === "active";
   const showSuggested = tab === "all" || tab === "suggested";
 
-  const totalCount =
-    bundle.invitations.length + bundle.active.length + bundle.suggested.length;
+  const isParallel = kind === "parallel_path";
+  const totalForKind = isParallel ? parallelTotal : collabTotal;
+  const parallelEmpty =
+    parallelTotal === 0 &&
+    parallel.active.length === 0; // even if nothing optimistic-hidden, all 3 sections truly empty
 
   return (
     <div>
-      {/* Tab bar */}
+      {/* Top row: segmented control + total summary */}
+      <div className="mb-7 flex items-center justify-between gap-4">
+        <RoomKindSegmented
+          value={kind}
+          onChange={(next) => {
+            setKind(next);
+            // Reset sub-tab to "all" on kind change so the user lands
+            // on the overview of the new kind, not whatever they were
+            // viewing in the other.
+            setTab("all");
+          }}
+          collabCount={collabTotal}
+          parallelCount={parallelTotal}
+        />
+
+        {totalForKind > 0 && (
+          <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-gray-500">
+            {totalForKind} {totalForKind === 1 ? "room" : "rooms"}
+          </span>
+        )}
+      </div>
+
+      {/* Sub-tab bar */}
       <div className="mb-8 flex items-center justify-between">
-        <nav className="inline-flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1">
-          {TABS.map((t) => {
+        <nav
+          className="inline-flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1"
+          aria-label="Section"
+        >
+          {SUB_TABS.map((t) => {
             const active = tab === t.key;
-            const count =
-              t.key === "invitations"
-                ? bundle.invitations.length
+            const count = isParallel
+              ? t.key === "invitations"
+                ? visibleParallelInvitations.length
                 : t.key === "active"
-                  ? bundle.active.length
+                  ? parallel.active.length
                   : t.key === "suggested"
-                    ? bundle.suggested.length
+                    ? visibleParallelSuggested.length
+                    : undefined
+              : t.key === "invitations"
+                ? collab.invitations.length
+                : t.key === "active"
+                  ? collab.active.length
+                  : t.key === "suggested"
+                    ? collab.suggested.length
                     : undefined;
             return (
               <button
@@ -86,7 +162,9 @@ export function SynergyRoomsClient({ bundle }: { bundle: RoomsBundle }) {
                   <span
                     className={[
                       "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 font-mono text-[9px]",
-                      active ? "bg-white/15 text-white" : "bg-gray-100 text-gray-600",
+                      active
+                        ? "bg-white/15 text-white"
+                        : "bg-gray-100 text-gray-600",
                     ].join(" ")}
                   >
                     {count}
@@ -96,69 +174,154 @@ export function SynergyRoomsClient({ bundle }: { bundle: RoomsBundle }) {
             );
           })}
         </nav>
-
-        {totalCount > 0 && (
-          <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-gray-500">
-            {totalCount} {totalCount === 1 ? "room" : "rooms"}
-          </span>
-        )}
       </div>
 
-      {/* Empty state */}
-      {totalCount === 0 && <EmptyState />}
+      {/* Panel — render-content branches on `kind` */}
+      {isParallel ? (
+        // ── Parallel-path panel ──
+        <div
+          role="tabpanel"
+          id="rooms-panel-parallel_path"
+          aria-label="Parallel paths"
+        >
+          {parallelEmpty &&
+          visibleParallelInvitations.length === 0 &&
+          visibleParallelSuggested.length === 0 ? (
+            <ParallelEmptyState
+              myStrategiesCount={parallel.my_strategies_count}
+              myMatchablePublishedCount={parallel.my_matchable_published_count}
+            />
+          ) : (
+            <div className="space-y-12">
+              {showInvitations && visibleParallelInvitations.length > 0 && (
+                <Section
+                  label="Pending invitations"
+                  count={visibleParallelInvitations.length}
+                  sub="Anonymous senders. Accept to open the parallel-path room."
+                  icon={Inbox}
+                >
+                  <Grid>
+                    {visibleParallelInvitations.map((inv) => (
+                      <ParallelInvitationCard
+                        key={inv.request_id}
+                        card={inv}
+                        onResolved={(id) =>
+                          setHiddenParallelInvitations((prev) => {
+                            const next = new Set(prev);
+                            next.add(id);
+                            return next;
+                          })
+                        }
+                      />
+                    ))}
+                  </Grid>
+                </Section>
+              )}
 
-      {/* Sections */}
-      <div className="space-y-12">
-        {showInvitations && bundle.invitations.length > 0 && (
-          <Section
-            label="Pending invitations"
-            count={bundle.invitations.length}
-            sub="Anonymous senders. Accept to reveal."
-            icon={Inbox}
-          >
-            <Grid>
-              {bundle.invitations.map((inv) => (
-                <InvitationCard key={inv.id} invitation={inv} />
-              ))}
-            </Grid>
-          </Section>
-        )}
+              {showActive && parallel.active.length > 0 && (
+                <Section
+                  label="Active parallel paths"
+                  count={parallel.active.length}
+                  sub="Pursuing convergent goals via different routines."
+                  icon={Users}
+                >
+                  <Grid>
+                    {parallel.active.map((room) => (
+                      <ParallelActiveCard key={room.room_id} card={room} />
+                    ))}
+                  </Grid>
+                </Section>
+              )}
 
-        {showActive && bundle.active.length > 0 && (
-          <Section
-            label="Active rooms"
-            count={bundle.active.length}
-            sub="Connected. Both sides revealed."
-            icon={Users}
-          >
-            <Grid>
-              {bundle.active.map((room) => (
-                <ActiveRoomCard key={room.id} room={room} />
-              ))}
-            </Grid>
-          </Section>
-        )}
+              {showSuggested && visibleParallelSuggested.length > 0 && (
+                <Section
+                  label="Suggested parallel paths"
+                  count={visibleParallelSuggested.length}
+                  sub="People on similar journeys you haven't connected with yet."
+                  icon={Lightbulb}
+                >
+                  <Grid>
+                    {visibleParallelSuggested.map((s) => (
+                      <ParallelSuggestedCard
+                        key={s.match_id}
+                        card={s}
+                        onSent={(id) =>
+                          setHiddenParallelSuggested((prev) => {
+                            const next = new Set(prev);
+                            next.add(id);
+                            return next;
+                          })
+                        }
+                      />
+                    ))}
+                  </Grid>
+                </Section>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        // ── Collaboration panel (existing surface, unchanged) ──
+        <div
+          role="tabpanel"
+          id="rooms-panel-collaboration"
+          aria-label="Collaborations"
+        >
+          {collabTotal === 0 && <CollabEmptyState />}
 
-        {showSuggested && bundle.suggested.length > 0 && (
-          <Section
-            label="Suggested rooms"
-            count={bundle.suggested.length}
-            sub="Your components with available collaborators."
-            icon={Lightbulb}
-          >
-            <Grid>
-              {bundle.suggested.map((s) => (
-                <SuggestedRoomCard key={s.id} room={s} />
-              ))}
-            </Grid>
-          </Section>
-        )}
-      </div>
+          <div className="space-y-12">
+            {showInvitations && collab.invitations.length > 0 && (
+              <Section
+                label="Pending invitations"
+                count={collab.invitations.length}
+                sub="Anonymous senders. Accept to reveal."
+                icon={Inbox}
+              >
+                <Grid>
+                  {collab.invitations.map((inv) => (
+                    <InvitationCard key={inv.id} invitation={inv} />
+                  ))}
+                </Grid>
+              </Section>
+            )}
+
+            {showActive && collab.active.length > 0 && (
+              <Section
+                label="Active rooms"
+                count={collab.active.length}
+                sub="Connected. Both sides revealed."
+                icon={Users}
+              >
+                <Grid>
+                  {collab.active.map((room) => (
+                    <ActiveRoomCard key={room.id} room={room} />
+                  ))}
+                </Grid>
+              </Section>
+            )}
+
+            {showSuggested && collab.suggested.length > 0 && (
+              <Section
+                label="Suggested rooms"
+                count={collab.suggested.length}
+                sub="Your components with available collaborators."
+                icon={Lightbulb}
+              >
+                <Grid>
+                  {collab.suggested.map((s) => (
+                    <SuggestedRoomCard key={s.id} room={s} />
+                  ))}
+                </Grid>
+              </Section>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// ── Generic section header ──
+// ── Generic section header (shared between collab + parallel panels) ──
 
 function Section({
   label,
@@ -198,9 +361,9 @@ function Grid({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ── Empty state ──
+// ── Collab empty state (existing) ──
 
-function EmptyState() {
+function CollabEmptyState() {
   return (
     <div className="rounded-2xl border border-gray-200 bg-white px-8 py-16 text-center">
       <div className="mx-auto inline-flex h-10 w-10 items-center justify-center rounded-full bg-gray-100">
@@ -224,7 +387,7 @@ function EmptyState() {
   );
 }
 
-// ── Active room card ──
+// ── Active collab room card (existing) ──
 
 function ActiveRoomCard({ room }: { room: ActiveRoom }) {
   return (
@@ -282,7 +445,7 @@ function ActiveRoomCard({ room }: { room: ActiveRoom }) {
   );
 }
 
-// ── Invitation card (anonymous) ──
+// ── Invitation card (collab — anonymous) ──
 
 function InvitationCard({ invitation }: { invitation: Invitation }) {
   const daysLeft = Math.max(
@@ -353,7 +516,7 @@ function InvitationCard({ invitation }: { invitation: Invitation }) {
   );
 }
 
-// ── Suggested room card ──
+// ── Suggested collab room card ──
 
 function SuggestedRoomCard({ room }: { room: SuggestedRoom }) {
   return (

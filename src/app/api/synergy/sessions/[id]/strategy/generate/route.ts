@@ -23,6 +23,7 @@ import {
   STRATEGY_GENERATE_SYSTEM,
 } from "@/lib/synergy/strategy-prompts";
 import { collectAuthoritativePlans } from "@/lib/synergy/plan-meta";
+import { inngest } from "@/inngest/client";
 
 export const maxDuration = 60;
 
@@ -61,7 +62,7 @@ interface DbComponent {
 
 export async function POST(_request: Request, ctx: RouteContext) {
   const { id: sessionId } = await ctx.params;
-  const { supabase, error: authError } = await safeAuth();
+  const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -359,6 +360,29 @@ ${boardSummary || "(empty)"}`;
     return NextResponse.json(
       { error: sanitizeErrorMessage(blocksErr) },
       { status: 500 },
+    );
+  }
+
+  // 2b. Fire-and-forget: notify the parallel-path matcher.
+  //
+  // The Inngest function "synergy/strategy.generated" embeds the new
+  // strategy and runs the cross-user kNN + LLM rerank. We swallow
+  // errors so a transient Inngest outage never blocks a user's
+  // strategy publish — the worst case is a delayed parallel-path
+  // discovery feed.
+  try {
+    await inngest.send({
+      name: "synergy/strategy.generated",
+      data: {
+        strategyId,
+        sessionId,
+        userId: user.id,
+      },
+    });
+  } catch (e) {
+    console.warn(
+      "[strategy/generate] inngest.send failed; matcher will not run for this strategy:",
+      e,
     );
   }
 
