@@ -35,7 +35,11 @@ import {
   Users,
 } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
-import { generateStrategy, updateStrategy } from "@/lib/synergy/client";
+import {
+  generateStrategy,
+  updateStrategy,
+  updateStrategyBlock,
+} from "@/lib/synergy/client";
 import type {
   BrainstormComponent,
   StrategyBundle,
@@ -51,6 +55,11 @@ import {
 } from "./synergy-strategy-blocks";
 import { SynergyStrategyComponentList } from "./synergy-strategy-component-list";
 import { SynergyStrategyShareModal } from "./synergy-strategy-share-modal";
+import {
+  ProgressStrip,
+  StrategyCompleteHero,
+  TodayHero,
+} from "./synergy-strategy-progress";
 import { useParallax } from "@/hooks/synergy/use-parallax";
 
 interface Props {
@@ -173,6 +182,72 @@ export function SynergyStrategy({
     [bundle.strategy],
   );
 
+  // ── Phase 2 — TodayHero state ──
+  // The hero picks the next eligible step automatically. `skippedIds`
+  // is a session-local set of step IDs the user has skipped, so the
+  // hero advances through the plan as they ask for the next thing.
+  // Persisting the skip state isn't worth it — it resets on reload,
+  // which is fine: the user comes back with fresh perspective.
+  const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
+  const planStepBlocks = bundle.blocks.filter(
+    (b) => b.block_type === "plan_step",
+  );
+  const eligiblePlanSteps = planStepBlocks.filter(
+    (b) => !skippedIds.has(b.id),
+  );
+  const allDone =
+    planStepBlocks.length > 0 &&
+    planStepBlocks.every(
+      (b) =>
+        ((b.meta as { status?: string }).status ?? "pending") === "done",
+    );
+
+  // Cycle the hero step's status. Used by the "Mark started" / "Mark
+  // done" CTA. Optimistic state lives in the block itself via
+  // handleBlockUpdate so the change is reflected immediately in both
+  // the hero and the inline plan-step row.
+  const advanceHeroStep = useCallback(
+    async (block: SynergyStrategyBlock) => {
+      const currentStatus =
+        ((block.meta as { status?: string }).status ?? "pending") as
+          | "pending"
+          | "in_progress"
+          | "done";
+      const next: "pending" | "in_progress" | "done" =
+        currentStatus === "pending"
+          ? "in_progress"
+          : currentStatus === "in_progress"
+            ? "done"
+            : "done"; // already done — no-op cycle
+      try {
+        const updated = await updateStrategyBlock(block.id, {
+          meta_patch: { status: next },
+        });
+        handleBlockUpdate(updated);
+      } catch (err) {
+        toast.error("Couldn't update step", {
+          description: (err as Error).message,
+        });
+      }
+    },
+    [handleBlockUpdate],
+  );
+
+  const skipHeroStep = useCallback(() => {
+    // Use the currently-selected hero step from eligiblePlanSteps; we
+    // don't know which one it is at this layer (TodayHero owns
+    // selection), so we mark the LOWEST-index eligible as skipped —
+    // which is the one currently being shown.
+    // Future: TodayHero could surface the chosen step via a callback
+    // arg so this isn't position-dependent.
+    if (eligiblePlanSteps.length === 0) return;
+    setSkippedIds((prev) => {
+      const next = new Set(prev);
+      next.add(eligiblePlanSteps[0].id);
+      return next;
+    });
+  }, [eligiblePlanSteps]);
+
   return (
     <div className="mx-auto max-w-4xl py-8">
       <Header
@@ -191,6 +266,25 @@ export function SynergyStrategy({
           }
         />
       )}
+
+      {/* ── Phase 2 hero ──
+          When every plan step is done, render the celebration; otherwise
+          the action-first "Today" card with the dependency-aware next
+          step. Hidden entirely when there are no plan steps. */}
+      {planStepBlocks.length > 0 &&
+        (allDone ? (
+          <StrategyCompleteHero
+            totalSteps={planStepBlocks.length}
+            onRegenerate={onGenerate}
+          />
+        ) : (
+          <TodayHero
+            planSteps={eligiblePlanSteps}
+            onStartStep={advanceHeroStep}
+            onSkipStep={skipHeroStep}
+          />
+        ))}
+
       <DocBody
         strategy={bundle.strategy}
         blocks={bundle.blocks}
@@ -570,6 +664,11 @@ function DocBody({
             label="The Plan"
             sub={`${planSteps.length} step${planSteps.length === 1 ? "" : "s"}`}
           />
+          {/* Phase 2 — effort-weighted progress strip. Always renders
+              when there's at least one plan step; the empty 0% bar
+              works as a soft commitment cue ("here's the shape of
+              what's ahead") before the user marks anything done. */}
+          <ProgressStrip planSteps={planSteps} />
           <div className="space-y-1">
             {planSteps.length === 0 ? (
               <EmptyHint message="No plan steps yet." />

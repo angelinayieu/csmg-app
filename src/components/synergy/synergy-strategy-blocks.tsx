@@ -44,6 +44,7 @@ import { getStepIcon, getStepMetadata } from "@/lib/synergy/step-icons";
 import type {
   HypothesisMeta,
   PlanStepMeta,
+  PlanStepStatus,
   RiskMeta,
   SynergyStrategyBlock,
 } from "@/lib/synergy/types";
@@ -403,6 +404,99 @@ function ExperimentCard({
 
 // ── plan_step ──
 
+/** Phase 2 — per-step status indicator.
+ *
+ * Tappable circle that cycles pending → in_progress → done → pending.
+ *
+ * Visual states:
+ *   pending      — white with thin gray ring
+ *   in_progress  — gray-900 ring with an animated pulse halo (disabled
+ *                  under prefers-reduced-motion via the keyframes)
+ *   done         — filled gray-900 with a tiny check
+ *
+ * Tap target is 24×24 (the surrounding button) with a visual 14×14
+ * indicator centered inside — comfortable to hit on touch without
+ * dominating the spine column.
+ */
+function StatusDot({
+  value,
+  onClick,
+  stepNumber,
+}: {
+  value: PlanStepStatus;
+  onClick: () => void;
+  stepNumber: number;
+}) {
+  const labelMap: Record<PlanStepStatus, string> = {
+    pending: "not started",
+    in_progress: "in progress",
+    done: "done",
+  };
+  const nextMap: Record<PlanStepStatus, string> = {
+    pending: "Mark as in progress",
+    in_progress: "Mark as done",
+    done: "Mark as not started",
+  };
+  return (
+    <button
+      onClick={onClick}
+      aria-label={`Step ${stepNumber} — currently ${labelMap[value]}. ${nextMap[value]}.`}
+      title={nextMap[value]}
+      className="group/dot inline-flex h-6 w-6 items-center justify-center rounded-full transition hover:bg-black/[0.04]"
+    >
+      <span
+        aria-hidden
+        className={[
+          "relative inline-flex h-3.5 w-3.5 items-center justify-center rounded-full transition",
+          value === "pending" &&
+            "bg-white ring-1 ring-gray-300 group-hover/dot:ring-gray-500",
+          value === "in_progress" &&
+            "bg-white ring-2 ring-gray-900 group-hover/dot:ring-gray-700",
+          value === "done" &&
+            "bg-gray-900 text-white group-hover/dot:bg-gray-700",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        {value === "done" && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+        {value === "in_progress" && (
+          <>
+            {/* Pulsing halo signals "active." The animation runs from
+                the local @keyframes below and respects reduced-motion
+                via the media-query-gated rule. */}
+            <span
+              aria-hidden
+              className="absolute inset-0 rounded-full"
+              style={{
+                animation: "statusDotPulse 1.8s ease-out infinite",
+                boxShadow: "0 0 0 0 rgba(15,23,42,0.35)",
+              }}
+            />
+          </>
+        )}
+      </span>
+      <style jsx>{`
+        @keyframes statusDotPulse {
+          0% {
+            box-shadow: 0 0 0 0 rgba(15, 23, 42, 0.35);
+          }
+          70% {
+            box-shadow: 0 0 0 6px rgba(15, 23, 42, 0);
+          }
+          100% {
+            box-shadow: 0 0 0 0 rgba(15, 23, 42, 0);
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          span[style*="statusDotPulse"] {
+            animation: none !important;
+          }
+        }
+      `}</style>
+    </button>
+  );
+}
+
 export function PlanStepBlock({
   block,
   index,
@@ -431,6 +525,41 @@ export function PlanStepBlock({
   // skip the chevron and show the action chips inline so the user can
   // trigger them without a wasted click.
   const [expanded, setExpanded] = useState(false);
+
+  // ── Phase 2 — status (pending / in_progress / done) ──
+  // Locally mirrored so the StatusDot can update instantly on tap;
+  // the persisted block.meta is the source of truth and reconciles
+  // when the parent re-renders with the updated block.
+  const status: PlanStepStatus =
+    (meta.status as PlanStepStatus | undefined) ?? "pending";
+  const [statusOptimistic, setStatusOptimistic] = useState<PlanStepStatus | null>(
+    null,
+  );
+  const effectiveStatus = statusOptimistic ?? status;
+  const isDone = effectiveStatus === "done";
+
+  const cycleStatus = async () => {
+    const next: PlanStepStatus =
+      effectiveStatus === "pending"
+        ? "in_progress"
+        : effectiveStatus === "in_progress"
+          ? "done"
+          : "pending";
+    setStatusOptimistic(next);
+    try {
+      const updated = await updateStrategyBlock(block.id, {
+        meta_patch: { status: next },
+      });
+      onUpdate(updated);
+      setStatusOptimistic(null);
+    } catch (err) {
+      // Revert optimistic state on failure
+      setStatusOptimistic(null);
+      toast.error("Couldn't update status", {
+        description: (err as Error).message,
+      });
+    }
+  };
 
   const saveTitle = async (next: string) => {
     setEditing(null);
@@ -506,15 +635,24 @@ export function PlanStepBlock({
               "inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 2px rgba(15,23,42,0.04)",
           }}
         >
-          <StepIcon className="h-3 w-3" />
+          <StepIcon
+            className={`h-3 w-3 transition ${isDone ? "opacity-40" : ""}`}
+          />
         </div>
       </div>
 
-      <div className="pb-5">
-        {/* STEP 0N caps label — mono, very small, gray-400. Tells you
-            sequence without making it the loudest pixel on the page. */}
-        <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.18em] text-gray-400">
-          Step {String(index + 1).padStart(2, "0")}
+      <div className={`pb-5 transition ${isDone ? "opacity-55" : ""}`}>
+        {/* Meta row: StatusDot + STEP 0N caps label. The dot is the
+            tappable status affordance; the caps label tells sequence. */}
+        <div className="mb-1 flex items-center gap-2">
+          <StatusDot
+            value={effectiveStatus}
+            onClick={cycleStatus}
+            stepNumber={index + 1}
+          />
+          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-gray-400">
+            Step {String(index + 1).padStart(2, "0")}
+          </div>
         </div>
 
         {editing === "title" ? (
@@ -530,7 +668,11 @@ export function PlanStepBlock({
         ) : (
           <div
             onClick={() => setEditing("title")}
-            className="-mx-1 cursor-text rounded-md px-1 text-[16px] font-semibold leading-snug tracking-tight text-gray-900 transition hover:bg-black/[0.025]"
+            className={`-mx-1 cursor-text rounded-md px-1 text-[16px] font-semibold leading-snug tracking-tight transition hover:bg-black/[0.025] ${
+              isDone
+                ? "text-gray-400 line-through decoration-gray-300 decoration-[1px]"
+                : "text-gray-900"
+            }`}
             title="Click to edit"
           >
             {meta.title || "Step"}
@@ -540,7 +682,11 @@ export function PlanStepBlock({
         {/* Metadata pills — small mono caps badges (time/cadence/mode/
             tools) extracted from the body. Empty array hides entirely. */}
         {pills.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <div
+            className={`mt-2 flex flex-wrap items-center gap-1.5 transition ${
+              isDone ? "opacity-50" : ""
+            }`}
+          >
             {pills.map((pill, i) => {
               const PillIcon = pill.icon;
               return (

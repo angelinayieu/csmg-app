@@ -24,12 +24,28 @@ interface Body {
 // Per-type allowed meta keys for user edits. AI-op-produced keys
 // (sub_steps, supporting_rationales, challenges, additional_mitigations,
 // supports_block_id) are NOT in here — they evolve via op endpoints.
+//
+// `status` is Phase 2 user-authored state (pending / in_progress / done)
+// — cycles via the StatusDot affordance on each plan-step row. Value
+// is validated below before merge.
 const ALLOWED_META_KEYS: Record<string, string[]> = {
-  plan_step: ["title"],
+  plan_step: ["title", "status"],
   risk: ["title", "severity", "mitigation"],
   hypothesis: ["rationale", "evidence_status"],
   evidence: ["source_title", "source_kind", "url", "summary"],
   note: [],
+};
+
+// Per-key value validators. Only fires for keys with constrained
+// values (enums); free-form strings get the existing length sanitize.
+const META_VALUE_VALIDATORS: Record<string, (v: unknown) => boolean> = {
+  status: (v) =>
+    typeof v === "string" && ["pending", "in_progress", "done"].includes(v),
+  severity: (v) =>
+    typeof v === "string" && ["high", "medium", "low"].includes(v),
+  evidence_status: (v) =>
+    typeof v === "string" &&
+    ["untested", "supported", "refuted"].includes(v),
 };
 
 export async function PATCH(request: Request, ctx: RouteContext) {
@@ -69,8 +85,12 @@ export async function PATCH(request: Request, ctx: RouteContext) {
     const merged = { ...(existing.meta as Record<string, any>) };
     for (const key of Object.keys(patch)) {
       if (!allowed.includes(key)) continue;
-      // Lightweight sanitization on common string fields
       const val = patch[key];
+      // Reject enum-valued fields with non-enum values rather than
+      // silently storing garbage in meta.
+      const validator = META_VALUE_VALIDATORS[key];
+      if (validator && !validator(val)) continue;
+      // Lightweight sanitization on free-form strings
       if (typeof val === "string") {
         merged[key] = val.slice(0, 1000);
       } else {
