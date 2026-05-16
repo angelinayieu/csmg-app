@@ -19,7 +19,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Loader2, GitBranch, Camera, Activity, Beaker } from "lucide-react";
+import { Loader2, GitBranch, Camera, Activity, Beaker, Package } from "lucide-react";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { ConnectPanel } from "@/components/whiteboard/connect-panel";
 import { CanvasSnapshotsDrawer } from "@/components/canvas/chrome/canvas-snapshots-drawer";
@@ -87,6 +87,7 @@ import {
 import { CanvasExperienceModeChip } from "@/components/canvas/chrome/canvas-experience-mode-chip";
 import { CanvasAutopilotPanel } from "@/components/canvas/chrome/canvas-autopilot-panel";
 import { CanvasVoiceDock } from "@/components/canvas/chrome/canvas-voice-dock";
+import { CanvasFinalProductsDrawer } from "@/components/canvas/chrome/canvas-final-products-drawer";
 import { SynergyGlassDock } from "@/components/synergy/synergy-glass-dock";
 
 // ── Unified canvas chrome gating (Phase 1) ────────────────────────
@@ -169,6 +170,10 @@ export default function WhiteboardPage() {
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [situationOpen, setSituationOpen] = useState(false);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
+  // Phase 2b — Final Products drawer. Single surface that lists
+  // generated apps + key entities + (later) the strategy doc for
+  // this space. The user's "where is the final products tab?" ask.
+  const [productsOpen, setProductsOpen] = useState(false);
   // Scenario panel mode — null when closed, { kind: "new" } when
   // composing against a snapshot, { kind: "detail" } when viewing an
   // existing scenario.
@@ -378,6 +383,19 @@ export default function WhiteboardPage() {
         </button>
       )}
 
+      {/* Phase 2b — Final Products launcher. Stacked above the
+          Evidence button on the bottom-right rail. Available in
+          every mode because every whiteboard can produce outputs;
+          the drawer itself shows mode-appropriate empty states. */}
+      <button
+        onClick={() => setProductsOpen(true)}
+        className="fixed bottom-[13.5rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-indigo-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+        title="Final Products — apps, key entities, strategy doc"
+      >
+        <Package className="h-3.5 w-3.5 text-indigo-600" />
+        Products
+      </button>
+
       {/* Connect launcher — bottom-right floating button. Opens the
           weave + bridges side panel for this whiteboard. */}
       <button
@@ -388,6 +406,13 @@ export default function WhiteboardPage() {
         <GitBranch className="h-3.5 w-3.5" />
         Connect
       </button>
+
+      {productsOpen && (
+        <CanvasFinalProductsDrawer
+          onClose={() => setProductsOpen(false)}
+          spaceId={space.id}
+        />
+      )}
 
       <ConnectPanel
         open={connectOpen}
