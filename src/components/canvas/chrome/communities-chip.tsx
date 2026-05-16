@@ -27,8 +27,8 @@ import {
   Loader2,
   Network,
   RefreshCw,
-  Sparkles,
   Star,
+  Wand2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -203,7 +203,7 @@ export function CommunitiesChip({ spaceId }: { spaceId: string }) {
           {redetect.state === "running" ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : (
-            <Sparkles className="h-3 w-3" />
+            <Wand2 className="h-3 w-3" />
           )}
           {redetect.state === "running"
             ? "Detecting…"

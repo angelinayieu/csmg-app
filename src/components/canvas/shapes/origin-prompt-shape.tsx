@@ -22,6 +22,8 @@ import {
   resizeBox,
 } from "tldraw";
 import type { OriginPromptShape } from "./types";
+import { IntakeRoomIcon } from "@/components/canvas/icons";
+import { CanvasShapeGlass } from "./canvas-shape-glass";
 
 export const ORIGIN_PROMPT_DEFAULT_W = 420;
 export const ORIGIN_PROMPT_DEFAULT_H = 140;
@@ -83,19 +85,13 @@ function OriginPromptView({ shape }: { shape: OriginPromptShape }) {
         overflow: "hidden",
       }}
     >
-      <div
+      <CanvasShapeGlass
+        tier="card"
+        accent={accent}
+        state={runActive ? "active" : "pending"}
+        radius={16}
+        padding="14px 18px"
         style={{
-          width: "100%",
-          height: "100%",
-          borderRadius: 16,
-          background: "rgba(255,255,255,0.94)",
-          border: runActive
-            ? `1px solid color-mix(in srgb, ${accent} 38%, transparent)`
-            : "1px solid rgba(15,23,42,0.08)",
-          boxShadow: runActive
-            ? `0 0 0 4px color-mix(in srgb, ${accent} 8%, transparent), 0 12px 32px -14px rgba(16,24,40,0.18)`
-            : "0 1px 2px rgba(16,24,40,0.04), 0 8px 24px -12px rgba(16,24,40,0.1)",
-          padding: "14px 18px",
           display: "flex",
           gap: 12,
           alignItems: "flex-start",
@@ -115,11 +111,9 @@ function OriginPromptView({ shape }: { shape: OriginPromptShape }) {
               ? `color-mix(in srgb, ${accent} 16%, transparent)`
               : "rgba(15,23,42,0.04)",
             color: runActive ? accent : "#64748b",
-            fontSize: 16,
-            lineHeight: 1,
           }}
         >
-          ✦
+          <IntakeRoomIcon size={16} />
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div
@@ -150,7 +144,7 @@ function OriginPromptView({ shape }: { shape: OriginPromptShape }) {
             {preview}
           </div>
         </div>
-      </div>
+      </CanvasShapeGlass>
     </HTMLContainer>
   );
 }

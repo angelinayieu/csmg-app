@@ -36,7 +36,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, CheckCircle2, Sparkles, X } from "lucide-react";
+import { ArrowRight, CheckCircle2, Target, X } from "lucide-react";
 
 interface FramingProposalGateProps {
   spaceId: string;
@@ -193,7 +193,7 @@ export function FramingProposalGate({ spaceId }: FramingProposalGateProps) {
           {isApproved ? (
             <CheckCircle2 className="h-3.5 w-3.5" />
           ) : (
-            <Sparkles className="h-3.5 w-3.5" />
+            <Target className="h-3.5 w-3.5" />
           )}
         </div>
 

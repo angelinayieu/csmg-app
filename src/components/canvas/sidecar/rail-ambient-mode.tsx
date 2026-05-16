@@ -185,15 +185,11 @@ export function RailAmbientMode({ spaceId }: Props) {
               fontWeight: 700,
               letterSpacing: "0.14em",
               textTransform: "uppercase",
-              marginBottom: 4,
               color: "rgba(85,100,121,0.7)",
             }}
           >
             No synthesis yet
           </div>
-          <span>
-            Decompose a prompt or drop a paper to populate strategy + insights here.
-          </span>
         </div>
       )}
 

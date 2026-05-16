@@ -20,7 +20,7 @@
 
 import React, { useState } from "react";
 import {
-  Sparkles,
+  Wand2,
   Zap,
   Search,
   ArrowUpRight,
@@ -121,7 +121,7 @@ export function BrainstormPanel({
                   : "rgba(15,23,42,0.05)",
               }}
             >
-              <Sparkles
+              <Wand2
                 className={cn(
                   "h-3.5 w-3.5 transition-colors",
                   settings.enabled && "animate-pulse",
@@ -173,7 +173,7 @@ export function BrainstormPanel({
             {/* Active sticky preview */}
             {hudCtx!.activeShape && (
               <AmbientSection
-                icon={<Sparkles className="h-3 w-3" />}
+                icon={<Wand2 className="h-3 w-3" />}
                 label="Active sticky"
                 accent="from-blue-50 to-purple-50"
               >

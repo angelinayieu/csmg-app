@@ -23,8 +23,9 @@
 // it lives inside the canvas chrome stack.
 
 import { useEffect, useMemo, useState } from "react";
-import { Sparkles, Layers, Telescope, Combine, FlaskConical, CheckCircle2, AlertCircle } from "lucide-react";
+import { Layers, Telescope, Combine, FlaskConical, CheckCircle2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { IntakeRoomIcon } from "@/components/canvas/icons";
 import {
   useEventsOfType,
   useLatestStageBoundary,
@@ -40,7 +41,7 @@ interface StageMeta {
   label: string;
   /** One-line tooltip explaining what's happening at this stage. */
   description: string;
-  Icon: typeof Sparkles;
+  Icon: React.ComponentType<{ className?: string; size?: number }>;
 }
 
 // Order matters — drives left-to-right rendering.
@@ -49,7 +50,7 @@ const STAGES: StageMeta[] = [
     key: "intake",
     label: "Intake",
     description: "Parsing the prompt and opening the canvas.",
-    Icon: Sparkles,
+    Icon: IntakeRoomIcon,
   },
   {
     key: "landscape",
