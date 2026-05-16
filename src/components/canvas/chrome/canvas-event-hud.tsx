@@ -477,7 +477,10 @@ export function CanvasEventHud({ runId, onClose, onRetry, onResume }: CanvasEven
           when the run has finished or there's no meaningful message. */}
       {latestStageMessage && status !== "completed" && status !== "failed" && status !== "timeout" && (
         <div className="mt-1.5 flex items-center gap-1.5 text-[10.5px] font-medium text-gray-500">
-          <span className="inline-block h-1 w-1 animate-pulse rounded-full bg-blue-500" />
+          <span
+            className="inline-block h-1 w-1 animate-pulse rounded-full"
+            style={{ background: "var(--canvas-accent)" }}
+          />
           <span className="truncate">{latestStageMessage}</span>
         </div>
       )}
@@ -498,9 +501,16 @@ export function CanvasEventHud({ runId, onClose, onRetry, onResume }: CanvasEven
                   className={cn(
                     "flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold transition-colors",
                     st === "done" && "bg-emerald-500 text-white",
-                    st === "active" && "bg-blue-500 text-white",
                     st === "pending" && "bg-gray-200 text-gray-400",
                   )}
+                  style={
+                    st === "active"
+                      ? {
+                          background: "var(--canvas-accent)",
+                          color: "#ffffff",
+                        }
+                      : undefined
+                  }
                 >
                   {st === "done" ? (
                     <Check className="h-2.5 w-2.5" strokeWidth={3} />
@@ -514,9 +524,13 @@ export function CanvasEventHud({ runId, onClose, onRetry, onResume }: CanvasEven
                   className={cn(
                     "truncate text-[10px] font-semibold tracking-tight",
                     st === "done" && "text-emerald-700",
-                    st === "active" && "text-blue-700",
                     st === "pending" && "text-gray-400",
                   )}
+                  style={
+                    st === "active"
+                      ? { color: "var(--canvas-accent)" }
+                      : undefined
+                  }
                 >
                   {STAGE_SHORT[stage]}
                 </span>

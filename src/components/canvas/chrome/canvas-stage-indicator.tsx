@@ -235,15 +235,26 @@ function CanvasStageIndicatorInner() {
                   "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-all",
                   isError
                     ? "bg-red-50 text-red-600 ring-1 ring-red-200"
-                    : isActive
-                      ? "bg-violet-100 text-violet-700 ring-1 ring-violet-300"
-                      : isComplete
-                        ? "text-emerald-600"
+                    : isComplete
+                      ? "text-emerald-600"
+                      : isActive
+                        ? null // accent-driven inline style below
                         : "text-slate-400",
                   isActive &&
                     pulseStage === stage.key &&
                     "stage-chip-pulse",
                 )}
+                style={
+                  isActive && !isError
+                    ? {
+                        background:
+                          "color-mix(in srgb, var(--canvas-accent) calc(var(--accent-fill-medium) * 100%), transparent)",
+                        color: "var(--canvas-accent)",
+                        boxShadow:
+                          "inset 0 0 0 1px color-mix(in srgb, var(--canvas-accent) calc(var(--accent-border-strong) * 100%), transparent)",
+                      }
+                    : undefined
+                }
                 data-pulse-seq={pulseSeq}
               >
                 <Icon
@@ -280,15 +291,22 @@ function CanvasStageIndicatorInner() {
         @keyframes stage-chip-glow {
           0% {
             transform: scale(0.94);
-            box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.45);
+            box-shadow: 0 0 0 0
+              color-mix(
+                in srgb,
+                var(--canvas-accent) 45%,
+                transparent
+              );
           }
           50% {
             transform: scale(1.06);
-            box-shadow: 0 0 0 6px rgba(124, 58, 237, 0);
+            box-shadow: 0 0 0 6px
+              color-mix(in srgb, var(--canvas-accent) 0%, transparent);
           }
           100% {
             transform: scale(1);
-            box-shadow: 0 0 0 0 rgba(124, 58, 237, 0);
+            box-shadow: 0 0 0 0
+              color-mix(in srgb, var(--canvas-accent) 0%, transparent);
           }
         }
         :global(.stage-icon-spin) {
