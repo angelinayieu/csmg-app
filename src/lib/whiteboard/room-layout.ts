@@ -52,6 +52,13 @@ export interface StageRoomMeta {
   /** Title shown in the room's header. User-facing, not the pipeline
    *  internal name (e.g., "Probability spaces", not "landscape"). */
   title: string;
+  /** One-word narrative label used by the top stage strip + bottom
+   *  event-hud pills. Single source of truth for "what do we call
+   *  this stage in a chip / pill / breadcrumb." Was previously two
+   *  separate records (`STAGE_LABELS` in canvas-event-hud +
+   *  `label` in canvas-stage-indicator) using `Scan/Graph/Propose`
+   *  vs `Breadth/Depth/Weave` for the same stages. */
+  shortLabel: string;
   /** Plain-language explanation of what's happening in this room.
    *  Renders below the title in a smaller font. */
   description: string;
@@ -77,6 +84,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   intake: {
     order: 0,
     title: "Understanding your situation",
+    shortLabel: "Intake",
     description:
       "Reading your prompt, parsing what you brought, and framing the question.",
     accent: "#8B5CF6",
@@ -85,6 +93,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   landscape: {
     order: 1,
     title: "Probability spaces",
+    shortLabel: "Breadth",
     description:
       "Opening the dimensions that matter for this question — actors, scenarios, risk, …",
     accent: "#0891B2",
@@ -93,6 +102,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   kg: {
     order: 2,
     title: "Knowledge graph",
+    shortLabel: "Depth",
     description:
       "Decomposing the situation into entities, causal edges, and feedback cycles.",
     accent: "#10B981",
@@ -101,6 +111,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   proposal: {
     order: 3,
     title: "Strategies",
+    shortLabel: "Weave",
     description:
       "Synthesizing ranked strategies with the supporting reasoning that produced each one.",
     accent: "#D97706",
@@ -109,6 +120,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   twin: {
     order: 4,
     title: "Digital twin",
+    shortLabel: "Twin",
     description:
       "The committed Workflow/Strategy/Twin: causal stages, mechanism cascade, and the proposed-vs-actual diff.",
     accent: "#7C3AED",
@@ -117,6 +129,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   lab: {
     order: 5,
     title: "Lab simulations",
+    shortLabel: "Test",
     description:
       "Stress-testing strategies with Monte Carlo runs and counterfactual variants.",
     accent: "#EC4899",
@@ -125,6 +138,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   reflexive: {
     order: 6,
     title: "Reflexive loop",
+    shortLabel: "Loop",
     description:
       "Background prospector + radar + calibration — the system continuously chips away at coverage between visits.",
     accent: "#0EA5E9",
@@ -133,6 +147,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   results: {
     order: 7,
     title: "Results",
+    shortLabel: "Done",
     description: "Final synthesis and approved next actions.",
     accent: "#475569",
     glyph: "⑧",

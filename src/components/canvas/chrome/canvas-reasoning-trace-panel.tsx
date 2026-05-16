@@ -34,6 +34,7 @@ import { useMemo, useState } from "react";
 import { BrainCircuit, Check, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRunEventStore } from "../hooks/run-event-store";
+import { STAGE_ROOMS } from "@/lib/whiteboard/room-layout";
 import type { PipelineStage } from "@/types/pipeline-events";
 
 export interface CanvasReasoningTracePanelProps {
@@ -68,15 +69,18 @@ const STAGE_ORDER: PipelineStage[] = [
   "results",
 ];
 
+// Reuse the canonical short labels — same vocabulary as the top stage
+// strip and the bottom event-hud. (Was "KG / Strategy / Reflexive";
+// now matches "Depth / Weave / Loop".)
 const STAGE_LABEL: Record<PipelineStage, string> = {
-  intake: "Intake",
-  landscape: "Landscape",
-  kg: "KG",
-  proposal: "Strategy",
-  twin: "Twin",
-  lab: "Lab",
-  reflexive: "Reflexive",
-  results: "Results",
+  intake: STAGE_ROOMS.intake.shortLabel,
+  landscape: STAGE_ROOMS.landscape.shortLabel,
+  kg: STAGE_ROOMS.kg.shortLabel,
+  proposal: STAGE_ROOMS.proposal.shortLabel,
+  twin: STAGE_ROOMS.twin.shortLabel,
+  lab: STAGE_ROOMS.lab.shortLabel,
+  reflexive: STAGE_ROOMS.reflexive.shortLabel,
+  results: STAGE_ROOMS.results.shortLabel,
 };
 
 /**

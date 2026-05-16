@@ -17,6 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, CheckCircle2, AlertCircle, AlertTriangle, Check, StopCircle, Clock, Brain, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRunEventStore } from "../hooks/run-event-store";
+import { STAGE_ROOMS } from "@/lib/whiteboard/room-layout";
 import type { PipelineStage } from "@/types/pipeline-events";
 
 // Stall thresholds. The pipeline emits a heartbeat stage_boundary
@@ -55,13 +56,22 @@ export interface CanvasEventHudProps {
   onResume?: () => void;
 }
 
-const STAGE_LABELS: Record<string, string> = {
-  intake: "Intake",
-  landscape: "Landscape",
-  kg: "Knowledge graph",
-  proposal: "Proposals",
-  lab: "Lab",
-  results: "Results",
+// Stage labels — single source of truth. STAGE_ROOMS.title is the long
+// form for room headers ("Knowledge graph"); STAGE_ROOMS.shortLabel is
+// the canonical one-word narrative pill used by both this dock and the
+// top stage indicator strip (`Intake / Breadth / Depth / Weave / Twin /
+// Test / Loop / Done`). Previously two parallel records here disagreed
+// with the top strip — the top strip said "Breadth" while this dock
+// said "Scan" for the same stage.
+const STAGE_LABELS: Record<PipelineStage, string> = {
+  intake: STAGE_ROOMS.intake.title,
+  landscape: STAGE_ROOMS.landscape.title,
+  kg: STAGE_ROOMS.kg.title,
+  proposal: STAGE_ROOMS.proposal.title,
+  twin: STAGE_ROOMS.twin.title,
+  lab: STAGE_ROOMS.lab.title,
+  reflexive: STAGE_ROOMS.reflexive.title,
+  results: STAGE_ROOMS.results.title,
 };
 
 const STAGE_ORDER: PipelineStage[] = [
@@ -76,14 +86,14 @@ const STAGE_ORDER: PipelineStage[] = [
 ];
 
 const STAGE_SHORT: Record<PipelineStage, string> = {
-  intake: "Intake",
-  landscape: "Scan",
-  kg: "Graph",
-  proposal: "Propose",
-  twin: "Twin",
-  lab: "Lab",
-  reflexive: "Loop",
-  results: "Results",
+  intake: STAGE_ROOMS.intake.shortLabel,
+  landscape: STAGE_ROOMS.landscape.shortLabel,
+  kg: STAGE_ROOMS.kg.shortLabel,
+  proposal: STAGE_ROOMS.proposal.shortLabel,
+  twin: STAGE_ROOMS.twin.shortLabel,
+  lab: STAGE_ROOMS.lab.shortLabel,
+  reflexive: STAGE_ROOMS.reflexive.shortLabel,
+  results: STAGE_ROOMS.results.shortLabel,
 };
 
 export function CanvasEventHud({ runId, onClose, onRetry, onResume }: CanvasEventHudProps) {

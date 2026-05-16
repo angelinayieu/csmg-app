@@ -32,53 +32,57 @@ import {
   useRunEventStoreOptional,
   useRunStatus,
 } from "../hooks/run-event-store";
+import { STAGE_ROOMS } from "@/lib/whiteboard/room-layout";
 import type { PipelineStage } from "@/types/pipeline-events";
 
 interface StageMeta {
   /** Canonical key from PipelineStage. */
   key: PipelineStage;
-  /** User-facing label rendered in the strip. */
+  /** User-facing label rendered in the strip. Pulled from STAGE_ROOMS
+   *  so the top strip and bottom dock can't drift apart vocabularies. */
   label: string;
   /** One-line tooltip explaining what's happening at this stage. */
   description: string;
   Icon: React.ComponentType<{ className?: string; size?: number }>;
 }
 
-// Order matters — drives left-to-right rendering.
+// Order matters — drives left-to-right rendering. Labels come from
+// STAGE_ROOMS.shortLabel so this strip never disagrees with the
+// bottom event-hud about what to call each stage.
 const STAGES: StageMeta[] = [
   {
     key: "intake",
-    label: "Intake",
+    label: STAGE_ROOMS.intake.shortLabel,
     description: "Parsing the prompt and opening the canvas.",
     Icon: IntakeRoomIcon,
   },
   {
     key: "landscape",
-    label: "Breadth",
+    label: STAGE_ROOMS.landscape.shortLabel,
     description: "Frame extractor opening axes — broad lenses on the situation.",
     Icon: Telescope,
   },
   {
     key: "kg",
-    label: "Depth",
+    label: STAGE_ROOMS.kg.shortLabel,
     description: "Per-axis generators deepening each branch + cycle detection.",
     Icon: Layers,
   },
   {
     key: "proposal",
-    label: "Weave",
+    label: STAGE_ROOMS.proposal.shortLabel,
     description: "Cross-axis synthesis + strategy ranking.",
     Icon: Combine,
   },
   {
     key: "lab",
-    label: "Test",
+    label: STAGE_ROOMS.lab.shortLabel,
     description: "Lab dissection of proposed systems.",
     Icon: FlaskConical,
   },
   {
     key: "results",
-    label: "Done",
+    label: STAGE_ROOMS.results.shortLabel,
     description: "Run completed.",
     Icon: CheckCircle2,
   },
