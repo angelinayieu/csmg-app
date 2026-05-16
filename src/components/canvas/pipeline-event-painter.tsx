@@ -1211,21 +1211,13 @@ function paintVariant(
 // a shape's top-left X given the desired shape width, so shapes land
 // centered on the anchor column.
 
-const ROW_PITCH = 520;
-
-/** Narrative band for each Sprint A shape type. */
-const ROW_APP_FORMATION = 1;   // app-result — downstream reality card
-const ROW_EXPERIMENT = 2;      // iv-decomposition — the active variant's IV rings
-const ROW_VARIANTS_BAND = 3;   // variant-carousel — whole deck
-const ROW_SYNTHESIS = 4;       // stage-node chains
-
-function rowY(anchorY: number, row: number): number {
-  return anchorY + row * ROW_PITCH;
-}
-
-function centerX(anchorX: number, shapeW: number): number {
-  return anchorX - shapeW / 2;
-}
+// (Sprint A row helpers — ROW_APP_FORMATION / ROW_EXPERIMENT /
+// ROW_VARIANTS_BAND / ROW_SYNTHESIS / rowY() / centerX() — were
+// removed when the 4 row-based paints migrated to placeInsideRoom
+// ("lab", anchor, …). See LAB_ROW_*_Y constants below for the new
+// interior offsets. The row narrative is preserved: each band still
+// stacks beneath the prior, just inside the lab room now so the
+// cascade tracks them when upstream rooms grow.)
 
 // Dimensions for the Sprint A shapes (matched to their getDefaultProps).
 const APP_RESULT_W = 560;
@@ -1241,6 +1233,18 @@ const STAGE_NODE_W = 180;
 const STAGE_NODE_H = 110;
 const STAGE_X_PITCH = STAGE_NODE_W + 60;
 const STAGE_CHAIN_V_PITCH = STAGE_NODE_H + 60;
+
+// Lab-room interior layout — the 4 Sprint-A row bands stack inside
+// the lab room with a uniform gap. Each offset is from the room's
+// content-top (placeInsideRoom already accounts for the header).
+// Replaces the prior rowY(anchor.y, ROW_*) constants which floated
+// anywhere from anchor+520 to anchor+2080 without any room knowing.
+const LAB_ROW_GAP = 60;
+const LAB_ROW_APP_Y = 24;
+const LAB_ROW_IV_Y = LAB_ROW_APP_Y + APP_RESULT_H + LAB_ROW_GAP;
+const LAB_ROW_VARIANT_Y = LAB_ROW_IV_Y + IV_DECOMP_H + LAB_ROW_GAP;
+const LAB_ROW_CAUSAL_TOP_Y =
+  LAB_ROW_VARIANT_Y + VARIANT_CAROUSEL_H + LAB_ROW_GAP;
 
 /**
  * Balanced-alternating offset from a center point. Index 0 sits at
@@ -2274,8 +2278,11 @@ function paintAppResultReady(
   }
 
   const shapeId = createShapeId();
-  const x = centerX(state.anchor.x, APP_RESULT_W);
-  const y = rowY(state.anchor.y, ROW_APP_FORMATION);
+  // Place inside the lab room (was rowY(anchor.y, ROW_APP_FORMATION)
+  // which floated anchor + 520 outside any room).
+  const placement = placeInsideRoom("lab", state.anchor, 0, LAB_ROW_APP_Y);
+  const x = placement.x - APP_RESULT_W / 2;
+  const y = placement.y;
   try {
     editor.createShape<DownstreamRealityShape>({
       id: shapeId,
@@ -2285,6 +2292,13 @@ function paintAppResultReady(
       props,
     });
     state.appResultShapesByAppId.set(appKey, shapeId);
+    registerRoomChild(state, "lab", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "lab",
+      y + APP_RESULT_H,
+    );
 
     // Cross-row tether: if the KG-formation card (intake landscape)
     // already exists, link it downward. Reads as "landscape scored
@@ -2344,8 +2358,10 @@ function paintIVDecompositionReady(
   }
 
   const shapeId = createShapeId();
-  const x = centerX(state.anchor.x, IV_DECOMP_W);
-  const y = rowY(state.anchor.y, ROW_EXPERIMENT);
+  // Place inside the lab room, second row (below app-result).
+  const placement = placeInsideRoom("lab", state.anchor, 0, LAB_ROW_IV_Y);
+  const x = placement.x - IV_DECOMP_W / 2;
+  const y = placement.y;
   try {
     editor.createShape<IVDecompositionShape>({
       id: shapeId,
@@ -2355,6 +2371,13 @@ function paintIVDecompositionReady(
       props,
     });
     state.ivDecompositionShapeId = shapeId;
+    registerRoomChild(state, "lab", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "lab",
+      y + IV_DECOMP_H,
+    );
 
     // Tether from app-result (same appId if present, else first
     // painted). Reads as "reality decomposed into IVs".
@@ -2409,8 +2432,15 @@ function paintVariantDeckReady(
   }
 
   const shapeId = createShapeId();
-  const x = centerX(state.anchor.x, VARIANT_CAROUSEL_W);
-  const y = rowY(state.anchor.y, ROW_VARIANTS_BAND);
+  // Place inside the lab room, third row (below iv-decomposition).
+  const placement = placeInsideRoom(
+    "lab",
+    state.anchor,
+    0,
+    LAB_ROW_VARIANT_Y,
+  );
+  const x = placement.x - VARIANT_CAROUSEL_W / 2;
+  const y = placement.y;
   try {
     editor.createShape<VariantCarouselShape>({
       id: shapeId,
@@ -2420,6 +2450,13 @@ function paintVariantDeckReady(
       props,
     });
     state.variantCarouselShapeId = shapeId;
+    registerRoomChild(state, "lab", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "lab",
+      y + VARIANT_CAROUSEL_H,
+    );
 
     // Tether from iv-decomposition if present. Reads as "IVs
     // materialized into variants".
@@ -2484,19 +2521,24 @@ function paintCausalStageReady(
     return;
   }
 
-  // Each chain sits on its own sub-band within the synthesis row.
-  // chainRank is 1-indexed; row 0 for rank 1 keeps the top chain
-  // aligned with rowY(SYNTHESIS).
+  // Each chain sits on its own sub-band within the lab room's
+  // synthesis area. chainRank is 1-indexed; row 0 for rank 1 keeps
+  // the top chain aligned with LAB_ROW_CAUSAL_TOP_Y. Stages unfurl
+  // left-to-right within their chain row.
   const chainRow = Math.max(0, event.chainRank - 1);
-  const baseY = rowY(state.anchor.y, ROW_SYNTHESIS) + chainRow * STAGE_CHAIN_V_PITCH;
-
-  // Stages unfurl left-to-right within their chain row. Use
-  // stageIndex to position so out-of-order emissions still land in
-  // the right slot. Center the mid-stage (index 2-3 of a 6-stage
-  // chain) on the anchor column so long chains balance.
+  const stageOffsetY = LAB_ROW_CAUSAL_TOP_Y + chainRow * STAGE_CHAIN_V_PITCH;
+  const placement = placeInsideRoom(
+    "lab",
+    state.anchor,
+    0,
+    stageOffsetY,
+  );
+  // Center the mid-stage (index 2-3 of a 6-stage chain) on the room
+  // column so long chains balance horizontally. Stage 0 lands left of
+  // center; later stages chain to the right.
   const centerOffset = -2.5 * STAGE_X_PITCH;
-  const x = state.anchor.x + centerOffset + event.stageIndex * STAGE_X_PITCH;
-  const y = baseY;
+  const x = placement.x + centerOffset + event.stageIndex * STAGE_X_PITCH;
+  const y = placement.y;
 
   const shapeId = createShapeId();
   try {
@@ -2508,6 +2550,13 @@ function paintCausalStageReady(
       props,
     });
     state.stageNodeShapesByKey.set(key, shapeId);
+    registerRoomChild(state, "lab", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "lab",
+      y + STAGE_NODE_H,
+    );
     const chainList = state.stageNodesByChain.get(event.chainId) ?? [];
     chainList.push(shapeId);
     state.stageNodesByChain.set(event.chainId, chainList);
