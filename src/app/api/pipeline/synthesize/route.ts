@@ -1130,7 +1130,17 @@ YOU MUST address each signal in your synthesis:
     let regenMetadata: SynthesisData["regen_metadata"] = undefined;
     if (qualityScore) {
       const REGEN_THRESHOLD = 55;
-      const CRITICAL_FLAGS: QualityFlag[] = ["shallow_leverage", "ungrounded_risk", "generic_actions"];
+      const CRITICAL_FLAGS: QualityFlag[] = [
+        "shallow_leverage",
+        "ungrounded_risk",
+        "generic_actions",
+        // Display-readiness flags — these surface in the right-rail
+        // immediately, so a synthesis that ships with any of them
+        // visibly fails before the user reads a single sentence.
+        "missing_insight_name",
+        "empty_insight_summary",
+        "parroting_summary",
+      ];
       const MAX_REGEN_ATTEMPTS = 1;
       const regenAttempt = 0;
 
@@ -1151,6 +1161,9 @@ YOU MUST address each signal in your synthesis:
             missing_dynamics: "The analysis doesn't reference feedback loops or temporal dynamics. Ground the strategy in the system's dynamic behavior.",
             weak_external_coverage: "Insufficient external context. Reference domain research findings in worth_considering and cross-context insights.",
             unexpanded_critical: "Key leverage/risk/bottleneck entities lack internal structure. Expanding these entities would reveal sub-components and internal dynamics that strengthen analysis depth.",
+            missing_insight_name: "At least one leverage_point or risk_point is missing the `entity_name` field. EVERY leverage/risk MUST include the named entity from the graph (not 'Leverage' or 'Risk' — the actual entity name). The right-rail uses this as the card title; missing names render as placeholder text.",
+            empty_insight_summary: "At least one leverage_point, risk_point, or master_bottleneck has an empty or one-line summary. Every `summary` field MUST be a substantive paragraph (3+ sentences) explaining what this is and why it matters in THIS specific situation. No empty strings. No one-word placeholders.",
+            parroting_summary: "At least one summary reads as a platitude that could apply to any business or research problem (e.g. 'optimizing the session enhances productivity', 'accurate models improve understanding'). REWRITE every flagged summary to (a) name the specific entity from the graph, (b) explain the specific mechanism in this domain, (c) reference a concrete quantity, timeframe, or named instrument. If you cannot meet this bar, OMIT the point — better to ship fewer grounded insights than a list of empty observations.",
           };
 
           const flagGuidanceLines = criticalFlagsFound
