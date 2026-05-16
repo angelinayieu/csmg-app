@@ -83,6 +83,8 @@ import {
 } from "./shapes/strategy-hero-card-shape";
 import {
   STAGE_ROOMS,
+  STAGE_HEIGHT,
+  ROOM_GAP,
   computeRoomBounds,
   buildRoomSubtitle,
   roomForEventType,
@@ -91,6 +93,7 @@ import {
   EMPTY_ROOM_COUNTS,
   type RoomCounts,
 } from "@/lib/whiteboard/room-layout";
+import type { PipelineStage } from "@/types/pipeline-events";
 import { normalizeName as normalizeEntityName } from "@/lib/decomposition/extract-candidate-names";
 import { HubTracker } from "@/lib/graph/hub-discovery";
 
@@ -270,6 +273,7 @@ function ensureOriginPrompt(
       },
     });
     state.originPromptShapeId = shapeId;
+    registerRoomChild(state, "intake", shapeId);
     recordChildBottomForStage(
       editor,
       state,
@@ -329,6 +333,7 @@ function ensureKGFormation(editor: Editor, state: PainterState) {
       },
     });
     state.kgFormationShapeId = shapeId;
+    registerRoomChild(state, "kg", shapeId);
     recordChildBottomForStage(
       editor,
       state,
@@ -583,6 +588,7 @@ function paintSpaceOpened(
       },
     });
     state.spaceShellShapeIds.set(event.spaceKey, shapeId);
+    registerRoomChild(state, "landscape", shapeId);
     recordChildBottomForStage(
       editor,
       state,
@@ -861,6 +867,7 @@ function paintSituationAnalyzed(
       meta: { source: "pipeline-event" },
     });
     state.situationCardShapeId = shapeId;
+    registerRoomChild(state, "intake", shapeId);
     // Grow the intake room to enclose the card so it doesn't poke past
     // the room's bottom edge. The default intake height (280) only
     // fits the prompt; with the situation card we need ~prompt+card.
@@ -1046,6 +1053,7 @@ function paintTwinProposalReady(
       props: propsBase,
       meta: { source: "pipeline-event:twin-proposal-ready" },
     });
+    registerRoomChild(state, "twin", shapeId);
     recordChildBottomForStage(
       editor,
       state,
@@ -3726,8 +3734,112 @@ function recordChildBottomForStage(
       type: "room",
       props: { h: requiredH },
     });
+    // The room just grew. Static STAGE_HEIGHT-based downstream Y
+    // calculations are now stale — push every later room (and its
+    // contents) down by the delta so the cascade stays coherent.
+    // Without this, the landscape shells render INSIDE the bottom of
+    // a grown intake room (the bug visible in screen 1).
+    repositionDownstreamRooms(editor, state, stage, requiredH - currentH);
   } catch (err) {
     console.warn("[pipeline-painter] room auto-resize failed:", err);
+  }
+}
+
+/**
+ * Register a shape as a child of `stage`'s room. The downstream
+ * reposition pass shifts every registered child by the same delta when
+ * an upstream room grows, so children stay visually inside the room
+ * that owns them. Idempotent — re-registering the same id is a no-op.
+ */
+function registerRoomChild(
+  state: PainterState,
+  stage: PipelineStage,
+  shapeId: TLShapeId,
+) {
+  let bucket = state.roomChildren.get(stage);
+  if (!bucket) {
+    bucket = new Set<TLShapeId>();
+    state.roomChildren.set(stage, bucket);
+  }
+  bucket.add(shapeId);
+}
+
+/**
+ * When `grownStage`'s room grew by `deltaY`, every room with a higher
+ * order in the cascade needs to shift down by the same delta — both
+ * the room shape itself AND every shape registered as living inside
+ * it. Without this, the static STAGE_HEIGHT-based Y math in
+ * `computeRoomBounds()` leaves the downstream rooms at their original
+ * positions, and the grown room's overflow visually swallows them.
+ *
+ * Cheap — the loop runs once per growth event, touches at most one
+ * shape update per downstream room + one per registered child.
+ */
+function repositionDownstreamRooms(
+  editor: Editor,
+  state: PainterState,
+  grownStage: string,
+  deltaY: number,
+) {
+  if (deltaY <= 0) return;
+  const grownMeta = STAGE_ROOMS[grownStage as PipelineStage];
+  if (!grownMeta) return;
+
+  for (const [stage, roomId] of state.roomShapeIds) {
+    const meta = STAGE_ROOMS[stage as PipelineStage];
+    if (!meta || meta.order <= grownMeta.order) continue;
+
+    const room = editor.getShape(roomId);
+    if (!room) continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const oldY = (room as { y?: number }).y;
+    if (typeof oldY !== "number") continue;
+
+    try {
+      // Same RoomShape-as-TLShape constraint mismatch the rest of the
+      // painter's room ops work around — see upsertRoomForStage below.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      editor.updateShape({
+        id: roomId,
+        type: "room",
+        x: (room as { x?: number }).x ?? 0,
+        y: oldY + deltaY,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+    } catch (err) {
+      console.warn("[pipeline-painter] downstream room shift failed:", err);
+      continue;
+    }
+
+    // Also bump every shape that lives inside this downstream room.
+    const children = state.roomChildren.get(stage);
+    if (!children) continue;
+    for (const childId of children) {
+      const child = editor.getShape(childId);
+      if (!child) continue;
+      const childX = (child as { x?: number }).x ?? 0;
+      const childY = (child as { y?: number }).y ?? 0;
+      try {
+        // x/y exist on every tldraw shape; type-narrowing the discriminated
+        // shape union just to shift a position would be needlessly verbose.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        editor.updateShape({
+          id: childId,
+          type: child.type,
+          x: childX,
+          y: childY + deltaY,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any);
+      } catch {
+        /* shape may have been deleted mid-flight; skip */
+      }
+    }
+    // Bump the cached max-Y so future grow checks against this room
+    // continue to produce sensible deltas.
+    const prevMax = state.roomChildMaxY.get(stage);
+    if (typeof prevMax === "number") {
+      state.roomChildMaxY.set(stage, prevMax + deltaY);
+    }
   }
 }
 

@@ -128,6 +128,13 @@ export interface PainterState {
    *  default soft-height under-counts the actual content. Reset
    *  alongside roomShapeIds on run cleanup. */
   roomChildMaxY: Map<string, number>;
+  /** stage → set of shape ids that were placed inside this stage's
+   *  room. When a room grows past its static STAGE_HEIGHT, every
+   *  downstream room AND every shape inside those downstream rooms
+   *  needs to shift down by the delta so the cascade stays coherent.
+   *  Populated at each `placeInsideRoom()` callsite alongside the
+   *  shape creation. Reset alongside roomShapeIds on run cleanup. */
+  roomChildren: Map<string, Set<TLShapeId>>;
   // ── Origin prompt (lineage root) ───────────────────────────────
   /** tldraw id of the origin-prompt card. Created on the first event
    *  once the anchor lands so every downstream painter shape can
@@ -362,6 +369,7 @@ export function makeInitialState(): PainterState {
     roomShapeIds: new Map(),
     roomCounts: new Map(),
     roomChildMaxY: new Map(),
+    roomChildren: new Map(),
     originPromptShapeId: null,
     spaceShellShapeIds: new Map(),
     spaceShellState: new Map(),
