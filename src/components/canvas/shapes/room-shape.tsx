@@ -57,6 +57,8 @@ import {
   TwinRoomIcon,
   ReflexiveRoomIcon,
 } from "@/components/canvas/icons";
+import { CanvasShapeGlass } from "./canvas-shape-glass";
+import { AccentChip } from "@/components/ui/accent-chip";
 
 // Custom stage SVG icons replace the roman-numeral glyph. Matches the
 // rooms-strip pre-flight upgrade — geometric, lab-instrument feel
@@ -166,14 +168,10 @@ function RoomView({ shape }: { shape: RoomShape }) {
   const accent = meta.accent;
 
   // Local-state toggle: expanded shows description text, compact is
-  // header-only. Defaults to expanded for the first 5 seconds after
-  // spawn so the user reads what each room means, then auto-collapses
-  // to keep the canvas clean.
-  const [expanded, setExpanded] = useState(true);
-  useEffect(() => {
-    const t = window.setTimeout(() => setExpanded(false), 5000);
-    return () => window.clearTimeout(t);
-  }, []);
+  // header-only. Defaults to collapsed — the title + subtitle already
+  // tell the user what the room is. Users can expand via the caret
+  // when they want the longer explanation.
+  const [expanded, setExpanded] = useState(false);
 
   // Track entrance window so the entrance animation only plays once
   // per spawn. After ENTRANCE_MS we drop the entrance class so a
@@ -211,84 +209,45 @@ function RoomView({ shape }: { shape: RoomShape }) {
     setExpanded((v) => !v);
   };
 
-  // State chip — monospace caps to match the rail vocabulary
-  // (rail-ambient-mode + rooms-strip use the same WORKING / DONE /
-  // PENDING chips, all on the same alphabet). The active chip uses a
-  // breathing dot at the kg-drill-halo cadence instead of a rotating
-  // spinner — quieter, less anxious, same cadence as the icon ring.
+  // State chip — uses the shared <AccentChip> primitive so the
+  // WORKING / DONE / PENDING vocabulary matches the rail and any
+  // other surface that surfaces lifecycle state. Active state earns
+  // a breathing dot at the same cadence as the room icon ring.
   const stateChip = (() => {
     if (state === "active") {
       return (
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            padding: "2px 8px",
-            borderRadius: 999,
-            background: `color-mix(in srgb, ${accent} 14%, transparent)`,
-            border: `0.5px solid color-mix(in srgb, ${accent} 38%, transparent)`,
-            fontSize: 9,
-            fontWeight: 700,
-            letterSpacing: "0.14em",
-            color: accent,
-            fontFamily: '"SF Mono", ui-monospace, monospace',
-          }}
+        <AccentChip
+          accent={accent}
+          variant="soft"
+          size="sm"
+          icon={
+            <span
+              aria-hidden
+              className="rail-streaming-breath"
+              style={{
+                width: 4,
+                height: 4,
+                borderRadius: "50%",
+                background: accent,
+              }}
+            />
+          }
         >
-          <span
-            aria-hidden
-            className="rail-streaming-breath"
-            style={{
-              width: 4,
-              height: 4,
-              borderRadius: "50%",
-              background: accent,
-            }}
-          />
           WORKING
-        </span>
+        </AccentChip>
       );
     }
     if (state === "complete") {
       return (
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 3,
-            padding: "2px 8px",
-            borderRadius: 999,
-            background: "rgba(16,185,129,0.10)",
-            border: "0.5px solid rgba(16,185,129,0.32)",
-            fontSize: 9,
-            fontWeight: 700,
-            letterSpacing: "0.14em",
-            color: "#047857",
-            fontFamily: '"SF Mono", ui-monospace, monospace',
-          }}
-        >
+        <AccentChip accent="#10b981" variant="soft" size="sm">
           DONE
-        </span>
+        </AccentChip>
       );
     }
     return (
-      <span
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          padding: "2px 8px",
-          borderRadius: 999,
-          background: "rgba(148,163,184,0.08)",
-          border: "0.5px solid rgba(148,163,184,0.22)",
-          fontSize: 9,
-          fontWeight: 700,
-          letterSpacing: "0.14em",
-          color: "#64748b",
-          fontFamily: '"SF Mono", ui-monospace, monospace',
-        }}
-      >
+      <AccentChip accent="#94a3b8" variant="soft" size="sm">
         PENDING
-      </span>
+      </AccentChip>
     );
   })();
 
@@ -301,93 +260,16 @@ function RoomView({ shape }: { shape: RoomShape }) {
         overflow: "visible",
       }}
     >
-      {/* Animation styles — scoped via :global so the keyframes
-          register at the document level. */}
-      <style jsx global>{`
-        @keyframes room-entrance {
-          0% {
-            opacity: 0;
-            transform: translateY(14px) scale(0.97);
-          }
-          100% {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
-        }
-        @keyframes room-pulse {
-          0% {
-            transform: scale(1);
-            filter: saturate(1);
-          }
-          50% {
-            transform: scale(1.012);
-            filter: saturate(1.18);
-          }
-          100% {
-            transform: scale(1);
-            filter: saturate(1);
-          }
-        }
-        .room-shape-root {
-          transform-origin: 50% 0%;
-        }
-        .room-shape-entrance {
-          animation: room-entrance 700ms cubic-bezier(0.22, 1, 0.36, 1) 1;
-        }
-        .room-shape-pulsing {
-          animation: room-pulse 280ms ease-out 1;
-        }
-      `}</style>
-      <div
-        className={`room-shape-root ${
-          inEntrance
-            ? "room-shape-entrance"
-            : pulsing
-              ? "room-shape-pulsing"
-              : ""
-        }`}
-        style={{
-          width: "100%",
-          height: "100%",
-          borderRadius: 28,
-          // Frosted glass body. The radial gradient at the top
-          // washes the accent color across the upper edge then
-          // fades to neutral, giving each room a distinct color
-          // identity without flooding the whole frame.
-          background: `
-            radial-gradient(ellipse 70% 50% at 50% 0%,
-              color-mix(in srgb, ${accent} 6%, transparent) 0%,
-              transparent 60%),
-            rgba(255,255,255,0.55)
-          `,
-          backdropFilter: "blur(18px) saturate(140%)",
-          WebkitBackdropFilter: "blur(18px) saturate(140%)",
-          border:
-            state === "active"
-              ? `1px solid color-mix(in srgb, ${accent} 32%, transparent)`
-              : "1px solid rgba(15,23,42,0.08)",
-          // Layered shadows for depth — the inset hairline gives a
-          // glossy "edge of glass" highlight, the soft ambient
-          // shadow grounds the card to the canvas, and an active-
-          // state accent glow picks up the room being worked on.
-          boxShadow: `
-            inset 0 1px 0 rgba(255,255,255,0.85),
-            0 1px 2px rgba(15,23,42,0.04),
-            0 24px 48px -28px rgba(15,23,42,0.16)${
-              state === "active"
-                ? `, 0 0 0 6px color-mix(in srgb, ${accent} 6%, transparent)`
-                : ""
-            }
-          `,
-          padding: "20px 28px 24px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          // Don't let entrance translate clip outside the rounded
-          // corners during the animation.
-          overflow: "hidden",
-          transition: "border 220ms ease, box-shadow 220ms ease",
-        }}
+      <CanvasShapeGlass
+        tier="float"
+        accent={accent}
+        state={state}
+        topAccent="soft"
+        radius={28}
+        padding="20px 28px 24px"
+        entrance={inEntrance}
+        pulsing={pulsing}
+        style={{ display: "flex", flexDirection: "column", gap: 8 }}
       >
         {/* Top accent rail — gradient hairline that gives each room
             its color identity without flooding the body. Sits ABOVE
@@ -624,7 +506,7 @@ function RoomView({ shape }: { shape: RoomShape }) {
             }}
           />
         )}
-      </div>
+      </CanvasShapeGlass>
     </HTMLContainer>
   );
 }

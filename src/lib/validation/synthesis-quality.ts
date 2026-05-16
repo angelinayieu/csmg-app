@@ -250,6 +250,73 @@ export function scoreSynthesisQuality(
     }
   }
 
+  // ── Display-readiness flags ──
+  // Catches the specific defects that make the right-rail render as
+  // "Bottleneck / Bottleneck / blast radius 18.00" — empty summaries,
+  // missing entity_name, or platitude summaries the synthesis prompt
+  // explicitly forbids.
+  const entityNamesLower = new Set(
+    entities
+      .map((e) => (e.name ?? "").toLowerCase().trim())
+      .filter((n) => n.length > 0),
+  );
+  const isParroting = (text: string): boolean => {
+    const t = (text ?? "").toLowerCase().trim();
+    if (t.length < 20) return false;
+    // Banned generic phrases — the synthesis prompt warns against
+    // these explicitly. Hitting two or more is a hard parroting flag.
+    const banned = [
+      "improve overall",
+      "enhance overall",
+      "optimize overall",
+      "increase overall",
+      "improve effectiveness",
+      "reduce effectiveness",
+      "increase efficiency",
+      "improve understanding",
+      "enhances productivity",
+      "drives success",
+      "key to success",
+      "best practices",
+      "leverage synergies",
+    ];
+    const hits = banned.filter((p) => t.includes(p)).length;
+    if (hits >= 1) return true;
+    // No named entity from the graph mentioned anywhere in the
+    // summary — true sign the LLM is generalising not grounding.
+    if (entityNamesLower.size > 0) {
+      const referencesAnEntity = Array.from(entityNamesLower).some(
+        (name) => name.length >= 4 && t.includes(name),
+      );
+      if (!referencesAnEntity) return true;
+    }
+    return false;
+  };
+
+  for (const lp of synthesis.leverage_points ?? []) {
+    const name = (
+      (lp as unknown as { entity_name?: string }).entity_name ?? ""
+    ).trim();
+    const summary = (lp.summary ?? "").trim();
+    if (name.length === 0) flags.push("missing_insight_name");
+    if (summary.length < 20) flags.push("empty_insight_summary");
+    else if (isParroting(summary)) flags.push("parroting_summary");
+  }
+  for (const rp of synthesis.risk_points ?? []) {
+    const name = (
+      (rp as unknown as { entity_name?: string }).entity_name ?? ""
+    ).trim();
+    const summary = (rp.summary ?? "").trim();
+    if (name.length === 0) flags.push("missing_insight_name");
+    if (summary.length < 20) flags.push("empty_insight_summary");
+    else if (isParroting(summary)) flags.push("parroting_summary");
+  }
+  if (synthesis.master_bottleneck) {
+    const summary = (synthesis.master_bottleneck.summary ?? "").trim();
+    if (summary.length < 20) flags.push("empty_insight_summary");
+    else if (isParroting(summary)) flags.push("parroting_summary");
+  }
+
   // ── Phase 8: Classification-aware quality flags ──
   if (epistemicClassification) {
     // Flag: classification detected argument structure but synthesis lacks Toulmin entities

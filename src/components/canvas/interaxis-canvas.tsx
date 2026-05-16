@@ -159,7 +159,6 @@ import { ObjectivesDrawer } from "./drawers/objectives-drawer";
 import { ProbabilityDrawer } from "./drawers/probability-drawer";
 import { GraphDrawer } from "./drawers/graph-drawer";
 import { CanvasEventHud } from "./chrome/canvas-event-hud";
-import { WhileYouWaitChip } from "./chrome/while-you-wait-chip";
 import { PreliminaryInsightsPanel } from "./chrome/preliminary-insights-panel";
 import { CanvasRunSignalsBanner } from "./chrome/canvas-run-signals-banner";
 import { CanvasReasoningStream } from "./chrome/canvas-reasoning-stream";
@@ -3827,12 +3826,6 @@ export function InteraxisCanvas({
           </div>
         </div>
       )}
-
-      {/* Multitask hint — shows when a pipeline run goes idle (long
-          stages can run for minutes). Reminds the user that the
-          canvas isn't blocked during research/synthesis: existing
-          entities are interactive, brainstorm rail is open, etc. */}
-      <WhileYouWaitChip />
 
       {/* Preliminary topology insights — surfaces hubs, bridge
           candidates, isolated clusters, and feedback loops the moment

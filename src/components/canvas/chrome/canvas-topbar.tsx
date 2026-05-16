@@ -6,7 +6,7 @@ import {
   Maximize2,
   Minimize2,
   Magnet,
-  Sparkles,
+  Wand2,
   Network,
   ListTree,
   Cog,
@@ -157,7 +157,7 @@ export function CanvasTopBar({
               : "Auto-AI: off \u2014 click to let AI decompose hubs when you\u2019re idle"
           }
         >
-          <Sparkles
+          <Wand2
             className={cn(
               "h-3 w-3",
               autoAI && autoAIState === "running" && "animate-pulse",

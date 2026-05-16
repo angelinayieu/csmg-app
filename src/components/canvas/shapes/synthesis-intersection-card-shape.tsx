@@ -508,7 +508,7 @@ function ComputingSkeleton({ accent }: { accent: string }) {
           color: accent,
         }}
       >
-        ✦ computing intersection…
+        computing intersection…
       </span>
       {[0, 1, 2].map((i) => (
         <div

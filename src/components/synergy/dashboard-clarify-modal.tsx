@@ -245,9 +245,9 @@ export function DashboardClarifyModal({
         onClick={() => !busy && onCancel()}
         className="absolute inset-0"
         style={{
-          background: "rgba(15, 23, 42, 0.55)",
-          backdropFilter: "blur(22px) saturate(160%)",
-          WebkitBackdropFilter: "blur(22px) saturate(160%)",
+          background: "rgba(15, 23, 42, 0.68)",
+          backdropFilter: "blur(24px) saturate(160%)",
+          WebkitBackdropFilter: "blur(24px) saturate(160%)",
           cursor: busy ? "wait" : "pointer",
         }}
       />
@@ -262,13 +262,14 @@ export function DashboardClarifyModal({
           <div
             className="flex flex-col items-center gap-6 rounded-3xl px-10 py-14"
             style={{
-              background: "rgba(255, 255, 255, 0.97)",
-              backdropFilter: "blur(28px) saturate(180%)",
-              WebkitBackdropFilter: "blur(28px) saturate(180%)",
-              border: "1px solid rgba(255, 255, 255, 0.7)",
+              // Fully opaque — earlier attempts at glass with 0.97
+              // still showed the page through clearly, so we trade
+              // the apple-glass look for guaranteed readability.
+              background: "#ffffff",
+              border: "1px solid rgba(15, 23, 42, 0.06)",
               boxShadow: [
-                "inset 0 1px 0 rgba(255, 255, 255, 0.8)",
-                "0 24px 60px -18px rgba(15, 23, 42, 0.35)",
+                "inset 0 1px 0 rgba(255, 255, 255, 0.9)",
+                "0 30px 70px -18px rgba(15, 23, 42, 0.45)",
                 `0 0 80px -20px ${meta.accentSoft}`,
               ].join(", "),
             }}
@@ -314,13 +315,12 @@ export function DashboardClarifyModal({
             <div
               className="relative rounded-3xl"
               style={{
-                background: "rgba(255, 255, 255, 0.97)",
-                backdropFilter: "blur(28px) saturate(180%)",
-                WebkitBackdropFilter: "blur(28px) saturate(180%)",
-                border: "1px solid rgba(255, 255, 255, 0.85)",
+                // Fully opaque — see comment on loader card above.
+                background: "#ffffff",
+                border: "1px solid rgba(15, 23, 42, 0.06)",
                 boxShadow: [
                   "inset 0 1px 0 rgba(255, 255, 255, 0.9)",
-                  "0 30px 70px -18px rgba(15, 23, 42, 0.4)",
+                  "0 30px 70px -18px rgba(15, 23, 42, 0.45)",
                   `0 0 80px -20px ${meta.accentSoft}`,
                 ].join(", "),
               }}

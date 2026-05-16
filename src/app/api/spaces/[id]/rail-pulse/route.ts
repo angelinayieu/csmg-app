@@ -61,8 +61,35 @@ export interface RailPulseActiveStrategy {
 
 export interface RailPulseLockedInsight {
   entity_id: string;
-  title: string;
+  /** The entity's display name. Null when synthesis returned the
+   *  point without a hydrated name — the rail uses this as the
+   *  primary title and falls back to a one-line summary excerpt
+   *  when null. */
+  entity_name: string | null;
+  /** The synthesis paragraph for this point. Rendered as the
+   *  subtitle / "why" line under the entity name. Always trimmed
+   *  to a sentence boundary before display. */
   summary: string;
+}
+
+export interface RailPulseBottleneck {
+  entity_id: string;
+  /** Hydrated entity name when available; null when synthesis
+   *  didn't supply one. The rail prefers this for the card title. */
+  entity_name: string | null;
+  /** Synthesis paragraph — rendered as the "why" line. */
+  summary: string;
+  /** Raw blast_radius from synthesis. Kept for callers that want
+   *  the number; the rail itself renders `scope_label` instead. */
+  blast_radius: number | null;
+  /** Human-readable scope band derived from blast_radius. One of
+   *  "narrow scope", "moderate scope", "wide scope", "system-wide".
+   *  Null when blast_radius is missing. */
+  scope_label: string | null;
+  /** What unblocks if this constraint is resolved. From
+   *  master_bottleneck.counterfactual_unlock. The rail surfaces
+   *  this as a third line when present. */
+  unlock_summary: string | null;
 }
 
 export interface RailPulseFreshPair {
@@ -80,7 +107,7 @@ export interface RailPulseResponse {
   /** null when the space hasn't been synthesized into a strategy yet. */
   active_strategy: RailPulseActiveStrategy | null;
   locked_insights: {
-    bottleneck: { entity_id: string; summary: string; blast_radius: number | null } | null;
+    bottleneck: RailPulseBottleneck | null;
     leverage_top: RailPulseLockedInsight[];
     risk_top: RailPulseLockedInsight[];
     axiom_count: number;
@@ -93,6 +120,10 @@ export interface RailPulseResponse {
   };
   /** True when synthesis_data exists and has at least one tier populated. */
   has_synthesis: boolean;
+  /** True when the KG has entities but synthesis hasn't run / finished
+   *  yet — lets the rail render a "Synthesizing…" state instead of
+   *  partially-broken cards. */
+  synthesis_in_progress: boolean;
 }
 
 function emptyResponse(): RailPulseResponse {
@@ -113,6 +144,7 @@ function emptyResponse(): RailPulseResponse {
       fresh_pairwise: [],
     },
     has_synthesis: false,
+    synthesis_in_progress: false,
   };
 }
 
@@ -231,25 +263,65 @@ export async function GET(_request: Request, ctx: Ctx) {
     ?.axioms ?? [];
   const openQuestions: RichOpenQuestion[] = synthesis?.open_questions ?? [];
 
+  // Synthesis sometimes omits the hydrated entity_name on
+  // leverage/risk/bottleneck. Fall back to the entities table so the
+  // rail never has to fabricate a title from a truncated summary.
+  const insightEntityIds = new Set<string>();
+  for (const lp of leveragePoints.slice(0, 3)) {
+    if (lp.entity_id) insightEntityIds.add(lp.entity_id);
+  }
+  for (const rp of riskPoints.slice(0, 3)) {
+    if (rp.entity_id) insightEntityIds.add(rp.entity_id);
+  }
+  if (bottleneck?.entity_id) insightEntityIds.add(bottleneck.entity_id);
+
+  let entityNameById = new Map<string, string>();
+  if (insightEntityIds.size > 0) {
+    const { data: nameRows } = (await db
+      .from("entities")
+      .select("entity_id, name")
+      .eq("space_id", spaceId)
+      .in("entity_id", Array.from(insightEntityIds))) as {
+      data: Array<{ entity_id: string; name: string }> | null;
+    };
+    entityNameById = new Map(
+      (nameRows ?? [])
+        .filter((r) => typeof r.name === "string" && r.name.trim().length > 0)
+        .map((r) => [r.entity_id, r.name.trim()]),
+    );
+  }
+
+  const resolveName = (
+    entity_id: string | null | undefined,
+    explicit: string | undefined,
+  ): string | null => {
+    const ex = typeof explicit === "string" ? explicit.trim() : "";
+    if (ex.length > 0) return ex;
+    if (entity_id && entityNameById.has(entity_id)) {
+      return entityNameById.get(entity_id) ?? null;
+    }
+    return null;
+  };
+
   const lockedLeverage: RailPulseLockedInsight[] = leveragePoints
     .slice(0, 3)
     .map((lp) => ({
       entity_id: lp.entity_id,
-      title:
-        (lp as unknown as { entity_name?: string }).entity_name ??
-        lp.summary?.slice(0, 60) ??
-        "Leverage",
-      summary: lp.summary ?? "",
+      entity_name: resolveName(
+        lp.entity_id,
+        (lp as unknown as { entity_name?: string }).entity_name,
+      ),
+      summary: typeof lp.summary === "string" ? lp.summary.trim() : "",
     }));
   const lockedRisks: RailPulseLockedInsight[] = riskPoints
     .slice(0, 3)
     .map((rp) => ({
       entity_id: rp.entity_id,
-      title:
-        (rp as unknown as { entity_name?: string }).entity_name ??
-        rp.summary?.slice(0, 60) ??
-        "Risk",
-      summary: rp.summary ?? "",
+      entity_name: resolveName(
+        rp.entity_id,
+        (rp as unknown as { entity_name?: string }).entity_name,
+      ),
+      summary: typeof rp.summary === "string" ? rp.summary.trim() : "",
     }));
 
   // ── 4. Live counts — pairwise_connection_checks ────────────────────
@@ -331,21 +403,48 @@ export async function GET(_request: Request, ctx: Ctx) {
       axioms.length > 0 ||
       !!activeStrategy);
 
+  // Bottleneck projection — when synthesis is sparse, prefer entities-
+  // table name over the literal word "Bottleneck"; convert blast_radius
+  // into a human scope band; surface the counterfactual unlock so the
+  // rail can show a third meaningful line.
+  const bottleneckProjection: RailPulseBottleneck | null = bottleneck
+    ? {
+        entity_id: bottleneck.entity_id,
+        entity_name: resolveName(
+          bottleneck.entity_id,
+          (bottleneck as unknown as { entity_name?: string }).entity_name,
+        ),
+        summary:
+          typeof bottleneck.summary === "string"
+            ? bottleneck.summary.trim()
+            : "",
+        blast_radius:
+          typeof bottleneck.blast_radius === "number"
+            ? bottleneck.blast_radius
+            : null,
+        scope_label:
+          typeof bottleneck.blast_radius === "number"
+            ? scopeLabelFromBlastRadius(bottleneck.blast_radius)
+            : null,
+        unlock_summary:
+          typeof bottleneck.counterfactual_unlock === "string" &&
+          bottleneck.counterfactual_unlock.trim().length > 0
+            ? bottleneck.counterfactual_unlock.trim()
+            : null,
+      }
+    : null;
+
+  // "Synthesizing" — we have a KG but no synthesis output yet. Means the
+  // pipeline is mid-run (or failed silently). Either way the rail
+  // shouldn't render half-baked cards; it should say so explicitly.
+  const synthesisInProgress = !hasSynthesis && (spaceRow.entity_count ?? 0) > 0;
+
   const response: RailPulseResponse = {
     computed_at: new Date().toISOString(),
     snapshot,
     active_strategy: activeStrategy,
     locked_insights: {
-      bottleneck: bottleneck
-        ? {
-            entity_id: bottleneck.entity_id,
-            summary: bottleneck.summary ?? "",
-            blast_radius:
-              typeof bottleneck.blast_radius === "number"
-                ? bottleneck.blast_radius
-                : null,
-          }
-        : null,
+      bottleneck: bottleneckProjection,
       leverage_top: lockedLeverage,
       risk_top: lockedRisks,
       axiom_count: axioms.length,
@@ -357,14 +456,35 @@ export async function GET(_request: Request, ctx: Ctx) {
       fresh_pairwise: freshPairwise,
     },
     has_synthesis: hasSynthesis,
+    synthesis_in_progress: synthesisInProgress,
   };
 
   if (!hasSynthesis) {
     // Fall through with the partial snapshot — rail's Ambient mode
     // renders a quiet "no synthesis yet" State zone but still surfaces
     // KG counts.
-    return NextResponse.json({ ...emptyResponse(), snapshot, computed_at: response.computed_at });
+    return NextResponse.json({
+      ...emptyResponse(),
+      snapshot,
+      computed_at: response.computed_at,
+      synthesis_in_progress: synthesisInProgress,
+    });
   }
 
   return NextResponse.json(response);
+}
+
+// ── Helpers ────────────────────────────────────────────────────────
+
+// Map raw blast_radius (a dimensionless number set by synthesis) to a
+// human band. The thresholds are calibrated to typical KG sizes — a
+// blast of 30+ in a 50-node graph saturates the graph; a blast of 3
+// is local. Thresholds are conservative to avoid screaming
+// "system-wide" on tiny graphs.
+function scopeLabelFromBlastRadius(blastRadius: number): string {
+  if (!Number.isFinite(blastRadius)) return "—";
+  if (blastRadius >= 30) return "system-wide impact";
+  if (blastRadius >= 15) return "wide impact";
+  if (blastRadius >= 5) return "moderate impact";
+  return "narrow impact";
 }

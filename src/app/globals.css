@@ -438,6 +438,57 @@
   }
 }
 
+/* ─── Canvas shape primitives ────────────────────────────────────────
+ *
+ * Shared keyframes for canvas-shape glass surfaces. Every tldraw
+ * shape that uses <CanvasShapeGlass> consumes these — replaces the
+ * 40+ bespoke @keyframes scattered across individual shape files.
+ *
+ * - canvas-shape-enter   : one-shot mount animation
+ * - canvas-shape-pulse   : data-tick saturation pulse (on subtitle /
+ *                          count changes)
+ *
+ * Cadence and curve match the existing room-shape recipe so the
+ * migration is visually transparent.
+ */
+@keyframes canvas-shape-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes canvas-shape-pulse {
+  0% {
+    transform: scale(1);
+    filter: saturate(1);
+  }
+  50% {
+    transform: scale(1.012);
+    filter: saturate(1.18);
+  }
+  100% {
+    transform: scale(1);
+    filter: saturate(1);
+  }
+}
+.canvas-shape-enter {
+  transform-origin: 50% 0%;
+  animation: canvas-shape-enter 700ms var(--ease-out-quart) 1;
+}
+.canvas-shape-pulse {
+  animation: canvas-shape-pulse 280ms ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas-shape-enter,
+  .canvas-shape-pulse {
+    animation: none !important;
+  }
+}
+
 [data-theme="blue"] {
   --accent-50: #e8f0ff;
   --accent-100: #c8daff;
