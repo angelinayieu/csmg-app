@@ -42,6 +42,27 @@ interface ClarifyingQuestionsRequest {
   uncertaintyScore?: number;
 }
 
+/** A pre-baked multiple-choice option the user can click in one
+ *  tap. Options are AI-generated PER QUESTION and aim to be
+ *  concrete + quantified (specific numbers, ranges, durations,
+ *  or named categories) — never vague filler like "I don't know"
+ *  or "Same as before". The user always has a "write your own"
+ *  escape hatch rendered by the client, so options here should
+ *  represent the LIKELY answers, not exhaustive coverage. */
+interface MCQOption {
+  /** Concise choice label (5-14 words). Quantified when the
+   *  question admits a number ("10-25% within 6 months",
+   *  "$50k-$100k budget", "2-3 person team"); otherwise a
+   *  precise categorical answer ("Heart-rate variability via
+   *  Whoop strap"). Avoids hedges like "roughly" or "around" —
+   *  the range itself encodes uncertainty. */
+  label: string;
+  /** One-line tradeoff or context for the option — what the
+   *  user is implicitly committing to by picking it. Rendered
+   *  in smaller text under the label. */
+  detail: string;
+}
+
 interface ClarifyingQuestion {
   /** The question to ask the user — concise, single sentence. */
   question: string;
@@ -49,10 +70,13 @@ interface ClarifyingQuestion {
    *  tooltip on hover so the user understands the value of
    *  answering. */
   rationale: string;
-  /** Free-text vs short-answer hint. v1 always uses free-text;
-   *  the field exists so a future iteration can render multi-
-   *  choice or numeric inputs. */
-  kind: "free_text";
+  /** "mcq" — render the options array as clickable choices plus
+   *  a free-text escape hatch. "free_text" — legacy/fallback,
+   *  textarea only. New questions should always be mcq. */
+  kind: "mcq" | "free_text";
+  /** 3-4 pre-baked answer options. Required when kind === "mcq".
+   *  Omitted when kind === "free_text" (legacy). */
+  options?: MCQOption[];
 }
 
 /** What the system inferred about the user's situation from their prompt.
@@ -77,14 +101,34 @@ Summarize what you understood from the prompt in three parts:
   - primary_objective: One sentence — what outcome do they want from this analysis?
   - key_assumptions: 2-3 concrete assumptions the analysis will make (things that aren't stated but need to be true for the analysis to be valid)
 
-JOB 2 — GENERATE CLARIFYING QUESTIONS (3-5 questions)
-Generate short questions that target CONCRETE gaps. Rules:
+JOB 2 — GENERATE CLARIFYING QUESTIONS WITH OPTIONS (3 questions)
+Generate exactly 3 short questions that target CONCRETE gaps, each with 3-4 high-quality multiple-choice options the user can pick in one tap.
+
+QUESTION RULES:
 1. Each question fills a gap not answerable from the prompt itself.
 2. "What's your goal?" is too vague — better: "Which metric do you want to move, and by when?"
-3. User can answer in one sentence. No multi-part essays.
-4. Include a rationale — why this matters for the analysis.
+3. Single sentence, no multi-part essays.
+4. Include a rationale — one sentence on why this matters for the analysis.
 5. Order by impact: most gap-closing question first.
 6. Match the lens bias when provided. With "engineer" active, lean toward measurable specs. With "historian," ask about prior attempts. With "skeptic," surface assumptions worth testing.
+
+OPTION RULES (this is the key part — DO THIS WELL):
+Each question gets 3-4 options. Every option MUST be:
+  a. CONCRETE — never "I'm not sure", "Same as before", "It depends", "Roughly average". The user already has a "write your own" escape hatch in the UI; do not waste an MCQ slot on a vague fallback.
+  b. QUANTIFIED when the question admits a number — use specific ranges, durations, percentages, dollar amounts, counts, or named instruments/metrics:
+       - "10-25% improvement within 6 months"
+       - "$5k-$15k monthly budget"
+       - "2-3 weeks of pilot data, n=20-50 participants"
+       - "Heart-rate variability via Whoop strap, daily"
+  c. PRECISE CATEGORICAL when the question is non-numeric — pick a single named option from a real taxonomy:
+       - "Solo founder, no team yet" / "2-5 person product team" / "Internal R&D lab with 10+ scientists"
+       - "Behavioral nudges (timing, framing)" / "Pharmacological (supplements, off-label meds)" / "Neurostimulation (tDCS, vagal)"
+  d. PERSONALIZED to the user's specific prompt — refer to entities, domains, or constraints they mentioned. Generic options like "Option A / B / C" are unacceptable.
+  e. MUTUALLY EXCLUSIVE and ordered logically (low→high for ranges, conservative→ambitious for scope).
+  f. ONE LINE label (5-14 words) + one short detail line explaining the tradeoff or what picking this commits to.
+  g. SPAN THE LIKELY ANSWER SPACE — the 3-4 options should cover roughly 70-90% of plausible real answers. The user types their own if they fall outside.
+
+DO NOT include "Other" or "Skip" as an option — the UI handles those separately.
 
 Return strict JSON:
 {
@@ -94,7 +138,17 @@ Return strict JSON:
     "key_assumptions": ["...", "..."]
   },
   "questions": [
-    { "question": "...", "rationale": "...", "kind": "free_text" }
+    {
+      "question": "Which biometric signal do you want to use as the primary cognitive-state proxy?",
+      "rationale": "Different signals impose different sampling rates and noise floors on the action-stimulus model.",
+      "kind": "mcq",
+      "options": [
+        { "label": "EEG, 8-channel consumer headset (Muse / Emotiv)", "detail": "High temporal resolution, noisy in motion; ~$300-500 hardware." },
+        { "label": "Heart-rate variability via wrist strap (Whoop, Polar)", "detail": "Daily aggregate signal; clean but lags 15-30 min behind state shifts." },
+        { "label": "Pupillometry via webcam-based eye tracking", "detail": "Real-time arousal proxy; needs controlled lighting, ~5% data loss." },
+        { "label": "Subjective self-report at fixed intervals", "detail": "Cheapest, no hardware; recall bias makes it weakest as ground truth." }
+      ]
+    }
   ]
 }`;
 
@@ -122,9 +176,21 @@ const RESPONSE_SCHEMA = {
           properties: {
             question: { type: "string" },
             rationale: { type: "string" },
-            kind: { type: "string", enum: ["free_text"] },
+            kind: { type: "string", enum: ["mcq", "free_text"] },
+            options: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  label: { type: "string" },
+                  detail: { type: "string" },
+                },
+                required: ["label", "detail"],
+              },
+            },
           },
-          required: ["question", "rationale", "kind"],
+          required: ["question", "rationale", "kind", "options"],
         },
       },
     },
@@ -171,7 +237,7 @@ Prioritize questions that would close the gaps above. If a gap is too vague to b
 ${text.slice(0, 2000)}
 """
 ${lensesBlock}${baselineBlock}
-Generate 3-5 clarifying questions per the system instructions.`;
+Generate exactly 3 clarifying questions per the system instructions. Each question must include 3-4 concrete, quantified, personalized MCQ options. Reference specifics from the user's prompt above — generic options are unacceptable.`;
 }
 
 export async function POST(request: Request) {
@@ -229,7 +295,7 @@ export async function POST(request: Request) {
       user: buildPrompt(text, lenses, unknowns, uncertaintyScore),
       responseSchema: RESPONSE_SCHEMA,
       temperature: 0.4,
-      maxTokens: 1200,
+      maxTokens: 2400,
       model: body?.model,
     });
 
@@ -243,11 +309,33 @@ export async function POST(request: Request) {
               typeof q.rationale === "string",
           )
           .slice(0, 5)
-          .map((q) => ({
-            question: q.question.trim(),
-            rationale: q.rationale.trim(),
-            kind: "free_text" as const,
-          }))
+          .map((q) => {
+            const options = Array.isArray(q.options)
+              ? q.options
+                  .filter(
+                    (o): o is MCQOption =>
+                      !!o &&
+                      typeof o.label === "string" &&
+                      o.label.trim().length > 0 &&
+                      typeof o.detail === "string",
+                  )
+                  .map((o) => ({
+                    label: o.label.trim(),
+                    detail: o.detail.trim(),
+                  }))
+                  .slice(0, 4)
+              : [];
+            // If LLM gave us usable options, surface them as MCQ.
+            // Otherwise fall back to free_text so the modal still
+            // renders a textarea instead of an empty option list.
+            const hasUsableOptions = options.length >= 2;
+            return {
+              question: q.question.trim(),
+              rationale: q.rationale.trim(),
+              kind: hasUsableOptions ? ("mcq" as const) : ("free_text" as const),
+              ...(hasUsableOptions ? { options } : {}),
+            };
+          })
       : [];
 
     const inferred_baseline: InferredBaseline | null =

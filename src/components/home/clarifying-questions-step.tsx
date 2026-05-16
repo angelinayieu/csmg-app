@@ -32,7 +32,11 @@ import type { ReasoningLens } from "@/types/reasoning-settings";
 interface ClarifyingQuestion {
   question: string;
   rationale: string;
-  kind: "free_text";
+  // The API may return "mcq" with options[] — this compact inline
+  // step renders a textarea regardless, so options are accepted but
+  // ignored here. The dashboard modal renders them as clickable rows.
+  kind: "mcq" | "free_text";
+  options?: Array<{ label: string; detail: string }>;
 }
 
 interface InferredBaseline {
