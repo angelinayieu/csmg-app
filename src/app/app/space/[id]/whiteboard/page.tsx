@@ -87,6 +87,7 @@ import {
 // Settings so users don't get stranded on the canvas.
 import { CanvasExperienceModeChip } from "@/components/canvas/chrome/canvas-experience-mode-chip";
 import { CanvasAutopilotPanel } from "@/components/canvas/chrome/canvas-autopilot-panel";
+import { CanvasVoiceDock } from "@/components/canvas/chrome/canvas-voice-dock";
 import { SynergyGlassDock } from "@/components/synergy/synergy-glass-dock";
 
 // ── Unified canvas chrome gating (Phase 1) ────────────────────────
@@ -118,6 +119,11 @@ function chromeForMode(mode: ExperienceMode | null) {
     // probe user can switch to autopilot mid-session without
     // having to start a fresh whiteboard.
     showAutopilotPanel: isLight,
+    // Phase 2a #2 — Voice dock is the headline affordance for
+    // brain_probe. Hidden in brainstorm_speed (autopilot owns
+    // the input flow there) and in deep R&D modes (the pipeline
+    // creates entities; manual voice would compete with it).
+    showVoiceDock: mode === "brain_probe",
     emphasizeTwin: mode === "digital_twin",
     isLight,
   };
@@ -251,6 +257,12 @@ export default function WhiteboardPage() {
           modes have their own pipeline orchestration so an extra
           autopilot would be redundant chrome. */}
       {chrome.showAutopilotPanel && <CanvasAutopilotPanel spaceId={space.id} />}
+
+      {/* Phase 2a #2 — Voice dock. Brain Probe specific: each
+          spoken utterance becomes a new entity on the canvas via
+          /api/spaces/[id]/entities/manual. Hidden in other modes
+          to keep their chrome focused. */}
+      {chrome.showVoiceDock && <CanvasVoiceDock spaceId={space.id} />}
 
       {/* Phase 2 — entity-detail drawer. Renders nothing until a
           `shell-graph:focus` or `root-cause-tree:focus` window event
