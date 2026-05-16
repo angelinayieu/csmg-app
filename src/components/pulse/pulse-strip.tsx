@@ -10,15 +10,27 @@
 // Kept separate from pulse-bar.tsx because the bar itself is a pure
 // visual component — callers that want custom state wiring can use it
 // directly without inheriting the panel.
+//
+// Route-aware suppression: on the dashboard root (/app) the bar's
+// "Quiet · No active space — select or create one to begin" message
+// is redundant because the dashboard IS the create-a-space surface.
+// Hide there. Show on every other authenticated route.
 
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import { PulseBar } from "./pulse-bar";
 import { PulseRecentPanel } from "./pulse-recent-panel";
 import { usePulseState } from "./use-pulse-state";
 
 export function PulseStrip() {
+  const pathname = usePathname() ?? "";
   const state = usePulseState();
   const [recentOpen, setRecentOpen] = useState(false);
+
+  // Hide on the dashboard. The hero on /app already invites the user
+  // to start — adding "select or create one to begin" above it reads
+  // as a redundant nag.
+  if (pathname === "/app" || pathname === "/app/") return null;
 
   // Filter out the "quiet" filler event from the unread count so users
   // don't see "1 new" when the system has nothing real to report.
