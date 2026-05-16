@@ -960,6 +960,33 @@ These are NOT external landscape entities — these are entities the user SHOULD
       let passCitations: Array<{ url: string; title: string; citedText: string }> = [];
 
       if (useWebSearch) {
+        // The Anthropic stream below runs silent for 30-90s while the
+        // LLM reasons + fires its web_search tool. Without an in-flight
+        // signal the HUD reads as "Idle Ns" and the user assumes the
+        // run hung. Two complementary mechanisms:
+        //   1. A 5s elapsed-time tick — guarantees the HUD updates
+        //      even when Claude is thinking but not yet searching.
+        //   2. A `contentBlock` stream listener — every time Claude
+        //      actually fires a web_search tool, the LLM's own query
+        //      becomes a user-visible progress event ("search 3: …").
+        // Both emit stage_boundary; the painter's camera-fit debounce
+        // coalesces redundant fits and the room subtitle stays steady.
+        const passStartMs = Date.now();
+        let webSearchCount = 0;
+        const heartbeat = setInterval(() => {
+          const elapsed = Math.round((Date.now() - passStartMs) / 1000);
+          const searchSuffix =
+            webSearchCount > 0
+              ? `, ${webSearchCount} web search${webSearchCount === 1 ? "" : "es"}`
+              : "";
+          void emitStructuralEvent(db, pipelineRunId, {
+            type: "stage_boundary",
+            stage: "landscape",
+            phase: "enter",
+            message: `Research pass ${passIdx + 1}/${plan.max_passes} — ${elapsed}s elapsed${searchSuffix}…`,
+          });
+        }, 5000);
+
         try {
           const anthropic = getAnthropicClient();
           // Get tools with pass-specific search budget
@@ -989,6 +1016,41 @@ These are NOT external landscape entities — these are entities the user SHOULD
             },
             { timeout: 10 * 60 * 1000 },
           );
+
+          // Tap each completed content block. When Claude fires a
+          // server_tool_use(web_search), the block carries the actual
+          // query — surface a preview as live progress. Wrapped in
+          // try/catch so a logging mistake here can't break the LLM
+          // stream itself.
+          stream.on("contentBlock", (block) => {
+            try {
+              if (
+                block.type === "server_tool_use" &&
+                block.name === "web_search"
+              ) {
+                webSearchCount++;
+                const input = block.input as { query?: string } | undefined;
+                const rawQuery = input?.query?.trim() ?? "";
+                const preview = rawQuery.length === 0
+                  ? "external sources"
+                  : rawQuery.length > 80
+                    ? rawQuery.slice(0, 80) + "…"
+                    : rawQuery;
+                void emitStructuralEvent(db, pipelineRunId, {
+                  type: "stage_boundary",
+                  stage: "landscape",
+                  phase: "enter",
+                  message: `Pass ${passIdx + 1} · search ${webSearchCount}: ${preview}`,
+                });
+              }
+            } catch (err) {
+              console.warn(
+                `[research] contentBlock listener threw (non-fatal):`,
+                err,
+              );
+            }
+          });
+
           const response = await stream.finalMessage();
 
           const parsed = parseResearchResponse(response.content);
@@ -1005,6 +1067,19 @@ These are NOT external landscape entities — these are entities the user SHOULD
           const errMsg = (anthropicErr as Error).message ?? String(anthropicErr);
           console.warn(`[Research] Pass ${passIdx + 1}: Anthropic call failed, falling back to OpenAI: ${errMsg}`);
           fallbackPassCount++;
+
+          // Sprint C — surface the silent degradation. The user is
+          // about to get training-only research (no web_search) for
+          // this pass; the chrome banner picks this up so they know
+          // why citation counts will be lower than expected.
+          void emitStructuralEvent(db, pipelineRunId, {
+            type: "pipeline_warning",
+            stage: "landscape",
+            code: "research_anthropic_failed",
+            message: `Pass ${passIdx + 1}: web-search backend unavailable, falling back to training-only research`,
+            details: { errorMessage: errMsg.slice(0, 500) },
+          });
+
           try {
             passResult = await llmJSON<DomainExpertOutput>({
               system: DOMAIN_EXPERT_PROMPT,
@@ -1017,6 +1092,8 @@ These are NOT external landscape entities — these are entities the user SHOULD
             console.error(`[Research] Pass ${passIdx + 1}: OpenAI fallback also failed: ${openaiErrMsg}`);
             throw new Error(`Research failed: Anthropic error (${errMsg}), OpenAI fallback also failed (${openaiErrMsg})`);
           }
+        } finally {
+          clearInterval(heartbeat);
         }
       } else {
         passResult = await llmJSON<DomainExpertOutput>({

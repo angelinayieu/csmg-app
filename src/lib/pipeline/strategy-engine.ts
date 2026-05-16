@@ -164,7 +164,49 @@ export interface MultiStepStrategyParams {
    * problem the LLM would otherwise drift toward.
    */
   chosenFramingBlock?: string;
+  /**
+   * E3 — layer-stratified variant marker. When set, the engine biases the
+   * final recommendation LLM call toward producing a strategy that
+   * EMPHASIZES this layer of the user's domain ontology. The same struct
+   * is patched onto `recommendation.layer_focus` on the output so
+   * downstream consumers (strategy-hero card chip, variants column,
+   * proposed-vs-actual diff) can identify which layer this variant
+   * commits to. `null` or omitted = comprehensive variant (no
+   * stratification).
+   */
+  layerFocus?: {
+    /** Layer slug — matches `ResolvedLayer.id` (ontology slug or
+     *  knowledge_layer enum). */
+    layer_id: string;
+    /** Domain-adapted display label, e.g. "Behaviors". */
+    label: string;
+    /** Hex accent color from the resolved layer. */
+    color: string;
+    /** 1-2 sentence rationale shown in the chip's hover tooltip. */
+    rationale: string;
+  } | null;
+  /**
+   * Sub-stage progress hook. Fired at each of the five LLM-bearing
+   * step transitions (diagnosis enter, synthesis enter, verification
+   * enter, layer-generation enter, final-output enter). The engine
+   * itself runs 60-120s with no upstream emissions; this lets the
+   * caller surface "Diagnosing… → Synthesizing… → Verifying… →
+   * Composing layers… → Generating recommendation…" through the
+   * existing structural-event bus instead of letting the HUD sit on
+   * a single stale message for two minutes.
+   *
+   * Callback is fire-and-forget — engine doesn't await it. Throwing
+   * here will not stop the engine.
+   */
+  onStep?: (step: StrategyEngineStep, message: string) => void;
 }
+
+export type StrategyEngineStep =
+  | "diagnosis"
+  | "synthesis"
+  | "verification"
+  | "layer_generation"
+  | "final_output";
 
 // ── Output ──
 
@@ -351,9 +393,21 @@ export async function generateMultiStepStrategy(
 
   console.log(`[strategy-engine] Pre-compute complete: ${probabilitySpaces.length} spaces, ${spaceIntersections.length} intersections, ${graphStructure.centrality_rankings.length} hub entities, layer distribution: L1=${layerClassification.byLayer.L1.length} L2=${layerClassification.byLayer.L2.length} L3=${layerClassification.byLayer.L3.length} L4=${layerClassification.byLayer.L4.length}`);
 
+  // Fire-and-forget step emitter. Wrapped so a buggy caller callback
+  // can never propagate into the engine's control flow.
+  const emitStep = (step: StrategyEngineStep, message: string) => {
+    if (!params.onStep) return;
+    try {
+      params.onStep(step, message);
+    } catch (err) {
+      console.warn("[strategy-engine] onStep callback threw (ignored):", err);
+    }
+  };
+
   // ── Step 1: Diagnosis ──
   const diagStart = Date.now();
   console.log("[strategy-engine] Step 1: Diagnosis...");
+  emitStep("diagnosis", "Diagnosing structural patterns…");
 
   let diagnosis: StrategicDiagnosis;
   try {
@@ -438,6 +492,8 @@ export async function generateMultiStepStrategy(
   const diagSummary = diagnosis.core_problem_statement ?? "No problem statement returned";
   console.log(`[strategy-engine] Step 1 complete (${stepTimings.diagnosis_ms}ms): "${diagSummary.slice(0, 80)}..."`);
 
+  emitStep("synthesis", "Generating strategic options…");
+
   // ── Step 2: Synthesis ──
   const synthStart = Date.now();
   console.log("[strategy-engine] Step 2: Strategy Synthesis...");
@@ -500,6 +556,8 @@ export async function generateMultiStepStrategy(
   stepTimings.synthesis_ms = Date.now() - synthStart;
   console.log(`[strategy-engine] Step 2 complete (${stepTimings.synthesis_ms}ms): ${synthesisResult.options.length} options, ${synthesisResult.rejected_options.length} rejected`);
 
+  emitStep("verification", "Stress-testing options against failure modes…");
+
   // ── Step 3: Verification ──
   const verifyStart = Date.now();
   console.log("[strategy-engine] Step 3: Verification...");
@@ -549,6 +607,8 @@ export async function generateMultiStepStrategy(
   stepTimings.verification_ms = Date.now() - verifyStart;
   console.log(`[strategy-engine] Step 3 complete (${stepTimings.verification_ms}ms): final ranking = [${verification.final_ranking.map((r) => `#${r.rank} ${r.title}`).join(", ")}]`);
 
+  emitStep("layer_generation", "Composing reasoning layers (L4→L1)…");
+
   // ── Step 4: Bottom-Up Layer Generation (L4→L3→L2→L1) ──
   const layerStart = Date.now();
   console.log("[strategy-engine] Step 4: Bottom-up layer generation (L4→L3→L2→L1)...");
@@ -587,6 +647,8 @@ export async function generateMultiStepStrategy(
     console.warn("[strategy-engine] Bottom-up layer generation failed (non-fatal), final output will generate layers:", err);
   }
   stepTimings.layer_generation_ms = Date.now() - layerStart;
+
+  emitStep("final_output", "Generating final recommendation…");
 
   // ── Step 5: Final output (backward-compatible StrategicRecommendation) ──
   const finalStart = Date.now();
@@ -744,6 +806,17 @@ export async function generateMultiStepStrategy(
     ? `${params.learningContextBlock}\n\n`
     : "";
 
+  // E3 — layer-focus directive. When the caller specifies a focus layer,
+  // we prepend a short, imperative block to the prompt that biases the
+  // LLM toward producing a strategy emphasizing that layer. Sits LAST
+  // before the core prompt (alongside interventionCandidatesBlock) so
+  // it's the freshest context the model reads. Empty string when
+  // layerFocus is null/omitted — the comprehensive variant uses the
+  // unaltered prompt.
+  const layerFocusBlock = params.layerFocus
+    ? `## LAYER FOCUS DIRECTIVE — read carefully\n\nThis recommendation is a LAYER-STRATIFIED VARIANT. Your output must center the **${params.layerFocus.label}** layer of the user's domain ontology.\n\n- The strategy's perspectives, micro-tactics, and infrastructure proposals MUST predominantly target this layer.\n- It is acceptable — and often necessary — to acknowledge what falls outside this layer in your \`tradeoff_vs_top\` rationale. Be explicit: "this variant skips X (a layer-Y intervention) because we are deliberately optimizing ${params.layerFocus.label}."\n- The user is comparing variants ACROSS layers. A variant that drifts toward a different layer (or a non-stratified comprehensive view) defeats the purpose of stratification.\n- Reason: ${params.layerFocus.rationale}\n\n`
+    : "";
+
   const stratUserWithBaseline = [
     priorCtxBlock,
     params.userBaselineBlock ?? "",
@@ -758,6 +831,10 @@ export async function generateMultiStepStrategy(
     // on"; the intervention candidates say "here's what you can actually
     // MOVE." Ordering matters: levers should be the last thing read.
     interventionCandidatesBlock,
+    // Layer-focus directive sits immediately before the core prompt —
+    // freshest context, last instruction the LLM reads, ensuring
+    // stratified variants don't drift toward comprehensive output.
+    layerFocusBlock,
     stratPrompt.user,
   ].join("");
 
@@ -1026,6 +1103,15 @@ export async function generateMultiStepStrategy(
   if (degradedSteps.length > 0) {
     recommendation.degraded_steps = [...degradedSteps];
   }
+
+  // E3 — patch the layer_focus marker. When `params.layerFocus` was set by
+  // the caller (the new strategy-variants/generate endpoint), the recommendation
+  // is a stratified variant: tag it so downstream consumers (strategy-hero
+  // chip, variants column, proposed-vs-actual diff) can identify which layer
+  // this variant commits to. `null` for comprehensive variants — these
+  // round-trip cleanly through the GET endpoint's flattening and the
+  // shape's null-check render gate.
+  recommendation.layer_focus = params.layerFocus ?? null;
 
   return {
     recommendation,

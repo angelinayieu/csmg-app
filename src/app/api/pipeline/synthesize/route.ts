@@ -54,6 +54,8 @@ import {
   rollupLayerCoverageGates,
   type LayerCoverageGateInput,
 } from "@/lib/situation-frame/layer-coverage-gate";
+import { predictAndPersistLayerCascades } from "@/lib/pipeline/cross-layer-cascade-prediction";
+import type { LayerOntologyRow } from "@/types/layer-ontology";
 import {
   rollupMeasurementCoverageGates,
   type MeasurementCoverageGateInput,
@@ -1495,6 +1497,24 @@ REQUIREMENTS FOR THIS PASS:
           // Phase 1 — chosen framing block; engine threads it into
           // diagnosis + synthesis prompts.
           chosenFramingBlock: stratChosenFramingBlock,
+          // Surface each of the engine's 5 LLM-bearing steps as a
+          // structural event. Without this the HUD shows a single
+          // stale "Synthesizing strategic insights…" message for the
+          // full 60-120s the chain runs; with it the user reads
+          // "Diagnosing… → Synthesizing… → Verifying… → Composing
+          // layers… → Generating recommendation…" as it happens.
+          // Fire-and-forget: the engine never awaits this and a DB
+          // hiccup here is silently absorbed by emitStructuralEvent.
+          onStep: pipelineRunId
+            ? (step, message) => {
+                void emitStructuralEvent(db, pipelineRunId, {
+                  type: "stage_boundary",
+                  stage: "proposal",
+                  phase: "enter",
+                  message,
+                });
+              }
+            : undefined,
         });
 
         strategicRecommendation = multiStepResult.recommendation;
@@ -2778,6 +2798,76 @@ REQUIREMENTS FOR THIS PASS:
           60_000,
           "synthesis_data.subsystems stays empty; strategy generation falls back to flat axiom/convergence/leverage lists",
         );
+
+        // ── Hop 0.8: cross-layer cascade prediction (D-track β) ───
+        //
+        // Predicts inter-layer propagation cascades via LLM and persists
+        // them to the `layer_dependencies` table for this space. Read
+        // later by /api/spaces/[id]/strategy-variants/generate to thread
+        // affected_layers into a stratified variant's
+        // recommendation.layer_focus.cascade.
+        //
+        // Direct in-process call (not an HTTP hop) — the module is a
+        // pure function with no route wrapper. Soft-fails internally:
+        // returns { ok: false, error } rather than throwing, so the
+        // try/catch here only fires on truly unexpected escapes.
+        //
+        // Gate conditions inside the module: ontology.length < 2 OR
+        // entities.length < 5 → early return with ok:false. Common case
+        // for brand-new spaces; not an error worth logging at warn.
+        try {
+          const [ontologyRes, entityRes, edgeRes, spaceRes] = await Promise.all([
+            db
+              .from("layer_ontology")
+              .select("*")
+              .eq("space_id", chainedSpaceId)
+              .order("ordinal", { ascending: true }),
+            db.from("entities").select("*").eq("space_id", chainedSpaceId),
+            db.from("edges").select("*").eq("space_id", chainedSpaceId),
+            db
+              .from("spaces")
+              .select("name")
+              .eq("id", chainedSpaceId)
+              .maybeSingle(),
+          ]);
+          const ontology = (ontologyRes?.data ?? []) as LayerOntologyRow[];
+          const entities = (entityRes?.data ?? []) as Entity[];
+          const edges = (edgeRes?.data ?? []) as Edge[];
+          const spaceName =
+            (spaceRes?.data as { name?: string } | null)?.name ?? undefined;
+
+          const cascadeRes = await predictAndPersistLayerCascades({
+            db,
+            spaceId: chainedSpaceId,
+            userId: user.id,
+            ontology,
+            entities,
+            edges,
+            spaceName,
+            synthesisStep: "synthesize-cascade-prediction",
+          });
+
+          if (!cascadeRes.ok && cascadeRes.error) {
+            console.warn(
+              `[synthesize:degraded] hop=cascade-prediction reason=${cascadeRes.error} — variants generated later will lack recommendation.layer_focus.cascade payload`,
+            );
+          } else if (cascadeRes.ok) {
+            // Emit a structural event so canvas surfaces (LayerStackShape
+            // arrows, variant ripple chips) know to refetch the
+            // dependencies endpoint. Soft-fails internally so this stays
+            // in the try-block without an extra wrapper.
+            await emitStructuralEvent(db, chainedRunId, {
+              type: "layer_dependencies_materialized",
+              emitted: cascadeRes.emitted,
+              inserted: cascadeRes.inserted,
+              skipped: cascadeRes.skipped.length,
+            });
+          }
+        } catch (cascadeErr) {
+          console.warn(
+            `[synthesize:degraded] hop=cascade-prediction reason=${cascadeErr instanceof Error ? cascadeErr.message : String(cascadeErr)} — variants generated later will lack recommendation.layer_focus.cascade payload`,
+          );
+        }
 
         // ── Hop 1: root-trace (backward BFS, pure structure) ──────
         //
