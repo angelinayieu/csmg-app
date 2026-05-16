@@ -31,7 +31,7 @@ import {
   stopEventPropagation,
 } from "tldraw";
 import {
-  Sparkles,
+  Target,
   RefreshCw,
   ExternalLink,
   ChevronRight,
@@ -208,7 +208,7 @@ function FinalPlanCardBody({ shape }: { shape: FinalPlanCardShape }) {
                 textTransform: "uppercase",
               }}
             >
-              <Sparkles size={11} strokeWidth={2.4} />
+              <Target size={11} strokeWidth={2.4} />
               Final plan
               {props.confidence && (
                 <span

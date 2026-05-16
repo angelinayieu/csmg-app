@@ -41,6 +41,7 @@ import {
   Target,
 } from "lucide-react";
 import type { SituationCardShape } from "./types";
+import { CanvasShapeGlass } from "./canvas-shape-glass";
 
 export const SITUATION_CARD_DEFAULT_W = 560;
 export const SITUATION_CARD_DEFAULT_H = 240;
@@ -150,8 +151,13 @@ export class SituationCardShapeUtil extends BaseBoxShapeUtil<SituationCardShape>
           pointerEvents: "all",
         }}
       >
-        <div
-          className="situation-card-enter"
+        <CanvasShapeGlass
+          tier="card"
+          accent={accent}
+          state={skipped ? "complete" : "active"}
+          radius={14}
+          padding={10}
+          entrance
           onPointerDown={(e) => e.stopPropagation()}
           onDoubleClick={(e) => {
             // Bubble up to the whiteboard page via a window CustomEvent
@@ -170,23 +176,9 @@ export class SituationCardShapeUtil extends BaseBoxShapeUtil<SituationCardShape>
             }
           }}
           style={{
-            width: "100%",
-            height: "100%",
-            borderRadius: 14,
-            overflow: "hidden",
-            background: skipped
-              ? "rgba(248,250,252,0.95)"
-              : "rgba(255,255,255,0.97)",
-            backdropFilter: "blur(14px) saturate(1.3)",
-            WebkitBackdropFilter: "blur(14px) saturate(1.3)",
-            border: `1px solid color-mix(in srgb, ${accent} ${skipped ? 12 : 22}%, rgba(15,23,42,0.06))`,
-            boxShadow: skipped
-              ? "0 1px 2px rgba(15,23,42,0.03)"
-              : `0 1px 2px rgba(15,23,42,0.04), 0 12px 30px -16px color-mix(in srgb, ${accent} 35%, transparent)`,
             opacity: skipped ? 0.7 : 1,
             display: "flex",
             flexDirection: "column",
-            padding: 10,
             gap: 8,
             fontFamily:
               "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
@@ -321,23 +313,7 @@ export class SituationCardShapeUtil extends BaseBoxShapeUtil<SituationCardShape>
             informs landscapes
             <ArrowDown size={9} strokeWidth={2.2} />
           </div>
-        </div>
-        <style jsx>{`
-          .situation-card-enter {
-            animation: situation-card-fade-in 600ms
-              cubic-bezier(0.25, 0.8, 0.25, 1) both;
-          }
-          @keyframes situation-card-fade-in {
-            from {
-              opacity: 0;
-              transform: translateY(8px) scale(0.985);
-            }
-            to {
-              opacity: 1;
-              transform: translateY(0) scale(1);
-            }
-          }
-        `}</style>
+        </CanvasShapeGlass>
       </HTMLContainer>
     );
   }
