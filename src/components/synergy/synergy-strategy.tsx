@@ -51,6 +51,7 @@ import {
 } from "./synergy-strategy-blocks";
 import { SynergyStrategyComponentList } from "./synergy-strategy-component-list";
 import { SynergyStrategyShareModal } from "./synergy-strategy-share-modal";
+import { useParallax } from "@/hooks/synergy/use-parallax";
 
 interface Props {
   sessionId: string;
@@ -479,6 +480,14 @@ function DocBody({
   }
   const evidenceFor = (id: string) => evidenceBySource.get(id) ?? [];
 
+  // ── Tier 3b: cursor-driven parallax ──
+  // A tiny tilt that follows the global cursor position so the panel
+  // feels like a physical pane in space rather than a flat sheet. Max
+  // 0.5° each axis, eased on RAF. The hook self-disables when the user
+  // has prefers-reduced-motion set or is on a touch device.
+  const panelRef = useRef<HTMLElement>(null);
+  useParallax(panelRef, { maxTiltDeg: 0.5 });
+
   return (
     // ── Outer surface ──
     // Frosted-glass panel that picks up the scene background behind it
@@ -487,6 +496,7 @@ function DocBody({
     // cyan glow, no hard border — a barely-visible inner ring + a
     // soft neutral shadow does the lifting.
     <article
+      ref={panelRef}
       className="relative overflow-hidden rounded-3xl bg-white/85 ring-1 ring-black/[0.04] backdrop-blur-2xl"
       style={{
         boxShadow: animate

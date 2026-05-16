@@ -472,7 +472,12 @@ export function PlanStepBlock({
     // The vertical connector becomes a faint dotted spine — present
     // enough to imply sequence, quiet enough not to compete with
     // content.
-    <div className="group relative grid grid-cols-[24px_1fr] gap-4 pl-1 transition">
+    // Tier 3c — per-row hover lift. Subtle: the row translates up 1px
+    // on hover and the glyph tile picks up a faint glow via the
+    // existing group-hover ring darken. Enough spatial cue to suggest
+    // "this row is interactable" without competing with the parallax
+    // tilt happening on the parent panel.
+    <div className="group relative grid grid-cols-[24px_1fr] gap-4 pl-1 transition-transform duration-200 ease-out hover:-translate-y-px">
       {/* Dashed spine + icon tile — the line threads behind the tile
           on its way down to the next step. Mask fades the line near
           the bottom of the row so it softly hands off to the next. */}
