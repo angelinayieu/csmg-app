@@ -126,9 +126,17 @@ const STAGES: Array<{
     n: 4,
     label: "Publish",
     hint: "Generate the strategy doc + share.",
-    status: "soon",
+    status: "available",
   },
 ];
+
+interface PublishedStrategy {
+  statement: string;
+  pitch: string;
+  plan: string[];
+  risks: string[];
+  hypotheses: string[];
+}
 
 interface Props {
   /** Parent unmounts on close — fresh state each open. */
@@ -178,6 +186,16 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
   const [sharpenAnswers, setSharpenAnswers] = useState<Record<number, string>>(
     {},
   );
+
+  // Stage 4 — published strategy. Derived from kept entities +
+  // extractions + sharpen answers via a single LLM crystallization
+  // call. Stored in spaces.synthesis_data.focus_strategy so the
+  // Final Products drawer can surface it later (proper synergy_
+  // strategies persistence waits on Phase 3 schema).
+  const [publishedStrategy, setPublishedStrategy] =
+    useState<PublishedStrategy | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishTriggered, setPublishTriggered] = useState(false);
 
   // ESC closes
   useEffect(() => {
@@ -366,6 +384,68 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
   const sharpening =
     sharpenTriggered && sharpenQuestions === null && sharpenError === null;
 
+  // ── Stage 4 publishing ──
+  const triggerPublish = useCallback(() => {
+    if (publishTriggered) return;
+    if (keptEntities.length === 0) return;
+    setPublishTriggered(true);
+  }, [publishTriggered, keptEntities.length]);
+
+  useEffect(() => {
+    if (!publishTriggered) return;
+    if (publishedStrategy !== null || publishError !== null) return;
+    let cancelled = false;
+    const extractionList = Object.values(extractions ?? {});
+    const answerList = (sharpenQuestions ?? []).map((q, i) => ({
+      question: q.question,
+      answer: sharpenAnswers[i] ?? "",
+    }));
+    fetch("/api/canvas/selection/publish", {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        spaceId,
+        keptEntityIds: keptEntities
+          .map((e) => e.entity_id)
+          .filter((id): id is string => typeof id === "string"),
+        extractions: extractionList,
+        sharpenAnswers: answerList,
+      }),
+    })
+      .then(async (r) => {
+        const json = (await r.json().catch(() => ({}))) as {
+          strategy?: PublishedStrategy;
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!r.ok || !json.strategy) {
+          throw new Error(json.error ?? `${r.status}`);
+        }
+        setPublishedStrategy(json.strategy);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setPublishError(e instanceof Error ? e.message : String(e));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    publishTriggered,
+    publishedStrategy,
+    publishError,
+    keptEntities,
+    extractions,
+    sharpenQuestions,
+    sharpenAnswers,
+    spaceId,
+  ]);
+
+  const publishing =
+    publishTriggered && publishedStrategy === null && publishError === null;
+
   const overrideKind = (entityId: string, kind: ExtractionKind) => {
     setExtractions((prev) => {
       if (!prev) return prev;
@@ -389,6 +469,7 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
       // "user clicked next" as the explicit trigger.
       if (newStage === 2) triggerExtraction();
       if (newStage === 3) triggerSharpening();
+      if (newStage === 4) triggerPublish();
     }
   };
   const prev = () => {
@@ -468,6 +549,7 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
                   setStage(s.n);
                   if (s.n === 2) triggerExtraction();
                   if (s.n === 3) triggerSharpening();
+                  if (s.n === 4) triggerPublish();
                 }}
                 disabled={s.status === "soon"}
                 title={`${s.label} — ${s.hint}`}
@@ -540,7 +622,18 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
               objectivePreview={synthesizedObjective}
             />
           )}
-          {stage > 3 && <StagePlaceholder stage={stage} />}
+          {stage === 4 && (
+            <Stage4Publish
+              strategy={publishedStrategy}
+              loading={publishing}
+              error={publishError}
+              onRetry={() => {
+                setPublishedStrategy(null);
+                setPublishError(null);
+                setPublishTriggered(false);
+              }}
+            />
+          )}
         </div>
 
         {/* Footer */}
@@ -558,15 +651,25 @@ export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
               ? `${keptCount} of ${entities.length} kept`
               : `Stage ${stage} of 4`}
           </span>
-          <button
-            type="button"
-            onClick={next}
-            disabled={stage === 4 || (stage === 1 && keptCount === 0)}
-            className="inline-flex items-center gap-1 rounded-md bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-gray-800 disabled:opacity-40"
-          >
-            {stage === 4 ? "Publish" : "Next"}{" "}
-            <ArrowRight className="h-3 w-3" />
-          </button>
+          {stage === 4 && publishedStrategy ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-emerald-700"
+            >
+              Done <ArrowRight className="h-3 w-3" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={next}
+              disabled={stage === 4 || (stage === 1 && keptCount === 0)}
+              className="inline-flex items-center gap-1 rounded-md bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-gray-800 disabled:opacity-40"
+            >
+              {stage === 3 ? "Publish" : "Next"}{" "}
+              <ArrowRight className="h-3 w-3" />
+            </button>
+          )}
         </div>
       </aside>
 
@@ -1076,23 +1179,144 @@ function SharpenRow({
   );
 }
 
-// ── Stage 4 placeholder ──────────────────────────────────────────
+// ── Stage 4 — Publish ────────────────────────────────────────────
 
-function StagePlaceholder({ stage }: { stage: Stage }) {
-  const meta = STAGES.find((s) => s.n === stage);
-  return (
-    <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 text-center">
-      <Loader2 className="h-5 w-5 text-gray-400" />
-      <div>
-        <p className="text-[13px] font-semibold text-gray-800">
-          Stage {stage} · {meta?.label} — coming next
-        </p>
-        <p className="mt-1.5 max-w-xs text-[11.5px] leading-relaxed text-gray-600">
-          {meta?.hint} This stage lands in a follow-up to Phase 2c
-          — the shell + Stage 1 are ready first so the curation
-          step is usable on its own.
+function Stage4Publish({
+  strategy,
+  loading,
+  error,
+  onRetry,
+}: {
+  strategy: PublishedStrategy | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+        <p className="text-[12.5px] text-gray-600">Crystallizing strategy…</p>
+        <p className="max-w-xs text-[10.5px] leading-relaxed text-gray-500">
+          Combining the kept entities, their classifications, and your
+          sharpening answers into a single focused doc.
         </p>
       </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <p className="text-[12.5px] text-rose-700">Publish failed: {error}</p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="rounded-md bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-gray-800"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+  if (!strategy) return null;
+
+  return (
+    <div>
+      <div className="mb-3">
+        <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700">
+          Stage 4 · Published
+        </div>
+        <h3 className="font-display-tight mt-1 text-[18px] font-semibold leading-snug tracking-tight text-gray-900">
+          Your strategy
+        </h3>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-gray-600">
+          Saved to this space&apos;s synthesis data. Surfaces in the
+          Final Products drawer.
+        </p>
+      </div>
+
+      {/* Statement — the headline */}
+      <div className="mb-4 rounded-xl border border-cyan-200 bg-gradient-to-br from-cyan-50/40 to-indigo-50/30 px-4 py-3">
+        <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-cyan-700">
+          statement
+        </div>
+        <p className="font-display-tight mt-1 text-[15px] font-semibold leading-snug text-gray-900">
+          {strategy.statement}
+        </p>
+      </div>
+
+      {/* Pitch */}
+      {strategy.pitch && (
+        <div className="mb-4 rounded-xl border border-gray-200 bg-white px-3 py-2.5">
+          <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-gray-500">
+            pitch
+          </div>
+          <p className="mt-1 text-[12px] leading-relaxed text-gray-800">
+            {strategy.pitch}
+          </p>
+        </div>
+      )}
+
+      {/* Plan */}
+      {strategy.plan.length > 0 && (
+        <PublishedList
+          label="plan"
+          items={strategy.plan}
+          tone="bg-indigo-50/40 border-indigo-200"
+          numbered
+        />
+      )}
+
+      {/* Risks */}
+      {strategy.risks.length > 0 && (
+        <PublishedList
+          label="risks"
+          items={strategy.risks}
+          tone="bg-rose-50/40 border-rose-200"
+        />
+      )}
+
+      {/* Hypotheses */}
+      {strategy.hypotheses.length > 0 && (
+        <PublishedList
+          label="hypotheses"
+          items={strategy.hypotheses}
+          tone="bg-amber-50/40 border-amber-200"
+        />
+      )}
+    </div>
+  );
+}
+
+function PublishedList({
+  label,
+  items,
+  tone,
+  numbered = false,
+}: {
+  label: string;
+  items: string[];
+  tone: string;
+  numbered?: boolean;
+}) {
+  return (
+    <div className={`mb-3 rounded-xl border px-3 py-2.5 ${tone}`}>
+      <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-gray-600">
+        {label}
+      </div>
+      <ul className="mt-1.5 space-y-1">
+        {items.map((item, i) => (
+          <li
+            key={i}
+            className="flex items-start gap-2 text-[11.5px] leading-snug text-gray-800"
+          >
+            <span className="mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center font-mono text-[8.5px] text-gray-500">
+              {numbered ? `${i + 1}.` : "•"}
+            </span>
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

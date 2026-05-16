@@ -54,8 +54,29 @@ interface Props {
   spaceId: string;
 }
 
+interface FocusStrategy {
+  statement?: string;
+  pitch?: string;
+  plan?: string[];
+  risks?: string[];
+  hypotheses?: string[];
+  generated_at?: string;
+}
+
 export function CanvasFinalProductsDrawer({ onClose, spaceId }: Props) {
-  const { entities } = useSpaceData();
+  const { entities, space } = useSpaceData();
+  // Read the Stage-4 published strategy from spaces.synthesis_data.
+  // Lives there until Phase 3 ships synergy_strategies.space_id.
+  const focusStrategy: FocusStrategy | null = (() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sd = (space as any)?.synthesis_data as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    const fs = sd?.focus_strategy;
+    if (!fs || typeof fs !== "object") return null;
+    return fs as FocusStrategy;
+  })();
   const [apps, setApps] = useState<AppRow[] | null>(null);
   const [loadingApps, setLoadingApps] = useState(true);
   const [appsError, setAppsError] = useState<string | null>(null);
@@ -218,14 +239,18 @@ export function CanvasFinalProductsDrawer({ onClose, spaceId }: Props) {
             )}
           </Section>
 
-          {/* ── Strategy doc placeholder ── */}
+          {/* ── Strategy doc ── */}
           <Section label="Strategy doc" icon={FileText} count={null} loading={false}>
-            <EmptyRow
-              icon={FileText}
-              title="Coming with Phase 3"
-              body="Strategy docs (statement, pitch, plan, risks, hypotheses) live in the synergy_strategies table. A space_id back-link lands with the data migration so canvas spaces can surface their own doc here."
-              variant="info"
-            />
+            {focusStrategy && focusStrategy.statement ? (
+              <FocusStrategyCard strategy={focusStrategy} />
+            ) : (
+              <EmptyRow
+                icon={FileText}
+                title="No strategy published yet"
+                body="Run the Converge flow to crystallize a statement, plan, risks, and hypotheses from your kept entities. Published strategies land here automatically."
+                variant="info"
+              />
+            )}
           </Section>
         </div>
 
@@ -402,6 +427,54 @@ function EmptyRow({
         <span className="text-[12px] font-semibold text-gray-800">{title}</span>
       </div>
       <p className="mt-1 text-[11px] leading-relaxed text-gray-600">{body}</p>
+    </div>
+  );
+}
+
+function FocusStrategyCard({ strategy }: { strategy: FocusStrategy }) {
+  return (
+    <div className="rounded-xl border border-cyan-200 bg-gradient-to-br from-cyan-50/50 to-indigo-50/30 px-3 py-3">
+      <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-cyan-700">
+        statement
+      </div>
+      <p className="mt-1 text-[12.5px] font-semibold leading-snug text-gray-900">
+        {strategy.statement}
+      </p>
+      {strategy.pitch && (
+        <p className="mt-2 text-[11px] leading-relaxed text-gray-700">
+          {strategy.pitch}
+        </p>
+      )}
+      {strategy.plan && strategy.plan.length > 0 && (
+        <div className="mt-3">
+          <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-gray-500">
+            plan
+          </div>
+          <ol className="mt-1 space-y-0.5">
+            {strategy.plan.slice(0, 4).map((step, i) => (
+              <li
+                key={i}
+                className="flex items-start gap-1.5 text-[11px] leading-snug text-gray-700"
+              >
+                <span className="font-mono text-[9.5px] tabular-nums text-gray-400">
+                  {i + 1}.
+                </span>
+                <span>{step}</span>
+              </li>
+            ))}
+            {strategy.plan.length > 4 && (
+              <li className="text-[10.5px] text-gray-500">
+                + {strategy.plan.length - 4} more steps
+              </li>
+            )}
+          </ol>
+        </div>
+      )}
+      {strategy.generated_at && (
+        <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.12em] text-gray-400">
+          published {new Date(strategy.generated_at).toLocaleString()}
+        </p>
+      )}
     </div>
   );
 }
