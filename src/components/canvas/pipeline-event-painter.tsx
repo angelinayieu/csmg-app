@@ -83,7 +83,7 @@ import {
 } from "./shapes/strategy-hero-card-shape";
 import {
   STAGE_ROOMS,
-  STAGE_HEIGHT,
+  MIN_ROOM_H,
   ROOM_GAP,
   computeRoomBounds,
   buildRoomSubtitle,
@@ -3765,6 +3765,55 @@ function registerRoomChild(
 }
 
 /**
+ * Compute the Y a newly-spawning room should land at, based on the
+ * ACTUAL bottoms of the upstream rooms that already exist. The static
+ * `computeRoomBounds()` Y assumes every upstream room is still at
+ * MIN_ROOM_H — true at spawn time, but false the moment an upstream
+ * room grows. Without this dynamic recomputation, a new downstream
+ * room placed mid-run lands INSIDE the grown upstream room rather
+ * than below it. `fallbackY` is the static cascade Y from
+ * computeRoomBounds — used as the default when no upstream rooms
+ * exist yet (the very first room of the run).
+ */
+function computeSpawnYFromLiveRooms(
+  editor: Editor,
+  state: PainterState,
+  stage: PipelineStage,
+  fallbackY: number,
+): number {
+  const meta = STAGE_ROOMS[stage];
+  if (!meta) return fallbackY;
+  let highestUpstreamOrder = -1;
+  let highestUpstreamBottom = 0;
+  for (const [otherStage, roomId] of state.roomShapeIds) {
+    const other = STAGE_ROOMS[otherStage as PipelineStage];
+    if (!other || other.order >= meta.order) continue;
+    const room = editor.getShape(roomId);
+    if (!room) continue;
+    const roomY = (room as { y?: number }).y ?? 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const roomH = ((room as any).props?.h as number | undefined) ?? MIN_ROOM_H;
+    const bottom = roomY + roomH;
+    if (other.order > highestUpstreamOrder) {
+      highestUpstreamOrder = other.order;
+      highestUpstreamBottom = bottom;
+    }
+  }
+  if (highestUpstreamOrder === -1) return fallbackY;
+  // Pad for any intermediate stages that haven't spawned yet (unusual
+  // but supports out-of-order stage_boundary events).
+  const missingIntermediates = Math.max(
+    0,
+    meta.order - highestUpstreamOrder - 1,
+  );
+  return (
+    highestUpstreamBottom +
+    ROOM_GAP +
+    missingIntermediates * (MIN_ROOM_H + ROOM_GAP)
+  );
+}
+
+/**
  * When `grownStage`'s room grew by `deltaY`, every room with a higher
  * order in the cascade needs to shift down by the same delta — both
  * the room shape itself AND every shape registered as living inside
@@ -3902,12 +3951,20 @@ function upsertRoomForStage(
     return;
   }
 
-  // First spawn for this stage. Compute deterministic bounds from
-  // the room layout helper so rooms always land in the same vertical
-  // slot regardless of arrival order.
+  // First spawn for this stage. computeRoomBounds returns a Y based
+  // on the static MIN_ROOM_H cascade — but earlier rooms may have
+  // already grown past their initial height, so the static Y would
+  // place this new room INSIDE the grown upstream rooms. Recompute
+  // the spawn-Y from the live shapes the painter has already created.
   const bounds = computeRoomBounds(
     stage as keyof typeof STAGE_ROOMS,
     state.anchor,
+  );
+  const dynamicY = computeSpawnYFromLiveRooms(
+    editor,
+    state,
+    stage as PipelineStage,
+    bounds.y,
   );
   // If children for this stage already painted before the room (the
   // common case — kg-formation paints on first entity_added, but
@@ -3916,7 +3973,7 @@ function upsertRoomForStage(
   const recordedMaxY = state.roomChildMaxY.get(stage);
   const requiredH =
     recordedMaxY != null
-      ? Math.max(bounds.h, recordedMaxY - bounds.y + ROOM_PADDING.bottom)
+      ? Math.max(bounds.h, recordedMaxY - dynamicY + ROOM_PADDING.bottom)
       : bounds.h;
   const shapeId = createShapeId();
   try {
@@ -3924,7 +3981,7 @@ function upsertRoomForStage(
       id: shapeId,
       type: "room",
       x: bounds.x,
-      y: bounds.y,
+      y: dynamicY,
       props: {
         w: bounds.w,
         h: requiredH,
