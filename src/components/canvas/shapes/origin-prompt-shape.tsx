@@ -22,6 +22,7 @@ import {
   resizeBox,
 } from "tldraw";
 import type { OriginPromptShape } from "./types";
+import { IntakeRoomIcon } from "@/components/canvas/icons";
 
 export const ORIGIN_PROMPT_DEFAULT_W = 420;
 export const ORIGIN_PROMPT_DEFAULT_H = 140;
@@ -115,11 +116,9 @@ function OriginPromptView({ shape }: { shape: OriginPromptShape }) {
               ? `color-mix(in srgb, ${accent} 16%, transparent)`
               : "rgba(15,23,42,0.04)",
             color: runActive ? accent : "#64748b",
-            fontSize: 16,
-            lineHeight: 1,
           }}
         >
-          ✦
+          <IntakeRoomIcon size={16} />
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div

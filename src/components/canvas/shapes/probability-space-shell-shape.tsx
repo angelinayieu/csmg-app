@@ -332,8 +332,8 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
               </div>
               {axis && (
                 isCustom ? (
-                  // B3 — custom-axis chip. Sparkle glyph + accent-tinted
-                  // background so it visually pops from the gray
+                  // B3 — custom-axis chip. Dashed accent border +
+                  // tinted fill so it visually pops from the gray
                   // canonical chip; tooltip explains what "custom"
                   // means + names the underlying axis_id slug.
                   <span
@@ -341,7 +341,6 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
-                      gap: 3,
                       fontSize: 8,
                       fontWeight: 700,
                       letterSpacing: "0.06em",
@@ -354,7 +353,6 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
                       flexShrink: 0,
                     }}
                   >
-                    <span style={{ fontSize: 9, lineHeight: 1 }}>✦</span>
                     custom
                   </span>
                 ) : (

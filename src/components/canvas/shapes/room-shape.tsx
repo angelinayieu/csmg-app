@@ -168,14 +168,10 @@ function RoomView({ shape }: { shape: RoomShape }) {
   const accent = meta.accent;
 
   // Local-state toggle: expanded shows description text, compact is
-  // header-only. Defaults to expanded for the first 5 seconds after
-  // spawn so the user reads what each room means, then auto-collapses
-  // to keep the canvas clean.
-  const [expanded, setExpanded] = useState(true);
-  useEffect(() => {
-    const t = window.setTimeout(() => setExpanded(false), 5000);
-    return () => window.clearTimeout(t);
-  }, []);
+  // header-only. Defaults to collapsed — the title + subtitle already
+  // tell the user what the room is. Users can expand via the caret
+  // when they want the longer explanation.
+  const [expanded, setExpanded] = useState(false);
 
   // Track entrance window so the entrance animation only plays once
   // per spawn. After ENTRANCE_MS we drop the entrance class so a

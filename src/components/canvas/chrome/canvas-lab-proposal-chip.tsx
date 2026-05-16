@@ -18,7 +18,8 @@
 // wizard's open state (the modal is the visible surface).
 
 import { useCallback, useEffect, useState } from "react";
-import { Sparkles, X } from "lucide-react";
+import { X } from "lucide-react";
+import { LabRoomIcon } from "@/components/canvas/icons";
 import { LabProposalWizard } from "@/components/lab/lab-proposal-wizard";
 import type { LabScaffold, Subject } from "@/types/subject";
 
@@ -83,7 +84,7 @@ export function CanvasLabProposalChip({ spaceId }: Props) {
       {pending && !open && (
         <div className="pointer-events-none fixed bottom-20 right-3 z-[55] flex items-end justify-end">
           <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-violet-300 bg-white/95 px-3 py-2 shadow-lg backdrop-blur-md">
-            <Sparkles className="h-3.5 w-3.5 text-violet-600" />
+            <LabRoomIcon size={14} style={{ color: "#7c3aed" }} />
             <button
               type="button"
               onClick={() => setOpen(true)}
