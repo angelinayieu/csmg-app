@@ -19,7 +19,8 @@
 
 import { useEffect, useState } from "react";
 import { createShapeId, type Editor, type TLShapeId } from "tldraw";
-import { Sparkles, ChevronDown, ChevronUp, Network, GitBranch, AlertTriangle, RefreshCcw } from "lucide-react";
+import { ChevronDown, ChevronUp, Network, GitBranch, AlertTriangle, RefreshCcw } from "lucide-react";
+import { KgRoomIcon } from "@/components/canvas/icons";
 import { usePreliminaryInsights } from "../hooks/use-preliminary-insights";
 import type { Entity, Edge, Space } from "@/types";
 
@@ -73,7 +74,7 @@ export function PreliminaryInsightsPanel({
           className="flex w-full items-center gap-2 border-b border-purple-50 px-3.5 py-2.5 text-left transition-colors hover:bg-purple-50/40"
         >
           <div className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-gradient-to-br from-purple-500 to-blue-500 text-white">
-            <Sparkles className="h-3 w-3" />
+            <KgRoomIcon size={12} />
           </div>
           <div className="flex-1">
             <div className="text-[11.5px] font-semibold text-gray-900">
