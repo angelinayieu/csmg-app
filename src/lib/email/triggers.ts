@@ -16,6 +16,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import {
   matchSurfacedEmail,
   newRequestEmail,
+  parallelPathAcceptedEmail,
   requestAcceptedEmail,
   testEmail,
 } from "./templates";
@@ -294,6 +295,66 @@ export async function sendMatchSurfacedEmail(
     }
   } catch (err) {
     console.warn("[email · match_surfaced] trigger errored:", err);
+  }
+}
+
+// ── parallel_path_accepted ──
+//
+// Fired by the synergy/parallel-path.matched Inngest consumer when
+// one user accepts another's parallel-path invitation. Notifies the
+// ORIGINAL REQUESTER. The accepter does not need notification (they
+// just clicked accept; they already know).
+//
+// Reuses the `request_accepted` NotificationKey for opt-out purposes —
+// semantically the same class of "your request was accepted" emails,
+// so we don't fragment the user's preference surface.
+//
+// Privacy: surfaces shared_theme + shared_pillars only. Never reveals
+// the accepter's display_name or avatar — that only unlocks via the
+// in-room mutual-reveal handshake.
+
+export async function sendParallelPathAcceptedEmail(args: {
+  requester_user_id: string;
+  room_id: string;
+  shared_theme: string;
+  shared_pillars: string[];
+}): Promise<void> {
+  try {
+    const delivery = await resolveDelivery(
+      args.requester_user_id,
+      "request_accepted",
+    );
+    if (!delivery) return;
+
+    const token = await mintUnsubscribeToken(
+      args.requester_user_id,
+      "request_accepted",
+    );
+
+    const tpl = parallelPathAcceptedEmail({
+      shared_theme: args.shared_theme,
+      shared_pillars: args.shared_pillars,
+      room_url: appUrl(`/app/synergy/rooms/${args.room_id}`),
+      preferences_url: appUrl("/app/synergy/profile#email"),
+      unsubscribe_url: appUrl(
+        `/email/unsubscribe?token=${encodeURIComponent(token)}`,
+      ),
+    });
+
+    const result = await sendTransactional({
+      to: delivery.email,
+      subject: tpl.subject,
+      preheader: tpl.preheader,
+      html: tpl.html,
+    });
+    if (!result.ok) {
+      console.warn(
+        "[email · parallel_path_accepted] send failed:",
+        result.error,
+      );
+    }
+  } catch (err) {
+    console.warn("[email · parallel_path_accepted] trigger errored:", err);
   }
 }
 

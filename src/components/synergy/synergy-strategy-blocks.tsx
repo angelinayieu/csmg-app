@@ -40,9 +40,11 @@ import {
   mitigateStrategyBlock,
   updateStrategyBlock,
 } from "@/lib/synergy/client";
+import { getStepIcon, getStepMetadata } from "@/lib/synergy/step-icons";
 import type {
   HypothesisMeta,
   PlanStepMeta,
+  PlanStepStatus,
   RiskMeta,
   SynergyStrategyBlock,
 } from "@/lib/synergy/types";
@@ -189,7 +191,7 @@ function SupportingEvidence({
     <div className="mt-2">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-blue-700 transition hover:text-blue-900"
+        className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500 transition hover:text-gray-900"
       >
         {open ? (
           <ChevronDown className="h-3 w-3" />
@@ -216,10 +218,10 @@ function SupportingEvidence({
             return (
               <li
                 key={e.id}
-                className="rounded-md border border-blue-100 bg-blue-50/40 px-2.5 py-1.5"
+                className="rounded-md border border-gray-200 bg-gray-50/60 px-2.5 py-1.5"
               >
                 <div className="flex items-start gap-2">
-                  <Search className="mt-0.5 h-3 w-3 shrink-0 text-blue-600" />
+                  <Search className="mt-0.5 h-3 w-3 shrink-0 text-gray-500" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       {href ? (
@@ -260,10 +262,10 @@ function SupportingEvidence({
 // ── Challenges rendering ──
 // In-place red-tinted callouts beneath the block.
 
-const CHALLENGE_SEVERITY: Record<string, { bg: string; ring: string; text: string }> = {
-  high: { bg: "bg-rose-50", ring: "ring-rose-200", text: "text-rose-700" },
-  medium: { bg: "bg-amber-50", ring: "ring-amber-200", text: "text-amber-700" },
-  low: { bg: "bg-gray-50", ring: "ring-gray-200", text: "text-gray-700" },
+const CHALLENGE_SEVERITY: Record<string, { bar: string; text: string }> = {
+  high: { bar: "bg-rose-500", text: "text-rose-600" },
+  medium: { bar: "bg-amber-500", text: "text-amber-600" },
+  low: { bar: "bg-gray-300", text: "text-gray-500" },
 };
 
 function ChallengesGroup({
@@ -280,8 +282,12 @@ function ChallengesGroup({
         return (
           <div
             key={i}
-            className={`rounded-md ring-1 ${tone.ring} ${tone.bg} px-2.5 py-1.5`}
+            className="relative overflow-hidden rounded-md border border-gray-200 bg-white px-2.5 py-1.5 pl-3.5"
           >
+            <span
+              aria-hidden
+              className={`absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full ${tone.bar}`}
+            />
             <div className="flex items-start gap-2">
               <MessageSquareWarning
                 className={`mt-0.5 h-3 w-3 shrink-0 ${tone.text}`}
@@ -292,7 +298,7 @@ function ChallengesGroup({
                     Challenge
                   </span>
                   <span
-                    className={`rounded-full bg-white px-1.5 py-0 font-mono text-[8px] uppercase tracking-wider ${tone.text}`}
+                    className={`font-mono text-[8px] uppercase tracking-[0.15em] ${tone.text}`}
                   >
                     {c.severity}
                   </span>
@@ -312,10 +318,12 @@ function ChallengesGroup({
 
 // ── Experiment card (renders inside HypothesisBlock when meta.experiment is set) ──
 
+// Effort is a quiet dot+caps pair, not a colored pill. Hours = calm
+// gray, weeks = warmer accent. Read as metadata.
 const EFFORT_TONE: Record<string, string> = {
-  hours: "bg-emerald-100 text-emerald-700",
-  days: "bg-amber-100 text-amber-700",
-  weeks: "bg-rose-100 text-rose-700",
+  hours: "bg-emerald-500",
+  days: "bg-amber-500",
+  weeks: "bg-rose-500",
 };
 
 function ExperimentCard({
@@ -330,17 +338,16 @@ function ExperimentCard({
     effort: string;
   };
 }) {
-  const effortTone = EFFORT_TONE[experiment.effort] ?? EFFORT_TONE.days;
+  const effortDot = EFFORT_TONE[experiment.effort] ?? EFFORT_TONE.days;
   return (
-    <div className="mt-3 rounded-xl border border-purple-200 bg-white/70 p-3">
+    <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50/40 p-3">
       <div className="mb-1 flex items-center gap-2">
-        <Beaker className="h-3.5 w-3.5 text-purple-600" />
-        <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-purple-700">
+        <Beaker className="h-3.5 w-3.5 text-gray-500" />
+        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-gray-500">
           Experiment
         </span>
-        <span
-          className={`ml-auto rounded-full px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${effortTone}`}
-        >
+        <span className="ml-auto inline-flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${effortDot}`} />
           {experiment.effort}
         </span>
       </div>
@@ -351,14 +358,14 @@ function ExperimentCard({
         {experiment.design}
       </p>
       {experiment.steps.length > 0 && (
-        <ol className="mt-2 space-y-1 border-l-2 border-purple-100 pl-3">
+        <ol className="mt-2 space-y-1 border-l border-gray-200 pl-3">
           {experiment.steps.map((s, i) => (
             <li
               key={i}
               className="text-[11.5px] leading-relaxed text-gray-700"
             >
-              <span className="mr-1 font-mono text-[10px] font-semibold text-purple-700">
-                {i + 1}.
+              <span className="font-numerical mr-1 font-mono text-[10px] font-semibold tabular-nums text-gray-500">
+                {String(i + 1).padStart(2, "0")}.
               </span>
               {s}
             </li>
@@ -366,17 +373,25 @@ function ExperimentCard({
         </ol>
       )}
       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <div className="rounded-md border border-emerald-100 bg-emerald-50/60 px-2.5 py-1.5">
-          <div className="font-mono text-[9px] uppercase tracking-wider text-emerald-700">
-            ↑ supports if
+        <div className="relative overflow-hidden rounded-md border border-gray-200 bg-white px-2.5 py-1.5 pl-3.5">
+          <span
+            aria-hidden
+            className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-emerald-500"
+          />
+          <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-emerald-600">
+            supports if
           </div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-gray-700">
             {experiment.success_signal}
           </p>
         </div>
-        <div className="rounded-md border border-rose-100 bg-rose-50/60 px-2.5 py-1.5">
-          <div className="font-mono text-[9px] uppercase tracking-wider text-rose-700">
-            ↓ refutes if
+        <div className="relative overflow-hidden rounded-md border border-gray-200 bg-white px-2.5 py-1.5 pl-3.5">
+          <span
+            aria-hidden
+            className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-rose-500"
+          />
+          <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-rose-600">
+            refutes if
           </div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-gray-700">
             {experiment.refute_signal}
@@ -388,6 +403,99 @@ function ExperimentCard({
 }
 
 // ── plan_step ──
+
+/** Phase 2 — per-step status indicator.
+ *
+ * Tappable circle that cycles pending → in_progress → done → pending.
+ *
+ * Visual states:
+ *   pending      — white with thin gray ring
+ *   in_progress  — gray-900 ring with an animated pulse halo (disabled
+ *                  under prefers-reduced-motion via the keyframes)
+ *   done         — filled gray-900 with a tiny check
+ *
+ * Tap target is 24×24 (the surrounding button) with a visual 14×14
+ * indicator centered inside — comfortable to hit on touch without
+ * dominating the spine column.
+ */
+function StatusDot({
+  value,
+  onClick,
+  stepNumber,
+}: {
+  value: PlanStepStatus;
+  onClick: () => void;
+  stepNumber: number;
+}) {
+  const labelMap: Record<PlanStepStatus, string> = {
+    pending: "not started",
+    in_progress: "in progress",
+    done: "done",
+  };
+  const nextMap: Record<PlanStepStatus, string> = {
+    pending: "Mark as in progress",
+    in_progress: "Mark as done",
+    done: "Mark as not started",
+  };
+  return (
+    <button
+      onClick={onClick}
+      aria-label={`Step ${stepNumber} — currently ${labelMap[value]}. ${nextMap[value]}.`}
+      title={nextMap[value]}
+      className="group/dot inline-flex h-6 w-6 items-center justify-center rounded-full transition hover:bg-black/[0.04]"
+    >
+      <span
+        aria-hidden
+        className={[
+          "relative inline-flex h-3.5 w-3.5 items-center justify-center rounded-full transition",
+          value === "pending" &&
+            "bg-white ring-1 ring-gray-300 group-hover/dot:ring-gray-500",
+          value === "in_progress" &&
+            "bg-white ring-2 ring-gray-900 group-hover/dot:ring-gray-700",
+          value === "done" &&
+            "bg-gray-900 text-white group-hover/dot:bg-gray-700",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        {value === "done" && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+        {value === "in_progress" && (
+          <>
+            {/* Pulsing halo signals "active." The animation runs from
+                the local @keyframes below and respects reduced-motion
+                via the media-query-gated rule. */}
+            <span
+              aria-hidden
+              className="absolute inset-0 rounded-full"
+              style={{
+                animation: "statusDotPulse 1.8s ease-out infinite",
+                boxShadow: "0 0 0 0 rgba(15,23,42,0.35)",
+              }}
+            />
+          </>
+        )}
+      </span>
+      <style jsx>{`
+        @keyframes statusDotPulse {
+          0% {
+            box-shadow: 0 0 0 0 rgba(15, 23, 42, 0.35);
+          }
+          70% {
+            box-shadow: 0 0 0 6px rgba(15, 23, 42, 0);
+          }
+          100% {
+            box-shadow: 0 0 0 0 rgba(15, 23, 42, 0);
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          span[style*="statusDotPulse"] {
+            animation: none !important;
+          }
+        }
+      `}</style>
+    </button>
+  );
+}
 
 export function PlanStepBlock({
   block,
@@ -409,6 +517,49 @@ export function PlanStepBlock({
     }>;
   };
   const [editing, setEditing] = useState<null | "title" | "body">(null);
+  // Tier 2c — progressive disclosure. Sub-steps, challenges, supporting
+  // evidence, and the per-step AI actions are hidden by default so the
+  // doc reads like a 5-step outline. Tap the chevron underneath the
+  // body to reveal them all together. When the step has no detail yet
+  // (fresh strategy, no expand/challenge/find-evidence runs yet), we
+  // skip the chevron and show the action chips inline so the user can
+  // trigger them without a wasted click.
+  const [expanded, setExpanded] = useState(false);
+
+  // ── Phase 2 — status (pending / in_progress / done) ──
+  // Locally mirrored so the StatusDot can update instantly on tap;
+  // the persisted block.meta is the source of truth and reconciles
+  // when the parent re-renders with the updated block.
+  const status: PlanStepStatus =
+    (meta.status as PlanStepStatus | undefined) ?? "pending";
+  const [statusOptimistic, setStatusOptimistic] = useState<PlanStepStatus | null>(
+    null,
+  );
+  const effectiveStatus = statusOptimistic ?? status;
+  const isDone = effectiveStatus === "done";
+
+  const cycleStatus = async () => {
+    const next: PlanStepStatus =
+      effectiveStatus === "pending"
+        ? "in_progress"
+        : effectiveStatus === "in_progress"
+          ? "done"
+          : "pending";
+    setStatusOptimistic(next);
+    try {
+      const updated = await updateStrategyBlock(block.id, {
+        meta_patch: { status: next },
+      });
+      onUpdate(updated);
+      setStatusOptimistic(null);
+    } catch (err) {
+      // Revert optimistic state on failure
+      setStatusOptimistic(null);
+      toast.error("Couldn't update status", {
+        description: (err as Error).message,
+      });
+    }
+  };
 
   const saveTitle = async (next: string) => {
     setEditing(null);
@@ -434,22 +585,35 @@ export function PlanStepBlock({
     }
   };
 
+  // ── Per-step icon + metadata pills ──
+  // Phase 1 onward: prefers LLM-tagged meta.category / .duration_estimate
+  // / .effort_level when present (strategy generated post-upgrade).
+  // Falls back to regex heuristics for backward-compat with strategies
+  // generated before the schema upgrade.
+  const StepIcon = getStepIcon(meta, block.body);
+  const pills = getStepMetadata(meta, block.body);
+
   return (
     // ── Step row ──
     // Apple-style restraint: drop the loud blue numbered circle for a
-    // mono "STEP 0N" caps label that lets the title carry the row. The
-    // vertical connector becomes a faint dotted spine — present enough
-    // to imply sequence, quiet enough not to compete with content.
-    // The whole row lifts subtly on hover for that "this is a tile
-    // floating in space" visionOS read.
-    <div className="group relative grid grid-cols-[14px_1fr] gap-4 pl-1 transition">
-      {/* Dashed spine — faint vertical dashes (3px tall every 7px),
-          fading toward the bottom. Visually quieter than a solid line
-          but still tells the eye "these are sequential." */}
+    // mono "STEP 0N" caps label + a small glyph tile that wears the
+    // step's activity kind (calendar / book / users / code / radio).
+    // The vertical connector becomes a faint dotted spine — present
+    // enough to imply sequence, quiet enough not to compete with
+    // content.
+    // Tier 3c — per-row hover lift. Subtle: the row translates up 1px
+    // on hover and the glyph tile picks up a faint glow via the
+    // existing group-hover ring darken. Enough spatial cue to suggest
+    // "this row is interactable" without competing with the parallax
+    // tilt happening on the parent panel.
+    <div className="group relative grid grid-cols-[24px_1fr] gap-4 pl-1 transition-transform duration-200 ease-out hover:-translate-y-px">
+      {/* Dashed spine + icon tile — the line threads behind the tile
+          on its way down to the next step. Mask fades the line near
+          the bottom of the row so it softly hands off to the next. */}
       <div className="relative flex justify-center">
         <div
           aria-hidden
-          className="absolute top-6 bottom-[-12px] w-px"
+          className="absolute top-9 bottom-[-16px] w-px"
           style={{
             backgroundImage:
               "linear-gradient(to bottom, rgba(15,23,42,0.16) 50%, transparent 50%)",
@@ -461,20 +625,34 @@ export function PlanStepBlock({
               "linear-gradient(to bottom, black 0%, black 70%, transparent 100%)",
           }}
         />
-        {/* Step glyph: a tiny ring marking this step's anchor. Sits
-            flush with the "STEP 0N" caps label on the right so the eye
-            reads them together. */}
-        <span
-          aria-hidden
-          className="relative z-10 mt-[7px] inline-flex h-2 w-2 items-center justify-center rounded-full bg-white ring-1 ring-gray-300 transition group-hover:ring-gray-400"
-        />
+        {/* Glyph tile — 24×24 rounded square wearing the inferred icon.
+            Subtle inset highlight + soft drop shadow gives it the
+            "engraved chip" feel that visionOS controls use. */}
+        <div
+          className="relative z-10 mt-[2px] inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white text-gray-600 ring-1 ring-black/[0.06] transition group-hover:text-gray-900 group-hover:ring-black/[0.12]"
+          style={{
+            boxShadow:
+              "inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 2px rgba(15,23,42,0.04)",
+          }}
+        >
+          <StepIcon
+            className={`h-3 w-3 transition ${isDone ? "opacity-40" : ""}`}
+          />
+        </div>
       </div>
 
-      <div className="pb-5">
-        {/* STEP 0N caps label — mono, very small, gray-400. Tells you
-            sequence without making it the loudest pixel on the page. */}
-        <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.18em] text-gray-400">
-          Step {String(index + 1).padStart(2, "0")}
+      <div className={`pb-5 transition ${isDone ? "opacity-55" : ""}`}>
+        {/* Meta row: StatusDot + STEP 0N caps label. The dot is the
+            tappable status affordance; the caps label tells sequence. */}
+        <div className="mb-1 flex items-center gap-2">
+          <StatusDot
+            value={effectiveStatus}
+            onClick={cycleStatus}
+            stepNumber={index + 1}
+          />
+          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-gray-400">
+            Step {String(index + 1).padStart(2, "0")}
+          </div>
         </div>
 
         {editing === "title" ? (
@@ -490,82 +668,187 @@ export function PlanStepBlock({
         ) : (
           <div
             onClick={() => setEditing("title")}
-            className="-mx-1 cursor-text rounded-md px-1 text-[16px] font-semibold leading-snug tracking-tight text-gray-900 transition hover:bg-black/[0.025]"
+            className={`-mx-1 cursor-text rounded-md px-1 text-[16px] font-semibold leading-snug tracking-tight transition hover:bg-black/[0.025] ${
+              isDone
+                ? "text-gray-400 line-through decoration-gray-300 decoration-[1px]"
+                : "text-gray-900"
+            }`}
             title="Click to edit"
           >
             {meta.title || "Step"}
           </div>
         )}
+
+        {/* Metadata pills — small mono caps badges (time/cadence/mode/
+            tools) extracted from the body. Empty array hides entirely. */}
+        {pills.length > 0 && (
+          <div
+            className={`mt-2 flex flex-wrap items-center gap-1.5 transition ${
+              isDone ? "opacity-50" : ""
+            }`}
+          >
+            {pills.map((pill, i) => {
+              const PillIcon = pill.icon;
+              return (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 rounded-md bg-gray-50 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-gray-600 ring-1 ring-black/[0.04]"
+                >
+                  <PillIcon className="h-2.5 w-2.5" />
+                  {pill.label}
+                </span>
+              );
+            })}
+          </div>
+        )}
+
         {editing === "body" ? (
           <EditTextarea
             initialValue={block.body}
             onSave={saveBody}
             onCancel={() => setEditing(null)}
             placeholder="What does this step entail?"
-            className="mt-1 text-[14px] leading-[1.6] text-gray-600"
+            className="mt-2 text-[14px] leading-[1.6] text-gray-600"
           />
         ) : (
           <p
             onClick={() => setEditing("body")}
-            className="-mx-1 mt-1 cursor-text rounded-md px-1 text-[14px] leading-[1.6] text-gray-600 transition hover:bg-black/[0.025]"
+            className="-mx-1 mt-2 cursor-text rounded-md px-1 text-[14px] leading-[1.6] text-gray-600 transition hover:bg-black/[0.025]"
             title="Click to edit"
           >
             {block.body}
           </p>
         )}
 
-        {meta.sub_steps && meta.sub_steps.length > 0 && (
-          <ul className="mt-3 space-y-1.5 border-l border-gray-200 pl-3">
-            {meta.sub_steps.map((s, i) => (
-              <li key={i} className="text-[12px] leading-relaxed">
-                <div className="font-semibold text-gray-800">{s.title}</div>
-                <div className="text-gray-600">{s.detail}</div>
-              </li>
-            ))}
-          </ul>
-        )}
+        {/* ── Progressive disclosure (Tier 2c) ──
+            Counts what's currently hidden. If the step has any
+            sub-steps, challenges, or supporting evidence we show a
+            quiet chevron link with a "what's behind it" label
+            ("2 sub-steps · 1 challenge · 3 sources"). Tapping reveals
+            everything inside an animated panel. If the step has none
+            of those yet, we skip the chevron entirely and surface the
+            action chips inline — the actions are how the user GETS
+            content, so hiding them when there's nothing else here
+            would be a usability foot-gun. */}
+        {(() => {
+          const subStepCount = meta.sub_steps?.length ?? 0;
+          const challengeCount = meta.challenges?.length ?? 0;
+          const evidenceCount = supportingEvidence.length;
+          const hasDetail =
+            subStepCount + challengeCount + evidenceCount > 0;
 
-        <ChallengesGroup challenges={meta.challenges ?? []} />
-        <SupportingEvidence evidence={supportingEvidence} />
+          const actions = (
+            <BlockActions
+              actions={[
+                {
+                  icon: Maximize2,
+                  label: meta.sub_steps?.length ? "Re-expand" : "Expand",
+                  run: async () => {
+                    const updated = await expandStrategyBlock(block.id);
+                    onUpdate(updated);
+                    toast.success("Expanded into sub-steps");
+                  },
+                },
+                {
+                  icon: Search,
+                  label: "Find evidence",
+                  run: async () => {
+                    const created = await findEvidenceForBlock(block.id);
+                    onAppendBlocks(created);
+                    toast.success(`Found ${created.length} sources`);
+                  },
+                },
+                {
+                  icon: MessageSquareWarning,
+                  label: meta.challenges?.length ? "Re-challenge" : "Challenge",
+                  run: async () => {
+                    const updated = await challengeStrategyBlock(block.id);
+                    onUpdate(updated);
+                    toast.success("Challenges surfaced");
+                  },
+                },
+                {
+                  icon: Pencil,
+                  label: "Edit",
+                  run: async () => {
+                    setEditing("body");
+                  },
+                },
+              ]}
+            />
+          );
 
-        <BlockActions
-          actions={[
-            {
-              icon: Maximize2,
-              label: meta.sub_steps?.length ? "Re-expand" : "Expand",
-              run: async () => {
-                const updated = await expandStrategyBlock(block.id);
-                onUpdate(updated);
-                toast.success("Expanded into sub-steps");
-              },
-            },
-            {
-              icon: Search,
-              label: "Find evidence",
-              run: async () => {
-                const created = await findEvidenceForBlock(block.id);
-                onAppendBlocks(created);
-                toast.success(`Found ${created.length} sources`);
-              },
-            },
-            {
-              icon: MessageSquareWarning,
-              label: meta.challenges?.length ? "Re-challenge" : "Challenge",
-              run: async () => {
-                const updated = await challengeStrategyBlock(block.id);
-                onUpdate(updated);
-                toast.success("Challenges surfaced");
-              },
-            },
-            {
-              icon: Pencil,
-              label: "Edit",
-              run: async () => {
-                setEditing("body");
-              },
-            },
-          ]}
-        />
+          // ── No detail yet — actions live inline ──
+          if (!hasDetail) {
+            return <div className="mt-3">{actions}</div>;
+          }
+
+          // ── Has detail — render chevron + collapsible panel ──
+          const counterParts: string[] = [];
+          if (subStepCount > 0) {
+            counterParts.push(
+              `${subStepCount} sub-step${subStepCount === 1 ? "" : "s"}`,
+            );
+          }
+          if (challengeCount > 0) {
+            counterParts.push(
+              `${challengeCount} challenge${challengeCount === 1 ? "" : "s"}`,
+            );
+          }
+          if (evidenceCount > 0) {
+            counterParts.push(
+              `${evidenceCount} source${evidenceCount === 1 ? "" : "s"}`,
+            );
+          }
+          const counterLabel = counterParts.join(" · ");
+
+          return (
+            <>
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                aria-expanded={expanded}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-medium text-gray-500 transition hover:bg-black/[0.03] hover:text-gray-900"
+              >
+                <ChevronDown
+                  className={`h-3 w-3 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+                  strokeWidth={1.75}
+                />
+                {expanded ? "Hide details" : counterLabel}
+              </button>
+
+              {/* Grid-rows height animation — no JS lib needed. The
+                  inner overflow-hidden div is what visually clips
+                  the content while the grid row collapses 0fr → 1fr. */}
+              <div
+                className="grid transition-[grid-template-rows] duration-300 ease-out"
+                style={{
+                  gridTemplateRows: expanded ? "1fr" : "0fr",
+                }}
+                aria-hidden={!expanded}
+              >
+                <div className="overflow-hidden">
+                  {subStepCount > 0 && (
+                    <ul className="mt-3 space-y-1.5 border-l border-gray-200 pl-3">
+                      {meta.sub_steps!.map((s, i) => (
+                        <li key={i} className="text-[12px] leading-relaxed">
+                          <div className="font-semibold text-gray-800">
+                            {s.title}
+                          </div>
+                          <div className="text-gray-600">{s.detail}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <ChallengesGroup challenges={meta.challenges ?? []} />
+                  <SupportingEvidence evidence={supportingEvidence} />
+
+                  <div className="mt-3">{actions}</div>
+                </div>
+              </div>
+            </>
+          );
+        })()}
       </div>
     </div>
   );
@@ -573,16 +856,25 @@ export function PlanStepBlock({
 
 // ── risk ──
 
-const RISK_SEVERITY_TONE: Record<string, { bg: string; ring: string; text: string }> = {
-  high: { bg: "bg-rose-50", ring: "ring-rose-200", text: "text-rose-700" },
-  medium: { bg: "bg-amber-50", ring: "ring-amber-200", text: "text-amber-700" },
-  low: { bg: "bg-gray-50", ring: "ring-gray-200", text: "text-gray-700" },
+// Severity is signaled by a 3px left-edge accent bar plus colored
+// mono caps text, not by a wash of color across the whole card. This
+// keeps the page calm — the eye can scan severity at a glance via
+// the bar, but the card itself reads as content, not alarm.
+const RISK_SEVERITY_TONE: Record<
+  string,
+  { bar: string; text: string }
+> = {
+  high: { bar: "bg-rose-500", text: "text-rose-600" },
+  medium: { bar: "bg-amber-500", text: "text-amber-600" },
+  low: { bar: "bg-gray-300", text: "text-gray-500" },
 };
 
+// Mitigation kind reads as a small lowercase tag — the kind itself
+// (prevent / detect / respond) is information, not visual hierarchy.
 const MITIGATION_KIND_TONE: Record<string, string> = {
-  prevent: "bg-blue-100 text-blue-700",
-  detect: "bg-purple-100 text-purple-700",
-  respond: "bg-emerald-100 text-emerald-700",
+  prevent: "text-blue-600",
+  detect: "text-purple-600",
+  respond: "text-emerald-600",
 };
 
 export function RiskBlock({
@@ -628,9 +920,12 @@ export function RiskBlock({
   };
 
   return (
-    <div
-      className={`group rounded-xl ring-1 ${tone.ring} ${tone.bg} p-3 transition`}
-    >
+    <div className="group relative overflow-hidden rounded-xl border border-gray-200 bg-white p-3 pl-4 transition hover:border-gray-300">
+      {/* Severity accent bar — the only color the card carries. */}
+      <span
+        aria-hidden
+        className={`absolute left-0 top-3 bottom-3 w-[3px] rounded-full ${tone.bar}`}
+      />
       <div className="flex items-start gap-2">
         <AlertTriangle className={`mt-0.5 h-4 w-4 shrink-0 ${tone.text}`} />
         <div className="min-w-0 flex-1">
@@ -648,14 +943,14 @@ export function RiskBlock({
             ) : (
               <div
                 onClick={() => setEditing("title")}
-                className="cursor-text rounded font-semibold text-gray-900 transition hover:bg-white/60"
+                className="cursor-text rounded font-semibold text-gray-900 transition hover:bg-gray-50"
                 title="Click to edit"
               >
                 {meta.title || "Risk"}
               </div>
             )}
             <span
-              className={`rounded-full bg-white px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${tone.text}`}
+              className={`font-mono text-[9px] uppercase tracking-[0.15em] ${tone.text}`}
             >
               {meta.severity ?? "medium"}
             </span>
@@ -670,7 +965,7 @@ export function RiskBlock({
           ) : (
             <p
               onClick={() => setEditing("body")}
-              className="mt-1 cursor-text rounded text-[12px] leading-relaxed text-gray-700 transition hover:bg-white/60"
+              className="mt-1 cursor-text rounded text-[12px] leading-relaxed text-gray-700 transition hover:bg-gray-50"
               title="Click to edit"
             >
               {block.body}
@@ -697,7 +992,7 @@ export function RiskBlock({
               ) : (
                 <p
                   onClick={() => setEditing("mitigation")}
-                  className="cursor-text rounded bg-white/60 p-2 text-[12px] leading-relaxed text-gray-800 transition hover:bg-white"
+                  className="cursor-text rounded bg-gray-50 p-2 text-[12px] leading-relaxed text-gray-800 transition hover:bg-gray-100"
                   title="Click to edit"
                 >
                   {meta.mitigation}
@@ -715,10 +1010,10 @@ export function RiskBlock({
                 {meta.additional_mitigations.map((m, i) => (
                   <li
                     key={i}
-                    className="flex items-start gap-2 rounded-md bg-white/60 px-2 py-1"
+                    className="flex items-start gap-2 rounded-md bg-gray-50 px-2 py-1"
                   >
                     <span
-                      className={`shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider ${MITIGATION_KIND_TONE[m.kind] ?? "bg-gray-100 text-gray-600"}`}
+                      className={`shrink-0 font-mono text-[8px] uppercase tracking-[0.15em] ${MITIGATION_KIND_TONE[m.kind] ?? "text-gray-500"}`}
                     >
                       {m.kind}
                     </span>
@@ -810,7 +1105,12 @@ export function HypothesisBlock({
   };
 
   return (
-    <div className="group rounded-xl ring-1 ring-purple-200 bg-purple-50/40 p-3 transition">
+    <div className="group relative overflow-hidden rounded-xl border border-gray-200 bg-white p-3 pl-4 transition hover:border-gray-300">
+      {/* Hairline left rule — quiet hypothesis accent. */}
+      <span
+        aria-hidden
+        className="absolute left-0 top-3 bottom-3 w-[3px] rounded-full bg-gray-300"
+      />
       <div className="flex items-start gap-2">
         <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-purple-600" />
         <div className="min-w-0 flex-1">
@@ -824,7 +1124,7 @@ export function HypothesisBlock({
           ) : (
             <div
               onClick={() => setEditing("body")}
-              className="cursor-text rounded font-semibold text-gray-900 transition hover:bg-white/60"
+              className="cursor-text rounded font-semibold text-gray-900 transition hover:bg-gray-50"
               title="Click to edit"
             >
               {block.body}
@@ -832,7 +1132,7 @@ export function HypothesisBlock({
           )}
 
           <div className="mt-1 text-[12px] leading-relaxed text-gray-700">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-purple-700">
+            <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-400">
               why
             </span>{" "}
             {editing === "rationale" ? (
@@ -845,7 +1145,7 @@ export function HypothesisBlock({
             ) : (
               <span
                 onClick={() => setEditing("rationale")}
-                className="cursor-text rounded transition hover:bg-white/60"
+                className="cursor-text rounded transition hover:bg-gray-50"
                 title="Click to edit"
               >
                 {meta.rationale || "(no rationale)"}
@@ -854,7 +1154,7 @@ export function HypothesisBlock({
           </div>
 
           {meta.supporting_rationales && meta.supporting_rationales.length > 0 && (
-            <ul className="mt-2 space-y-1 border-l-2 border-purple-100 pl-3">
+            <ul className="mt-2 space-y-1 border-l border-gray-200 pl-3">
               {meta.supporting_rationales.map((r, i) => (
                 <li key={i} className="text-[12px] leading-relaxed text-gray-700">
                   {r}
@@ -864,7 +1164,7 @@ export function HypothesisBlock({
           )}
 
           {meta.evidence_status && (
-            <span className="mt-2 inline-block rounded-full bg-white px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-600">
+            <span className="mt-2 inline-block rounded-full bg-gray-50 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
               {meta.evidence_status}
             </span>
           )}
@@ -939,7 +1239,7 @@ export function EvidenceBlock({ block }: { block: SynergyStrategyBlock }) {
   return (
     <div className="group rounded-lg border border-gray-200 bg-white p-3">
       <div className="flex items-start gap-2">
-        <Search className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600" />
+        <Search className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-500" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             {href ? (

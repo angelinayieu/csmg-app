@@ -41,6 +41,23 @@ Output sections
    Each step:
      - title: 4-8 word imperative ("Acquire labeled MRI dataset" not "We acquire data")
      - detail: 1-2 sentence concrete elaboration — names tools/methods/segments when the board provides them
+     - category: ONE of
+         "schedule"     — committing time blocks, sessions, cadences
+         "research"     — reading, gathering data, literature review
+         "collaborate"  — engaging people, interviews, partnerships
+         "build"        — creating, coding, prototyping, modeling
+         "publish"      — sharing, broadcasting, releasing, presenting
+         "iterate"      — refining, improving, validating, testing
+         "learn"        — acquiring a skill, study, training
+         "other"        — none of the above fits
+     - duration_estimate: concise time commitment, e.g. "30 min/day", "2 weeks total", "ongoing", "by Q3"
+     - effort_level: ONE of
+         "light"   — fits spare time, <5 hrs/week
+         "medium"  — meaningful weekly commitment, 5-15 hrs/week
+         "heavy"   — primary focus, >15 hrs/week or project-defining
+     - first_action: ONE concrete action the user can take in the next hour. This is the most important field — be SHARP. Forbidden: paraphrases of the title, generic verbs ("start working on..."), planning meta-steps ("decide which approach to take..."). Required: a specific, IMMEDIATELY do-able sentence with a real verb, real object, and ideally a concrete artifact. Example for "Acquire labeled MRI dataset" → "Open the IXI dataset page and download the first 20 T1-weighted scans into /data/raw/".
+     - depends_on: array of 0-based indices of steps that must be completed first. Empty array if no prerequisites. Be SPARING — only mark a dependency when step B genuinely cannot start without step A's output. Most plans have at most 1-2 dependencies total.
+     - success_signal: ONE sentence stating the observable evidence that this step is complete. Should be checkable in 30 seconds. Example for "Acquire labeled MRI dataset" → "/data/raw/ contains 100+ scans with corresponding label files in YAML format."
 
 4. RISKS (2-4 items; include all authoritative-plan risks first)
    Each:
@@ -74,8 +91,41 @@ export const STRATEGY_GENERATE_SCHEMA = {
           properties: {
             title: { type: "string" },
             detail: { type: "string" },
+            category: {
+              type: "string",
+              enum: [
+                "schedule",
+                "research",
+                "collaborate",
+                "build",
+                "publish",
+                "iterate",
+                "learn",
+                "other",
+              ],
+            },
+            duration_estimate: { type: "string" },
+            effort_level: {
+              type: "string",
+              enum: ["light", "medium", "heavy"],
+            },
+            first_action: { type: "string" },
+            depends_on: {
+              type: "array",
+              items: { type: "integer" },
+            },
+            success_signal: { type: "string" },
           },
-          required: ["title", "detail"],
+          required: [
+            "title",
+            "detail",
+            "category",
+            "duration_estimate",
+            "effort_level",
+            "first_action",
+            "depends_on",
+            "success_signal",
+          ],
         },
       },
       risks: {

@@ -9,6 +9,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { SynergyStrategy } from "@/components/synergy/synergy-strategy";
+import { SynergySceneBackground } from "@/components/synergy/synergy-scene-background";
+import type { ScenePresetKey } from "@/lib/synergy/scene-presets";
 import type {
   BrainstormComponent,
   StrategyBundle,
@@ -28,6 +30,30 @@ export default async function SynergyStrategyPage({ params }: PageProps) {
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
+
+  // ── User's chosen scene background (Tier 3a) ──
+  // Same query the Rooms page uses. Soft-fail if the column hasn't been
+  // migrated yet (20260811) — falls back to the default 'mist' preset.
+  // The strategy doc's frosted-glass panel (Tier 1) was specifically
+  // designed to let backdrop bleed through; wiring the scene here is
+  // what makes it actually feel translucent.
+  let backgroundPreset: ScenePresetKey = "mist";
+  let backgroundCustomUrl: string | null = null;
+  try {
+    const { data: bgProfile } = await db
+      .from("synergy_profiles")
+      .select("background_preset, background_custom_url")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (bgProfile?.background_preset) {
+      backgroundPreset = bgProfile.background_preset as ScenePresetKey;
+    }
+    if (bgProfile?.background_custom_url) {
+      backgroundCustomUrl = bgProfile.background_custom_url;
+    }
+  } catch {
+    // Migration 20260811 not applied — quietly default to mist
+  }
 
   const [sessionRes, strategyRes, componentsRes, nodeCountRes] = await Promise.all([
     db
@@ -58,14 +84,20 @@ export default async function SynergyStrategyPage({ params }: PageProps) {
 
   if (sessionRes.error || !sessionRes.data) {
     return (
-      <div className="mx-auto max-w-4xl py-16">
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-900">
-          Couldn&apos;t load this brainstorm.{" "}
-          <Link href="/app/synergy" className="underline">
-            Back to brainstorms
-          </Link>
+      <>
+        <SynergySceneBackground
+          preset={backgroundPreset}
+          customUrl={backgroundCustomUrl}
+        />
+        <div className="mx-auto max-w-4xl py-16">
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-900">
+            Couldn&apos;t load this brainstorm.{" "}
+            <Link href="/app/synergy" className="underline">
+              Back to brainstorms
+            </Link>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
@@ -107,14 +139,28 @@ export default async function SynergyStrategyPage({ params }: PageProps) {
     components.length > 0 && (growthRatio > 0.3 || ageDays > 7);
 
   return (
-    <SynergyStrategy
-      sessionId={id}
-      sessionTitle={session.title}
-      initialBundle={bundle}
-      initialNodeCount={currentNodes}
-      reextractAdvised={reextractAdvised}
-      lastExtractedNodeCount={lastNodes}
-      lastExtractedAt={session.last_extracted_at}
-    />
+    <>
+      {/* ── Tier 3a: scene-aware backdrop ──
+          Renders the user's chosen atmosphere (one of 7 presets or a
+          custom upload) as a fixed inset-0 -z-10 layer behind page
+          content. The frosted-glass strategy panel built in Tier 1
+          (bg-white/85 + backdrop-blur-2xl) was specifically designed
+          to let this bleed through — the panel reads as a floating
+          pane over the user's chosen scene rather than a solid card
+          on an empty page. */}
+      <SynergySceneBackground
+        preset={backgroundPreset}
+        customUrl={backgroundCustomUrl}
+      />
+      <SynergyStrategy
+        sessionId={id}
+        sessionTitle={session.title}
+        initialBundle={bundle}
+        initialNodeCount={currentNodes}
+        reextractAdvised={reextractAdvised}
+        lastExtractedNodeCount={lastNodes}
+        lastExtractedAt={session.last_extracted_at}
+      />
+    </>
   );
 }

@@ -35,7 +35,11 @@ import {
   Users,
 } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
-import { generateStrategy, updateStrategy } from "@/lib/synergy/client";
+import {
+  generateStrategy,
+  updateStrategy,
+  updateStrategyBlock,
+} from "@/lib/synergy/client";
 import type {
   BrainstormComponent,
   StrategyBundle,
@@ -51,6 +55,18 @@ import {
 } from "./synergy-strategy-blocks";
 import { SynergyStrategyComponentList } from "./synergy-strategy-component-list";
 import { SynergyStrategyShareModal } from "./synergy-strategy-share-modal";
+import {
+  ProgressStrip,
+  StrategyCompleteHero,
+  TodayHero,
+} from "./synergy-strategy-progress";
+import {
+  PlanCards,
+  PlanTimeline,
+  ViewModeToggle,
+  type ViewMode,
+} from "./synergy-strategy-views";
+import { useParallax } from "@/hooks/synergy/use-parallax";
 
 interface Props {
   sessionId: string;
@@ -172,6 +188,80 @@ export function SynergyStrategy({
     [bundle.strategy],
   );
 
+  // ── Phase 3 — plan-section view mode ──
+  // Toggles which layout the plan section uses (Linear / Timeline /
+  // Cards). Only the plan section reformats — statement, pitch, risks,
+  // hypotheses keep their normal rendering across all three views.
+  // Local-state only; URL sync deferred (would be a nice addition for
+  // shareable links to a specific view).
+  const [viewMode, setViewMode] = useState<ViewMode>("linear");
+
+  // ── Phase 2 — TodayHero state ──
+  // The hero picks the next eligible step automatically. `skippedIds`
+  // is a session-local set of step IDs the user has skipped, so the
+  // hero advances through the plan as they ask for the next thing.
+  // Persisting the skip state isn't worth it — it resets on reload,
+  // which is fine: the user comes back with fresh perspective.
+  const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
+  const planStepBlocks = bundle.blocks.filter(
+    (b) => b.block_type === "plan_step",
+  );
+  const eligiblePlanSteps = planStepBlocks.filter(
+    (b) => !skippedIds.has(b.id),
+  );
+  const allDone =
+    planStepBlocks.length > 0 &&
+    planStepBlocks.every(
+      (b) =>
+        ((b.meta as { status?: string }).status ?? "pending") === "done",
+    );
+
+  // Cycle the hero step's status. Used by the "Mark started" / "Mark
+  // done" CTA. Optimistic state lives in the block itself via
+  // handleBlockUpdate so the change is reflected immediately in both
+  // the hero and the inline plan-step row.
+  const advanceHeroStep = useCallback(
+    async (block: SynergyStrategyBlock) => {
+      const currentStatus =
+        ((block.meta as { status?: string }).status ?? "pending") as
+          | "pending"
+          | "in_progress"
+          | "done";
+      const next: "pending" | "in_progress" | "done" =
+        currentStatus === "pending"
+          ? "in_progress"
+          : currentStatus === "in_progress"
+            ? "done"
+            : "done"; // already done — no-op cycle
+      try {
+        const updated = await updateStrategyBlock(block.id, {
+          meta_patch: { status: next },
+        });
+        handleBlockUpdate(updated);
+      } catch (err) {
+        toast.error("Couldn't update step", {
+          description: (err as Error).message,
+        });
+      }
+    },
+    [handleBlockUpdate],
+  );
+
+  const skipHeroStep = useCallback(() => {
+    // Use the currently-selected hero step from eligiblePlanSteps; we
+    // don't know which one it is at this layer (TodayHero owns
+    // selection), so we mark the LOWEST-index eligible as skipped —
+    // which is the one currently being shown.
+    // Future: TodayHero could surface the chosen step via a callback
+    // arg so this isn't position-dependent.
+    if (eligiblePlanSteps.length === 0) return;
+    setSkippedIds((prev) => {
+      const next = new Set(prev);
+      next.add(eligiblePlanSteps[0].id);
+      return next;
+    });
+  }, [eligiblePlanSteps]);
+
   return (
     <div className="mx-auto max-w-4xl py-8">
       <Header
@@ -190,11 +280,32 @@ export function SynergyStrategy({
           }
         />
       )}
+
+      {/* ── Phase 2 hero ──
+          When every plan step is done, render the celebration; otherwise
+          the action-first "Today" card with the dependency-aware next
+          step. Hidden entirely when there are no plan steps. */}
+      {planStepBlocks.length > 0 &&
+        (allDone ? (
+          <StrategyCompleteHero
+            totalSteps={planStepBlocks.length}
+            onRegenerate={onGenerate}
+          />
+        ) : (
+          <TodayHero
+            planSteps={eligiblePlanSteps}
+            onStartStep={advanceHeroStep}
+            onSkipStep={skipHeroStep}
+          />
+        ))}
+
       <DocBody
         strategy={bundle.strategy}
         blocks={bundle.blocks}
         components={bundle.components}
         animate={justGenerated}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
         onRegenerate={onGenerate}
         onBlockUpdate={handleBlockUpdate}
         onAppendBlocks={handleAppendBlocks}
@@ -442,6 +553,8 @@ function DocBody({
   blocks,
   components,
   animate,
+  viewMode,
+  onViewModeChange,
   onRegenerate,
   onBlockUpdate,
   onAppendBlocks,
@@ -451,6 +564,8 @@ function DocBody({
   blocks: SynergyStrategyBlock[];
   components: BrainstormComponent[];
   animate: boolean;
+  viewMode: ViewMode;
+  onViewModeChange: (next: ViewMode) => void;
   onRegenerate: () => void;
   onBlockUpdate: (updated: SynergyStrategyBlock) => void;
   onAppendBlocks: (created: SynergyStrategyBlock[]) => void;
@@ -479,6 +594,14 @@ function DocBody({
   }
   const evidenceFor = (id: string) => evidenceBySource.get(id) ?? [];
 
+  // ── Tier 3b: cursor-driven parallax ──
+  // A tiny tilt that follows the global cursor position so the panel
+  // feels like a physical pane in space rather than a flat sheet. Max
+  // 0.5° each axis, eased on RAF. The hook self-disables when the user
+  // has prefers-reduced-motion set or is on a touch device.
+  const panelRef = useRef<HTMLElement>(null);
+  useParallax(panelRef, { maxTiltDeg: 0.5 });
+
   return (
     // ── Outer surface ──
     // Frosted-glass panel that picks up the scene background behind it
@@ -487,6 +610,7 @@ function DocBody({
     // cyan glow, no hard border — a barely-visible inner ring + a
     // soft neutral shadow does the lifting.
     <article
+      ref={panelRef}
       className="relative overflow-hidden rounded-3xl bg-white/85 ring-1 ring-black/[0.04] backdrop-blur-2xl"
       style={{
         boxShadow: animate
@@ -501,22 +625,26 @@ function DocBody({
         className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/80 to-transparent"
       />
 
-      {/* Floating Regenerate — circular icon, top-right of the card.
-          Hover reveals the label via a tooltip-style pill. */}
-      <button
-        onClick={onRegenerate}
-        title="Regenerate the whole strategy from the current board"
-        aria-label="Regenerate strategy"
-        className="group absolute right-5 top-5 z-20 inline-flex h-9 items-center gap-2 rounded-full bg-white/70 px-2.5 text-[12px] font-medium text-gray-600 ring-1 ring-black/[0.06] backdrop-blur-md transition hover:bg-white hover:text-gray-900 hover:ring-black/[0.1]"
-      >
-        <RefreshCw
-          className="h-3.5 w-3.5 transition group-hover:rotate-[-90deg]"
-          strokeWidth={1.75}
-        />
-        <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:max-w-[120px] group-hover:pr-1 group-hover:opacity-100">
-          Regenerate
-        </span>
-      </button>
+      {/* Floating top-right controls: view-mode toggle + Regenerate.
+          The toggle sits left of Regenerate so the eye reads it as
+          "how am I viewing this" before "do something to it." */}
+      <div className="absolute right-5 top-5 z-20 flex items-center gap-2">
+        <ViewModeToggle value={viewMode} onChange={onViewModeChange} />
+        <button
+          onClick={onRegenerate}
+          title="Regenerate the whole strategy from the current board"
+          aria-label="Regenerate strategy"
+          className="group inline-flex h-9 items-center gap-2 rounded-full bg-white/70 px-2.5 text-[12px] font-medium text-gray-600 ring-1 ring-black/[0.06] backdrop-blur-md transition hover:bg-white hover:text-gray-900 hover:ring-black/[0.1]"
+        >
+          <RefreshCw
+            className="h-3.5 w-3.5 transition group-hover:rotate-[-90deg]"
+            strokeWidth={1.75}
+          />
+          <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:max-w-[120px] group-hover:pr-1 group-hover:opacity-100">
+            Regenerate
+          </span>
+        </button>
+      </div>
 
       <div className="px-10 pb-10 pt-12">
         {/* Statement — the document headline. No "STATEMENT" label
@@ -560,11 +688,25 @@ function DocBody({
             label="The Plan"
             sub={`${planSteps.length} step${planSteps.length === 1 ? "" : "s"}`}
           />
-          <div className="space-y-1">
-            {planSteps.length === 0 ? (
-              <EmptyHint message="No plan steps yet." />
-            ) : (
-              planSteps.map((b, i) => (
+          {/* Phase 2 — effort-weighted progress strip. Always renders
+              when there's at least one plan step; the empty 0% bar
+              works as a soft commitment cue ("here's the shape of
+              what's ahead") before the user marks anything done. */}
+          <ProgressStrip planSteps={planSteps} />
+
+          {/* Phase 3 — view-mode switch for the plan section.
+              Linear: the inline vertical rows the doc has always had.
+              Timeline: horizontal cards + dependency curves.
+              Cards: equal-size presentation tiles in a 2-col grid. */}
+          {planSteps.length === 0 ? (
+            <EmptyHint message="No plan steps yet." />
+          ) : viewMode === "timeline" ? (
+            <PlanTimeline planSteps={planSteps} />
+          ) : viewMode === "cards" ? (
+            <PlanCards planSteps={planSteps} />
+          ) : (
+            <div className="space-y-1">
+              {planSteps.map((b, i) => (
                 <PlanStepBlock
                   key={b.id}
                   block={b}
@@ -573,9 +715,9 @@ function DocBody({
                   onUpdate={onBlockUpdate}
                   onAppendBlocks={onAppendBlocks}
                 />
-              ))
-            )}
-          </div>
+              ))}
+            </div>
+          )}
         </StaggerSection>
 
         <Divider />

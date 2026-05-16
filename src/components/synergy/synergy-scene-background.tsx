@@ -15,6 +15,7 @@
 
 "use client";
 
+import { useEffect } from "react";
 import { resolveScenePreset, type ScenePresetKey } from "@/lib/synergy/scene-presets";
 
 interface Props {
@@ -32,6 +33,21 @@ export function SynergySceneBackground({
 }: Props) {
   const scene = resolveScenePreset(preset);
   const usingCustom = scene.key === "custom" && customUrl;
+
+  // While this component is mounted, mark the document body with a
+  // class that lets globals.css hide the layout's `bg-gradient-page`
+  // gradient. Without this, the layout's near-white gradient sits in
+  // front of our fixed -z-10 scene layer and visually covers it — the
+  // user's scene reads as "barely there" even when they've picked
+  // Aurora or a custom photo. The class auto-removes on unmount so
+  // non-synergy routes keep the gradient.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.body.classList.add("synergy-scene-active");
+    return () => {
+      document.body.classList.remove("synergy-scene-active");
+    };
+  }, []);
 
   return (
     <div

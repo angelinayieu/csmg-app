@@ -357,12 +357,49 @@ export interface MitigationTactic {
   kind: "prevent" | "detect" | "respond";
 }
 
+// ── Phase 1: LLM-tagged plan-step categories ──
+//
+// Authored by the strategy-gen LLM at generation time so the UI can
+// render activity glyphs + duration/effort pills + dependency arrows
+// without falling back to client-side regex heuristics. The category
+// list maps 1:1 to icons in src/lib/synergy/step-icons.ts.
+export type PlanStepCategory =
+  | "schedule"
+  | "research"
+  | "collaborate"
+  | "build"
+  | "publish"
+  | "iterate"
+  | "learn"
+  | "other";
+
+export type PlanStepEffort = "light" | "medium" | "heavy";
+
+export type PlanStepStatus = "pending" | "in_progress" | "done";
+
 export interface PlanStepMeta {
   title?: string;
-  // AI-op-produced sub-steps via /expand
-  sub_steps?: SubStep[];
-  // AI-op-produced adversarial weaknesses via /challenge
-  challenges?: ChallengeItem[];
+
+  // ── Phase 1 LLM-tagged fields ──
+  // All optional on the TYPE for backward compat with strategies
+  // generated before the schema upgrade. The LLM schema marks them
+  // required so new generations always include them.
+  category?: PlanStepCategory;
+  duration_estimate?: string; // "30 min/day", "2 weeks total", "ongoing"
+  effort_level?: PlanStepEffort;
+  /** Single concrete action the user can take in the next hour. */
+  first_action?: string;
+  /** 0-based indices of plan steps that must be completed first. */
+  depends_on?: number[];
+  /** Observable evidence this step is complete. Checkable in 30s. */
+  success_signal?: string;
+
+  // ── Phase 2 user-authored state (added separately) ──
+  status?: PlanStepStatus;
+
+  // ── Existing AI-op-produced fields ──
+  sub_steps?: SubStep[]; // produced by /expand
+  challenges?: ChallengeItem[]; // produced by /challenge
   evidence_urls?: string[];
 }
 export interface RiskMeta {
@@ -407,4 +444,74 @@ export interface StrategyBundle {
   strategy: SynergyStrategy | null;
   blocks: SynergyStrategyBlock[];
   components: BrainstormComponent[];
+}
+
+// ── Phase 5 — Parallel-Path Matching types ──
+//
+// A second axis of matching that pairs USERS WITH SIMILAR STRATEGIES
+// (convergent goal, possibly divergent routine), not complementary
+// components. The data shape here mirrors `component_matches` /
+// `match_requests` / `synergy_rooms` but at the strategy granularity.
+
+export type RoomKind = "collaboration" | "parallel_path";
+
+export interface StrategyMatch {
+  id: string;
+  strategy_a: string;
+  strategy_b: string;
+  cosine_sim: number;
+  rerank_score: number;
+  shared_theme: string;
+  shared_pillars: string[];
+  divergence_summary: string | null;
+  final_score: number;
+  computed_at: string;
+}
+
+export interface ParallelPathRequest {
+  id: string;
+  from_user: string;
+  to_user: string;
+  from_strategy: string;
+  to_strategy: string;
+  message: string | null;
+  status: "pending" | "accepted" | "declined" | "expired";
+  created_at: string;
+  expires_at: string;
+  responded_at: string | null;
+}
+
+export interface PlanStepCheckin {
+  id: string;
+  room_id: string;
+  user_id: string;
+  step_block_id: string;
+  marked_complete_at: string;
+  reflection: string | null;
+  updated_at: string;
+}
+
+export interface RoomDigest {
+  id: string;
+  room_id: string;
+  week_starting: string;
+  summary: string;
+  user_a_completions: number;
+  user_b_completions: number;
+  created_at: string;
+}
+
+// Suggested-card payload — what the Rooms surface renders for each
+// strategy that has at least one parallel-path candidate the user
+// hasn't yet invited or been invited by.
+export interface SuggestedParallelPath {
+  match_id: string;
+  my_strategy_id: string;
+  my_strategy_statement: string | null;
+  their_strategy_id: string;
+  their_owner_seed: string; // for the anonymous abstract avatar
+  shared_theme: string;
+  shared_pillars: string[];
+  final_score: number;
+  their_progress_total: number; // # of plan_step blocks on their side
 }

@@ -97,4 +97,41 @@ export type Events = {
       query: string;
     };
   };
+  /**
+   * Synergy Phase 5 — parallel-path matching.
+   *
+   * Fired by POST /api/synergy/sessions/[id]/strategy/generate after a
+   * strategy + its plan_step blocks are persisted. Consumed by
+   * synergyStrategyMatcher: embed the strategy → run kNN + LLM rerank
+   * against the cross-user pool → upsert strategy_matches rows.
+   *
+   * Soft-fail discipline: the matcher must never block the user's
+   * strategy publish. If embedding or matching fails, the strategy is
+   * still saved — only the parallel-path discovery feed is delayed.
+   */
+  "synergy/strategy.generated": {
+    data: {
+      strategyId: string;
+      sessionId: string;
+      userId: string;
+    };
+  };
+  /**
+   * Synergy Phase 5b — a parallel-path invitation was accepted, both
+   * users now share a parallel_path room. Fired by the respond
+   * endpoint AFTER the room row exists. Consumed (in Phase 5c) by a
+   * notifier that emails both parties + pushes a realtime ping into
+   * the new room channel.
+   *
+   * 5b ships this as a fire-and-forget queue — no handler is registered
+   * yet. The handler lands in 5c.
+   */
+  "synergy/parallel-path.matched": {
+    data: {
+      roomId: string;
+      requesterId: string;
+      accepterId: string;
+      sharedTheme: string;
+    };
+  };
 };

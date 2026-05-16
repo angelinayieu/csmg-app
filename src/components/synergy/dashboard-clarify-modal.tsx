@@ -14,10 +14,12 @@
 // pure-white card style. Backdrop blur dims the page underneath so
 // the modal pops without a hard scrim.
 //
-// Data: POST /api/pipeline/clarifying-questions returns 3–5
-// questions + an inferred baseline. We render the first 3 as
-// flashcards. Skipping is always allowed; an answered set is
-// concatenated onto the prompt before navigation.
+// Data: POST /api/pipeline/clarifying-questions returns 3 questions
+// + 3-4 AI-generated, quantified MCQ options per question + an
+// inferred baseline. We render them as flashcards with click-to-
+// answer options and a "write your own" textarea escape hatch.
+// Skipping is always allowed; the answered set is concatenated
+// onto the prompt before navigation.
 
 "use client";
 
@@ -37,10 +39,16 @@ import {
 } from "@/types/experience-mode";
 import { RollingCubeLoader } from "@/components/synergy/rolling-cube-loader";
 
+interface MCQOption {
+  label: string;
+  detail: string;
+}
+
 interface ClarifyingQuestion {
   question: string;
   rationale: string;
-  kind: "free_text";
+  kind: "mcq" | "free_text";
+  options?: MCQOption[];
 }
 
 interface InferredBaseline {
@@ -157,24 +165,31 @@ export function DashboardClarifyModal({
   const isOther = currentSelection === -2;
   const isLast = index >= total - 1;
 
+  // AI-generated options for the active question. Empty array when
+  // the question is free-text fallback — in that case the UI shows
+  // only the textarea so the user can type freely.
+  const currentOptions: MCQOption[] =
+    current?.kind === "mcq" && Array.isArray(current.options)
+      ? current.options
+      : [];
+  const hasOptions = currentOptions.length > 0;
+
   const pickOption = (optIdx: number) => {
     setSelection({ ...selection, [index]: optIdx });
     if (optIdx === -2) {
-      // Keep textarea contents if the user is toggling Other on/off,
-      // but if they previously committed a non-Other label, clear it.
-      if (currentAnswer === defaultOptionLabel(current, optIdx)) {
+      // Switching to "Write your own". If the current answer is one
+      // of the preset labels, clear it so the textarea opens empty;
+      // otherwise preserve whatever the user already typed.
+      const presetLabels = currentOptions.map((o) => o.label);
+      if (presetLabels.includes(currentAnswer)) {
         setAnswers({ ...answers, [index]: "" });
       }
     } else if (optIdx === -1) {
       setAnswers({ ...answers, [index]: "" });
     } else {
       // Preset option — the option label IS the answer text.
-      // (The pre-flight endpoint returns free_text only, so we
-      // synthesize a default skip-option ladder ourselves below.)
-      setAnswers({
-        ...answers,
-        [index]: defaultOptionLabel(current, optIdx),
-      });
+      const label = currentOptions[optIdx]?.label ?? "";
+      setAnswers({ ...answers, [index]: label });
     }
   };
 
@@ -230,9 +245,9 @@ export function DashboardClarifyModal({
         onClick={() => !busy && onCancel()}
         className="absolute inset-0"
         style={{
-          background: "rgba(15, 23, 42, 0.32)",
-          backdropFilter: "blur(18px) saturate(160%)",
-          WebkitBackdropFilter: "blur(18px) saturate(160%)",
+          background: "rgba(15, 23, 42, 0.55)",
+          backdropFilter: "blur(22px) saturate(160%)",
+          WebkitBackdropFilter: "blur(22px) saturate(160%)",
           cursor: busy ? "wait" : "pointer",
         }}
       />
@@ -247,13 +262,13 @@ export function DashboardClarifyModal({
           <div
             className="flex flex-col items-center gap-6 rounded-3xl px-10 py-14"
             style={{
-              background: "rgba(255, 255, 255, 0.72)",
+              background: "rgba(255, 255, 255, 0.97)",
               backdropFilter: "blur(28px) saturate(180%)",
               WebkitBackdropFilter: "blur(28px) saturate(180%)",
               border: "1px solid rgba(255, 255, 255, 0.7)",
               boxShadow: [
                 "inset 0 1px 0 rgba(255, 255, 255, 0.8)",
-                "0 24px 60px -18px rgba(15, 23, 42, 0.25)",
+                "0 24px 60px -18px rgba(15, 23, 42, 0.35)",
                 `0 0 80px -20px ${meta.accentSoft}`,
               ].join(", "),
             }}
@@ -299,13 +314,13 @@ export function DashboardClarifyModal({
             <div
               className="relative rounded-3xl"
               style={{
-                background: "rgba(255, 255, 255, 0.78)",
+                background: "rgba(255, 255, 255, 0.97)",
                 backdropFilter: "blur(28px) saturate(180%)",
                 WebkitBackdropFilter: "blur(28px) saturate(180%)",
-                border: "1px solid rgba(255, 255, 255, 0.7)",
+                border: "1px solid rgba(255, 255, 255, 0.85)",
                 boxShadow: [
-                  "inset 0 1px 0 rgba(255, 255, 255, 0.8)",
-                  "0 24px 60px -18px rgba(15, 23, 42, 0.25)",
+                  "inset 0 1px 0 rgba(255, 255, 255, 0.9)",
+                  "0 30px 70px -18px rgba(15, 23, 42, 0.4)",
                   `0 0 80px -20px ${meta.accentSoft}`,
                 ].join(", "),
               }}
@@ -353,14 +368,14 @@ export function DashboardClarifyModal({
               {baseline && index === 0 && (
                 <div className="mx-6 mt-4 rounded-xl px-3 py-2.5"
                   style={{
-                    background: "linear-gradient(135deg, rgba(255,255,255,0.6), rgba(255,255,255,0.3))",
-                    border: "1px solid rgba(15, 23, 42, 0.06)",
+                    background: `linear-gradient(135deg, ${meta.accentSoft}, rgba(255,255,255,0.6))`,
+                    border: `1px solid ${meta.accent}22`,
                   }}
                 >
-                  <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-gray-500">
+                  <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-gray-600">
                     what we understood
                   </div>
-                  <p className="mt-1 text-[12px] leading-relaxed text-gray-700">
+                  <p className="mt-1 text-[12px] leading-relaxed text-gray-800">
                     {baseline.primary_objective}
                   </p>
                 </div>
@@ -423,12 +438,11 @@ export function DashboardClarifyModal({
                       </p>
                     )}
 
-                    {/* Quick-pick options (synthesized — the endpoint
-                        returns free-text questions only, so we give
-                        the user fast "I dunno / partial / specific"
-                        ladders to click + Other to type freely). */}
+                    {/* AI-generated, quantified options personalized to
+                        this question. Falls through to textarea-only
+                        when the LLM couldn't draft usable options. */}
                     <div className="mt-5 space-y-0.5">
-                      {SKIP_LADDER.map((opt, i) => (
+                      {currentOptions.map((opt, i) => (
                         <RadioRow
                           key={i}
                           label={opt.label}
@@ -439,14 +453,22 @@ export function DashboardClarifyModal({
                         />
                       ))}
                       <RadioRow
-                        label="Write or describe my own answer"
-                        detail="None of the above? Type your specific answer below."
-                        active={isOther}
+                        label={
+                          hasOptions
+                            ? "Write or describe my own answer"
+                            : "Type your answer"
+                        }
+                        detail={
+                          hasOptions
+                            ? "None of the above? Type your specific answer below."
+                            : "Free-form — be as specific as you can."
+                        }
+                        active={isOther || !hasOptions}
                         onClick={() => pickOption(-2)}
                         accent={meta.accent}
                         otherIcon
                       />
-                      {isOther && (
+                      {(isOther || !hasOptions) && (
                         <div
                           className="mt-1 overflow-hidden rounded-xl border bg-white transition"
                           style={{
@@ -540,29 +562,6 @@ export function DashboardClarifyModal({
 }
 
 // ── Helpers ──
-
-// Endpoint returns "free_text" questions only. We surface a small
-// engagement ladder so the user can answer in 1 click for the
-// common case ("I don't know", "Roughly X", "I want to specify"),
-// and fall back to a textarea when they want to be precise.
-const SKIP_LADDER = [
-  {
-    label: "I'm not sure yet",
-    detail: "Skip this one — the system will infer a reasonable default.",
-  },
-  {
-    label: "Same as my default",
-    detail: "Use what's in my profile / past sessions.",
-  },
-] as const;
-
-function defaultOptionLabel(
-  _q: ClarifyingQuestion | undefined,
-  optIdx: number,
-): string {
-  if (optIdx < 0) return "";
-  return SKIP_LADDER[optIdx]?.label ?? "";
-}
 
 function RadioRow({
   label,

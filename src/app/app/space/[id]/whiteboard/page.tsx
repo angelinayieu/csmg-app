@@ -294,6 +294,7 @@ export default function WhiteboardPage() {
         runId={runIdFromQuery}
         existingEntityCount={entities.length}
         spaceId={space.id}
+        mode={experienceMode}
         inputText={
           // SSR'd space row stores the original prompt as input_text;
           // pass it through so the Resume CTA can re-fire decompose
