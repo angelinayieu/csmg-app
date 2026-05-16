@@ -65,7 +65,7 @@ export function DashboardExperiencePills({
           return (
             <div
               key={m.id}
-              className="relative"
+              className="relative inline-flex"
               onMouseEnter={() => openTip(m.id)}
               onMouseLeave={scheduleClose}
               onFocus={() => openTip(m.id)}
