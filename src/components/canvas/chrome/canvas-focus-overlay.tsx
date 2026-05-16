@@ -28,7 +28,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -43,6 +43,51 @@ import { useSpaceData } from "@/contexts/space-data-context";
 import type { Entity } from "@/types";
 
 type Stage = 1 | 2 | 3 | 4;
+
+type ExtractionKind =
+  | "core_idea"
+  | "upstream_dependency"
+  | "downstream_output"
+  | "polished_product"
+  | "alternative";
+
+interface ExtractionResult {
+  entity_id: string;
+  kind: ExtractionKind;
+  rationale: string;
+}
+
+const KIND_META: Record<
+  ExtractionKind,
+  { label: string; tone: string; emoji: string }
+> = {
+  core_idea: {
+    label: "Core idea",
+    tone: "bg-rose-50 text-rose-700 border-rose-200",
+    emoji: "◆",
+  },
+  upstream_dependency: {
+    label: "Upstream",
+    tone: "bg-amber-50 text-amber-700 border-amber-200",
+    emoji: "↑",
+  },
+  downstream_output: {
+    label: "Downstream",
+    tone: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    emoji: "↓",
+  },
+  polished_product: {
+    label: "Polished product",
+    tone: "bg-indigo-50 text-indigo-700 border-indigo-200",
+    emoji: "✦",
+  },
+  alternative: {
+    label: "Alternative",
+    tone: "bg-purple-50 text-purple-700 border-purple-200",
+    emoji: "⤳",
+  },
+};
+
 const STAGES: Array<{
   n: Stage;
   label: string;
@@ -59,7 +104,7 @@ const STAGES: Array<{
     n: 2,
     label: "Extract",
     hint: "Pull out polished products + upstream / downstream.",
-    status: "soon",
+    status: "available",
   },
   {
     n: 3,
@@ -78,9 +123,10 @@ const STAGES: Array<{
 interface Props {
   /** Parent unmounts on close — fresh state each open. */
   onClose: () => void;
+  spaceId: string;
 }
 
-export function CanvasFocusOverlay({ onClose }: Props) {
+export function CanvasFocusOverlay({ onClose, spaceId }: Props) {
   const { entities } = useSpaceData();
   const [stage, setStage] = useState<Stage>(1);
 
@@ -96,6 +142,18 @@ export function CanvasFocusOverlay({ onClose }: Props) {
     }
     return initial;
   });
+
+  // Stage 2 — extraction classifications. Keyed by entity_id. The
+  // user can manually override the LLM's classification via the
+  // kind dropdown on each row. extractError + extractTriggered let
+  // us derive the "extracting" loading state without setting state
+  // synchronously inside the fetch effect (which the lint rule
+  // forbids).
+  const [extractions, setExtractions] = useState<
+    Record<string, ExtractionResult> | null
+  >(null);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [extractTriggered, setExtractTriggered] = useState(false);
 
   // ESC closes
   useEffect(() => {
@@ -132,8 +190,91 @@ export function CanvasFocusOverlay({ onClose }: Props) {
     setKeepState((s) => ({ ...s, [id]: !s[id] }));
   };
 
+  // Kept entities — recomputed each render. The Stage 2 fetch uses
+  // these as the input set; the kind override uses them as a sort
+  // key.
+  const keptEntities = useMemo(
+    () => sortedEntities.filter((e) => keepState[e.id]),
+    [sortedEntities, keepState],
+  );
+
+  // Extraction trigger — fires as a side effect of the Next click
+  // when transitioning 1 → 2. Pure event handler; no setState in
+  // useEffect.
+  const triggerExtraction = useCallback(() => {
+    if (extractTriggered) return;
+    if (keptEntities.length === 0) return;
+    setExtractTriggered(true);
+  }, [extractTriggered, keptEntities.length]);
+
+  // The fetch — runs once when extractTriggered flips true. Uses
+  // refs to avoid re-firing on every render.
+  useEffect(() => {
+    if (!extractTriggered) return;
+    if (extractions !== null || extractError !== null) return;
+    let cancelled = false;
+    fetch("/api/canvas/selection/extract", {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        spaceId,
+        entityIds: keptEntities
+          .map((e) => e.entity_id)
+          .filter((id): id is string => typeof id === "string"),
+      }),
+    })
+      .then(async (r) => {
+        const json = (await r.json().catch(() => ({}))) as {
+          classifications?: ExtractionResult[];
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!r.ok) throw new Error(json.error ?? `${r.status}`);
+        const map: Record<string, ExtractionResult> = {};
+        for (const c of json.classifications ?? []) {
+          map[c.entity_id] = c;
+        }
+        setExtractions(map);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setExtractError(e instanceof Error ? e.message : String(e));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [extractTriggered, extractions, extractError, keptEntities, spaceId]);
+
+  // Derived loading flag — no setState needed.
+  const extracting =
+    extractTriggered && extractions === null && extractError === null;
+
+  const overrideKind = (entityId: string, kind: ExtractionKind) => {
+    setExtractions((prev) => {
+      if (!prev) return prev;
+      const existing = prev[entityId];
+      return {
+        ...prev,
+        [entityId]: existing
+          ? { ...existing, kind, rationale: `Manually set to ${kind}.` }
+          : { entity_id: entityId, kind, rationale: "Manually set." },
+      };
+    });
+  };
+
   const next = () => {
-    if (stage < 4) setStage((stage + 1) as Stage);
+    if (stage < 4) {
+      const newStage = (stage + 1) as Stage;
+      setStage(newStage);
+      // When transitioning into Stage 2, kick the extraction
+      // request. Done here as an event-handler side effect rather
+      // than in a useEffect to satisfy the set-state-in-effect
+      // lint rule and to keep "user clicked next" as the explicit
+      // trigger (vs an implicit reactive one).
+      if (newStage === 2) triggerExtraction();
+    }
   };
   const prev = () => {
     if (stage > 1) setStage((stage - 1) as Stage);
@@ -207,7 +348,11 @@ export function CanvasFocusOverlay({ onClose }: Props) {
               <button
                 key={s.n}
                 type="button"
-                onClick={() => s.status === "available" && setStage(s.n)}
+                onClick={() => {
+                  if (s.status !== "available") return;
+                  setStage(s.n);
+                  if (s.n === 2) triggerExtraction();
+                }}
                 disabled={s.status === "soon"}
                 title={`${s.label} — ${s.hint}`}
                 className="group flex flex-1 items-center gap-1.5 disabled:cursor-not-allowed"
@@ -248,7 +393,21 @@ export function CanvasFocusOverlay({ onClose }: Props) {
               totalCount={entities.length}
             />
           )}
-          {stage > 1 && <StagePlaceholder stage={stage} />}
+          {stage === 2 && (
+            <Stage2Extract
+              keptEntities={keptEntities}
+              extractions={extractions}
+              extracting={extracting}
+              error={extractError}
+              onOverride={overrideKind}
+              onRetry={() => {
+                setExtractions(null);
+                setExtractError(null);
+                setExtractTriggered(false);
+              }}
+            />
+          )}
+          {stage > 2 && <StagePlaceholder stage={stage} />}
         </div>
 
         {/* Footer */}
@@ -421,7 +580,178 @@ function EntityKeepRow({
   );
 }
 
-// ── Stage 2-4 placeholders ───────────────────────────────────────
+// ── Stage 2 — Extract ────────────────────────────────────────────
+
+const KIND_ORDER: ExtractionKind[] = [
+  "polished_product",
+  "core_idea",
+  "upstream_dependency",
+  "downstream_output",
+  "alternative",
+];
+
+function Stage2Extract({
+  keptEntities,
+  extractions,
+  extracting,
+  error,
+  onOverride,
+  onRetry,
+}: {
+  keptEntities: Entity[];
+  extractions: Record<string, ExtractionResult> | null;
+  extracting: boolean;
+  error: string | null;
+  onOverride: (entityId: string, kind: ExtractionKind) => void;
+  onRetry: () => void;
+}) {
+  if (keptEntities.length === 0) {
+    return (
+      <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <Sparkles className="h-6 w-6 text-gray-400" />
+        <p className="max-w-xs text-[12.5px] leading-relaxed text-gray-600">
+          Nothing kept to extract from. Go back to Stage 1 and pick
+          which entities matter.
+        </p>
+      </div>
+    );
+  }
+  if (extracting) {
+    return (
+      <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+        <p className="text-[12.5px] text-gray-600">
+          Classifying {keptEntities.length} entities…
+        </p>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <p className="text-[12.5px] text-rose-700">Extract failed: {error}</p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="rounded-md bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-gray-800"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+  if (!extractions) return null;
+
+  // Group entities by their classified kind for display.
+  const grouped: Record<ExtractionKind, Entity[]> = {
+    core_idea: [],
+    upstream_dependency: [],
+    downstream_output: [],
+    polished_product: [],
+    alternative: [],
+  };
+  for (const e of keptEntities) {
+    const eid = e.entity_id ?? e.id;
+    const cls = extractions[eid];
+    if (cls) grouped[cls.kind].push(e);
+  }
+
+  return (
+    <div>
+      <div className="mb-3">
+        <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-500">
+          Stage 2
+        </div>
+        <h3 className="font-display-tight mt-1 text-[18px] font-semibold leading-snug tracking-tight text-gray-900">
+          Pull out the polished pieces
+        </h3>
+        <p className="mt-1.5 text-[12px] leading-relaxed text-gray-600">
+          Each kept entity classified into one of five canonical kinds.
+          Override any row if the system got it wrong.
+        </p>
+      </div>
+
+      {KIND_ORDER.map((kind) => {
+        const items = grouped[kind];
+        if (items.length === 0) return null;
+        const meta = KIND_META[kind];
+        return (
+          <div key={kind} className="mb-4 last:mb-0">
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <span
+                className={`inline-flex h-4 min-w-4 items-center justify-center rounded-md border px-1 font-mono text-[10px] ${meta.tone}`}
+              >
+                {meta.emoji}
+              </span>
+              <span className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-gray-500">
+                {meta.label}
+              </span>
+              <span className="font-mono text-[9.5px] tabular-nums text-gray-400">
+                · {items.length}
+              </span>
+            </div>
+            <ul className="space-y-1">
+              {items.map((e) => {
+                const eid = e.entity_id ?? e.id;
+                const cls = extractions[eid];
+                return (
+                  <li key={e.id}>
+                    <ExtractedRow
+                      entity={e}
+                      classification={cls}
+                      onOverride={(k) => onOverride(eid, k)}
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ExtractedRow({
+  entity,
+  classification,
+  onOverride,
+}: {
+  entity: Entity;
+  classification: ExtractionResult | undefined;
+  onOverride: (kind: ExtractionKind) => void;
+}) {
+  return (
+    <div className="group rounded-xl border border-gray-200 bg-white/70 px-3 py-2 transition hover:border-gray-300">
+      <div className="flex items-start gap-2.5">
+        <span className="min-w-0 flex-1">
+          <span className="truncate text-[12.5px] font-semibold text-gray-900">
+            {entity.name}
+          </span>
+          {classification?.rationale && (
+            <span className="mt-0.5 block line-clamp-2 text-[11px] leading-snug text-gray-600">
+              {classification.rationale}
+            </span>
+          )}
+        </span>
+        <select
+          value={classification?.kind ?? "core_idea"}
+          onChange={(e) => onOverride(e.target.value as ExtractionKind)}
+          className="shrink-0 rounded-md border border-gray-200 bg-white px-1.5 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em] text-gray-700 outline-none transition hover:border-gray-400 focus:border-gray-700"
+          aria-label="Override classification"
+        >
+          {KIND_ORDER.map((k) => (
+            <option key={k} value={k}>
+              {KIND_META[k].label}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
+// ── Stage 3-4 placeholders ───────────────────────────────────────
 
 function StagePlaceholder({ stage }: { stage: Stage }) {
   const meta = STAGES.find((s) => s.n === stage);

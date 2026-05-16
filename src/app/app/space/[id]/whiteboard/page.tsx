@@ -443,7 +443,10 @@ export default function WhiteboardPage() {
       )}
 
       {focusOpen && (
-        <CanvasFocusOverlay onClose={() => setFocusOpen(false)} />
+        <CanvasFocusOverlay
+          onClose={() => setFocusOpen(false)}
+          spaceId={space.id}
+        />
       )}
 
       <ConnectPanel

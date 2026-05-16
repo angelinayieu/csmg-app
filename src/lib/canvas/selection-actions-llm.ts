@@ -89,6 +89,67 @@ export async function generatePlan(
   return (result.steps ?? []).slice(0, 5);
 }
 
+// ── Extract (Focus mode Stage 2) ──────────────────────────────────
+
+export type ExtractionKind =
+  | "core_idea"
+  | "upstream_dependency"
+  | "downstream_output"
+  | "polished_product"
+  | "alternative";
+
+export interface ExtractionResult {
+  entity_id: string;
+  kind: ExtractionKind;
+  /** 1-sentence rationale for the classification. */
+  rationale: string;
+}
+
+const EXTRACT_KIND_DEFINITIONS: Record<ExtractionKind, string> = {
+  core_idea:
+    "Sits at the conceptual center. Other items derive from it; if it changed, half the others would shift.",
+  upstream_dependency:
+    "Something the project NEEDS but doesn't own. A precondition, input, or external supplier.",
+  downstream_output:
+    "Something the project PRODUCES that flows OUT. A deliverable, side effect, or downstream consumer.",
+  polished_product:
+    "A near-final artifact the user could ship or hand off today. Concrete, complete-feeling.",
+  alternative:
+    "A competing framing or rival approach. Useful for comparison; not the chosen path.",
+};
+
+const EXTRACT_SYSTEM = `You classify entities into one of five canonical "extracted component" kinds. Apply the definitions strictly — when an entity could fit two kinds, pick the most distinctive one.
+
+Kinds:
+${Object.entries(EXTRACT_KIND_DEFINITIONS)
+  .map(([k, v]) => `- ${k}: ${v}`)
+  .join("\n")}
+
+For each entity:
+- kind: one of the five above
+- rationale: one sentence (≤ 20 words) explaining why this kind fits best
+
+Return strictly valid JSON: { "classifications": [{ "entity_id": "...", "kind": "...", "rationale": "..." }] }`;
+
+export async function extractComponents(
+  entities: Array<Pick<Entity, "entity_id" | "name" | "description">>,
+): Promise<ExtractionResult[]> {
+  const list = entities
+    .map(
+      (e) =>
+        `- entity_id="${e.entity_id}", name="${e.name}", description="${e.description ?? "(none)"}"`,
+    )
+    .join("\n");
+  const result = await llmJSON<{ classifications: ExtractionResult[] }>({
+    system: EXTRACT_SYSTEM,
+    user: `Entities to classify:\n${list}`,
+    maxTokens: 1400,
+    temperature: 0.3,
+    fallback: { classifications: [] },
+  });
+  return result.classifications ?? [];
+}
+
 // ── Rank ─────────────────────────────────────────────────────────
 
 export type RankCriterion =
