@@ -38,6 +38,7 @@ import { CanvasImageVisionBridge } from "./chrome/canvas-image-vision-bridge";
 import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
 import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
 import { CanvasWorkspaceRoomSpawner } from "./chrome/canvas-workspace-room-spawner";
+import { CanvasTwinRevealOrchestrator } from "./chrome/canvas-twin-reveal-orchestrator";
 import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
 import { CanvasOperationalSeedSpawner } from "./chrome/canvas-operational-seed-spawner";
 import { CanvasRoomTransitionSpawner } from "./chrome/canvas-room-transition-spawner";
@@ -193,6 +194,13 @@ function CanvasOverlays() {
           WorkspaceRoomShape at the viewport center. First step toward
           making this canvas the universal workspace surface. */}
       <CanvasWorkspaceRoomSpawner />
+      {/* Cinematic Phase 1 — the "twin is ready" climax. Watches for
+          a twin-snapshot (or workspace-room kind=twin) being added to
+          the canvas; when one lands, it pauses the painter's
+          normal cadence, zooms the camera in, fades a "Your digital
+          twin is ready" headline, then pulls back and offers an
+          "Open the twin" CTA. Fires once per mount. */}
+      <CanvasTwinRevealOrchestrator spaceId={spaceId} />
       {/* Hydrator counterpart — fetches pre-existing subjects from
           the DB on mount and paints SubjectCard shapes for any that
           aren't already on the canvas. Required for template-
