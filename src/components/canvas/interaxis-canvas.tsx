@@ -24,6 +24,8 @@ import {
 import type { Entity, Edge, Space } from "@/types";
 import { KG_NODE_TIER_SIZE } from "./shapes/kg-node-shape";
 import { RunEventStoreProvider } from "./hooks/run-event-store";
+import { SituationFrameProvider } from "./situation-frame-context";
+import { CanvasAuditModeProvider } from "./canvas-audit-mode-context";
 // Phase C — popover that opens when a room's (+) button is clicked.
 // Listens for `canvas-room:extend` window events; dispatches
 // `canvas-room:extend-verb` on selection.
@@ -178,6 +180,7 @@ import { CanvasReasoningTracePanel } from "./chrome/canvas-reasoning-trace-panel
 import { CanvasLayerToggle } from "./chrome/canvas-layer-toggle";
 import { CanvasProbabilityBadge } from "./chrome/canvas-probability-badge";
 import { useLayerFilterState } from "./drawers/use-layer-filter-state";
+import { useResolvedLayers } from "@/lib/hooks/use-resolved-layers";
 import { PipelineEventPainter } from "./pipeline-event-painter";
 import type { ProbabilitySpaceAxis } from "@/types/pipeline-events";
 import { CanvasErrorBoundary } from "./canvas-error-boundary";
@@ -555,6 +558,12 @@ export function InteraxisCanvas({
               health_score?: number | null;
               stale_reason?: string | null;
               intervention_count?: number;
+              /** Plain-English "what this app does for you." Lives at
+               *  apps.config.tagline; the apps endpoint flattens it onto
+               *  the row so the canvas card can render it without an
+               *  extra fetch. Optional — older apps that pre-date the
+               *  tagline field omit it and the card hides the line. */
+              tagline?: string | null;
             }>;
           };
           const apps = json.apps ?? [];
@@ -589,6 +598,10 @@ export function InteraxisCanvas({
                 appId: app.id,
                 spaceId: space.id,
                 name: app.name,
+                // Fall back to description when tagline is absent — older
+                // apps shipped before tagline existed often have a
+                // serviceable one-line description we can re-use.
+                tagline: (app.tagline ?? app.description ?? "").trim(),
                 appType: appTypeStr as AppCardShape["props"]["appType"],
                 status: (app.status ?? "proposed") as AppCardShape["props"]["status"],
                 healthScore: app.health_score ?? null,
@@ -701,35 +714,62 @@ export function InteraxisCanvas({
     return m;
   }, [libraryspaceNames, space.id, space.name]);
 
-  // ── Layer filter (Internal / External / All) ──
-  // URL-param backed. When not "all", iterate kg-node shapes and
-  // dim the ones whose entity doesn't match the current layer so
-  // the user can look at the graph through one lens at a time.
+  // ── Layer filter (any layer slug or "all") ──
+  // URL-param backed. When not "all", iterate kg-node shapes and dim
+  // the ones whose entity doesn't match the current layer so the user
+  // can look at the graph through one lens at a time.
+  //
+  // E1: filter accepts any slug, not just internal/external. When the
+  // slug matches an ontology layer, the resolver's entityLayerMap is
+  // consulted; otherwise the legacy knowledge_layer enum path applies.
   // Opacity is tldraw's top-level shape prop — cheap, reversible,
   // doesn't touch shape identity so clicks + selection still work.
   const { filter: layerFilter } = useLayerFilterState();
+  const resolvedLayers = useResolvedLayers(space.id);
   useEffect(() => {
     if (!editor) return;
+    // Is the active filter a known ontology slug? When so, the resolver's
+    // entityLayerMap is the source of truth (id == slug). Otherwise fall
+    // back to the legacy knowledge_layer comparison.
+    const ontologySlugs = new Set(
+      resolvedLayers.layers.map((l) => l.id),
+    );
+    const isOntologySlug =
+      layerFilter !== "all" &&
+      resolvedLayers.ontologyPresent &&
+      ontologySlugs.has(layerFilter);
+
     const shapesToUpdate: Array<{ id: import("tldraw").TLShapeId; type: "kg-node"; opacity: number }> = [];
     for (const s of editor.getCurrentPageShapes()) {
       if (s.type !== "kg-node") continue;
       const ks = s as KGNodeShape;
       const entity = entityById.get(ks.props.entityId);
-      // knowledge_layer: internal | conceptual | external | bridge.
-      // "Internal" view shows internal + conceptual. "External" view
-      // shows external + bridge.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const layer = (entity as any)?.knowledge_layer as string | null | undefined;
       let matches = true;
-      if (layerFilter === "internal") {
-        matches = layer === "internal" || layer === "conceptual" || !layer;
-      } else if (layerFilter === "external") {
-        matches = layer === "external" || layer === "bridge";
+
+      if (layerFilter === "all") {
+        matches = true;
+      } else if (isOntologySlug && entity) {
+        // Resolver-driven: entity matches when its assigned layer id equals
+        // the filter slug. Missing assignment is treated as a miss so users
+        // explicitly see what hasn't been classified yet (rather than
+        // hiding the mismatch silently).
+        const assignedSlug = resolvedLayers.entityLayerMap[entity.id];
+        matches = assignedSlug === layerFilter;
+      } else {
+        // Legacy path — knowledge_layer enum compare. "Internal" view
+        // shows internal + conceptual + unset; "External" shows external
+        // + bridge; any other slug compares directly.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const layer = (entity as any)?.knowledge_layer as string | null | undefined;
+        if (layerFilter === "internal") {
+          matches = layer === "internal" || layer === "conceptual" || !layer;
+        } else if (layerFilter === "external") {
+          matches = layer === "external" || layer === "bridge";
+        } else {
+          matches = layer === layerFilter;
+        }
       }
-      // Hidden = opacity 0, not faded. The previous 0.15 fade still
-      // consumed visual layout space and made it ambiguous whether the
-      // entity was "in the picture" or not. With 0 the toggle is a true
-      // show/hide.
+
       const targetOpacity = matches ? 1 : 0;
       if (Math.abs((ks.opacity ?? 1) - targetOpacity) > 0.01) {
         shapesToUpdate.push({ id: ks.id, type: "kg-node", opacity: targetOpacity });
@@ -738,7 +778,16 @@ export function InteraxisCanvas({
     if (shapesToUpdate.length > 0) {
       editor.updateShapes(shapesToUpdate);
     }
-  }, [editor, layerFilter, entityById, entities]);
+  }, [
+    editor,
+    layerFilter,
+    entityById,
+    entities,
+    resolvedLayers.layers,
+    resolvedLayers.ontologyPresent,
+    resolvedLayers.entityLayerMap,
+    space.id,
+  ]);
 
   // Reactive set of entity UUIDs already placed on the canvas so the
   // drawer can render a check next to those rows.
@@ -815,12 +864,172 @@ export function InteraxisCanvas({
     [editor, space?.id],
   );
 
+  // Phase E — drawer → forest-plot focus bridge.
+  //
+  // Called from the goal-impact decomposition drawer when the user clicks
+  // "Open forest plot →" on an edge row. We fetch the edge-filtered
+  // findings, mutate the singleton forest-plot shape's props in-place
+  // (so the card animation is just the row dim/highlight, not a respawn),
+  // and pan + zoom to it. `null` clears focus.
+  //
+  // No-op when:
+  //   • no editor mounted yet (drawer can technically open during canvas
+  //     hydration if the user lands on the strategy view first)
+  //   • the singleton shape isn't on the current page (rare — the
+  //     drawer's link is conditional on `nStudies > 0` which means
+  //     evidence rows exist; the seeder will have spawned the card)
+  //   • the fetch errors (we soft-fail; the drawer will simply close
+  //     without zoom rather than render a broken state)
+  const handleFocusForestPlotOnEdge = useCallback(
+    (edgeId: string | null) => {
+      if (!editor || !space?.id) return;
+      const forestShapeId = createShapeId(`forest-plot-${space.id}`);
+      const existing = editor.getShape(forestShapeId);
+      if (!existing) return;
+
+      const run = async () => {
+        try {
+          const qs = new URLSearchParams({ limit: "8" });
+          if (edgeId) qs.set("edgeId", edgeId);
+          const res = await fetch(
+            `/api/spaces/${encodeURIComponent(space.id)}/forest-plot?${qs.toString()}`,
+          );
+          if (!res.ok) return;
+          const json = (await res.json()) as {
+            findings?: unknown[];
+            primary_metric?: string | null;
+            matched_finding_ids?: string[];
+            focused_edge_label?: string | null;
+          };
+          const findings = Array.isArray(json.findings) ? json.findings : [];
+          const matched = Array.isArray(json.matched_finding_ids)
+            ? json.matched_finding_ids
+            : [];
+          editor.updateShape({
+            id: forestShapeId,
+            type: "forest-plot",
+            props: {
+              findingsJson: JSON.stringify(findings),
+              referenceMetric: json.primary_metric ?? null,
+              findingCount: findings.length,
+              highlightedFindingIds: JSON.stringify(matched),
+              focusedEdgeLabel: edgeId
+                ? (json.focused_edge_label ?? null)
+                : null,
+            },
+            // tldraw's typed editor union doesn't include all our custom
+            // shape types — same workaround used by the probe-trail
+            // updateShape call at the bottom of this file.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any);
+          editor.select(forestShapeId);
+          editor.zoomToSelection({ animation: { duration: 300 } });
+        } catch {
+          /* soft-fail — drawer will just close without zooming */
+        }
+      };
+      void run();
+    },
+    [editor, space?.id],
+  );
+
+  // Phase E — listen for the forest-plot card's own "× clear focus" chip.
+  // The shape can't reach back into the editor context directly (it's
+  // rendered inside tldraw's component tree), so it dispatches a custom
+  // event on window and we handle it here. Routes through the same
+  // focus-clear path (passing null), keeping the state machine single.
+  useEffect(() => {
+    if (!editor || !space?.id) return;
+    const onClear = () => handleFocusForestPlotOnEdge(null);
+    window.addEventListener("forest-plot:clear-focus", onClear);
+    return () => {
+      window.removeEventListener("forest-plot:clear-focus", onClear);
+    };
+  }, [editor, space?.id, handleFocusForestPlotOnEdge]);
+
+  // Phase 0 rigor — listen for the forest-plot card's tier toggle.
+  // Same pattern as `forest-plot:clear-focus`: the shape dispatches
+  // a window event, we re-fetch the route with the new tier mode,
+  // and rewrite the shape props. Soft-fail when the fetch or shape
+  // lookup fails — the button just stays disabled until the timeout
+  // re-enables it on the shape side.
+  useEffect(() => {
+    if (!editor || !space?.id) return;
+    const onSetTierMode = (ev: Event) => {
+      const detail = (ev as CustomEvent<{
+        shapeId?: unknown;
+        mode?: unknown;
+      }>).detail;
+      const shapeId =
+        typeof detail?.shapeId === "string" ? detail.shapeId : null;
+      const mode =
+        detail?.mode === "all" || detail?.mode === "anchored"
+          ? detail.mode
+          : null;
+      if (!shapeId || !mode) return;
+      // Verify the shape still exists before we kick a network call.
+      // The `forest-plot` shape type isn't in tldraw's TLShape union
+      // (it's a custom shape registered via shapeUtils), so we cast
+      // through `any` for both the lookup and the comparison — same
+      // workaround used elsewhere in this file.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const shape = editor.getShape(shapeId as any) as
+        | { id: unknown; type: string }
+        | undefined;
+      if (!shape || shape.type !== "forest-plot") return;
+      const run = async () => {
+        try {
+          const url = `/api/spaces/${encodeURIComponent(space.id)}/forest-plot?limit=8${mode === "all" ? "&tier=all" : ""}`;
+          const res = await fetch(url);
+          if (!res.ok) return;
+          const json = (await res.json()) as {
+            findings?: unknown[];
+            primary_metric?: string | null;
+            tier_mode?: "anchored" | "all";
+            tier_counts?: Record<string, number>;
+          };
+          const findings = Array.isArray(json.findings) ? json.findings : [];
+          const nextMode: "anchored" | "all" =
+            json.tier_mode === "all" ? "all" : "anchored";
+          const tierCounts =
+            json.tier_counts && typeof json.tier_counts === "object"
+              ? json.tier_counts
+              : {};
+          editor.updateShape({
+            id: shape.id,
+            type: "forest-plot",
+            props: {
+              findingsJson: JSON.stringify(findings),
+              referenceMetric: json.primary_metric ?? null,
+              findingCount: findings.length,
+              tierMode: nextMode,
+              tierCountsJson: JSON.stringify(tierCounts),
+            },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any);
+        } catch {
+          /* soft-fail */
+        }
+      };
+      void run();
+    };
+    window.addEventListener("forest-plot:set-tier-mode", onSetTierMode);
+    return () => {
+      window.removeEventListener("forest-plot:set-tier-mode", onSetTierMode);
+    };
+  }, [editor, space?.id]);
+
   const strategyCanvasPresence = useMemo(
     () => ({
       objectiveIds: placedStrategyObjectiveIds,
       zoomToObjective: handleZoomToStrategyObjective,
+      focusForestPlotOnEdge: handleFocusForestPlotOnEdge,
     }),
-    [placedStrategyObjectiveIds, handleZoomToStrategyObjective],
+    [
+      placedStrategyObjectiveIds,
+      handleZoomToStrategyObjective,
+      handleFocusForestPlotOnEdge,
+    ],
   );
 
   // ── Sync KG entities + edges into tldraw on first mount ──
@@ -3401,6 +3610,22 @@ export function InteraxisCanvas({
               placed from the server. That's the "everything
               disappears when I move the canvas" bug. One source of
               truth: the server. Do not re-add this prop. */}
+          {/* Situation-frame provider — fetches spaces.situation_frame
+              once on mount and re-fetches on `framing-proposed` /
+              `framing-approved` window events so the shell shapes and
+              the divergence strip can render lens attribution + the
+              "N lenses framed this differently" CTA without each one
+              hitting the API. Wraps <Tldraw> so it reaches BOTH the
+              shape utils (inside tldraw's render tree) and the
+              chrome overlays (mounted via the InFrontOfTheCanvas
+              component prop, which also lives inside that tree). */}
+          <SituationFrameProvider spaceId={space.id}>
+          {/* Audit-mode provider — surface | trail (default) | audit.
+              Persisted per-space in localStorage. Gates the visibility
+              density of pipeline-reasoning surfaces (lens attribution,
+              frame map, hover-expand) so a user can pick their preferred
+              depth without losing the artefacts themselves. */}
+          <CanvasAuditModeProvider spaceId={space.id}>
           <CanvasOverlayPropsContext.Provider value={overlayPropsValue}>
             <Tldraw
               // tldraw v3+ enforces production licensing: when no key is
@@ -3421,6 +3646,8 @@ export function InteraxisCanvas({
               onMount={(e) => setEditor(e)}
             />
           </CanvasOverlayPropsContext.Provider>
+          </CanvasAuditModeProvider>
+          </SituationFrameProvider>
         </CanvasErrorBoundary>
       </BrainstormContextProvider>
 
@@ -3983,7 +4210,7 @@ export function InteraxisCanvas({
       {!quietMode && !brainstormPanelOpen && (
         <div className="pointer-events-none absolute right-4 top-16 z-30 flex flex-col items-end gap-2">
           <CanvasProbabilityBadge />
-          <CanvasLayerToggle hasAnyEntity={entities.length > 0} />
+          <CanvasLayerToggle hasAnyEntity={entities.length > 0} spaceId={space.id} />
           <BrainstormToggleButton
             open={brainstormPanelOpen}
             onToggle={() => {

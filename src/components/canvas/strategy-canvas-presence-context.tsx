@@ -21,11 +21,25 @@ export interface StrategyCanvasPresence {
   /** Pan + zoom the canvas to the dropped objective card, if present.
    *  No-op when the id isn't on the page. */
   zoomToObjective: (objectiveId: string) => void;
+  /**
+   * Phase E: focus the singleton forest-plot card on a specific edge —
+   *   1. fetch `/api/spaces/[id]/forest-plot?edgeId=<id>`
+   *   2. update the existing shape's findingsJson + highlightedFindingIds
+   *      + focusedEdgeLabel
+   *   3. pan + zoom the canvas to the shape
+   *
+   * Pass `null` to clear focus (resets the card back to space-wide top-N
+   * with all rows opaque). No-op when the forest-plot shape isn't on the
+   * current page yet — drawer link should be hidden in that case (the
+   * caller already checks `nStudies > 0` so the situation is rare).
+   */
+  focusForestPlotOnEdge: (edgeId: string | null) => void;
 }
 
 const empty: StrategyCanvasPresence = {
   objectiveIds: new Set(),
   zoomToObjective: () => {},
+  focusForestPlotOnEdge: () => {},
 };
 
 const StrategyCanvasPresenceContext = createContext<StrategyCanvasPresence>(empty);

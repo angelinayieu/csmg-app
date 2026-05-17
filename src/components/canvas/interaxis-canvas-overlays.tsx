@@ -24,6 +24,9 @@ import { CommunitiesChip } from "./chrome/communities-chip";
 import { CanvasBridgeGapsButton } from "./chrome/canvas-bridge-gaps-button";
 import { CanvasPreflightChip } from "./chrome/canvas-preflight-chip";
 import { CanvasStageIndicator } from "./chrome/canvas-stage-indicator";
+import { CanvasDivergenceStrip } from "./chrome/canvas-divergence-strip";
+import { CanvasFrameMap } from "./chrome/canvas-frame-map";
+import { CanvasAuditModeToggle } from "./chrome/canvas-audit-mode-toggle";
 import { CanvasLassoSystemButton } from "./chrome/canvas-lasso-system-button";
 import { CanvasLassoSubjectButton } from "./chrome/canvas-lasso-subject-button";
 import { CanvasLassoSummarizeButton } from "./chrome/canvas-lasso-summarize-button";
@@ -124,6 +127,21 @@ function CanvasOverlays() {
           Auto-hides when the space has too few entities for a contract. */}
       <CanvasPreflightChip spaceId={spaceId} />
       <CanvasStageIndicator />
+      {/* Persistent amber strip surfacing framing-panel disagreement.
+          Reads from SituationFrameContext (wraps <Tldraw> in
+          interaxis-canvas.tsx, so this reaches both shapes + overlays).
+          Self-hides when frame has no surface divergences AND only one
+          candidate framing exists — i.e. the panel reached clean
+          consensus. Click → opens /app/space/[id]/framing (the existing
+          side-by-side comparison page that was unreachable once the
+          framing-proposal-gate auto-dismissed). */}
+      <CanvasDivergenceStrip spaceId={spaceId} />
+      {/* The 4-layer × 5-category frame-panel verdict grid. Pinned
+          top-left; collapsed pill at trail-mode, full grid at audit-
+          mode, hidden in surface-mode. The single densest information
+          artifact the framing pipeline produces — prior to this it
+          sat in spaces.situation_frame.cells[] with no canvas surface. */}
+      <CanvasFrameMap />
       <CanvasLassoSystemButton spaceId={spaceId} />
       {/* Phase 6C — sibling button: lasso → save-as-subject. Same
           extractor, atomic /from-lasso endpoint creates both the
@@ -238,6 +256,11 @@ function CanvasOverlays() {
       >
         <RelaxLayoutButton />
       </div>
+      {/* Audit-mode toggle — surface | trail | audit. Bottom-LEFT so it
+          doesn't compete with the RelaxLayout button on the right.
+          Persisted per-space via localStorage; defaults to "trail" so
+          new users see lens attribution + frame map out of the box. */}
+      <CanvasAuditModeToggle />
     </>
   );
 }

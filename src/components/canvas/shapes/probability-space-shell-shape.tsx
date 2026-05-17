@@ -29,11 +29,28 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProbabilitySpaceShellShape } from "./types";
 import { computeForceLayout } from "@/lib/graph/force-layout";
 import { useAxisActive, useCanvasFilter } from "../hooks/use-canvas-filter";
 import { canvasNavigate } from "@/lib/canvas/canvas-bus";
+import { useSituationFrame } from "../situation-frame-context";
+import { useTrailOrAudit } from "../canvas-audit-mode-context";
+
+// Lens display labels — keep aligned with src/lib/prompts/framing-lenses.ts
+// `LensId`. Defined here (not imported from prompts) because shape utils
+// must render synchronously on the canvas thread and we don't want a
+// server-only prompt module pulled into the canvas bundle.
+const LENS_DISPLAY: Record<string, string> = {
+  systems_analyst: "Systems",
+  skeptic: "Skeptic",
+  operator: "Operator",
+  engineer: "Engineer",
+  historian: "Historian",
+};
+function lensLabel(id: string): string {
+  return LENS_DISPLAY[id] ?? id.replace(/_/g, " ");
+}
 
 export const SPACE_SHELL_DEFAULT_W = 280;
 export const SPACE_SHELL_DEFAULT_H = 200;
@@ -201,6 +218,51 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
   const isEmpty = entities.length === 0;
 
   const [expanded, setExpanded] = useState(false);
+  // Hover-expand: when the user hovers the shell body and audit-mode is
+  // trail-or-audit, auto-expand the "Why this lens" panel after a brief
+  // delay so a passing cursor doesn't trigger it. Cursor-leave collapses
+  // unless the user has clicked the expand button (which sets
+  // `expandLocked`) — that way an explicit click sticks even if the
+  // user moves their cursor off the card.
+  const [hoverExpanded, setHoverExpanded] = useState(false);
+  const [expandLocked, setExpandLocked] = useState(false);
+  const auditOrTrail = useTrailOrAudit();
+  const hoverTimerRef = useRef<number | null>(null);
+  const onShellEnter = useCallback(() => {
+    if (!auditOrTrail) return;
+    if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = window.setTimeout(() => {
+      setHoverExpanded(true);
+    }, 220);
+  }, [auditOrTrail]);
+  const onShellLeave = useCallback(() => {
+    if (hoverTimerRef.current) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHoverExpanded(false);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
+  // Effective expansion = user clicked (sticky) OR cursor is hovering.
+  const effectiveExpanded = expandLocked || expanded || hoverExpanded;
+
+  // Lens attribution from the situation frame — joins axis → target_cells
+  // → supporting_lenses so the shell can show "which lenses argued for
+  // this axis." Returns null on legacy spaces / mid-pipeline mounts; the
+  // chips row hides entirely when null or when the lens set is empty.
+  const { getLensSupportForAxis, frame } = useSituationFrame();
+  const lensSupport = useMemo(
+    () => (axis ? getLensSupportForAxis(axis) : null),
+    [axis, getLensSupportForAxis],
+  );
+  // Total lens count from the frame so the chips row can render
+  // "X of N" without hardcoding the panel's 5-lens default (users can
+  // disable lenses via reasoning_settings.lenses).
+  const lensesUsedCount = frame?.lenses_used?.length ?? 0;
 
   // Phase 1 — replace the chip list with a real mini-graph. Layout
   // is memoized on the JSON-string contents so it only recomputes
@@ -257,6 +319,8 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
       }}
     >
       <div
+        onMouseEnter={onShellEnter}
+        onMouseLeave={onShellLeave}
         style={{
           width: "100%",
           height: "100%",
@@ -546,13 +610,108 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
           </div>
         )}
 
+        {/* Lens provenance footer — always-visible attribution row.
+            Renders ONLY when the situation frame has been fetched AND the
+            joined cell→lens lookup found a non-empty set. Legacy spaces
+            (pre-frame-panel) and mid-pipeline mounts before the panel
+            commits a frame both fall to null and hide the row, so we
+            never show a misleading "0 lenses" badge.
+
+            Reads as: ←  Skeptic · Engineer  · 3 of 5
+                      └ lens chips        └ axis_support / total
+
+            Lens chip count is capped at 3 inline (with +N for overflow)
+            so the row stays single-line at the shell's 280px width even
+            when all 5 lenses backed an axis. */}
+        {auditOrTrail && lensSupport && lensSupport.lenses.length > 0 && (
+          <div
+            style={{
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              flexWrap: "nowrap",
+              overflow: "hidden",
+              marginTop: 2,
+            }}
+            title={
+              `Backed by lens${lensSupport.lenses.length === 1 ? "" : "es"}: ` +
+              lensSupport.lenses.map(lensLabel).join(", ") +
+              ` · ${lensSupport.axisSupportCount} of ${lensesUsedCount || lensSupport.lenses.length} lenses independently proposed this axis`
+            }
+          >
+            <span
+              aria-hidden
+              style={{
+                fontSize: 9,
+                fontWeight: 600,
+                letterSpacing: "0.08em",
+                color: "#94a3b8",
+                textTransform: "uppercase",
+                flexShrink: 0,
+              }}
+            >
+              ←
+            </span>
+            {lensSupport.lenses.slice(0, 3).map((id) => (
+              <span
+                key={id}
+                style={{
+                  fontSize: 9.5,
+                  fontWeight: 600,
+                  letterSpacing: "0.02em",
+                  color: "#475569",
+                  background: "rgba(100, 116, 139, 0.08)",
+                  border: "1px solid rgba(100, 116, 139, 0.16)",
+                  borderRadius: 4,
+                  padding: "1px 5px",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
+                {lensLabel(id)}
+              </span>
+            ))}
+            {lensSupport.lenses.length > 3 && (
+              <span
+                style={{
+                  fontSize: 9.5,
+                  fontWeight: 500,
+                  color: "#94a3b8",
+                  flexShrink: 0,
+                }}
+              >
+                +{lensSupport.lenses.length - 3}
+              </span>
+            )}
+            {lensesUsedCount > 0 && (
+              <span
+                style={{
+                  fontSize: 9,
+                  fontWeight: 500,
+                  color: "#94a3b8",
+                  marginLeft: 2,
+                  flexShrink: 0,
+                }}
+                aria-label={`Axis support: ${lensSupport.axisSupportCount} of ${lensesUsedCount}`}
+              >
+                · {lensSupport.axisSupportCount}/{lensesUsedCount}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Why this lens — expand/collapse */}
         <button
           type="button"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
+            // Explicit click toggles + locks: once clicked, the panel
+            // stays open (or closed) regardless of hover, so a user
+            // who scrolls reading the breakdown doesn't lose it.
             setExpanded((v) => !v);
+            setExpandLocked(true);
           }}
           style={{
             position: "relative",
@@ -571,19 +730,19 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
             justifyContent: "space-between",
           }}
         >
-          <span>{expanded ? "Hide context" : "Why this lens"}</span>
+          <span>{effectiveExpanded ? "Hide context" : "Why this lens"}</span>
           <span style={{ fontSize: 9, color: "#94a3b8" }}>
-            {expanded ? "▲" : "▼"}
+            {effectiveExpanded ? "▲" : "▼"}
           </span>
         </button>
-        {expanded && (
+        {effectiveExpanded && (
           <div
             style={{
               position: "relative",
               fontSize: 11,
               lineHeight: 1.45,
               color: "#475569",
-              maxHeight: 80,
+              maxHeight: 120,
               overflowY: "auto",
             }}
           >
@@ -591,6 +750,94 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
             {edges.length > 0 && (
               <div style={{ marginTop: 6, fontSize: 10, color: "#64748b" }}>
                 {edges.length} mechanism{edges.length === 1 ? "" : "s"} traced
+              </div>
+            )}
+            {/* Expanded lens breakdown — shown when the frame is loaded
+                so the user can see exactly which lenses backed this axis
+                + how confident the per-cell consensus was. Mean cell
+                confidence renders as a small badge; the lens list is the
+                full set (not truncated like the footer row). Hidden when
+                no lens data is available rather than showing an empty
+                "Backed by:" section. */}
+            {lensSupport && lensSupport.lenses.length > 0 && (
+              <div
+                style={{
+                  marginTop: 8,
+                  paddingTop: 6,
+                  borderTop: "1px dashed rgba(15,23,42,0.08)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    marginBottom: 4,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      letterSpacing: "0.12em",
+                      textTransform: "uppercase",
+                      color: "#64748b",
+                    }}
+                  >
+                    Backed by
+                  </span>
+                  {lensSupport.meanCellConfidence > 0 && (
+                    <span
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 600,
+                        color: "#64748b",
+                        background: "rgba(100, 116, 139, 0.10)",
+                        borderRadius: 3,
+                        padding: "1px 4px",
+                      }}
+                      title="Mean confidence across the cells this axis targets"
+                    >
+                      cell conf {Math.round(lensSupport.meanCellConfidence * 100)}
+                    </span>
+                  )}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 4,
+                  }}
+                >
+                  {lensSupport.lenses.map((id) => (
+                    <span
+                      key={id}
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 500,
+                        color: "#334155",
+                        background: "rgba(100, 116, 139, 0.10)",
+                        border: "1px solid rgba(100, 116, 139, 0.18)",
+                        borderRadius: 4,
+                        padding: "2px 6px",
+                      }}
+                    >
+                      {lensLabel(id)}
+                    </span>
+                  ))}
+                </div>
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontSize: 10,
+                    color: "#94a3b8",
+                  }}
+                >
+                  {lensSupport.axisSupportCount} of{" "}
+                  {lensesUsedCount || lensSupport.lenses.length} lenses
+                  independently proposed this axis
+                  {lensSupport.source === "ad_hoc" && " · panel-minted"}
+                </div>
               </div>
             )}
           </div>

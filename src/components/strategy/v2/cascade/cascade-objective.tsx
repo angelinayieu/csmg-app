@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRight, Pin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CascadeObjective, CascadeRowVM } from "../strategy-view-model";
@@ -11,8 +11,39 @@ import {
   type StrategyObjectiveDragPayload,
 } from "@/components/canvas/strategy-objective-drag";
 import { useStrategyCanvasPresence } from "@/components/canvas/strategy-canvas-presence-context";
+import { useSpaceData } from "@/contexts/space-data-context";
+import { GoalImpactDecompositionDrawer } from "./goal-impact-decomposition-drawer";
+import { bucketEvidenceByEntity } from "@/lib/twin/impact-weighted-metric";
 import type { CausalChain } from "@/types/causal-chains";
 import type { Entity } from "@/types";
+import type { EvidenceRegistryRow } from "@/types/evidence-registry";
+import { RigorMark } from "@/components/canvas/shapes/rigor-mark";
+
+// Module-level cache so N cascade rows don't trigger N separate
+// /evidence fetches. First row to fetch resolves the Promise and
+// every subsequent caller gets the cached Map. Cleared by spaceId
+// change so a different space's data doesn't leak across mounts.
+const _evidenceCache = new Map<
+  string,
+  Promise<Map<string, EvidenceRegistryRow[]>>
+>();
+function fetchEvidenceForSpace(
+  spaceId: string,
+): Promise<Map<string, EvidenceRegistryRow[]>> {
+  const cached = _evidenceCache.get(spaceId);
+  if (cached) return cached;
+  const promise = fetch(
+    `/api/spaces/${encodeURIComponent(spaceId)}/evidence?limit=500`,
+  )
+    .then((r) => (r.ok ? r.json() : null))
+    .then((payload) => {
+      const rows = (payload?.rows ?? []) as EvidenceRegistryRow[];
+      return bucketEvidenceByEntity(rows);
+    })
+    .catch(() => new Map<string, EvidenceRegistryRow[]>());
+  _evidenceCache.set(spaceId, promise);
+  return promise;
+}
 
 interface CascadeObjectiveProps {
   objective: CascadeObjective;
@@ -33,8 +64,47 @@ export function CascadeObjectiveCard({
 }: CascadeObjectiveProps) {
   const p = palette(row.paletteKey);
   const [expanded, setExpanded] = useState(false);
+  // Decomposition drawer state — separate from row expansion so opening
+  // the drawer doesn't expand the cascade row underneath it.
+  const [decompositionOpen, setDecompositionOpen] = useState(false);
   const presence = useStrategyCanvasPresence();
   const isOnCanvas = presence.objectiveIds.has(objective.id);
+
+  // Pull edges + active goal from the space-data context so the drawer
+  // can walk per-chain edges without prop-drilling them through three
+  // cascade ancestors.
+  const spaceData = useSpaceData();
+  const drawerEdges = spaceData.edges;
+  const activeGoal = spaceData.activeGoal;
+
+  // entityNameById — derived from the entityMap that's already in
+  // scope. Keys on entity_id (the chain.entity_ids[] uses entity_id
+  // strings, not row.id).
+  const entityNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const e of entityMap.values()) {
+      if (e.entity_id) map.set(e.entity_id, e.name);
+    }
+    return map;
+  }, [entityMap]);
+
+  // Evidence pulled from the cached space-level fetch. The Map is
+  // empty until the first fetch resolves; the drawer renders honest
+  // empty states for the evidence section in the interim (n_studies=0,
+  // no pooled effect, "not yet aggregated").
+  const [evidenceByEntity, setEvidenceByEntity] = useState<
+    Map<string, EvidenceRegistryRow[]>
+  >(() => new Map());
+  useEffect(() => {
+    let cancelled = false;
+    if (!spaceId) return;
+    fetchEvidenceForSpace(spaceId).then((m) => {
+      if (!cancelled) setEvidenceByEntity(m);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId]);
 
   const matchedChain = objective.matchedChainId
     ? causalChains.find((c) => c.id === objective.matchedChainId)
@@ -181,21 +251,138 @@ export function CascadeObjectiveCard({
               On canvas
             </button>
           )}
-          {objective.progressPct !== undefined && (
-            <span
-              className="tabular-nums"
-              style={{
-                fontSize: "11.5px",
-                fontWeight: 700,
-                color: "#0B0D12",
-                letterSpacing: "-0.02em",
-                minWidth: 30,
-                textAlign: "right",
-              }}
-            >
-              {objective.progressPct}%
-            </span>
-          )}
+          {objective.progressPct !== undefined &&
+            (objective.impact ? (
+              // Impact chip — clickable, opens the decomposition drawer.
+              // Hover reveals the full breakdown; click opens the audit.
+              // Pill-shaped with hairline border + soft fill so it reads
+              // as an actionable affordance, not a passive readout.
+              (() => {
+                // Phase 0 rigor: pick the chip's glyph variant by which
+                // tier family dominates the pooling. Three cases:
+                //   • anchored — at least one paper-sourced row pooled
+                //   • drifted  — pooling is web/legacy only
+                //   • none     — no pooled evidence at all (glyph hidden)
+                // The chip's border + tint shift subtly on the drifted
+                // path so the warning is readable at-a-glance without
+                // overwhelming the layout.
+                const ev = objective.impact.evidence;
+                const hasAnchored = ev.n_anchored > 0;
+                const hasDrifted = ev.n_drifted > 0;
+                const drifted = hasDrifted && !hasAnchored;
+                const showGlyph = ev.n_studies > 0;
+                const baseBg = drifted
+                  ? "rgba(180, 83, 9, 0.06)"
+                  : "rgba(11,13,18,0.04)";
+                const hoverBg = drifted
+                  ? "rgba(180, 83, 9, 0.10)"
+                  : "rgba(11,13,18,0.07)";
+                const baseBorder = drifted
+                  ? "1px solid rgba(180, 83, 9, 0.28)"
+                  : "1px solid rgba(11,13,18,0.08)";
+                const hoverBorder = drifted
+                  ? "1px solid rgba(180, 83, 9, 0.48)"
+                  : "1px solid rgba(11,13,18,0.16)";
+                const glyphColor = drifted ? "#B45309" : "#0F766E";
+                const tierLine =
+                  ev.n_studies > 0
+                    ? ` · n=${ev.n_studies}${
+                        ev.n_drifted > 0
+                          ? ` (${ev.n_anchored} anchored · ${ev.n_drifted} drifted)`
+                          : ""
+                      }`
+                    : "";
+                return (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDecompositionOpen(true);
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    draggable={false}
+                    onDragStart={(e) => e.preventDefault()}
+                    className="tabular-nums"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 5,
+                      fontSize: "11.5px",
+                      fontWeight: 700,
+                      color: "#0B0D12",
+                      letterSpacing: "-0.02em",
+                      textAlign: "right",
+                      background: baseBg,
+                      border: baseBorder,
+                      borderRadius: 999,
+                      padding: "3px 10px",
+                      cursor: "pointer",
+                      transition:
+                        "background 120ms ease-out, border-color 120ms ease-out",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = hoverBg;
+                      e.currentTarget.style.border = hoverBorder;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = baseBg;
+                      e.currentTarget.style.border = baseBorder;
+                    }}
+                    title={
+                      `${objective.impact.pct.toFixed(1)}% expected goal impact · ` +
+                      `${objective.impact.chains.length} chain${objective.impact.chains.length === 1 ? "" : "s"}` +
+                      tierLine +
+                      (ev.i_squared !== null
+                        ? `, I²=${Math.round(ev.i_squared)}%`
+                        : "") +
+                      ` · confidence ${objective.impact.confidence.toFixed(2)}` +
+                      // Phase F: when calibration is loaded for this stage,
+                      // surface the tracking number in the tooltip so the
+                      // user sees their predictions are factored in without
+                      // opening the drawer. `blended` distinguishes "this
+                      // moved confidence" from "informational only".
+                      (objective.impact.calibration
+                        ? ` · ±${objective.impact.calibration.mean_abs_delta_strength.toFixed(2)} drift across ${objective.impact.calibration.n_rows} prediction${objective.impact.calibration.n_rows === 1 ? "" : "s"}${objective.impact.calibration.blended ? " (blended)" : ""}`
+                        : "") +
+                      (drifted
+                        ? " · pool is web/legacy only — see decomposition for tier breakdown"
+                        : "") +
+                      " — click to see the math"
+                    }
+                    aria-label={`Open decomposition for ${objective.title}${
+                      drifted ? " (low-rigor pool)" : ""
+                    }`}
+                  >
+                    {showGlyph && (
+                      <RigorMark
+                        tier={hasAnchored ? "paper_extracted" : "web_heuristic"}
+                        size={10}
+                        showTitle={false}
+                        style={{ color: glyphColor }}
+                      />
+                    )}
+                    {objective.impact.pct.toFixed(1)}% goal impact
+                  </button>
+                );
+              })()
+            ) : (
+              // Legacy: bare key-metric ratio, kept honest via tooltip.
+              // No drawer because there's no decomposition to show.
+              <span
+                className="tabular-nums"
+                style={{
+                  fontSize: "11.5px",
+                  fontWeight: 700,
+                  color: "#0B0D12",
+                  letterSpacing: "-0.02em",
+                  textAlign: "right",
+                  minWidth: 30,
+                }}
+                title={`${objective.progressPct}% (legacy key-metric ratio — no goal anchor)`}
+              >
+                {objective.progressPct}%
+              </span>
+            ))}
           {/* LEAD/LAG chip only renders when the perspective gives us a real
               signal (trend_direction or action timeframe). Defaulting to
               "lead" when neither was present — the previous behaviour — was
@@ -286,6 +473,38 @@ export function CascadeObjectiveCard({
             </div>
           )}
         </>
+      )}
+      {/* Decomposition drawer — only rendered when there's a real impact
+          to decompose. Mounted at the end so AnimatePresence's exit
+          animation completes before unmount, even if the component
+          re-renders (state lives in the cascade objective, not the
+          drawer itself). */}
+      {objective.impact && (
+        <GoalImpactDecompositionDrawer
+          open={decompositionOpen}
+          onClose={() => setDecompositionOpen(false)}
+          stageName={objective.title}
+          goalTitle={activeGoal?.title ?? null}
+          impact={objective.impact}
+          stageEntityId={objective.sourceEntityIds[0] ?? ""}
+          causalChains={causalChains}
+          edges={drawerEdges}
+          // Evidence map starts empty (Phase D wires the fetch). The
+          // drawer renders honest empty states — n=0 study rows, no
+          // pooled effect, confidence falls back to chain trust only.
+          evidenceByEntity={evidenceByEntity}
+          entityNameById={entityNameById}
+          // Phase E: clicking "Open forest plot →" on an edge row closes
+          // the drawer, then asks the canvas to focus the singleton
+          // forest-plot card on that edge (filter + zoom + highlight).
+          // Close-then-focus ordering matters: the drawer's exit
+          // animation runs in parallel with the zoom so the camera move
+          // doesn't feel hidden behind the scrim.
+          onOpenForestPlot={(edgeId) => {
+            setDecompositionOpen(false);
+            presence.focusForestPlotOnEdge(edgeId);
+          }}
+        />
       )}
     </div>
   );

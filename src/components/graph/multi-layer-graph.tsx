@@ -13,6 +13,7 @@ import {
 import type { Entity, Edge, Cycle } from "@/types";
 import type { SynthesisData } from "@/types/synthesis";
 import { cleanEntityName } from "@/components/intelligence/orbital-graph";
+import { useResolvedLayers } from "@/lib/hooks/use-resolved-layers";
 
 // ── Props ──
 
@@ -22,6 +23,21 @@ interface MultiLayerGraphProps {
   cycles: Cycle[];
   synthesisData: SynthesisData | null;
   onEntityClick?: (entity: Entity) => void;
+  /**
+   * When provided, the component fetches the space's resolved layer
+   * ontology (via /api/spaces/[id]/layer-ontology/resolved) and uses
+   * the ontology's first three layer labels + colors for the band
+   * headers instead of the hardcoded "Data / Relationships /
+   * Organizing Principles" trio. Bucketing logic (which entity lands
+   * in which band) stays category-driven for this first pass — a
+   * future ticket will lift the full N-band layout to match the
+   * ontology's cardinality.
+   *
+   * Optional and backward-compatible: when omitted, the component
+   * renders exactly as before. Callers that already pass spaceId
+   * unlock the adaptive labels without changing any other prop.
+   */
+  spaceId?: string;
 }
 
 // ── Constants ──
@@ -29,11 +45,35 @@ interface MultiLayerGraphProps {
 const LAYER_PADDING = 50;
 const PERSPECTIVE_ANGLE = 38; // degrees — less extreme than 55
 
-const LAYER_META = [
+// Default band labels used when no ontology resolves. Kept as the
+// historical "Data / Relationships / Organizing Principles" so spaces
+// without a layer_ontology see no UI change.
+const DEFAULT_LAYER_META = [
   { key: "data", label: "Data", color: "#E5E7EB", accent: "#9CA3AF" },
   { key: "relationships", label: "Relationships", color: "#D1FAE5", accent: "#10B981" },
   { key: "principles", label: "Organizing Principles", color: "#EDE9FE", accent: "#8B5CF6" },
 ] as const;
+
+/** Convert a hex color into a soft pastel background by stepping it
+ *  toward white. Used to derive a band-background tint from the
+ *  ontology layer's accent color when one is present. */
+function softenForBand(hex: string): string {
+  // Naive lift-to-white: parse hex, blend 80% toward white. Works for
+  // both 3-digit and 6-digit hex. Falls through to the input string
+  // when parsing fails (so CSS color names / vars pass unchanged).
+  const m = hex.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!m) return hex;
+  const raw = m[1].length === 3
+    ? m[1].split("").map((c) => c + c).join("")
+    : m[1];
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+  const lift = (c: number) => Math.round(c + (255 - c) * 0.8);
+  return `#${[lift(r), lift(g), lift(b)]
+    .map((n) => n.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
 
 type EntityCategory = Entity["entity_category"];
 const DATA_CATS: EntityCategory[] = ["concrete", "abstract", "epistemic"];
@@ -133,7 +173,40 @@ export function MultiLayerGraph({
   cycles,
   synthesisData,
   onEntityClick,
+  spaceId,
 }: MultiLayerGraphProps) {
+  // E1 — adaptive band labels. When spaceId is provided AND a per-space
+  // layer ontology is configured, use its first three layers' labels +
+  // accents for the band headers; otherwise fall back to the historical
+  // "Data / Relationships / Organizing Principles" trio so spaces
+  // without an ontology render unchanged.
+  const resolved = useResolvedLayers(spaceId ?? null);
+  const layerMeta = useMemo(() => {
+    if (!resolved.ontologyPresent || resolved.layers.length === 0) {
+      return DEFAULT_LAYER_META;
+    }
+    // Sample the first three ontology layers by ordinal — bucketing
+    // logic is still 3-band by category for this pass, so we only need
+    // three labels. The full N-band layout is a future ticket.
+    const sample = resolved.layers.slice(0, 3);
+    // Pad with defaults if the ontology has fewer than three layers,
+    // so the JSX consumers below still see a length-3 array.
+    const padded = [
+      sample[0] ?? null,
+      sample[1] ?? null,
+      sample[2] ?? null,
+    ];
+    return padded.map((l, idx) => {
+      if (!l) return DEFAULT_LAYER_META[idx];
+      return {
+        key: l.id,
+        label: l.label,
+        color: softenForBand(l.color),
+        accent: l.color,
+      };
+    }) as typeof DEFAULT_LAYER_META;
+  }, [resolved.ontologyPresent, resolved.layers]);
+
   // Container sizing
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(700);
@@ -287,7 +360,7 @@ export function MultiLayerGraph({
 
   const renderLayer = (layerIndex: number) => {
     const ents = layerEntities[layerIndex];
-    const meta = LAYER_META[layerIndex];
+    const meta = layerMeta[layerIndex];
 
     // Edges: show edges where BOTH endpoints are on THIS layer
     const layerEdgeElements: React.ReactNode[] = [];
@@ -570,7 +643,7 @@ export function MultiLayerGraph({
           Knowledge Layers
         </h3>
         <div className="flex items-center gap-1.5">
-          {LAYER_META.map((meta, i) => (
+          {layerMeta.map((meta, i) => (
             <button
               key={meta.key}
               onClick={() => toggleLayer(i)}
@@ -582,7 +655,7 @@ export function MultiLayerGraph({
               )}
             >
               {layerVisibility[i] ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
-              {meta.key === "data" ? "Data" : meta.key === "relationships" ? "Relations" : "Principles"}
+              {meta.label}
             </button>
           ))}
           {focusedLayer !== null && (

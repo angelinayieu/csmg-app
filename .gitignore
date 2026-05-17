@@ -43,6 +43,15 @@ next-env.d.ts
 # typically hundreds of MB. Never commit these to source control.
 .claude/worktrees/
 
+# Claude Code runtime state — scheduled task locks, session caches. Should
+# never be committed; the runtime regenerates these on demand.
+.claude/scheduled_tasks.lock
+
+# Stray Claude session worktrees that leaked outside .claude/worktrees/.
+# Match the agent-suffix pattern (...-<5char-id>/) so we catch any future
+# escapees without ignoring real project directories.
+idea-synthesizer-claude-*/
+
 # Personal MCP server config — points at the developer's own Supabase
 # project ref. OAuth is per-user, so each contributor adds their own.
 .mcp.json

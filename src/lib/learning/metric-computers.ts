@@ -28,6 +28,13 @@
 // can reproduce any historical score.
 
 import type { Entity } from "@/types";
+import {
+  computeBrier,
+  computeECE,
+  computeReliabilityBins,
+  toCalibrationPoints,
+  type ReliabilityBin,
+} from "./calibration-metrics";
 
 export interface CoverageInput {
   entities: Pick<Entity, "analysis_count" | "evidence_strength">[];
@@ -57,6 +64,11 @@ export interface CalibrationInput {
   predictions: Array<{
     deviation: number | null;
     confidence: number | null;
+    /** When present, enables Brier/ECE/reliability-bin computation
+     *  on top of the legacy 1 − mean(|deviation|) score. Omit on
+     *  legacy call sites — the new metrics will be null. */
+    deviation_tag?: string | null;
+    status?: string | null;
   }>;
 }
 
@@ -65,6 +77,16 @@ export interface CalibrationResult {
   resolvedCount: number;
   /** Mean |deviation| among resolved predictions — lower is better. */
   meanAbsDeviation: number | null;
+  /** Brier score over (confidence, deviation_tag === 'expected') pairs.
+   *  Null when fewer than MIN_SAMPLE_FOR_CALIBRATION calibratable rows. */
+  brier: number | null;
+  /** Expected Calibration Error (10 bins). Null with same threshold. */
+  ece: number | null;
+  /** Reliability-diagram bins. Null with same threshold. */
+  reliabilityBins: ReliabilityBin[] | null;
+  /** Rows that contributed to brier/ece — non-null confidence AND a
+   *  quantitative deviation_tag. Always ≤ resolvedCount. */
+  calibratableCount: number;
 }
 
 /**
@@ -87,8 +109,34 @@ export function computeCalibration(input: CalibrationInput): CalibrationResult {
   const resolved = input.predictions.filter(
     (p) => p.deviation !== null && Number.isFinite(p.deviation as number),
   );
+
+  // Brier / ECE / bins use a different (and stricter) filter: a row
+  // contributes only when it carries a non-null confidence AND a
+  // quantitative deviation_tag. We compute those independently so a
+  // space with deviation data but no confidence stamps still produces
+  // a legacy `score` — and a space with confidence stamps but a tiny
+  // sample still gets `score` while the new metrics stay null.
+  const points = toCalibrationPoints(
+    input.predictions.map((p) => ({
+      confidence: p.confidence ?? null,
+      deviation_tag: p.deviation_tag ?? null,
+      status: p.status ?? "resolved",
+    })),
+  );
+  const brier = computeBrier(points);
+  const ece = computeECE(points);
+  const reliabilityBins = computeReliabilityBins(points);
+
   if (resolved.length === 0) {
-    return { score: null, resolvedCount: 0, meanAbsDeviation: null };
+    return {
+      score: null,
+      resolvedCount: 0,
+      meanAbsDeviation: null,
+      brier,
+      ece,
+      reliabilityBins,
+      calibratableCount: points.length,
+    };
   }
   let sumAbsDev = 0;
   for (const p of resolved) sumAbsDev += Math.abs(p.deviation as number);
@@ -98,6 +146,10 @@ export function computeCalibration(input: CalibrationInput): CalibrationResult {
     score,
     resolvedCount: resolved.length,
     meanAbsDeviation: mean,
+    brier,
+    ece,
+    reliabilityBins,
+    calibratableCount: points.length,
   };
 }
 

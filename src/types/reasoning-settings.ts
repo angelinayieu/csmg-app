@@ -125,6 +125,60 @@ export const DEFAULT_REASONING_SETTINGS: ReasoningSettings = {
   strategyCount: 3,
 };
 
+/**
+ * Single "turn everything up" preset — the one-click max-rigor mode the user
+ * has been asking for. Every toggle pushed to its highest-cost / deepest
+ * setting so the pipeline produces the full output catalog: all 5 lenses,
+ * deep research (3 passes), pre-flight clarifier, baseline first, all 5
+ * ranked strategies, apps materialized, lab simulations + variant factory.
+ *
+ * Cost implications (read this before defaulting it on): roughly 4-6x the
+ * standard run's LLM spend and ~5-10x the wall time vs the defaults. Apps
+ * + lab toggles compound — runLab triggers the variant factory which
+ * generates 3-5 variants per app with Monte Carlo per variant.
+ *
+ * Used by the "Max Rigor" pill on the chatbox row. The pill compares the
+ * current settings against this object via `isMaxRigorPreset` to flip its
+ * active/inactive visual.
+ */
+export const MAX_RIGOR_REASONING_SETTINGS: ReasoningSettings = {
+  lenses: ["systems_analyst", "skeptic", "operator", "engineer", "historian"],
+  depth: "deep",
+  askClarifyingQuestions: true,
+  buildBaselineFirst: true,
+  showAlternatives: true,
+  generateApps: true,
+  runLab: true,
+  // Inlined max (5) rather than referencing STRATEGY_COUNT_MAX because that
+  // constant is declared later in this file and reading it here would hit
+  // the Temporal Dead Zone at module init. The bound is asserted indirectly
+  // via the STRATEGY_COUNT_MAX export below; if either changes, update both.
+  strategyCount: 5,
+};
+
+/**
+ * Cheap structural check used by the "Max Rigor" pill to decide whether to
+ * render in its "active" (highlighted) state. Settings count as max-rigor
+ * when every comparable field matches MAX_RIGOR_REASONING_SETTINGS — order-
+ * insensitive on `lenses`. costBudget / costBudgetStrictness / solveBy are
+ * ignored here because they're orthogonal constraints (a user can pair
+ * max-rigor with a tight budget).
+ */
+export function isMaxRigorPreset(settings: ReasoningSettings): boolean {
+  if (settings.depth !== MAX_RIGOR_REASONING_SETTINGS.depth) return false;
+  if (settings.askClarifyingQuestions !== MAX_RIGOR_REASONING_SETTINGS.askClarifyingQuestions) return false;
+  if (settings.buildBaselineFirst !== MAX_RIGOR_REASONING_SETTINGS.buildBaselineFirst) return false;
+  if (settings.showAlternatives !== MAX_RIGOR_REASONING_SETTINGS.showAlternatives) return false;
+  if (settings.generateApps !== MAX_RIGOR_REASONING_SETTINGS.generateApps) return false;
+  if (settings.runLab !== MAX_RIGOR_REASONING_SETTINGS.runLab) return false;
+  if (settings.strategyCount !== MAX_RIGOR_REASONING_SETTINGS.strategyCount) return false;
+  const maxLenses = new Set(MAX_RIGOR_REASONING_SETTINGS.lenses);
+  const currentLenses = new Set(settings.lenses);
+  if (maxLenses.size !== currentLenses.size) return false;
+  for (const l of maxLenses) if (!currentLenses.has(l)) return false;
+  return true;
+}
+
 /** Bounds for the strategyCount stepper. Keep tight so the LLM
  *  doesn't fan out into low-quality alternatives; >5 strategies
  *  is rarely actionable. */

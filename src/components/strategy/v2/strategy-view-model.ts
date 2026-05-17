@@ -1,7 +1,7 @@
 // Strategy view-model derivations — pure functions, no React.
 // Merges StrategicRecommendation + CausalChains + Entities + goals into shapes the UI consumes.
 
-import type { Entity } from "@/types";
+import type { Entity, Edge } from "@/types";
 import type {
   StrategicRecommendation,
   StrategyPerspective,
@@ -14,6 +14,12 @@ import type { StrategyReasoningTrace } from "@/types/strategy-reasoning";
 import type { CausalChain } from "@/types/causal-chains";
 import type { SynthesisData } from "@/types/synthesis";
 import type { ImprovementGoal } from "@/types/goals";
+import type { EvidenceRegistryRow } from "@/types/evidence-registry";
+import {
+  computeStageImpact,
+  type StageImpact,
+  type CalibrationByEdge,
+} from "@/lib/twin/impact-weighted-metric";
 import { paletteSlot, type PaletteSlot } from "./strategy-palette";
 
 // ── Hero ──
@@ -55,10 +61,32 @@ export interface CascadeObjective {
   id: string;
   title: string;
   /**
-   * 0-100 progress against the key_metric target. `undefined` when the
-   * metric is qualitative (current/target are non-numeric strings like
-   * "high"/"low") or when neither current nor target is set — in that case
-   * the UI hides the progress bar instead of rendering 0% as if measured.
+   * Impact-weighted contribution of this objective's primary entity
+   * toward the active goal. Includes:
+   *   • pct (0..100, absolute %)
+   *   • per-chain decomposition
+   *   • aggregated evidence (effect sizes, CIs, study count, I²)
+   *   • composite confidence (chain-trust × evidence-quality blend)
+   *
+   * Computed by computeStageImpact() in lib/twin/impact-weighted-metric.ts.
+   * `null` when no active goal is set or when the perspective doesn't carry
+   * a resolvable entity_id — the UI then hides the impact chip.
+   *
+   * Phase B (this turn): the chain-contribution layer is wired. Evidence
+   * is passed in but typically empty until the hook fetches it from
+   * /api/spaces/[id]/evidence-registry. The library degrades gracefully —
+   * a null evidence map produces honest pct values from chain math alone.
+   */
+  impact: StageImpact | null;
+  /**
+   * Legacy 0-100 progress against the key_metric target — RETAINED for
+   * back-compat with the existing progress-bar render path. Now sourced
+   * from `impact.pct` rounded to integer when impact is set; falls back
+   * to `undefined` when impact is null so the bar hides instead of
+   * showing 0% theater.
+   *
+   * Removal scheduled for a follow-up sweep once the cascade-objective
+   * view component reads `impact` directly (Phase C).
    */
   progressPct?: number;
   /**
@@ -144,6 +172,21 @@ export interface VariantVM {
   /** Infrastructure proposals that will be materialized as apps on approval.
       Used by the pre-approval app preview to show exactly what gets created. */
   infrastructureProposals: InfrastructureProposal[];
+  /**
+   * E3 — layer-stratified variant marker. Flattened from
+   * `recommendation.layer_focus` so the variant card can render the
+   * layer chip without needing the full nested recommendation. `null`
+   * for comprehensive (non-stratified) variants — the chip stays
+   * hidden and the variant reads as "draws from all layers."
+   */
+  layerFocus: {
+    layerId: string;
+    label: string;
+    color: string;
+    /** Hover-tooltip text. Optional; falls back to a default
+     *  "Variant emphasizes the X layer" copy when empty. */
+    rationale: string;
+  } | null;
 }
 
 // ── Flowchart (variant detail) ──
@@ -323,13 +366,79 @@ function isPlaceholderValue(v: string | undefined | null): boolean {
   return PLACEHOLDER_VALUES.has(v.trim().toLowerCase());
 }
 
-function objectiveProgress(p: StrategyPerspective): number | undefined {
+/**
+ * Compute the impact-weighted % goal contribution for a perspective.
+ *
+ * Replaces the legacy `objectiveProgress` which divided LLM-stated
+ * `current` by LLM-stated `target` to fabricate a progress bar. The
+ * new computation:
+ *   1. Resolves a primary entity_id for the perspective (key_metric
+ *      first, then first supporting/entity_ref)
+ *   2. Calls computeStageImpact() with all causal chains for the active
+ *      goal, edges, and evidence — honest math, gracefully degrades
+ *      when inputs are sparse
+ *
+ * Returns null when no entity can be resolved (e.g. perspective only
+ * carries qualitative copy with no entity refs) OR when no active goal
+ * is set (impact is goal-relative; without a goal, "% impact toward X"
+ * is meaningless and we'd rather show no number than a misleading one).
+ */
+function objectiveImpact(
+  p: StrategyPerspective,
+  args: {
+    activeGoal: ImprovementGoal | null;
+    causalChains: CausalChain[];
+    edges: Edge[];
+    evidenceByEntity: Map<string, EvidenceRegistryRow[]>;
+    /** Phase F: per-edge calibration aggregates. Omitted on pre-resolution
+     *  spaces — impact lib leaves `calibration: null` on the returned
+     *  StageImpact in that case. */
+    calibrationByEdge?: Map<string, CalibrationByEdge>;
+  },
+): StageImpact | null {
+  const {
+    activeGoal,
+    causalChains,
+    edges,
+    evidenceByEntity,
+    calibrationByEdge,
+  } = args;
+  if (!activeGoal) return null;
+  // Resolve entity id from the perspective's structured fields. The
+  // strategy LLM emits supporting_entities[] AND/OR entity_refs[]; we
+  // try both. key_metric.entity_id isn't a stable field on every
+  // recommendation today, so we pull from the entity arrays first.
+  const entityId =
+    (p.supporting_entities && p.supporting_entities[0]) ||
+    (p.entity_refs && p.entity_refs[0]) ||
+    null;
+  if (!entityId) return null;
+  return computeStageImpact({
+    stage_entity_id: entityId,
+    goal: activeGoal,
+    causal_chains: causalChains,
+    edges,
+    evidence_by_entity: evidenceByEntity,
+    calibration_by_edge: calibrationByEdge,
+  });
+}
+
+/**
+ * Legacy helper retained for the action-derived objective fallback at
+ * line ~442 (the case where an objective has no key_metric and we
+ * promoted the first action). Unlike the perspective-level metric, an
+ * action-derived objective has no entity to anchor impact against —
+ * so we keep the old current/target arithmetic for action progress.
+ *
+ * (Yes, this leaves the legacy bogus-math in place for action fallbacks.
+ * Plan: Phase B.2 — replace with timeframe-based heuristic since
+ * actions naturally have "scheduled" vs "completed" semantics.)
+ */
+function legacyKeyMetricProgress(p: StrategyPerspective): number | undefined {
   const km = p.key_metric;
   if (!km) return undefined;
   const current = parseFirstNumber(km.current);
   const target = parseFirstNumber(km.target);
-  // Qualitative metrics ("high" / "low") yield null and we return undefined
-  // so the UI can render the qualitative valueLabel instead of a bogus 0%.
   if (current === null || target === null || target === 0) return undefined;
   const pct = (current / target) * 100;
   return Math.round(Math.max(0, Math.min(100, pct)));
@@ -385,12 +494,44 @@ export function buildCascadeRow(
   i: number,
   recommendation: StrategicRecommendation,
   causalChains: CausalChain[],
+  /**
+   * Phase B inputs for impact-weighted metric. All three optional so
+   * existing callers (legacy builds, tests) keep working without
+   * passing them — impact lib gracefully returns null when activeGoal
+   * is null and the progressPct falls back to legacy key_metric math.
+   */
+  impactInputs?: {
+    activeGoal: ImprovementGoal | null;
+    edges: Edge[];
+    evidenceByEntity: Map<string, EvidenceRegistryRow[]>;
+    /** Phase F. Optional — omitted on pre-resolution spaces. */
+    calibrationByEdge?: Map<string, CalibrationByEdge>;
+  },
 ): CascadeRowVM {
   const paletteKey = paletteSlot(i);
   const weight = deriveWeight(p);
   const confidence = deriveConfidence(p);
   const leadLag = deriveLeadLag(p);
-  const progress = objectiveProgress(p);
+  // Impact = real goal-contribution math via computeStageImpact when
+  // we have an active goal + edges; null otherwise. Falls through to
+  // legacy key_metric arithmetic for progressPct so the existing bar
+  // render path keeps working until Phase C lands the decomposition UI.
+  const impact = impactInputs
+    ? objectiveImpact(p, {
+        activeGoal: impactInputs.activeGoal,
+        causalChains,
+        edges: impactInputs.edges,
+        evidenceByEntity: impactInputs.evidenceByEntity,
+        calibrationByEdge: impactInputs.calibrationByEdge,
+      })
+    : null;
+  // progressPct precedence: real impact > legacy key_metric ratio.
+  // When neither is available, undefined collapses the progress bar
+  // in the view (instead of rendering 0% theater).
+  const progress =
+    impact !== null
+      ? Math.round(impact.pct)
+      : legacyKeyMetricProgress(p);
 
   // Primary objective = the perspective's key_metric aspiration
   const primaryId = `p${i + 1}-obj-primary`;
@@ -416,6 +557,7 @@ export function buildCascadeRow(
     objectives.push({
       id: primaryId,
       title: p.objective ?? p.key_metric.name,
+      impact,
       progressPct: progress,
       tag: leadLag,
       valueLabel: kmValueLabel,
@@ -439,6 +581,11 @@ export function buildCascadeRow(
     objectives.push({
       id: `p${i + 1}-obj-fallback`,
       title: a.text,
+      // Action-derived fallback: no entity-anchored impact today.
+      // Phase B.2 will replace with timeframe-based heuristic
+      // ("scheduled", "in progress", "completed") since actions
+      // naturally carry timeframe semantics rather than goal contribution.
+      impact: null,
       progressPct: undefined,
       tag: leadLagFromTimeframe(a.timeframe),
       description: a.infrastructure_note,
@@ -587,6 +734,25 @@ function computeVariantROI(rec: StrategicRecommendation): {
 
 export function buildVariantVM(rs: RankedStrategy, isTop: boolean): VariantVM {
   const rec = rs.recommendation;
+  // E3 — flatten layer_focus into a denormalized struct on the VM so the
+  // card render doesn't have to navigate the nested recommendation shape.
+  // Defensive against partial LLM output: only build the focus block when
+  // all three render fields are well-formed strings.
+  const lf = rec.layer_focus;
+  const layerFocus =
+    lf &&
+    typeof lf === "object" &&
+    typeof lf.layer_id === "string" &&
+    typeof lf.label === "string" &&
+    typeof lf.color === "string"
+      ? {
+          layerId: lf.layer_id,
+          label: lf.label,
+          color: lf.color,
+          rationale:
+            typeof lf.rationale === "string" ? lf.rationale : "",
+        }
+      : null;
   return {
     rank: rs.rank,
     id: `variant-${rs.rank}`,
@@ -600,6 +766,7 @@ export function buildVariantVM(rs: RankedStrategy, isTop: boolean): VariantVM {
     recommendation: rec,
     rankingRationale: rs.ranking_rationale,
     infrastructureProposals: rs.infrastructure_proposals ?? [],
+    layerFocus,
   };
 }
 
@@ -762,6 +929,22 @@ export function buildStrategyVM(args: {
   synthData: SynthesisData | null;
   entityCount: number;
   spaceName: string;
+  /**
+   * Phase B inputs for the impact-weighted metric. All optional so that
+   * legacy callers (tests, snapshot fixtures) continue to work without
+   * the new fields — when omitted, the cascade falls back to legacy
+   * key_metric ratio math for progressPct and impact is null.
+   */
+  activeGoal?: ImprovementGoal | null;
+  edges?: Edge[];
+  evidenceByEntity?: Map<string, EvidenceRegistryRow[]>;
+  /**
+   * Phase F: per-edge calibration aggregates from
+   * /api/spaces/[id]/calibration-summary. Optional — when omitted or
+   * empty, `computeStageImpact` returns `calibration: null` and uses the
+   * legacy two-factor confidence formula.
+   */
+  calibrationByEdge?: Map<string, CalibrationByEdge>;
 }): StrategyVM {
   const {
     recommendation,
@@ -771,6 +954,10 @@ export function buildStrategyVM(args: {
     synthData,
     entityCount,
     spaceName,
+    activeGoal = null,
+    edges = [],
+    evidenceByEntity = new Map(),
+    calibrationByEdge,
   } = args;
 
   const hero = buildHeroVM({
@@ -783,8 +970,16 @@ export function buildStrategyVM(args: {
     alternativesCount: Math.max(0, rankedStrategies.length - 1),
   });
 
+  // Compose impact inputs once and pass to every cascade row so the
+  // computation can short-circuit (when activeGoal is null) without
+  // re-checking inside each call.
+  const impactInputs =
+    activeGoal !== null
+      ? { activeGoal, edges, evidenceByEntity, calibrationByEdge }
+      : undefined;
+
   const cascade = recommendation.perspectives.map((p, i) =>
-    buildCascadeRow(p, i, recommendation, causalChains),
+    buildCascadeRow(p, i, recommendation, causalChains, impactInputs),
   );
 
   const variantSource =

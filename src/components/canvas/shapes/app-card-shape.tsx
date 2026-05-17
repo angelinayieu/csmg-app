@@ -117,6 +117,7 @@ export class AppCardShapeUtil extends BaseBoxShapeUtil<AppCardShape> {
     appId: T.string,
     spaceId: T.string,
     name: T.string,
+    tagline: T.string,
     appType: T.literalEnum(...VALID_TYPES),
     status: T.literalEnum(...VALID_STATUSES),
     healthScore: T.number.nullable(),
@@ -145,6 +146,7 @@ export class AppCardShapeUtil extends BaseBoxShapeUtil<AppCardShape> {
       appId: "",
       spaceId: "",
       name: "Untitled app",
+      tagline: "",
       appType: "dashboard",
       status: "proposed",
       healthScore: null,
@@ -174,9 +176,9 @@ function AppCardShapeView({ shape }: { shape: AppCardShape }) {
     appId,
     spaceId,
     name,
+    tagline,
     appType,
     status,
-    healthScore,
     staleReason,
     interventionCount,
     p10,
@@ -190,7 +192,7 @@ function AppCardShapeView({ shape }: { shape: AppCardShape }) {
   const TypeIcon = APP_TYPE_ICON[appType];
   const statusColor = STATUS_COLOR[status];
   const isStale = !!staleReason;
-  const hasHealth = typeof healthScore === "number";
+  const hasTagline = typeof tagline === "string" && tagline.trim().length > 0;
   const hasDistribution =
     typeof p10 === "number" && typeof p50 === "number" && typeof p90 === "number";
   // CardSpec wins over the legacy DistributionBand whenever it parses
@@ -343,24 +345,16 @@ function AppCardShapeView({ shape }: { shape: AppCardShape }) {
               Stale
             </span>
           )}
-          {hasHealth && (
-            <span
-              style={{
-                marginLeft: "auto",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: 14,
-                fontWeight: 700,
-                color: typeAccent,
-                fontVariantNumeric: "tabular-nums",
-              }}
-              title="Health score"
-            >
-              {Math.round(healthScore)}%
-            </span>
-          )}
+          {/* (Health % readout intentionally removed — was stale theater
+              set at app-gen time and never recomputed. The card now leads
+              with the tagline below the title so the primary read is
+              "what this app actually does for me," not a fabricated
+              health metric. healthScore is preserved on the shape props
+              for back-compat with persisted canvases.) */}
         </div>
 
-        {/* Title */}
+        {/* Title — 1-line clamp now (was 2) to leave room for the
+            tagline below. Keeps the card's total height unchanged. */}
         <div
           style={{
             fontSize: 13,
@@ -368,14 +362,38 @@ function AppCardShapeView({ shape }: { shape: AppCardShape }) {
             lineHeight: 1.25,
             color: "#0a1020",
             display: "-webkit-box",
-            WebkitLineClamp: 2,
+            WebkitLineClamp: 1,
             WebkitBoxOrient: "vertical",
             overflow: "hidden",
-            flex: 1,
           }}
         >
           {name}
         </div>
+
+        {/* Tagline — "what this app does for you" in plain English.
+            Sourced from apps.config.tagline. 2-line clamp + muted color
+            so the title remains the primary anchor and the tagline is
+            the supporting context. Collapses entirely when the strategy
+            didn't ship a tagline (older apps). */}
+        {hasTagline && (
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 400,
+              lineHeight: 1.35,
+              color: "rgba(11, 13, 18, 0.58)",
+              letterSpacing: "-0.005em",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              flex: 1,
+            }}
+            title={tagline}
+          >
+            {tagline}
+          </div>
+        )}
 
         {hasDistribution && (
           <DistributionBand

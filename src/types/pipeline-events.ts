@@ -95,6 +95,7 @@ export type StructuralEvent =
   | KgPlanApprovedEvent
   | KgPlanRejectedEvent
   | LayerOntologyMaterializedEvent
+  | LayerDependenciesMaterializedEvent
   // Phase 2 (research-strategy migration) — surface claims that don't
   // yet meet the triangulation bar (≥2 independent supporting sources)
   // so research can target them next pass, AND active contradiction
@@ -201,6 +202,26 @@ export interface CycleDetectedEvent {
   cycleId: string;
   classification: string;
   entityIds: string[];
+  /**
+   * Optional preview fields — populated by the emitter from the
+   * just-inserted `cycles` row so the painter can spawn a richly-rendered
+   * cycle-loop card without an extra DB roundtrip. All optional for
+   * back-compat with legacy events written before L1.1 landed; the
+   * painter falls back to the shape's defaults when omitted.
+   *
+   * Source: see decompose/route.ts ~line 1680 where this event is emitted.
+   * Mirrors the cached-preview pattern used by proposal_ready and
+   * twin_proposal_ready.
+   */
+  name?: string;
+  /**
+   * LLM-estimated multiplier (loop strength). NOT effect-size-weighted —
+   * see docs/CORE_CONCEPTS.md for the rigor caveats. Single number
+   * per cycle; the painter's tooltip surfaces this provenance to the user.
+   */
+  multiplier?: number | null;
+  growthType?: string | null;
+  firstEntityId?: string | null;
 }
 
 export interface BridgeFormedEvent {
@@ -1462,6 +1483,23 @@ export interface LayerOntologyMaterializedEvent {
   /** Slug of the starter template if ontologySource includes
    *  "starter"; null otherwise. */
   starterSlug: string | null;
+}
+
+// D-track Phase β — cross-layer cascade prediction has completed and
+// rows have been persisted to `layer_dependencies`. Consumers (canvas
+// LayerStackShape arrows, variant ripple chips, the strategy-variants
+// generator) should refetch /api/spaces/[id]/layer-dependencies to
+// pick up the new cascade context. One event per synthesize run, even
+// when the prediction soft-fails — `inserted` reports the truth.
+export interface LayerDependenciesMaterializedEvent {
+  type: "layer_dependencies_materialized";
+  /** Number of cascades the LLM emitted (pre-validation). */
+  emitted: number;
+  /** Number of cascades that passed validation + landed in DB. */
+  inserted: number;
+  /** Count of cascades rejected during validation (invalid layer ids,
+   *  self-loops, out-of-range numbers, missing mechanism). */
+  skipped: number;
 }
 
 // ── Phase 2 · Triangulation gap-flagging ──────────────────────────────
