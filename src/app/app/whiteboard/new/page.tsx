@@ -7,8 +7,7 @@
 //
 // What it does:
 //   1. Reads the search params the dashboard hero forwarded
-//      (?prompt | ?seed | ?mode | ?lenses | ?baseline | ?single
-//       | ?objective).
+//      (?prompt | ?seed | ?mode | ?lenses | ?baseline | ?single).
 //   2. Coerces them into a reasoning_settings bundle with the
 //      experience_mode baked in.
 //   3. POSTs /api/intake/bootstrap server-side — the same atomic
@@ -19,6 +18,13 @@
 //      InteraxisCanvas). The chrome on that page reads
 //      space.reasoning_settings.experienceMode and gates which
 //      panels show.
+//
+// This page is now the DEEP-LINK FALLBACK for direct URL access.
+// The dashboard hero POSTs /api/intake/bootstrap directly from the
+// client (synergy-dashboard-hero.tsx#routeToDestination) so it can
+// pass structured clarifying_qa_pairs + inferred_baseline that the
+// URL-pack route cannot carry. Bookmarked links + the legacy
+// /app/synergy/new redirect chain still resolve through here.
 //
 // This is Phase 1 of the consolidation plan. Phases 2/3 will port
 // Synergy's distinctive operations (voice dock, autopilot, focus
@@ -45,7 +51,6 @@ interface PageProps {
     lenses?: string;
     baseline?: string;
     single?: string;
-    objective?: string;
   }>;
 }
 
@@ -75,6 +80,25 @@ export default async function UnifiedWhiteboardNewPage({
 
   const mode = isExperienceMode(params.mode) ? params.mode : "brain_probe";
 
+  // ── Brainstorm Speedrun re-route (cinematic autopilot Wave 0) ──
+  // brainstorm_speed lands on the InteraxisCanvas today by default,
+  // but the canvas has no node-augment popover or autopilot loop —
+  // those primitives live on the legacy Synergy whiteboard. Until
+  // Phase 2/3 ports voice-dock + autopilot + node-popover to the
+  // canvas, brainstorm_speed redirects to /app/synergy/new where
+  // the existing augment + autopilot toolkit works out of the box.
+  //
+  // ?autopilot=1 tells synergy-whiteboard to auto-fire the multi-
+  // wave autopilot sequencer (variations → decompose → ... →
+  // converge) once the seed node mounts. See useAutopilot's
+  // `run({ sequence })` mode (Wave 1) for the choreographed cascade.
+  if (mode === "brainstorm_speed") {
+    const synergyParams = new URLSearchParams();
+    synergyParams.set("seed", text);
+    synergyParams.set("autopilot", "1");
+    redirect(`/app/synergy/new?${synergyParams.toString()}`);
+  }
+
   // Compose reasoning_settings from the query params so the canvas
   // chrome + downstream pipeline stages see consistent state.
   const lenses: ReasoningLens[] =
@@ -96,10 +120,10 @@ export default async function UnifiedWhiteboardNewPage({
   const reasoning_settings = coerceReasoningSettings(reasoningRaw);
 
   // ── Mode → pipeline policy ──
-  //   brain_probe / brainstorm_speed → quiet canvas; user drives it.
+  //   brain_probe                     → quiet canvas; user drives it.
   //   precise_rd / digital_twin       → full pipeline kicks in.
-  const skipPipeline =
-    mode === "brain_probe" || mode === "brainstorm_speed";
+  // brainstorm_speed is redirected to synergy above; never reaches here.
+  const skipPipeline = mode === "brain_probe";
 
   // Bootstrap is a same-origin POST that needs the user's session
   // cookie. We grab it off the incoming request and forward it.

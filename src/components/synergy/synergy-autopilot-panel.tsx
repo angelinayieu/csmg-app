@@ -4,12 +4,25 @@
 // rounds count + "Run" link. Click the chevron to disclose the
 // rounds slider. Precision inherits from the parent rail (no
 // duplicate slider).
+//
+// Wave 1.3 — Speedrun button. Adds a secondary "Run speedrun"
+// action that fires the multi-round sequence
+//   [variations, variations, decompose, rank]
+// instead of the plain N-rounds variations loop. Becomes the
+// primary action when the panel is opened via the
+// `autopilot:start-speedrun` window event (dispatched by the
+// synergy whiteboard when ?autopilot=1 is on the URL, i.e., the
+// brainstorm_speed homepage path).
 
 "use client";
 
-import { useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Pause } from "lucide-react";
-import { useAutopilot, type AutopilotPhase } from "@/hooks/synergy/use-autopilot";
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronRight, FastForward, Loader2, Pause } from "lucide-react";
+import {
+  useAutopilot,
+  type AutopilotPhase,
+  type AutopilotRoundKind,
+} from "@/hooks/synergy/use-autopilot";
 import type { AutopilotNewNode } from "@/hooks/synergy/use-autopilot";
 
 interface Props {
@@ -21,9 +34,21 @@ interface Props {
     expanded: { id: string; label: string };
     newNodes: AutopilotNewNode[];
     round: number;
+    roundKind: AutopilotRoundKind;
   }) => void;
   onComplete?: () => void;
 }
+
+/** The brainstorm-speedrun sequence. Variations twice to fan the
+ *  problem space, decompose to surface upstream/downstream chains,
+ *  rank to score the variations. Wave 2 will append a `converge`
+ *  round at the end for MVP clustering. */
+const SPEEDRUN_SEQUENCE: AutopilotRoundKind[] = [
+  "variations",
+  "variations",
+  "decompose",
+  "rank",
+];
 
 export function SynergyAutopilotPanel({
   sessionId,
@@ -47,6 +72,33 @@ export function SynergyAutopilotPanel({
     });
     onComplete?.();
   };
+
+  const startSpeedrun = async () => {
+    if (isRunning) return;
+    setExpanded(true);
+    await run({
+      sessionId,
+      sequence: SPEEDRUN_SEQUENCE,
+      precision,
+      onRound: (r) => onRound?.(r),
+    });
+    onComplete?.();
+  };
+
+  // Wave 0/1 wiring — auto-start speedrun when the whiteboard
+  // dispatches `autopilot:start-speedrun`. This is how the
+  // brainstorm_speed homepage path bootstraps the sequence after
+  // the seed node mounts. Idempotent: ignored if already running.
+  useEffect(() => {
+    function onStart() {
+      if (phase.kind === "running") return;
+      void startSpeedrun();
+    }
+    window.addEventListener("autopilot:start-speedrun", onStart);
+    return () =>
+      window.removeEventListener("autopilot:start-speedrun", onStart);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, precision, phase.kind]);
 
   return (
     <div className="rounded-xl bg-white"
@@ -78,9 +130,43 @@ export function SynergyAutopilotPanel({
 
       {expanded && (
         <div className="border-t border-black/5 px-3 py-3">
+          {/* Speedrun — runs the full divergent → convergent sequence */}
+          <div className="mb-3 rounded-lg bg-gradient-to-br from-violet-50 to-fuchsia-50 p-2.5 ring-1 ring-violet-100">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <FastForward
+                    className="h-3 w-3 text-violet-600"
+                    strokeWidth={1.75}
+                  />
+                  <span className="font-mono text-[9px] uppercase tracking-[0.15em] text-violet-700">
+                    Speedrun
+                  </span>
+                </div>
+                <p className="mt-1 text-[10.5px] leading-snug text-gray-600">
+                  {SPEEDRUN_SEQUENCE.length}-wave cascade: variations ×2 →
+                  decompose → rank
+                </p>
+              </div>
+              <button
+                onClick={startSpeedrun}
+                disabled={isRunning}
+                className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isRunning && phase.kind === "running" ? (
+                  <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.5} />
+                ) : (
+                  <FastForward className="h-3 w-3" strokeWidth={1.75} />
+                )}
+                Run
+              </button>
+            </div>
+          </div>
+
+          {/* Classic — N rounds of variations (legacy slider) */}
           <div className="mb-1.5 flex items-center justify-between">
             <span className="font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
-              Rounds
+              Custom rounds
             </span>
             <span className="font-mono text-[10px] text-gray-700">{rounds}</span>
           </div>
@@ -104,7 +190,16 @@ export function SynergyAutopilotPanel({
           <div className="mt-3 flex items-center justify-between gap-2">
             <div className="min-w-0 flex-1 text-[10.5px] text-gray-500">
               {phase.kind === "running" && (
-                <>Round {phase.round} of {phase.total}</>
+                <>
+                  {/* Wave 1: show round-kind label so sequence runs
+                      read as a story ("decomposing…") not a counter. */}
+                  Round {phase.round} of {phase.total}
+                  {phase.roundKind !== "variations" ? (
+                    <span className="ml-1 text-gray-400">
+                      · {phase.roundKind}
+                    </span>
+                  ) : null}
+                </>
               )}
               {phase.kind === "stopped" && <>{phase.reason}.</>}
               {phase.kind === "error" && (

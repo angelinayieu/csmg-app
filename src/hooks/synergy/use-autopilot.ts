@@ -1,21 +1,32 @@
 // ── useAutopilot — client-side multi-round loop ──
 //
 // Each iteration calls /api/synergy/sessions/[id]/autopilot/round, which
-// expands one unexpanded leaf and inserts 4 variations server-side.
+// expands one unexpanded leaf and inserts N child nodes server-side.
 // Looping client-side keeps cancellation immediate (just stop the next
 // call) and avoids long-running server requests.
 //
 // The hook is presentation-agnostic: pass an `onRound` callback to
 // merge the new nodes into your local state. The hook itself doesn't
 // touch any UI.
+//
+// Two modes:
+//   - SINGLE  (legacy): `run({ sessionId, rounds, precision })` — fires
+//     the same `variations` mode N times. Backward-compatible with the
+//     existing autopilot panel slider.
+//   - SEQUENCE (Wave 1): `run({ sessionId, sequence, precision })` —
+//     fires the listed round kinds in order, one per iteration. Drives
+//     the brainstorm-speedrun choreography (variations → decompose →
+//     ...) without each round needing its own client orchestration.
 
 import { useCallback, useRef, useState } from "react";
 
+/** A node persisted by an autopilot round. Kind is left loose because
+ *  later round kinds (decompose, etc.) produce non-variation kinds. */
 export interface AutopilotNewNode {
   id: string;
   session_id: string;
   parent_id: string;
-  kind: "variation";
+  kind: string;
   label: string;
   meta: string | null;
   x: number;
@@ -23,26 +34,74 @@ export interface AutopilotNewNode {
   created_at: string;
 }
 
+/** Available round kinds. Each maps to a discrete LLM operation in the
+ *  /api/synergy/sessions/[id]/autopilot/round endpoint. */
+export type AutopilotRoundKind =
+  | "variations" // existing — fan 4 angles off a leaf
+  | "decompose"  // Wave 1 — break a node into upstream/downstream/internal/adjacent
+  | "rank";      // Wave 1 — score variation siblings (no new nodes; persists ranking meta)
+
 export type AutopilotPhase =
   | { kind: "idle" }
-  | { kind: "running"; round: number; total: number; status: string }
+  | {
+      kind: "running";
+      round: number;
+      total: number;
+      status: string;
+      /** Which round-kind is firing right now. Useful for UI labels
+       *  during a sequence run. */
+      roundKind: AutopilotRoundKind;
+    }
   | { kind: "stopped"; reason: string; completed: number; total: number }
   | { kind: "error"; message: string; completed: number; total: number };
 
-export interface RunOptions {
+interface BaseRunOptions {
   sessionId: string;
-  rounds: number;
   precision: number;
   onRound?: (result: {
     expanded: { id: string; label: string };
     newNodes: AutopilotNewNode[];
     round: number;
+    roundKind: AutopilotRoundKind;
   }) => void;
 }
+
+export interface SingleRunOptions extends BaseRunOptions {
+  /** Legacy: fire `variations` this many times. */
+  rounds: number;
+  sequence?: undefined;
+}
+
+export interface SequenceRunOptions extends BaseRunOptions {
+  /** Wave 1: fire each round-kind in order. */
+  sequence: AutopilotRoundKind[];
+  rounds?: undefined;
+}
+
+export type RunOptions = SingleRunOptions | SequenceRunOptions;
 
 interface RoundResponse {
   expanded: { id: string; label: string };
   new_nodes: AutopilotNewNode[];
+}
+
+/** Resolve the round-kind plan from RunOptions. Sequence mode passes
+ *  through; single mode expands `rounds` to an array of `variations`. */
+function resolvePlan(opts: RunOptions): AutopilotRoundKind[] {
+  if (opts.sequence) return opts.sequence;
+  return Array.from({ length: opts.rounds }, () => "variations" as const);
+}
+
+/** Human label per round-kind. Surfaced in the UI status indicator. */
+function statusFor(kind: AutopilotRoundKind): string {
+  switch (kind) {
+    case "variations":
+      return "Expanding the most-recent thread…";
+    case "decompose":
+      return "Decomposing into upstream / downstream / internal / adjacent…";
+    case "rank":
+      return "Ranking the variations by feasibility / novelty / impact…";
+  }
 }
 
 export function useAutopilot() {
@@ -56,17 +115,26 @@ export function useAutopilot() {
   const run = useCallback(async (opts: RunOptions) => {
     cancelRef.current = false;
     let completed = 0;
+    const plan = resolvePlan(opts);
+    const total = plan.length;
 
-    for (let r = 1; r <= opts.rounds; r++) {
+    for (let r = 1; r <= total; r++) {
       if (cancelRef.current) {
-        setPhase({ kind: "stopped", reason: "Cancelled", completed, total: opts.rounds });
+        setPhase({
+          kind: "stopped",
+          reason: "Cancelled",
+          completed,
+          total,
+        });
         return;
       }
+      const roundKind = plan[r - 1];
       setPhase({
         kind: "running",
         round: r,
-        total: opts.rounds,
-        status: "Expanding the most-recent thread…",
+        total,
+        status: statusFor(roundKind),
+        roundKind,
       });
 
       try {
@@ -75,7 +143,10 @@ export function useAutopilot() {
           {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ precision: opts.precision }),
+            body: JSON.stringify({
+              precision: opts.precision,
+              roundKind,
+            }),
           },
         );
 
@@ -89,7 +160,7 @@ export function useAutopilot() {
           } catch {
             // ignore
           }
-          setPhase({ kind: "stopped", reason, completed, total: opts.rounds });
+          setPhase({ kind: "stopped", reason, completed, total });
           return;
         }
 
@@ -101,7 +172,7 @@ export function useAutopilot() {
           } catch {
             // ignore
           }
-          setPhase({ kind: "error", message: msg, completed, total: opts.rounds });
+          setPhase({ kind: "error", message: msg, completed, total });
           return;
         }
 
@@ -111,10 +182,11 @@ export function useAutopilot() {
           expanded: data.expanded,
           newNodes: data.new_nodes,
           round: r,
+          roundKind,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setPhase({ kind: "error", message: msg, completed, total: opts.rounds });
+        setPhase({ kind: "error", message: msg, completed, total });
         return;
       }
     }
@@ -123,7 +195,7 @@ export function useAutopilot() {
       kind: "stopped",
       reason: `Finished ${completed} round${completed === 1 ? "" : "s"}`,
       completed,
-      total: opts.rounds,
+      total,
     });
   }, []);
 

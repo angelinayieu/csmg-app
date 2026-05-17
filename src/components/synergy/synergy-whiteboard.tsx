@@ -116,12 +116,19 @@ interface Props {
   // Set when the user arrived from the dashboard voice orb — auto-
   // starts the mic on mount so the conversation continues seamlessly.
   autoStartVoice?: boolean;
+  // Set when the user arrived from the brainstorm_speed homepage
+  // pill. The whiteboard auto-fires the multi-wave autopilot
+  // sequencer (variations → decompose → ... → converge) once the
+  // seed node mounts, producing the cinematic speedrun crash. See
+  // Wave 1.3 wiring below.
+  autoStartAutopilot?: boolean;
 }
 
 export function SynergyWhiteboard({
   sessionId,
   focusNodeId,
   autoStartVoice = false,
+  autoStartAutopilot = false,
 }: Props) {
   const [tool, setTool] = useState<SynergyTool>("select");
   const [autoMode, setAutoMode] = useState(true);
@@ -270,6 +277,28 @@ export function SynergyWhiteboard({
     if (!loaded || !focusNodeId) return;
     setSelectedId(focusNodeId);
   }, [loaded, focusNodeId]);
+
+  // Wave 0/1 — brainstorm-speedrun autostart. When the URL arrived
+  // with ?autopilot=1 (set by the homepage redirect chain for the
+  // brainstorm_speed experience mode), dispatch the speedrun event
+  // once the seed node has loaded AND at least one persisted node
+  // exists. The autopilot panel (which is mounted inside the AI rail)
+  // listens for this event and fires the multi-wave sequence.
+  // useRef gate prevents duplicate fires on hot-reload / re-render.
+  const autopilotStartedRef = useRef(false);
+  useEffect(() => {
+    if (!autoStartAutopilot) return;
+    if (!loaded) return;
+    if (autopilotStartedRef.current) return;
+    if (nodes.length === 0) return;
+    autopilotStartedRef.current = true;
+    // Brief defer so the canvas finishes its first paint + the
+    // autopilot panel has subscribed to the event listener.
+    const t = window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("autopilot:start-speedrun"));
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [autoStartAutopilot, loaded, nodes.length]);
 
   // Auto-save: 750ms debounce after the most recent node/stroke mutation.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -801,7 +830,13 @@ export function SynergyWhiteboard({
             x: n.x,
             y: n.y,
             label: n.label,
-            kind: n.kind,
+            // Wave 1: autopilot round-kinds now produce multiple node
+            // kinds (variation / branch / ranking). The hook's
+            // AutopilotNewNode.kind is intentionally loose (string)
+            // since each round kind picks its own. The server only
+            // emits values that are valid NodeKinds — assertion is
+            // safe but loud-on-bug if a typo lands.
+            kind: n.kind as NodeKind,
             parent: n.parent_id,
             meta: n.meta ?? undefined,
           }),

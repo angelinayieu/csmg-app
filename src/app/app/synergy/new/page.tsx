@@ -24,6 +24,11 @@ interface PageProps {
     baseline?: string;
     single?: string;
     objective?: string;
+    /** Wave 0 — autopilot bootstrap. When set to "1", the destination
+     *  /app/synergy/[id] route forwards it through so the whiteboard
+     *  auto-fires the multi-wave autopilot sequencer (brainstorm
+     *  speedrun crash) once the seed node mounts. */
+    autopilot?: string;
   }>;
 }
 
@@ -93,5 +98,10 @@ export default async function NewSynergyPage({ searchParams }: PageProps) {
     });
   }
 
-  redirect(`/app/synergy/${session.id}`);
+  // Wave 0 — pass autopilot=1 through so the whiteboard auto-fires
+  // the speedrun sequencer once the seed node mounts.
+  const destParams = new URLSearchParams();
+  if (params.autopilot === "1") destParams.set("autopilot", "1");
+  const qs = destParams.toString();
+  redirect(`/app/synergy/${session.id}${qs ? `?${qs}` : ""}`);
 }

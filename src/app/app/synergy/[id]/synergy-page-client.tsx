@@ -38,18 +38,25 @@ interface Props {
   // voice orb. The whiteboard reads this on mount and auto-starts
   // listening so the conversation flows continuously.
   autoStartVoice?: boolean;
+  // True when the route arrived with ?autopilot=1 from the
+  // brainstorm_speed homepage redirect. The whiteboard reads this
+  // on mount and auto-fires the multi-wave autopilot sequencer
+  // (cinematic brainstorm-speedrun crash) once the seed node mounts.
+  autoStartAutopilot?: boolean;
 }
 
 export function SynergyPageClient({
   sessionId,
   focusNodeId,
   autoStartVoice,
+  autoStartAutopilot,
 }: Props) {
   return (
     <SynergyWhiteboard
       sessionId={sessionId}
       focusNodeId={focusNodeId}
       autoStartVoice={autoStartVoice}
+      autoStartAutopilot={autoStartAutopilot}
     />
   );
 }
