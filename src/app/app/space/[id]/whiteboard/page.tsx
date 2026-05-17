@@ -74,6 +74,7 @@ import { PipelineErrorBanner } from "@/components/canvas/chrome/pipeline-error-b
 // the default LLM-driven mode stays uncluttered. Bridges to the
 // in-canvas spawner via window events for shape creation.
 import { CanvasAddButtons } from "@/components/canvas/chrome/canvas-add-buttons";
+import { CanvasWorkspaceRoomPicker } from "@/components/canvas/chrome/canvas-workspace-room-picker";
 import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
 import {
   isExperienceMode,
@@ -321,6 +322,15 @@ export default function WhiteboardPage() {
           existing Connect / Snapshots / Baseline / Evidence stack
           on the bottom-right. */}
       <CanvasAddButtonsMount spaceId={space.id} space={space} />
+
+      {/* Universal-canvas Phase A — "Add brainstorm" picker. Lets the
+          user bring any of their existing brainstorm sessions onto
+          this canvas as a WorkspaceRoomShape. Top-right anchor so it
+          sits near the existing top chrome (mode toggle, etc.) and
+          doesn't crowd the bottom-right action stack. */}
+      <div className="fixed right-6 top-20 z-40">
+        <CanvasWorkspaceRoomPicker />
+      </div>
 
       {/* Baseline launcher — opens the situation drawer. Stacked above
           Snapshots so all three bottom-right anchors are visible. */}

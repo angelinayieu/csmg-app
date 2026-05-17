@@ -50,6 +50,7 @@ import { StrategyHeroCardShapeUtil } from "./shapes/strategy-hero-card-shape";
 import { StrategyAlternativeShapeUtil } from "./shapes/strategy-alternative-shape";
 import { StrategyObjectiveShapeUtil } from "./shapes/strategy-objective-shape";
 import { RoomShapeUtil } from "./shapes/room-shape";
+import { WorkspaceRoomShapeUtil } from "./shapes/workspace-room-shape";
 import { RoomTransitionShapeUtil } from "./shapes/room-transition-shape";
 import { ProbeTrailShapeUtil } from "./shapes/probe-trail-shape";
 import { MechanismCardShapeUtil } from "./shapes/mechanism-card-shape";
@@ -176,6 +177,11 @@ export const SHAPE_UTILS = [
   // sends it to back so subsequent painted shapes (entities, axes,
   // proposals) layer on top, reading as "inside" the room.
   RoomShapeUtil,
+  // Universal-canvas Phase A — hosts arbitrary user artifacts as
+  // canvas rooms (brainstorm sessions, strategy docs, twin sessions,
+  // probe transcripts). Discriminated by `kind` prop. First step
+  // toward making this canvas the universal workspace surface.
+  WorkspaceRoomShapeUtil,
   // B1 — directional flow connector between consecutive cascade rooms.
   // Spawned by canvas-room-transition-spawner once both endpoint rooms
   // exist on the canvas. Pulse re-fires the dash-march animation when

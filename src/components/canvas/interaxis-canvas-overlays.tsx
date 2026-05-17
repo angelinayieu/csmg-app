@@ -37,6 +37,7 @@ import { CanvasStrategyAppFanout } from "./chrome/canvas-strategy-app-fanout";
 import { CanvasImageVisionBridge } from "./chrome/canvas-image-vision-bridge";
 import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
 import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
+import { CanvasWorkspaceRoomSpawner } from "./chrome/canvas-workspace-room-spawner";
 import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
 import { CanvasOperationalSeedSpawner } from "./chrome/canvas-operational-seed-spawner";
 import { CanvasRoomTransitionSpawner } from "./chrome/canvas-room-transition-spawner";
@@ -186,6 +187,12 @@ function CanvasOverlays() {
           inside the tree. Listens for the
           interaxis:spawn-subject-card window event. */}
       <CanvasSubjectCardSpawner spaceId={spaceId} />
+      {/* Universal-canvas Phase A — listens for
+          canvas-workspace:add-brainstorm window events from the
+          CanvasWorkspaceRoomPicker chrome and spawns a
+          WorkspaceRoomShape at the viewport center. First step toward
+          making this canvas the universal workspace surface. */}
+      <CanvasWorkspaceRoomSpawner />
       {/* Hydrator counterpart — fetches pre-existing subjects from
           the DB on mount and paints SubjectCard shapes for any that
           aren't already on the canvas. Required for template-

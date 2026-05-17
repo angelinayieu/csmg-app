@@ -644,6 +644,27 @@ declare module "@tldraw/tlschema" {
        *  endpoint (add info, ask query, sub-objective). */
       spaceId: string;
     };
+    // Universal-canvas Phase A — workspace room shape. Hosts arbitrary
+    // user artifacts (brainstorm sessions, strategy docs, twin
+    // construction sessions, probe transcripts) as canvas rooms. The
+    // `kind` prop discriminates the renderer; `artifact_id` links to
+    // the underlying database row. First step toward making this
+    // canvas the universal workspace surface.
+    "workspace-room": {
+      w: number;
+      h: number;
+      /** Discriminator — which artifact this room hosts. */
+      kind: "brainstorm" | "strategy" | "twin" | "probe";
+      /** UUID FK to the underlying row (brainstorm_sessions.id,
+       *  synergy_strategies.id, etc.). Resolved client-side by the
+       *  per-kind renderer. */
+      artifact_id: string;
+      /** Cached title for instant render before the artifact fetch
+       *  completes. */
+      cached_title: string;
+      /** ms timestamp at spawn — gates the entrance animation. */
+      spawnedAt: number;
+    };
     // Probe rabbit-hole trail (2026-07-04) — spatial unfurl of a probe
     // question into 2-4 sub-questions. Spawned by the dock:probe event
     // listener (or per-card (+) menu's Probe action) right after the

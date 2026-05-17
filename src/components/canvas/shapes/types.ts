@@ -600,6 +600,53 @@ export type RoomShape = TLBaseShape<
   }
 >;
 
+// ── WorkspaceRoomShape (universal-canvas Phase A) ──
+//
+// A room shape that hosts ARBITRARY user artifacts rather than the
+// 8 pipeline stages of a single R&D space. This is the first step
+// toward making the space canvas the universal workspace: each
+// brainstorm session, strategy doc, twin construction session, or
+// probe session becomes a room here, the user composes them on the
+// canvas, and connectors track provenance between them.
+//
+// The `kind` discriminator decides how the room renders:
+//   "brainstorm" — renders a brainstorm_session summary; click → opens
+//                  the synergy whiteboard
+//   "strategy"   — (Phase A.2) renders a synergy_strategy summary;
+//                  click → opens the strategy doc
+//   "twin"       — (Phase A.3) renders a twin construction session;
+//                  click → opens the twin builder
+//   "probe"      — (Phase A.4) renders a probe transcript; click → opens
+//                  the probe canvas
+//
+// `artifact_id` is the foreign key to the underlying row (the
+// brainstorm_session_id / synergy_strategy_id / etc.). Resolved
+// client-side via a per-kind fetcher in the renderer.
+//
+// Distinct from RoomShape (the pipeline-stage room) so we can iterate
+// on this universal-canvas pattern without touching the production
+// pipeline-room rendering path.
+export type WorkspaceRoomShape = TLBaseShape<
+  "workspace-room",
+  {
+    w: number;
+    h: number;
+    kind: "brainstorm" | "strategy" | "twin" | "probe";
+    /** UUID of the underlying artifact (brainstorm_sessions.id,
+     *  synergy_strategies.id, etc.). The renderer fetches the row
+     *  via the per-kind client API to populate title/meta/thumbnail. */
+    artifact_id: string;
+    /** Cached title for instant render before the artifact fetch
+     *  completes. Updated optimistically when the artifact is
+     *  edited elsewhere. Optional — falls back to "Loading…" if
+     *  not set at spawn time. */
+    cached_title: string;
+    /** ms timestamp at spawn — used to gate the entrance animation
+     *  so re-mounts (tldraw page switches) don't replay it. */
+    spawnedAt: number;
+  }
+>;
+
 // B1 (operational whiteboard) — directional connector between two rooms.
 // Spawned by canvas-room-transition-spawner once rooms exist on the canvas.
 // Renders an orthogonal arrow with a dashed-pulse animation that fires when
