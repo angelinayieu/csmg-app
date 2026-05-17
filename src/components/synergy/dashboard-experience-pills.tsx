@@ -13,7 +13,7 @@
 
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Brain, FastForward, FlaskConical, Layers3 } from "lucide-react";
 import { EXPERIENCE_MODES, type ExperienceMode } from "@/types/experience-mode";
 
@@ -38,6 +38,16 @@ export function DashboardExperiencePills({
   const [hovered, setHovered] = useState<ExperienceMode | null>(null);
   const closeTimer = useRef<number | null>(null);
 
+  // Tooltip edge-clamping refs. The tooltip is `w-[260px]` and
+  // centered on its pill via `left-1/2 -translate-x-1/2`, which
+  // means the leftmost + rightmost pills overhang the row's
+  // bounds because their tooltip extends 130px past the pill
+  // edge. We measure on hover and apply a counter-shift so the
+  // body stays in the viewport while the arrow keeps pointing
+  // at the pill.
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRefs = useRef<Map<ExperienceMode, HTMLDivElement>>(new Map());
+
   const openTip = (id: ExperienceMode) => {
     if (closeTimer.current) {
       window.clearTimeout(closeTimer.current);
@@ -51,9 +61,63 @@ export function DashboardExperiencePills({
     closeTimer.current = window.setTimeout(() => setHovered(null), 110);
   };
 
+  // Compute the edge-clamp shift each time `hovered` flips. Run as
+  // layout effect so the user never sees the un-clamped frame.
+  useLayoutEffect(() => {
+    if (!hovered) return;
+    const tooltip = tooltipRefs.current.get(hovered);
+    const row = rowRef.current;
+    if (!tooltip || !row) return;
+
+    // Reset transform additions so we measure the un-shifted baseline.
+    tooltip.style.setProperty("--tip-shift", "0px");
+    const arrow = tooltip.querySelector<HTMLElement>("[data-tip-arrow]");
+    if (arrow) arrow.style.setProperty("--arrow-shift", "0px");
+
+    const rowRect = row.getBoundingClientRect();
+    const tipRect = tooltip.getBoundingClientRect();
+    const PAD = 8;
+    let shift = 0;
+    if (tipRect.left < rowRect.left + PAD) {
+      shift = rowRect.left + PAD - tipRect.left; // positive = move right
+    } else if (tipRect.right > rowRect.right - PAD) {
+      shift = rowRect.right - PAD - tipRect.right; // negative = move left
+    }
+    tooltip.style.setProperty("--tip-shift", `${shift}px`);
+    if (arrow) arrow.style.setProperty("--arrow-shift", `${-shift}px`);
+  }, [hovered]);
+
+  // Re-measure on viewport resize so a window-size change doesn't
+  // leave the tooltip dangling at the wrong offset.
+  useEffect(() => {
+    if (!hovered) return;
+    const onResize = () => {
+      const tooltip = tooltipRefs.current.get(hovered);
+      const row = rowRef.current;
+      if (!tooltip || !row) return;
+      tooltip.style.setProperty("--tip-shift", "0px");
+      const arrow = tooltip.querySelector<HTMLElement>("[data-tip-arrow]");
+      if (arrow) arrow.style.setProperty("--arrow-shift", "0px");
+      const rowRect = row.getBoundingClientRect();
+      const tipRect = tooltip.getBoundingClientRect();
+      const PAD = 8;
+      let shift = 0;
+      if (tipRect.left < rowRect.left + PAD) {
+        shift = rowRect.left + PAD - tipRect.left;
+      } else if (tipRect.right > rowRect.right - PAD) {
+        shift = rowRect.right - PAD - tipRect.right;
+      }
+      tooltip.style.setProperty("--tip-shift", `${shift}px`);
+      if (arrow) arrow.style.setProperty("--arrow-shift", `${-shift}px`);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [hovered]);
+
   return (
     <div className="relative mx-auto w-full max-w-3xl">
       <div
+        ref={rowRef}
         className="flex flex-wrap items-center justify-center gap-2"
         role="radiogroup"
         aria-label="Experience mode"
@@ -126,8 +190,19 @@ export function DashboardExperiencePills({
                 <div
                   id={`exp-pill-tip-${m.id}`}
                   role="tooltip"
-                  className="pointer-events-none absolute left-1/2 top-full z-40 mt-2 w-[260px] -translate-x-1/2 rounded-2xl px-4 py-3 text-left"
+                  ref={(el) => {
+                    if (el) tooltipRefs.current.set(m.id, el);
+                    else tooltipRefs.current.delete(m.id);
+                  }}
+                  className="pointer-events-none absolute left-1/2 top-full z-40 mt-2 w-[260px] rounded-2xl px-4 py-3 text-left"
                   style={{
+                    // -translate-x-1/2 centers tooltip on the pill.
+                    // The --tip-shift CSS variable is set by the
+                    // useLayoutEffect above when the body would
+                    // overflow the row (leftmost/rightmost pills).
+                    // Default 0 = unshifted = behaves as before.
+                    transform:
+                      "translateX(-50%) translateX(var(--tip-shift, 0px))",
                     background: "rgba(255, 255, 255, 0.95)",
                     backdropFilter: "blur(24px) saturate(180%)",
                     WebkitBackdropFilter: "blur(24px) saturate(180%)",
@@ -160,11 +235,17 @@ export function DashboardExperiencePills({
                   <p className="mt-2 text-[12px] leading-relaxed text-gray-700">
                     {m.description}
                   </p>
-                  {/* Arrow */}
+                  {/* Arrow — counter-shifts the tooltip body's
+                      --tip-shift so the arrow stays pointing at the
+                      pill center even when the body is clamped to
+                      keep itself inside the row. */}
                   <span
                     aria-hidden
-                    className="absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45"
+                    data-tip-arrow
+                    className="absolute -top-1.5 left-1/2 h-3 w-3 rotate-45"
                     style={{
+                      transform:
+                        "translateX(-50%) translateX(var(--arrow-shift, 0px)) rotate(45deg)",
                       background: "rgba(255, 255, 255, 0.92)",
                       borderLeft: `1px solid ${m.accent}33`,
                       borderTop: `1px solid ${m.accent}33`,
