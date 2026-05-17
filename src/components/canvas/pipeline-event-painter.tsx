@@ -68,6 +68,7 @@ import type {
   VariantCarouselShape,
   StageNodeShape,
   TwinSnapshotShape,
+  CycleLoopShape,
 } from "./shapes/types";
 import {
   ORIGIN_PROMPT_DEFAULT_H,
@@ -83,6 +84,8 @@ import {
 } from "./shapes/strategy-hero-card-shape";
 import {
   STAGE_ROOMS,
+  MIN_ROOM_H,
+  ROOM_GAP,
   computeRoomBounds,
   buildRoomSubtitle,
   roomForEventType,
@@ -91,6 +94,7 @@ import {
   EMPTY_ROOM_COUNTS,
   type RoomCounts,
 } from "@/lib/whiteboard/room-layout";
+import type { PipelineStage } from "@/types/pipeline-events";
 import { normalizeName as normalizeEntityName } from "@/lib/decomposition/extract-candidate-names";
 import { HubTracker } from "@/lib/graph/hub-discovery";
 
@@ -270,6 +274,7 @@ function ensureOriginPrompt(
       },
     });
     state.originPromptShapeId = shapeId;
+    registerRoomChild(state, "intake", shapeId);
     recordChildBottomForStage(
       editor,
       state,
@@ -329,6 +334,7 @@ function ensureKGFormation(editor: Editor, state: PainterState) {
       },
     });
     state.kgFormationShapeId = shapeId;
+    registerRoomChild(state, "kg", shapeId);
     recordChildBottomForStage(
       editor,
       state,
@@ -583,6 +589,7 @@ function paintSpaceOpened(
       },
     });
     state.spaceShellShapeIds.set(event.spaceKey, shapeId);
+    registerRoomChild(state, "landscape", shapeId);
     recordChildBottomForStage(
       editor,
       state,
@@ -729,8 +736,10 @@ const TAXONOMY_CARD_OFFSET_X =
 const ASSET_CARD_W = 200;
 const ASSET_CARD_H = 88;
 const ASSET_CARD_GAP = 12;
-const ASSET_CARD_ROW_X_OFFSET = 360; // distance from anchor.x to start of row
-const ASSET_CARD_ROW_Y_OFFSET = -780; // above anchor (origin-prompt sits even higher)
+// Note: ASSET_CARD_ROW_{X,Y}_OFFSET were anchor-relative constants
+// removed when paintAssetAdded migrated to placeInsideRoom("intake").
+// Asset positioning now derives from the intake room's interior +
+// origin-prompt's width.
 
 const SITUATION_CARD_W = 560;
 const SITUATION_CARD_H = 240;
@@ -755,12 +764,31 @@ function paintAssetAdded(
   // Idempotent — re-emission of the same asset upserts.
   if (state.assetCardShapeIds.has(event.assetId)) return;
 
-  // Position in a horizontal row to the right of the origin-prompt.
-  // Index by current chip count so each new chip slots after the prior.
+  // Place inside the `intake` room as a horizontal row above the
+  // origin-prompt card. Was previously anchor.y - 780 (floating well
+  // outside the cascade); now lives inside intake so the row grows
+  // the room when assets pile in and downstream rooms shift in sync.
+  // Origin-prompt sits at room-top + 16; assets sit ROW above it
+  // (negative offsetYFromTop pulls upward inside the room's content
+  // area) at the right of the room's horizontal center so they read
+  // as "what the user brought" beside the prompt.
   const idx = state.assetCardShapeIds.size;
-  const x =
-    state.anchor.x + ASSET_CARD_ROW_X_OFFSET + idx * (ASSET_CARD_W + ASSET_CARD_GAP);
-  const y = state.anchor.y + ASSET_CARD_ROW_Y_OFFSET;
+  const ASSET_ROW_OFFSET_Y = 16; // top of intake content area
+  // Stack to the right of the prompt: prompt is centered at offsetX=0
+  // with width 420 (ORIGIN_PROMPT_DEFAULT_W). Start the asset row a
+  // gutter to its right.
+  const ASSET_ROW_X_FROM_CENTER =
+    ORIGIN_PROMPT_DEFAULT_W / 2 + 32; // 32px gutter past prompt's right edge
+  const offsetX =
+    ASSET_ROW_X_FROM_CENTER + idx * (ASSET_CARD_W + ASSET_CARD_GAP);
+  const placement = placeInsideRoom(
+    "intake",
+    state.anchor,
+    offsetX + ASSET_CARD_W / 2, // placeInsideRoom centers; shift to left-edge for left-anchored shape
+    ASSET_ROW_OFFSET_Y,
+  );
+  const x = placement.x - ASSET_CARD_W / 2;
+  const y = placement.y;
   const accent =
     ASSET_CLASS_ACCENT_LOOKUP[event.assetClass] ?? "#0891B2";
 
@@ -785,6 +813,13 @@ function paintAssetAdded(
       meta: { source: "pipeline-event" },
     });
     state.assetCardShapeIds.set(event.assetId, shapeId);
+    registerRoomChild(state, "intake", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "intake",
+      y + ASSET_CARD_H,
+    );
   } catch (err) {
     console.warn("[pipeline-painter] asset card paint failed:", err);
   }
@@ -861,6 +896,7 @@ function paintSituationAnalyzed(
       meta: { source: "pipeline-event" },
     });
     state.situationCardShapeId = shapeId;
+    registerRoomChild(state, "intake", shapeId);
     // Grow the intake room to enclose the card so it doesn't poke past
     // the room's bottom edge. The default intake height (280) only
     // fits the prompt; with the situation card we need ~prompt+card.
@@ -912,13 +948,25 @@ function paintTaxonomy(
 
   const shapeId = createShapeId();
   try {
+    // Place inside the kg room, beside the kg-formation card. Was
+    // previously anchor-relative (anchor.x + 212, anchor.y - 360)
+    // which floated outside any room and let the card overlap
+    // arbitrary rooms above as the cascade shifted. Now lives inside
+    // kg next to kg-formation. The horizontal offset keeps the prior
+    // "landscape | IVs" pair reading.
+    const placement = placeInsideRoom(
+      "kg",
+      state.anchor,
+      TAXONOMY_CARD_OFFSET_X + TAXONOMY_CARD_W / 2,
+      16,
+    );
+    const x = placement.x - TAXONOMY_CARD_W / 2;
+    const y = placement.y;
     editor.createShape<TaxonomyCardShape>({
       id: shapeId,
       type: "taxonomy-card",
-      // Positioned to the right of the KG formation overview card so
-      // the two live artifacts read as a pair ("landscape | IVs").
-      x: state.anchor.x + TAXONOMY_CARD_OFFSET_X,
-      y: state.anchor.y - TAXONOMY_CARD_OFFSET_Y,
+      x,
+      y,
       props: {
         w: TAXONOMY_CARD_W,
         h: TAXONOMY_CARD_H,
@@ -934,6 +982,13 @@ function paintTaxonomy(
       },
     });
     state.taxonomyCardShapeId = shapeId;
+    registerRoomChild(state, "kg", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "kg",
+      y + TAXONOMY_CARD_H,
+    );
     // Tether DOWN from the KG formation card so the IV card reads as
     // "derived from the landscape" rather than floating. Mirrors the
     // backlink pattern in paintAppResultReady. Silent no-op if kg-
@@ -1046,6 +1101,7 @@ function paintTwinProposalReady(
       props: propsBase,
       meta: { source: "pipeline-event:twin-proposal-ready" },
     });
+    registerRoomChild(state, "twin", shapeId);
     recordChildBottomForStage(
       editor,
       state,
@@ -1118,12 +1174,24 @@ function paintVariant(
 
   const idx = state.variantCount;
   state.variantCount++;
-  const x =
-    state.anchor.x +
-    VARIANT_CARD_CENTER_X +
-    alternatingOffset(idx, VARIANT_CARD_SPACING) -
-    VARIANT_CARD_W / 2;
-  const y = state.anchor.y - VARIANT_CARD_OFFSET_Y;
+  // Place inside the kg room, beside-and-below the taxonomy card so
+  // variants read as "instances of the taxonomy." Was previously
+  // anchor.y - 116 + a left/right fan from VARIANT_CARD_CENTER_X —
+  // both floating outside any room.
+  //
+  // Taxonomy card sits at kg interior offset 16; we land variants
+  // below it (16 + TAXONOMY_CARD_H + 24).
+  const variantOffsetY = 16 + TAXONOMY_CARD_H + 24;
+  // Keep the fan layout (alternating left/right) but now centered on
+  // the kg room's interior, not the painter anchor.
+  const placement = placeInsideRoom(
+    "kg",
+    state.anchor,
+    VARIANT_CARD_CENTER_X + alternatingOffset(idx, VARIANT_CARD_SPACING),
+    variantOffsetY,
+  );
+  const x = placement.x - VARIANT_CARD_W / 2;
+  const y = placement.y;
 
   const shapeId = createShapeId();
   try {
@@ -1135,6 +1203,13 @@ function paintVariant(
       props,
     });
     state.variantCardShapeIds.set(event.variantId, shapeId);
+    registerRoomChild(state, "kg", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "kg",
+      y + VARIANT_CARD_H,
+    );
     // Tether the FIRST variant up to the taxonomy card so the deck
     // reads as "materialized from these IVs". Later variants rely on
     // sibling proximity — drawing an arrow from every one of them
@@ -1175,21 +1250,13 @@ function paintVariant(
 // a shape's top-left X given the desired shape width, so shapes land
 // centered on the anchor column.
 
-const ROW_PITCH = 520;
-
-/** Narrative band for each Sprint A shape type. */
-const ROW_APP_FORMATION = 1;   // app-result — downstream reality card
-const ROW_EXPERIMENT = 2;      // iv-decomposition — the active variant's IV rings
-const ROW_VARIANTS_BAND = 3;   // variant-carousel — whole deck
-const ROW_SYNTHESIS = 4;       // stage-node chains
-
-function rowY(anchorY: number, row: number): number {
-  return anchorY + row * ROW_PITCH;
-}
-
-function centerX(anchorX: number, shapeW: number): number {
-  return anchorX - shapeW / 2;
-}
+// (Sprint A row helpers — ROW_APP_FORMATION / ROW_EXPERIMENT /
+// ROW_VARIANTS_BAND / ROW_SYNTHESIS / rowY() / centerX() — were
+// removed when the 4 row-based paints migrated to placeInsideRoom
+// ("lab", anchor, …). See LAB_ROW_*_Y constants below for the new
+// interior offsets. The row narrative is preserved: each band still
+// stacks beneath the prior, just inside the lab room now so the
+// cascade tracks them when upstream rooms grow.)
 
 // Dimensions for the Sprint A shapes (matched to their getDefaultProps).
 const APP_RESULT_W = 560;
@@ -1205,6 +1272,18 @@ const STAGE_NODE_W = 180;
 const STAGE_NODE_H = 110;
 const STAGE_X_PITCH = STAGE_NODE_W + 60;
 const STAGE_CHAIN_V_PITCH = STAGE_NODE_H + 60;
+
+// Lab-room interior layout — the 4 Sprint-A row bands stack inside
+// the lab room with a uniform gap. Each offset is from the room's
+// content-top (placeInsideRoom already accounts for the header).
+// Replaces the prior rowY(anchor.y, ROW_*) constants which floated
+// anywhere from anchor+520 to anchor+2080 without any room knowing.
+const LAB_ROW_GAP = 60;
+const LAB_ROW_APP_Y = 24;
+const LAB_ROW_IV_Y = LAB_ROW_APP_Y + APP_RESULT_H + LAB_ROW_GAP;
+const LAB_ROW_VARIANT_Y = LAB_ROW_IV_Y + IV_DECOMP_H + LAB_ROW_GAP;
+const LAB_ROW_CAUSAL_TOP_Y =
+  LAB_ROW_VARIANT_Y + VARIANT_CAROUSEL_H + LAB_ROW_GAP;
 
 /**
  * Balanced-alternating offset from a center point. Index 0 sits at
@@ -1955,14 +2034,37 @@ function upsertRootCauseTree(editor: Editor, state: PainterState) {
   if (!state.anchor) return; // painter needs an anchor to position; try again on next event
   const shapeId = createShapeId();
   try {
+    // Place inside the kg room, to the left of the kg-formation card
+    // and below the room header. Was previously anchor.x - 800,
+    // anchor.y - 380 — floating 800px to the left and 380px above
+    // the painter anchor, totally orphaned from any room.
+    //
+    // ROOT_CAUSE_TREE_OFFSET_X is negative (-800), keeping the tree
+    // on the LEFT inside the kg room (matching prior left-of-formation
+    // positioning).
+    const placement = placeInsideRoom(
+      "kg",
+      state.anchor,
+      ROOT_CAUSE_TREE_OFFSET_X + ROOT_CAUSE_TREE_W / 2,
+      16,
+    );
+    const x = placement.x - ROOT_CAUSE_TREE_W / 2;
+    const y = placement.y;
     editor.createShape<RootCauseTreeShape>({
       id: shapeId,
       type: "root-cause-tree",
-      x: state.anchor.x + ROOT_CAUSE_TREE_OFFSET_X,
-      y: state.anchor.y - ROOT_CAUSE_TREE_OFFSET_Y,
+      x,
+      y,
       props,
     });
     state.rootCauseTreeShapeId = shapeId;
+    registerRoomChild(state, "kg", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "kg",
+      y + ROOT_CAUSE_TREE_H,
+    );
     // Tether the tree up to kg-formation so "drilling for root causes"
     // reads as descending from the landscape rather than appearing in
     // isolation off to the upper-left. Silent no-op if the formation
@@ -2238,8 +2340,11 @@ function paintAppResultReady(
   }
 
   const shapeId = createShapeId();
-  const x = centerX(state.anchor.x, APP_RESULT_W);
-  const y = rowY(state.anchor.y, ROW_APP_FORMATION);
+  // Place inside the lab room (was rowY(anchor.y, ROW_APP_FORMATION)
+  // which floated anchor + 520 outside any room).
+  const placement = placeInsideRoom("lab", state.anchor, 0, LAB_ROW_APP_Y);
+  const x = placement.x - APP_RESULT_W / 2;
+  const y = placement.y;
   try {
     editor.createShape<DownstreamRealityShape>({
       id: shapeId,
@@ -2249,6 +2354,13 @@ function paintAppResultReady(
       props,
     });
     state.appResultShapesByAppId.set(appKey, shapeId);
+    registerRoomChild(state, "lab", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "lab",
+      y + APP_RESULT_H,
+    );
 
     // Cross-row tether: if the KG-formation card (intake landscape)
     // already exists, link it downward. Reads as "landscape scored
@@ -2308,8 +2420,10 @@ function paintIVDecompositionReady(
   }
 
   const shapeId = createShapeId();
-  const x = centerX(state.anchor.x, IV_DECOMP_W);
-  const y = rowY(state.anchor.y, ROW_EXPERIMENT);
+  // Place inside the lab room, second row (below app-result).
+  const placement = placeInsideRoom("lab", state.anchor, 0, LAB_ROW_IV_Y);
+  const x = placement.x - IV_DECOMP_W / 2;
+  const y = placement.y;
   try {
     editor.createShape<IVDecompositionShape>({
       id: shapeId,
@@ -2319,6 +2433,13 @@ function paintIVDecompositionReady(
       props,
     });
     state.ivDecompositionShapeId = shapeId;
+    registerRoomChild(state, "lab", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "lab",
+      y + IV_DECOMP_H,
+    );
 
     // Tether from app-result (same appId if present, else first
     // painted). Reads as "reality decomposed into IVs".
@@ -2373,8 +2494,15 @@ function paintVariantDeckReady(
   }
 
   const shapeId = createShapeId();
-  const x = centerX(state.anchor.x, VARIANT_CAROUSEL_W);
-  const y = rowY(state.anchor.y, ROW_VARIANTS_BAND);
+  // Place inside the lab room, third row (below iv-decomposition).
+  const placement = placeInsideRoom(
+    "lab",
+    state.anchor,
+    0,
+    LAB_ROW_VARIANT_Y,
+  );
+  const x = placement.x - VARIANT_CAROUSEL_W / 2;
+  const y = placement.y;
   try {
     editor.createShape<VariantCarouselShape>({
       id: shapeId,
@@ -2384,6 +2512,13 @@ function paintVariantDeckReady(
       props,
     });
     state.variantCarouselShapeId = shapeId;
+    registerRoomChild(state, "lab", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "lab",
+      y + VARIANT_CAROUSEL_H,
+    );
 
     // Tether from iv-decomposition if present. Reads as "IVs
     // materialized into variants".
@@ -2448,19 +2583,24 @@ function paintCausalStageReady(
     return;
   }
 
-  // Each chain sits on its own sub-band within the synthesis row.
-  // chainRank is 1-indexed; row 0 for rank 1 keeps the top chain
-  // aligned with rowY(SYNTHESIS).
+  // Each chain sits on its own sub-band within the lab room's
+  // synthesis area. chainRank is 1-indexed; row 0 for rank 1 keeps
+  // the top chain aligned with LAB_ROW_CAUSAL_TOP_Y. Stages unfurl
+  // left-to-right within their chain row.
   const chainRow = Math.max(0, event.chainRank - 1);
-  const baseY = rowY(state.anchor.y, ROW_SYNTHESIS) + chainRow * STAGE_CHAIN_V_PITCH;
-
-  // Stages unfurl left-to-right within their chain row. Use
-  // stageIndex to position so out-of-order emissions still land in
-  // the right slot. Center the mid-stage (index 2-3 of a 6-stage
-  // chain) on the anchor column so long chains balance.
+  const stageOffsetY = LAB_ROW_CAUSAL_TOP_Y + chainRow * STAGE_CHAIN_V_PITCH;
+  const placement = placeInsideRoom(
+    "lab",
+    state.anchor,
+    0,
+    stageOffsetY,
+  );
+  // Center the mid-stage (index 2-3 of a 6-stage chain) on the room
+  // column so long chains balance horizontally. Stage 0 lands left of
+  // center; later stages chain to the right.
   const centerOffset = -2.5 * STAGE_X_PITCH;
-  const x = state.anchor.x + centerOffset + event.stageIndex * STAGE_X_PITCH;
-  const y = baseY;
+  const x = placement.x + centerOffset + event.stageIndex * STAGE_X_PITCH;
+  const y = placement.y;
 
   const shapeId = createShapeId();
   try {
@@ -2472,6 +2612,13 @@ function paintCausalStageReady(
       props,
     });
     state.stageNodeShapesByKey.set(key, shapeId);
+    registerRoomChild(state, "lab", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "lab",
+      y + STAGE_NODE_H,
+    );
     const chainList = state.stageNodesByChain.get(event.chainId) ?? [];
     chainList.push(shapeId);
     state.stageNodesByChain.set(event.chainId, chainList);
@@ -3472,6 +3619,28 @@ function paintEdge(
   }
 }
 
+/**
+ * Compact display name for a bridge's type. Keeps the arrow label
+ * short enough to read at canvas zoom. Returns an empty string for
+ * generic/empty types so the caller falls back to the percentage-only
+ * label form.
+ */
+function formatBridgeTypeShort(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const s = raw.trim().toLowerCase();
+  if (s === "shared_variable" || s === "shared") return "shared";
+  if (s === "causal") return "causal";
+  if (s === "structural" || s === "structural_analog") return "structural";
+  if (s === "mechanism" || s === "shared_mechanism") return "mechanism";
+  if (s === "temporal" || s === "temporal_overlap") return "temporal";
+  if (s === "bridge" || s === "generic") return "";
+  // Unknown type — show a snake_case → "Snake case" prefix so the
+  // label stays informative when new types ship without a mapping
+  // here. Cap at 14 chars to protect arrow legibility.
+  const friendly = s.replace(/_/g, " ");
+  return friendly.length <= 14 ? friendly : friendly.slice(0, 14);
+}
+
 function paintBridge(
   editor: Editor,
   event: Extract<StructuralEvent, { type: "bridge_formed" }>,
@@ -3490,6 +3659,17 @@ function paintBridge(
   if (state.ghostBridgesByPair.has(pairKey)) return;
 
   const arrowId = createShapeId();
+  // Surface the bridge's confidence + type as the arrow label so the
+  // gold dashed line carries actual information instead of just
+  // signalling "something cross-layer happened." The audit's P1
+  // finding was that bridges are the insight (LLM found a hidden
+  // leverage point across orthogonal lenses) but the canvas threw
+  // away the bridgeType + confidence the backend emitted.
+  const pct = Math.round(event.confidence * 100);
+  const typeShort = formatBridgeTypeShort(event.bridgeType);
+  // Compact label: "shared · 76%" or just "76%" when the type is
+  // generic/empty. Keeps the line readable at canvas zoom levels.
+  const label = typeShort ? `${typeShort} · ${pct}%` : `${pct}% bridge`;
   try {
     const arrow: TLShapePartial<TLArrowShape> = {
       id: arrowId,
@@ -3502,6 +3682,9 @@ function paintBridge(
         color: "yellow",
         size: "m",
         dash: "dashed",
+        font: "sans",
+        labelColor: "yellow",
+        richText: toRichText(label),
       },
     };
     editor.createShapes([arrow]);
@@ -3647,8 +3830,14 @@ function ensureSynthesisCard(
   }
 
   const shapeId = createShapeId();
-  const x = state.anchor.x - SYNTHESIS_W / 2;
-  const y = state.anchor.y + SYNTHESIS_Y_OFFSET;
+  // Place inside the `proposal` room — synthesis is the pivot every
+  // proposal card anchors to, so it lives at the room's interior top
+  // (~16px below the header). Was previously anchor.y + SYNTHESIS_Y_OFFSET
+  // which floated outside any room and let the proposal fan grow
+  // without bounding the cascade.
+  const placement = placeInsideRoom("proposal", state.anchor, 0, 16);
+  const x = placement.x - SYNTHESIS_W / 2;
+  const y = placement.y;
   try {
     editor.createShape<SynthesisIntersectionCardShape>({
       id: shapeId,
@@ -3669,6 +3858,13 @@ function ensureSynthesisCard(
       },
     });
     state.synthesisCardShapeId = shapeId;
+    registerRoomChild(state, "proposal", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "proposal",
+      y + SYNTHESIS_H,
+    );
     return shapeId;
   } catch (err) {
     console.warn("[pipeline-painter] synthesis card create failed:", err);
@@ -3726,8 +3922,161 @@ function recordChildBottomForStage(
       type: "room",
       props: { h: requiredH },
     });
+    // The room just grew. Static STAGE_HEIGHT-based downstream Y
+    // calculations are now stale — push every later room (and its
+    // contents) down by the delta so the cascade stays coherent.
+    // Without this, the landscape shells render INSIDE the bottom of
+    // a grown intake room (the bug visible in screen 1).
+    repositionDownstreamRooms(editor, state, stage, requiredH - currentH);
   } catch (err) {
     console.warn("[pipeline-painter] room auto-resize failed:", err);
+  }
+}
+
+/**
+ * Register a shape as a child of `stage`'s room. The downstream
+ * reposition pass shifts every registered child by the same delta when
+ * an upstream room grows, so children stay visually inside the room
+ * that owns them. Idempotent — re-registering the same id is a no-op.
+ */
+function registerRoomChild(
+  state: PainterState,
+  stage: PipelineStage,
+  shapeId: TLShapeId,
+) {
+  let bucket = state.roomChildren.get(stage);
+  if (!bucket) {
+    bucket = new Set<TLShapeId>();
+    state.roomChildren.set(stage, bucket);
+  }
+  bucket.add(shapeId);
+}
+
+/**
+ * Compute the Y a newly-spawning room should land at, based on the
+ * ACTUAL bottoms of the upstream rooms that already exist. The static
+ * `computeRoomBounds()` Y assumes every upstream room is still at
+ * MIN_ROOM_H — true at spawn time, but false the moment an upstream
+ * room grows. Without this dynamic recomputation, a new downstream
+ * room placed mid-run lands INSIDE the grown upstream room rather
+ * than below it. `fallbackY` is the static cascade Y from
+ * computeRoomBounds — used as the default when no upstream rooms
+ * exist yet (the very first room of the run).
+ */
+function computeSpawnYFromLiveRooms(
+  editor: Editor,
+  state: PainterState,
+  stage: PipelineStage,
+  fallbackY: number,
+): number {
+  const meta = STAGE_ROOMS[stage];
+  if (!meta) return fallbackY;
+  let highestUpstreamOrder = -1;
+  let highestUpstreamBottom = 0;
+  for (const [otherStage, roomId] of state.roomShapeIds) {
+    const other = STAGE_ROOMS[otherStage as PipelineStage];
+    if (!other || other.order >= meta.order) continue;
+    const room = editor.getShape(roomId);
+    if (!room) continue;
+    const roomY = (room as { y?: number }).y ?? 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const roomH = ((room as any).props?.h as number | undefined) ?? MIN_ROOM_H;
+    const bottom = roomY + roomH;
+    if (other.order > highestUpstreamOrder) {
+      highestUpstreamOrder = other.order;
+      highestUpstreamBottom = bottom;
+    }
+  }
+  if (highestUpstreamOrder === -1) return fallbackY;
+  // Pad for any intermediate stages that haven't spawned yet (unusual
+  // but supports out-of-order stage_boundary events).
+  const missingIntermediates = Math.max(
+    0,
+    meta.order - highestUpstreamOrder - 1,
+  );
+  return (
+    highestUpstreamBottom +
+    ROOM_GAP +
+    missingIntermediates * (MIN_ROOM_H + ROOM_GAP)
+  );
+}
+
+/**
+ * When `grownStage`'s room grew by `deltaY`, every room with a higher
+ * order in the cascade needs to shift down by the same delta — both
+ * the room shape itself AND every shape registered as living inside
+ * it. Without this, the static STAGE_HEIGHT-based Y math in
+ * `computeRoomBounds()` leaves the downstream rooms at their original
+ * positions, and the grown room's overflow visually swallows them.
+ *
+ * Cheap — the loop runs once per growth event, touches at most one
+ * shape update per downstream room + one per registered child.
+ */
+function repositionDownstreamRooms(
+  editor: Editor,
+  state: PainterState,
+  grownStage: string,
+  deltaY: number,
+) {
+  if (deltaY <= 0) return;
+  const grownMeta = STAGE_ROOMS[grownStage as PipelineStage];
+  if (!grownMeta) return;
+
+  for (const [stage, roomId] of state.roomShapeIds) {
+    const meta = STAGE_ROOMS[stage as PipelineStage];
+    if (!meta || meta.order <= grownMeta.order) continue;
+
+    const room = editor.getShape(roomId);
+    if (!room) continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const oldY = (room as { y?: number }).y;
+    if (typeof oldY !== "number") continue;
+
+    try {
+      // Same RoomShape-as-TLShape constraint mismatch the rest of the
+      // painter's room ops work around — see upsertRoomForStage below.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      editor.updateShape({
+        id: roomId,
+        type: "room",
+        x: (room as { x?: number }).x ?? 0,
+        y: oldY + deltaY,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+    } catch (err) {
+      console.warn("[pipeline-painter] downstream room shift failed:", err);
+      continue;
+    }
+
+    // Also bump every shape that lives inside this downstream room.
+    const children = state.roomChildren.get(stage);
+    if (!children) continue;
+    for (const childId of children) {
+      const child = editor.getShape(childId);
+      if (!child) continue;
+      const childX = (child as { x?: number }).x ?? 0;
+      const childY = (child as { y?: number }).y ?? 0;
+      try {
+        // x/y exist on every tldraw shape; type-narrowing the discriminated
+        // shape union just to shift a position would be needlessly verbose.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        editor.updateShape({
+          id: childId,
+          type: child.type,
+          x: childX,
+          y: childY + deltaY,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any);
+      } catch {
+        /* shape may have been deleted mid-flight; skip */
+      }
+    }
+    // Bump the cached max-Y so future grow checks against this room
+    // continue to produce sensible deltas.
+    const prevMax = state.roomChildMaxY.get(stage);
+    if (typeof prevMax === "number") {
+      state.roomChildMaxY.set(stage, prevMax + deltaY);
+    }
   }
 }
 
@@ -3790,12 +4139,20 @@ function upsertRoomForStage(
     return;
   }
 
-  // First spawn for this stage. Compute deterministic bounds from
-  // the room layout helper so rooms always land in the same vertical
-  // slot regardless of arrival order.
+  // First spawn for this stage. computeRoomBounds returns a Y based
+  // on the static MIN_ROOM_H cascade — but earlier rooms may have
+  // already grown past their initial height, so the static Y would
+  // place this new room INSIDE the grown upstream rooms. Recompute
+  // the spawn-Y from the live shapes the painter has already created.
   const bounds = computeRoomBounds(
     stage as keyof typeof STAGE_ROOMS,
     state.anchor,
+  );
+  const dynamicY = computeSpawnYFromLiveRooms(
+    editor,
+    state,
+    stage as PipelineStage,
+    bounds.y,
   );
   // If children for this stage already painted before the room (the
   // common case — kg-formation paints on first entity_added, but
@@ -3804,7 +4161,7 @@ function upsertRoomForStage(
   const recordedMaxY = state.roomChildMaxY.get(stage);
   const requiredH =
     recordedMaxY != null
-      ? Math.max(bounds.h, recordedMaxY - bounds.y + ROOM_PADDING.bottom)
+      ? Math.max(bounds.h, recordedMaxY - dynamicY + ROOM_PADDING.bottom)
       : bounds.h;
   const shapeId = createShapeId();
   try {
@@ -3812,7 +4169,7 @@ function upsertRoomForStage(
       id: shapeId,
       type: "room",
       x: bounds.x,
-      y: bounds.y,
+      y: dynamicY,
       props: {
         w: bounds.w,
         h: requiredH,
@@ -4081,11 +4438,14 @@ function paintProposal(
   // Alternate left/right so subsequent proposals fan to both sides.
   const side: "left" | "right" = state.proposalCount % 2 === 0 ? "right" : "left";
 
-  // Anchor proposalX/Y around the synthesis card. Right-side proposals
-  // sit to the right of the card; left-side to the left. Vertically
-  // staggered so multiple proposals on the same side don't overlap.
-  const synthesisX = state.anchor.x - SYNTHESIS_W / 2;
-  const synthesisY = state.anchor.y + SYNTHESIS_Y_OFFSET;
+  // Anchor proposalX/Y around the synthesis card's actual room-relative
+  // position. Was previously anchor.y + SYNTHESIS_Y_OFFSET which let
+  // the proposal stack drift outside the proposal room. Now both
+  // synthesis and proposals live inside the room and the cascade
+  // shifts downstream rooms (twin/lab/results) when this stack grows.
+  const synthPlacement = placeInsideRoom("proposal", state.anchor, 0, 16);
+  const synthesisX = synthPlacement.x - SYNTHESIS_W / 2;
+  const synthesisY = synthPlacement.y;
   const stackIndex = Math.floor(state.proposalCount / 2);
   const stackVOffset = stackIndex * (PROPOSAL_H + RIBBON_H + EXPERIMENT_DESIGN_H + 60);
   const proposalX =
@@ -4184,6 +4544,13 @@ function paintProposal(
     state.proposalsById.set(event.proposalId, proposalShapeId);
     state.proposalCount += 1;
     state.synthesisAppsCount += 1;
+    registerRoomChild(state, "proposal", proposalShapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "proposal",
+      proposalY + PROPOSAL_H,
+    );
     // Bump the appsProposedCount footer on the synthesis card so the
     // user sees the running tally tick up as proposals stream in.
     ensureSynthesisCard(editor, state, /* spaceId */ "");
@@ -4220,6 +4587,13 @@ function paintProposal(
         };
         editor.createShapes([ribbon]);
         state.chainRibbonsByProposal.set(event.proposalId, ribbonId);
+        registerRoomChild(state, "proposal", ribbonId);
+        recordChildBottomForStage(
+          editor,
+          state,
+          "proposal",
+          proposalY + PROPOSAL_H + RIBBON_VGAP + RIBBON_H,
+        );
       } catch (err) {
         // Non-fatal — the proposal card above still conveys the
         // proposal, the ribbon is a bonus.
@@ -4314,6 +4688,13 @@ function paintProposal(
         };
         editor.createShapes([design]);
         state.experimentDesignByProposal.set(event.proposalId, designId);
+        registerRoomChild(state, "proposal", designId);
+        recordChildBottomForStage(
+          editor,
+          state,
+          "proposal",
+          designY + EXPERIMENT_DESIGN_H,
+        );
       } catch (err) {
         // Non-fatal — the snapshot + ribbon above still convey the
         // proposal. The design card is a richer layer that some runs
@@ -4336,6 +4717,34 @@ function paintProposal(
   }
 }
 
+// Cycle-loop layout: stack the cards in a row at the bottom of the kg
+// room's interior, wrapping after CYCLE_LOOPS_PER_ROW. Default dims
+// match cycle-loop-shape.tsx's getDefaultProps (260×140).
+const CYCLE_LOOP_W = 260;
+const CYCLE_LOOP_H = 140;
+const CYCLE_LOOP_GAP = 16;
+const CYCLE_LOOPS_PER_ROW = 5;
+// Y offset inside kg room — below the entire top cluster (kg-formation,
+// taxonomy, variants, root-cause-tree). Root-cause-tree is the tallest
+// member at 16 + 440 = 456 from room top; cycle loops stack BELOW
+// that with a gap so the bands never overlap horizontally. The grow
+// logic shifts downstream rooms if more rows arrive than fit at this
+// offset — see W4a in pipeline-event-painter.tsx.
+const CYCLE_LOOP_OFFSET_Y_BASE = 480;
+
+type CycleClassification = CycleLoopShape["props"]["classification"];
+const VALID_CYCLE_CLASSIFICATIONS: readonly CycleClassification[] = [
+  "reinforcing_positive",
+  "reinforcing_negative",
+  "balancing",
+] as const;
+
+function normalizeCycleClassification(raw: string): CycleClassification {
+  return (
+    VALID_CYCLE_CLASSIFICATIONS.find((c) => c === raw) ?? "balancing"
+  );
+}
+
 function paintCycle(
   editor: Editor,
   event: Extract<StructuralEvent, { type: "cycle_detected" }>,
@@ -4356,6 +4765,94 @@ function paintCycle(
     } catch (err) {
       console.warn("[pipeline-painter] cycle highlight failed:", err);
     }
+  }
+
+  // Spawn a cycle-loop card so the classification (reinforcing+ /
+  // reinforcing− / balancing) is actually surfaced to the user.
+  // Without this the cycle was invisible apart from the convergence
+  // dashed-ring on each entity — the user couldn't tell a virtuous
+  // loop from a death spiral.
+  //
+  // Idempotent: re-emission of the same cycleId updates the existing
+  // card's classification + entity preview instead of stacking
+  // duplicates. Requires an anchor; cycles can arrive before any
+  // structural event (rare) so we bail early in that case.
+  if (!state.anchor) return;
+
+  const classification = normalizeCycleClassification(event.classification);
+  const entityNames = event.entityIds
+    .map((id) => lookupEntityName(editor, state, id))
+    .filter((n): n is string => !!n);
+
+  const existingId = state.cycleLoopShapeIds.get(event.cycleId);
+  if (existingId) {
+    try {
+      editor.updateShape<CycleLoopShape>({
+        id: existingId,
+        type: "cycle-loop",
+        props: {
+          classification,
+          entityNames,
+          nodeCount: event.entityIds.length,
+        },
+      });
+    } catch (err) {
+      console.warn("[pipeline-painter] cycle-loop update failed:", err);
+    }
+    return;
+  }
+
+  // Place inside the kg room in a row layout below kg-formation.
+  // Cycles wrap to a new row after CYCLE_LOOPS_PER_ROW so the band
+  // stays inside the room's horizontal extent.
+  const idx = state.cycleLoopShapeIds.size;
+  const row = Math.floor(idx / CYCLE_LOOPS_PER_ROW);
+  const col = idx % CYCLE_LOOPS_PER_ROW;
+  const rowWidth =
+    CYCLE_LOOPS_PER_ROW * CYCLE_LOOP_W +
+    (CYCLE_LOOPS_PER_ROW - 1) * CYCLE_LOOP_GAP;
+  // Center the row horizontally on the room's content center, then
+  // index each card from the left edge.
+  const offsetX =
+    -rowWidth / 2 + col * (CYCLE_LOOP_W + CYCLE_LOOP_GAP) + CYCLE_LOOP_W / 2;
+  const offsetY =
+    CYCLE_LOOP_OFFSET_Y_BASE + row * (CYCLE_LOOP_H + CYCLE_LOOP_GAP);
+  const placement = placeInsideRoom("kg", state.anchor, offsetX, offsetY);
+  const x = placement.x - CYCLE_LOOP_W / 2;
+  const y = placement.y;
+
+  const firstEntityId = event.entityIds[0] ?? null;
+  const shapeId = createShapeId();
+  try {
+    editor.createShape<CycleLoopShape>({
+      id: shapeId,
+      type: "cycle-loop",
+      x,
+      y,
+      props: {
+        w: CYCLE_LOOP_W,
+        h: CYCLE_LOOP_H,
+        cycleId: event.cycleId,
+        spaceId: state.strategyHeroSpaceId ?? "",
+        name: entityNames[0] ? `Loop · ${entityNames[0]}` : "Cycle",
+        classification,
+        entityNames,
+        nodeCount: event.entityIds.length,
+        multiplier: null,
+        firstEntityId,
+      },
+      meta: { source: "pipeline-event" },
+    });
+    state.cycleLoopShapeIds.set(event.cycleId, shapeId);
+    registerRoomChild(state, "kg", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "kg",
+      y + CYCLE_LOOP_H,
+    );
+  } catch (err) {
+    console.warn("[pipeline-painter] cycle-loop create failed:", err);
   }
 }
 

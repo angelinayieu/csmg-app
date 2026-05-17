@@ -52,6 +52,13 @@ export interface StageRoomMeta {
   /** Title shown in the room's header. User-facing, not the pipeline
    *  internal name (e.g., "Probability spaces", not "landscape"). */
   title: string;
+  /** One-word narrative label used by the top stage strip + bottom
+   *  event-hud pills. Single source of truth for "what do we call
+   *  this stage in a chip / pill / breadcrumb." Was previously two
+   *  separate records (`STAGE_LABELS` in canvas-event-hud +
+   *  `label` in canvas-stage-indicator) using `Scan/Graph/Propose`
+   *  vs `Breadth/Depth/Weave` for the same stages. */
+  shortLabel: string;
   /** Plain-language explanation of what's happening in this room.
    *  Renders below the title in a smaller font. */
   description: string;
@@ -77,6 +84,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   intake: {
     order: 0,
     title: "Understanding your situation",
+    shortLabel: "Intake",
     description:
       "Reading your prompt, parsing what you brought, and framing the question.",
     accent: "#8B5CF6",
@@ -85,6 +93,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   landscape: {
     order: 1,
     title: "Probability spaces",
+    shortLabel: "Breadth",
     description:
       "Opening the dimensions that matter for this question — actors, scenarios, risk, …",
     accent: "#0891B2",
@@ -93,6 +102,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   kg: {
     order: 2,
     title: "Knowledge graph",
+    shortLabel: "Depth",
     description:
       "Decomposing the situation into entities, causal edges, and feedback cycles.",
     accent: "#10B981",
@@ -101,6 +111,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   proposal: {
     order: 3,
     title: "Strategies",
+    shortLabel: "Weave",
     description:
       "Synthesizing ranked strategies with the supporting reasoning that produced each one.",
     accent: "#D97706",
@@ -109,6 +120,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   twin: {
     order: 4,
     title: "Digital twin",
+    shortLabel: "Twin",
     description:
       "The committed Workflow/Strategy/Twin: causal stages, mechanism cascade, and the proposed-vs-actual diff.",
     accent: "#7C3AED",
@@ -117,6 +129,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   lab: {
     order: 5,
     title: "Lab simulations",
+    shortLabel: "Test",
     description:
       "Stress-testing strategies with Monte Carlo runs and counterfactual variants.",
     accent: "#EC4899",
@@ -125,6 +138,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   reflexive: {
     order: 6,
     title: "Reflexive loop",
+    shortLabel: "Loop",
     description:
       "Background prospector + radar + calibration — the system continuously chips away at coverage between visits.",
     accent: "#0EA5E9",
@@ -133,6 +147,7 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
   results: {
     order: 7,
     title: "Results",
+    shortLabel: "Done",
     description: "Final synthesis and approved next actions.",
     accent: "#475569",
     glyph: "⑧",
@@ -153,10 +168,28 @@ export const STAGE_ROOMS: Record<PipelineStage, StageRoomMeta> = {
  *  widest natural unfurl (the layered KG grid). */
 export const ROOM_W = 1900;
 
-/** Per-stage starting height. Painter can extend if needed. Exported
- *  so canvas-side helpers (e.g., the final-plan-card bridge that
- *  creates the results Room outside the SSE event stream) can size
- *  rooms consistently with the painter. */
+/** Initial height every room spawns at — just enough to show the
+ *  header bar + a line of subtitle. Rooms grow past this via the
+ *  painter's `recordChildBottomForStage()` whenever a child lands
+ *  below the room's current bottom edge, and downstream rooms shift
+ *  via `repositionDownstreamRooms()` so the cascade stays coherent.
+ *
+ *  Previously each stage had its own static MAX height (intake:200,
+ *  landscape:340, kg:620, …) and rooms were rendered at that height
+ *  whether or not they had content yet. Empty stages painted 200-
+ *  620px of beige slab each, stacking to ~3400px of cascade total —
+ *  the "wall of slabs" the user flagged in the zoomed-out view. By
+ *  starting at MIN_ROOM_H, an empty cascade is ~80×8 + gaps ≈ 1100px
+ *  and only the stages actively producing content take vertical real
+ *  estate. */
+// Calibrated against the room-shape header: padding 20+24=44 + telemetry
+// strip 14 + header row 44 = ~102 when the room is active. 104 gives a
+// 2px breathing margin so the bottom hint strip doesn't clip.
+export const MIN_ROOM_H = 104;
+
+/** Per-stage soft-max heights — preserved for reference / downstream
+ *  use. The painter no longer uses these as initial heights; rooms
+ *  start at MIN_ROOM_H and grow as children land. */
 export const STAGE_HEIGHT: Record<PipelineStage, number> = {
   intake: 200,
   landscape: 340,
@@ -199,18 +232,24 @@ export function computeRoomBounds(
   anchor: { x: number; y: number },
 ): { x: number; y: number; w: number; h: number } {
   const meta = STAGE_ROOMS[stage];
-  // Sum heights + gaps for every room above this one in the order.
+  // Sum MIN_ROOM_H + gap for every room above this one in the order.
+  // Rooms cascade from MIN_ROOM_H at spawn; the painter shifts them
+  // downward (via repositionDownstreamRooms) once an upstream room
+  // grows past its initial height. We deliberately do NOT pre-allocate
+  // STAGE_HEIGHT slots here — the cascade would otherwise reserve
+  // ~3400px of vertical space the moment the run started, even with
+  // empty rooms.
   let yOffset = FIRST_ROOM_Y_OFFSET;
   for (const otherStage of Object.keys(STAGE_ROOMS) as PipelineStage[]) {
     const other = STAGE_ROOMS[otherStage];
     if (other.order >= meta.order) continue;
-    yOffset += STAGE_HEIGHT[otherStage] + ROOM_GAP;
+    yOffset += MIN_ROOM_H + ROOM_GAP;
   }
   return {
     x: anchor.x - ROOM_W / 2,
     y: anchor.y + yOffset,
     w: ROOM_W,
-    h: STAGE_HEIGHT[stage],
+    h: MIN_ROOM_H,
   };
 }
 

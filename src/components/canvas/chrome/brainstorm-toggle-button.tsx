@@ -7,7 +7,7 @@
 // open/close the panel. Reflects current state via color + subtle
 // pulse when features are actively influencing canvas behavior.
 
-import { Sparkles } from "lucide-react";
+import { Wand2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BrainstormSettings } from "@/lib/brainstorm/brainstorm-settings";
 
@@ -58,7 +58,7 @@ export function BrainstormToggleButton({
           : "Enable brainstorm mode"
       }
     >
-      <Sparkles
+      <Wand2
         className={cn("h-3 w-3", active && "animate-pulse")}
         strokeWidth={1.75}
       />

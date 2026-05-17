@@ -33,9 +33,11 @@ import {
   Pencil,
   Check,
   X,
-  Sparkles,
+  RefreshCw,
+  Lightbulb,
   AlertTriangle,
   Layers,
+  Layers3,
   Compass,
   FlaskConical,
   FileText,
@@ -44,6 +46,7 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { KgRoomIcon } from "@/components/canvas/icons";
 import type {
   KgGenerationPlan,
   KgPlanMode,
@@ -188,7 +191,7 @@ export function KgPlanReviewCard({
           />
           <PlanSection
             title="Custom axes"
-            icon={<Sparkles className="h-3.5 w-3.5" />}
+            icon={<Layers3 className="h-3.5 w-3.5" />}
             section="axis_proposals"
             value={localPlan.axis_proposals}
             onEdit={handleSectionEdit}
@@ -276,7 +279,7 @@ export function KgPlanReviewCard({
               {busy === "replan" ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Sparkles className="h-3.5 w-3.5" />
+                <RefreshCw className="h-3.5 w-3.5" />
               )}
               Re-plan
             </button>
@@ -311,7 +314,7 @@ function PlanHeader({ plan }: { plan: KgGenerationPlan }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-wider text-gray-500">
-            <Sparkles className="h-3 w-3 text-blue-600" />
+            <KgRoomIcon size={12} style={{ color: "#2563eb" }} />
             KG Generation Plan · v{plan.version} · {plan.mode}
           </div>
           <h2 className="mt-1 truncate text-[18px] font-semibold tracking-tight text-gray-900">
@@ -842,7 +845,7 @@ function FramingReviewCta({ spaceId }: { spaceId: string }) {
   return (
     <div className="mb-4 rounded-lg border border-indigo-100 bg-gradient-to-r from-indigo-50/60 to-violet-50/60 px-3 py-2.5">
       <div className="flex items-start gap-2.5">
-        <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-600" />
+        <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-600" />
         <div className="flex-1 text-[11.5px] leading-snug">
           <div className="flex items-baseline gap-2">
             <span className="font-semibold text-indigo-900">
