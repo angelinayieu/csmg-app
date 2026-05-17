@@ -7,3 +7,4 @@ export { synergyMatchRefresh } from "./synergy-match-refresh";
 export { synergyStrategyMatcher } from "./synergy-strategy-matcher";
 export { synergyParallelDigestWeekly } from "./synergy-parallel-digest-weekly";
 export { synergyParallelPathMatched } from "./synergy-parallel-path-matched";
+export { synergyToCanvasBatchMigration } from "./synergy-to-canvas-batch-migration";

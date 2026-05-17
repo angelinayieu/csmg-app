@@ -28,6 +28,18 @@ export default async function SynergyProcessPage({ params }: PageProps) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
+  // Phase 3 — migration redirect. The legacy "process" page is
+  // subsumed by the canvas's Final Products drawer + selection
+  // popover, so migrated sessions skip straight to the whiteboard.
+  const { data: migrationRow } = await db
+    .from("brainstorm_sessions")
+    .select("migrated_to_space_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (migrationRow?.migrated_to_space_id) {
+    redirect(`/app/space/${migrationRow.migrated_to_space_id}/whiteboard`);
+  }
+
   // Run the four reads in parallel — session, node count, components,
   // cached scores. Components + scores have RLS-gated owner reads.
   const [sessionRes, nodeCountRes, componentsRes, scoresRes] = await Promise.all([

@@ -31,6 +31,17 @@ export default async function SynergyStrategyPage({ params }: PageProps) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
+  // Phase 3 — migration redirect. If the session has been migrated,
+  // route the user to the canvas-side strategy page (same UUID).
+  const { data: migrationRow } = await db
+    .from("brainstorm_sessions")
+    .select("migrated_to_space_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (migrationRow?.migrated_to_space_id) {
+    redirect(`/app/space/${migrationRow.migrated_to_space_id}/strategy`);
+  }
+
   // ── User's chosen scene background (Tier 3a) ──
   // Same query the Rooms page uses. Soft-fail if the column hasn't been
   // migrated yet (20260811) — falls back to the default 'mist' preset.
