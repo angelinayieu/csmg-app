@@ -79,7 +79,7 @@ export function CanvasExperienceModeChip({ mode, promptHint }: Props) {
   return (
     <div
       ref={ref}
-      className="fixed top-4 right-4 z-[55]"
+      className="chrome-dimmable fixed top-4 right-4 z-[55]"
     >
       <button
         type="button"

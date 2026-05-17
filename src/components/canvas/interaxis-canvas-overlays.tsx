@@ -39,6 +39,7 @@ import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
 import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
 import { CanvasWorkspaceRoomSpawner } from "./chrome/canvas-workspace-room-spawner";
 import { CanvasTwinRevealOrchestrator } from "./chrome/canvas-twin-reveal-orchestrator";
+import { CanvasActivityTracker } from "./chrome/canvas-activity-tracker";
 import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
 import { CanvasOperationalSeedSpawner } from "./chrome/canvas-operational-seed-spawner";
 import { CanvasRoomTransitionSpawner } from "./chrome/canvas-room-transition-spawner";
@@ -201,6 +202,14 @@ function CanvasOverlays() {
           twin is ready" headline, then pulls back and offers an
           "Open the twin" CTA. Fires once per mount. */}
       <CanvasTwinRevealOrchestrator spaceId={spaceId} />
+      {/* Cinematic Phase 3 — chrome dimming during unfurl. Watches
+          shape additions in the editor store; when shapes are being
+          added in a burst (pipeline materialization, manual auth, etc.)
+          sets `data-canvas-unfurl-active="true"` on the body. CSS
+          rules in globals.css demote `.chrome-dimmable` tagged
+          elements to 40% while the attribute is present. Auto-clears
+          on 4 seconds of stillness. */}
+      <CanvasActivityTracker />
       {/* Hydrator counterpart — fetches pre-existing subjects from
           the DB on mount and paints SubjectCard shapes for any that
           aren't already on the canvas. Required for template-

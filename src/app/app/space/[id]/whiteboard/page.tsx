@@ -328,7 +328,7 @@ export default function WhiteboardPage() {
           this canvas as a WorkspaceRoomShape. Top-right anchor so it
           sits near the existing top chrome (mode toggle, etc.) and
           doesn't crowd the bottom-right action stack. */}
-      <div className="fixed right-6 top-20 z-40">
+      <div className="chrome-dimmable fixed right-6 top-20 z-40">
         <CanvasWorkspaceRoomPicker />
       </div>
 
@@ -336,7 +336,7 @@ export default function WhiteboardPage() {
           Snapshots so all three bottom-right anchors are visible. */}
       <button
         onClick={() => setSituationOpen(true)}
-        className="fixed bottom-[8.5rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+        className="chrome-dimmable fixed bottom-[8.5rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
         title="Baseline — view the system's analysis of your current state (inputs, process, outputs, knowns, unknowns)"
       >
         <Activity className="h-3.5 w-3.5 text-cyan-600" />
@@ -352,7 +352,7 @@ export default function WhiteboardPage() {
       {chrome.showEvidenceLauncher && (
         <button
           onClick={() => setEvidenceOpen(true)}
-          className="fixed bottom-[11rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-purple-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+          className="chrome-dimmable fixed bottom-[11rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-purple-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
           title="Evidence registry — review effect sizes extracted from research artifacts (rigorous mode)"
         >
           <Beaker className="h-3.5 w-3.5 text-purple-600" />
@@ -366,7 +366,7 @@ export default function WhiteboardPage() {
       {chrome.showSnapshotsLauncher && (
         <button
           onClick={() => setSnapshotsOpen(true)}
-          className="fixed bottom-20 right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+          className="chrome-dimmable fixed bottom-20 right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
           title="Snapshots & scenarios — freeze the KG and test interventions against it"
         >
           <Camera className="h-3.5 w-3.5 text-blue-600" />
@@ -378,7 +378,7 @@ export default function WhiteboardPage() {
           weave + bridges side panel for this whiteboard. */}
       <button
         onClick={() => setConnectOpen(true)}
-        className="fixed bottom-6 right-6 z-50 flex items-center gap-1.5 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 px-4 py-2.5 text-[12px] font-semibold text-white shadow-lg transition-all hover:-translate-y-px hover:shadow-xl"
+        className="chrome-dimmable fixed bottom-6 right-6 z-50 flex items-center gap-1.5 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 px-4 py-2.5 text-[12px] font-semibold text-white shadow-lg transition-all hover:-translate-y-px hover:shadow-xl"
         title="Connect this whiteboard to others (weave + bridges)"
       >
         <GitBranch className="h-3.5 w-3.5" />
