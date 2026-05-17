@@ -123,6 +123,20 @@ export class ProposalSnapshotShapeUtil extends BaseBoxShapeUtil<ProposalSnapshot
             : distributionProvenance === "composite_computed"
               ? "Composite computed"
               : "LLM-estimated — not sample-derived";
+    // Inline label so the provenance is scannable without hovering for
+    // the tooltip. A 68% MC·50 number means something very different
+    // from a 68% LLM-self-report and the user shouldn't need to learn
+    // a hover gesture to see that.
+    const provenanceShortLabel =
+      distributionProvenance === "ode_rk4"
+        ? `ODE·${distributionSampleCount ?? "—"}`
+        : distributionProvenance === "mc_simulation"
+          ? `MC·${distributionSampleCount ?? "—"}`
+          : distributionProvenance === "bootstrap"
+            ? `Boot·${distributionSampleCount ?? "—"}`
+            : distributionProvenance === "composite_computed"
+              ? "Computed"
+              : "LLM est";
     // PR 5 — filter to known axes (catalog lookup). Unknown strings
     // get silently dropped rather than crashing the shape render.
     const validAxes = (axesUsed ?? []).filter(
@@ -327,24 +341,31 @@ export class ProposalSnapshotShapeUtil extends BaseBoxShapeUtil<ProposalSnapshot
                   gap: 4,
                 }}
               >
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <span
+                  style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                  title={provenanceTitle}
+                  aria-label={provenanceTitle}
+                >
                   <span
-                    title={provenanceTitle}
-                    aria-label={provenanceTitle}
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
-                      justifyContent: "center",
-                      width: 12,
-                      height: 12,
-                      borderRadius: 3,
-                      background: isComputedDist ? "rgba(37,99,235,0.12)" : "rgba(217,119,6,0.14)",
+                      gap: 3,
+                      padding: "1px 5px",
+                      borderRadius: 4,
+                      background: isComputedDist
+                        ? "rgba(37,99,235,0.12)"
+                        : "rgba(217,119,6,0.14)",
                       color: isComputedDist ? "#2563eb" : "#b45309",
                       fontSize: 9,
                       fontWeight: 700,
+                      letterSpacing: "0.02em",
+                      textTransform: "none",
+                      fontVariantNumeric: "tabular-nums",
                     }}
                   >
-                    {isComputedDist ? "⚡" : "✎"}
+                    <span>{isComputedDist ? "⚡" : "✎"}</span>
+                    <span>{provenanceShortLabel}</span>
                   </span>
                   <span>p10–p90</span>
                 </span>
