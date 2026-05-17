@@ -3,6 +3,7 @@
 import { BaseBoxShapeUtil, HTMLContainer, T, type RecordProps, type TLResizeInfo, resizeBox } from "tldraw";
 import { Zap, AlertTriangle, RefreshCw, GitBranch, Lightbulb } from "lucide-react";
 import type { SynthesisCardShape } from "./types";
+import { useShapeEntrance } from "@/hooks/canvas/use-shape-entrance";
 
 const KINDS = ["leverage", "risk", "cycle", "bridge", "insight"] as const;
 
@@ -47,27 +48,46 @@ export class SynthesisCardShapeUtil extends BaseBoxShapeUtil<SynthesisCardShape>
   }
 
   component(shape: SynthesisCardShape) {
-    const style = KIND_STYLE[shape.props.kind];
-    const Icon = style.icon;
-    return (
-      <HTMLContainer
-        style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
+    return <SynthesisCardView shape={shape} />;
+  }
+
+  indicator(shape: SynthesisCardShape) {
+    return <rect width={shape.props.w} height={shape.props.h} rx={14} ry={14} />;
+  }
+}
+
+function SynthesisCardView({ shape }: { shape: SynthesisCardShape }) {
+  const style = KIND_STYLE[shape.props.kind];
+  const Icon = style.icon;
+  // Cinematic Phase 2 — entrance fade-in. Synthesis cards (bottleneck,
+  // leverage, risk, cycle, bridge, insight) are the AI's analytical
+  // conclusions about the user's system. Each landing on the canvas
+  // is a "moment" — animating in gives weight to that signal.
+  const { entranceStyle } = useShapeEntrance(640);
+  return (
+    <HTMLContainer
+      style={{
+        width: shape.props.w,
+        height: shape.props.h,
+        pointerEvents: "all",
+        ...entranceStyle,
+      }}
+    >
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          borderRadius: 14,
+          background: "#ffffff",
+          border: `1px solid ${style.color}26`,
+          boxShadow: `0 1px 3px rgba(0,0,0,0.04), 0 12px 32px -8px ${style.color}33`,
+          padding: "14px 16px",
+          overflow: "hidden",
+          fontFamily:
+            '-apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif',
+        }}
       >
-        <div
-          style={{
-            position: "relative",
-            width: "100%",
-            height: "100%",
-            borderRadius: 14,
-            background: "#ffffff",
-            border: `1px solid ${style.color}26`,
-            boxShadow: `0 1px 3px rgba(0,0,0,0.04), 0 12px 32px -8px ${style.color}33`,
-            padding: "14px 16px",
-            overflow: "hidden",
-            fontFamily:
-              '-apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif',
-          }}
-        >
           <div
             style={{
               position: "absolute",
@@ -139,10 +159,5 @@ export class SynthesisCardShapeUtil extends BaseBoxShapeUtil<SynthesisCardShape>
           )}
         </div>
       </HTMLContainer>
-    );
-  }
-
-  indicator(shape: SynthesisCardShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={14} ry={14} />;
-  }
+  );
 }

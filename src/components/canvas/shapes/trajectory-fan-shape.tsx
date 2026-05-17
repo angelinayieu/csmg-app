@@ -35,6 +35,7 @@ import {
 } from "tldraw";
 import { TrendingUp, ArrowUpRight } from "lucide-react";
 import type { TrajectoryFanShape } from "./types";
+import { useShapeEntrance } from "@/hooks/canvas/use-shape-entrance";
 
 export const TRAJECTORY_FAN_DEFAULT_W = 320;
 export const TRAJECTORY_FAN_DEFAULT_H = 200;
@@ -257,12 +258,18 @@ function TrajectoryFanView({ shape }: { shape: TrajectoryFanShape }) {
       ? Math.round(confidence * 100)
       : null;
 
+  // Cinematic Phase 2 — entrance fade-in. Trajectory fans are the
+  // twin's predicted future; they should arrive with a deliberate
+  // "this is the forecast" moment rather than popping in.
+  const { entranceStyle } = useShapeEntrance(700);
+
   return (
     <HTMLContainer
       style={{
         width: w,
         height: h,
         pointerEvents: "all",
+        ...entranceStyle,
       }}
     >
       <div

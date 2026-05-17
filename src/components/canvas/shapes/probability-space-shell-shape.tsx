@@ -34,6 +34,7 @@ import type { ProbabilitySpaceShellShape } from "./types";
 import { computeForceLayout } from "@/lib/graph/force-layout";
 import { useAxisActive, useCanvasFilter } from "../hooks/use-canvas-filter";
 import { canvasNavigate } from "@/lib/canvas/canvas-bus";
+import { useShapeEntrance } from "@/hooks/canvas/use-shape-entrance";
 
 export const SPACE_SHELL_DEFAULT_W = 280;
 export const SPACE_SHELL_DEFAULT_H = 200;
@@ -247,6 +248,12 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
     return m;
   }, [entities]);
 
+  // Cinematic Phase 2 — entrance animation. Shell shapes fly in
+  // from below with a soft fade + scale; replaces the previous
+  // hard-pop spawn that read as visually abrupt in the landscape
+  // moment (T+8-18s in the pipeline timeline).
+  const { entranceStyle } = useShapeEntrance(620);
+
   return (
     <HTMLContainer
       style={{
@@ -254,6 +261,7 @@ function ShellView({ shape }: { shape: ProbabilitySpaceShellShape }) {
         height: h,
         pointerEvents: "all",
         overflow: "hidden",
+        ...entranceStyle,
       }}
     >
       <div

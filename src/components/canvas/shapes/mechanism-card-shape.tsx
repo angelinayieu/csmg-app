@@ -24,6 +24,7 @@ import {
 } from "tldraw";
 import { Activity, BarChart3, CheckCircle2, Sparkles, Beaker, Gamepad2, Sparkle, Zap } from "lucide-react";
 import type { MechanismCardShape } from "./types";
+import { useShapeEntrance } from "@/hooks/canvas/use-shape-entrance";
 
 export const MECHANISM_CARD_DEFAULT_W = 240;
 export const MECHANISM_CARD_DEFAULT_H = 160;
@@ -183,6 +184,11 @@ function MechanismCardView({ shape }: { shape: MechanismCardShape }) {
   const statusColor = STATUS_COLOR[status] ?? STATUS_COLOR.proposed;
   const statusLabel = STATUS_LABEL[status] ?? status;
 
+  // Cinematic Phase 2 — entrance fade-in. Mechanism cards orbit the
+  // twin during the climax reveal; the fade gives the "rising into
+  // place" feel rather than the abrupt pop they had before.
+  const { entranceStyle } = useShapeEntrance(640);
+
   return (
     <HTMLContainer
       style={{
@@ -200,6 +206,7 @@ function MechanismCardView({ shape }: { shape: MechanismCardShape }) {
         fontFamily:
           '-apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif',
         overflow: "hidden",
+        ...entranceStyle,
       }}
     >
       {/* Header row — kind icon + label + status dot */}

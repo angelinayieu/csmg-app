@@ -36,6 +36,7 @@ import {
 import { useMemo } from "react";
 import { Layers } from "lucide-react";
 import type { LayerStackShape } from "./types";
+import { useShapeEntrance } from "@/hooks/canvas/use-shape-entrance";
 
 export const LAYER_STACK_DEFAULT_W = 180;
 export const LAYER_STACK_DEFAULT_H = 560;
@@ -136,6 +137,12 @@ function LayerStackView({ shape }: { shape: LayerStackShape }) {
   const { w, h, layersJson } = shape.props;
   const layers = useMemo(() => safeParseLayers(layersJson), [layersJson]);
 
+  // Cinematic Phase 2 — entrance fade-in. The layer stack is THE
+  // architectural moment ("modeling 7 layers") and it currently
+  // pops in silently on the left edge. Animating in gives it the
+  // visual weight that signal deserves.
+  const { entranceStyle } = useShapeEntrance(720);
+
   return (
     <HTMLContainer
       style={{
@@ -151,6 +158,7 @@ function LayerStackView({ shape }: { shape: LayerStackShape }) {
         overflow: "hidden",
         fontFamily:
           '-apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif',
+        ...entranceStyle,
       }}
     >
       {/* Header */}
