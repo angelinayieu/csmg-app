@@ -183,9 +183,14 @@ function WorkspaceRoomView({ shape }: { shape: WorkspaceRoomShape }) {
           </span>
         </div>
 
-        {/* Per-kind body — phase A only brainstorm is wired */}
+        {/* Per-kind body */}
         {kind === "brainstorm" ? (
           <BrainstormRoomBody
+            artifactId={artifact_id}
+            cachedTitle={cached_title}
+          />
+        ) : kind === "strategy" ? (
+          <StrategyRoomBody
             artifactId={artifact_id}
             cachedTitle={cached_title}
           />
@@ -286,6 +291,147 @@ function BrainstormRoomBody({
           onClick={handleOpen}
           className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700"
           title="Open this brainstorm in a new tab"
+        >
+          Open
+          <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── StrategyRoomBody ──
+// Renders a synergy_strategies row as a compact dashboard tile:
+// statement (truncated), effort-weighted progress strip, summary
+// pills (steps / risks / hypotheses), last-modified + open-link.
+// The strategy room is essentially a mini-version of the strategy
+// doc's hero — same progress signal, same effort-weighting.
+
+interface StrategySummary {
+  id: string;
+  statement: string | null;
+  pitch: string | null;
+  session_id: string;
+  updated_at: string;
+  total_steps: number;
+  done_steps: number;
+  risk_count: number;
+  hypothesis_count: number;
+  effort_weighted_done_pct: number;
+}
+
+function StrategyRoomBody({
+  artifactId,
+  cachedTitle,
+}: {
+  artifactId: string;
+  cachedTitle: string;
+}) {
+  const [data, setData] = useState<StrategySummary | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!artifactId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/synergy/strategies/${artifactId}/summary`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) throw new Error("Failed to load strategy");
+        const json = (await res.json()) as { strategy: StrategySummary };
+        if (!cancelled) setData(json.strategy);
+      } catch {
+        // Soft-fail — keep cached title visible
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactId]);
+
+  const statement = data?.statement?.trim() || cachedTitle || "Untitled strategy";
+  const totalSteps = data?.total_steps ?? 0;
+  const doneSteps = data?.done_steps ?? 0;
+  const riskCount = data?.risk_count ?? 0;
+  const hypoCount = data?.hypothesis_count ?? 0;
+  const pct = data?.effort_weighted_done_pct ?? 0;
+  const updated = data?.updated_at;
+  // Open destination — the strategy doc lives at the brainstorm's
+  // session route, not the strategy id route.
+  const openHref = data?.session_id
+    ? `/app/synergy/${data.session_id}/strategy`
+    : null;
+
+  const handleOpen = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (typeof window === "undefined" || !openHref) return;
+    window.open(openHref, "_blank");
+  };
+
+  return (
+    <div className="flex h-[calc(100%-44px)] flex-col px-5 pb-4 pt-2">
+      <h3 className="font-display-tight line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight text-gray-900">
+        {statement}
+      </h3>
+
+      {/* Effort-weighted progress strip — matches the strategy doc's
+          ProgressStrip vocabulary so canvas + doc speak the same
+          language. */}
+      {totalSteps > 0 && (
+        <div className="mt-2.5 flex items-center gap-2">
+          <div className="relative h-[3px] flex-1 overflow-hidden rounded-full bg-gray-200/70">
+            <div
+              className="absolute inset-y-0 left-0 rounded-full bg-gray-900 transition-[width] duration-500 ease-out"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.15em] text-gray-500">
+            {doneSteps} of {totalSteps}
+          </span>
+        </div>
+      )}
+
+      {/* Summary pills */}
+      {(totalSteps > 0 || riskCount > 0 || hypoCount > 0) && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {totalSteps > 0 && (
+            <span className="inline-flex items-center rounded-md bg-gray-50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-gray-600 ring-1 ring-black/[0.04]">
+              {totalSteps} {totalSteps === 1 ? "step" : "steps"}
+            </span>
+          )}
+          {riskCount > 0 && (
+            <span className="inline-flex items-center rounded-md bg-gray-50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-gray-600 ring-1 ring-black/[0.04]">
+              {riskCount} {riskCount === 1 ? "risk" : "risks"}
+            </span>
+          )}
+          {hypoCount > 0 && (
+            <span className="inline-flex items-center rounded-md bg-gray-50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-gray-600 ring-1 ring-black/[0.04]">
+              {hypoCount} {hypoCount === 1 ? "hypothesis" : "hypotheses"}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Meta row + open */}
+      <div className="mt-auto flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-gray-500">
+          {loading ? (
+            <span className="text-gray-300">Loading…</span>
+          ) : updated ? (
+            <span>{relativeTime(updated)}</span>
+          ) : null}
+        </div>
+
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={handleOpen}
+          disabled={!openHref}
+          className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700 disabled:opacity-50"
+          title="Open this strategy in a new tab"
         >
           Open
           <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} />

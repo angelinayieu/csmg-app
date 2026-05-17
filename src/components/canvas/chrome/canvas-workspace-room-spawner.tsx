@@ -26,13 +26,26 @@ interface AddBrainstormDetail {
   title?: string;
 }
 
+interface AddStrategyDetail {
+  strategyId: string;
+  /** session_id of the source brainstorm (synergy_strategies.session_id).
+   *  Carried through so future provenance auto-connectors can match
+   *  this strategy back to a brainstorm room on the same canvas. */
+  sessionId?: string;
+  statement?: string;
+}
+
 export function CanvasWorkspaceRoomSpawner() {
   const editor = useEditor();
 
   useEffect(() => {
-    function onAddBrainstorm(ev: Event) {
-      const detail = (ev as CustomEvent<AddBrainstormDetail>).detail;
-      if (!detail || !detail.sessionId) return;
+    // Shared helper — places a room at the viewport center and
+    // selects + zooms to it. Each kind passes its own props.
+    function spawnRoom(props: {
+      kind: "brainstorm" | "strategy" | "twin" | "probe";
+      artifact_id: string;
+      cached_title: string;
+    }) {
       try {
         const center = editor.getViewportPageBounds().center;
         const shapeId = createShapeId();
@@ -40,39 +53,64 @@ export function CanvasWorkspaceRoomSpawner() {
           {
             id: shapeId,
             type: "workspace-room",
-            // Anchor to viewport center, offset by half-w/h so the
-            // shape lands centered on the cursor's current focus.
             x: center.x - WORKSPACE_ROOM_DEFAULT_W / 2,
             y: center.y - WORKSPACE_ROOM_DEFAULT_H / 2,
             props: {
               w: WORKSPACE_ROOM_DEFAULT_W,
               h: WORKSPACE_ROOM_DEFAULT_H,
-              kind: "brainstorm",
-              artifact_id: detail.sessionId,
-              cached_title: detail.title ?? "",
+              kind: props.kind,
+              artifact_id: props.artifact_id,
+              cached_title: props.cached_title,
               spawnedAt: Date.now(),
             },
           },
         ]);
-        // Bring it into view + select so the user sees the room land.
         editor.select(shapeId);
         editor.zoomToSelection({ animation: { duration: 320 } });
       } catch (err) {
         console.warn(
-          "[workspace-room-spawner] createShapes failed:",
+          `[workspace-room-spawner] createShapes (${props.kind}) failed:`,
           err,
         );
       }
+    }
+
+    function onAddBrainstorm(ev: Event) {
+      const detail = (ev as CustomEvent<AddBrainstormDetail>).detail;
+      if (!detail || !detail.sessionId) return;
+      spawnRoom({
+        kind: "brainstorm",
+        artifact_id: detail.sessionId,
+        cached_title: detail.title ?? "",
+      });
+    }
+
+    function onAddStrategy(ev: Event) {
+      const detail = (ev as CustomEvent<AddStrategyDetail>).detail;
+      if (!detail || !detail.strategyId) return;
+      spawnRoom({
+        kind: "strategy",
+        artifact_id: detail.strategyId,
+        cached_title: detail.statement ?? "",
+      });
     }
 
     window.addEventListener(
       "canvas-workspace:add-brainstorm",
       onAddBrainstorm,
     );
+    window.addEventListener(
+      "canvas-workspace:add-strategy",
+      onAddStrategy,
+    );
     return () => {
       window.removeEventListener(
         "canvas-workspace:add-brainstorm",
         onAddBrainstorm,
+      );
+      window.removeEventListener(
+        "canvas-workspace:add-strategy",
+        onAddStrategy,
       );
     };
   }, [editor]);
