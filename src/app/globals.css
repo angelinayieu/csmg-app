@@ -392,6 +392,36 @@
     opacity: 1;
   }
 }
+
+/* Wave 1.5 Fix 3 — synergy node entrance. Each brainstorm node
+   fades + scales in when it first mounts. Used by autopilot waves
+   so users see new nodes "land" rather than blink in. Single 500ms
+   ease-out cycle; CSS animations fire only on mount/key-change so
+   subsequent re-renders (pan/zoom/drag) don't re-trigger. Respects
+   reduced-motion preferences. */
+@keyframes synergyNodeEnter {
+  0% {
+    opacity: 0;
+    transform: scale(0.78);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.synergy-node-enter {
+  animation: synergyNodeEnter 500ms cubic-bezier(0.22, 1, 0.36, 1)
+    both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .synergy-node-enter {
+    animation: none !important;
+  }
+}
 /* Ambient pulse — only runs in gradient mode. In canvas mode the
    background is deliberately calm (a whiteboard, not a stage). */
 .immersive-home-surface.mode-gradient .immersive-home-bg::before {

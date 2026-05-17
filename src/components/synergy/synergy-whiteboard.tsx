@@ -278,6 +278,66 @@ export function SynergyWhiteboard({
     setSelectedId(focusNodeId);
   }, [loaded, focusNodeId]);
 
+  // ── Auto-fit viewport to a set of newly-spawned/affected nodes ──
+  // Hoisted up here from its previous position lower in the file so
+  // the initial-fit + autopilot-follow effects below can reference
+  // it. Used after every scoped action so the user immediately sees
+  // what just happened instead of having to hunt across the canvas.
+  // Uses the layout-helpers' computeFitToContent which accounts for
+  // the left toolbar (64px) and right AI rail (320px) plus a small
+  // top inset for the zoom/sync indicators.
+  //
+  // We pad the bbox so the new subtree never touches the rail edges,
+  // and cap zoom at 1.0 so we don't dramatically zoom IN on a tiny
+  // subtree (would feel jarring after a click). A small subtree at
+  // close range is fine — just don't magnify it.
+  const autoFitToBbox = useCallback(
+    (bbox: ReturnType<typeof computeSubtreeBbox>) => {
+      if (!bbox) return;
+      const { pan: nextPan, zoom: nextZoom } = computeFitToContent(
+        bbox,
+        {
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          leftRail: 64,
+          rightRail: 320,
+          topInset: 64,
+          bottomInset: 100,
+        },
+        {
+          padding: 120,
+          maxZoom: 1.0,
+          minZoom: 0.35,
+        },
+      );
+      setPan(nextPan);
+      setZoom(nextZoom);
+    },
+    [],
+  );
+
+  // Wave 1.5 Fix 1 — auto-fit on initial load.
+  // The synergy whiteboard's default pan/zoom is {0,0,1.0}, but the
+  // core seed node is placed at world coords (600, 360) by
+  // /app/synergy/new. With default pan/zoom that puts the seed
+  // 600px right and 360px down — invisible to a user who arrives
+  // on a fresh whiteboard. Auto-fit centers whatever nodes exist
+  // in the visible viewport on first paint. useRef gate so this
+  // fires once per mount and never fights user-driven pan/zoom.
+  const initialFitDoneRef = useRef(false);
+  useEffect(() => {
+    if (!loaded) return;
+    if (initialFitDoneRef.current) return;
+    if (nodes.length === 0) return;
+    initialFitDoneRef.current = true;
+    const bbox = computeSubtreeBbox(nodes);
+    if (bbox) {
+      // rAF so the canvas container has measured + we can read
+      // window.innerWidth/Height in the same paint.
+      requestAnimationFrame(() => autoFitToBbox(bbox));
+    }
+  }, [loaded, nodes, autoFitToBbox]);
+
   // Wave 0/1 — brainstorm-speedrun autostart. When the URL arrived
   // with ?autopilot=1 (set by the homepage redirect chain for the
   // brainstorm_speed experience mode), dispatch the speedrun event
@@ -819,31 +879,48 @@ export function SynergyWhiteboard({
   // into local state here so the canvas reflects the new nodes immediately.
   // The auto-save loop will subsequently PUT the full node list (including
   // these), which is idempotent — IDs are preserved on the round-trip.
-  const handleAutopilotRound = useCallback((newNodes: AutopilotNewNode[]) => {
-    if (newNodes.length === 0) return;
-    setNodes((prev) =>
-      withRepel(prev, [
-        ...prev,
-        ...newNodes.map(
-          (n): ClientNode => ({
-            id: n.id,
-            x: n.x,
-            y: n.y,
-            label: n.label,
-            // Wave 1: autopilot round-kinds now produce multiple node
-            // kinds (variation / branch / ranking). The hook's
-            // AutopilotNewNode.kind is intentionally loose (string)
-            // since each round kind picks its own. The server only
-            // emits values that are valid NodeKinds — assertion is
-            // safe but loud-on-bug if a typo lands.
-            kind: n.kind as NodeKind,
-            parent: n.parent_id,
-            meta: n.meta ?? undefined,
-          }),
-        ),
-      ]),
-    );
-  }, []);
+  const handleAutopilotRound = useCallback(
+    (newNodes: AutopilotNewNode[]) => {
+      if (newNodes.length === 0) return;
+      const converted: ClientNode[] = newNodes.map((n) => ({
+        id: n.id,
+        x: n.x,
+        y: n.y,
+        label: n.label,
+        // Wave 1: autopilot round-kinds now produce multiple node
+        // kinds (variation / branch / ranking). The hook's
+        // AutopilotNewNode.kind is intentionally loose (string)
+        // since each round kind picks its own. The server only
+        // emits values that are valid NodeKinds — assertion is
+        // safe but loud-on-bug if a typo lands.
+        kind: n.kind as NodeKind,
+        parent: n.parent_id,
+        meta: n.meta ?? undefined,
+      }));
+      setNodes((prev) => {
+        const merged = withRepel(prev, [...prev, ...converted]);
+        // Wave 1.5 Fix 2 — camera follow per round. After repel
+        // settles the layout, pan/zoom to fit the new arrivals (plus
+        // their parent for visual context). Without this the new
+        // nodes spawn at world coords radiating from a parent that
+        // may sit outside the user's current viewport — meaning the
+        // user sees nothing land. We use the setNodes updater's
+        // `prev` to look up the parent and rAF the autoFit so the
+        // commit has flushed before we measure.
+        const parentId = converted[0]?.parent;
+        const parent = parentId
+          ? prev.find((n) => n.id === parentId)
+          : undefined;
+        const fitTargets = parent ? [parent, ...converted] : converted;
+        const bbox = computeSubtreeBbox(fitTargets);
+        if (bbox) {
+          requestAnimationFrame(() => autoFitToBbox(bbox));
+        }
+        return merged;
+      });
+    },
+    [autoFitToBbox],
+  );
 
   // Build the rich context block for a scoped action on a target node.
   // Used by all five scoped actions (decompose/variations/questions/
@@ -885,38 +962,6 @@ export function SynergyWhiteboard({
       return ctxLines.join("\n\n");
     },
     [nodes],
-  );
-
-  // ── Auto-fit viewport to a set of newly-spawned/affected nodes ──
-  // Called after every scoped action so the user immediately sees what
-  // just happened instead of having to hunt across the canvas. Uses
-  // the layout-helpers' computeFitToContent which accounts for the
-  // left toolbar (64px) and right AI rail (320px) plus a small top
-  // inset for the zoom/sync indicators.
-  //
-  // We pad the bbox so the new subtree never touches the rail edges,
-  // and cap zoom at 1.0 so we don't dramatically zoom IN on a tiny
-  // subtree (would feel jarring after a click). A small subtree at
-  // close range is fine — just don't magnify it.
-  const autoFitToBbox = useCallback(
-    (bbox: ReturnType<typeof computeSubtreeBbox>) => {
-      if (!bbox) return;
-      const { pan: nextPan, zoom: nextZoom } = computeFitToContent(bbox, {
-        viewportWidth: window.innerWidth,
-        viewportHeight: window.innerHeight,
-        leftRail: 64,
-        rightRail: 320,
-        topInset: 64,
-        bottomInset: 100,
-      }, {
-        padding: 120,
-        maxZoom: 1.0,
-        minZoom: 0.35,
-      });
-      setPan(nextPan);
-      setZoom(nextZoom);
-    },
-    [],
   );
 
   const runVariations = async (parentId: string) => {

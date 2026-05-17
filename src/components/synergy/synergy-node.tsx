@@ -313,6 +313,11 @@ export function SynergyNode({
         onClick={onClick}
         title={node.meta}
         className={[
+          // Wave 1.5 Fix 3 — synergy-node-enter fires once on mount
+          // via CSS animation. Gives every node (initial load,
+          // autopilot, user-created, ai-augmented) a visible "land"
+          // moment so the user sees the canvas building itself.
+          "synergy-node-enter",
           "select-none rounded-2xl px-3 py-2 text-xs shadow-sm transition cursor-grab active:cursor-grabbing",
           s.bg,
           s.text,
