@@ -4724,10 +4724,13 @@ const CYCLE_LOOP_W = 260;
 const CYCLE_LOOP_H = 140;
 const CYCLE_LOOP_GAP = 16;
 const CYCLE_LOOPS_PER_ROW = 5;
-// Y offset inside kg room, below the kg-formation card (280 tall +
-// 40 gap). The grow logic shifts downstream rooms if more rows arrive
-// than fit at this offset.
-const CYCLE_LOOP_OFFSET_Y_BASE = 320;
+// Y offset inside kg room — below the entire top cluster (kg-formation,
+// taxonomy, variants, root-cause-tree). Root-cause-tree is the tallest
+// member at 16 + 440 = 456 from room top; cycle loops stack BELOW
+// that with a gap so the bands never overlap horizontally. The grow
+// logic shifts downstream rooms if more rows arrive than fit at this
+// offset — see W4a in pipeline-event-painter.tsx.
+const CYCLE_LOOP_OFFSET_Y_BASE = 480;
 
 type CycleClassification = CycleLoopShape["props"]["classification"];
 const VALID_CYCLE_CLASSIFICATIONS: readonly CycleClassification[] = [
