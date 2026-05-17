@@ -166,14 +166,22 @@ export async function POST(request: Request) {
     }
 
     const stepIds: string[] = [];
+    type InsertedRow = {
+      id: string;
+      entity_id: string;
+      name: string;
+      description: string | null;
+      entity_category: string | null;
+      confidence: number | null;
+    };
+    let insertedSteps: InsertedRow[] = [];
     if (newEntities.length > 0) {
-      const { data: inserted } = await db
+      const { data } = await db
         .from("entities")
         .insert(newEntities)
-        .select("id");
-      for (const row of (inserted ?? []) as Array<{ id: string }>) {
-        stepIds.push(row.id);
-      }
+        .select("id, entity_id, name, description, entity_category, confidence");
+      insertedSteps = (data ?? []) as InsertedRow[];
+      for (const row of insertedSteps) stepIds.push(row.id);
     }
     const edgeIds: string[] = [];
     if (newEdges.length > 0) {
@@ -190,6 +198,7 @@ export async function POST(request: Request) {
       plan: {
         step_entity_ids: stepIds,
         edge_ids: edgeIds,
+        entities: insertedSteps,
       },
     });
   } catch (err) {

@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useEditor, useValue } from "tldraw";
+import { placeEntitiesOnCanvas } from "@/lib/canvas/place-entity-shapes";
 import {
   Brain,
   HelpCircle,
@@ -151,9 +152,43 @@ export function CanvasSelectionPopover({ spaceId }: Props) {
         );
         if (!res.ok) continue;
         const json = (await res.json().catch(() => ({}))) as {
-          children?: { id: string }[];
+          parent_entity_id?: string;
+          children?: Array<{
+            id: string;
+            entity_id?: string;
+            name?: string;
+            description?: string | null;
+            entity_category?: string | null;
+            confidence?: number | null;
+          }>;
         };
-        created += json.children?.length ?? 0;
+        const kids = json.children ?? [];
+        created += kids.length;
+        // Phase 2c-D — paint each new child near its parent on the
+        // canvas. The deepen endpoint returns full entity rows;
+        // the placer sizes + positions them in an arc below the
+        // parent shape.
+        if (kids.length > 0 && json.parent_entity_id) {
+          const placeable = kids
+            .filter(
+              (k): k is typeof k & { entity_id: string; name: string } =>
+                typeof k.entity_id === "string" && typeof k.name === "string",
+            )
+            .map((k) => ({
+              id: k.id,
+              entity_id: k.entity_id,
+              name: k.name,
+              description: k.description ?? null,
+              entity_category: k.entity_category ?? null,
+              confidence: k.confidence ?? null,
+            }));
+          if (placeable.length > 0) {
+            placeEntitiesOnCanvas(editor, placeable, {
+              kind: "near_parent",
+              parentEntityId: json.parent_entity_id,
+            });
+          }
+        }
       }
       toast.success("Decomposed", {
         description: `${created} new entities across ${entityIds.length} selected.`,
@@ -165,7 +200,7 @@ export function CanvasSelectionPopover({ spaceId }: Props) {
     } finally {
       setBusy(null);
     }
-  }, [entityIds]);
+  }, [entityIds, editor]);
 
   const runQuestions = useCallback(async () => {
     setBusy("questions");
@@ -261,18 +296,49 @@ export function CanvasSelectionPopover({ spaceId }: Props) {
         throw new Error(body.error ?? `${res.status}`);
       }
       const json = (await res.json().catch(() => ({}))) as {
-        created?: { variation_ids?: string[] };
+        created?: {
+          variation_ids?: string[];
+          entities?: Array<{
+            id: string;
+            entity_id: string;
+            name: string;
+            description: string | null;
+            entity_category: string | null;
+            confidence: number | null;
+            parent_entity_id: string | null;
+          }>;
+        };
       };
-      const count = json.created?.variation_ids?.length ?? 0;
+      // Phase 2c-D — place each variation as a kg-node shape near
+      // its parent so the user sees the result immediately rather
+      // than only as a toast.
+      const newEntities = json.created?.entities ?? [];
+      const byParent = new Map<
+        string,
+        Array<(typeof newEntities)[number]>
+      >();
+      for (const e of newEntities) {
+        const p = e.parent_entity_id;
+        if (!p) continue;
+        const arr = byParent.get(p) ?? [];
+        arr.push(e);
+        byParent.set(p, arr);
+      }
+      for (const [parentId, children] of byParent) {
+        placeEntitiesOnCanvas(editor, children, {
+          kind: "near_parent",
+          parentEntityId: parentId,
+        });
+      }
       toast.success("Variations created", {
-        description: `${count} new entities across ${entityIds.length} selected.`,
+        description: `${newEntities.length} new entities across ${entityIds.length} selected.`,
       });
     } catch (e) {
       toast.error("Variations failed", { description: (e as Error).message });
     } finally {
       setBusy(null);
     }
-  }, [entityIds, spaceId]);
+  }, [entityIds, spaceId, editor]);
 
   const runMakePlan = useCallback(async () => {
     if (entityIds.length < 2) {
@@ -294,18 +360,33 @@ export function CanvasSelectionPopover({ spaceId }: Props) {
         throw new Error(body.error ?? `${res.status}`);
       }
       const json = (await res.json().catch(() => ({}))) as {
-        plan?: { step_entity_ids?: string[] };
+        plan?: {
+          step_entity_ids?: string[];
+          entities?: Array<{
+            id: string;
+            entity_id: string;
+            name: string;
+            description: string | null;
+            entity_category: string | null;
+            confidence: number | null;
+          }>;
+        };
       };
-      const count = json.plan?.step_entity_ids?.length ?? 0;
+      // Phase 2c-D — place plan steps as a horizontal row near the
+      // current viewport center so the user sees the sequence.
+      const newSteps = json.plan?.entities ?? [];
+      if (newSteps.length > 0) {
+        placeEntitiesOnCanvas(editor, newSteps, { kind: "row" });
+      }
       toast.success("Plan generated", {
-        description: `${count} steps tying ${entityIds.length} entities together.`,
+        description: `${newSteps.length} steps tying ${entityIds.length} entities together.`,
       });
     } catch (e) {
       toast.error("Make-a-plan failed", { description: (e as Error).message });
     } finally {
       setBusy(null);
     }
-  }, [entityIds, spaceId]);
+  }, [entityIds, spaceId, editor]);
 
   const runRank = useCallback(async () => {
     if (entityIds.length < 2) {

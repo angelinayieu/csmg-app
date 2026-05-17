@@ -58,7 +58,31 @@ export function CanvasVoiceDock({ spaceId }: Props) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error ?? `${res.status}`);
       }
-      // Force a refresh so the new entity paints immediately.
+      // Pull the inserted entity from the response so we can paint
+      // a shape on the canvas immediately. /entities/manual returns
+      // { entity: Entity }. Without this, the row would land in the
+      // DB but the canvas would stay blank — the
+      // pipeline-event-painter only listens to SSE, and manual
+      // routes don't emit.
+      const body = (await res.json().catch(() => ({}))) as {
+        entity?: {
+          id: string;
+          entity_id: string;
+          name: string;
+          description?: string | null;
+          entity_category?: string | null;
+          confidence?: number | null;
+        };
+      };
+      if (body.entity) {
+        window.dispatchEvent(
+          new CustomEvent("interaxis:voice-entity-created", {
+            detail: { spaceId, entity: body.entity },
+          }),
+        );
+      }
+      // Refresh the entity list so other panels (Final Products,
+      // selection popover) see the new row.
       await refreshEntities();
       setLastAddedAt(Date.now());
     } catch (e) {

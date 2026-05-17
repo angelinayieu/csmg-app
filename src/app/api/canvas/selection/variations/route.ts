@@ -133,15 +133,41 @@ export async function POST(request: Request) {
     }
 
     const insertedEntityIds: string[] = [];
+    // Phase 2c-D — also return the FULL inserted rows so the
+    // client-side shape placer can render kg-node shapes
+    // immediately on the canvas (no SSE round-trip needed for
+    // manual actions).
+    type InsertedRow = {
+      id: string;
+      entity_id: string;
+      name: string;
+      description: string | null;
+      entity_category: string | null;
+      confidence: number | null;
+    };
+    let inserted: InsertedRow[] = [];
     if (newEntities.length > 0) {
-      const { data: inserted } = await db
+      const { data } = await db
         .from("entities")
         .insert(newEntities)
-        .select("id");
-      for (const row of (inserted ?? []) as Array<{ id: string }>) {
-        insertedEntityIds.push(row.id);
+        .select("id, entity_id, name, description, entity_category, confidence");
+      inserted = (data ?? []) as InsertedRow[];
+      for (const row of inserted) insertedEntityIds.push(row.id);
+    }
+
+    // Map each new variation back to its parent so the client can
+    // place children near the right parent shape.
+    const parentByEntityIndex: string[] = [];
+    for (const set of variationSets) {
+      for (const _ of set.variations) {
+        parentByEntityIndex.push(set.parent.entity_id);
+        void _;
       }
     }
+    const insertedWithParent = inserted.map((row, i) => ({
+      ...row,
+      parent_entity_id: parentByEntityIndex[i] ?? null,
+    }));
 
     const insertedEdgeIds: string[] = [];
     if (newEdges.length > 0) {
@@ -158,6 +184,7 @@ export async function POST(request: Request) {
       created: {
         variation_ids: insertedEntityIds,
         edge_ids: insertedEdgeIds,
+        entities: insertedWithParent,
       },
     });
   } catch (err) {

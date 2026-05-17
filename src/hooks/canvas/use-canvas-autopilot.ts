@@ -102,9 +102,48 @@ export function useCanvasAutopilot(): UseCanvasAutopilotReturn {
           throw new Error(body.error ?? `${res.status}`);
         }
         const json = (await res.json().catch(() => ({}))) as {
-          children?: unknown[];
+          children?: Array<{
+            id: string;
+            entity_id?: string;
+            name?: string;
+            description?: string | null;
+            entity_category?: string | null;
+            confidence?: number | null;
+          }>;
         };
-        const childCount = json.children?.length ?? 0;
+        const kids = json.children ?? [];
+        const childCount = kids.length;
+        // Phase 2c-D — dispatch a window event so the in-canvas
+        // CanvasAutopilotSpawner can paint kg-node shapes near the
+        // parent. The autopilot panel lives outside the editor
+        // tree, so direct editor.createShapes calls aren't an
+        // option from here; the event bus is the bridge.
+        if (kids.length > 0 && target.entity_id) {
+          const placeable = kids
+            .filter(
+              (k): k is typeof k & { entity_id: string; name: string } =>
+                typeof k.entity_id === "string" && typeof k.name === "string",
+            )
+            .map((k) => ({
+              id: k.id,
+              entity_id: k.entity_id,
+              name: k.name,
+              description: k.description ?? null,
+              entity_category: k.entity_category ?? null,
+              confidence: k.confidence ?? null,
+            }));
+          if (placeable.length > 0) {
+            window.dispatchEvent(
+              new CustomEvent("interaxis:autopilot-round", {
+                detail: {
+                  spaceId,
+                  parentEntityId: target.entity_id,
+                  children: placeable,
+                },
+              }),
+            );
+          }
+        }
         completed += 1;
         onRound?.({ round: r, targetEntityId: target.id, childCount });
 

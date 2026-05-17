@@ -37,6 +37,8 @@ import { CanvasFinalPlanCardBridge } from "./chrome/canvas-final-plan-card-bridg
 import { CanvasStrategyAppFanout } from "./chrome/canvas-strategy-app-fanout";
 import { CanvasImageVisionBridge } from "./chrome/canvas-image-vision-bridge";
 import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
+import { CanvasVoiceEntitySpawner } from "./chrome/canvas-voice-entity-spawner";
+import { CanvasAutopilotSpawner } from "./chrome/canvas-autopilot-spawner";
 import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
 import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
 import { CanvasOperationalSeedSpawner } from "./chrome/canvas-operational-seed-spawner";
@@ -198,6 +200,19 @@ function CanvasOverlays() {
           inside the tree. Listens for the
           interaxis:spawn-subject-card window event. */}
       <CanvasSubjectCardSpawner spaceId={spaceId} />
+
+      {/* Phase 2c-D — bridges the page-level voice dock to the
+          editor tree. Catches interaxis:voice-entity-created window
+          events and paints the new entity as a kg-node shape via
+          the shared place-entity-shapes helper. */}
+      <CanvasVoiceEntitySpawner spaceId={spaceId} />
+
+      {/* Phase 2c-D — bridges the page-level autopilot panel to
+          the editor tree. Each round, the autopilot dispatches an
+          interaxis:autopilot-round window event with the new
+          children + parent entityId; this spawner paints kg-node
+          shapes near the parent. */}
+      <CanvasAutopilotSpawner spaceId={spaceId} />
       {/* Hydrator counterpart — fetches pre-existing subjects from
           the DB on mount and paints SubjectCard shapes for any that
           aren't already on the canvas. Required for template-
