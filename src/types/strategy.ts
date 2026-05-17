@@ -374,6 +374,70 @@ export interface StrategicRecommendation {
    */
   degraded_steps?: string[];
 
+  /**
+   * E3 — layer-stratified variant marker. When the strategy was generated
+   * with a single-layer focus (`generateStrategy({ layer_focus: <slug> })`),
+   * this records which layer the variant emphasizes and why. `null` for
+   * comprehensive variants that draw from all layers. Consumed by the
+   * strategy-hero card's layer chip and the variants section's
+   * "Layer focus" column.
+   */
+  layer_focus?: {
+    /** Layer slug — either a `layer_ontology.slug` or a `knowledge_layer`
+     *  enum value when no ontology is configured. Matches the `id` field
+     *  on `ResolvedLayer`. */
+    layer_id: string;
+    /** Human-readable label, domain-adapted. e.g. "Behaviors". */
+    label: string;
+    /** Hex color from the resolved layer's accent — drives the chip + the
+     *  card's left-border accent on canvas. */
+    color: string;
+    /** 1-2 sentence rationale for why this layer was chosen as the focus
+     *  for this variant. Surfaces in the chip's hover tooltip. */
+    rationale: string;
+    /**
+     * D-track Phase β — cascade context. When the variant generator
+     * receives `layer_dependencies` rows from the synthesize stage,
+     * the affected downstream layers are passed through here so the
+     * strategy hero card + variant card can render the ripple chip
+     * strip ("Behaviors → Biomarkers · 3 weeks → Cognitive · 3 months").
+     *
+     * Each entry summarizes one cascade edge from `layer_dependencies`:
+     * which layer is affected, predicted direction of change, lag
+     * label, and a short note explaining the propagation.
+     *
+     * Empty array when the variant was generated before D-track's
+     * cascade prediction ran for this space (or when the focused
+     * layer has no outgoing dependencies). Optional + tolerated null
+     * on legacy variants — the ripple UI gates on length > 0.
+     */
+    cascade?: {
+      affected_layers: Array<{
+        layer_id: string;
+        label: string;
+        color: string;
+        /** Propagation kind from `layer_dependencies.kind`. */
+        kind:
+          | "causal"
+          | "modulatory"
+          | "inhibitory"
+          | "compensatory"
+          | "reinforcing";
+        /** 0..1 — how strongly this layer is predicted to be affected. */
+        strength: number;
+        lag_label: string | null;
+        /** Predicted directional change in this affected layer — kept
+         *  free-text so the LLM can express "increases working memory
+         *  variance" vs "stabilizes cortisol curve" without a forced
+         *  enum. */
+        predicted_change: string;
+      }>;
+      /** 1-2 sentence summary of the cascade dynamics — the strategy
+       *  hero's hover-tooltip on the ripple chip strip. */
+      rationale: string;
+    } | null;
+  } | null;
+
   // Evidence grounding
   entity_references: string[];
   external_evidence_count: number;

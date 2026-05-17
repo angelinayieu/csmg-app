@@ -118,17 +118,29 @@ export async function runLearningMeasure(
     let resolvedPreds: Array<{
       deviation: number | null;
       confidence: number | null;
+      deviation_tag: string | null;
+      status: string | null;
     }> = [];
     try {
+      // `deviation_tag` is what enables Brier / ECE / reliability bins
+      // — without it the new calibration metrics can't tell hits from
+      // misses, only "how far off" the point estimate was.
       const { data: predRows } = await db
         .from("prediction_ledger")
-        .select("deviation, confidence, status")
+        .select("deviation, confidence, status, deviation_tag")
         .eq("user_id", opts.userId)
         .eq("status", "resolved");
       resolvedPreds = (predRows ?? []).map(
-        (r: { deviation: number | null; confidence: number | null }) => ({
+        (r: {
+          deviation: number | null;
+          confidence: number | null;
+          deviation_tag: string | null;
+          status: string | null;
+        }) => ({
           deviation: r.deviation,
           confidence: r.confidence,
+          deviation_tag: r.deviation_tag,
+          status: r.status ?? "resolved",
         }),
       );
     } catch (err) {
@@ -195,6 +207,14 @@ export async function runLearningMeasure(
         evidence_per_entity: citation.perEntity,
         prior_spaces_seen: priorEntityNames.length > 0,
         prior_entity_names_sample: priorEntityNames.slice(0, 20),
+        // Confidence-calibration block. Null when fewer than 20
+        // calibratable (resolved + non-null confidence + quantitative
+        // deviation_tag) predictions exist — the dashboard strip hides
+        // itself in that case.
+        calibration_brier: calibration.brier,
+        calibration_ece: calibration.ece,
+        calibration_reliability_bins: calibration.reliabilityBins,
+        calibratable_prediction_count: calibration.calibratableCount,
       },
     };
 

@@ -227,10 +227,40 @@ function CycleLoopShapeView({ shape }: { shape: CycleLoopShape }) {
                 fontWeight: 700,
                 color: meta.color,
                 fontVariantNumeric: "tabular-nums",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 3,
               }}
-              title="Estimated multiplier per loop"
+              // Honesty annotation — see docs/CORE_CONCEPTS.md. The
+              // multiplier is an LLM guess, not effect-size-weighted.
+              // It's used downstream only for Monte Carlo amplification
+              // of forecasts that contain this cycle's entities.
+              title={
+                "LLM-estimated loop multiplier (not effect-size-weighted).\n" +
+                "Used for Monte Carlo amplification only — single point estimate without confidence bounds.\n" +
+                "See docs/CORE_CONCEPTS.md for the rigor caveats."
+              }
             >
               ~{multiplier.toFixed(1)}×
+              <span
+                aria-hidden
+                style={{
+                  fontSize: 8,
+                  fontWeight: 700,
+                  color: meta.color,
+                  opacity: 0.55,
+                  letterSpacing: "0.02em",
+                  textTransform: "uppercase",
+                  border: `1px solid ${meta.color}`,
+                  borderRadius: 3,
+                  padding: "0px 3px",
+                  marginLeft: 2,
+                  lineHeight: 1.3,
+                }}
+                title="LLM-estimated, not effect-size-weighted"
+              >
+                est
+              </span>
             </span>
           )}
         </div>

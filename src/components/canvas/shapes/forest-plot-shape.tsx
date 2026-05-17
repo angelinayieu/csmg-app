@@ -12,7 +12,7 @@
 // (bottleneck / leverage / risk) so users see "the strongest evidence-
 // based effect sizes" alongside the qualitative insights.
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
@@ -21,8 +21,16 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, X } from "lucide-react";
 import type { ForestPlotShape } from "./types";
+import { RigorMark } from "./rigor-mark";
+import {
+  isAnchoredTier,
+  TIER_META,
+  type RigorTier,
+  type TierCounts,
+  emptyTierCounts,
+} from "@/lib/evidence/rigor-tier";
 
 export const FOREST_PLOT_DEFAULT_W = 360;
 export const FOREST_PLOT_DEFAULT_H = 320;
@@ -38,6 +46,11 @@ interface ForestFinding {
   n_total: number | null;
   followup_label: string | null;
   population_label: string | null;
+  /** Phase 0 rigor: classification from /api/spaces/[id]/forest-plot.
+   *  Drives per-row RigorMark glyph + dimmed/dashed styling on
+   *  drifted (web/legacy) rows. Defaults to "legacy_unsourced" for
+   *  historical payloads that predate the field. */
+  rigor_tier: RigorTier;
 }
 
 const SMD_METRICS = new Set([
@@ -54,22 +67,57 @@ function isRatioMetric(m: string | null | undefined): boolean {
   return RATIO_METRICS.has(m.toLowerCase());
 }
 
+const KNOWN_TIERS: ReadonlySet<RigorTier> = new Set<RigorTier>([
+  "paper_reviewed",
+  "paper_extracted",
+  "web_deep_research",
+  "web_heuristic",
+  "legacy_unsourced",
+]);
+
 function safeParseFindings(json: string): ForestFinding[] {
   if (!json) return [];
   try {
     const parsed = JSON.parse(json);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (f): f is ForestFinding =>
-        f &&
-        typeof f === "object" &&
-        typeof (f as { effect_size?: unknown }).effect_size === "number" &&
-        typeof (f as { ci_lower?: unknown }).ci_lower === "number" &&
-        typeof (f as { ci_upper?: unknown }).ci_upper === "number" &&
-        typeof (f as { label?: unknown }).label === "string",
-    );
+    return parsed
+      .filter(
+        (f): f is Omit<ForestFinding, "rigor_tier"> & { rigor_tier?: unknown } =>
+          f &&
+          typeof f === "object" &&
+          typeof (f as { effect_size?: unknown }).effect_size === "number" &&
+          typeof (f as { ci_lower?: unknown }).ci_lower === "number" &&
+          typeof (f as { ci_upper?: unknown }).ci_upper === "number" &&
+          typeof (f as { label?: unknown }).label === "string",
+      )
+      .map((f): ForestFinding => {
+        const rawTier =
+          typeof f.rigor_tier === "string" ? f.rigor_tier : "";
+        const tier: RigorTier = KNOWN_TIERS.has(rawTier as RigorTier)
+          ? (rawTier as RigorTier)
+          : "legacy_unsourced";
+        return { ...f, rigor_tier: tier };
+      });
   } catch {
     return [];
+  }
+}
+
+function safeParseTierCounts(json: string): TierCounts {
+  const empty = emptyTierCounts();
+  if (!json) return empty;
+  try {
+    const parsed = JSON.parse(json);
+    if (!parsed || typeof parsed !== "object") return empty;
+    for (const tier of KNOWN_TIERS) {
+      const v = (parsed as Record<string, unknown>)[tier];
+      if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+        empty[tier] = Math.floor(v);
+      }
+    }
+    return empty;
+  } catch {
+    return empty;
   }
 }
 
@@ -96,6 +144,12 @@ export class ForestPlotShapeUtil extends BaseBoxShapeUtil<ForestPlotShape> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     referenceMetric: T.any as any,
     findingCount: T.number,
+    highlightedFindingIds: T.string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    focusedEdgeLabel: T.any as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tierMode: T.any as any,
+    tierCountsJson: T.string,
   };
 
   override canResize = () => true;
@@ -113,6 +167,10 @@ export class ForestPlotShapeUtil extends BaseBoxShapeUtil<ForestPlotShape> {
       findingsJson: "[]",
       referenceMetric: null,
       findingCount: 0,
+      highlightedFindingIds: "[]",
+      focusedEdgeLabel: null,
+      tierMode: "anchored",
+      tierCountsJson: JSON.stringify(emptyTierCounts()),
     };
   }
 
@@ -125,16 +183,92 @@ export class ForestPlotShapeUtil extends BaseBoxShapeUtil<ForestPlotShape> {
   }
 }
 
+function safeParseHighlightIds(json: string): Set<string> {
+  if (!json) return new Set();
+  try {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) return new Set();
+    const out = new Set<string>();
+    for (const v of parsed) {
+      if (typeof v === "string" && v.length > 0) out.add(v);
+    }
+    return out;
+  } catch {
+    return new Set();
+  }
+}
+
 function ForestPlotView({ shape }: { shape: ForestPlotShape }) {
-  const { w, h, findingsJson, referenceMetric } = shape.props;
+  const {
+    w,
+    h,
+    findingsJson,
+    referenceMetric,
+    highlightedFindingIds,
+    focusedEdgeLabel,
+    tierMode: rawTierMode,
+    tierCountsJson,
+  } = shape.props;
+  const tierMode: "anchored" | "all" =
+    rawTierMode === "all" ? "all" : "anchored";
+
+  const [toggling, setToggling] = useState(false);
 
   const findings = useMemo(
     () => safeParseFindings(findingsJson),
     [findingsJson],
   );
+  const tierCounts = useMemo(
+    () => safeParseTierCounts(tierCountsJson),
+    [tierCountsJson],
+  );
+
+  const highlightedIds = useMemo(
+    () => safeParseHighlightIds(highlightedFindingIds),
+    [highlightedFindingIds],
+  );
+  const isFocusing = highlightedIds.size > 0;
+  const matchedCount = useMemo(
+    () => findings.filter((f) => highlightedIds.has(f.id)).length,
+    [findings, highlightedIds],
+  );
 
   const isRatio = isRatioMetric(referenceMetric);
   const referenceValue = isRatio ? 1 : 0;
+
+  // Phase 0 rigor: total counts across the eligible pool, used for the
+  // toggle copy and footer. Anchored = paper-sourced tiers; drifted =
+  // web/legacy tiers.
+  const anchoredTotal =
+    tierCounts.paper_reviewed + tierCounts.paper_extracted;
+  const driftedTotal =
+    tierCounts.web_deep_research +
+    tierCounts.web_heuristic +
+    tierCounts.legacy_unsourced;
+  const hasAnyDrifted = driftedTotal > 0;
+
+  // Phase 0 rigor: toggle handler — dispatches a window event so the
+  // canvas host can re-fetch the route and rewrite the shape props.
+  // Mirrors the same pattern used by the focus chip's clear button.
+  // The `toggling` flag is a soft debounce to prevent double-clicks
+  // during the in-flight fetch; the listener rewrites findingsJson +
+  // tierMode through editor.updateShape, which re-renders this view.
+  const handleToggleTier = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (toggling) return;
+      const nextMode: "anchored" | "all" =
+        tierMode === "anchored" ? "all" : "anchored";
+      setToggling(true);
+      window.dispatchEvent(
+        new CustomEvent("forest-plot:set-tier-mode", {
+          detail: { shapeId: shape.id, mode: nextMode },
+        }),
+      );
+      window.setTimeout(() => setToggling(false), 1500);
+    },
+    [shape.id, tierMode, toggling],
+  );
 
   // Layout: header ~52px, footer ~22px, label column ~110px on left,
   // numeric readout column ~70px on right. Bar plotting region is
@@ -223,45 +357,191 @@ function ForestPlotView({ shape }: { shape: ForestPlotShape }) {
         />
 
         {/* Header */}
-        <div style={{ paddingLeft: 4 }}>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              fontSize: 9,
-              fontWeight: 700,
-              letterSpacing: "0.16em",
-              textTransform: "uppercase",
-              color: ACCENT,
-            }}
-            title="Effect sizes from evidence_registries, ranked by |effect|"
-          >
-            <BarChart3 style={{ width: 10, height: 10 }} />
-            Forest plot
-          </div>
-          <div
-            style={{
-              marginTop: 2,
-              fontSize: 12,
-              color: "#0a1020",
-              fontWeight: 500,
-            }}
-          >
-            {findings.length > 0 ? (
-              <>
-                {findings.length} finding{findings.length === 1 ? "" : "s"} ·{" "}
-                <span style={{ color: "#64748b" }}>
-                  {referenceMetric ?? "mixed"}
-                  {referenceMetric && ` · ref @ ${referenceValue}`}
+        <div
+          style={{
+            paddingLeft: 4,
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: 8,
+          }}
+        >
+          <div>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: "0.16em",
+                textTransform: "uppercase",
+                color: ACCENT,
+              }}
+              title="Effect sizes from evidence_registries, ranked by |effect|"
+            >
+              <BarChart3 style={{ width: 10, height: 10 }} />
+              Forest plot
+            </div>
+            <div
+              style={{
+                marginTop: 2,
+                fontSize: 12,
+                color: "#0a1020",
+                fontWeight: 500,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              {findings.length > 0 ? (
+                <>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <RigorMark
+                      tier={tierMode === "anchored" ? "paper_extracted" : "web_heuristic"}
+                      size={11}
+                      style={{ color: tierMode === "anchored" ? ACCENT : "#94a3b8" }}
+                    />
+                    {tierMode === "anchored" ? (
+                      <>
+                        {anchoredTotal} anchored
+                      </>
+                    ) : (
+                      <>
+                        {findings.length} of {anchoredTotal + driftedTotal}
+                      </>
+                    )}
+                  </span>
+                  <span style={{ color: "#64748b" }}>
+                    · {referenceMetric ?? "mixed"}
+                    {referenceMetric && ` · ref @ ${referenceValue}`}
+                  </span>
+                </>
+              ) : (
+                <span style={{ color: "#94a3b8", fontStyle: "italic" }}>
+                  no findings with CIs yet
                 </span>
-              </>
-            ) : (
-              <span style={{ color: "#94a3b8", fontStyle: "italic" }}>
-                no findings with CIs yet
-              </span>
+              )}
+            </div>
+            {/* Phase 0 rigor: tier toggle. Only renders when there are
+                drifted rows in the eligible pool — otherwise the toggle
+                has no behavior to surface. */}
+            {hasAnyDrifted && (
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={handleToggleTier}
+                disabled={toggling}
+                title={
+                  tierMode === "anchored"
+                    ? `Show all ${anchoredTotal + driftedTotal} findings, including ${driftedTotal} drifted (web / legacy). Drifted rows render dimmed.`
+                    : `Hide ${driftedTotal} drifted findings (web / legacy). Show only the ${anchoredTotal} paper-sourced rows.`
+                }
+                style={{
+                  marginTop: 6,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "2px 7px",
+                  background:
+                    tierMode === "anchored"
+                      ? "rgba(15, 118, 110, 0.06)"
+                      : "rgba(11, 13, 18, 0.04)",
+                  border:
+                    tierMode === "anchored"
+                      ? `1px solid ${ACCENT}33`
+                      : "1px solid rgba(11, 13, 18, 0.12)",
+                  borderRadius: 4,
+                  fontSize: 9.5,
+                  fontWeight: 600,
+                  color: tierMode === "anchored" ? ACCENT : "#475569",
+                  letterSpacing: "-0.005em",
+                  cursor: toggling ? "wait" : "pointer",
+                  opacity: toggling ? 0.6 : 1,
+                  transition:
+                    "background 120ms ease-out, border-color 120ms ease-out",
+                }}
+                aria-label={
+                  tierMode === "anchored"
+                    ? "Show all tiers"
+                    : "Show anchored tiers only"
+                }
+              >
+                <RigorMark
+                  tier={tierMode === "anchored" ? "web_heuristic" : "paper_extracted"}
+                  size={9}
+                />
+                {tierMode === "anchored"
+                  ? `Show all · ${anchoredTotal + driftedTotal}`
+                  : `Anchored · ${anchoredTotal}`}
+              </button>
             )}
           </div>
+          {/* Phase E: focus chip — appears when an edge focus is active.
+              Shows the focused edge label + matched/total ratio. The "×"
+              dispatches a custom event the spawner listens to (so the
+              shape stays editor-agnostic). */}
+          {isFocusing && (
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "3px 6px 3px 8px",
+                background: "rgba(15, 118, 110, 0.08)",
+                border: `1px solid ${ACCENT}55`,
+                borderRadius: 4,
+                fontSize: 10,
+                fontWeight: 600,
+                color: ACCENT,
+                letterSpacing: "-0.005em",
+                whiteSpace: "nowrap",
+                maxWidth: 200,
+              }}
+              title={`Focused on edge: ${focusedEdgeLabel ?? "—"} · ${matchedCount} of ${findings.length} findings match`}
+            >
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  maxWidth: 140,
+                }}
+              >
+                {focusedEdgeLabel ?? "focused"}
+                <span style={{ color: "#0F766EAA", marginLeft: 4 }}>
+                  {matchedCount}/{findings.length}
+                </span>
+              </span>
+              <button
+                type="button"
+                aria-label="Clear edge focus"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  window.dispatchEvent(
+                    new CustomEvent("forest-plot:clear-focus", {
+                      detail: { shapeId: shape.id },
+                    }),
+                  );
+                }}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 14,
+                  height: 14,
+                  padding: 0,
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: 3,
+                  color: ACCENT,
+                  cursor: "pointer",
+                }}
+              >
+                <X size={10} strokeWidth={2.5} />
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Body — SVG forest */}
@@ -297,25 +577,126 @@ function ForestPlotView({ shape }: { shape: ForestPlotShape }) {
                 : above
                   ? BAR_POSITIVE
                   : BAR_NEGATIVE;
+              // Phase 0 rigor: drifted rows render at 0.62 opacity with
+              // a dashed CI bar so the tier downgrade is visible without
+              // the user reading the glyph. Truncate one character
+              // tighter so the inline RigorMark glyph fits before the
+              // label without colliding with the CI plot region.
+              const tierAnchored = isAnchoredTier(f.rigor_tier);
+              const tierMeta = TIER_META[f.rigor_tier];
               const truncatedLabel =
-                f.label.length > 18 ? `${f.label.slice(0, 17)}…` : f.label;
+                f.label.length > 17 ? `${f.label.slice(0, 16)}…` : f.label;
               const readout = `${formatEffect(f.effect_size, isRatio)} [${formatEffect(f.ci_lower, isRatio)}, ${formatEffect(f.ci_upper, isRatio)}]`;
+              // Phase E focus styling. Only kicks in when focus is active;
+              // baseline (no focus) renders identically to pre-Phase-E.
+              const isMatch = highlightedIds.has(f.id);
+              const focusDim = isFocusing && !isMatch;
+              const tierDim = !tierAnchored;
+              // Multiplicative dim: drifted-in-focus rows are extra
+              // suppressed, but never below 0.18 (still legible).
+              const rowOpacity = Math.max(
+                0.18,
+                (focusDim ? 0.3 : 1) * (tierDim ? 0.62 : 1),
+              );
+              const labelFill = focusDim
+                ? "#94A3B8"
+                : tierDim
+                  ? "#64748B"
+                  : "#475569";
+              // Glyph geometry — two stacked horizontal bars, 7×1.4
+              // user-units each, 1.4 gap, vertically centered on the
+              // row baseline. Matches the RigorMark React component but
+              // inlined into this parent SVG so we don't nest <svg>.
+              const glyphX = padLR + 2;
+              const glyphTopY = yCenter - 1.7 - 1.4;
+              const glyphBotY = yCenter + 1.7 - 1.4;
+              const glyphW = 7;
+              const glyphH = 1.4;
+              const labelX = padLR + 12;
               return (
-                <g key={f.id} style={{ pointerEvents: "auto" }}>
-                  <title>{`${f.label}: ${readout}${
+                <g
+                  key={f.id}
+                  style={{ pointerEvents: "auto", opacity: rowOpacity }}
+                >
+                  <title>{`${f.label}: ${readout} · ${tierMeta.label}${
                     f.followup_label ? ` · ${f.followup_label}` : ""
-                  }${f.n_total ? ` · n=${f.n_total}` : ""}`}</title>
+                  }${f.n_total ? ` · n=${f.n_total}` : ""}${
+                    focusDim
+                      ? " · not in focused edge — click × on focus chip to clear"
+                      : ""
+                  }`}</title>
+                  {/* Highlight rail — 2px teal vertical bar at the left
+                      edge of the label column for matched rows. Aligns
+                      with the drawer's EdgeRow rail pattern for visual
+                      consistency across the two surfaces. */}
+                  {isFocusing && isMatch && (
+                    <line
+                      x1={padLR}
+                      x2={padLR}
+                      y1={yCenter - rowH / 2 + 2}
+                      y2={yCenter + rowH / 2 - 2}
+                      stroke={ACCENT}
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                    />
+                  )}
+                  {/* Phase 0 rigor glyph — paired horizontal bars.
+                      Anchored = filled; drifted = hairline outline. */}
+                  {tierAnchored ? (
+                    <>
+                      <rect
+                        x={glyphX}
+                        y={glyphTopY}
+                        width={glyphW}
+                        height={glyphH}
+                        rx={0.4}
+                        fill={labelFill}
+                      />
+                      <rect
+                        x={glyphX}
+                        y={glyphBotY}
+                        width={glyphW}
+                        height={glyphH}
+                        rx={0.4}
+                        fill={labelFill}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <rect
+                        x={glyphX}
+                        y={glyphTopY}
+                        width={glyphW}
+                        height={glyphH}
+                        rx={0.4}
+                        fill="none"
+                        stroke={labelFill}
+                        strokeWidth={0.6}
+                      />
+                      <rect
+                        x={glyphX}
+                        y={glyphBotY}
+                        width={glyphW}
+                        height={glyphH}
+                        rx={0.4}
+                        fill="none"
+                        stroke={labelFill}
+                        strokeWidth={0.6}
+                      />
+                    </>
+                  )}
                   {/* Label */}
                   <text
-                    x={padLR + 4}
+                    x={labelX}
                     y={yCenter}
                     fontSize={10}
-                    fill="#475569"
+                    fill={labelFill}
+                    fontWeight={isFocusing && isMatch ? 600 : 400}
                     dominantBaseline="middle"
                   >
                     {truncatedLabel}
                   </text>
-                  {/* CI bar */}
+                  {/* CI bar — solid for anchored rows, dashed for drifted */}
                   <line
                     x1={xLow}
                     x2={xHigh}
@@ -324,7 +705,9 @@ function ForestPlotView({ shape }: { shape: ForestPlotShape }) {
                     stroke={barColor}
                     strokeWidth={1.5}
                     strokeOpacity={0.55}
+                    strokeDasharray={tierDim ? "2 2" : undefined}
                   />
+
                   {/* CI caps */}
                   <line
                     x1={xLow}
@@ -358,7 +741,7 @@ function ForestPlotView({ shape }: { shape: ForestPlotShape }) {
                     x={w - padLR}
                     y={yCenter}
                     fontSize={9.5}
-                    fill="#475569"
+                    fill={labelFill}
                     dominantBaseline="middle"
                     textAnchor="end"
                     fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
@@ -387,23 +770,69 @@ function ForestPlotView({ shape }: { shape: ForestPlotShape }) {
           </div>
         )}
 
-        {/* Footer — domain hint + ratio/SMD reminder */}
+        {/* Footer — tier breakdown + ratio/SMD reminder */}
         <div
           style={{
             marginTop: "auto",
             paddingLeft: 4,
             display: "flex",
             justifyContent: "space-between",
+            alignItems: "center",
+            gap: 8,
             color: "#94A3B8",
             fontSize: 9.5,
           }}
         >
-          <span>
-            {isRatio ? "ratio metric" : "standardized effect"} · ref line at{" "}
-            {referenceValue}
-          </span>
-          {findings.length > 0 && (
+          {/* Phase 0 rigor: tier breakdown of the eligible pool. Always
+              reports the full population (independent of active filter)
+              so the user can see what's being hidden. Falls back to the
+              old metric hint when there are zero rows in the pool. */}
+          {anchoredTotal + driftedTotal > 0 ? (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+              title="Per-tier breakdown of the eligible pool. Drifted = web-research or legacy / unsourced rows."
+            >
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 3,
+                  color: anchoredTotal > 0 ? ACCENT : "#94A3B8",
+                }}
+              >
+                <RigorMark
+                  tier="paper_extracted"
+                  size={9}
+                  style={{ opacity: anchoredTotal > 0 ? 1 : 0.4 }}
+                />
+                {anchoredTotal} anchored
+              </span>
+              {driftedTotal > 0 && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 3,
+                    color: "#94A3B8",
+                  }}
+                >
+                  <RigorMark tier="web_heuristic" size={9} />
+                  {driftedTotal} drifted
+                </span>
+              )}
+            </span>
+          ) : (
             <span>
+              {isRatio ? "ratio metric" : "standardized effect"} · ref line at{" "}
+              {referenceValue}
+            </span>
+          )}
+          {findings.length > 0 && (
+            <span style={{ whiteSpace: "nowrap" }}>
               {formatEffect(domain.min, isRatio)} →{" "}
               {formatEffect(domain.max, isRatio)}
             </span>

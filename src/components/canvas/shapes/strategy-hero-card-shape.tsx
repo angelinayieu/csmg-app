@@ -88,6 +88,9 @@ export class StrategyHeroCardShapeUtil extends BaseBoxShapeUtil<StrategyHeroCard
     activeConfidence: T.nullable(T.number),
     activePosture: T.string,
     pulse: T.number,
+    activeLayerFocusId: T.nullable(T.string),
+    activeLayerFocusLabel: T.nullable(T.string),
+    activeLayerFocusColor: T.nullable(T.string),
   };
 
   override canResize = () => true;
@@ -119,6 +122,9 @@ export class StrategyHeroCardShapeUtil extends BaseBoxShapeUtil<StrategyHeroCard
       activeConfidence: null,
       activePosture: "cautious_validation",
       pulse: 0,
+      activeLayerFocusId: null,
+      activeLayerFocusLabel: null,
+      activeLayerFocusColor: null,
     };
   }
 
@@ -144,8 +150,26 @@ function StrategyHeroCardView({ shape }: { shape: StrategyHeroCardShape }) {
     activeSummary,
     activeConfidence,
     activePosture,
+    activeLayerFocusId,
+    activeLayerFocusLabel,
+    activeLayerFocusColor,
   } = shape.props;
   const accent = useMemo(() => postureAccent(activePosture), [activePosture]);
+  // E3 — when the active rank is a layer-stratified variant, the card shows
+  // a chip in the header indicating which layer of the user's domain
+  // ontology this strategy emphasizes. A `null` activeLayerFocusId means
+  // the variant is comprehensive (no chip).
+  const layerFocus = useMemo(
+    () =>
+      activeLayerFocusId && activeLayerFocusLabel && activeLayerFocusColor
+        ? {
+            id: activeLayerFocusId,
+            label: activeLayerFocusLabel,
+            color: activeLayerFocusColor,
+          }
+        : null,
+    [activeLayerFocusId, activeLayerFocusLabel, activeLayerFocusColor],
+  );
   const postureDisplay = useMemo(
     () => postureLabel(activePosture),
     [activePosture],
@@ -218,6 +242,7 @@ function StrategyHeroCardView({ shape }: { shape: StrategyHeroCardShape }) {
     >
       <div
         style={{
+          position: "relative",
           width: "100%",
           height: "100%",
           borderRadius: 20,
@@ -228,8 +253,31 @@ function StrategyHeroCardView({ shape }: { shape: StrategyHeroCardShape }) {
           display: "flex",
           flexDirection: "column",
           gap: 12,
+          overflow: "hidden",
         }}
       >
+        {/* E3 — left-edge layer accent stripe. Only when this rank is a
+            layer-stratified variant. The gradient fades from the layer's
+            color at the top to transparent at the bottom, so the
+            accent feels like a "light source" emanating from the
+            top-left corner rather than a flat color block. Positioned
+            absolutely, clipped by the parent's overflow:hidden +
+            border-radius so it follows the card's rounded corner. */}
+        {layerFocus && (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              top: 0,
+              bottom: 0,
+              left: 0,
+              width: 4,
+              background: `linear-gradient(180deg, ${layerFocus.color} 0%, color-mix(in srgb, ${layerFocus.color} 50%, transparent) 60%, color-mix(in srgb, ${layerFocus.color} 0%, transparent) 100%)`,
+              pointerEvents: "none",
+            }}
+          />
+        )}
+
         {/* Header row — pill + meta */}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span
@@ -262,6 +310,95 @@ function StrategyHeroCardView({ shape }: { shape: StrategyHeroCardShape }) {
           >
             {postureDisplay}
           </span>
+
+          {/* E3 — layer-focus chip. visionOS aesthetic: glass pill with
+              backdrop-blur, a soft inner glow from the layer's accent
+              color, a custom geometric "layer stack" SVG icon (three
+              offset rounded squares signaling depth), and a pure-color
+              dot showing the layer's accent at full saturation. Only
+              renders when this rank is a layer-stratified variant —
+              comprehensive ranks (layer_focus === null) show no chip. */}
+          {layerFocus && (
+            <span
+              title={`This variant emphasizes the ${layerFocus.label} layer of your domain ontology. Click to filter the canvas to this layer.`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "3px 10px 3px 8px",
+                borderRadius: 999,
+                // Glass surface — translucent white with a subtle layer-
+                // tinted wash. Backdrop-blur gives the visionOS depth feel.
+                background: `linear-gradient(135deg, rgba(255,255,255,0.78) 0%, color-mix(in srgb, ${layerFocus.color} 6%, rgba(255,255,255,0.78)) 100%)`,
+                backdropFilter: "blur(14px) saturate(160%)",
+                WebkitBackdropFilter: "blur(14px) saturate(160%)",
+                // Inner border in layer color, very subtle.
+                border: `1px solid color-mix(in srgb, ${layerFocus.color} 28%, transparent)`,
+                // Soft outer glow in layer color — gives the chip a sense
+                // of "lit from the layer color underneath" without
+                // bleeding loudly into the surrounding card.
+                boxShadow: `0 1px 0 rgba(255,255,255,0.6) inset, 0 0 0 1px rgba(255,255,255,0.4) inset, 0 4px 14px -8px ${layerFocus.color}`,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                color: `color-mix(in srgb, ${layerFocus.color} 80%, #0b0d12)`,
+                lineHeight: 1,
+              }}
+            >
+              {/* Custom geometric "layer stack" icon — three offset
+                  rounded squares with descending opacity, the foremost
+                  filled. Communicates depth and the selected front
+                  layer at a glance. */}
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 13 13"
+                fill="none"
+                aria-hidden
+                style={{ flexShrink: 0 }}
+              >
+                <rect
+                  x="1.4"
+                  y="1.4"
+                  width="6.4"
+                  height="6.4"
+                  rx="1.6"
+                  ry="1.6"
+                  fill="none"
+                  stroke={layerFocus.color}
+                  strokeWidth="1.2"
+                  opacity="0.38"
+                />
+                <rect
+                  x="3"
+                  y="3"
+                  width="6.4"
+                  height="6.4"
+                  rx="1.6"
+                  ry="1.6"
+                  fill="none"
+                  stroke={layerFocus.color}
+                  strokeWidth="1.2"
+                  opacity="0.7"
+                />
+                <rect
+                  x="4.6"
+                  y="4.6"
+                  width="6.4"
+                  height="6.4"
+                  rx="1.6"
+                  ry="1.6"
+                  fill={layerFocus.color}
+                  stroke={layerFocus.color}
+                  strokeWidth="1.2"
+                  fillOpacity="0.92"
+                />
+              </svg>
+              <span>{layerFocus.label}</span>
+            </span>
+          )}
+
           {activeConfidence !== null && (
             <span
               style={{

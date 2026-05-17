@@ -33,6 +33,9 @@ import {
   useRunStatus,
 } from "../hooks/run-event-store";
 import type { PipelineStage } from "@/types/pipeline-events";
+import { useContext } from "react";
+import { CanvasStageDetailsPopover } from "./canvas-stage-details-popover";
+import { CanvasOverlayPropsContext } from "../interaxis-canvas-overlays";
 
 interface StageMeta {
   /** Canonical key from PipelineStage. */
@@ -84,9 +87,12 @@ const STAGES: StageMeta[] = [
   },
 ];
 
-// How long the strip stays visible after the run ends. After this
-// the strip auto-fades so it doesn't clutter the post-run canvas.
-const HIDE_AFTER_TERMINAL_MS = 8000;
+// How long the strip stays visible after the run ends. The strip is
+// useful as a clickable Table-of-Contents AFTER the run too — clicking
+// a chip opens a stage-details popover. We keep the strip for ~3
+// minutes so the user has time to explore each stage's output, then
+// fade so it doesn't clutter a stale canvas.
+const HIDE_AFTER_TERMINAL_MS = 180_000;
 
 export function CanvasStageIndicator() {
   // Defensive — only render when inside a RunEventStoreProvider.
@@ -99,6 +105,16 @@ function CanvasStageIndicatorInner() {
   const latest = useLatestStageBoundary();
   const status = useRunStatus();
   const stageBoundaryEvents = useEventsOfType("stage_boundary");
+  // Selected stage chip → opens the details popover below the strip.
+  // null = no popover. Clicking the same chip again toggles closed.
+  const [selectedStage, setSelectedStage] = useState<PipelineStage | null>(
+    null,
+  );
+  // spaceId for the popover's deep links. Pulled via context rather
+  // than props since the indicator is mounted by overlays as a leaf
+  // with no props.
+  const overlayProps = useContext(CanvasOverlayPropsContext);
+  const spaceId = overlayProps?.spaceId ?? "";
 
   // Per-stage event-driven status. A stage is "done" once we see its
   // exit event; "active" on enter-but-no-exit; "pending" if neither.
@@ -128,7 +144,9 @@ function CanvasStageIndicatorInner() {
       landscape: "pending",
       kg: "pending",
       proposal: "pending",
+      twin: "pending",
       lab: "pending",
+      reflexive: "pending",
       results: "pending",
     };
     for (const s of stageBoundaryEvents) {
@@ -225,8 +243,20 @@ function CanvasStageIndicatorInner() {
               data-stage={stage.key}
               data-stage-state={stageState}
             >
-              <span
-                title={`${stateLabel} · ${stage.description}`}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  // Clicking a pending stage is a no-op — there's no
+                  // detail to show before the stage runs. Other states
+                  // toggle: clicking the selected chip closes the
+                  // popover; clicking another switches its content.
+                  if (stageState === "pending") return;
+                  setSelectedStage((prev) =>
+                    prev === stage.key ? null : stage.key,
+                  );
+                }}
+                title={`${stateLabel} · ${stage.description}${stageState !== "pending" ? " · click for details" : ""}`}
                 className={cn(
                   "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-all",
                   isError
@@ -239,8 +269,14 @@ function CanvasStageIndicatorInner() {
                   isActive &&
                     pulseStage === stage.key &&
                     "stage-chip-pulse",
+                  // Clickable affordance for non-pending stages.
+                  stageState !== "pending" &&
+                    "cursor-pointer hover:bg-slate-100",
+                  selectedStage === stage.key &&
+                    "ring-2 ring-offset-1 ring-slate-300",
                 )}
                 data-pulse-seq={pulseSeq}
+                aria-expanded={selectedStage === stage.key}
               >
                 <Icon
                   className={cn(
@@ -249,7 +285,7 @@ function CanvasStageIndicatorInner() {
                   )}
                 />
                 {stage.label}
-              </span>
+              </button>
               {/* Connector tick between chips. Red when the right side
                   is the error stage so the visual cascade reads clearly. */}
               {i < STAGES.length - 1 && (
@@ -269,6 +305,18 @@ function CanvasStageIndicatorInner() {
           );
         })}
       </div>
+      {/* Stage details popover. Renders below the strip when a chip is
+          clicked; closes via the X inside the popover or by re-clicking
+          the same chip above. Only mounted when a stage is selected so
+          the popover's data hooks (useSituationFrame, run-event store
+          counters) only run when the user actually opened it. */}
+      {selectedStage && (
+        <CanvasStageDetailsPopover
+          stage={selectedStage}
+          spaceId={spaceId}
+          onClose={() => setSelectedStage(null)}
+        />
+      )}
       <style jsx>{`
         :global(.stage-chip-pulse) {
           animation: stage-chip-glow 1100ms cubic-bezier(0.2, 0.8, 0.2, 1) 1;

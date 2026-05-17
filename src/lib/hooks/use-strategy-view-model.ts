@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { useStrategyAuto } from "@/lib/hooks/use-strategy-auto";
 import { buildStrategyVM, type StrategyVM } from "@/components/strategy/v2/strategy-view-model";
@@ -13,6 +13,11 @@ import type { StrategicRecommendation, RankedStrategy } from "@/types/strategy";
 import type { StrategyReasoningTrace } from "@/types/strategy-reasoning";
 import type { CausalChain } from "@/types/causal-chains";
 import type { StrategyBatch, StrategyBatchEntry } from "@/types/strategy-batch";
+import type { EvidenceRegistryRow } from "@/types/evidence-registry";
+import {
+  bucketEvidenceByEntity,
+  type CalibrationByEdge,
+} from "@/lib/twin/impact-weighted-metric";
 
 export interface StrategyViewModelResult {
   vm: StrategyVM | null;
@@ -166,6 +171,95 @@ export function useStrategyViewModel(
     return strategyAuto.rankedStrategies ?? [];
   }, [currentEntry, strategyAuto.rankedStrategies]);
 
+  // ── Phase D: evidence fetch ─────────────────────────────────────
+  //
+  // Single fetch on space change. Cap at the endpoint max (500 rows)
+  // so we don't truncate at the default 100 limit on rich spaces. The
+  // response is bucketed by attached_entity_id via the impact lib's
+  // helper; the same bucketed Map flows into both the cascade VM (for
+  // computeStageImpact's pooled effect) and the decomposition drawer
+  // (for per-edge evidence rows).
+  //
+  // Soft-fail: a fetch error leaves the Map empty. The impact library
+  // already handles n_studies=0 honestly (composite confidence collapses
+  // to 100% chain weight, evidence section shows "not yet aggregated"
+  // empty state). No throw, no broken UI.
+  const [evidenceByEntity, setEvidenceByEntity] = useState<
+    Map<string, EvidenceRegistryRow[]>
+  >(() => new Map());
+  useEffect(() => {
+    let cancelled = false;
+    const spaceId = ctx.space?.id;
+    if (!spaceId) {
+      setEvidenceByEntity(new Map());
+      return;
+    }
+    fetch(
+      `/api/spaces/${encodeURIComponent(spaceId)}/evidence?limit=500`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (cancelled) return;
+        const rows = (payload?.rows ?? []) as EvidenceRegistryRow[];
+        setEvidenceByEntity(bucketEvidenceByEntity(rows));
+      })
+      .catch(() => {
+        if (!cancelled) setEvidenceByEntity(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx.space?.id]);
+
+  // ── Phase F: calibration fetch ────────────────────────────────────
+  //
+  // Identical pattern to the evidence fetch above. Buckets the
+  // `by_edge` payload into a Map<edgeId, CalibrationByEdge> the impact
+  // lib can consume directly. Soft-fail keeps the Map empty so
+  // computeStageImpact returns `calibration: null` and the composite
+  // confidence falls back to the two-factor formula.
+  //
+  // Scope: space-wide (no `strategySnapshotId` filter today). The current
+  // strategy's snapshot id isn't always available at this layer — we'd
+  // need to plumb `currentEntry.strategy_snapshot_id` here. For now,
+  // space-wide is a slight over-count on multi-strategy spaces; trade
+  // for simplicity and revisit when the snapshot-attribution UI lands.
+  const [calibrationByEdge, setCalibrationByEdge] = useState<
+    Map<string, CalibrationByEdge>
+  >(() => new Map());
+  useEffect(() => {
+    let cancelled = false;
+    const spaceId = ctx.space?.id;
+    if (!spaceId) {
+      setCalibrationByEdge(new Map());
+      return;
+    }
+    fetch(
+      `/api/spaces/${encodeURIComponent(spaceId)}/calibration-summary?days=90`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (cancelled) return;
+        const byEdge = (payload?.by_edge ?? {}) as Record<
+          string,
+          CalibrationByEdge
+        >;
+        const map = new Map<string, CalibrationByEdge>();
+        for (const [edgeId, agg] of Object.entries(byEdge)) {
+          if (agg && typeof agg.n === "number" && agg.n > 0) {
+            map.set(edgeId, agg);
+          }
+        }
+        setCalibrationByEdge(map);
+      })
+      .catch(() => {
+        if (!cancelled) setCalibrationByEdge(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx.space?.id]);
+
   const vm = useMemo<StrategyVM | null>(() => {
     if (!recommendation) return null;
     return buildStrategyVM({
@@ -176,8 +270,35 @@ export function useStrategyViewModel(
       synthData,
       entityCount: ctx.entities.length,
       spaceName: ctx.space.name,
+      // Phase B (impact-weighted metric): pass the active goal + edges
+      // so the cascade can compute real goal-contribution % via
+      // computeStageImpact() instead of the legacy current/target ratio.
+      // Phase D: evidenceByEntity now carries real evidence rows
+      // bucketed by attached_entity_id. Pooled effect sizes + CIs + I²
+      // appear in the drawer once n_studies >= 1. Composite confidence
+      // blends in evidence quality once n_studies >= 3.
+      activeGoal: ctx.activeGoal,
+      edges: ctx.edges,
+      evidenceByEntity,
+      // Phase F: per-edge calibration aggregates from
+      // /api/spaces/[id]/calibration-summary. Empty map on pre-resolution
+      // spaces — impact lib leaves StageImpact.calibration null and the
+      // composite confidence uses the legacy two-factor formula.
+      calibrationByEdge,
     });
-  }, [recommendation, rankedStrategies, reasoningTrace, causalChains, synthData, ctx.entities.length, ctx.space.name]);
+  }, [
+    recommendation,
+    rankedStrategies,
+    reasoningTrace,
+    causalChains,
+    synthData,
+    ctx.entities.length,
+    ctx.space.name,
+    ctx.activeGoal,
+    ctx.edges,
+    evidenceByEntity,
+    calibrationByEdge,
+  ]);
 
   // Phase 3: chain staleness vs strategy's target goal
   const chainsStaleness: StalenessResult = useMemo(() => {

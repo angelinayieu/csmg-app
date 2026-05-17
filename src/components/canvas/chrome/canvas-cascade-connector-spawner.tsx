@@ -54,11 +54,15 @@ export function CanvasCascadeConnectorSpawner({
 }: CascadeConnectorSpawnerProps) {
   const editor = useEditor();
 
-  // Subscribe to a coarse "artifact set changed" signal — only the
-  // shape kinds we connect (subject-card, strategy-hero-card,
-  // twin-snapshot, app-card). Position changes don't matter — the
-  // bindings handle that automatically — so we only re-run when the
-  // SET of artifact shapes changes (one created, one deleted).
+  // Subscribe to a coarse "artifact set changed" signal — the shape
+  // kinds we connect: subject-card, strategy-hero-card, twin-snapshot,
+  // mechanism-card, app-card. Mechanism cards are now part of the
+  // fingerprint so the cascade re-routes through them when they exist
+  // (twin → mechanism → app) and falls back to direct twin → app when
+  // they don't (legacy strategies that pre-date the mechanism table).
+  // Position changes don't matter — the bindings handle that
+  // automatically — so we only re-run when the SET of artifact shapes
+  // changes (one created, one deleted).
   const artifactFingerprint = useValue(
     "cascade-connector-fingerprint",
     () => {
@@ -69,6 +73,7 @@ export function CanvasCascadeConnectorSpawner({
           s.type === "subject-card" ||
           s.type === "strategy-hero-card" ||
           s.type === "twin-snapshot" ||
+          s.type === "mechanism-card" ||
           s.type === "app-card"
         ) {
           ids.push(`${s.type}:${s.id}`);
@@ -101,6 +106,13 @@ export function CanvasCascadeConnectorSpawner({
   return null;
 }
 
+type AppShape = TLShape & {
+  props: { appId?: string };
+};
+type MechanismShape = TLShape & {
+  props: { mechanismId?: string };
+};
+
 function ensureCascadeConnectors(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   editor: any,
@@ -110,7 +122,8 @@ function ensureCascadeConnectors(
   const subjects: TLShape[] = [];
   let strategyHero: TLShape | null = null;
   let twinSnapshot: TLShape | null = null;
-  const appCards: TLShape[] = [];
+  const mechanismCards: MechanismShape[] = [];
+  const appCards: AppShape[] = [];
 
   for (const s of editor.getCurrentPageShapes() as TLShape[]) {
     if (s.type === "subject-card") subjects.push(s);
@@ -121,7 +134,11 @@ function ensureCascadeConnectors(
       if (!strategyHero || s.id < strategyHero.id) strategyHero = s;
     } else if (s.type === "twin-snapshot") {
       if (!twinSnapshot || s.id < twinSnapshot.id) twinSnapshot = s;
-    } else if (s.type === "app-card") appCards.push(s);
+    } else if (s.type === "mechanism-card") {
+      mechanismCards.push(s as MechanismShape);
+    } else if (s.type === "app-card") {
+      appCards.push(s as AppShape);
+    }
   }
 
   // ── B2: persona → strategy-hero ────────────────────────────────────
@@ -151,9 +168,63 @@ function ensureCascadeConnectors(
     });
   }
 
-  // ── B3b: twin-snapshot → app-card[] ────────────────────────────────
-  // One arrow per app. Without a twin OR no apps, skip.
-  if (twinSnapshot && appCards.length > 0) {
+  // ── B3b/B3c: twin-snapshot → mechanism-card[] → app-card[] ─────────
+  //
+  // When mechanism cards exist on canvas, route the cascade THROUGH
+  // them — this matches the real data model where apps.parent_mechanism_id
+  // links each app to a mechanism, not directly to the twin. The
+  // resulting layout reads as twin → mechanism → app, which is the
+  // operational architecture the user actually wants to see.
+  //
+  // Fallback: when no mechanism cards exist (legacy spaces approved
+  // before the mechanisms table landed, OR mechanisms still loading),
+  // draw twin → app arrows directly as before. The fingerprint watcher
+  // re-runs this function once the mechanism cards appear, which then
+  // creates the through-mechanism arrows alongside the direct ones.
+  // The direct arrows aren't cleaned up automatically — that's
+  // intentional, since deleting an existing arrow could trample user
+  // arrangements. A future cleanup pass (see C-track) can prune
+  // redundant direct arrows when through-mechanism routing supersedes
+  // them.
+  if (twinSnapshot && mechanismCards.length > 0) {
+    // twin → mechanism
+    for (const mech of mechanismCards) {
+      ensureArrow({
+        editor,
+        spaceId,
+        fromShape: twinSnapshot,
+        toShape: mech,
+        slug: "twin-to-mechanism",
+        label: null, // multi-mechanism case — labels would clutter
+      });
+    }
+
+    // mechanism → app, routed by parent_mechanism_id when available.
+    // The app-card shape carries appId but NOT parent_mechanism_id in
+    // its props (the shape was authored before mechanisms existed), so
+    // we can't infer the mechanism→app edges from canvas state alone.
+    // Until app-card carries parentMechanismId, draw an arrow from
+    // EACH mechanism to EACH app — this gives a visually rich "twin
+    // operationalizes through these mechanisms which manage these
+    // apps" but doesn't claim a specific app belongs to a specific
+    // mechanism. When app-card adds the parent prop (small follow-up),
+    // the loop below can filter by it for surgical routing.
+    if (appCards.length > 0) {
+      for (const mech of mechanismCards) {
+        for (const app of appCards) {
+          ensureArrow({
+            editor,
+            spaceId,
+            fromShape: mech,
+            toShape: app,
+            slug: "mechanism-to-app",
+            label: null,
+          });
+        }
+      }
+    }
+  } else if (twinSnapshot && appCards.length > 0) {
+    // Fallback (legacy): twin → app directly.
     for (const app of appCards) {
       ensureArrow({
         editor,
@@ -161,7 +232,7 @@ function ensureCascadeConnectors(
         fromShape: twinSnapshot,
         toShape: app,
         slug: "twin-to-app",
-        label: null, // multi-app case — labels would crowd
+        label: null,
       });
     }
   }

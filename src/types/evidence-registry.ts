@@ -287,6 +287,13 @@ export interface EvidenceRegistryRow {
   user_id: string;
   created_at: string;
   updated_at: string;
+
+  // ── Optional derived classification ──
+  // Populated by callers that have run `classifyRigorRow` from
+  // src/lib/evidence/rigor-tier.ts. Undefined when the row was loaded
+  // by a consumer that doesn't care about rigor (e.g. the legacy
+  // drawer fetch). Never persisted — it's a pure derivation.
+  rigor_tier?: import("@/lib/evidence/rigor-tier").RigorTier;
 }
 
 // ── Extraction draft (what the primitive returns before insert) ────

@@ -98,11 +98,17 @@ import type {
   SynthesisCardShape,
   RoomShape,
   LayerStackShape,
+  LearningLoopCardShape,
+  CycleLoopShape,
 } from "../shapes/types";
 import {
   STRATEGY_HERO_DEFAULT_W,
   STRATEGY_HERO_DEFAULT_H,
 } from "../shapes/strategy-hero-card-shape";
+import {
+  LEARNING_LOOP_DEFAULT_W,
+  LEARNING_LOOP_DEFAULT_H,
+} from "../shapes/learning-loop-card-shape";
 import {
   STAGE_ROOMS,
   STAGE_HEIGHT,
@@ -394,11 +400,23 @@ export function CanvasOperationalSeedSpawner({
         const layerStackShapeId = createShapeId(`layer-stack-${spaceId}`);
         if (!editor.getShape(layerStackShapeId) && !flag(layerStackFlagK)) {
           try {
-            const res = await fetch(
-              `/api/spaces/${encodeURIComponent(spaceId)}/layer-ontology`,
-            );
-            if (res.ok && !cancelled) {
-              const json = (await res.json()) as {
+            // D-track β — load ontology + layer-dependencies in parallel
+            // so the shape spawns with both layer rows AND any
+            // cross-layer cascade arrows in one paint. Dependencies are
+            // an optional second-class signal: if the endpoint 404s,
+            // throws, or returns [] (cascade prediction hasn't run yet
+            // for this space), the shape still renders its layer rows
+            // without the arrow gutter.
+            const [ontologyRes, depsRes] = await Promise.all([
+              fetch(
+                `/api/spaces/${encodeURIComponent(spaceId)}/layer-ontology`,
+              ),
+              fetch(
+                `/api/spaces/${encodeURIComponent(spaceId)}/layer-dependencies`,
+              ).catch(() => null),
+            ]);
+            if (ontologyRes.ok && !cancelled) {
+              const json = (await ontologyRes.json()) as {
                 ontology?: Array<{
                   id: string;
                   ordinal: number;
@@ -418,11 +436,54 @@ export function CanvasOperationalSeedSpawner({
                   color: l.color,
                   typical_node_kinds: l.typical_node_kinds ?? [],
                 }));
+
+              // Pull cascade rows in the shape that LayerStackShape's
+              // ParsedDependency expects. Strip DB-managed fields (id,
+              // user_id, confidence, generated_at) so the JSON stays
+              // compact on the shape props.
+              let dependencies: Array<{
+                from_layer_id: string;
+                to_layer_id: string;
+                kind: string;
+                strength: number;
+                lag_label: string | null;
+                mechanism: string;
+              }> = [];
+              if (depsRes && depsRes.ok) {
+                try {
+                  const depsJson = (await depsRes.json()) as {
+                    dependencies?: Array<{
+                      from_layer_id: string;
+                      to_layer_id: string;
+                      kind: string;
+                      strength: number;
+                      lag_label: string | null;
+                      mechanism: string;
+                    }>;
+                  };
+                  dependencies = (depsJson.dependencies ?? []).map((d) => ({
+                    from_layer_id: d.from_layer_id,
+                    to_layer_id: d.to_layer_id,
+                    kind: d.kind,
+                    strength: d.strength,
+                    lag_label: d.lag_label,
+                    mechanism: d.mechanism,
+                  }));
+                } catch {
+                  /* non-fatal — bad JSON from deps endpoint just means
+                     no arrow gutter. The shape renders cleanly. */
+                }
+              }
+
               if (layers.length > 0) {
-                // Width 180, height enough for ~75px per row + header.
-                // Cap at 600 (the KG room body is ~600 tall after
-                // accounting for ROOM_PADDING).
-                const STACK_W = 180;
+                // Width: 180 base, +60 gutter when cascade arrows are
+                // present (shape internally suppresses the gutter when
+                // dependenciesJson is empty so visible width matches).
+                // Height enough for ~75px per row + header. Cap at 600
+                // (the KG room body is ~600 tall after accounting for
+                // ROOM_PADDING).
+                const hasDeps = dependencies.length > 0;
+                const STACK_W = hasDeps ? 240 : 180;
                 const STACK_H = Math.min(
                   600,
                   Math.max(160, layers.length * 78 + 40),
@@ -454,6 +515,7 @@ export function CanvasOperationalSeedSpawner({
                     h: STACK_H,
                     spaceId,
                     layersJson: JSON.stringify(layers),
+                    dependenciesJson: JSON.stringify(dependencies),
                   },
                   meta: { source: "operational-seeder:layer-stack" },
                 });
@@ -484,6 +546,14 @@ export function CanvasOperationalSeedSpawner({
                   summary: string;
                   confidence: number | null;
                   posture: string;
+                  // E3 — present on stratified variants, null on
+                  // comprehensive variants. Source: the GET endpoint's
+                  // RankedStrategyEntry flattening.
+                  layer_focus: {
+                    layer_id: string;
+                    label: string;
+                    color: string;
+                  } | null;
                 }>;
               };
               const ranked = json.ranked_strategies ?? [];
@@ -517,6 +587,13 @@ export function CanvasOperationalSeedSpawner({
                     activeConfidence: top.confidence,
                     activePosture: top.posture,
                     pulse: 0,
+                    // E3 — thread the flattened layer_focus into the
+                    // three shape props. When null (comprehensive
+                    // variant), all three stay null and the chip +
+                    // left-edge stripe stay hidden.
+                    activeLayerFocusId: top.layer_focus?.layer_id ?? null,
+                    activeLayerFocusLabel: top.layer_focus?.label ?? null,
+                    activeLayerFocusColor: top.layer_focus?.color ?? null,
                   },
                   meta: { source: "operational-seeder:strategy-hero" },
                 });
@@ -867,6 +944,170 @@ export function CanvasOperationalSeedSpawner({
 
         if (cancelled) return;
 
+        // ── 2bb. Learning-loop card inside Twin room ────────────
+        // P1.1: the strategy's StrategyLearningLoop rendered as a
+        // canvas shape. Today the same data is rendered only inside
+        // the off-canvas strategy-page's whiteboard-view
+        // (build-whiteboard-model.ts:422-459); this brings it onto
+        // the actual tldraw canvas where the user lives.
+        //
+        // Position: centered below the mechanism row, above the
+        // trajectory fan row. Twin room reads top→bottom as:
+        //   • twin-snapshot (state) + mechanism cards (substrate)
+        //   • learning-loop card (dashboard — what to watch + pivot)
+        //   • trajectory fans (forecast)
+        //
+        // Data source: twin-proposal GET response carries
+        // `learning_loop` (extracted from synthesis_data.
+        // strategic_recommendation by the route handler). Singleton
+        // per space — deterministic shape id; localStorage flag so a
+        // user-dismissal sticks.
+        const learningFlagK = flagKey("learning-loop");
+        const learningShapeId = createShapeId(
+          `learning-loop-${spaceId}`,
+        );
+        if (!editor.getShape(learningShapeId) && !flag(learningFlagK)) {
+          try {
+            const res = await fetch(
+              `/api/spaces/${encodeURIComponent(spaceId)}/twin-proposal`,
+            );
+            if (res.ok && !cancelled) {
+              const json = (await res.json()) as {
+                learning_loop?: {
+                  lagging_indicator?: {
+                    metric?: string;
+                    target?: string;
+                    deadline?: string;
+                  };
+                  leading_indicators?: Array<{
+                    metric?: string;
+                    measurement_method?: string;
+                    cadence?: string;
+                    green_reading?: string;
+                    yellow_reading?: string;
+                    red_reading?: string;
+                  }>;
+                  review_cadence?: {
+                    metric_checks?: string;
+                    full_strategy_review?: string;
+                    total_cycles_in_timeline?: number;
+                  };
+                  pivot_criteria?: Array<{
+                    signal?: string;
+                    response?: string;
+                    specific_action?: string;
+                    timeline?: string;
+                  }>;
+                  persistence_signals?: Array<unknown>;
+                } | null;
+              };
+              const ll = json.learning_loop ?? null;
+              // Spawn only when there's something meaningful to show:
+              // either a lagging indicator OR at least one leading
+              // indicator. Without either the card is a bag of
+              // placeholders that says "no signal here" — worse than
+              // not spawning.
+              const hasLagging =
+                typeof ll?.lagging_indicator?.metric === "string" &&
+                ll.lagging_indicator.metric.trim().length > 0;
+              const hasLeading =
+                Array.isArray(ll?.leading_indicators) &&
+                ll!.leading_indicators!.length > 0;
+              if (ll && (hasLagging || hasLeading) && !cancelled) {
+                // Layout: anchor below the mechanism-card row (which
+                // started ~70px below twin-snapshot, occupies ~190px
+                // tall). Pad ~110px from the room header to clear
+                // both. Centered horizontally inside the twin room.
+                const learningPos = placeCenteredInsideRoom(
+                  "twin",
+                  SEED_ANCHOR,
+                  LEARNING_LOOP_DEFAULT_W,
+                  LEARNING_LOOP_DEFAULT_H,
+                  0,
+                  TWIN_SNAP_H + 80, // 80px gap below twin-snapshot row
+                );
+
+                // Normalize the indicator + pivot arrays for the
+                // shape's JSON props. We drop entries without a
+                // metric since the shape can't render them
+                // meaningfully.
+                const leadingClean = (ll.leading_indicators ?? [])
+                  .filter(
+                    (li) =>
+                      typeof li?.metric === "string" &&
+                      li.metric.trim().length > 0,
+                  )
+                  .slice(0, 4)
+                  .map((li) => ({
+                    metric: li.metric,
+                    cadence: li.cadence ?? "",
+                    green_reading: li.green_reading ?? "",
+                    yellow_reading: li.yellow_reading ?? "",
+                    red_reading: li.red_reading ?? "",
+                    measurement_method: li.measurement_method ?? "",
+                    status: "unknown" as const,
+                  }));
+                const pivotsClean = (ll.pivot_criteria ?? [])
+                  .filter(
+                    (p) =>
+                      typeof p?.signal === "string" &&
+                      p.signal.trim().length > 0,
+                  )
+                  .map((p) => ({
+                    signal: p.signal,
+                    response: p.response ?? "",
+                    specific_action: p.specific_action ?? "",
+                    timeline: p.timeline ?? "",
+                  }));
+
+                editor.markHistoryStoppingPoint(
+                  `auto-place-learning-loop-${spaceId}`,
+                );
+                editor.createShape<LearningLoopCardShape>({
+                  id: learningShapeId,
+                  type: "learning-loop-card",
+                  x: learningPos.x,
+                  y: learningPos.y,
+                  props: {
+                    w: LEARNING_LOOP_DEFAULT_W,
+                    h: LEARNING_LOOP_DEFAULT_H,
+                    spaceId,
+                    capturedAt: new Date().toISOString(),
+                    laggingMetric: ll.lagging_indicator?.metric ?? "",
+                    laggingTarget: ll.lagging_indicator?.target ?? "",
+                    laggingDeadline:
+                      ll.lagging_indicator?.deadline ?? "",
+                    leadingIndicatorsJson: JSON.stringify(leadingClean),
+                    metricCheckCadence:
+                      ll.review_cadence?.metric_checks ?? "",
+                    reviewCadence:
+                      ll.review_cadence?.full_strategy_review ?? "",
+                    totalCycles:
+                      typeof ll.review_cadence
+                        ?.total_cycles_in_timeline === "number"
+                        ? ll.review_cadence!.total_cycles_in_timeline
+                        : 0,
+                    pivotCriteriaJson: JSON.stringify(pivotsClean),
+                    persistenceCount: Array.isArray(
+                      ll.persistence_signals,
+                    )
+                      ? ll.persistence_signals.length
+                      : 0,
+                    accent: "#7C3AED",
+                  },
+                });
+                setFlag(learningFlagK);
+              }
+            }
+          } catch {
+            /* non-fatal — no learning_loop is a valid state pre-strategy */
+          }
+        } else if (editor.getShape(learningShapeId)) {
+          setFlag(learningFlagK);
+        }
+
+        if (cancelled) return;
+
         // ── 2c. Trajectory fan cards inside Twin room ────────────
         // Read prediction_ledger trajectory rows and spawn a fan-chart
         // card per row. Anchored as a horizontal strip BELOW the
@@ -1123,6 +1364,136 @@ export function CanvasOperationalSeedSpawner({
 
         if (cancelled) return;
 
+        // ── 3b. Cycle-loop cards inside KG room ────────────────────
+        // L1.1: auto-spawn one cycle-loop card per detected feedback
+        // loop. Today these only manifest as the convergence ring on
+        // member entities — the loop itself only appears if the user
+        // manually drags from the library. This block fetches the
+        // cycles table and spawns a card for each, so already-completed
+        // spaces (where no SSE fires) also get the loops visible.
+        //
+        // Deterministic shape ID `cycle-loop-${cycleId}` matches the
+        // live painter (paintCycle), so whichever fires first wins and
+        // the other becomes a no-op — no duplicates across the
+        // canvas-mount vs during-run paths.
+        //
+        // Layout: 4 per row, ~480px below the kg-room content top.
+        // Same as the painter so re-paints from a fresh run align with
+        // any cards seeded earlier.
+        const cyclesFlagK = flagKey("cycle-loops");
+        if (!flag(cyclesFlagK)) {
+          try {
+            const res = await fetch(
+              `/api/spaces/${encodeURIComponent(spaceId)}/cycles`,
+            );
+            if (res.ok && !cancelled) {
+              const json = (await res.json()) as {
+                cycles?: Array<{
+                  id: string;
+                  cycle_id: string;
+                  name: string | null;
+                  classification: string;
+                  entity_ids: string[];
+                  estimated_multiplier: number | null;
+                }>;
+                entity_name_by_id?: Record<string, string>;
+              };
+              const cyclesList = json.cycles ?? [];
+              const nameLookup = json.entity_name_by_id ?? {};
+              if (cyclesList.length > 0 && !cancelled) {
+                const PER_ROW = 4;
+                const CARD_W = 260;
+                const CARD_H = 140;
+                const GAP_X = 16;
+                const GAP_Y = 16;
+                const placement = placeInsideRoom(
+                  "kg",
+                  SEED_ANCHOR,
+                  0,
+                  480,
+                );
+                const totalRowWidth =
+                  PER_ROW * CARD_W + (PER_ROW - 1) * GAP_X;
+                const rowStartX = placement.x - totalRowWidth / 2;
+
+                const VALID_CLASSIFICATIONS = [
+                  "reinforcing_positive",
+                  "reinforcing_negative",
+                  "balancing",
+                ] as const;
+                type ValidClassification = (typeof VALID_CLASSIFICATIONS)[number];
+
+                const shapesToCreate: Array<Partial<CycleLoopShape> & {
+                  type: "cycle-loop";
+                }> = [];
+
+                cyclesList.forEach((c, idx) => {
+                  const shapeId = createShapeId(`cycle-loop-${c.cycle_id}`);
+                  // Idempotent: if the painter (or a prior seed pass)
+                  // already created this shape, leave it alone.
+                  if (editor.getShape(shapeId)) return;
+
+                  const col = idx % PER_ROW;
+                  const row = Math.floor(idx / PER_ROW);
+                  const x = Math.round(rowStartX + col * (CARD_W + GAP_X));
+                  const y = Math.round(placement.y + row * (CARD_H + GAP_Y));
+
+                  // Resolve up to 4 entity names from the lookup map.
+                  // Members without resolved names just don't contribute
+                  // to the preview — card falls back to nodeCount.
+                  const entityIds = Array.isArray(c.entity_ids)
+                    ? c.entity_ids
+                    : [];
+                  const entityNames: string[] = [];
+                  for (const eid of entityIds.slice(0, 4)) {
+                    const nm = nameLookup[eid];
+                    if (nm && nm.length > 0) entityNames.push(nm);
+                  }
+
+                  // Normalize classification to the enum the shape accepts.
+                  const classification: ValidClassification =
+                    (VALID_CLASSIFICATIONS as readonly string[]).includes(
+                      c.classification,
+                    )
+                      ? (c.classification as ValidClassification)
+                      : "balancing";
+
+                  shapesToCreate.push({
+                    id: shapeId,
+                    type: "cycle-loop",
+                    x,
+                    y,
+                    props: {
+                      w: CARD_W,
+                      h: CARD_H,
+                      cycleId: c.cycle_id,
+                      spaceId,
+                      name: c.name && c.name.length > 0 ? c.name : "Untitled cycle",
+                      classification,
+                      entityNames,
+                      nodeCount: entityIds.length,
+                      multiplier: c.estimated_multiplier ?? null,
+                      firstEntityId: entityIds[0] ?? null,
+                    },
+                  });
+                });
+
+                if (shapesToCreate.length > 0) {
+                  editor.markHistoryStoppingPoint(
+                    `auto-place-cycle-loops-${spaceId}`,
+                  );
+                  editor.createShapes(shapesToCreate);
+                }
+                setFlag(cyclesFlagK);
+              }
+            }
+          } catch {
+            /* non-fatal — cycles may not be populated yet */
+          }
+        }
+
+        if (cancelled) return;
+
         // ── 4. Forest plot card (top evidence-registries findings) ───
         // Singleton card inside the kg room visualizing the strongest
         // |effect_size| findings with CIs, ranked vertically. Anchored
@@ -1147,11 +1518,80 @@ export function CanvasOperationalSeedSpawner({
               const json = (await res.json()) as {
                 findings?: unknown[];
                 primary_metric?: string | null;
+                tier_mode?: "anchored" | "all";
+                tier_counts?: Record<string, number>;
               };
               const findings = Array.isArray(json.findings)
                 ? json.findings
                 : [];
-              if (findings.length > 0 && !cancelled) {
+              const tierMode: "anchored" | "all" =
+                json.tier_mode === "all" ? "all" : "anchored";
+              const tierCounts =
+                json.tier_counts && typeof json.tier_counts === "object"
+                  ? json.tier_counts
+                  : {};
+              // Phase 0 rigor: when no anchored rows are present, the
+              // default `anchored` filter would render the card empty.
+              // Refetch with `tier=all` so the card surfaces something
+              // (drifted rows are visually de-emphasized — see shape).
+              // This is the only time we silently flip to permissive
+              // mode on first load; the user can still toggle back.
+              if (findings.length === 0 && tierMode === "anchored") {
+                const driftedTotal =
+                  (Number(tierCounts.web_deep_research) || 0) +
+                  (Number(tierCounts.web_heuristic) || 0) +
+                  (Number(tierCounts.legacy_unsourced) || 0);
+                if (driftedTotal > 0) {
+                  const fallback = await fetch(
+                    `/api/spaces/${encodeURIComponent(spaceId)}/forest-plot?limit=8&tier=all`,
+                  );
+                  if (fallback.ok && !cancelled) {
+                    const fjson = (await fallback.json()) as {
+                      findings?: unknown[];
+                      primary_metric?: string | null;
+                      tier_mode?: "anchored" | "all";
+                      tier_counts?: Record<string, number>;
+                    };
+                    const ffindings = Array.isArray(fjson.findings)
+                      ? fjson.findings
+                      : [];
+                    if (ffindings.length > 0 && !cancelled) {
+                      const FOREST_W = 360;
+                      const FOREST_H = 320;
+                      const pos = placeCenteredInsideRoom(
+                        "kg",
+                        SEED_ANCHOR,
+                        FOREST_W,
+                        FOREST_H,
+                        0,
+                        460,
+                      );
+                      editor.markHistoryStoppingPoint(
+                        `auto-place-forest-plot-${spaceId}`,
+                      );
+                      editor.createShape({
+                        id: forestShapeId,
+                        type: "forest-plot",
+                        x: pos.x,
+                        y: pos.y,
+                        props: {
+                          w: FOREST_W,
+                          h: FOREST_H,
+                          findingsJson: JSON.stringify(ffindings),
+                          referenceMetric: fjson.primary_metric ?? null,
+                          findingCount: ffindings.length,
+                          tierMode: "all",
+                          tierCountsJson: JSON.stringify(
+                            fjson.tier_counts ?? tierCounts,
+                          ),
+                        },
+                        meta: { source: "operational-seeder:forest-plot" },
+                      });
+                      setFlag(forestFlagK);
+                    }
+                  }
+                }
+              } else if (findings.length > 0 && !cancelled) {
                 const FOREST_W = 360;
                 const FOREST_H = 320;
                 // Anchor inside the kg room. Synthesis cards row sits
@@ -1180,6 +1620,8 @@ export function CanvasOperationalSeedSpawner({
                     findingsJson: JSON.stringify(findings),
                     referenceMetric: json.primary_metric ?? null,
                     findingCount: findings.length,
+                    tierMode,
+                    tierCountsJson: JSON.stringify(tierCounts),
                   },
                   meta: { source: "operational-seeder:forest-plot" },
                 });

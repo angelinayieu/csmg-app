@@ -68,6 +68,7 @@ import type {
   VariantCarouselShape,
   StageNodeShape,
   TwinSnapshotShape,
+  CycleLoopShape,
 } from "./shapes/types";
 import {
   ORIGIN_PROMPT_DEFAULT_H,
@@ -911,14 +912,24 @@ function paintTaxonomy(
   }
 
   const shapeId = createShapeId();
+  // A5 — anchor inside the kg room, shoulder-to-shoulder with kg-formation.
+  // Previously used hardcoded absolute offsets (`anchor.x + OFFSET_X`,
+  // `anchor.y - OFFSET_Y`) which placed the card outside any room. The
+  // taxonomy is derived from the KG formation's variables, so the two
+  // live artifacts belonging together inside the kg room reads cleanly
+  // as "what's being modeled | what variables we're varying".
+  const taxonomyPlacement = placeInsideRoom(
+    "kg",
+    state.anchor,
+    TAXONOMY_CARD_OFFSET_X,
+    16,
+  );
   try {
     editor.createShape<TaxonomyCardShape>({
       id: shapeId,
       type: "taxonomy-card",
-      // Positioned to the right of the KG formation overview card so
-      // the two live artifacts read as a pair ("landscape | IVs").
-      x: state.anchor.x + TAXONOMY_CARD_OFFSET_X,
-      y: state.anchor.y - TAXONOMY_CARD_OFFSET_Y,
+      x: taxonomyPlacement.x - TAXONOMY_CARD_W / 2,
+      y: taxonomyPlacement.y,
       props: {
         w: TAXONOMY_CARD_W,
         h: TAXONOMY_CARD_H,
@@ -1670,14 +1681,19 @@ export function PipelineEventPainter({
       // overlay. Must clear before the formation shape itself to avoid
       // dangling bindings.
       ...state.originArrowIds,
-      // Proposal snapshots + their chain ribbons + experiment-design
-      // cards — these were live forking breadcrumbs. The committed
-      // operational view uses strategy-hero-card / final-plan-card /
-      // experiment_taxonomies, so the breadcrumbs would duplicate the
-      // canonical narrative.
-      ...state.proposalsById.values(),
-      ...state.chainRibbonsByProposal.values(),
-      ...state.experimentDesignByProposal.values(),
+      // PROPOSAL SNAPSHOTS / CHAIN RIBBONS / EXPERIMENT DESIGN —
+      // T1.1 (operational whiteboard): these are no longer deleted.
+      // They carry the per-rank reasoning (target, headline, distribution,
+      // causal chain, IV/DV/control framing) — the audit trail that
+      // explains WHY each strategy ranked where it did. Without them
+      // the post-run proposal room shows only the synthesis card +
+      // hero, losing the forked reasoning entirely. State maps are
+      // still cleared below (line 1712-1714) so a re-run creates
+      // fresh shapes with new IDs; prior-run snapshots stay as
+      // narrative artifacts. The strategy-hero-card and final-plan-card
+      // remain the canonical "active" surfaces; these are now the
+      // canonical "how we got here" surfaces.
+      //
       // KG formation overlay — replaced post-run by the persistent
       // kg-overview-card. Keeping both would double-count the same
       // graph summary.
@@ -1954,12 +1970,26 @@ function upsertRootCauseTree(editor: Editor, state: PainterState) {
 
   if (!state.anchor) return; // painter needs an anchor to position; try again on next event
   const shapeId = createShapeId();
+  // A5 — anchor inside the kg room, to the left of kg-formation. The
+  // root-cause tree is a backward-BFS view OF the kg, so it belongs in
+  // the kg room alongside kg-formation and taxonomy-card. Previously
+  // used hardcoded `anchor.x + OFFSET_X` (a large negative) and
+  // `anchor.y - OFFSET_Y` which placed the tree upper-left of the
+  // canvas origin, off-room. ROOT_CAUSE_TREE_OFFSET_X retains its
+  // negative sign so the tree still sits LEFT of kg-formation; we
+  // just resolve it room-relatively now.
+  const rootCausePlacement = placeInsideRoom(
+    "kg",
+    state.anchor,
+    ROOT_CAUSE_TREE_OFFSET_X,
+    16,
+  );
   try {
     editor.createShape<RootCauseTreeShape>({
       id: shapeId,
       type: "root-cause-tree",
-      x: state.anchor.x + ROOT_CAUSE_TREE_OFFSET_X,
-      y: state.anchor.y - ROOT_CAUSE_TREE_OFFSET_Y,
+      x: rootCausePlacement.x - ROOT_CAUSE_TREE_W / 2,
+      y: rootCausePlacement.y,
       props,
     });
     state.rootCauseTreeShapeId = shapeId;
@@ -3552,7 +3582,12 @@ function paintBridge(
 
 const SYNTHESIS_W = 540;
 const SYNTHESIS_H = 320;
-const SYNTHESIS_Y_OFFSET = -60; // sits at anchor.y - 60 (just below shells row)
+const SYNTHESIS_Y_OFFSET = -60; // legacy — retained for any out-of-tree readers
+// A5 — synthesis card anchors inside the landscape room. Sits near the
+// bottom of landscape so the probability-space shells row stacked above
+// reads as "shells converging into this final ranking". 16px breathing
+// room above the room bottom.
+const SYNTHESIS_LANDSCAPE_Y_OFFSET = 340 - SYNTHESIS_H - 16;
 
 interface ConvergenceRow {
   entityId: string;
@@ -3647,8 +3682,22 @@ function ensureSynthesisCard(
   }
 
   const shapeId = createShapeId();
-  const x = state.anchor.x - SYNTHESIS_W / 2;
-  const y = state.anchor.y + SYNTHESIS_Y_OFFSET;
+  // A5 — anchor inside the landscape room (synthesis IS the landscape
+  // stage's final ranking output, feeding into proposals). Previously
+  // sat at anchor.y - 60, which placed it ABOVE the intake room — a
+  // drift bug flagged by the operational-whiteboard audit. Position
+  // near the bottom of the landscape room so it reads as the
+  // culmination of the probability-space convergence shells stacked
+  // above. proposal-snapshot cards continue to anchor relatively to
+  // synthesisX/Y (see paintProposalReady) so they fan from this card.
+  const synthesisPlacement = placeInsideRoom(
+    "landscape",
+    state.anchor,
+    0,
+    SYNTHESIS_LANDSCAPE_Y_OFFSET,
+  );
+  const x = synthesisPlacement.x - SYNTHESIS_W / 2;
+  const y = synthesisPlacement.y;
   try {
     editor.createShape<SynthesisIntersectionCardShape>({
       id: shapeId,
@@ -4012,6 +4061,16 @@ function upsertStrategyHero(
         activeConfidence: confidence,
         activePosture: posture,
         pulse: 0,
+        // E3 — layer_focus is not on the proposal_ready event payload
+        // (the LLM emits it onto recommendation.layer_focus, which the
+        // shape hydrates on mount via /api/spaces/[id]/twin-proposal).
+        // Initial values are null so the chip stays hidden until the
+        // hydration writes real values back to the shape. The update
+        // branch above does NOT touch these fields so refreshes don't
+        // clobber the hydrated focus.
+        activeLayerFocusId: null,
+        activeLayerFocusLabel: null,
+        activeLayerFocusColor: null,
       },
       meta: { source: "pipeline-event:strategy-hero" },
     };
@@ -4084,8 +4143,18 @@ function paintProposal(
   // Anchor proposalX/Y around the synthesis card. Right-side proposals
   // sit to the right of the card; left-side to the left. Vertically
   // staggered so multiple proposals on the same side don't overlap.
-  const synthesisX = state.anchor.x - SYNTHESIS_W / 2;
-  const synthesisY = state.anchor.y + SYNTHESIS_Y_OFFSET;
+  // A5 — mirror the synthesis card's room-anchored placement
+  // (landscape room, near bottom) so proposals fan from where the card
+  // actually lives. Previously used the legacy -60 absolute offset
+  // which floated the proposals above intake.
+  const synthesisPlacement = placeInsideRoom(
+    "landscape",
+    state.anchor,
+    0,
+    SYNTHESIS_LANDSCAPE_Y_OFFSET,
+  );
+  const synthesisX = synthesisPlacement.x - SYNTHESIS_W / 2;
+  const synthesisY = synthesisPlacement.y;
   const stackIndex = Math.floor(state.proposalCount / 2);
   const stackVOffset = stackIndex * (PROPOSAL_H + RIBBON_H + EXPERIMENT_DESIGN_H + 60);
   const proposalX =
@@ -4341,9 +4410,10 @@ function paintCycle(
   event: Extract<StructuralEvent, { type: "cycle_detected" }>,
   state: PainterState,
 ) {
-  // Flip isConvergence on each ghost in the cycle — the KG-node shape
-  // util renders this as a distinct accent. If an entity in the cycle
-  // wasn't streamed as a ghost (pre-existing internal entity), skip it.
+  // ── 1. Existing behaviour: flip isConvergence on each ghost in the cycle ──
+  // The KG-node shape util renders this as a distinct accent. If an entity
+  // in the cycle wasn't streamed as a ghost (pre-existing internal entity),
+  // skip it.
   for (const entityId of event.entityIds) {
     const shapeId = state.ghostsByEntity.get(entityId);
     if (!shapeId) continue;
@@ -4356,6 +4426,97 @@ function paintCycle(
     } catch (err) {
       console.warn("[pipeline-painter] cycle highlight failed:", err);
     }
+  }
+
+  // ── 2. L1.1: also spawn a cycle-loop card inside the KG room ──
+  // Until L1.1, cycles only manifested as the convergence ring on member
+  // entities — the loop ITSELF was invisible unless the user manually
+  // dragged it from the library. Now each detected cycle auto-paints a
+  // card showing name + classification + member chain preview +
+  // LLM-estimated multiplier (with provenance honesty in the tooltip).
+  //
+  // Idempotency: deterministic shape id keyed on cycle_id. Re-emits
+  // (from a re-run) upsert in place. Survives run cleanup because
+  // "cycle-loop" is not in the deletion list at line ~1663.
+  if (!state.strategyHeroSpaceId) {
+    // SpaceId not stamped yet — defer; the next cycle event of this run
+    // will find it set. Acceptable trade because the deterministic id
+    // is per-cycle, not per-event-arrival.
+    return;
+  }
+  const cardShapeId = createShapeId(`cycle-loop-${event.cycleId}`);
+  if (editor.getShape(cardShapeId)) {
+    // Already painted (re-emit, or seed-spawner beat us to it). No-op.
+    return;
+  }
+
+  // Resolve up to 4 entity names from already-painted ghost kg-nodes
+  // for the cycle-loop card's chain preview. Members that haven't
+  // streamed yet (rare, but possible if cycle_detected lands before
+  // all entity_added events for the cycle) just don't contribute to
+  // the preview — the card falls back to nodeCount.
+  const entityNames: string[] = [];
+  for (const eid of event.entityIds.slice(0, 4)) {
+    const ghostId = state.ghostsByEntity.get(eid);
+    if (!ghostId) continue;
+    const ghost = editor.getShape(ghostId) as { props?: { name?: string } } | undefined;
+    if (ghost?.props?.name) entityNames.push(ghost.props.name);
+  }
+
+  // Normalize classification — the event carries a free `string` field;
+  // the shape's literalEnum only accepts 3 values. Fallback to balancing
+  // (the safe-default, doesn't claim a direction the LLM didn't assert).
+  const VALID_CLASSIFICATIONS = ["reinforcing_positive", "reinforcing_negative", "balancing"] as const;
+  type ValidClassification = typeof VALID_CLASSIFICATIONS[number];
+  const classification: ValidClassification =
+    (VALID_CLASSIFICATIONS as readonly string[]).includes(event.classification)
+      ? (event.classification as ValidClassification)
+      : "balancing";
+
+  // Layout: cycles fan out as a row inside the KG room. The Nth card
+  // (by existing cycle-loop count on canvas) gets offset along x; 4 per
+  // row, then wraps. Y offset = 480 from the KG room's content top
+  // (places the row below the kg-formation / kg-overview-card band).
+  const PER_ROW = 4;
+  const CARD_W = 260;
+  const CARD_H = 140;
+  const GAP_X = 16;
+  const GAP_Y = 16;
+  const existingCount = editor
+    .getCurrentPageShapes()
+    .filter((s) => s.type === "cycle-loop").length;
+  const col = existingCount % PER_ROW;
+  const row = Math.floor(existingCount / PER_ROW);
+
+  const placement = placeInsideRoom("kg", state.anchor, 0, 480);
+  const totalRowWidth = PER_ROW * CARD_W + (PER_ROW - 1) * GAP_X;
+  const rowStartX = placement.x - totalRowWidth / 2;
+  const x = Math.round(rowStartX + col * (CARD_W + GAP_X));
+  const y = Math.round(placement.y + row * (CARD_H + GAP_Y));
+
+  try {
+    editor.createShape<CycleLoopShape>({
+      id: cardShapeId,
+      type: "cycle-loop",
+      x,
+      y,
+      props: {
+        w: CARD_W,
+        h: CARD_H,
+        cycleId: event.cycleId,
+        spaceId: state.strategyHeroSpaceId,
+        name: event.name ?? "Untitled cycle",
+        classification,
+        entityNames,
+        nodeCount: event.entityIds.length,
+        multiplier: event.multiplier ?? null,
+        firstEntityId: event.firstEntityId ?? null,
+      },
+      meta: { source: "pipeline-event:cycle" },
+    });
+    recordChildBottomForStage(editor, state, "kg", y + CARD_H);
+  } catch (err) {
+    console.warn("[pipeline-painter] cycle-loop create failed:", err);
   }
 }
 

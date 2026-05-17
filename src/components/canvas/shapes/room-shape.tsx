@@ -101,6 +101,18 @@ export const ROOM_DEFAULT_H = 360;
 // switch) don't replay the animation.
 const ENTRANCE_MS = 700;
 const PULSE_MS = 280;
+// C3 — stage-transition animations. When the painter flips a room's
+// state field (pending → active, active → complete), the room plays a
+// one-shot animation that ties the visual to the pipeline beat:
+//   • Awakening: a slightly bolder pulse + saturation boost (~720ms).
+//     Marks the handoff from the previous stage so the eye follows the
+//     run as it moves down the cascade.
+//   • Completion: a final celebratory pulse that subsides — the icon's
+//     breathing ring fades out as part of the same beat (~600ms).
+//     Reads as "this stage just finished" before settling into the
+//     quieter DONE state.
+const AWAKENING_MS = 720;
+const COMPLETION_MS = 600;
 
 export class RoomShapeUtil extends BaseBoxShapeUtil<RoomShape> {
   static override type = "room" as const;
@@ -194,6 +206,32 @@ function RoomView({ shape }: { shape: RoomShape }) {
     return () => window.clearTimeout(t);
   }, [pulse]);
 
+  // C3 — stage-transition animations. Detect state changes after the
+  // first render and trigger the matching one-shot animation. We track
+  // the previous state via ref so we can distinguish "the room just
+  // mounted with state=X" (no transition animation, the entrance
+  // animation handles it) from "the room transitioned X → Y" (play
+  // awakening or completion).
+  const [awakening, setAwakening] = useState(false);
+  const [completing, setCompleting] = useState(false);
+  const prevStateRef = useRef(state);
+  useEffect(() => {
+    const prev = prevStateRef.current;
+    if (prev === state) return; // no-op on initial render / re-render
+    prevStateRef.current = state;
+    if (prev === "pending" && state === "active") {
+      setAwakening(true);
+      const t = window.setTimeout(() => setAwakening(false), AWAKENING_MS);
+      return () => window.clearTimeout(t);
+    }
+    if (prev === "active" && state === "complete") {
+      setCompleting(true);
+      const t = window.setTimeout(() => setCompleting(false), COMPLETION_MS);
+      return () => window.clearTimeout(t);
+    }
+    return undefined;
+  }, [state]);
+
   const handleExtend = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (typeof window === "undefined") return;
@@ -260,6 +298,51 @@ function RoomView({ shape }: { shape: RoomShape }) {
         overflow: "visible",
       }}
     >
+      {/* C3 — stage-transition keyframes (pending→active, active→
+          complete). The mount-entrance + subtitle-pulse animations
+          are handled by CanvasShapeGlass via its `entrance`/`pulsing`
+          props; these two are room-specific transitions the shared
+          primitive doesn't model, so they ride on top via className. */}
+      <style jsx global>{`
+        @keyframes room-awakening {
+          0% {
+            transform: scale(0.996);
+            filter: saturate(0.92) brightness(0.985);
+          }
+          40% {
+            transform: scale(1.018);
+            filter: saturate(1.28) brightness(1.04);
+          }
+          100% {
+            transform: scale(1);
+            filter: saturate(1) brightness(1);
+          }
+        }
+        @keyframes room-completion {
+          0% {
+            transform: scale(1);
+            filter: saturate(1) brightness(1);
+          }
+          30% {
+            transform: scale(1.014);
+            filter: saturate(1.22) brightness(1.08);
+          }
+          70% {
+            transform: scale(1.004);
+            filter: saturate(0.98) brightness(0.99);
+          }
+          100% {
+            transform: scale(1);
+            filter: saturate(1) brightness(1);
+          }
+        }
+        .room-shape-awakening {
+          animation: room-awakening 720ms cubic-bezier(0.22, 1, 0.36, 1) 1;
+        }
+        .room-shape-completing {
+          animation: room-completion 600ms cubic-bezier(0.32, 0, 0.36, 1) 1;
+        }
+      `}</style>
       <CanvasShapeGlass
         tier="float"
         accent={accent}
@@ -268,7 +351,16 @@ function RoomView({ shape }: { shape: RoomShape }) {
         radius={28}
         padding="20px 28px 24px"
         entrance={inEntrance}
-        pulsing={pulsing}
+        // Pulsing is exclusive with the C3 transition animations to
+        // avoid two transform-animations fighting on the same node.
+        pulsing={pulsing && !awakening && !completing}
+        className={
+          !inEntrance && completing
+            ? "room-shape-completing"
+            : !inEntrance && awakening
+              ? "room-shape-awakening"
+              : undefined
+        }
         style={{ display: "flex", flexDirection: "column", gap: 8 }}
       >
         {/* Top accent rail — gradient hairline that gives each room
@@ -353,7 +445,7 @@ function RoomView({ shape }: { shape: RoomShape }) {
               const Icon = STAGE_ICON[stage];
               return <Icon size={22} />;
             })()}
-            {state === "active" && (
+            {(state === "active" || completing) && (
               <span
                 aria-hidden
                 className="rail-streaming-breath"
@@ -362,7 +454,12 @@ function RoomView({ shape }: { shape: RoomShape }) {
                   inset: -3,
                   borderRadius: 16,
                   border: `1.5px solid ${accent}`,
-                  opacity: 0.55,
+                  // C3 — during the active→complete pulse, fade the
+                  // breathing ring to zero in step with the room's
+                  // settling animation. After completing=false flips,
+                  // the conditional below unmounts the ring entirely.
+                  opacity: completing ? 0 : 0.55,
+                  transition: "opacity 600ms cubic-bezier(0.32, 0, 0.36, 1)",
                   pointerEvents: "none",
                 }}
               />

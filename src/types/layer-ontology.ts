@@ -88,3 +88,64 @@ export interface LayerOntologyRow {
   created_at: string;
   updated_at: string;
 }
+
+// ── D-track Phase α — layer dependency cascades ─────────────────────
+//
+// Mirrors the `layer_dependencies` table (migration 20260720). Each
+// row is one durable layer→layer cascade claim. See the migration's
+// header for the distinction from `bridges` (entity-level) and
+// `cross_layer_analysis` on synthesis_data (tension detection).
+//
+// Bidirectional cascades are encoded as two separate rows (A→B + B→A).
+// The migration's unique constraint allows this; the strategy engine
+// treats them as a feedback pair when both are present and `kind` is
+// `reinforcing` on either side.
+
+/** Closed enum of inter-layer propagation semantics. Matches the
+ *  CHECK constraint on layer_dependencies.kind. */
+export type LayerDependencyKind =
+  | "causal"        // A causes B (one-way mechanistic)
+  | "modulatory"    // A scales the response of B
+  | "inhibitory"    // A suppresses B
+  | "compensatory"  // A buffers B against perturbation
+  | "reinforcing";  // A and B form a positive feedback
+
+/** Provenance for the row's authorship. */
+export type LayerDependencySource =
+  | "llm_inferred"
+  | "user_authored"
+  | "evidence_derived"
+  | "hybrid";
+
+export interface LayerDependencyRow {
+  id: string;
+  space_id: string;
+  user_id: string;
+  /** FK to layer_ontology.id — the layer whose changes propagate. */
+  from_layer_id: string;
+  /** FK to layer_ontology.id — the layer that is affected. */
+  to_layer_id: string;
+  kind: LayerDependencyKind;
+  /** 0..1; strategy engine multiplies this against intervention
+   *  magnitude when projecting cascade effects. */
+  strength: number;
+  /** Human-readable lag ("minutes", "weeks", "varies"). Nullable when
+   *  the LLM declines to commit to a temporal estimate. */
+  lag_label: string | null;
+  /** Numeric lag estimate in hours. Nullable when uncertain. Used by
+   *  the trajectory-fan projection math when present. */
+  lag_hours: number | null;
+  /** 1-2 sentences naming the mechanism behind the propagation. */
+  mechanism: string;
+  /** Optional supporting evidence summary (free-text). */
+  evidence_summary: string | null;
+  /** 0..1 — how confident the source is in this cascade claim. */
+  confidence: number;
+  source: LayerDependencySource;
+  /** When `source === "llm_inferred"`, names the synthesis step that
+   *  emitted the row (e.g. "synthesize-cascade-prediction"). Useful
+   *  for audit + re-running just that step. */
+  source_synthesis_step: string | null;
+  generated_at: string;
+  updated_at: string;
+}
