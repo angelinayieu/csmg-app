@@ -38,6 +38,12 @@ export async function getBalance(
         .eq("id", userId)
         .single(),
     {
+      // Tighter per-attempt timeout than the 4s default. getBalance is
+      // called from /api/credits/balance which has maxDuration=15;
+      // safeAuth ahead of us spends up to ~4.2s, leaving ~10s here.
+      // 3 × 2500ms + 500ms backoff ≈ 8s worst case keeps us under the
+      // route ceiling with ~2s buffer.
+      attemptTimeoutMs: 2500,
       onRetry: (err, attempt, delayMs) =>
         console.warn(
           `[credits.getBalance] retry ${attempt} after ${delayMs}ms (transient Supabase error):`,

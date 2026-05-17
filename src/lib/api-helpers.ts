@@ -43,10 +43,16 @@ export async function safeAuth(): Promise<
       () => supabase.auth.getUser(),
       {
         // Conservative: only 2 attempts total to keep the auth path
-        // fast on the green path. Total worst-case ~500ms wall vs
-        // 3-attempt's ~2s. Auth is on the hot path of every request.
+        // fast on the green path. Auth is on the hot path of every
+        // request. Per-attempt timeout is tightened to 2s (vs the
+        // default 4s) so even back-to-back hung attempts stay inside
+        // /api/credits/balance's 15s ceiling alongside getBalance's
+        // own retries.
+        //
+        // Budget: 2 × 2000ms + 200ms backoff ≈ 4.2s worst case.
         maxAttempts: 2,
         baseMs: 200,
+        attemptTimeoutMs: 2000,
         onRetry: (err, attempt, delayMs) =>
           console.warn(
             `[safeAuth] auth.getUser retry ${attempt} after ${delayMs}ms:`,
