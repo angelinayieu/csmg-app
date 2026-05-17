@@ -1,15 +1,13 @@
 // ── Email sending — Resend wrapper with no-op fallback ──
 //
-// Dry-run by default: if `RESEND_API_KEY` is unset OR the `resend`
-// package is not installed, this module logs the would-have-been
-// email contents and resolves successfully. That keeps the marketplace
-// loop wired end-to-end without forcing email infra setup. When the
-// API key + package are present, emails go out for real.
+// Dry-run when `RESEND_API_KEY` is unset: this module logs the
+// would-have-been email contents and resolves successfully. That keeps
+// the marketplace loop wired end-to-end without forcing email infra
+// setup in dev. When the API key is present, emails go out for real.
 //
 // To enable live sending:
-//   1. npm install resend
-//   2. Set RESEND_API_KEY in your env
-//   3. Optional: set RESEND_FROM (defaults to "Synergy <onboarding@resend.dev>")
+//   1. Set RESEND_API_KEY in your env (Vercel: Settings → Env Vars)
+//   2. Optional: set RESEND_FROM (defaults to "Synergy <onboarding@resend.dev>")
 //
 // Resend's free tier sends from `onboarding@resend.dev` without
 // domain verification — fine for dev. Production needs a verified
@@ -34,30 +32,14 @@ export interface SendResult {
   error?: string;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let cachedClient: any = null;
-let resolveAttempted = false;
-let resolveFailed = false;
+let cachedClient: import("resend").Resend | null = null;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getClient(): Promise<any> {
-  if (resolveFailed || !process.env.RESEND_API_KEY) return null;
+async function getClient(): Promise<import("resend").Resend | null> {
+  if (!process.env.RESEND_API_KEY) return null;
   if (cachedClient) return cachedClient;
-  if (resolveAttempted && !cachedClient) return null;
-  resolveAttempted = true;
-  try {
-    // @ts-expect-error -- optional dependency; install with `npm i resend`
-    const mod = await import("resend");
-    cachedClient = new mod.Resend(process.env.RESEND_API_KEY);
-    return cachedClient;
-  } catch (err) {
-    console.warn(
-      "[email] RESEND_API_KEY is set but `resend` package isn't installed. Run `npm install resend` to enable live sends. Falling back to dry-run.",
-      err,
-    );
-    resolveFailed = true;
-    return null;
-  }
+  const { Resend } = await import("resend");
+  cachedClient = new Resend(process.env.RESEND_API_KEY);
+  return cachedClient;
 }
 
 export async function sendTransactional(
@@ -149,5 +131,5 @@ function cryptoSafeId(): string {
 // Boolean accessor for callers that want to skip building expensive
 // template HTML when dry-run is the only available path. Cheap.
 export function emailDeliveryAvailable(): boolean {
-  return !!process.env.RESEND_API_KEY && !resolveFailed;
+  return !!process.env.RESEND_API_KEY;
 }

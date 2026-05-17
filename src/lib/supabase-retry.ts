@@ -24,10 +24,20 @@
 //     error.code + error.message for transient-network signatures.
 //     Use for `.from().select() / .insert() / .update()`.
 //
-// Backoff: 3 attempts by default, 100ms / 400ms / 1200ms with ±50%
-// jitter. Total worst-case wall time: ~1.7s. Median outage recovery
-// in the 16:41-16:49 incident was ~30s, so most user-facing requests
-// would have succeeded on retry within that window.
+// Backoff: 3 attempts by default, with 100ms / 400ms delays BETWEEN
+// attempts (factor=4, base=100). Wall time spent in backoff: ~500ms
+// total across 3 attempts. Median outage recovery in the 16:41-16:49
+// incident was ~30s, so most user-facing requests would have succeeded
+// on retry within that window.
+//
+// Per-attempt timeout: 4s default. Without this, a hung Supabase
+// socket (TCP open, no response — a common degradation mode) blocks
+// `await fn()` indefinitely. The wrapper's retry budget never starts,
+// the circuit breaker never sees a returned failure, and the request
+// just rides the Vercel function-duration ceiling into a 504. The
+// timeout fires a synthetic error whose message includes "timeout",
+// which isTransientNetworkError matches → retry → breaker counts the
+// failure → after 5 in 60s the breaker opens and we fast-fail 503.
 //
 // What we DO NOT retry:
 //   - 4xx auth/permission errors (intentional — RLS denials are real)
@@ -46,8 +56,14 @@
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
 export const DEFAULT_BASE_MS = 100;
-export const DEFAULT_BACKOFF_FACTOR = 4; // 100ms → 400ms → 1600ms
+export const DEFAULT_BACKOFF_FACTOR = 4; // delays between attempts: 100ms → 400ms
 export const DEFAULT_JITTER_PCT = 0.5; // ±50%
+// Default per-attempt timeout. Tuned for healthy p99 of ~300ms with
+// generous headroom (~13x) while still cutting off true hangs well
+// before any reasonable Vercel maxDuration. Hot-path callers (auth,
+// balance polling) should override with a tighter value so 2-3 retries
+// fit inside their route's timeout budget.
+export const DEFAULT_ATTEMPT_TIMEOUT_MS = 4000;
 
 // ── Circuit breaker tunables ────────────────────────────────────────
 //
@@ -90,6 +106,13 @@ export interface RetryOpts {
   /** Caller-provided AbortSignal — when aborted, we stop retrying
    *  immediately without waiting for the backoff. */
   signal?: AbortSignal;
+  /** Per-attempt timeout in ms. Each attempt is raced against this
+   *  timer; if it expires first, the attempt rejects with a synthetic
+   *  "timeout" error that the retry predicate treats as transient.
+   *  Defaults to DEFAULT_ATTEMPT_TIMEOUT_MS. Pass 0 or Infinity to
+   *  disable (not recommended — hung Supabase sockets are the primary
+   *  failure mode this wrapper exists to defend against). */
+  attemptTimeoutMs?: number;
   /** Optional callback fired before each retry. Useful for telemetry
    *  to count "supabase_retried" events without polluting call sites. */
   onRetry?: (err: unknown, attempt: number, delayMs: number) => void;
@@ -142,6 +165,10 @@ export function isTransientNetworkError(err: unknown): boolean {
     if (combined.includes("network error")) return true;
     if (combined.includes("connect timeout")) return true;
     if (combined.includes("read econnreset")) return true;
+    // Per-attempt timeout fired by withAttemptTimeout — see message
+    // shape in that helper. Including this sentinel keeps the wrapper
+    // self-contained without needing a dedicated error subclass.
+    if (combined.includes("supabase attempt timeout")) return true;
 
     // HTTP-status-shaped errors thrown by the SDK
     if (combined.includes("502") && combined.includes("bad gateway")) return true;
@@ -307,6 +334,47 @@ function computeDelayMs(attempt: number, opts: RetryOpts): number {
   return Math.max(0, Math.round(ideal * jitter));
 }
 
+/**
+ * Race a promise against a timer. If the timer wins, reject with a
+ * synthetic Error whose message contains "timeout" — that token is
+ * matched by isTransientNetworkError so the retry wrapper treats it as
+ * a normal transient and retries (and counts the failure against the
+ * breaker).
+ *
+ * The Supabase JS client doesn't accept an AbortSignal at the
+ * `.from().select()` level the wrapper sees, so cancellation is
+ * cooperative-only: the underlying fetch keeps running in the
+ * background after timeout and will eventually settle. We attach a
+ * no-op `.catch` to the original to prevent unhandled-rejection
+ * warnings when the orphaned promise later rejects.
+ */
+function withAttemptTimeout<T>(
+  fn: () => PromiseLike<T>,
+  timeoutMs: number | undefined,
+): Promise<T> {
+  // Opt-out path — caller explicitly asked for no per-attempt timeout.
+  if (!timeoutMs || timeoutMs <= 0 || !Number.isFinite(timeoutMs)) {
+    return Promise.resolve(fn());
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutP = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new Error(
+          `Supabase attempt timeout after ${timeoutMs}ms (treating as transient)`,
+        ),
+      );
+    }, timeoutMs);
+  });
+  const original = Promise.resolve(fn());
+  // Swallow late rejections from the orphaned promise so Node doesn't
+  // log "unhandledRejection" after the race already settled.
+  original.catch(() => {});
+  return Promise.race([original, timeoutP]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -350,6 +418,7 @@ export async function retrySupabase<T>(
   checkCircuit();
 
   const max = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const attemptTimeoutMs = opts.attemptTimeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS;
   const shouldRetry = opts.shouldRetry ?? isTransientNetworkError;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= max; attempt++) {
@@ -357,7 +426,7 @@ export async function retrySupabase<T>(
       throw new DOMException("Aborted", "AbortError");
     }
     try {
-      const result = await fn();
+      const result = await withAttemptTimeout(fn, attemptTimeoutMs);
       recordSuccess();
       return result;
     } catch (err) {
@@ -398,6 +467,7 @@ export async function retrySupabaseQuery<T>(
   checkCircuit();
 
   const max = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const attemptTimeoutMs = opts.attemptTimeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS;
   const shouldRetry = opts.shouldRetry ?? isTransientNetworkError;
   let lastResult: SupabaseQueryResult<T> | null = null;
   for (let attempt = 1; attempt <= max; attempt++) {
@@ -405,7 +475,7 @@ export async function retrySupabaseQuery<T>(
       throw new DOMException("Aborted", "AbortError");
     }
     try {
-      const result = await fn();
+      const result = await withAttemptTimeout(fn, attemptTimeoutMs);
       lastResult = result;
       // Success path — error is null OR error is non-transient.
       // Either way, the call landed cleanly — close the breaker.
