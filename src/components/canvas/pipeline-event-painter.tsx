@@ -3619,6 +3619,28 @@ function paintEdge(
   }
 }
 
+/**
+ * Compact display name for a bridge's type. Keeps the arrow label
+ * short enough to read at canvas zoom. Returns an empty string for
+ * generic/empty types so the caller falls back to the percentage-only
+ * label form.
+ */
+function formatBridgeTypeShort(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const s = raw.trim().toLowerCase();
+  if (s === "shared_variable" || s === "shared") return "shared";
+  if (s === "causal") return "causal";
+  if (s === "structural" || s === "structural_analog") return "structural";
+  if (s === "mechanism" || s === "shared_mechanism") return "mechanism";
+  if (s === "temporal" || s === "temporal_overlap") return "temporal";
+  if (s === "bridge" || s === "generic") return "";
+  // Unknown type — show a snake_case → "Snake case" prefix so the
+  // label stays informative when new types ship without a mapping
+  // here. Cap at 14 chars to protect arrow legibility.
+  const friendly = s.replace(/_/g, " ");
+  return friendly.length <= 14 ? friendly : friendly.slice(0, 14);
+}
+
 function paintBridge(
   editor: Editor,
   event: Extract<StructuralEvent, { type: "bridge_formed" }>,
@@ -3637,6 +3659,17 @@ function paintBridge(
   if (state.ghostBridgesByPair.has(pairKey)) return;
 
   const arrowId = createShapeId();
+  // Surface the bridge's confidence + type as the arrow label so the
+  // gold dashed line carries actual information instead of just
+  // signalling "something cross-layer happened." The audit's P1
+  // finding was that bridges are the insight (LLM found a hidden
+  // leverage point across orthogonal lenses) but the canvas threw
+  // away the bridgeType + confidence the backend emitted.
+  const pct = Math.round(event.confidence * 100);
+  const typeShort = formatBridgeTypeShort(event.bridgeType);
+  // Compact label: "shared · 76%" or just "76%" when the type is
+  // generic/empty. Keeps the line readable at canvas zoom levels.
+  const label = typeShort ? `${typeShort} · ${pct}%` : `${pct}% bridge`;
   try {
     const arrow: TLShapePartial<TLArrowShape> = {
       id: arrowId,
@@ -3649,6 +3682,9 @@ function paintBridge(
         color: "yellow",
         size: "m",
         dash: "dashed",
+        font: "sans",
+        labelColor: "yellow",
+        richText: toRichText(label),
       },
     };
     editor.createShapes([arrow]);
