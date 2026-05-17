@@ -218,13 +218,61 @@ Apply the precision spectrum to the synthesis label AND the "why" explanation:
 Return JSON.`;
 }
 
-// Precision-agnostic modes — clarify + plan have their own structural
-// rigor baked into their schemas (Q&A and plan-step-with-rationale).
-// Threading precision through them is marginal; the structure does
-// the work. Left as-is.
+// ── Converge (Wave 2 — brainstorm-speedrun MVP cluster pick) ──
+//
+// Receives the seed concept + a flat list of every descendant on the
+// brainstorm board (variations, decomposed branches, research notes,
+// ranked tops, etc.). Returns 2-3 candidate MVP clusters with
+// effort/impact/novelty scores, plus one cluster marked
+// recommended=true (the build-this-next pick).
+//
+// The point of converge is SCOPE DISCIPLINE: from a fan of 25-30
+// descendants, the model has to identify which 4-7 nodes form a
+// coherent "smallest valuable thing to build" and why the rest of
+// the fan is being deferred (not deleted — deferred is honest).
+//
+// Strong instructions to avoid:
+//   - Recommending all-of-the-above (no "platform" clusters)
+//   - Inflating novelty scores (most MVPs aren't novel; they're
+//     well-executed)
+//   - Bundling unrelated nodes into one cluster just to fit them in
+//   - Scope cuts that say "we won't do X" without naming why the
+//     MVP works without it
+const CONVERGE_SYSTEM = `You are a scope discipline expert helping a brainstormer converge a divergent fan of ideas into a concrete MVP pick.
+
+Input: the user's seed concept + a flat list of nodes from their brainstorm board. Each node has an ID, a kind (variation / branch / insight / action / etc.), and a label.
+
+Output: 2-3 MVP-CANDIDATE CLUSTERS. Each cluster groups 3-7 related nodes into a coherent buildable scope. Exactly ONE cluster has recommended=true — your build-this-next pick.
+
+Per cluster:
+- name: 3-6 words. Concrete and buildable ("Working-memory loadout app", not "Cognitive optimization platform").
+- pitch: 1-2 sentences. What is this thing? Who's it for? What does it actually DO?
+- member_node_ids: the IDs of nodes from the input that belong in this cluster. Echo IDs verbatim. 3-7 IDs per cluster typical; never more than 10.
+- effort: "light" (~1 weekend), "medium" (~2-4 weeks), or "heavy" (~quarter+).
+- impact: 1-10. Honest assessment of how much this advances the user's stated goal. Most MVPs are 4-7. Reserve 8+ for genuinely transformative options.
+- novelty: 1-10. Honest assessment of how new the angle is. Most MVPs are 3-5. Most "innovative" ideas in brainstorms are remixes of existing patterns — score them honestly.
+- scope_cut: 1-2 sentences. What we're DEFERRING and why the MVP works without it. ("We're deferring the social/sharing layer because a single-user MVP can validate the core mechanism. Add multiplayer after we know it works.")
+- recommended: true for exactly ONE cluster.
+
+The recommended cluster should be the one with the best impact-per-unit-effort, conditional on enough novelty to be worth the work. Don't always pick the easiest; don't always pick the most novel. Pick the one with the highest leverage.
+
+CRITICAL anti-patterns to avoid:
+- Do NOT recommend a "do all of the above" cluster. A cluster should be 3-7 nodes, not 15.
+- Do NOT inflate novelty scores. Most variations of common app categories are 3-5 novelty.
+- Do NOT bundle unrelated nodes just to fit them somewhere. If a node doesn't belong in any cluster, leave it out — it's a deferred branch.
+- Do NOT skip scope_cut. Every cluster names what's deferred and why.
+
+After the 2-3 clusters, write a single-sentence recommendation_rationale explaining why the recommended cluster wins over the others.
+
+Return JSON.`;
+
+// Precision-agnostic modes — clarify + plan + converge have their own
+// structural rigor baked into their schemas. Threading precision through
+// them is marginal; the structure does the work. Left as-is.
 const PRECISION_AGNOSTIC: Partial<Record<AugmentMode, string>> = {
   clarify: CLARIFY_SYSTEM,
   plan: PLAN_SYSTEM,
+  converge: CONVERGE_SYSTEM,
 };
 
 // ── Describe ──
@@ -282,6 +330,10 @@ export function systemForMode(mode: AugmentMode, precision: number): string {
       return synthesizeSystem(precision);
     case "describe":
       return DESCRIBE_SYSTEM;
+    case "converge":
+      // Returned via PRECISION_AGNOSTIC short-circuit above, but
+      // included here for switch exhaustiveness.
+      return CONVERGE_SYSTEM;
     default:
       // Exhaustiveness guard. If a new mode is added to AugmentMode
       // without a branch here, TS catches it at compile time.
@@ -514,6 +566,55 @@ export const SYNTHESIZE_SCHEMA = {
   },
 } as const;
 
+// ── Converge schema (Wave 2) ──
+// 2-3 MVP-candidate clusters with effort/impact/novelty scores +
+// scope cuts + member_node_ids echoed from input. Exactly one
+// cluster has recommended=true.
+export const CONVERGE_SCHEMA = {
+  name: "synergy_converge",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      clusters: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: { type: "string" },
+            pitch: { type: "string" },
+            member_node_ids: {
+              type: "array",
+              items: { type: "string" },
+            },
+            effort: {
+              type: "string",
+              enum: ["light", "medium", "heavy"],
+            },
+            impact: { type: "integer", minimum: 1, maximum: 10 },
+            novelty: { type: "integer", minimum: 1, maximum: 10 },
+            scope_cut: { type: "string" },
+            recommended: { type: "boolean" },
+          },
+          required: [
+            "name",
+            "pitch",
+            "member_node_ids",
+            "effort",
+            "impact",
+            "novelty",
+            "scope_cut",
+            "recommended",
+          ],
+        },
+      },
+      recommendation_rationale: { type: "string" },
+    },
+    required: ["clusters", "recommendation_rationale"],
+  },
+} as const;
+
 export function schemaForMode(mode: AugmentMode) {
   switch (mode) {
     case "augment":
@@ -538,5 +639,7 @@ export function schemaForMode(mode: AugmentMode) {
       // Describe reuses the augment shape — both spawn child nodes
       // from a free-form prompt. Keeps one schema across both modes.
       return AUGMENT_SCHEMA;
+    case "converge":
+      return CONVERGE_SCHEMA;
   }
 }

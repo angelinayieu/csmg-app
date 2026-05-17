@@ -37,7 +37,7 @@ interface RouteContext {
   params: Promise<{ id: string }>;
 }
 
-type RoundKind = "variations" | "decompose" | "rank";
+type RoundKind = "variations" | "decompose" | "rank" | "converge";
 
 interface Body {
   precision?: unknown;
@@ -70,7 +70,9 @@ export async function POST(request: Request, ctx: RouteContext) {
   const precisionRaw = typeof body.precision === "number" ? body.precision : 3;
   const precision = Math.min(5, Math.max(1, Math.round(precisionRaw)));
   const roundKind: RoundKind =
-    body.roundKind === "decompose" || body.roundKind === "rank"
+    body.roundKind === "decompose" ||
+    body.roundKind === "rank" ||
+    body.roundKind === "converge"
       ? body.roundKind
       : "variations";
 
@@ -117,10 +119,12 @@ export async function POST(request: Request, ctx: RouteContext) {
 
   // ── Round dispatch ──
   // RANK runs against a parent that has 2+ variation children
-  // (different target-selection than variations/decompose). The other
-  // two share the "newest unexpanded leaf" target. The dispatch is a
-  // simple branch — kept inline rather than extracted because each
-  // arm has different post-processing + insert shape.
+  // (different target-selection than variations/decompose).
+  // CONVERGE runs against the seed (kind="core") and reads ALL
+  // descendants regardless of leaf-eligibility. The other two share
+  // the "newest unexpanded leaf" target. The dispatch is a simple
+  // branch — kept inline rather than extracted because each arm has
+  // different post-processing + insert shape.
 
   if (roundKind === "rank") {
     return await runRankRound({
@@ -128,6 +132,15 @@ export async function POST(request: Request, ctx: RouteContext) {
       sessionId,
       nodes,
       childCount,
+      precision,
+    });
+  }
+
+  if (roundKind === "converge") {
+    return await runConvergeRound({
+      db,
+      sessionId,
+      nodes,
       precision,
     });
   }
@@ -458,6 +471,210 @@ async function runRankRound(args: {
 
   return NextResponse.json({
     expanded: { id: bestParent.id, label: bestParent.label },
+    new_nodes: (inserted ?? []) as InsertedNode[],
+  });
+}
+
+// ── Converge round handler (Wave 2) ──
+// The final wave of the brainstorm speedrun. Reads the seed
+// (kind="core") + ALL its descendants, sends them to the converge
+// LLM mode, and persists a single "ranking"-kind summary node with
+// the cluster JSON in meta. Member-node tagging (writing
+// cluster_id into each member's meta) is deferred to a separate
+// batch — keeps Wave 2 atomic.
+//
+// 409s cleanly if:
+//   - no seed exists (kind="core" missing)
+//   - too few descendants to converge meaningfully (<4)
+// The client sequencer treats 409 as "skip this round, move on."
+async function runConvergeRound(args: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any;
+  sessionId: string;
+  nodes: DbNode[];
+  precision: number;
+}) {
+  const { db, sessionId, nodes, precision } = args;
+
+  // Find the seed. Prefer kind="core"; fall back to the oldest node
+  // (creation order) if no core exists.
+  const seed =
+    nodes.find((n) => n.kind === "core") ?? nodes[0];
+  if (!seed) {
+    return NextResponse.json(
+      { error: "No seed to converge against" },
+      { status: 409 },
+    );
+  }
+
+  // Collect ALL descendants via BFS on parent_id.
+  const childrenByParent = new Map<string, DbNode[]>();
+  for (const n of nodes) {
+    if (!n.parent_id) continue;
+    const list = childrenByParent.get(n.parent_id) ?? [];
+    list.push(n);
+    childrenByParent.set(n.parent_id, list);
+  }
+  const descendants: DbNode[] = [];
+  const queue: string[] = [seed.id];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const children = childrenByParent.get(id) ?? [];
+    for (const c of children) {
+      descendants.push(c);
+      queue.push(c.id);
+    }
+  }
+
+  // Exclude transient + summary kinds — those aren't real "ideas" to
+  // cluster. Keep variations / branches / insights / actions /
+  // questions etc. Excludes ranking summaries (meta-output) and user
+  // speech transcripts.
+  const meaningful = descendants.filter(
+    (n) => n.kind !== "user" && n.kind !== "ranking",
+  );
+  if (meaningful.length < 4) {
+    return NextResponse.json(
+      {
+        error:
+          "Not enough descendants to converge yet (need 4+ ideas on the board)",
+      },
+      { status: 409 },
+    );
+  }
+
+  const system = systemForMode("converge", precision);
+  const schema = schemaForMode("converge");
+
+  // Build the user message. Cap at ~80 descendants so the prompt
+  // stays within sane token bounds for o-models. Prioritize
+  // variations (they're the divergent fan) over branches (they're
+  // categorical containers).
+  const sorted = meaningful
+    .slice()
+    .sort((a, b) => {
+      const ra = a.kind === "variation" ? 0 : 1;
+      const rb = b.kind === "variation" ? 0 : 1;
+      if (ra !== rb) return ra - rb;
+      return a.created_at.localeCompare(b.created_at);
+    })
+    .slice(0, 80);
+
+  const nodeBlock = sorted
+    .map(
+      (n) =>
+        `id=${n.id} kind=${n.kind} label="${n.label.slice(0, 200).replace(/"/g, "'")}"${n.meta ? ` meta="${n.meta.slice(0, 120).replace(/"/g, "'").replace(/\n/g, " ")}"` : ""}`,
+    )
+    .join("\n");
+
+  const userMsg = `Seed concept: ${seed.label}
+
+Brainstorm board descendants (${sorted.length} nodes):
+${nodeBlock}
+
+Cluster these into 2-3 MVP candidates. Pick one to recommend.`;
+
+  let parsed: {
+    clusters: Array<{
+      name: string;
+      pitch: string;
+      member_node_ids: string[];
+      effort: "light" | "medium" | "heavy";
+      impact: number;
+      novelty: number;
+      scope_cut: string;
+      recommended: boolean;
+    }>;
+    recommendation_rationale: string;
+  };
+  try {
+    parsed = await llmJSON({
+      system,
+      user: userMsg,
+      maxTokens: 2400,
+      temperature: 0.5,
+      responseSchema: schema as { name: string; schema: Record<string, unknown> },
+    });
+  } catch (err) {
+    const credit = detectCreditError(err);
+    if (credit.isCredit) {
+      return NextResponse.json(
+        { error: credit.message, code: "credits_exhausted" },
+        { status: 402 },
+      );
+    }
+    console.error("[autopilot/round converge] LLM error:", err);
+    return NextResponse.json(
+      { error: sanitizeErrorMessage(err) },
+      { status: 500 },
+    );
+  }
+
+  const clusters = (parsed.clusters ?? []).slice(0, 3);
+  if (clusters.length === 0) {
+    return NextResponse.json(
+      { error: "Converge returned no clusters" },
+      { status: 502 },
+    );
+  }
+  // Defensive: ensure exactly one cluster is recommended. If LLM
+  // returned 0 or 2+, fix by picking the highest-impact one,
+  // penalizing heavy effort.
+  const effortPenalty: Record<"light" | "medium" | "heavy", number> = {
+    light: 0,
+    medium: 1.5,
+    heavy: 3,
+  };
+  const recommendedCount = clusters.filter((c) => c.recommended).length;
+  if (recommendedCount !== 1) {
+    let bestIdx = 0;
+    let bestScore = -Infinity;
+    for (let i = 0; i < clusters.length; i++) {
+      const c = clusters[i];
+      const score = c.impact - effortPenalty[c.effort];
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+    clusters.forEach((c, i) => {
+      c.recommended = i === bestIdx;
+    });
+  }
+
+  // Persist a single ranking-kind summary node anchored near the seed.
+  // The cluster data is JSON-encoded in meta so the client renderer
+  // (forthcoming Wave 3 visual cluster grouping) can read it without
+  // another LLM call. label is a human summary: "MVP: <recommended cluster name>".
+  const recommended = clusters.find((c) => c.recommended) ?? clusters[0];
+  const summaryNode = {
+    session_id: sessionId,
+    parent_id: seed.id,
+    kind: "ranking" as const,
+    label: `MVP: ${recommended.name}`,
+    meta: JSON.stringify({
+      kind: "converge",
+      clusters,
+      recommendation_rationale: parsed.recommendation_rationale,
+      generatedAt: new Date().toISOString(),
+    }).slice(0, 6000),
+    x: seed.x + 280,
+    y: seed.y - 200,
+  };
+
+  const { data: inserted, error: insertErr } = await db
+    .from("brainstorm_nodes")
+    .insert([summaryNode])
+    .select("id, session_id, parent_id, kind, label, meta, x, y, created_at");
+  if (insertErr) {
+    return NextResponse.json(
+      { error: sanitizeErrorMessage(insertErr) },
+      { status: 500 },
+    );
+  }
+
+  return NextResponse.json({
+    expanded: { id: seed.id, label: seed.label },
     new_nodes: (inserted ?? []) as InsertedNode[],
   });
 }

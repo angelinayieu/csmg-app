@@ -41,13 +41,14 @@ interface Props {
 
 /** The brainstorm-speedrun sequence. Variations twice to fan the
  *  problem space, decompose to surface upstream/downstream chains,
- *  rank to score the variations. Wave 2 will append a `converge`
- *  round at the end for MVP clustering. */
+ *  rank to score the variations, then converge to cluster the
+ *  surviving fan into 2-3 MVP candidates with the recommended pick. */
 const SPEEDRUN_SEQUENCE: AutopilotRoundKind[] = [
   "variations",
   "variations",
   "decompose",
   "rank",
+  "converge",
 ];
 
 export function SynergyAutopilotPanel({
@@ -145,7 +146,7 @@ export function SynergyAutopilotPanel({
                 </div>
                 <p className="mt-1 text-[10.5px] leading-snug text-gray-600">
                   {SPEEDRUN_SEQUENCE.length}-wave cascade: variations ×2 →
-                  decompose → rank
+                  decompose → rank → converge
                 </p>
               </div>
               <button

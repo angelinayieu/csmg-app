@@ -127,7 +127,16 @@ export type AugmentMode =
   // popover's "Or describe what you want…" field. Backed by the
   // AUGMENT_SCHEMA shape — emits 1-6 new child nodes that fulfill
   // the user's prompt against the card's rich context.
-  | "describe";
+  | "describe"
+  // ── Brainstorm-speedrun convergence (Wave 2) ──
+  // Reads the seed + ALL its descendants (variations, branches,
+  // research notes, ranking summaries) and clusters them into 2-3
+  // MVP candidates with effort / impact / novelty scores, one of
+  // which is "recommended" (the build-this-next pick). Used as the
+  // final wave of the autopilot speedrun sequence — turns "we
+  // expanded a fan of ideas" into "here's the smallest valuable
+  // thing to build."
+  | "converge";
 
 export interface AugmentResult {
   nodes: Array<{
@@ -231,6 +240,47 @@ export interface PlanResult {
   risks: PlanRisk[];
 }
 
+// ── Convergence cluster (Wave 2) ──
+//
+// One MVP-candidate cluster produced by the converge augment mode.
+// The LLM groups descendants of the seed into 2-3 of these. The
+// `recommended` field is true for at most one cluster — the build-
+// this-next pick. The remaining clusters become deferred branches
+// the user can come back to.
+export type ConvergeEffort = "light" | "medium" | "heavy";
+
+export interface ConvergeCluster {
+  /** Human-readable name for the cluster, 3-6 words. e.g.
+   *  "Working-memory loadout app". */
+  name: string;
+  /** 1-2 sentence pitch describing what this MVP would actually be. */
+  pitch: string;
+  /** brainstorm_nodes.id values of nodes this cluster groups
+   *  together. The IDs come from the input context — the LLM
+   *  echoes back the ones it considered for this cluster. */
+  member_node_ids: string[];
+  /** Build effort estimate. */
+  effort: ConvergeEffort;
+  /** Expected impact on the user's stated goal. 1 = marginal,
+   *  10 = transformative. */
+  impact: number;
+  /** Novelty / surprise. 1 = obvious, 10 = genuinely new angle. */
+  novelty: number;
+  /** What's left OUT to keep scope tight ("we're deferring X
+   *  because the MVP works without it"). 1-2 sentences. */
+  scope_cut: string;
+  /** Exactly one cluster has recommended=true. The build-this-next
+   *  pick. The autopilot UI spotlights it post-convergence. */
+  recommended: boolean;
+}
+
+export interface ConvergeResult {
+  /** 2-3 candidate clusters. Exactly one has recommended=true. */
+  clusters: ConvergeCluster[];
+  /** 1-sentence rationale for which cluster the LLM recommended. */
+  recommendation_rationale: string;
+}
+
 export type AugmentResponse =
   | { mode: "augment"; result: AugmentResult }
   | { mode: "decompose"; result: DecomposeResult }
@@ -244,7 +294,9 @@ export type AugmentResponse =
   // Describe reuses AugmentResult — same shape (nodes[] + summary)
   // but the system prompt routes through DESCRIBE_SYSTEM to honor
   // the user's free-form instruction.
-  | { mode: "describe"; result: AugmentResult };
+  | { mode: "describe"; result: AugmentResult }
+  // Wave 2 — convergence into MVP-candidate clusters.
+  | { mode: "converge"; result: ConvergeResult };
 
 // ── History buckets (right rail dedup) ──
 //

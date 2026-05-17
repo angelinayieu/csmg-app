@@ -38,8 +38,9 @@ export interface AutopilotNewNode {
  *  /api/synergy/sessions/[id]/autopilot/round endpoint. */
 export type AutopilotRoundKind =
   | "variations" // existing — fan 4 angles off a leaf
-  | "decompose"  // Wave 1 — break a node into upstream/downstream/internal/adjacent
-  | "rank";      // Wave 1 — score variation siblings (no new nodes; persists ranking meta)
+  | "decompose"  // Wave 1 — break a node into upstream/downstream/principles/variations
+  | "rank"       // Wave 1 — score variation siblings (no new nodes; persists ranking meta)
+  | "converge";  // Wave 2 — cluster seed's descendants into 2-3 MVP candidates
 
 export type AutopilotPhase =
   | { kind: "idle" }
@@ -98,9 +99,11 @@ function statusFor(kind: AutopilotRoundKind): string {
     case "variations":
       return "Expanding the most-recent thread…";
     case "decompose":
-      return "Decomposing into upstream / downstream / internal / adjacent…";
+      return "Decomposing into upstream / downstream / principles…";
     case "rank":
       return "Ranking the variations by feasibility / novelty / impact…";
+    case "converge":
+      return "Converging the fan into MVP candidates…";
   }
 }
 
