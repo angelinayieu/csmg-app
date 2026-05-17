@@ -40,6 +40,7 @@ import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator
 import { CanvasWorkspaceRoomSpawner } from "./chrome/canvas-workspace-room-spawner";
 import { CanvasTwinRevealOrchestrator } from "./chrome/canvas-twin-reveal-orchestrator";
 import { CanvasActivityTracker } from "./chrome/canvas-activity-tracker";
+import { CanvasSceneDirector } from "./chrome/canvas-scene-director";
 import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
 import { CanvasOperationalSeedSpawner } from "./chrome/canvas-operational-seed-spawner";
 import { CanvasRoomTransitionSpawner } from "./chrome/canvas-room-transition-spawner";
@@ -210,6 +211,17 @@ function CanvasOverlays() {
           elements to 40% while the attribute is present. Auto-clears
           on 4 seconds of stillness. */}
       <CanvasActivityTracker />
+      {/* Cinematic Phase 4 — scene director. Watches for high-value
+          shape spawns (synthesis cards, hypothesis ladders, strategy
+          hero card) and queues a per-shape "spotlight" sequence:
+          camera zooms to it, holds ~1.5s, returns to fit. Multiple
+          spotlights queue up serially so bottleneck → leverage →
+          risk read as a narrative sequence rather than landing on
+          top of each other. Mutual-exclusion with the twin reveal
+          orchestrator via the data-canvas-twin-reveal-active body
+          attribute: the director pauses while the twin moment owns
+          the camera. */}
+      <CanvasSceneDirector />
       {/* Hydrator counterpart — fetches pre-existing subjects from
           the DB on mount and paints SubjectCard shapes for any that
           aren't already on the canvas. Required for template-

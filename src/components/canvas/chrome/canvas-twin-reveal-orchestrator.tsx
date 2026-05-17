@@ -81,11 +81,21 @@ export function CanvasTwinRevealOrchestrator({
       if (hasFiredRef.current) return;
       hasFiredRef.current = true;
 
+      // Cinematic Phase 4 mutual exclusion — mark the body so the
+      // CanvasSceneDirector pauses its queue while the twin reveal
+      // owns the camera. Cleared in the final phase ("done") below.
+      if (typeof document !== "undefined") {
+        document.body.setAttribute("data-canvas-twin-reveal-active", "true");
+      }
+
       // Phase 1: zoom to the twin shape's bounds
       try {
         const bounds = editor.getShapePageBounds(twinShapeId);
         if (!bounds) {
           hasFiredRef.current = false;
+          if (typeof document !== "undefined") {
+            document.body.removeAttribute("data-canvas-twin-reveal-active");
+          }
           return;
         }
         // Expand bounds slightly so the shape isn't pressed against
@@ -139,10 +149,15 @@ export function CanvasTwinRevealOrchestrator({
           ZOOM_OUT_MS,
       );
 
-      // Phase 5 (after CTA hold): fade CTA
+      // Phase 5 (after CTA hold): fade CTA + release mutual-exclusion
       scheduleTimeout(
         () => {
           setState((s) => ({ ...s, phase: "done" }));
+          // Release the body attribute so any queued scene-director
+          // spotlights (Phase 4) can resume.
+          if (typeof document !== "undefined") {
+            document.body.removeAttribute("data-canvas-twin-reveal-active");
+          }
         },
         HEADLINE_LEAD_MS +
           HEADLINE_HOLD_MS +
@@ -218,7 +233,17 @@ export function CanvasTwinRevealOrchestrator({
   }, [editor, fireSequence, clearTimeouts]);
 
   // Clean up timeouts on unmount
-  useEffect(() => clearTimeouts, [clearTimeouts]);
+  useEffect(() => {
+    return () => {
+      clearTimeouts();
+      // Ensure the mutual-exclusion attribute is cleared if the
+      // orchestrator unmounts mid-sequence (e.g., user navigates
+      // away during the reveal).
+      if (typeof document !== "undefined") {
+        document.body.removeAttribute("data-canvas-twin-reveal-active");
+      }
+    };
+  }, [clearTimeouts]);
 
   const handleOpenTwin = () => {
     router.push(`/app/space/${spaceId}/twin`);
