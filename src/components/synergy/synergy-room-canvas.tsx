@@ -25,7 +25,6 @@ import {
   Sparkles,
   StickyNote,
   Target,
-  UserCircle2,
   X,
 } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
@@ -41,7 +40,13 @@ import {
 import { augment } from "@/lib/synergy/client";
 import { useRoomRealtime } from "@/hooks/synergy/use-room-realtime";
 import { useRoomPresence } from "@/hooks/synergy/use-room-presence";
+import { useRoomEvents } from "@/hooks/synergy/use-room-events";
+import { useRoomMessages } from "@/hooks/synergy/use-room-messages";
 import { useSpeech } from "@/hooks/synergy/use-speech";
+import { RoomCursorsLayer } from "./room-cursors-layer";
+import { RoomPresenceStack } from "./room-presence-stack";
+import { RoomRightRail } from "./room-right-rail";
+import { abstractAvatarStyle } from "@/lib/synergy/abstract-avatar";
 import { AI_META_PREFIX, SynergyRoomAIDock } from "./synergy-room-ai-dock";
 import {
   SynergyRoomVoiceDock,
@@ -94,11 +99,50 @@ export function SynergyRoomCanvas({ bundle }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
-  // ── Presence ──
-  // Set of OTHER user_ids currently in this room channel.
-  // Single-other-user rooms in V1, so size is 0 or 1.
-  const otherPresent = useRoomPresence(roomId, myId);
-  const theyAreHere = otherPresent.has(theirId);
+  // ── Presence + live cursors ──
+  // The hook multiplexes:
+  //   - presence (who's joined) → onlineUserIds
+  //   - broadcast (live world-coord cursor positions) → cursors map
+  //   - broadcastCursor(worldX, worldY) → throttled send (call on move)
+  //
+  // Single-other-user rooms in V1, so the sets are size 0 or 1.
+  const { onlineUserIds, cursors, broadcastCursor } = useRoomPresence(
+    roomId,
+    myId,
+  );
+  const theyAreHere = onlineUserIds.has(theirId);
+  // Derive a "cursor has ticked recently" set so the header avatar
+  // ring goes hued (active) vs slate (present but idle). 5s threshold
+  // matches a comfortable "they're working right now" read.
+  const activeUserIds = useMemo(() => {
+    const now = Date.now();
+    const out = new Set<string>();
+    for (const [uid, c] of cursors) {
+      if (now - c.updatedAt < 5_000) out.add(uid);
+    }
+    return out;
+  }, [cursors]);
+  // Labels keyed by user_id — passed to the cursor layer for the pill
+  // text. In v1 the only remote member is `theirId`, whose profile is
+  // already revealed (this is an accepted-match room).
+  const userLabels = useMemo(
+    () => ({
+      [theirId]: bundle.their_profile?.display_name ?? null,
+    }),
+    [theirId, bundle.their_profile?.display_name],
+  );
+
+  // ── Right rail state (Timeline + Chat) ──
+  // Both feeds load lazily on mount and live-update via Realtime.
+  // The shell handles tab switching + unseen tracking.
+  const { events: timelineEvents, loading: timelineLoading } =
+    useRoomEvents(roomId);
+  const {
+    messages: chatMessages,
+    loading: chatLoading,
+    sendMessage,
+  } = useRoomMessages(roomId);
+  const [rightRailOpen, setRightRailOpen] = useState(false);
 
   // Pan + zoom (world-space; same pattern as solo whiteboard)
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -288,6 +332,19 @@ export function SynergyRoomCanvas({ bundle }: Props) {
         return;
       }
 
+      // ── R4: shared voice transcript stream ──
+      // Mirror the spoken phrase to the chat thread so the partner
+      // sees what you said as a voice transcript bubble in real time
+      // (the canvas-side mic dock would otherwise be silent on their
+      // end except for a new node appearing). Fire-and-forget; the
+      // node landed already — we don't want a chat failure to roll
+      // back the canvas write. Meta carries the node id so a future
+      // version can wire "click bubble → focus node" navigation.
+      void sendMessage(trimmed, {
+        kind: "voice_transcript",
+        meta: { node_id: voiceNode.id },
+      });
+
       if (!voiceFreeFlow || !voiceNode) {
         setVoiceBusy(false);
         return;
@@ -369,6 +426,7 @@ export function SynergyRoomCanvas({ bundle }: Props) {
       bundle.their_component,
       placeSpiralAround,
       roomId,
+      sendMessage,
       viewportCenterWorld,
       voiceFreeFlow,
     ],
@@ -411,6 +469,14 @@ export function SynergyRoomCanvas({ bundle }: Props) {
         x: panStartRef.current.panX + (e.clientX - panStartRef.current.clientX),
         y: panStartRef.current.panY + (e.clientY - panStartRef.current.clientY),
       });
+    }
+    // Broadcast my cursor (world coords) to remote viewers. The hook
+    // throttles internally at 30Hz so this is safe to fire on every
+    // pointer event. Skip while archived to save channel traffic on
+    // read-only rooms.
+    if (!archived) {
+      const w = toWorld(e.clientX, e.clientY);
+      broadcastCursor(w.x, w.y);
     }
   };
 
@@ -665,38 +731,40 @@ export function SynergyRoomCanvas({ bundle }: Props) {
               {bundle.their_profile && (
                 <>
                   <span className="text-gray-300">·</span>
-                  <div className="inline-flex items-center gap-1.5">
-                    <span className="relative inline-flex">
-                      <UserCircle2 className="h-3.5 w-3.5 text-gray-500" />
-                      {theyAreHere && (
-                        <span
-                          className="absolute -bottom-0.5 -right-0.5 inline-block h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white"
-                          style={{
-                            animation: "synergyPresencePulse 2s ease-in-out infinite",
-                          }}
-                        />
-                      )}
-                    </span>
-                    <span className="text-[12px] text-gray-700">
-                      with{" "}
-                      <Link
-                        href={`/app/synergy/profile/${theirId}`}
-                        className="font-semibold text-gray-900 underline-offset-2 hover:text-blue-700 hover:underline"
-                        title="View profile"
-                      >
-                        {bundle.their_profile.display_name}
-                      </Link>
-                    </span>
-                    {theyAreHere && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-emerald-700">
-                        here now
-                      </span>
-                    )}
-                  </div>
+                  <span className="text-[12px] text-gray-700">
+                    with{" "}
+                    <Link
+                      href={`/app/synergy/profile/${theirId}`}
+                      className="font-semibold text-gray-900 underline-offset-2 hover:text-blue-700 hover:underline"
+                      title="View profile"
+                    >
+                      {bundle.their_profile.display_name}
+                    </Link>
+                  </span>
                 </>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
+              {/* Avatar stack — one circular avatar per room member.
+                  Ring intensity carries the live-presence signal:
+                    active (cursor moved <5s ago) → hued ring
+                    present (in channel, idle)    → slate ring
+                    offline                       → faint slate ring */}
+              <RoomPresenceStack
+                members={
+                  bundle.their_profile
+                    ? [
+                        {
+                          userId: theirId,
+                          displayName: bundle.their_profile.display_name,
+                          avatarUrl: bundle.their_profile.avatar_url,
+                        },
+                      ]
+                    : []
+                }
+                presentUserIds={onlineUserIds}
+                activeUserIds={activeUserIds}
+              />
               {archived && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-600">
                   <ArchiveX className="h-3 w-3" /> archived (read-only)
@@ -807,7 +875,37 @@ export function SynergyRoomCanvas({ bundle }: Props) {
               />
             ))}
           </div>
+
+          {/* ── Remote cursors overlay ──
+              Sibling of the pan/zoom wrapper, so cursor pills stay at a
+              constant viewport size regardless of zoom. The layer reads
+              world coords from the presence channel and maps them to
+              viewport pixels using the same pan/zoom transform. */}
+          <RoomCursorsLayer
+            cursors={cursors}
+            pan={pan}
+            zoom={zoom}
+            userLabels={userLabels}
+          />
         </div>
+
+        {/* ── Right rail ──
+            One unified panel with Timeline + Chat tabs. Collapsed
+            by default; the pill at top-right surfaces unseen counts
+            so the user can tell at a glance that something new
+            arrived even when focused on the canvas. */}
+        <RoomRightRail
+          myUserId={myId}
+          theirDisplayName={bundle.their_profile?.display_name ?? null}
+          archived={archived}
+          open={rightRailOpen}
+          onToggle={() => setRightRailOpen((v) => !v)}
+          events={timelineEvents}
+          eventsLoading={timelineLoading}
+          messages={chatMessages}
+          messagesLoading={chatLoading}
+          onSendMessage={sendMessage}
+        />
 
         {/* Voice dock — bottom-LEFT mic + free-flow toggle. Each
             speech-final spawns a node at viewport center; free-flow
@@ -1026,23 +1124,34 @@ function RoomNodeCard({
             )}
             {node.kind}
           </span>
+          {/* Author stamp — small abstract avatar whose hashed gradient
+              matches this user's cursor color + header avatar, so a
+              glance ties "this card belongs to that person." Tooltip
+              carries the semantic label ("you" / their display name).
+              AI-generated cards keep the dedicated purple chip since
+              they have no human actor. */}
           {isAiGenerated ? (
-            <span className="rounded-full bg-purple-500/15 px-1 text-[8px] text-purple-700">
-              {isMine ? "you · AI" : isTheirs ? "them · AI" : "AI"}
+            <span
+              className="rounded-full bg-purple-500/15 px-1 text-[8px] text-purple-700"
+              title={
+                isMine
+                  ? "AI suggestion — triggered by you"
+                  : isTheirs
+                    ? "AI suggestion — triggered by them"
+                    : "AI suggestion"
+              }
+            >
+              AI
             </span>
           ) : (
-            <>
-              {isMine && (
-                <span className="rounded-full bg-blue-500/15 px-1 text-[8px] text-blue-700">
-                  you
-                </span>
-              )}
-              {isTheirs && (
-                <span className="rounded-full bg-emerald-500/15 px-1 text-[8px] text-emerald-700">
-                  them
-                </span>
-              )}
-            </>
+            <span
+              style={{
+                ...abstractAvatarStyle(node.author_id, 14),
+                fontSize: 7,
+              }}
+              title={isMine ? "You" : isTheirs ? "Them" : "Member"}
+              aria-label={isMine ? "Your card" : "Their card"}
+            />
           )}
         </div>
         {editing ? (

@@ -4,11 +4,17 @@
 // and "Downstream (produces)" sections inside the strategy doc. The doc
 // doesn't duplicate component data — it references the same rows the
 // matching marketplace uses, so visibility edits stay single-sourced.
+//
+// Visual language unified with the rest of the strategy doc: neutral
+// white cards (no amber/emerald wash), section header uses the same
+// quieted SectionTitle treatment as Risks/Hypotheses, and the
+// directionality is communicated entirely via the custom InflowGlyph /
+// OutflowGlyph glyphs.
 
 "use client";
 
-import { ArrowDown, ArrowUp, Lock, Globe, Network } from "lucide-react";
 import type { BrainstormComponent } from "@/lib/synergy/types";
+import { InflowGlyph, OutflowGlyph } from "./synergy-glyphs";
 
 interface Props {
   kind: "upstream" | "downstream";
@@ -17,34 +23,32 @@ interface Props {
 
 const KIND_META: Record<
   Props["kind"],
-  { label: string; sub: string; icon: React.ComponentType<{ className?: string }>; accent: string }
+  { label: string; sub: string; Glyph: React.ComponentType<{ className?: string }> }
 > = {
   upstream: {
     label: "Upstream",
     sub: "what this needs",
-    icon: ArrowUp,
-    accent: "border-amber-200 bg-amber-50/30",
+    Glyph: InflowGlyph,
   },
   downstream: {
     label: "Downstream",
     sub: "what this produces",
-    icon: ArrowDown,
-    accent: "border-emerald-200 bg-emerald-50/30",
+    Glyph: OutflowGlyph,
   },
 };
 
 export function SynergyStrategyComponentList({ kind, components }: Props) {
   const meta = KIND_META[kind];
-  const Icon = meta.icon;
+  const Glyph = meta.Glyph;
   const filtered = components.filter((c) => c.kind === kind);
 
   if (filtered.length === 0) {
     return (
       <section>
-        <SectionHeader Icon={Icon} label={meta.label} sub={meta.sub} count={0} />
+        <SectionHeader Glyph={Glyph} label={meta.label} sub={meta.sub} count={0} />
         <p className="rounded-lg border border-dashed border-gray-200 bg-white px-3 py-3 text-[11px] text-gray-500">
-          No {kind} components extracted yet. Run "Extract components" on the
-          processing page first.
+          No {kind} components extracted yet. Run &ldquo;Extract components&rdquo; on
+          the processing page first.
         </p>
       </section>
     );
@@ -53,7 +57,7 @@ export function SynergyStrategyComponentList({ kind, components }: Props) {
   return (
     <section>
       <SectionHeader
-        Icon={Icon}
+        Glyph={Glyph}
         label={meta.label}
         sub={meta.sub}
         count={filtered.length}
@@ -62,7 +66,7 @@ export function SynergyStrategyComponentList({ kind, components }: Props) {
         {filtered.map((c) => (
           <li
             key={c.id}
-            className={`group rounded-lg border ${meta.accent} p-3 transition`}
+            className="group rounded-lg border border-gray-200 bg-white p-3 transition hover:border-gray-300"
           >
             <div className="flex items-start gap-2">
               <div className="min-w-0 flex-1">
@@ -71,7 +75,7 @@ export function SynergyStrategyComponentList({ kind, components }: Props) {
                     {c.label_public}
                   </div>
                   {c.subkind && (
-                    <span className="rounded-full bg-white px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-600">
+                    <span className="rounded-full bg-gray-50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-500">
                       {c.subkind}
                     </span>
                   )}
@@ -90,22 +94,29 @@ export function SynergyStrategyComponentList({ kind, components }: Props) {
 }
 
 function SectionHeader({
-  Icon,
+  Glyph,
   label,
   sub,
   count,
 }: {
-  Icon: React.ComponentType<{ className?: string }>;
+  Glyph: React.ComponentType<{ className?: string }>;
   label: string;
   sub: string;
   count: number;
 }) {
+  // Quieted treatment to match the SectionTitle used by Risks /
+  // Hypotheses in synergy-strategy.tsx: small neutral glyph, 15px
+  // medium label, mono caps metadata on right.
   return (
-    <div className="mb-3 flex items-baseline gap-2">
-      <Icon className="h-4 w-4 self-center text-blue-600" />
-      <h3 className="font-semibold text-gray-900">{label}</h3>
-      <span className="text-[12px] text-gray-500">— {sub}</span>
-      <span className="ml-auto font-mono text-[10px] uppercase tracking-wider text-gray-500">
+    <div className="mb-5 flex items-center gap-2.5">
+      <Glyph className="h-3.5 w-3.5 text-gray-500" />
+      <h3 className="font-display-tight text-[15px] font-medium text-gray-900">
+        {label}
+      </h3>
+      <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-400">
+        {sub}
+      </span>
+      <span className="ml-auto font-mono text-[10px] uppercase tracking-[0.15em] text-gray-400">
         {count} {count === 1 ? "item" : "items"}
       </span>
     </div>
@@ -117,25 +128,17 @@ function VisibilityChip({
 }: {
   visibility: BrainstormComponent["visibility"];
 }) {
+  // Subtler than the original Lock/Network/Globe icon pills.
+  // A 5px colored dot + lowercase label on a neutral bg —
+  // visibility reads as metadata, not a primary control.
   const meta = {
-    private: { icon: Lock, label: "private", className: "bg-gray-100 text-gray-700" },
-    matchable_only: {
-      icon: Network,
-      label: "matchable",
-      className: "bg-blue-100 text-blue-700",
-    },
-    public: {
-      icon: Globe,
-      label: "public",
-      className: "bg-emerald-100 text-emerald-700",
-    },
+    private: { label: "private", dot: "bg-gray-400" },
+    matchable_only: { label: "matchable", dot: "bg-blue-500" },
+    public: { label: "public", dot: "bg-emerald-500" },
   }[visibility];
-  const Icon = meta.icon;
   return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider ${meta.className}`}
-    >
-      <Icon className="h-3 w-3" />
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-600">
+      <span className={`inline-block h-1.5 w-1.5 rounded-full ${meta.dot}`} />
       {meta.label}
     </span>
   );

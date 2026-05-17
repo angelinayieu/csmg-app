@@ -16,11 +16,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  ArrowRight,
   Check,
   Cloud,
+  CloudOff,
+  Focus as FocusIcon,
   Loader2,
-  Sparkles,
   Target,
 } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
@@ -87,6 +87,24 @@ const EDGE_COLOR_BY_KIND: Record<NodeKind, string> = {
   ranking: "rgba(249, 115, 22, 0.40)", // orange
   plan: "rgba(14, 165, 233, 0.50)", // sky — slightly stronger; plans are anchors
   synergy: "rgba(245, 158, 11, 0.55)", // amber — matches lateral-edge color so the lineage reads visually
+};
+
+// ── Top-right toolbar pill style ──
+// Shared between Save / Process / Zoom utility pills so they read as a
+// single cohesive cluster. The primary CTA (Focus & Publish) intentionally
+// breaks this style with a black-fill treatment to claim hierarchy.
+// Stack: subtle white-tint background, near-invisible border, triple
+// Apple-style shadow (inset highlight + contact + ambient).
+const TOOLBAR_PILL_STYLE: React.CSSProperties = {
+  background: "rgba(255, 255, 255, 0.92)",
+  border: "1px solid rgba(15, 23, 42, 0.06)",
+  backdropFilter: "blur(16px) saturate(180%)",
+  WebkitBackdropFilter: "blur(16px) saturate(180%)",
+  boxShadow: [
+    "inset 0 1px 0 rgba(255, 255, 255, 0.7)",
+    "0 1px 2px rgba(15, 23, 42, 0.04)",
+    "0 4px 12px -2px rgba(15, 23, 42, 0.06)",
+  ].join(", "),
 };
 
 // Folder region tint by category label. The Decompose action spawns
@@ -1736,50 +1754,126 @@ export function SynergyWhiteboard({
       />
 
       <main className="relative flex-1 overflow-hidden">
+        {/* ── Top-right command toolbar ──
+            Three-pill cluster modeled on the Apple-pill toolbar in the
+            workflow reference: cohesive pill shape, colored glyph +
+            monochrome label, primary action gets the inverted (black)
+            fill. Zoom sits as a trailing utility chip.
+            Pill base style is centralized in the helper for consistency. */}
         <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
-          <button
-            onClick={resetView}
-            title="Click to reset view. Wheel to zoom, space+drag to pan."
-            className="rounded-full border border-gray-200 bg-white/80 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-gray-600 backdrop-blur transition hover:text-gray-900"
+          {/* Save status — stateful pill. Glyph color encodes state;
+              label stays monochrome (Apple-style: state is in the icon,
+              not the typography). */}
+          <div
+            className="pointer-events-none inline-flex items-center gap-2 rounded-full px-3.5 py-1.5"
+            style={TOOLBAR_PILL_STYLE}
+            title={
+              saveStatus === "error"
+                ? "Last save failed — we'll keep retrying"
+                : "Auto-saves as you work"
+            }
           >
-            {Math.round(zoom * 100)}%
-          </button>
-          <div className="pointer-events-none flex items-center gap-1.5 rounded-full border border-gray-200 bg-white/80 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-gray-600 backdrop-blur">
             {saveStatus === "saving" && (
-              <>
-                <Loader2 className="h-3 w-3 animate-spin text-blue-600" /> saving…
-              </>
+              <Loader2
+                className="h-3.5 w-3.5 animate-spin text-blue-600"
+                strokeWidth={2}
+              />
             )}
             {saveStatus === "saved" && (
-              <>
-                <Check className="h-3 w-3 text-emerald-600" /> saved
-              </>
+              <Check
+                className="h-3.5 w-3.5 text-emerald-500"
+                strokeWidth={2.5}
+              />
             )}
             {saveStatus === "error" && (
-              <>
-                <Cloud className="h-3 w-3 text-rose-600" /> save failed
-              </>
+              <CloudOff
+                className="h-3.5 w-3.5 text-rose-500"
+                strokeWidth={2}
+              />
             )}
             {saveStatus === "idle" && (
-              <>
-                <Cloud className="h-3 w-3" /> synced
-              </>
+              <Cloud
+                className="h-3.5 w-3.5 text-gray-400"
+                strokeWidth={2}
+              />
             )}
+            <span className="text-[12px] font-medium text-gray-900">
+              {saveStatus === "saving"
+                ? "Saving"
+                : saveStatus === "error"
+                  ? "Save failed"
+                  : saveStatus === "idle"
+                    ? "Synced"
+                    : "Saved"}
+            </span>
           </div>
+
+          {/* Process — utility pill linking to the components/scoring view */}
           <Link
             href={`/app/synergy/${sessionId}/process`}
             title="Process page: components + scoring (utilitarian view)"
-            className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white/80 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-gray-600 backdrop-blur transition hover:text-gray-900"
+            className="inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 transition hover:-translate-y-px"
+            style={TOOLBAR_PILL_STYLE}
           >
-            <Target className="h-3 w-3" /> Process
+            <Target
+              className="h-3.5 w-3.5 text-amber-500"
+              strokeWidth={2}
+            />
+            <span className="text-[12px] font-medium text-gray-900">
+              Process
+            </span>
           </Link>
+
+          {/* Focus & Publish — primary CTA. Black-fill pill with an
+              emerald-haloed Focus glyph mirrors the "Start" button in
+              the reference, claiming visual dominance over the lighter
+              status/utility pills. */}
           <button
             onClick={() => focus.open()}
             title="Enter Focus Mode — converge + publish"
-            className="inline-flex items-center gap-1.5 rounded-full bg-blue-600 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-[0_4px_20px_-4px_rgba(6,182,212,0.5)] transition hover:scale-[1.03]"
+            className="group inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 transition hover:-translate-y-px"
+            style={{
+              background: "rgb(10, 10, 12)",
+              border: "1px solid rgba(0, 0, 0, 0.6)",
+              boxShadow: [
+                "inset 0 1px 0 rgba(255, 255, 255, 0.08)",
+                "0 1px 2px rgba(0, 0, 0, 0.2)",
+                "0 8px 24px -4px rgba(0, 0, 0, 0.28)",
+              ].join(", "),
+            }}
           >
-            <Sparkles className="h-3 w-3" /> Focus & Publish
-            <ArrowRight className="h-3 w-3" />
+            <span className="relative inline-flex h-3.5 w-3.5 items-center justify-center">
+              {/* Soft emerald halo behind the glyph — the "active /
+                  primary" cue. Subtle so it reads as material, not
+                  candy. */}
+              <span
+                aria-hidden
+                className="absolute -inset-1 rounded-full"
+                style={{
+                  background:
+                    "radial-gradient(circle, rgba(52, 211, 153, 0.45) 0%, transparent 65%)",
+                }}
+              />
+              <FocusIcon
+                className="relative h-3.5 w-3.5 text-emerald-400"
+                strokeWidth={2}
+              />
+            </span>
+            <span className="text-[12px] font-semibold text-white">
+              Focus &amp; Publish
+            </span>
+          </button>
+
+          {/* Zoom % — trailing utility chip. Click resets the view;
+              the percentage doubles as a live readout while the user
+              wheels to zoom. Smaller padding so it reads as secondary. */}
+          <button
+            onClick={resetView}
+            title="Reset view (wheel to zoom · space+drag to pan)"
+            className="inline-flex items-center justify-center rounded-full px-2.5 py-1.5 font-mono text-[10px] font-medium uppercase tracking-wider text-gray-500 transition hover:text-gray-900"
+            style={TOOLBAR_PILL_STYLE}
+          >
+            {Math.round(zoom * 100)}%
           </button>
         </div>
 
