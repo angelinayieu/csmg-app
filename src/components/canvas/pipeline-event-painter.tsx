@@ -68,6 +68,7 @@ import type {
   VariantCarouselShape,
   StageNodeShape,
   TwinSnapshotShape,
+  CycleLoopShape,
 } from "./shapes/types";
 import {
   ORIGIN_PROMPT_DEFAULT_H,
@@ -4680,6 +4681,31 @@ function paintProposal(
   }
 }
 
+// Cycle-loop layout: stack the cards in a row at the bottom of the kg
+// room's interior, wrapping after CYCLE_LOOPS_PER_ROW. Default dims
+// match cycle-loop-shape.tsx's getDefaultProps (260×140).
+const CYCLE_LOOP_W = 260;
+const CYCLE_LOOP_H = 140;
+const CYCLE_LOOP_GAP = 16;
+const CYCLE_LOOPS_PER_ROW = 5;
+// Y offset inside kg room, below the kg-formation card (280 tall +
+// 40 gap). The grow logic shifts downstream rooms if more rows arrive
+// than fit at this offset.
+const CYCLE_LOOP_OFFSET_Y_BASE = 320;
+
+type CycleClassification = CycleLoopShape["props"]["classification"];
+const VALID_CYCLE_CLASSIFICATIONS: readonly CycleClassification[] = [
+  "reinforcing_positive",
+  "reinforcing_negative",
+  "balancing",
+] as const;
+
+function normalizeCycleClassification(raw: string): CycleClassification {
+  return (
+    VALID_CYCLE_CLASSIFICATIONS.find((c) => c === raw) ?? "balancing"
+  );
+}
+
 function paintCycle(
   editor: Editor,
   event: Extract<StructuralEvent, { type: "cycle_detected" }>,
@@ -4700,6 +4726,94 @@ function paintCycle(
     } catch (err) {
       console.warn("[pipeline-painter] cycle highlight failed:", err);
     }
+  }
+
+  // Spawn a cycle-loop card so the classification (reinforcing+ /
+  // reinforcing− / balancing) is actually surfaced to the user.
+  // Without this the cycle was invisible apart from the convergence
+  // dashed-ring on each entity — the user couldn't tell a virtuous
+  // loop from a death spiral.
+  //
+  // Idempotent: re-emission of the same cycleId updates the existing
+  // card's classification + entity preview instead of stacking
+  // duplicates. Requires an anchor; cycles can arrive before any
+  // structural event (rare) so we bail early in that case.
+  if (!state.anchor) return;
+
+  const classification = normalizeCycleClassification(event.classification);
+  const entityNames = event.entityIds
+    .map((id) => lookupEntityName(editor, state, id))
+    .filter((n): n is string => !!n);
+
+  const existingId = state.cycleLoopShapeIds.get(event.cycleId);
+  if (existingId) {
+    try {
+      editor.updateShape<CycleLoopShape>({
+        id: existingId,
+        type: "cycle-loop",
+        props: {
+          classification,
+          entityNames,
+          nodeCount: event.entityIds.length,
+        },
+      });
+    } catch (err) {
+      console.warn("[pipeline-painter] cycle-loop update failed:", err);
+    }
+    return;
+  }
+
+  // Place inside the kg room in a row layout below kg-formation.
+  // Cycles wrap to a new row after CYCLE_LOOPS_PER_ROW so the band
+  // stays inside the room's horizontal extent.
+  const idx = state.cycleLoopShapeIds.size;
+  const row = Math.floor(idx / CYCLE_LOOPS_PER_ROW);
+  const col = idx % CYCLE_LOOPS_PER_ROW;
+  const rowWidth =
+    CYCLE_LOOPS_PER_ROW * CYCLE_LOOP_W +
+    (CYCLE_LOOPS_PER_ROW - 1) * CYCLE_LOOP_GAP;
+  // Center the row horizontally on the room's content center, then
+  // index each card from the left edge.
+  const offsetX =
+    -rowWidth / 2 + col * (CYCLE_LOOP_W + CYCLE_LOOP_GAP) + CYCLE_LOOP_W / 2;
+  const offsetY =
+    CYCLE_LOOP_OFFSET_Y_BASE + row * (CYCLE_LOOP_H + CYCLE_LOOP_GAP);
+  const placement = placeInsideRoom("kg", state.anchor, offsetX, offsetY);
+  const x = placement.x - CYCLE_LOOP_W / 2;
+  const y = placement.y;
+
+  const firstEntityId = event.entityIds[0] ?? null;
+  const shapeId = createShapeId();
+  try {
+    editor.createShape<CycleLoopShape>({
+      id: shapeId,
+      type: "cycle-loop",
+      x,
+      y,
+      props: {
+        w: CYCLE_LOOP_W,
+        h: CYCLE_LOOP_H,
+        cycleId: event.cycleId,
+        spaceId: state.strategyHeroSpaceId ?? "",
+        name: entityNames[0] ? `Loop · ${entityNames[0]}` : "Cycle",
+        classification,
+        entityNames,
+        nodeCount: event.entityIds.length,
+        multiplier: null,
+        firstEntityId,
+      },
+      meta: { source: "pipeline-event" },
+    });
+    state.cycleLoopShapeIds.set(event.cycleId, shapeId);
+    registerRoomChild(state, "kg", shapeId);
+    recordChildBottomForStage(
+      editor,
+      state,
+      "kg",
+      y + CYCLE_LOOP_H,
+    );
+  } catch (err) {
+    console.warn("[pipeline-painter] cycle-loop create failed:", err);
   }
 }
 

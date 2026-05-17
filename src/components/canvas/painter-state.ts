@@ -128,6 +128,13 @@ export interface PainterState {
    *  default soft-height under-counts the actual content. Reset
    *  alongside roomShapeIds on run cleanup. */
   roomChildMaxY: Map<string, number>;
+  /** Cycle loop cards — one per cycle_detected event. The painter
+   *  spawns a cycle-loop-shape that surfaces the cycle's
+   *  classification (reinforcing_positive / reinforcing_negative /
+   *  balancing) + a preview of the entity chain. Keyed by cycleId
+   *  for idempotent upserts when the same cycle re-emits. Lives
+   *  inside the kg room alongside kg-formation. */
+  cycleLoopShapeIds: Map<string, TLShapeId>;
   /** stage → set of shape ids that were placed inside this stage's
    *  room. When a room grows past its static STAGE_HEIGHT, every
    *  downstream room AND every shape inside those downstream rooms
@@ -370,6 +377,7 @@ export function makeInitialState(): PainterState {
     roomCounts: new Map(),
     roomChildMaxY: new Map(),
     roomChildren: new Map(),
+    cycleLoopShapeIds: new Map(),
     originPromptShapeId: null,
     spaceShellShapeIds: new Map(),
     spaceShellState: new Map(),
