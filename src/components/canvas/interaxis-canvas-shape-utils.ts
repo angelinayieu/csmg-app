@@ -58,6 +58,8 @@ import { HypothesisLadderShapeUtil } from "./shapes/hypothesis-ladder-shape";
 import { TrajectoryFanShapeUtil } from "./shapes/trajectory-fan-shape";
 import { ForestPlotShapeUtil } from "./shapes/forest-plot-shape";
 import { EdgeDriftHeatmapShapeUtil } from "./shapes/edge-drift-heatmap-shape";
+import { ReflexivePulseShapeUtil } from "./shapes/reflexive-pulse-shape";
+import { LearningLoopCardShapeUtil } from "./shapes/learning-loop-card-shape";
 
 export const SHAPE_UTILS = [
   KGNodeShapeUtil,
@@ -227,4 +229,13 @@ export const SHAPE_UTILS = [
   // and how recently as a rows × cols heatmap. The reflexive room's
   // primary content — closes the audit-loop visualization gap.
   EdgeDriftHeatmapShapeUtil,
+  // C1 — Reflexive pulse glance card inside the reflexive room. Compact
+  // coverage + depth + calibration readout polled from
+  // intelligence-overview. Required by canvas-reflexive-spawner — without
+  // this registration, tldraw throws on createShape("reflexive-pulse").
+  ReflexivePulseShapeUtil,
+  // Learning loop card inside the reflexive/twin rooms. Spawned by the
+  // operational seeder when learning_loops rows exist for the space.
+  // Required by the seeder's createShape("learning-loop-card") call.
+  LearningLoopCardShapeUtil,
 ];

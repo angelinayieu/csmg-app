@@ -41,6 +41,8 @@ import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
 import { CanvasOperationalSeedSpawner } from "./chrome/canvas-operational-seed-spawner";
 import { CanvasRoomTransitionSpawner } from "./chrome/canvas-room-transition-spawner";
 import { CanvasCascadeConnectorSpawner } from "./chrome/canvas-cascade-connector-spawner";
+import { CanvasMechanismSpawner } from "./chrome/canvas-mechanism-spawner";
+import { CanvasReflexiveSpawner } from "./chrome/canvas-reflexive-spawner";
 import { RelaxLayoutButton } from "./chrome/relax-layout-button";
 
 // Hide tldraw's stock UI — we supply our own chrome (top bar, left tool
@@ -227,6 +229,18 @@ function CanvasOverlays() {
           persona → strategy-hero → twin-snapshot → app-card.
           Bindings track source/target positions automatically. */}
       <CanvasCascadeConnectorSpawner spaceId={spaceId} />
+      {/* Mechanism cards — operational whiteboard. Fetches the space's
+          mechanism rows (status ∈ proposed/approved/active/paused) and
+          spawns one mechanism-card per row inside the Twin room. Cards
+          arrange themselves in a 3-column grid below the twin-snapshot.
+          Idempotent + respects user-dismissal via localStorage flag. */}
+      <CanvasMechanismSpawner spaceId={spaceId} />
+      {/* Reflexive pulse — C1 (operational whiteboard). Compact glance
+          at prospector coverage + depth + calibration, anchored inside
+          the Reflexive room. Polls intelligence-overview every 30s
+          while the tab is visible; Scan-now button POSTs to the
+          prospector. Idempotent + dismissal-aware. */}
+      <CanvasReflexiveSpawner spaceId={spaceId} entities={entities} />
       {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
           user-triggered force-directed reflow over the main KG.
           Lives in CanvasOverlays so it has the tldraw editor context
