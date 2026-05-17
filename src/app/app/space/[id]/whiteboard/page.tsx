@@ -19,7 +19,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Loader2, GitBranch, Camera, Activity, Beaker } from "lucide-react";
+import { Loader2, GitBranch, Camera, Activity, Beaker, Package, Focus } from "lucide-react";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { ConnectPanel } from "@/components/whiteboard/connect-panel";
 import { CanvasSnapshotsDrawer } from "@/components/canvas/chrome/canvas-snapshots-drawer";
@@ -87,6 +87,10 @@ import {
 // the persistent nav back to Home / Brainstorms / Profile /
 // Settings so users don't get stranded on the canvas.
 import { CanvasExperienceModeChip } from "@/components/canvas/chrome/canvas-experience-mode-chip";
+import { CanvasAutopilotPanel } from "@/components/canvas/chrome/canvas-autopilot-panel";
+import { CanvasVoiceDock } from "@/components/canvas/chrome/canvas-voice-dock";
+import { CanvasFinalProductsDrawer } from "@/components/canvas/chrome/canvas-final-products-drawer";
+import { CanvasFocusOverlay } from "@/components/canvas/chrome/canvas-focus-overlay";
 import { SynergyGlassDock } from "@/components/synergy/synergy-glass-dock";
 
 // ── Unified canvas chrome gating (Phase 1) ────────────────────────
@@ -113,6 +117,16 @@ function chromeForMode(mode: ExperienceMode | null) {
     showBaselineLauncher: true, // baseline is useful in every mode
     showSnapshotsLauncher: isDeep,
     showConnectLauncher: true, // connect is cross-space, always useful
+    // Phase 2a #3 — Autopilot is the headline affordance for
+    // brainstorm_speed users. Also surface in brain_probe so a
+    // probe user can switch to autopilot mid-session without
+    // having to start a fresh whiteboard.
+    showAutopilotPanel: isLight,
+    // Phase 2a #2 — Voice dock is the headline affordance for
+    // brain_probe. Hidden in brainstorm_speed (autopilot owns
+    // the input flow there) and in deep R&D modes (the pipeline
+    // creates entities; manual voice would compete with it).
+    showVoiceDock: mode === "brain_probe",
     emphasizeTwin: mode === "digital_twin",
     isLight,
   };
@@ -159,6 +173,13 @@ export default function WhiteboardPage() {
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [situationOpen, setSituationOpen] = useState(false);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
+  // Phase 2b — Final Products drawer. Single surface that lists
+  // generated apps + key entities + (later) the strategy doc for
+  // this space. The user's "where is the final products tab?" ask.
+  const [productsOpen, setProductsOpen] = useState(false);
+  // Phase 2c — Focus overlay (staged convergence funnel). Stage 1
+  // (curate) is the MVP; 2-4 are stubbed until follow-up phases.
+  const [focusOpen, setFocusOpen] = useState(false);
   // Scenario panel mode — null when closed, { kind: "new" } when
   // composing against a snapshot, { kind: "detail" } when viewing an
   // existing scenario.
@@ -239,6 +260,19 @@ export default function WhiteboardPage() {
           promptHint={((space as any).input_text as string | undefined) ?? undefined}
         />
       )}
+
+      {/* Phase 2a #3 — Autopilot panel. Only mounts for the
+          lightweight brainstorm modes (brain_probe + brainstorm_speed)
+          where the user is actively driving expansion. Deep R&D
+          modes have their own pipeline orchestration so an extra
+          autopilot would be redundant chrome. */}
+      {chrome.showAutopilotPanel && <CanvasAutopilotPanel spaceId={space.id} />}
+
+      {/* Phase 2a #2 — Voice dock. Brain Probe specific: each
+          spoken utterance becomes a new entity on the canvas via
+          /api/spaces/[id]/entities/manual. Hidden in other modes
+          to keep their chrome focused. */}
+      {chrome.showVoiceDock && <CanvasVoiceDock spaceId={space.id} />}
 
       {/* Phase 2 — entity-detail drawer. Renders nothing until a
           `shell-graph:focus` or `root-cause-tree:focus` window event
@@ -374,6 +408,32 @@ export default function WhiteboardPage() {
         </button>
       )}
 
+      {/* Phase 2b — Final Products launcher. Stacked above the
+          Evidence button on the bottom-right rail. Available in
+          every mode because every whiteboard can produce outputs;
+          the drawer itself shows mode-appropriate empty states. */}
+      <button
+        onClick={() => setProductsOpen(true)}
+        className="fixed bottom-[13.5rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-indigo-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+        title="Final Products — apps, key entities, strategy doc"
+      >
+        <Package className="h-3.5 w-3.5 text-indigo-600" />
+        Products
+      </button>
+
+      {/* Phase 2c — Focus & Publish launcher. Stacked above the
+          Products button. Opens the staged convergence overlay
+          (curate → extract → sharpen → publish). Available in
+          every mode; the overlay itself handles empty states. */}
+      <button
+        onClick={() => setFocusOpen(true)}
+        className="fixed bottom-[16rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-cyan-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+        title="Focus & Publish — converge what matters into a strategy"
+      >
+        <Focus className="h-3.5 w-3.5 text-cyan-600" />
+        Converge
+      </button>
+
       {/* Connect launcher — bottom-right floating button. Opens the
           weave + bridges side panel for this whiteboard. */}
       <button
@@ -384,6 +444,20 @@ export default function WhiteboardPage() {
         <GitBranch className="h-3.5 w-3.5" />
         Connect
       </button>
+
+      {productsOpen && (
+        <CanvasFinalProductsDrawer
+          onClose={() => setProductsOpen(false)}
+          spaceId={space.id}
+        />
+      )}
+
+      {focusOpen && (
+        <CanvasFocusOverlay
+          onClose={() => setFocusOpen(false)}
+          spaceId={space.id}
+        />
+      )}
 
       <ConnectPanel
         open={connectOpen}
