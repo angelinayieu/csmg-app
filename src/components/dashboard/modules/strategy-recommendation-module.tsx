@@ -12,6 +12,7 @@ import { ReasoningTracePanel } from "@/components/strategy/reasoning-trace-panel
 import { StrategyLayersPanel } from "@/components/strategy/strategy-layers-panel";
 import { ReadyToShipMeter } from "@/components/strategy/ready-to-ship-meter";
 import { StrategyProvenancePanel } from "@/components/strategy/strategy-provenance-panel";
+import { StrategyQualityBadge } from "@/components/strategy/strategy-quality-badge";
 import type { CoherenceCheckResult } from "@/lib/pipeline/validate-strategy-coherence";
 import type {
   StrategicRecommendation,
@@ -459,6 +460,14 @@ export function StrategyRecommendationModule({
               : null
           }
         />
+
+        {/* ── Independent quality check (LLM-as-judge verdict) ──
+            Renders only when a post-strategy effectiveness check exists.
+            Surfaces the verdict from synthesis_data.strategy_effectiveness_check
+            — distinct from the strategy's self-reported provenance shown in
+            the hero. Silently absent for older strategies / soft-failed
+            judge calls. */}
+        <StrategyQualityBadge check={synthData?.strategy_effectiveness_check} />
 
         {/* ── TIER 1: Core Move (always visible) ── */}
         <Tier1CoreMove
