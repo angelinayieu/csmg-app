@@ -353,6 +353,48 @@ export interface SynthesisQualityScore {
   flags: QualityFlag[];
 }
 
+/**
+ * Independent post-strategy judgment from a separate LLM call. Rates
+ * the generated strategy against the synthesis it was built from on
+ * four narrow dimensions, returns red flags + an overall verdict.
+ *
+ * NOT the same as `recommendation.provenance` — that's self-reported
+ * by the strategy LLM. This is an outside opinion.
+ */
+export interface StrategyEffectivenessCheck {
+  /** Did the strategy explicitly address the master bottleneck? */
+  bottleneck_addressed: boolean;
+  /** 1-sentence reasoning. */
+  bottleneck_reasoning: string;
+
+  /** Are critical-load-bearing axioms grounded in the strategy's logic? */
+  critical_axioms_grounded: boolean;
+  axioms_reasoning: string;
+
+  /** Did the strategy engage with strong insight convergences? */
+  convergences_used: boolean;
+  convergences_reasoning: string;
+
+  /** 0-100 — how well does the strategy serve the active goal. */
+  goal_alignment_score: number;
+  goal_reasoning: string;
+
+  /** Concrete concerns the judge surfaced (e.g. "ignores risk-point
+   *  R4 which has blast_radius 5", "no action targets the leverage
+   *  point C7 that synthesis identified"). Empty = no red flags. */
+  red_flags: string[];
+
+  /** Overall verdict — closer to "should the user trust this" than
+   *  to a precise numeric score. */
+  overall_quality: "strong" | "acceptable" | "shallow" | "broken";
+
+  /** 2-3 sentence holistic assessment of the strategy. */
+  reasoning: string;
+
+  /** When the check ran (ISO timestamp). */
+  checked_at: string;
+}
+
 export interface SynthesisData {
   // Core findings
   master_bottleneck: RichBottleneck | null;
@@ -493,6 +535,24 @@ export interface SynthesisData {
   quality_score?: SynthesisQualityScore;
   goal_fitness?: GoalFitnessResult;
 
+  // ── Post-strategy effectiveness check (LLM-as-judge) ──
+  //
+  // Runs AFTER strategy generation completes. Takes the synthesis +
+  // the generated strategy and asks an LLM judge: did the strategy
+  // actually do what synthesis identified as necessary? Specifically:
+  // does it address the master bottleneck, ground in critical axioms,
+  // engage with strong convergences, align with the active goal?
+  //
+  // The strategy generator's `provenance` already tracks backlinks
+  // (axioms_respected, convergences_addressed, etc.) but those are
+  // self-reported by the same LLM that wrote the strategy. This
+  // check is an independent judgment from a separate LLM call with
+  // a narrow rubric — closer to "automatic editor" than "self-rating."
+  //
+  // Optional; absent for runs before this field shipped or when the
+  // judge call failed (soft-fail design — strategy still ships).
+  strategy_effectiveness_check?: StrategyEffectivenessCheck;
+
   // Gap-driven regeneration metadata (tracks if synthesis was re-run to fix quality issues)
   regen_metadata?: {
     attempted: boolean;
@@ -506,6 +566,27 @@ export interface SynthesisData {
   // Multi-perspective analysis: quick vs deep delta
   quick_synthesis_snapshot?: import("./execution-brief").QuickSynthesisSnapshot;
   perspective_delta?: import("./execution-brief").PerspectiveDelta;
+
+  // Phase B (typed clarifier answers, 2026-05). User commitments
+  // captured at intake via the pre-flight clarifier, grouped by the
+  // typed slot the question was generated to fill. The same answers
+  // ALSO live in open_questions[] with user_answer set — that path
+  // feeds the Phase 4b banner + synthesize dedup. This typed map is
+  // for new readers (canvas seed shapes, expand context_hint, twin
+  // boundary frames) that need to ask "what did the user say about
+  // X?" without text-matching prose. Soft-typed via Partial so
+  // legacy spaces without the field continue to load. See
+  // src/types/clarifier-answer.ts for slot semantics per mode.
+  user_assertions?: Partial<
+    Record<
+      import("./clarifier-answer").AnswerSlot,
+      Array<{
+        value: string;
+        question: string;
+        answered_at: string;
+      }>
+    >
+  >;
 
   // Signal intelligence (trajectory-influencing signal detection)
   signal_extraction?: import("../lib/intelligence/signal-extraction").SignalExtractionResult;

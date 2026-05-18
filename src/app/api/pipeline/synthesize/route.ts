@@ -1538,6 +1538,35 @@ REQUIREMENTS FOR THIS PASS:
         strategyValidationScore = multiStepResult.strategyValidation.score;
 
         console.log(`[strategy] Multi-step strategy complete: "${strategicRecommendation.title}" (confidence: ${strategicRecommendation.confidence}, validation: ${strategyValidationScore}/100, steps: ${multiStepResult.reasoningTrace.step_timings.diagnosis_ms + multiStepResult.reasoningTrace.step_timings.synthesis_ms + multiStepResult.reasoningTrace.step_timings.verification_ms + multiStepResult.reasoningTrace.step_timings.final_ms}ms total)`);
+
+        // ── Post-strategy effectiveness check (LLM-as-judge) ──
+        //
+        // Independent verdict on whether the generated strategy actually
+        // does what synthesis identified as necessary. Cheap relative
+        // to the 16k-token strategy call; runs ~3k tokens / ~1-2s.
+        // Soft-fail: if the call fails, strategy still ships with the
+        // effectiveness check left undefined.
+        try {
+          const { checkStrategyEffectiveness } = await import(
+            "@/lib/pipeline/check-strategy-effectiveness"
+          );
+          const effectivenessCheck = await checkStrategyEffectiveness({
+            synthesis,
+            recommendation: strategicRecommendation,
+            activeGoal,
+          });
+          if (effectivenessCheck) {
+            synthesis.strategy_effectiveness_check = effectivenessCheck;
+            console.log(
+              `[strategy] Effectiveness check: ${effectivenessCheck.overall_quality} | bottleneck:${effectivenessCheck.bottleneck_addressed} axioms:${effectivenessCheck.critical_axioms_grounded} convs:${effectivenessCheck.convergences_used} goal:${effectivenessCheck.goal_alignment_score} flags:${effectivenessCheck.red_flags.length}`,
+            );
+          }
+        } catch (checkErr) {
+          console.warn(
+            "[strategy] Effectiveness check failed (non-critical):",
+            checkErr,
+          );
+        }
       }
     } catch (stratErr) {
       console.warn("Strategic recommendation generation failed (non-critical):", stratErr);
