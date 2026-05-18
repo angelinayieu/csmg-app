@@ -24,6 +24,7 @@
 // of an already-finished graph, not new graph data. Users were missing
 // this — it's the source of "why doesn't the entity count change?"
 
+import { useMemo } from "react";
 import {
   ArrowRight,
   Pause,
@@ -33,7 +34,11 @@ import {
   Network,
   CheckCircle2,
   Clock,
+  XCircle,
+  Loader2,
+  CircleDashed,
 } from "lucide-react";
+import type { PhaseLiveState, PhaseStatus } from "@/lib/pipeline/derive-pipeline-state";
 
 /**
  * Status of each preflight card relative to the live codebase. The
@@ -449,7 +454,36 @@ const USER_GATES = [
   { afterPhase: 11, label: "User returns later", duration: "days to weeks" },
 ];
 
-export function OperationalTimeline() {
+export interface OperationalTimelineProps {
+  /**
+   * Optional live phase state. When provided, each phase row renders
+   * a status pill (done / live / pending / failed) derived from real
+   * Supabase rows for a specific space. When omitted (the preflight
+   * page case), no status pills render — the timeline is purely
+   * informational. Keyed by ordinal (1-12).
+   */
+  liveState?: PhaseLiveState[];
+  /**
+   * When the timeline is showing live state for a real space, this
+   * swaps the header copy from the generic "what actually runs"
+   * pitch to a space-specific "where you are right now" framing.
+   */
+  variant?: "preflight" | "live";
+}
+
+export function OperationalTimeline({
+  liveState,
+  variant = "preflight",
+}: OperationalTimelineProps = {}) {
+  const stateByOrdinal = useMemo(() => {
+    if (!liveState) return null;
+    const m = new Map<number, PhaseLiveState>();
+    for (const s of liveState) m.set(s.ordinal, s);
+    return m;
+  }, [liveState]);
+
+  const isLive = variant === "live";
+
   return (
     <div
       id="operational-timeline"
@@ -458,18 +492,31 @@ export function OperationalTimeline() {
       {/* Header */}
       <div className="mb-8 text-center">
         <p className="mb-2 text-[10.5px] font-bold uppercase tracking-[0.18em] text-emerald-600">
-          ↓ The real operational timeline ↓
+          {isLive ? "↓ Where you are in the pipeline ↓" : "↓ The real operational timeline ↓"}
         </p>
         <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
-          What actually runs, when, and how the KG grows
+          {isLive ? "Live pipeline state for this space" : "What actually runs, when, and how the KG grows"}
         </h2>
         <p className="mt-3 text-[13px] leading-relaxed text-slate-500 max-w-[680px] mx-auto">
-          The L0–L5 grid above is{" "}
-          <span className="font-semibold text-slate-700">role-categorical</span>{" "}
-          (where each kind of work lives) — not time-sequential. This timeline
-          is the actual order: 9 phases from prompt-submit to reflexive
-          background loop, with the right-edge track showing where the
-          knowledge graph actually grows vs derives.
+          {isLive ? (
+            <>
+              Each phase pill below reflects the actual rows in Supabase
+              right now. <span className="font-semibold text-slate-700">Green = done</span>,
+              <span className="font-semibold text-amber-700"> amber = live</span>,
+              gray = pending,
+              <span className="font-semibold text-rose-700"> red = failed</span>.
+              Refresh the page to re-derive.
+            </>
+          ) : (
+            <>
+              The L0–L5 grid above is{" "}
+              <span className="font-semibold text-slate-700">role-categorical</span>{" "}
+              (where each kind of work lives) — not time-sequential. This timeline
+              is the actual order: 12 phases from prompt-submit to reflexive
+              background loop, with the right-edge track showing where the
+              knowledge graph actually grows vs derives.
+            </>
+          )}
         </p>
       </div>
 
@@ -510,9 +557,14 @@ export function OperationalTimeline() {
 
         {PHASES.map((phase, i) => {
           const userGate = USER_GATES.find((g) => g.afterPhase === phase.ordinal);
+          const live = stateByOrdinal?.get(phase.ordinal) ?? null;
           return (
             <div key={phase.ordinal}>
-              <PhaseRow phase={phase} isLast={i === PHASES.length - 1 && !userGate} />
+              <PhaseRow
+                phase={phase}
+                isLast={i === PHASES.length - 1 && !userGate}
+                live={live}
+              />
               {userGate && (
                 <UserGateRow
                   label={userGate.label}
@@ -559,8 +611,19 @@ export function OperationalTimeline() {
 
 // ── Phase row ─────────────────────────────────────────────────────────
 
-function PhaseRow({ phase, isLast }: { phase: TimelinePhase; isLast: boolean }) {
+function PhaseRow({
+  phase,
+  isLast,
+  live,
+}: {
+  phase: TimelinePhase;
+  isLast: boolean;
+  live?: PhaseLiveState | null;
+}) {
   const triggerIsGate = phase.trigger === "user_gate";
+  // Tint the card border slightly more strongly when this phase is
+  // running, so the eye finds the "you are here" row at a glance.
+  const isRunning = live?.status === "running";
   return (
     <div className="relative grid grid-cols-[88px_minmax(0,1fr)_72px] gap-4 items-start py-5">
       {/* Time marker */}
@@ -588,14 +651,16 @@ function PhaseRow({ phase, isLast }: { phase: TimelinePhase; isLast: boolean }) 
       <div
         className="rounded-xl border bg-white px-5 py-4 shadow-sm"
         style={{
-          borderColor: phase.accentBorder,
-          boxShadow: `0 1px 0 white inset, 0 4px 12px -8px ${phase.accent}33`,
+          borderColor: isRunning ? "#F59E0B" : phase.accentBorder,
+          boxShadow: isRunning
+            ? `0 0 0 2px rgba(245,158,11,0.18), 0 1px 0 white inset, 0 6px 18px -8px rgba(245,158,11,0.30)`
+            : `0 1px 0 white inset, 0 4px 12px -8px ${phase.accent}33`,
         }}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 mb-1">
+            <div className="flex flex-wrap items-center gap-2 mb-1">
               <h3
                 className="text-[15px] font-semibold tracking-tight"
                 style={{ color: phase.accent }}
@@ -626,10 +691,17 @@ function PhaseRow({ phase, isLast }: { phase: TimelinePhase; isLast: boolean }) 
                   </>
                 )}
               </span>
+              {live && <StatusPill state={live} />}
             </div>
             <p className="text-[12.5px] leading-relaxed text-slate-600">
               {phase.blurb}
             </p>
+            {live && (
+              <p className="mt-1.5 text-[11px] font-medium text-slate-700">
+                <span className="text-slate-400">live · </span>
+                {live.detail}
+              </p>
+            )}
           </div>
         </div>
 
@@ -971,3 +1043,64 @@ function LegendChip({
     </span>
   );
 }
+
+// ── Live status pill ──────────────────────────────────────────────────
+//
+// Rendered next to the auto/user trigger pill in PhaseRow when the
+// timeline has `liveState` (i.e. when mounted from
+// /app/space/[id]/timeline). The amber "live" variant pulses softly
+// so the running row catches the eye.
+
+function StatusPill({ state }: { state: PhaseLiveState }) {
+  const visual = STATUS_VISUAL[state.status];
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
+        state.status === "running" ? "animate-pulse" : ""
+      }`}
+      style={{
+        background: visual.bg,
+        color: visual.text,
+        border: `1px solid ${visual.ring}`,
+      }}
+      title={`${visual.label} · ${state.signal.source} → ${state.signal.value}`}
+    >
+      {visual.Icon}
+      {visual.label}
+    </span>
+  );
+}
+
+const STATUS_VISUAL: Record<
+  PhaseStatus,
+  { bg: string; text: string; ring: string; label: string; Icon: React.ReactNode }
+> = {
+  completed: {
+    bg: "rgba(16,185,129,0.12)",
+    text: "#065F46",
+    ring: "rgba(16,185,129,0.40)",
+    label: "done",
+    Icon: <CheckCircle2 className="h-2.5 w-2.5" />,
+  },
+  running: {
+    bg: "rgba(245,158,11,0.14)",
+    text: "#92400E",
+    ring: "rgba(245,158,11,0.45)",
+    label: "live",
+    Icon: <Loader2 className="h-2.5 w-2.5 animate-spin" />,
+  },
+  pending: {
+    bg: "rgba(148,163,184,0.12)",
+    text: "#475569",
+    ring: "rgba(148,163,184,0.35)",
+    label: "pending",
+    Icon: <CircleDashed className="h-2.5 w-2.5" />,
+  },
+  failed: {
+    bg: "rgba(239,68,68,0.14)",
+    text: "#991B1B",
+    ring: "rgba(239,68,68,0.45)",
+    label: "failed",
+    Icon: <XCircle className="h-2.5 w-2.5" />,
+  },
+};
