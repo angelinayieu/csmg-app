@@ -859,6 +859,56 @@ Reasoning: ${mb.reasoning?.join(" | ") ?? "none"}${mb.counterfactual_unlock ? `\
     parts.push(`OPEN QUESTIONS (unknowns strategy must hedge against):\n${oqLines.join("\n")}`);
   }
 
+  // ── Newly-wired synthesis fields (effectiveness gap closure) ──
+  //
+  // These three fields were previously computed by the synthesis LLM but
+  // never reached the strategy prompt — discarded after generation. The
+  // strategy LLM was effectively making decisions without seeing the
+  // synthesis's own probabilistic outcomes, hidden-signal-to-action
+  // links, or component-level axioms. Surfacing them here turns
+  // synthesis from "advisor that produces unused work" into "advisor
+  // whose full reasoning grounds the recommendation."
+
+  if (synthesisData.scenarios?.length) {
+    const scLines = synthesisData.scenarios.map((sc) =>
+      `  [${sc.probability}] "${sc.name}" — if ${sc.conditions}, then ${sc.outcome_label}: ${sc.outcome_value}`
+    );
+    parts.push(`OUTCOME SCENARIOS (probability-graded futures — strategy must explain how it shifts these distributions):\n${scLines.join("\n")}`);
+  }
+
+  if (synthesisData.signal_to_action?.length) {
+    const staLines = synthesisData.signal_to_action.map((sta) => {
+      const entityHint = sta.connected_entities?.length
+        ? ` [entities: ${sta.connected_entities.join(", ")}]`
+        : "";
+      return `  Signal "${sta.signal}" (from ${sta.source})${entityHint}
+    Why it matters: ${sta.why_it_matters}
+    Linked action: ${sta.linked_action}
+    If ignored: ${sta.if_ignored}`;
+    });
+    parts.push(`SIGNAL → ACTION LINKAGE (synthesis's pre-computed mapping of hidden signals to required actions — strategy MUST either include each linked_action, supersede it with a stronger move, or explicitly justify dropping it):\n${staLines.join("\n")}`);
+  }
+
+  if (synthesisData.expansion_axioms?.length) {
+    // Show only critical + hidden axioms in the prompt — moderate/explicit
+    // load-bearings would inflate the context without changing decisions.
+    const eaLines = synthesisData.expansion_axioms
+      .filter(
+        (ax) =>
+          ax.load_bearing === "critical" ||
+          ax.visibility === "HIDDEN",
+      )
+      .map(
+        (ax) =>
+          `  [${ax.load_bearing}/${ax.visibility}] (under ${ax.parent_entity_id}) "${ax.claim}"
+    If false: ${ax.if_false}
+    Validation: ${ax.validation_path}`,
+      );
+    if (eaLines.length > 0) {
+      parts.push(`COMPONENT AXIOMS (load-bearing claims surfaced from entity internals — if these are wrong, the strategy's foundation cracks):\n${eaLines.join("\n")}`);
+    }
+  }
+
   if (synthesisData.sequencing_rationale) {
     parts.push(`SEQUENCING RATIONALE (from synthesis): ${synthesisData.sequencing_rationale}`);
   }
