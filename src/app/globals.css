@@ -798,6 +798,47 @@ body[data-canvas-unfurl-active="true"] .chrome-dimmable {
   }
 }
 
+/* ── Strategy hero card — canvas-side expand ──
+ * When the user clicks the strategy hero card to expand it, the
+ * CanvasStrategyExpandResponder sets data-canvas-strategy-expanded="true"
+ * on the body. We dim non-strategy canvas shapes so the expanded card
+ * is the visual focus, mirroring the chrome-dimming pattern but
+ * scoped to canvas content rather than fixed-position chrome. */
+body[data-canvas-strategy-expanded="true"]
+  .tl-html-container:not([data-shape-type="strategy-hero-card"]) {
+  opacity: 0.32;
+  transition: opacity 460ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ── KG node entity glow (strategy tactic hover) ──
+ * When the user hovers a tactic row in the expanded strategy card,
+ * the CanvasEntityGlowResponder stamps meta.strategy_glow on the
+ * matching kg-node shapes. The shape's render reads that meta value
+ * and applies the .kg-node-glow class to its outer wrapper, which
+ * triggers this keyframe pulse. Auto-clears after ~1.5s. */
+@keyframes kgNodeGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(8, 108, 232, 0);
+  }
+  50% {
+    box-shadow:
+      0 0 20px 6px rgba(8, 108, 232, 0.5),
+      0 0 0 2px rgba(8, 108, 232, 0.7);
+  }
+}
+.kg-node-glow {
+  animation: kgNodeGlow 1.5s ease-in-out;
+  border-radius: inherit;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kg-node-glow {
+    animation: none;
+    box-shadow:
+      0 0 0 2px rgba(8, 108, 232, 0.7);
+  }
+}
+
 /* Glassmorphism card */
 .glass-card {
   background: rgba(255, 255, 255, 0.45);

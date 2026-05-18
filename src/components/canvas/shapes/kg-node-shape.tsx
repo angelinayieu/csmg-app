@@ -388,12 +388,21 @@ function KGNodeShapeView({ shape }: { shape: KGNodeShape }) {
   const isConnectTarget =
     !!connect.active && !!entityId && connect.active.entityId !== entityId;
 
+  // Strategy hero trace-back glow: the CanvasEntityGlowResponder stamps
+  // meta.strategy_glow with a timestamp when the user hovers a tactic
+  // row that cites this entity. The class triggers the 1.5s
+  // kgNodeGlow keyframe (defined in globals.css). The responder
+  // auto-clears the meta after the pulse, but rendering follows
+  // the meta value naturally.
+  const hasStrategyGlow = !!(shape.meta as { strategy_glow?: number } | undefined)?.strategy_glow;
+
   const containerClasses = [
     showEnter ? "kg-node-enter" : "",
     pulsing ? "kg-node-confirm-pulse" : "",
     entityId ? "kg-node-with-actions" : "",
     isConnectSource ? "kg-node-connect-source" : "",
     isConnectTarget ? "kg-node-connect-target" : "",
+    hasStrategyGlow ? "kg-node-glow" : "",
   ]
     .filter(Boolean)
     .join(" ");

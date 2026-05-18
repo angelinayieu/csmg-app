@@ -40,6 +40,10 @@ import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator
 import { CanvasWorkspaceRoomSpawner } from "./chrome/canvas-workspace-room-spawner";
 import { CanvasTwinRevealOrchestrator } from "./chrome/canvas-twin-reveal-orchestrator";
 import { CanvasActivityTracker } from "./chrome/canvas-activity-tracker";
+import {
+  CanvasStrategyExpandResponder,
+  CanvasEntityGlowResponder,
+} from "./chrome/canvas-strategy-orchestration";
 import { CanvasSceneDirector } from "./chrome/canvas-scene-director";
 import { CanvasKgOverviewSpawner } from "./chrome/canvas-kg-overview-spawner";
 import { CanvasOperationalSeedSpawner } from "./chrome/canvas-operational-seed-spawner";
@@ -211,6 +215,18 @@ function CanvasOverlays() {
           elements to 40% while the attribute is present. Auto-clears
           on 4 seconds of stillness. */}
       <CanvasActivityTracker />
+      {/* Strategy hero card canvas-side expand. Listens for
+          `strategy-hero:toggle-expand` from the hero shape, resizes
+          the shape between collapsed/expanded footprints, reframes
+          the camera, and toggles a body attribute so other canvas
+          shapes dim during the expanded state. */}
+      <CanvasStrategyExpandResponder />
+      {/* Entity glow responder. When the user hovers a tactic row in
+          the expanded strategy hero card, the source entities cited
+          by that tactic pulse with a 1.5s glow halo on the canvas.
+          Click → camera pans to the first cited entity. This is the
+          "trace strategy back to KG" visualization. */}
+      <CanvasEntityGlowResponder />
       {/* Cinematic Phase 4 — scene director. Watches for high-value
           shape spawns (synthesis cards, hypothesis ladders, strategy
           hero card) and queues a per-shape "spotlight" sequence:
