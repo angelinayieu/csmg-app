@@ -422,6 +422,29 @@
     animation: none !important;
   }
 }
+
+/* Wave 3.4 — converge CTA pulse halo. A soft emerald ring scales
+   out + fades, repeating gently to draw attention to the "Build
+   prototype →" pill without demanding it. */
+@keyframes synergyConvergeCtaHalo {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(16, 185, 129, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+.synergy-converge-cta-halo {
+  animation: synergyConvergeCtaHalo 2200ms ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .synergy-converge-cta-halo {
+    animation: none !important;
+  }
+}
 /* Ambient pulse — only runs in gradient mode. In canvas mode the
    background is deliberately calm (a whiteboard, not a stage). */
 .immersive-home-surface.mode-gradient .immersive-home-bg::before {

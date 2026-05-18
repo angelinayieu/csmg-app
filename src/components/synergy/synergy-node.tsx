@@ -172,6 +172,15 @@ interface SynergyNodeProps {
   // True when the card has any descendants — drives Tidy visibility
   // in the action popover.
   canTidy: boolean;
+  // Wave 3.3 — converge spotlight/dim.
+  // When the brainstorm-speedrun converge round lands an MVP
+  // recommendation, members of the recommended cluster get
+  // `convergeRole: "recommended"` (soft emerald glow ring),
+  // members of non-recommended clusters get `convergeRole:
+  // "deferred"` (faded to ~35% opacity), and non-member nodes get
+  // `convergeRole: null` (unchanged). The whiteboard derives this
+  // from useConvergeResult and passes it per-node.
+  convergeRole?: "recommended" | "deferred" | null;
   onClick: (e: React.MouseEvent) => void;
   onAction: (action: SynergyNodeAction, nodeId: string) => void;
   // Fired when the user submits the popover's "Or describe…" field.
@@ -195,6 +204,7 @@ export function SynergyNode({
   busyAction,
   canRank,
   canTidy,
+  convergeRole = null,
   onClick,
   onAction,
   onDescribe,
@@ -321,14 +331,37 @@ export function SynergyNode({
           "select-none rounded-2xl px-3 py-2 text-xs shadow-sm transition cursor-grab active:cursor-grabbing",
           s.bg,
           s.text,
-          isCoreOrSelected ? "ring-2" : "ring-1",
-          selected ? "ring-blue-500 shadow-md" : s.ring,
+          // Wave 3.3 — converge spotlight ring trumps the normal
+          // selected/core ring. Recommended cluster gets ring-2 +
+          // emerald color; deferred stays at default ring.
+          convergeRole === "recommended"
+            ? "ring-2 ring-emerald-400"
+            : selected
+              ? "ring-2 ring-blue-500 shadow-md"
+              : isCoreOrSelected
+                ? `ring-2 ${s.ring}`
+                : `ring-1 ${s.ring}`,
         ].join(" ")}
         style={{
           minWidth: 180,
           maxWidth: cardMaxWidth,
           maxHeight: cardMaxHeight,
           overflowY: "auto",
+          // Wave 3.3 — converge dim/spotlight. Deferred cluster
+          // members fade to 35% so the user's eye lands on the
+          // recommended MVP. Recommended members get an emerald
+          // glow via box-shadow on top of the existing card shadow.
+          // Non-converge nodes (convergeRole === null) render
+          // unchanged. Transition runs 600ms so the dim/spotlight
+          // doesn't feel sudden.
+          opacity: convergeRole === "deferred" ? 0.35 : 1,
+          boxShadow:
+            convergeRole === "recommended"
+              ? "0 0 0 1px rgba(16, 185, 129, 0.35), 0 8px 24px -8px rgba(16, 185, 129, 0.35)"
+              : undefined,
+          transitionProperty: "opacity, box-shadow",
+          transitionDuration: "600ms",
+          transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)",
         }}
       >
         <div className="sticky top-0 mb-0.5 flex items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-wider opacity-60">

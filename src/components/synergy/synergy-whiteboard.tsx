@@ -57,6 +57,9 @@ import { SynergyToolbar, type SynergyTool } from "./synergy-toolbar";
 import { SynergyVoiceDock } from "./synergy-voice-dock";
 import { SynergyAIRail } from "./synergy-ai-rail";
 import { SynergyNode } from "./synergy-node";
+import { SynergyClusterOverlay } from "./synergy-cluster-overlay";
+import { SynergyConvergeCTA } from "./synergy-converge-cta";
+import { useConvergeResult } from "@/hooks/synergy/use-converge-result";
 import { SynergyActionableModal } from "./synergy-actionable-modal";
 import { FocusModeOverlay } from "./focus-mode/focus-mode-overlay";
 import { useFocusMode } from "./focus-mode/use-focus-mode";
@@ -337,6 +340,30 @@ export function SynergyWhiteboard({
       requestAnimationFrame(() => autoFitToBbox(bbox));
     }
   }, [loaded, nodes, autoFitToBbox]);
+
+  // ── Wave 3 — converge result + cinematic close ──
+  // Reads the latest converge ranking-summary node off the canvas
+  // and exposes the typed cluster payload + spotlight helpers.
+  // Drives: SynergyClusterOverlay boundaries, SynergyConvergeCTA
+  // anchor, per-node dim/spotlight, and the camera fit-to-
+  // recommended effect below.
+  const convergeResult = useConvergeResult(nodes);
+
+  // Wave 3.5 — Camera fit-to-recommended after a 1.5s breath.
+  // Lets the user see the full cluster overlay + dim/spotlight
+  // transition land before the camera focuses. useRef gate so we
+  // only fit once per converge summary (re-runs of converge create
+  // a new summary with a new id → new fit).
+  const convergeFitDoneForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!convergeResult) return;
+    if (!convergeResult.recommendedBbox) return;
+    if (convergeFitDoneForRef.current === convergeResult.summaryNodeId) return;
+    convergeFitDoneForRef.current = convergeResult.summaryNodeId;
+    const bbox = convergeResult.recommendedBbox;
+    const t = window.setTimeout(() => autoFitToBbox(bbox), 1500);
+    return () => window.clearTimeout(t);
+  }, [convergeResult, autoFitToBbox]);
 
   // Wave 0/1 — brainstorm-speedrun autostart. When the URL arrived
   // with ?autopilot=1 (set by the homepage redirect chain for the
@@ -2025,6 +2052,14 @@ export function SynergyWhiteboard({
               );
             })}
 
+            {/* Wave 3.2 — converge cluster boundaries. Renders BEFORE
+                nodes so the soft-tint rects sit behind the cards.
+                Pointer-events-none on the overlay → cards stay
+                interactive. */}
+            {convergeResult && (
+              <SynergyClusterOverlay result={convergeResult} />
+            )}
+
             {nodes.map((n) => {
               // busyAction is the in-flight action key for THIS node,
               // or null. The wire format is "<action>:<nodeId>"; we
@@ -2034,6 +2069,18 @@ export function SynergyWhiteboard({
                   ? aiBusy.split(":")[0]
                   : null;
               const visual = focusVisualFor(n);
+              // Wave 3.3 — per-node converge role. Recommended members
+              // get a spotlight ring; deferred members fade. Nodes
+              // that aren't in any converge cluster (or when no
+              // converge result exists yet) render unchanged.
+              const convergeRole: "recommended" | "deferred" | null =
+                !convergeResult
+                  ? null
+                  : convergeResult.recommendedMemberIds.has(n.id)
+                    ? "recommended"
+                    : convergeResult.deferredMemberIds.has(n.id)
+                      ? "deferred"
+                      : null;
               return (
                 <div
                   key={n.id}
@@ -2062,6 +2109,7 @@ export function SynergyWhiteboard({
                       (c) => c.parent === n.id && c.kind === "variation",
                     )}
                     canTidy={nodes.some((c) => c.parent === n.id)}
+                    convergeRole={convergeRole}
                     onClick={(e) => onNodeClick(e, n.id)}
                     onAction={handleNodeAction}
                     onDescribe={runDescribeOnNode}
@@ -2073,6 +2121,21 @@ export function SynergyWhiteboard({
                 </div>
               );
             })}
+
+            {/* Wave 3.4 — Build prototype CTA. Anchored at the
+                recommended cluster centroid (canvas coords) so it
+                scales + pans with the cluster the user is being
+                pointed at. Renders AFTER nodes so it floats above
+                them in z-order. Conditional on having both a
+                recommended cluster AND its centroid being computable
+                (requires ≥1 member node still on canvas). */}
+            {convergeResult?.recommended &&
+              convergeResult.recommendedCentroid && (
+                <SynergyConvergeCTA
+                  centroid={convergeResult.recommendedCentroid}
+                  clusterName={convergeResult.recommended.name}
+                />
+              )}
           </div>
         </div>
 
