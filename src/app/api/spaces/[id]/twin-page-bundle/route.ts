@@ -32,6 +32,7 @@ import {
 } from "@/lib/twin/aggregate-layer-distribution";
 import { runNarratorAgent } from "@/lib/twin/agents/narrator-agent";
 import { runCoachAgent } from "@/lib/twin/agents/coach-agent";
+import { computeAgentTimings } from "@/lib/twin/compute-agent-inputs";
 import type { Space, Entity, Edge, Cycle } from "@/types";
 import type { SynthesisData } from "@/types/synthesis";
 import type { ImprovementGoal } from "@/types/goals";
@@ -331,17 +332,17 @@ export async function GET(_req: Request, ctx: Ctx) {
       twinMacro: twinState.macro,
       topLeverageName: topLeverage,
       layerCount: layers.length,
-      recentChangeNote: null, // Phase 2 — wire to recent events
+      recentChangeNote: null, // Phase 3 — wire to pipeline_run_events
     });
     narratorSummary = narratorOut.summary;
   } catch (err) {
     console.warn("[twin-page-bundle] narrator failed:", err);
   }
 
-  // 8) Run Coach agent.
-  const daysSinceLastObs = predictionRows.length
-    ? null // Phase 2 — wire to observations table
-    : null;
+  // 8) Run Coach agent. W6 — enrich with real days-since timings so
+  //    the coach can say "you logged 2 days ago, run a prediction"
+  //    instead of always defaulting to log_observation.
+  const timings = await computeAgentTimings(db, spaceId, user.id);
   let coachNextAction: {
     text: string;
     action_type: string;
@@ -352,9 +353,9 @@ export async function GET(_req: Request, ctx: Ctx) {
       spaceName: space.name,
       twinMacro: twinState.macro,
       activeGoalTitle: activeGoal?.title ?? null,
-      activeGoalProgress: null, // Phase 2 — compute from goal
-      daysSinceLastObservation: daysSinceLastObs,
-      daysSinceLastPrediction: null,
+      activeGoalProgress: null, // Phase 3 — compute from goal + tracker
+      daysSinceLastObservation: timings.daysSinceLastObservation,
+      daysSinceLastPrediction: timings.daysSinceLastPrediction,
       activeMechanismKinds: mechanisms
         .filter((m) => m.status === "active")
         .map((m) => m.kind),

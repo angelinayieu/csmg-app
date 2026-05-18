@@ -15,7 +15,7 @@
 // Apple-minimalist. Custom twin icons (no emojis). Restraint.
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, MoveUpRight } from "lucide-react";
 import {
   TwinIcon,
@@ -25,6 +25,7 @@ import {
   ObservationIcon,
   VisualizationAppIcon,
 } from "@/components/twin/icons/twin-icons";
+import { useTwinActions } from "./twin-action-dispatcher";
 import type { TwinPageBundle } from "@/app/api/spaces/[id]/twin-page-bundle/route";
 import type { TwinTabKey } from "../twin-detail-client";
 
@@ -35,6 +36,9 @@ interface Props {
   onTabChange: (next: TwinTabKey) => void;
   cached: boolean;
   cachedAt: string | null;
+  /** Most recent realtime event timestamp (ms). Drives the "live"
+   *  pulse next to the title. Null when no events received yet. */
+  lastEventAt?: number | null;
 }
 
 const TABS: { key: TwinTabKey; label: string }[] = [
@@ -51,6 +55,7 @@ export function TwinPageHeader({
   onTabChange,
   cached: _cached,
   cachedAt: _cachedAt,
+  lastEventAt,
 }: Props) {
   void _cached;
   void _cachedAt;
@@ -62,6 +67,16 @@ export function TwinPageHeader({
 
   const entityCount = bundle.twin_macro.coverage.entities_modeled;
   const operatingEnabled = bundle.space_metadata.has_active_labs;
+
+  // "Just updated" pulse — visible for 4s after each realtime event,
+  // then fades to a subtle dot indicating realtime is connected.
+  const [pulseActive, setPulseActive] = useState(false);
+  useEffect(() => {
+    if (!lastEventAt) return;
+    setPulseActive(true);
+    const t = setTimeout(() => setPulseActive(false), 4000);
+    return () => clearTimeout(t);
+  }, [lastEventAt]);
 
   return (
     <header className="px-8 pt-7">
@@ -92,9 +107,14 @@ export function TwinPageHeader({
 
       {/* Row 2: title + dual-metric */}
       <div className="mt-5">
-        <h1 className="font-display-tight text-[32px] font-semibold leading-[1.1] tracking-tight text-gray-900">
-          {bundle.space_metadata.name}
-        </h1>
+        <div className="flex items-center gap-2.5">
+          <h1 className="font-display-tight text-[32px] font-semibold leading-[1.1] tracking-tight text-gray-900">
+            {bundle.space_metadata.name}
+          </h1>
+          {lastEventAt !== undefined && (
+            <LiveIndicator pulseActive={pulseActive} />
+          )}
+        </div>
         <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-gray-600">
           <span className="inline-flex items-center gap-1.5">
             <TwinIcon size={13} />
@@ -163,9 +183,34 @@ export function TwinPageHeader({
 
 function TwinActionsMenu({ spaceId: _spaceId }: { spaceId: string }) {
   void _spaceId;
+  const actions = useTwinActions();
   const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click / Escape so the menu doesn't trap focus.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const handleAction = (fn: () => void | Promise<void>) => () => {
+    setOpen(false);
+    void fn();
+  };
+
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <button
         onClick={() => setOpen((v) => !v)}
         className="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-medium text-gray-700 transition hover:text-gray-900"
@@ -195,30 +240,57 @@ function TwinActionsMenu({ spaceId: _spaceId }: { spaceId: string }) {
               icon={<SnapshotIcon size={14} />}
               title="Capture snapshot"
               hint="Freeze current state for comparison"
-              disabled
+              onClick={handleAction(actions.takeSnapshot)}
             />
             <ActionMenuItem
               icon={<PredictionIcon size={14} />}
               title="Run prediction"
-              hint="Fresh p10/p50/p90 against goal"
-              disabled
+              hint="Put a stake in the ground"
+              onClick={handleAction(actions.openRunPrediction)}
             />
             <ActionMenuItem
               icon={<ObservationIcon size={14} />}
               title="Log observation"
-              hint="Coming in Phase 2"
-              disabled
+              hint="Feed reality back to the twin"
+              onClick={handleAction(actions.openLogObservation)}
             />
             <ActionMenuItem
               icon={<VisualizationAppIcon size={14} />}
               title="Build visualization app"
-              hint="Coming in Phase 2"
-              disabled
+              hint="Scaffold a viz on canvas"
+              onClick={handleAction(actions.buildVizApp)}
             />
           </ul>
         </div>
       )}
     </div>
+  );
+}
+
+// ── Live indicator ────────────────────────────────────────────────
+//
+// Tiny pulse next to the title that flashes for ~4s after each
+// realtime event, then settles to a steady dim dot. Wrapped in a
+// "Live" tooltip-style label so the user understands the meaning.
+
+function LiveIndicator({ pulseActive }: { pulseActive: boolean }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[10.5px] font-medium uppercase tracking-wide text-gray-400"
+      title="Realtime updates active"
+    >
+      <span aria-hidden className="relative inline-flex h-1.5 w-1.5">
+        {pulseActive && (
+          <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500 opacity-75" />
+        )}
+        <span
+          className={`relative inline-flex h-1.5 w-1.5 rounded-full ${
+            pulseActive ? "bg-emerald-500" : "bg-gray-300"
+          }`}
+        />
+      </span>
+      Live
+    </span>
   );
 }
 

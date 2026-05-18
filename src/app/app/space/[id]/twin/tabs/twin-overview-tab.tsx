@@ -14,6 +14,7 @@ import { useCallback, useMemo } from "react";
 import { TwinNarratorCard } from "../parts/twin-narrator-card";
 import { TwinCoachCard } from "../parts/twin-coach-card";
 import { TwinHeroStatCard } from "../parts/twin-hero-stat-card";
+import { toast } from "@/lib/hooks/use-toast";
 import type { TwinPageBundle } from "@/app/api/spaces/[id]/twin-page-bundle/route";
 
 interface Props {
@@ -41,30 +42,29 @@ export function TwinOverviewTab({ spaceId, bundle, setBundle }: Props) {
     return count === 0 ? null : Math.round((total / count) * 100);
   }, [bundle.pain_metrics]);
 
-  // Force narrator re-run by deleting the cache + refetching the
-  // bundle. Phase 2 will add a dedicated narrator-refresh endpoint;
-  // for now we just bust the cache and refetch.
+  // Surgically re-run the Narrator agent via the dedicated W5 endpoint
+  // and patch only the narrator_summary field in local bundle state.
+  // Other tabs stay instant because no full bundle refetch happens.
   const handleNarratorRefresh = useCallback(async () => {
     try {
-      // Re-fetch from the bundle endpoint with cache-bypass. The
-      // simplest invalidation today is to extract-pain-metrics which
-      // also touches the cache; for narrator-specific refresh we
-      // hit the bundle endpoint twice — first to read current cache
-      // age, second to bypass.
-      // For Phase 1, just bypass cache by re-calling with no-store
-      // headers and trusting the endpoint's 5-min TTL to keep
-      // background callers cheap.
       const res = await fetch(
-        `/api/spaces/${spaceId}/twin-page-bundle`,
-        { cache: "no-store" },
+        `/api/spaces/${spaceId}/twin/refresh-narrator`,
+        { method: "POST" },
       );
-      if (!res.ok) return;
-      const json = (await res.json()) as { bundle: TwinPageBundle };
-      setBundle(json.bundle);
+      if (!res.ok) {
+        toast.error("Narrator refresh failed", {
+          description: "Try again in a moment.",
+        });
+        return;
+      }
+      const json = (await res.json()) as { narrator_summary: string | null };
+      setBundle({ ...bundle, narrator_summary: json.narrator_summary });
+      toast.success("Narrator refreshed");
     } catch (err) {
       console.warn("[overview-tab] narrator refresh failed:", err);
+      toast.error("Narrator refresh failed");
     }
-  }, [spaceId, setBundle]);
+  }, [spaceId, bundle, setBundle]);
 
   return (
     <div className="space-y-5">
@@ -83,7 +83,13 @@ export function TwinOverviewTab({ spaceId, bundle, setBundle }: Props) {
         <TwinHeroStatCard variant="goal" goal={bundle.active_goal} />
       </div>
 
-      <TwinCoachCard recommendation={bundle.coach_next_action} />
+      <TwinCoachCard
+        spaceId={spaceId}
+        recommendation={bundle.coach_next_action}
+        onReplaceRecommendation={(next) =>
+          setBundle({ ...bundle, coach_next_action: next })
+        }
+      />
     </div>
   );
 }

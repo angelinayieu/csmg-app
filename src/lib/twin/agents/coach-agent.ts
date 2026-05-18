@@ -30,6 +30,16 @@ export interface CoachInput {
   daysSinceLastPrediction: number | null; // null = never run
   activeMechanismKinds: string[];
   pendingProposalCount: number; // unresolved twin_proposal rows
+  /**
+   * Optional — when the user clicks "show me a different suggestion,"
+   * we pass the previous recommendation so the agent knows what to
+   * avoid. The agent treats this as soft guidance: pick a different
+   * action_type, or at least a meaningfully different framing.
+   */
+  previousRecommendation?: {
+    text: string;
+    action_type: CoachActionType;
+  } | null;
 }
 
 export interface CoachOutput {
@@ -77,6 +87,14 @@ Return JSON.`;
       ? "never run"
       : `${input.daysSinceLastPrediction}d ago`;
 
+  const previousBlock = input.previousRecommendation
+    ? `
+
+PREVIOUS SUGGESTION (the user clicked "show different" — pick a meaningfully different action_type or framing):
+  - "${input.previousRecommendation.text}"
+  - action_type: ${input.previousRecommendation.action_type}`
+    : "";
+
   const user = `Space: ${input.spaceName}
 
 Twin health: ${macro.health_score}/100 (${macro.health_label})
@@ -91,7 +109,7 @@ User activity:
   - Last prediction run: ${lastPred}
 
 Active mechanisms: ${input.activeMechanismKinds.length ? input.activeMechanismKinds.join(", ") : "none active"}
-Pending proposals: ${input.pendingProposalCount}`;
+Pending proposals: ${input.pendingProposalCount}${previousBlock}`;
 
   const result = await llmJSON<Omit<CoachOutput, "generated_at">>({
     system,

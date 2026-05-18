@@ -14,11 +14,16 @@
 // Phase 1 keeps "Log observation" as a placeholder — Phase 2 wires
 // it to the observations table the migration already created.
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { TwinPainMetricCard } from "../parts/twin-pain-metric-card";
 import { TwinFidelityStrip } from "../parts/twin-fidelity-strip";
 import { TwinPredictionHistory } from "../parts/twin-prediction-history";
+import {
+  TwinObservationFeed,
+  type ObservationFeedHandle,
+} from "../parts/twin-observation-feed";
+import { LogObservationDialog } from "../parts/dialogs/log-observation-dialog";
 import { PainIcon, ObservationIcon } from "@/components/twin/icons/twin-icons";
 import type { TwinPageBundle } from "@/app/api/spaces/[id]/twin-page-bundle/route";
 
@@ -30,6 +35,8 @@ interface Props {
 
 export function TwinOutcomesTab({ spaceId, bundle, setBundle }: Props) {
   const [refreshing, setRefreshing] = useState(false);
+  const [observationDialogOpen, setObservationDialogOpen] = useState(false);
+  const observationFeedRef = useRef<ObservationFeedHandle>(null);
 
   // Re-run the pain extractor, then bust the bundle cache so the next
   // bundle read picks up the new pain_metrics rows.
@@ -119,12 +126,11 @@ export function TwinOutcomesTab({ spaceId, bundle, setBundle }: Props) {
         <TwinPredictionHistory predictions={bundle.prediction_history} />
       </section>
 
-      {/* ── Log observation placeholder ──────────────────────────── */}
+      {/* ── Observation loop ─────────────────────────────────────── */}
       <section>
         <button
-          disabled
-          className="group flex w-full items-center justify-between gap-3 rounded-2xl border border-dashed border-gray-300 px-6 py-4 text-left transition hover:border-gray-400 disabled:cursor-not-allowed disabled:opacity-60"
-          title="Coming in Phase 2"
+          onClick={() => setObservationDialogOpen(true)}
+          className="group flex w-full items-center justify-between gap-3 rounded-2xl border border-dashed border-gray-300 px-6 py-4 text-left transition hover:border-gray-500 hover:bg-white/40"
         >
           <div className="flex items-center gap-3">
             <span
@@ -142,17 +148,54 @@ export function TwinOutcomesTab({ spaceId, bundle, setBundle }: Props) {
                 Log an observation
               </div>
               <div className="text-[11.5px] text-gray-500">
-                Tell the twin what actually happened — it&apos;ll calibrate
-                against its own predictions.
+                Tell the twin what actually happened — it&apos;ll score it
+                against open predictions and recalibrate.
               </div>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-[10.5px] text-gray-400">
+          <span className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[10.5px] font-medium text-white transition group-hover:bg-gray-700">
             <Plus className="h-3 w-3" strokeWidth={1.75} />
-            Phase 2
+            New
           </span>
         </button>
       </section>
+
+      {/* ── Recent observations feed ─────────────────────────────── */}
+      <section>
+        <TwinObservationFeed
+          ref={observationFeedRef}
+          spaceId={spaceId}
+        />
+      </section>
+
+      <LogObservationDialog
+        spaceId={spaceId}
+        open={observationDialogOpen}
+        onClose={() => setObservationDialogOpen(false)}
+        onSubmitted={(obs) => {
+          // Optimistic prepend to the feed so the user sees their row
+          // immediately; refresh in the background to pick up the
+          // server-side calibration_applied if the optimistic copy
+          // missed any post-write enrichment.
+          observationFeedRef.current?.prepend(obs);
+          void observationFeedRef.current?.refresh();
+          // Also bust the bundle so the next tab navigation picks up
+          // the recalibrated pain metrics / coach inputs.
+          void (async () => {
+            try {
+              const res = await fetch(
+                `/api/spaces/${spaceId}/twin-page-bundle`,
+                { cache: "no-store" },
+              );
+              if (!res.ok) return;
+              const json = (await res.json()) as { bundle: TwinPageBundle };
+              setBundle(json.bundle);
+            } catch {
+              /* non-fatal */
+            }
+          })();
+        }}
+      />
     </div>
   );
 }

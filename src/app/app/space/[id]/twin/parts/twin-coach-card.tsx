@@ -4,20 +4,33 @@
 //
 // Renders the Coach agent's single next-action recommendation. The
 // action_type drives the button label; clicking dispatches a window
-// event (Phase 1 wiring — the actual actions land in Phase 2).
+// event consumed by the Phase 2 coach action dispatcher.
 //
-// "Show different suggestion" re-runs the agent with a hint to
-// generate something else (Phase 2 — for now just disabled).
+// "Show different suggestion" hits the W5 refresh-coach endpoint
+// with hint="alternative" — the agent gets the previous rec as
+// soft guidance and picks something meaningfully different.
 
+import { useState } from "react";
 import { ArrowUpRight, RefreshCw } from "lucide-react";
+import { toast } from "@/lib/hooks/use-toast";
 import type { CoachActionType } from "@/lib/twin/agents/coach-agent";
 
 interface Props {
+  spaceId: string;
   recommendation: {
     text: string;
     action_type: string;
     target_id: string | null;
   } | null;
+  /**
+   * Callback so the Overview tab can patch its local bundle state
+   * with the new recommendation without a full bundle refetch.
+   */
+  onReplaceRecommendation?: (next: {
+    text: string;
+    action_type: string;
+    target_id: string | null;
+  }) => void;
 }
 
 const ACTION_LABELS: Record<CoachActionType, string> = {
@@ -30,7 +43,13 @@ const ACTION_LABELS: Record<CoachActionType, string> = {
   do_nothing: "Got it",
 };
 
-export function TwinCoachCard({ recommendation }: Props) {
+export function TwinCoachCard({
+  spaceId,
+  recommendation,
+  onReplaceRecommendation,
+}: Props) {
+  const [refreshing, setRefreshing] = useState(false);
+
   if (!recommendation) {
     // Hide the card entirely if the coach didn't return anything.
     return null;
@@ -50,6 +69,40 @@ export function TwinCoachCard({ recommendation }: Props) {
         },
       }),
     );
+  };
+
+  const handleShowDifferent = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const res = await fetch(
+        `/api/spaces/${spaceId}/twin/refresh-coach`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ hint: "alternative" }),
+        },
+      );
+      if (!res.ok) {
+        toast.error("Couldn't fetch alternative", {
+          description: "Try again in a moment.",
+        });
+        return;
+      }
+      const json = (await res.json()) as {
+        coach_next_action: {
+          text: string;
+          action_type: string;
+          target_id: string | null;
+        };
+      };
+      onReplaceRecommendation?.(json.coach_next_action);
+    } catch (err) {
+      console.warn("[coach-card] show different failed:", err);
+      toast.error("Couldn't fetch alternative");
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   return (
@@ -89,12 +142,16 @@ export function TwinCoachCard({ recommendation }: Props) {
             </button>
           )}
           <button
-            disabled
-            className="inline-flex items-center gap-1.5 text-[11.5px] font-medium text-gray-400 transition disabled:cursor-not-allowed"
-            title="Coming in Phase 2"
+            onClick={handleShowDifferent}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 text-[11.5px] font-medium text-gray-500 transition hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Re-run the Coach agent with a hint to pick something different"
           >
-            <RefreshCw className="h-3 w-3" strokeWidth={1.75} />
-            Show different suggestion
+            <RefreshCw
+              className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`}
+              strokeWidth={1.75}
+            />
+            {refreshing ? "Thinking…" : "Show different suggestion"}
           </button>
         </div>
       </div>

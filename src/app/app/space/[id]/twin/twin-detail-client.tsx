@@ -24,6 +24,7 @@ import { TwinOverviewTab } from "./tabs/twin-overview-tab";
 import { TwinSystemTab } from "./tabs/twin-system-tab";
 import { TwinOutcomesTab } from "./tabs/twin-outcomes-tab";
 import { TwinOperatingTab } from "./tabs/twin-operating-tab";
+import { TwinActionDispatcher } from "./parts/twin-action-dispatcher";
 import { useTwinPageBundleRealtime } from "./hooks/use-twin-page-bundle-realtime";
 import type { TwinPageBundle } from "@/app/api/spaces/[id]/twin-page-bundle/route";
 
@@ -52,8 +53,29 @@ export function TwinDetailClient({
   // Auto-disables for prefers-reduced-motion + touch devices.
   useParallax(panelRef, { maxTiltDeg: 0.4 });
 
-  // Phase 1 stub — wiring point for the Phase 2 realtime subscription.
-  useTwinPageBundleRealtime(spaceId, (next) => setBundle(next));
+  // W3 — subscribes to Supabase realtime channels for the 5 tables
+  // that drive this page. Bundle refetches on a 300ms-debounced
+  // trailing edge. lastEventAt lets the header flash a "live" pulse.
+  const { lastEventAt } = useTwinPageBundleRealtime(spaceId, (next) =>
+    setBundle(next),
+  );
+
+  // Bundle invalidation helper — actions call this after mutating
+  // server state so the page reflects the change. Bypasses the
+  // 5-min TTL by cache:no-store.
+  const refetchBundle = async () => {
+    try {
+      const res = await fetch(
+        `/api/spaces/${spaceId}/twin-page-bundle`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+      const json = (await res.json()) as { bundle: TwinPageBundle };
+      setBundle(json.bundle);
+    } catch {
+      /* non-fatal */
+    }
+  };
 
   // ── Empty / error state ──────────────────────────────────────────
   if (!bundle) {
@@ -100,7 +122,10 @@ export function TwinDetailClient({
 
   // ── Normal render ─────────────────────────────────────────────────
   return (
-    <>
+    <TwinActionDispatcher
+      spaceId={spaceId}
+      onBundleInvalidated={refetchBundle}
+    >
       <SynergySceneBackground preset="mist" customUrl={null} />
 
       <div className="mx-auto max-w-6xl px-6 py-8">
@@ -128,6 +153,7 @@ export function TwinDetailClient({
             onTabChange={setActiveTab}
             cached={initialCached}
             cachedAt={initialCachedAt}
+            lastEventAt={lastEventAt}
           />
 
           <div className="px-8 pb-10 pt-6">
@@ -146,6 +172,6 @@ export function TwinDetailClient({
           </div>
         </article>
       </div>
-    </>
+    </TwinActionDispatcher>
   );
 }
