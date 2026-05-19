@@ -567,6 +567,23 @@ function StrategyRoomBody({
     );
   };
 
+  // Phase A.6 — reverse-direction CTA. Spawns the source brainstorm
+  // as a workspace room. The spawner's drawProvenanceFromBrainstorm
+  // detects this strategy room on the canvas and auto-draws the
+  // B → S arrow.
+  const handleShowSourceBrainstorm = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!data?.session_id) return;
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:add-brainstorm", {
+        detail: {
+          sessionId: data.session_id,
+          title: "",
+        },
+      }),
+    );
+  };
+
   // Promotion bridge: strategy → R&D space. Packages the strategy's
   // statement + pitch as seed text, calls /api/intake/bootstrap to
   // create a new space, then spawns the corresponding space room with
@@ -580,7 +597,17 @@ function StrategyRoomBody({
       const res = await fetch("/api/intake/bootstrap", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: seed }),
+        // Phase A.6 — forward both upstream pointers so the new space
+        // persists them in synthesis_data.provenance. The brainstorm
+        // session id rides through transitively because every strategy
+        // is FK-linked to its source brainstorm. With these stored on
+        // the space row, S → R and B → R arrows redraw in fresh canvas
+        // sessions (not just the live event flow).
+        body: JSON.stringify({
+          text: seed,
+          promoted_from_strategy_id: artifactId,
+          promoted_from_brainstorm_session_id: data.session_id,
+        }),
       });
       if (!res.ok) throw new Error("intake bootstrap failed");
       const json = (await res.json()) as { spaceId?: string };
@@ -591,6 +618,7 @@ function StrategyRoomBody({
             spaceId: json.spaceId,
             name: data.statement.slice(0, 60),
             fromStrategyId: artifactId,
+            fromBrainstormSessionId: data.session_id,
           },
         }),
       );
@@ -668,6 +696,17 @@ function StrategyRoomBody({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {expanded && data?.session_id && (
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={handleShowSourceBrainstorm}
+              className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 ring-1 ring-blue-200 transition hover:bg-blue-100"
+              title="Spawn the source brainstorm room on this canvas"
+            >
+              <Sparkles className="h-3 w-3" />
+              Show source
+            </button>
+          )}
           {expanded && (
             <button
               onPointerDown={(e) => e.stopPropagation()}
@@ -734,6 +773,11 @@ interface SpaceRoomSummary {
   twin_initialized_at: string | null;
   updated_at: string;
   has_synthesis: boolean;
+  /** Phase A.6 — surfaced from synthesis_data.provenance so the room
+   *  can offer "Show source" CTAs that spawn the upstream rooms. Null
+   *  when the space wasn't promoted from anything (direct intake). */
+  from_strategy_id: string | null;
+  from_brainstorm_session_id: string | null;
 }
 
 const MATURITY_LABEL: Record<SpaceRoomSummary["maturity"], string> = {
@@ -825,14 +869,54 @@ function SpaceRoomBody({
   // Promotion bridges (Phase A.4).
   // Strategy-style "go to next stage" actions live in the expanded
   // body. Space room: "Build twin →" spawns a sibling twin room
-  // with the same artifact_id. Twin room: nothing to promote (twin
-  // is already the terminus today).
+  // with the same artifact_id. Twin room: "Show source" spawns the
+  // shared space room so the lineage is visible in both rooms.
   const handleSpawnTwin = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (typeof window === "undefined" || !artifactId) return;
     window.dispatchEvent(
       new CustomEvent("canvas-workspace:add-twin", {
         detail: { spaceId: artifactId, cachedTitle: name },
+      }),
+    );
+  };
+
+  // Phase A.6 — reverse-direction "Show source" handlers. Spawn the
+  // upstream room; the spawner's hydration helpers detect this space
+  // room on the canvas and auto-draw arrows in both directions.
+  const handleShowSourceStrategy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!data?.from_strategy_id) return;
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:add-strategy", {
+        detail: {
+          strategyId: data.from_strategy_id,
+          sessionId: data.from_brainstorm_session_id ?? undefined,
+          statement: "",
+        },
+      }),
+    );
+  };
+  const handleShowSourceBrainstorm = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!data?.from_brainstorm_session_id) return;
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:add-brainstorm", {
+        detail: {
+          sessionId: data.from_brainstorm_session_id,
+          title: "",
+        },
+      }),
+    );
+  };
+  const handleShowParentSpace = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Twin mode only — spawn the space that backs this twin (same
+    // artifact_id).
+    if (!artifactId) return;
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:add-space", {
+        detail: { spaceId: artifactId, name },
       }),
     );
   };
@@ -917,6 +1001,48 @@ function SpaceRoomBody({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* Phase A.6 — reverse "Show source" CTAs. Space mode shows
+              the strategy that spawned it (if any). Twin mode shows
+              the space it's a projection of. Brainstorm pointer is
+              transitive — only worth surfacing when there's no strategy
+              in between (otherwise the strategy room becomes the
+              natural hop). */}
+          {expanded && mode === "space" && data?.from_strategy_id && (
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={handleShowSourceStrategy}
+              className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-700 ring-1 ring-violet-200 transition hover:bg-violet-100"
+              title="Spawn the strategy room this space was promoted from"
+            >
+              <FileText className="h-3 w-3" />
+              Show source
+            </button>
+          )}
+          {expanded &&
+            mode === "space" &&
+            !data?.from_strategy_id &&
+            data?.from_brainstorm_session_id && (
+              <button
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={handleShowSourceBrainstorm}
+                className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 ring-1 ring-blue-200 transition hover:bg-blue-100"
+                title="Spawn the brainstorm room this space was derived from"
+              >
+                <Sparkles className="h-3 w-3" />
+                Show source
+              </button>
+            )}
+          {expanded && mode === "twin" && (
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={handleShowParentSpace}
+              className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 ring-1 ring-rose-200 transition hover:bg-rose-100"
+              title="Spawn the R&D space room this twin is a projection of"
+            >
+              <Network className="h-3 w-3" />
+              Show source
+            </button>
+          )}
           {expanded && mode === "space" && twinReady && (
             <button
               onPointerDown={(e) => e.stopPropagation()}

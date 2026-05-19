@@ -34,6 +34,7 @@ import {
 } from "@/lib/agents/domain-inferrer";
 import { TIERS, type AnalysisTier } from "@/lib/tiers";
 import { CREDIT_PACKS } from "@/lib/stripe";
+import { isAnswerSlot, type AnswerSlot } from "@/types/clarifier-answer";
 
 export const runtime = "nodejs";
 // Match decompose's cap — after() runs inside the same invocation, so
@@ -80,7 +81,10 @@ export async function POST(request: Request) {
     skipPlanGate: rawSkipPlanGate,
     planMode: rawPlanMode,
     clarifying_qa_pairs: rawClarifyingPairs,
+    inferred_baseline: rawInferredBaseline,
     skipPipeline: rawSkipPipeline,
+    promoted_from_strategy_id: rawPromotedFromStrategyId,
+    promoted_from_brainstorm_session_id: rawPromotedFromBrainstormSessionId,
   } = (body ?? {}) as {
     text?: string;
     reasoningDepth?: string;
@@ -98,8 +102,29 @@ export async function POST(request: Request) {
      *  seeds `synthesis_data.open_questions` with these so the Phase 4b
      *  banner ("N user-supplied answers informed this strategy") works
      *  on the first run instead of always reading 0. Optional; absent
-     *  when the user didn't toggle "ask clarifying questions". */
-    clarifying_qa_pairs?: Array<{ question?: unknown; answer?: unknown }>;
+     *  when the user didn't toggle "ask clarifying questions".
+     *
+     *  Phase B (2026-05) — each pair MAY include a `slot` field naming
+     *  the typed commitment it fills (exploration_angle, target_metric,
+     *  system_boundary, …). Slotted answers are also written into
+     *  synthesis_data.user_assertions[slot][] for typed downstream
+     *  routing. The legacy open_questions[] seeding is unchanged. */
+    clarifying_qa_pairs?: Array<{
+      question?: unknown;
+      answer?: unknown;
+      slot?: unknown;
+    }>;
+    /** Phase B — inferred baseline returned by the clarifier
+     *  (current_state_summary + primary_objective + key_assumptions).
+     *  Previously sliced into a 200-char URL param and discarded at
+     *  the destination boundary; now persisted alongside the open
+     *  questions so the canvas / Phase C seed shapes / Phase 3
+     *  analyzer-skip can read what the LLM already computed. */
+    inferred_baseline?: {
+      current_state_summary?: unknown;
+      primary_objective?: unknown;
+      key_assumptions?: unknown;
+    } | null;
     /** Unified-canvas Phase 1 (2026-05) — when true, create the space
      *  + pipeline_run row but DO NOT fire the heavy decompose chain.
      *  The user lands on a quiet whiteboard they can drive themselves
@@ -108,19 +133,63 @@ export async function POST(request: Request) {
      *  dashboard pills. Bypasses the credit reservation entirely
      *  since no LLM work is scheduled. */
     skipPipeline?: boolean;
+    /** Universal-canvas Phase A.6 — when this space is promoted from
+     *  a synergy_strategies row (via the strategy room's "Take deeper"
+     *  CTA), forward the strategy UUID so it's persisted onto the
+     *  new space's synthesis_data.provenance. The spawner then redraws
+     *  the S → R arrow on later sessions without relying on the
+     *  in-memory CustomEvent detail that only existed at promote-time. */
+    promoted_from_strategy_id?: string;
+    /** Same as above for brainstorms — strategy promotions forward
+     *  the strategy's session_id transitively so a Brainstorm → Space
+     *  arrow can also draw across sessions. */
+    promoted_from_brainstorm_session_id?: string;
   };
 
   // Sanitize clarifying pairs — drop empty pairs, trim, cap at 10.
-  const clarifyingPairs: Array<{ question: string; answer: string }> =
-    Array.isArray(rawClarifyingPairs)
-      ? rawClarifyingPairs
-          .map((p) => ({
-            question: typeof p?.question === "string" ? p.question.trim() : "",
-            answer: typeof p?.answer === "string" ? p.answer.trim() : "",
-          }))
-          .filter((p) => p.question.length > 0 && p.answer.length > 0)
-          .slice(0, 10)
-      : [];
+  // Phase B: also carry the typed `slot` field through. Unknown /
+  // missing slots degrade gracefully — the pair still seeds
+  // open_questions[]; only user_assertions routing is skipped.
+  const clarifyingPairs: Array<{
+    question: string;
+    answer: string;
+    slot?: AnswerSlot;
+  }> = Array.isArray(rawClarifyingPairs)
+    ? rawClarifyingPairs
+        .map((p) => ({
+          question: typeof p?.question === "string" ? p.question.trim() : "",
+          answer: typeof p?.answer === "string" ? p.answer.trim() : "",
+          ...(isAnswerSlot(p?.slot) ? { slot: p.slot as AnswerSlot } : {}),
+        }))
+        .filter((p) => p.question.length > 0 && p.answer.length > 0)
+        .slice(0, 10)
+    : [];
+
+  // Sanitize inferred baseline — types only, no trimming beyond
+  // strings. Stored alongside open_questions when present.
+  const inferredBaseline: {
+    current_state_summary: string;
+    primary_objective: string;
+    key_assumptions: string[];
+  } | null =
+    rawInferredBaseline &&
+    typeof rawInferredBaseline === "object" &&
+    typeof rawInferredBaseline.current_state_summary === "string" &&
+    typeof rawInferredBaseline.primary_objective === "string" &&
+    Array.isArray(rawInferredBaseline.key_assumptions)
+      ? {
+          current_state_summary: rawInferredBaseline.current_state_summary.trim(),
+          primary_objective: rawInferredBaseline.primary_objective.trim(),
+          key_assumptions: (
+            rawInferredBaseline.key_assumptions as unknown[]
+          )
+            .filter(
+              (a): a is string => typeof a === "string" && a.trim().length > 0,
+            )
+            .map((a) => a.trim())
+            .slice(0, 6),
+        }
+      : null;
 
   if (typeof text !== "string" || text.trim().length < 4) {
     return NextResponse.json(
@@ -373,6 +442,7 @@ export async function POST(request: Request) {
   // Phase 4b banner attributes them correctly. Without this, pre-flight
   // answers were only appended to input_text as prose — useful for
   // LLM context but invisible to the structured-answer surface.
+  const seedingTimestamp = new Date().toISOString();
   const seededOpenQuestions =
     clarifyingPairs.length > 0
       ? clarifyingPairs.map((qa) => ({
@@ -380,13 +450,85 @@ export async function POST(request: Request) {
           why_it_matters:
             "User-supplied via pre-flight clarifier — informs the initial pipeline run.",
           user_answer: qa.answer,
-          answered_at: new Date().toISOString(),
+          answered_at: seedingTimestamp,
           priority: "high" as const,
         }))
       : null;
-  const initialSynthesisData = seededOpenQuestions
-    ? { open_questions: seededOpenQuestions }
+
+  // Phase B — typed user_assertions map. Same data as the
+  // open_questions seeding above, but grouped by the typed slot the
+  // clarifier emitted. New readers (canvas seed shapes, expand
+  // context_hint, twin boundary frames) consume this map; legacy
+  // readers (Phase 4b banner, synthesize dedup) keep reading
+  // open_questions[] unchanged. Soft-typed Record<Slot, Entry[]> so
+  // legacy spaces without the field still load.
+  type AssertionEntry = {
+    value: string;
+    question: string;
+    answered_at: string;
+  };
+  const seededUserAssertions: Partial<Record<AnswerSlot, AssertionEntry[]>> = {};
+  for (const qa of clarifyingPairs) {
+    if (!qa.slot) continue;
+    const bucket = seededUserAssertions[qa.slot] ?? [];
+    bucket.push({
+      value: qa.answer,
+      question: qa.question,
+      answered_at: seedingTimestamp,
+    });
+    seededUserAssertions[qa.slot] = bucket;
+  }
+  const hasTypedAssertions = Object.keys(seededUserAssertions).length > 0;
+
+  // Universal-canvas Phase A.6 — sanitize the optional provenance
+  // pointers. We accept either field independently; UUID validation is
+  // best-effort (just a non-empty trimmed string) — RLS still gates
+  // any downstream join. Wrapped in a `provenance` sub-object so the
+  // synthesis pipeline's existing JSON consumers don't collide.
+  const isUuidLike = (v: unknown): v is string =>
+    typeof v === "string" && /^[0-9a-fA-F-]{16,40}$/.test(v.trim());
+  const promotedFromStrategyId = isUuidLike(rawPromotedFromStrategyId)
+    ? rawPromotedFromStrategyId.trim()
     : null;
+  const promotedFromBrainstormSessionId = isUuidLike(
+    rawPromotedFromBrainstormSessionId,
+  )
+    ? rawPromotedFromBrainstormSessionId.trim()
+    : null;
+  const hasProvenance =
+    promotedFromStrategyId !== null ||
+    promotedFromBrainstormSessionId !== null;
+
+  const initialSynthesisData =
+    seededOpenQuestions || hasTypedAssertions || inferredBaseline || hasProvenance
+      ? {
+          ...(seededOpenQuestions
+            ? { open_questions: seededOpenQuestions }
+            : {}),
+          ...(hasTypedAssertions
+            ? { user_assertions: seededUserAssertions }
+            : {}),
+          ...(inferredBaseline
+            ? { inferred_baseline: inferredBaseline }
+            : {}),
+          ...(hasProvenance
+            ? {
+                provenance: {
+                  ...(promotedFromStrategyId
+                    ? { from_strategy_id: promotedFromStrategyId }
+                    : {}),
+                  ...(promotedFromBrainstormSessionId
+                    ? {
+                        from_brainstorm_session_id:
+                          promotedFromBrainstormSessionId,
+                      }
+                    : {}),
+                  promoted_at: seedingTimestamp,
+                },
+              }
+            : {}),
+        }
+      : null;
 
   const placeholderName = deriveName(trimmed);
   const { data: spaceRow, error: spaceError } = await db

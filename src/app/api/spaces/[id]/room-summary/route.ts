@@ -64,6 +64,29 @@ export async function GET(_req: Request, ctx: RouteContext) {
         data.synthesis_text.trim().length > 0) ||
       (data.synthesis_data && typeof data.synthesis_data === "object");
 
+    // Universal-canvas Phase A.6 — surface provenance pointers if the
+    // space was promoted from an upstream strategy / brainstorm. The
+    // spawner reads these to redraw S → R / B → R arrows in fresh
+    // canvas sessions where the in-memory CustomEvent detail is gone.
+    // Soft-typed read — synthesis_data is `Json | null` so we have to
+    // walk it manually.
+    const sd = data.synthesis_data as
+      | {
+          provenance?: {
+            from_strategy_id?: unknown;
+            from_brainstorm_session_id?: unknown;
+          };
+        }
+      | null;
+    const fromStrategyId =
+      typeof sd?.provenance?.from_strategy_id === "string"
+        ? (sd.provenance.from_strategy_id as string)
+        : null;
+    const fromBrainstormSessionId =
+      typeof sd?.provenance?.from_brainstorm_session_id === "string"
+        ? (sd.provenance.from_brainstorm_session_id as string)
+        : null;
+
     return NextResponse.json({
       space: {
         id: data.id,
@@ -76,6 +99,8 @@ export async function GET(_req: Request, ctx: RouteContext) {
         twin_initialized_at: data.twin_initialized_at,
         updated_at: data.updated_at,
         has_synthesis: Boolean(hasSynthesis),
+        from_strategy_id: fromStrategyId,
+        from_brainstorm_session_id: fromBrainstormSessionId,
       },
     });
   } catch (e) {

@@ -59,6 +59,10 @@ interface AddSpaceDetail {
    *  by the strategy→space promotion bridge so we can auto-draw the
    *  arrow from strategy → space without an extra fetch). */
   fromStrategyId?: string;
+  /** Phase A.6 — when the strategy was itself derived from a
+   *  brainstorm, the promotion bridge forwards that session id too so
+   *  a B → R arrow can also draw without hitting the network. */
+  fromBrainstormSessionId?: string;
 }
 
 interface AddTwinDetail {
@@ -118,12 +122,17 @@ export function CanvasWorkspaceRoomSpawner() {
         artifact_id: detail.sessionId,
         cached_title: detail.title ?? "",
       });
-      // Phase A.2.5 — reverse-direction provenance. The new
-      // brainstorm room is now on the canvas; check if any existing
-      // strategy rooms link back to it via their source session_id
-      // and draw arrows for those matches.
+      // Phase A.2.5 — reverse-direction provenance to strategies on
+      // canvas. Phase A.6 — also reverse-direction to space rooms
+      // whose synthesis_data.provenance.from_brainstorm_session_id
+      // matches this session.
       if (shapeId) {
         void drawProvenanceFromBrainstorm({
+          editor,
+          brainstormShapeId: shapeId,
+          brainstormSessionId: detail.sessionId,
+        });
+        void drawSpaceProvenanceForBrainstorm({
           editor,
           brainstormShapeId: shapeId,
           brainstormSessionId: detail.sessionId,
@@ -139,17 +148,24 @@ export function CanvasWorkspaceRoomSpawner() {
         artifact_id: detail.strategyId,
         cached_title: detail.statement ?? "",
       });
-      // Phase A.2.5 — forward-direction provenance. If the picker
-      // forwarded the source session_id (most strategies have one),
-      // try to find a matching brainstorm room on the canvas right
-      // now and draw an arrow from it to this new strategy.
-      if (shapeId && detail.sessionId) {
+      if (!shapeId) return;
+      // Phase A.2.5 — forward-direction provenance to brainstorm rooms.
+      if (detail.sessionId) {
         void drawProvenanceFromStrategy({
           editor,
           strategyShapeId: shapeId,
           sourceSessionId: detail.sessionId,
         });
       }
+      // Phase A.6 — reverse-direction provenance to space rooms whose
+      // synthesis_data.provenance.from_strategy_id matches this
+      // strategy. Without this, S → R arrows didn't redraw in fresh
+      // sessions when the room-add order was R-then-S.
+      void drawSpaceProvenanceForStrategy({
+        editor,
+        strategyShapeId: shapeId,
+        strategyId: detail.strategyId,
+      });
     }
 
     function onAddSpace(ev: Event) {
@@ -161,18 +177,18 @@ export function CanvasWorkspaceRoomSpawner() {
         cached_title: detail.name ?? "",
       });
       if (!shapeId) return;
-      // Forward provenance: if a strategy that promoted into this
-      // space is already on the canvas, draw an arrow strategy→space.
-      if (detail.fromStrategyId) {
-        const strategyShapeId = findWorkspaceRoom(
-          editor,
-          "strategy",
-          detail.fromStrategyId,
-        );
-        if (strategyShapeId) {
-          drawProvenanceArrow(editor, strategyShapeId, shapeId);
-        }
-      }
+      // Phase A.6 — hydrate cross-session provenance for this new
+      // space room. If the live event detail carries fromStrategyId /
+      // fromBrainstormSessionId (just-promoted), use them. Otherwise
+      // fetch the space's room-summary which returns the same fields
+      // from synthesis_data.provenance.
+      void drawProvenanceFromSpace({
+        editor,
+        spaceShapeId: shapeId,
+        spaceId: detail.spaceId,
+        fromStrategyId: detail.fromStrategyId,
+        fromBrainstormSessionId: detail.fromBrainstormSessionId,
+      });
       // Reverse provenance: if a twin room for the SAME space already
       // exists, draw arrow space→twin so the lineage is visible
       // either way the user added them.
@@ -423,6 +439,146 @@ async function drawProvenanceFromBrainstorm({
     if (!match) continue;
     if (match.sessionId === brainstormSessionId) {
       drawProvenanceArrow(editor, brainstormShapeId, match.id);
+    }
+  }
+}
+
+// ── Phase A.6 — cross-session provenance hydration ───────────────
+//
+// When a space room is added, the spawner needs to learn whether the
+// space was promoted from an upstream strategy / brainstorm so it can
+// redraw arrows in fresh canvas sessions. The data lives in
+// synthesis_data.provenance on the space row and is returned by
+// /api/spaces/[id]/room-summary as `from_strategy_id` and
+// `from_brainstorm_session_id`.
+//
+// Three helpers, each soft-failing on fetch error:
+//   - drawProvenanceFromSpace: a space was just added → look up its
+//     ancestors and draw arrows IN from whichever rooms exist.
+//   - drawSpaceProvenanceForStrategy: a strategy was just added →
+//     walk all space rooms on canvas, fetch their provenance, draw
+//     arrows OUT to spaces that name this strategy as their parent.
+//   - drawSpaceProvenanceForBrainstorm: same as above but for the
+//     brainstorm ancestry chain.
+
+interface SpaceRoomSummary {
+  space: {
+    id: string;
+    from_strategy_id?: string | null;
+    from_brainstorm_session_id?: string | null;
+  };
+}
+
+async function fetchSpaceProvenance(
+  spaceId: string,
+): Promise<{
+  fromStrategyId: string | null;
+  fromBrainstormSessionId: string | null;
+} | null> {
+  try {
+    const res = await fetch(`/api/spaces/${spaceId}/room-summary`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as SpaceRoomSummary;
+    return {
+      fromStrategyId: json.space.from_strategy_id ?? null,
+      fromBrainstormSessionId: json.space.from_brainstorm_session_id ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function drawProvenanceFromSpace({
+  editor,
+  spaceShapeId,
+  spaceId,
+  fromStrategyId,
+  fromBrainstormSessionId,
+}: {
+  editor: Editor;
+  spaceShapeId: TLShapeId;
+  spaceId: string;
+  fromStrategyId?: string;
+  fromBrainstormSessionId?: string;
+}) {
+  // Prefer the in-memory hints (set when the user just promoted),
+  // fall back to the persisted provenance (cross-session case).
+  let strategyId = fromStrategyId ?? null;
+  let brainstormSessionId = fromBrainstormSessionId ?? null;
+  if (!strategyId && !brainstormSessionId) {
+    const persisted = await fetchSpaceProvenance(spaceId);
+    if (persisted) {
+      strategyId = persisted.fromStrategyId;
+      brainstormSessionId = persisted.fromBrainstormSessionId;
+    }
+  }
+
+  if (strategyId) {
+    const strategyShapeId = findWorkspaceRoom(editor, "strategy", strategyId);
+    if (strategyShapeId) {
+      drawProvenanceArrow(editor, strategyShapeId, spaceShapeId);
+    }
+  }
+  if (brainstormSessionId) {
+    const brainstormShapeId = findWorkspaceRoom(
+      editor,
+      "brainstorm",
+      brainstormSessionId,
+    );
+    if (brainstormShapeId) {
+      drawProvenanceArrow(editor, brainstormShapeId, spaceShapeId);
+    }
+  }
+}
+
+async function drawSpaceProvenanceForStrategy({
+  editor,
+  strategyShapeId,
+  strategyId,
+}: {
+  editor: Editor;
+  strategyShapeId: TLShapeId;
+  strategyId: string;
+}) {
+  const spaces = findAllWorkspaceRoomsByKind(editor, "space");
+  if (spaces.length === 0) return;
+  const fetched = await Promise.all(
+    spaces.map(async ({ id, artifactId }) => ({
+      id,
+      provenance: await fetchSpaceProvenance(artifactId),
+    })),
+  );
+  for (const m of fetched) {
+    if (!m.provenance) continue;
+    if (m.provenance.fromStrategyId === strategyId) {
+      drawProvenanceArrow(editor, strategyShapeId, m.id);
+    }
+  }
+}
+
+async function drawSpaceProvenanceForBrainstorm({
+  editor,
+  brainstormShapeId,
+  brainstormSessionId,
+}: {
+  editor: Editor;
+  brainstormShapeId: TLShapeId;
+  brainstormSessionId: string;
+}) {
+  const spaces = findAllWorkspaceRoomsByKind(editor, "space");
+  if (spaces.length === 0) return;
+  const fetched = await Promise.all(
+    spaces.map(async ({ id, artifactId }) => ({
+      id,
+      provenance: await fetchSpaceProvenance(artifactId),
+    })),
+  );
+  for (const m of fetched) {
+    if (!m.provenance) continue;
+    if (m.provenance.fromBrainstormSessionId === brainstormSessionId) {
+      drawProvenanceArrow(editor, brainstormShapeId, m.id);
     }
   }
 }
