@@ -25,6 +25,7 @@ import {
 } from "../parts/twin-observation-feed";
 import { LogObservationDialog } from "../parts/dialogs/log-observation-dialog";
 import { PainIcon, ObservationIcon } from "@/components/twin/icons/twin-icons";
+import { toast } from "@/lib/hooks/use-toast";
 import type { TwinPageBundle } from "@/app/api/spaces/[id]/twin-page-bundle/route";
 
 interface Props {
@@ -48,7 +49,12 @@ export function TwinOutcomesTab({ spaceId, bundle, setBundle }: Props) {
         `/api/spaces/${spaceId}/twin/extract-pain-metrics`,
         { method: "POST" },
       );
-      if (!extractRes.ok) return;
+      if (!extractRes.ok) {
+        toast.error("Couldn't refresh metrics", {
+          description: "The extractor didn't respond. Try again.",
+        });
+        return;
+      }
       const bundleRes = await fetch(
         `/api/spaces/${spaceId}/twin-page-bundle`,
         { cache: "no-store" },
@@ -56,8 +62,12 @@ export function TwinOutcomesTab({ spaceId, bundle, setBundle }: Props) {
       if (!bundleRes.ok) return;
       const json = (await bundleRes.json()) as { bundle: TwinPageBundle };
       setBundle(json.bundle);
+      toast.success("Pain metrics refreshed", {
+        description: `${json.bundle.pain_metrics.length} metric${json.bundle.pain_metrics.length === 1 ? "" : "s"} now tracked`,
+      });
     } catch (err) {
       console.warn("[outcomes-tab] pain refresh failed:", err);
+      toast.error("Couldn't refresh metrics");
     } finally {
       setRefreshing(false);
     }

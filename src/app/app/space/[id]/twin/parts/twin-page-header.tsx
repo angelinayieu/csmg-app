@@ -179,6 +179,47 @@ export function TwinPageHeader({
   );
 }
 
+// ── Live indicator ─────────────────────────────────────────────────
+//
+// Tiny dot next to the title that:
+//   - while pulseActive: emerald, animated ping ring + "Live" label,
+//     telling the user "something just changed on this page"
+//   - otherwise: dim hairline dot, quietly signaling "realtime
+//     channel is open and watching"
+//
+// Visual restraint matters here — this can fire frequently. The
+// resting state has to be near-invisible so it doesn't pull focus.
+
+function LiveIndicator({ pulseActive }: { pulseActive: boolean }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 transition-opacity"
+      aria-live="polite"
+      aria-label={pulseActive ? "Twin just updated" : "Live"}
+    >
+      <span className="relative inline-flex h-2 w-2">
+        {pulseActive && (
+          <span
+            aria-hidden
+            className="absolute inset-0 animate-ping rounded-full bg-emerald-400 opacity-60"
+          />
+        )}
+        <span
+          aria-hidden
+          className={`relative inline-flex h-2 w-2 rounded-full transition-colors ${
+            pulseActive ? "bg-emerald-500" : "bg-gray-300"
+          }`}
+        />
+      </span>
+      {pulseActive && (
+        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-700">
+          Live
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ── Actions dropdown ───────────────────────────────────────────────
 
 function TwinActionsMenu({ spaceId: _spaceId }: { spaceId: string }) {
@@ -264,33 +305,6 @@ function TwinActionsMenu({ spaceId: _spaceId }: { spaceId: string }) {
         </div>
       )}
     </div>
-  );
-}
-
-// ── Live indicator ────────────────────────────────────────────────
-//
-// Tiny pulse next to the title that flashes for ~4s after each
-// realtime event, then settles to a steady dim dot. Wrapped in a
-// "Live" tooltip-style label so the user understands the meaning.
-
-function LiveIndicator({ pulseActive }: { pulseActive: boolean }) {
-  return (
-    <span
-      className="inline-flex items-center gap-1 text-[10.5px] font-medium uppercase tracking-wide text-gray-400"
-      title="Realtime updates active"
-    >
-      <span aria-hidden className="relative inline-flex h-1.5 w-1.5">
-        {pulseActive && (
-          <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500 opacity-75" />
-        )}
-        <span
-          className={`relative inline-flex h-1.5 w-1.5 rounded-full ${
-            pulseActive ? "bg-emerald-500" : "bg-gray-300"
-          }`}
-        />
-      </span>
-      Live
-    </span>
   );
 }
 
