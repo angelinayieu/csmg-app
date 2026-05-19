@@ -14,22 +14,26 @@
 // (inside the tldraw editor tree) listens for those events and calls
 // editor.createShape(...) to actually spawn the shape.
 //
-// Phase A.2 adds the Strategy tab. Twin + Probe tabs ship in Phase
-// A.3 and A.4 with the same shape — just new tabs + endpoints + a
-// branch in the spawner.
+// Phase A.4 — replaces the Probe stub with R&D Space + activates Twin.
+// Probe is not a persistable artifact today (just a string[] field on
+// reactions) so a Probe room has no row to pin. The 4 tabs are now:
+// Brainstorm · Strategy · R&D Space · Digital Twin. Twin entries
+// reuse the spaces list filtered to digital_twin_state in
+// ('ready', 'active') — twin is a projection of a space, not its own
+// table.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FileText,
   Layers,
   Loader2,
-  MessageCircleQuestion,
+  Network,
   Plus,
   TestTube,
   X,
 } from "lucide-react";
 
-type PickerTab = "brainstorm" | "strategy" | "twin" | "probe";
+type PickerTab = "brainstorm" | "strategy" | "space" | "twin";
 
 interface BrainstormItem {
   id: string;
@@ -44,14 +48,28 @@ interface StrategyItem {
   updated_at: string;
 }
 
+interface SpaceItem {
+  id: string;
+  name: string;
+  entity_count: number;
+  edge_count: number;
+  maturity:
+    | "actionable_now"
+    | "waiting_on_dependency"
+    | "theoretical"
+    | "blocked";
+  digital_twin_state: "not_started" | "ready" | "active" | "retired";
+  updated_at: string;
+}
+
 const TAB_META: Record<
   PickerTab,
   { label: string; Icon: typeof Layers; available: boolean }
 > = {
   brainstorm: { label: "Brainstorm", Icon: Layers, available: true },
   strategy: { label: "Strategy", Icon: FileText, available: true },
-  twin: { label: "Twin", Icon: TestTube, available: false },
-  probe: { label: "Probe", Icon: MessageCircleQuestion, available: false },
+  space: { label: "R&D Space", Icon: Network, available: true },
+  twin: { label: "Twin", Icon: TestTube, available: true },
 };
 
 export function CanvasWorkspaceRoomPicker() {
@@ -59,16 +77,11 @@ export function CanvasWorkspaceRoomPicker() {
   const [activeTab, setActiveTab] = useState<PickerTab>("brainstorm");
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  // Each tab has its own cached list. We fetch lazily on first open
-  // of a tab, then refetch on every full-popover-open so freshly-
-  // created artifacts appear without a page reload.
   const [brainstorms, setBrainstorms] = useState<BrainstormItem[] | null>(null);
   const [strategies, setStrategies] = useState<StrategyItem[] | null>(null);
+  const [spaces, setSpaces] = useState<SpaceItem[] | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Re-fetch the active tab whenever the popover opens or the tab
-  // switches. Cheap parallel fetches; servers cache RLS so the cost
-  // is one DB round-trip per tab per open.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -89,11 +102,23 @@ export function CanvasWorkspaceRoomPicker() {
           if (!res.ok) throw new Error("strategies");
           const json = (await res.json()) as { strategies: StrategyItem[] };
           if (!cancelled) setStrategies(json.strategies ?? []);
+        } else if (activeTab === "space" || activeTab === "twin") {
+          // Both tabs share the spaces list — twin tab filters to
+          // spaces with a ready/active twin so we don't materialize
+          // empty twin rooms.
+          if (!spaces) {
+            const res = await fetch("/api/spaces/list", { cache: "no-store" });
+            if (!res.ok) throw new Error("spaces");
+            const json = (await res.json()) as { spaces: SpaceItem[] };
+            if (!cancelled) setSpaces(json.spaces ?? []);
+          }
         }
       } catch {
         if (!cancelled) {
           if (activeTab === "brainstorm") setBrainstorms([]);
           else if (activeTab === "strategy") setStrategies([]);
+          else if (activeTab === "space" || activeTab === "twin")
+            setSpaces([]);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -102,9 +127,12 @@ export function CanvasWorkspaceRoomPicker() {
     return () => {
       cancelled = true;
     };
+    // We intentionally re-fetch spaces every time we land on a
+    // space/twin tab — keeps the picker honest about freshly-created
+    // spaces without forcing the user to reopen the popover.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeTab]);
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
@@ -137,6 +165,24 @@ export function CanvasWorkspaceRoomPicker() {
     setOpen(false);
   }, []);
 
+  const handleSelectSpace = useCallback((item: SpaceItem) => {
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:add-space", {
+        detail: { spaceId: item.id, name: item.name },
+      }),
+    );
+    setOpen(false);
+  }, []);
+
+  const handleSelectTwin = useCallback((item: SpaceItem) => {
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:add-twin", {
+        detail: { spaceId: item.id, cachedTitle: item.name },
+      }),
+    );
+    setOpen(false);
+  }, []);
+
   return (
     <div ref={popoverRef} className="pointer-events-auto relative">
       <button
@@ -156,7 +202,6 @@ export function CanvasWorkspaceRoomPicker() {
               "0 20px 50px -24px rgba(15,23,42,0.2), inset 0 1px 0 rgba(255,255,255,0.7)",
           }}
         >
-          {/* Header */}
           <div className="flex items-center justify-between gap-2 border-b border-black/[0.04] px-4 py-2.5">
             <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-gray-500">
               Add room
@@ -170,8 +215,7 @@ export function CanvasWorkspaceRoomPicker() {
             </button>
           </div>
 
-          {/* Tab bar */}
-          <div className="flex items-center gap-0.5 border-b border-black/[0.04] px-2 pt-2">
+          <div className="flex items-center gap-0.5 overflow-x-auto border-b border-black/[0.04] px-2 pt-2">
             {(Object.keys(TAB_META) as PickerTab[]).map((tab) => {
               const meta = TAB_META[tab];
               const Icon = meta.Icon;
@@ -182,7 +226,7 @@ export function CanvasWorkspaceRoomPicker() {
                   onClick={() => meta.available && setActiveTab(tab)}
                   disabled={!meta.available}
                   className={[
-                    "inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-medium transition",
+                    "inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-medium transition",
                     active
                       ? "bg-gray-100 text-gray-900"
                       : meta.available
@@ -197,17 +241,11 @@ export function CanvasWorkspaceRoomPicker() {
                 >
                   <Icon className="h-3 w-3" strokeWidth={1.75} />
                   {meta.label}
-                  {!meta.available && (
-                    <span className="text-[9px] uppercase tracking-wider text-gray-400">
-                      Soon
-                    </span>
-                  )}
                 </button>
               );
             })}
           </div>
 
-          {/* List body */}
           <div className="max-h-[340px] overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center gap-2 py-8 text-[12px] text-gray-500">
@@ -224,6 +262,10 @@ export function CanvasWorkspaceRoomPicker() {
                 items={strategies}
                 onSelect={handleSelectStrategy}
               />
+            ) : activeTab === "space" ? (
+              <SpaceList items={spaces} onSelect={handleSelectSpace} />
+            ) : activeTab === "twin" ? (
+              <TwinList items={spaces} onSelect={handleSelectTwin} />
             ) : null}
           </div>
         </div>
@@ -231,8 +273,6 @@ export function CanvasWorkspaceRoomPicker() {
     </div>
   );
 }
-
-// ── Per-tab lists ──
 
 function BrainstormList({
   items,
@@ -296,6 +336,91 @@ function StrategyList({
             </div>
             <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-gray-500">
               {relativeTime(s.updated_at)}
+            </div>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function SpaceList({
+  items,
+  onSelect,
+}: {
+  items: SpaceItem[] | null;
+  onSelect: (item: SpaceItem) => void;
+}) {
+  if (items === null || items.length === 0) {
+    return (
+      <div className="px-4 py-8 text-center text-[12px] text-gray-500">
+        No R&D spaces yet. Start a Precise R&D run from the homepage.
+      </div>
+    );
+  }
+  return (
+    <ul>
+      {items.map((s) => (
+        <li key={s.id}>
+          <button
+            onClick={() => onSelect(s)}
+            className="block w-full px-4 py-2.5 text-left transition hover:bg-black/[0.03]"
+          >
+            <div className="line-clamp-2 text-[13px] font-medium text-gray-900">
+              {s.name || "Untitled space"}
+            </div>
+            <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-gray-500">
+              <span>
+                {s.entity_count} {s.entity_count === 1 ? "entity" : "entities"}
+              </span>
+              <span className="text-gray-300">·</span>
+              <span>{relativeTime(s.updated_at)}</span>
+            </div>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TwinList({
+  items,
+  onSelect,
+}: {
+  items: SpaceItem[] | null;
+  onSelect: (item: SpaceItem) => void;
+}) {
+  // Twin tab filters the spaces list to only those with a real twin.
+  // Empty-twin spaces would just spawn an empty twin room — better to
+  // hide them and prompt the user to mature the space first.
+  const twinReady = (items ?? []).filter(
+    (s) => s.digital_twin_state === "ready" || s.digital_twin_state === "active",
+  );
+  if (twinReady.length === 0) {
+    return (
+      <div className="px-4 py-8 text-center text-[12px] text-gray-500">
+        No twins are ready yet. Build out an R&D space until its twin
+        initializes.
+      </div>
+    );
+  }
+  return (
+    <ul>
+      {twinReady.map((s) => (
+        <li key={s.id}>
+          <button
+            onClick={() => onSelect(s)}
+            className="block w-full px-4 py-2.5 text-left transition hover:bg-black/[0.03]"
+          >
+            <div className="line-clamp-2 text-[13px] font-medium text-gray-900">
+              {s.name || "Untitled twin"}
+            </div>
+            <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-emerald-600">
+              <span>
+                {s.digital_twin_state === "active" ? "Twin live" : "Twin ready"}
+              </span>
+              <span className="text-gray-300">·</span>
+              <span className="text-gray-500">{relativeTime(s.updated_at)}</span>
             </div>
           </button>
         </li>

@@ -52,6 +52,20 @@ interface AddStrategyDetail {
   statement?: string;
 }
 
+interface AddSpaceDetail {
+  spaceId: string;
+  name?: string;
+  /** Optional: the strategy id this space was promoted FROM (carried
+   *  by the strategy→space promotion bridge so we can auto-draw the
+   *  arrow from strategy → space without an extra fetch). */
+  fromStrategyId?: string;
+}
+
+interface AddTwinDetail {
+  spaceId: string;
+  cachedTitle?: string;
+}
+
 export function CanvasWorkspaceRoomSpawner() {
   const editor = useEditor();
 
@@ -60,7 +74,7 @@ export function CanvasWorkspaceRoomSpawner() {
     // selects + zooms to it. Returns the new shape's id (or null on
     // failure) so callers can pass it to provenance helpers.
     function spawnRoom(props: {
-      kind: "brainstorm" | "strategy" | "twin" | "probe";
+      kind: "brainstorm" | "strategy" | "twin" | "probe" | "space";
       artifact_id: string;
       cached_title: string;
     }): TLShapeId | null {
@@ -138,6 +152,54 @@ export function CanvasWorkspaceRoomSpawner() {
       }
     }
 
+    function onAddSpace(ev: Event) {
+      const detail = (ev as CustomEvent<AddSpaceDetail>).detail;
+      if (!detail || !detail.spaceId) return;
+      const shapeId = spawnRoom({
+        kind: "space",
+        artifact_id: detail.spaceId,
+        cached_title: detail.name ?? "",
+      });
+      if (!shapeId) return;
+      // Forward provenance: if a strategy that promoted into this
+      // space is already on the canvas, draw an arrow strategy→space.
+      if (detail.fromStrategyId) {
+        const strategyShapeId = findWorkspaceRoom(
+          editor,
+          "strategy",
+          detail.fromStrategyId,
+        );
+        if (strategyShapeId) {
+          drawProvenanceArrow(editor, strategyShapeId, shapeId);
+        }
+      }
+      // Reverse provenance: if a twin room for the SAME space already
+      // exists, draw arrow space→twin so the lineage is visible
+      // either way the user added them.
+      const twinShapeId = findWorkspaceRoom(editor, "twin", detail.spaceId);
+      if (twinShapeId) {
+        drawProvenanceArrow(editor, shapeId, twinShapeId);
+      }
+    }
+
+    function onAddTwin(ev: Event) {
+      const detail = (ev as CustomEvent<AddTwinDetail>).detail;
+      if (!detail || !detail.spaceId) return;
+      const shapeId = spawnRoom({
+        kind: "twin",
+        artifact_id: detail.spaceId,
+        cached_title: detail.cachedTitle ?? "",
+      });
+      if (!shapeId) return;
+      // Auto-arrow: a twin is a projection of its space. If the
+      // space room is already on the canvas (same artifact_id), draw
+      // arrow space→twin.
+      const spaceShapeId = findWorkspaceRoom(editor, "space", detail.spaceId);
+      if (spaceShapeId) {
+        drawProvenanceArrow(editor, spaceShapeId, shapeId);
+      }
+    }
+
     window.addEventListener(
       "canvas-workspace:add-brainstorm",
       onAddBrainstorm,
@@ -146,6 +208,8 @@ export function CanvasWorkspaceRoomSpawner() {
       "canvas-workspace:add-strategy",
       onAddStrategy,
     );
+    window.addEventListener("canvas-workspace:add-space", onAddSpace);
+    window.addEventListener("canvas-workspace:add-twin", onAddTwin);
     return () => {
       window.removeEventListener(
         "canvas-workspace:add-brainstorm",
@@ -155,6 +219,8 @@ export function CanvasWorkspaceRoomSpawner() {
         "canvas-workspace:add-strategy",
         onAddStrategy,
       );
+      window.removeEventListener("canvas-workspace:add-space", onAddSpace);
+      window.removeEventListener("canvas-workspace:add-twin", onAddTwin);
     };
   }, [editor]);
 

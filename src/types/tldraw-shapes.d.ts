@@ -654,7 +654,7 @@ declare module "@tldraw/tlschema" {
       w: number;
       h: number;
       /** Discriminator — which artifact this room hosts. */
-      kind: "brainstorm" | "strategy" | "twin" | "probe";
+      kind: "brainstorm" | "strategy" | "twin" | "probe" | "space";
       /** UUID FK to the underlying row (brainstorm_sessions.id,
        *  synergy_strategies.id, etc.). Resolved client-side by the
        *  per-kind renderer. */

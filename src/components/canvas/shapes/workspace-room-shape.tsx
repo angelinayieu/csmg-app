@@ -27,12 +27,14 @@ import {
 } from "tldraw";
 import { useEffect, useState } from "react";
 import {
+  Activity,
   ArrowUpRight,
   FileText,
   Layers,
   Maximize2,
   MessageCircleQuestion,
   Minimize2,
+  Network,
   Sparkles,
   TestTube,
 } from "lucide-react";
@@ -86,6 +88,12 @@ const KIND_META: Record<
     accent: "#F59E0B",
     accentSoft: "rgba(245, 158, 11, 0.08)",
   },
+  space: {
+    label: "R&D Space",
+    Icon: Network,
+    accent: "#E11D48",
+    accentSoft: "rgba(225, 29, 72, 0.08)",
+  },
 };
 
 export class WorkspaceRoomShapeUtil extends BaseBoxShapeUtil<WorkspaceRoomShape> {
@@ -93,7 +101,7 @@ export class WorkspaceRoomShapeUtil extends BaseBoxShapeUtil<WorkspaceRoomShape>
   static override props: RecordProps<WorkspaceRoomShape> = {
     w: T.number,
     h: T.number,
-    kind: T.literalEnum("brainstorm", "strategy", "twin", "probe"),
+    kind: T.literalEnum("brainstorm", "strategy", "twin", "probe", "space"),
     artifact_id: T.string,
     cached_title: T.string,
     spawnedAt: T.number,
@@ -174,6 +182,11 @@ function WorkspaceRoomView({ shape }: { shape: WorkspaceRoomShape }) {
         width: w,
         height: h,
         pointerEvents: "all",
+        // Animates the inline width/height when expand/collapse changes
+        // the shape props. Tldraw's selection rect still snaps, but the
+        // rendered card grows smoothly in place.
+        transition:
+          "width 260ms cubic-bezier(0.22, 1, 0.36, 1), height 260ms cubic-bezier(0.22, 1, 0.36, 1)",
       }}
     >
       <div
@@ -246,6 +259,20 @@ function WorkspaceRoomView({ shape }: { shape: WorkspaceRoomShape }) {
             cachedTitle={cached_title}
             expanded={expanded}
           />
+        ) : kind === "space" ? (
+          <SpaceRoomBody
+            artifactId={artifact_id}
+            cachedTitle={cached_title}
+            expanded={expanded}
+            mode="space"
+          />
+        ) : kind === "twin" ? (
+          <SpaceRoomBody
+            artifactId={artifact_id}
+            cachedTitle={cached_title}
+            expanded={expanded}
+            mode="twin"
+          />
         ) : (
           <StubRoomBody kind={kind} expanded={expanded} />
         )}
@@ -277,6 +304,7 @@ function BrainstormRoomBody({
 }) {
   const [data, setData] = useState<BrainstormSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     if (!artifactId) return;
@@ -310,6 +338,38 @@ function BrainstormRoomBody({
     if (typeof window === "undefined" || !artifactId) return;
     // Open in a new tab — keeps the workspace canvas accessible.
     window.open(`/app/synergy/${artifactId}`, "_blank");
+  };
+
+  // Promotion bridge: brainstorm → strategy. Fires the existing
+  // strategy-generate endpoint, then spawns a strategy room beside
+  // this brainstorm so the lineage is immediately visible on canvas.
+  const handleGenerateStrategy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!artifactId || generating) return;
+    setGenerating(true);
+    try {
+      const res = await fetch(
+        `/api/synergy/sessions/${artifactId}/strategy/generate`,
+        { method: "POST", cache: "no-store" },
+      );
+      if (!res.ok) throw new Error("Strategy generation failed");
+      const json = (await res.json()) as {
+        strategy: { id: string; statement: string | null; session_id: string };
+      };
+      window.dispatchEvent(
+        new CustomEvent("canvas-workspace:add-strategy", {
+          detail: {
+            strategyId: json.strategy.id,
+            sessionId: json.strategy.session_id,
+            statement: json.strategy.statement ?? "",
+          },
+        }),
+      );
+    } catch (err) {
+      console.warn("[brainstorm-room] generate strategy failed:", err);
+    } finally {
+      setGenerating(false);
+    }
   };
 
   return (
@@ -353,22 +413,36 @@ function BrainstormRoomBody({
           )}
         </div>
 
-        <button
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={handleOpen}
-          className={
-            expanded
-              ? "inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-gray-700"
-              : "inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700"
-          }
-          title="Open this brainstorm in a new tab"
-        >
-          {expanded ? "Open in new tab" : "Open"}
-          <ArrowUpRight
-            className={expanded ? "h-3.5 w-3.5" : "h-3 w-3"}
-            strokeWidth={1.75}
-          />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {expanded && (
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={handleGenerateStrategy}
+              disabled={generating}
+              className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-700 ring-1 ring-violet-200 transition hover:bg-violet-100 disabled:opacity-60"
+              title="Synthesize a strategy from this brainstorm and spawn its room"
+            >
+              <FileText className="h-3 w-3" />
+              {generating ? "Generating…" : "Generate strategy"}
+            </button>
+          )}
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={handleOpen}
+            className={
+              expanded
+                ? "inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-gray-700"
+                : "inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700"
+            }
+            title="Open this brainstorm in a new tab"
+          >
+            {expanded ? "Open in new tab" : "Open"}
+            <ArrowUpRight
+              className={expanded ? "h-3.5 w-3.5" : "h-3 w-3"}
+              strokeWidth={1.75}
+            />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -405,6 +479,7 @@ function StrategyRoomBody({
 }) {
   const [data, setData] = useState<StrategySummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [promoting, setPromoting] = useState(false);
 
   useEffect(() => {
     if (!artifactId) return;
@@ -447,6 +522,40 @@ function StrategyRoomBody({
     e.stopPropagation();
     if (typeof window === "undefined" || !openHref) return;
     window.open(openHref, "_blank");
+  };
+
+  // Promotion bridge: strategy → R&D space. Packages the strategy's
+  // statement + pitch as seed text, calls /api/intake/bootstrap to
+  // create a new space, then spawns the corresponding space room with
+  // fromStrategyId so the spawner auto-draws the provenance arrow.
+  const handlePromoteToSpace = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!data?.statement || promoting) return;
+    setPromoting(true);
+    try {
+      const seed = [data.statement, data.pitch].filter(Boolean).join("\n\n");
+      const res = await fetch("/api/intake/bootstrap", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: seed }),
+      });
+      if (!res.ok) throw new Error("intake bootstrap failed");
+      const json = (await res.json()) as { spaceId?: string };
+      if (!json.spaceId) throw new Error("no spaceId in response");
+      window.dispatchEvent(
+        new CustomEvent("canvas-workspace:add-space", {
+          detail: {
+            spaceId: json.spaceId,
+            name: data.statement.slice(0, 60),
+            fromStrategyId: artifactId,
+          },
+        }),
+      );
+    } catch (err) {
+      console.warn("[strategy-room] promote-to-space failed:", err);
+    } finally {
+      setPromoting(false);
+    }
   };
 
   return (
@@ -515,23 +624,264 @@ function StrategyRoomBody({
           ) : null}
         </div>
 
-        <button
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={handleOpen}
-          disabled={!openHref}
-          className={
-            expanded
-              ? "inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-gray-700 disabled:opacity-50"
-              : "inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700 disabled:opacity-50"
-          }
-          title="Open this strategy in a new tab"
-        >
-          {expanded ? "Open in new tab" : "Open"}
-          <ArrowUpRight
-            className={expanded ? "h-3.5 w-3.5" : "h-3 w-3"}
-            strokeWidth={1.75}
-          />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {expanded && (
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={handlePromoteToSpace}
+              disabled={promoting || !data?.statement}
+              className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 ring-1 ring-rose-200 transition hover:bg-rose-100 disabled:opacity-60"
+              title="Promote this strategy to a fresh R&D space and spawn its room"
+            >
+              <Network className="h-3 w-3" />
+              {promoting ? "Promoting…" : "Take deeper"}
+            </button>
+          )}
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={handleOpen}
+            disabled={!openHref}
+            className={
+              expanded
+                ? "inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-gray-700 disabled:opacity-50"
+                : "inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700 disabled:opacity-50"
+            }
+            title="Open this strategy in a new tab"
+          >
+            {expanded ? "Open in new tab" : "Open"}
+            <ArrowUpRight
+              className={expanded ? "h-3.5 w-3.5" : "h-3 w-3"}
+              strokeWidth={1.75}
+            />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SpaceRoomBody ──
+// Handles both kind="space" (R&D pipeline mini-dashboard) and
+// kind="twin" (twin-state mini-dashboard for the same underlying
+// space row). Same fetch, different chrome: space mode shows KG
+// coverage as the headline; twin mode shows twin readiness +
+// "Open twin" as the headline. artifact_id is the space_id in both
+// cases — keeping them on one row makes the cross-add UX simple
+// (Open twin from a space room just spawns a twin room beside it
+// with the same artifact_id).
+
+interface SpaceRoomSummary {
+  id: string;
+  name: string;
+  entity_count: number;
+  edge_count: number;
+  cycle_count: number;
+  maturity: "actionable_now" | "waiting_on_dependency" | "theoretical" | "blocked";
+  digital_twin_state: "not_started" | "ready" | "active" | "retired";
+  twin_initialized_at: string | null;
+  updated_at: string;
+  has_synthesis: boolean;
+}
+
+const MATURITY_LABEL: Record<SpaceRoomSummary["maturity"], string> = {
+  actionable_now: "Actionable",
+  waiting_on_dependency: "Pending dep",
+  theoretical: "Exploratory",
+  blocked: "Blocked",
+};
+
+const TWIN_STATE_LABEL: Record<SpaceRoomSummary["digital_twin_state"], string> = {
+  not_started: "Twin not started",
+  ready: "Twin ready",
+  active: "Twin live",
+  retired: "Twin retired",
+};
+
+function SpaceRoomBody({
+  artifactId,
+  cachedTitle,
+  expanded,
+  mode,
+}: {
+  artifactId: string;
+  cachedTitle: string;
+  expanded: boolean;
+  mode: "space" | "twin";
+}) {
+  const [data, setData] = useState<SpaceRoomSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!artifactId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/spaces/${artifactId}/room-summary`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) throw new Error("Failed to load space");
+        const json = (await res.json()) as { space: SpaceRoomSummary };
+        if (!cancelled) setData(json.space);
+      } catch {
+        // Soft-fail — keep cached title visible
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactId]);
+
+  const name = data?.name?.trim() || cachedTitle || "Untitled space";
+  const entityCount = data?.entity_count ?? 0;
+  const edgeCount = data?.edge_count ?? 0;
+  const cycleCount = data?.cycle_count ?? 0;
+  const maturity = data?.maturity ?? "theoretical";
+  const twinState = data?.digital_twin_state ?? "not_started";
+  const updated = data?.updated_at;
+  // Twin mode is meaningless if the space has no twin yet — surface
+  // a "not ready" caption instead of pretending to be live.
+  const twinReady = twinState === "ready" || twinState === "active";
+
+  // Open destination depends on mode. Space → whiteboard. Twin →
+  // dedicated twin detail page (Twin Detail Page Phase 2 ships this
+  // route as a real surface, not a stub).
+  const openHref =
+    mode === "twin"
+      ? `/app/space/${artifactId}/twin`
+      : `/app/space/${artifactId}/whiteboard`;
+
+  const handleOpen = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (typeof window === "undefined" || !artifactId) return;
+    window.open(openHref, "_blank");
+  };
+
+  // Promotion bridges (Phase A.4).
+  // Strategy-style "go to next stage" actions live in the expanded
+  // body. Space room: "Build twin →" spawns a sibling twin room
+  // with the same artifact_id. Twin room: nothing to promote (twin
+  // is already the terminus today).
+  const handleSpawnTwin = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (typeof window === "undefined" || !artifactId) return;
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:add-twin", {
+        detail: { spaceId: artifactId, cachedTitle: name },
+      }),
+    );
+  };
+
+  return (
+    <div className="flex h-[calc(100%-44px)] flex-col px-5 pb-4 pt-2">
+      <h3
+        className={
+          expanded
+            ? "font-display-tight line-clamp-3 text-[18px] font-semibold leading-snug tracking-tight text-gray-900"
+            : "font-display-tight line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight text-gray-900"
+        }
+      >
+        {name}
+      </h3>
+
+      {/* Mode-specific second line. Twin mode shows readiness; space
+          mode shows the maturity label so the user knows whether the
+          pipeline is still inferring or settled. */}
+      <p
+        className={
+          expanded
+            ? "mt-2 text-[12px] leading-relaxed text-gray-500"
+            : "mt-1 text-[11px] leading-snug text-gray-500"
+        }
+      >
+        {mode === "twin" ? (
+          twinReady ? (
+            <span className="inline-flex items-center gap-1">
+              <Activity className="h-3 w-3" />
+              {TWIN_STATE_LABEL[twinState]}
+            </span>
+          ) : (
+            <span className="text-gray-400">
+              {TWIN_STATE_LABEL[twinState]} — needs synthesis
+            </span>
+          )
+        ) : (
+          <span>{MATURITY_LABEL[maturity]}</span>
+        )}
+      </p>
+
+      {/* Coverage pills row */}
+      {(entityCount > 0 || edgeCount > 0 || cycleCount > 0) && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {entityCount > 0 && (
+            <span className="inline-flex items-center rounded-md bg-gray-50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-gray-600 ring-1 ring-black/[0.04]">
+              {entityCount} {entityCount === 1 ? "entity" : "entities"}
+            </span>
+          )}
+          {edgeCount > 0 && (
+            <span className="inline-flex items-center rounded-md bg-gray-50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-gray-600 ring-1 ring-black/[0.04]">
+              {edgeCount} {edgeCount === 1 ? "edge" : "edges"}
+            </span>
+          )}
+          {cycleCount > 0 && (
+            <span className="inline-flex items-center rounded-md bg-gray-50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-gray-600 ring-1 ring-black/[0.04]">
+              {cycleCount} {cycleCount === 1 ? "cycle" : "cycles"}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Expanded extras: a second pill row + promotion CTA. Only
+          shown in space mode (twin mode has no further downstream to
+          promote to in this batch). */}
+      {expanded && mode === "space" && data?.has_synthesis && !twinReady && (
+        <p className="mt-2 text-[11px] leading-relaxed text-gray-500">
+          Synthesis is in progress — the twin will surface here once the
+          knowledge graph stabilizes.
+        </p>
+      )}
+
+      {/* Meta row + open + promotion */}
+      <div className="mt-auto flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-gray-500">
+          {loading ? (
+            <span className="text-gray-300">Loading…</span>
+          ) : updated ? (
+            <span>{relativeTime(updated)}</span>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {expanded && mode === "space" && twinReady && (
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={handleSpawnTwin}
+              className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200 transition hover:bg-emerald-100"
+              title="Spawn a twin room beside this one"
+            >
+              <TestTube className="h-3 w-3" />
+              Build twin
+            </button>
+          )}
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={handleOpen}
+            className={
+              expanded
+                ? "inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-gray-700"
+                : "inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700"
+            }
+            title={mode === "twin" ? "Open twin detail page" : "Open R&D whiteboard"}
+          >
+            {expanded ? "Open in new tab" : "Open"}
+            <ArrowUpRight
+              className={expanded ? "h-3.5 w-3.5" : "h-3 w-3"}
+              strokeWidth={1.75}
+            />
+          </button>
+        </div>
       </div>
     </div>
   );

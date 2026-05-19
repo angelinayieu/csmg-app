@@ -631,7 +631,7 @@ export type WorkspaceRoomShape = TLBaseShape<
   {
     w: number;
     h: number;
-    kind: "brainstorm" | "strategy" | "twin" | "probe";
+    kind: "brainstorm" | "strategy" | "twin" | "probe" | "space";
     /** UUID of the underlying artifact (brainstorm_sessions.id,
      *  synergy_strategies.id, etc.). The renderer fetches the row
      *  via the per-kind client API to populate title/meta/thumbnail. */
