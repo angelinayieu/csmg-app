@@ -14,7 +14,7 @@
 // Phase 1 keeps "Log observation" as a placeholder — Phase 2 wires
 // it to the observations table the migration already created.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { TwinPainMetricCard } from "../parts/twin-pain-metric-card";
 import { TwinFidelityStrip } from "../parts/twin-fidelity-strip";
@@ -23,6 +23,10 @@ import {
   TwinObservationFeed,
   type ObservationFeedHandle,
 } from "../parts/twin-observation-feed";
+import {
+  TwinLatestSnapshotCard,
+  type LatestSnapshotCardHandle,
+} from "../parts/twin-latest-snapshot-card";
 import { LogObservationDialog } from "../parts/dialogs/log-observation-dialog";
 import { PainIcon, ObservationIcon } from "@/components/twin/icons/twin-icons";
 import { toast } from "@/lib/hooks/use-toast";
@@ -38,6 +42,19 @@ export function TwinOutcomesTab({ spaceId, bundle, setBundle }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [observationDialogOpen, setObservationDialogOpen] = useState(false);
   const observationFeedRef = useRef<ObservationFeedHandle>(null);
+  const snapshotCardRef = useRef<LatestSnapshotCardHandle>(null);
+
+  // Refresh the snapshot card whenever the dispatcher fires the
+  // `twin:snapshot-captured` window event (emitted right after a
+  // successful POST /snapshots). Avoids a full bundle refetch since
+  // the snapshot card owns its own data.
+  useEffect(() => {
+    const handler = () => {
+      void snapshotCardRef.current?.refresh();
+    };
+    window.addEventListener("twin:snapshot-captured", handler);
+    return () => window.removeEventListener("twin:snapshot-captured", handler);
+  }, []);
 
   // Re-run the pain extractor, then bust the bundle cache so the next
   // bundle read picks up the new pain_metrics rows.
@@ -121,6 +138,11 @@ export function TwinOutcomesTab({ spaceId, bundle, setBundle }: Props) {
             ))}
           </div>
         )}
+      </section>
+
+      {/* ── Snapshots section ────────────────────────────────────── */}
+      <section>
+        <TwinLatestSnapshotCard ref={snapshotCardRef} spaceId={spaceId} />
       </section>
 
       {/* ── Fidelity section ─────────────────────────────────────── */}

@@ -114,6 +114,11 @@ export function TwinActionDispatcher({
             ? `${json.entity_count} entities · ${json.edge_count ?? 0} edges`
             : "Twin state captured for comparison.",
       });
+      // Notify the Outcomes-tab snapshot card so it refreshes its
+      // "Last captured" card without a full bundle refetch.
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("twin:snapshot-captured"));
+      }
       onBundleInvalidated?.();
     } catch (err) {
       console.warn("[dispatcher] snapshot failed:", err);
