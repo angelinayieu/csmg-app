@@ -664,6 +664,9 @@ declare module "@tldraw/tlschema" {
       cached_title: string;
       /** ms timestamp at spawn — gates the entrance animation. */
       spawnedAt: number;
+      /** When true the renderer shows a larger card with richer detail.
+       *  Toggle lives in the card's header. Same shape, two states. */
+      expanded: boolean;
     };
     // Probe rabbit-hole trail (2026-07-04) — spatial unfurl of a probe
     // question into 2-4 sub-questions. Spawned by the dock:probe event

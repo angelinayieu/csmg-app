@@ -22,20 +22,32 @@ import {
   type RecordProps,
   type TLResizeInfo,
   resizeBox,
+  useEditor,
+  stopEventPropagation,
 } from "tldraw";
 import { useEffect, useState } from "react";
 import {
   ArrowUpRight,
   FileText,
   Layers,
+  Maximize2,
   MessageCircleQuestion,
+  Minimize2,
   Sparkles,
   TestTube,
 } from "lucide-react";
 import type { WorkspaceRoomShape } from "./types";
 
+// Collapsed preset — compact card the picker lands on by default.
 export const WORKSPACE_ROOM_DEFAULT_W = 360;
 export const WORKSPACE_ROOM_DEFAULT_H = 220;
+// Expanded preset — bigger card with room for richer per-kind content
+// (pitch line, next-action step, fuller pill row). Toggled via the
+// header chevron button; keeps the shape on the canvas (not a route
+// navigation) — that's the "state 2" inline-expand UX the universal
+// canvas needed.
+export const WORKSPACE_ROOM_EXPANDED_W = 540;
+export const WORKSPACE_ROOM_EXPANDED_H = 380;
 const ENTRANCE_MS = 700;
 
 // Per-kind visual treatment. Keeps the kinds distinguishable on the
@@ -85,6 +97,7 @@ export class WorkspaceRoomShapeUtil extends BaseBoxShapeUtil<WorkspaceRoomShape>
     artifact_id: T.string,
     cached_title: T.string,
     spawnedAt: T.number,
+    expanded: T.boolean,
   };
 
   override canResize = () => true;
@@ -104,6 +117,7 @@ export class WorkspaceRoomShapeUtil extends BaseBoxShapeUtil<WorkspaceRoomShape>
       artifact_id: "",
       cached_title: "",
       spawnedAt: Date.now(),
+      expanded: false,
     };
   }
 
@@ -119,7 +133,9 @@ export class WorkspaceRoomShapeUtil extends BaseBoxShapeUtil<WorkspaceRoomShape>
 }
 
 function WorkspaceRoomView({ shape }: { shape: WorkspaceRoomShape }) {
-  const { w, h, kind, artifact_id, cached_title, spawnedAt } = shape.props;
+  const editor = useEditor();
+  const { w, h, kind, artifact_id, cached_title, spawnedAt, expanded } =
+    shape.props;
   const meta = KIND_META[kind];
   const Icon = meta.Icon;
 
@@ -132,9 +148,26 @@ function WorkspaceRoomView({ shape }: { shape: WorkspaceRoomShape }) {
     return () => window.clearTimeout(t);
   }, [spawnedAt]);
 
-  // Phase A wires only the brainstorm renderer. Other kinds render a
-  // stub so the shape stays valid + visible while we build the
-  // remaining renderers.
+  // Toggle expanded ↔ collapsed. Anchors the card's CENTER so the
+  // expansion feels like the card grows in place rather than snapping
+  // its bottom-right outward. Tldraw stores x/y at top-left, so we
+  // recompute x/y from the current center against the new w/h.
+  const handleToggleExpand = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = !expanded;
+    const nextW = next ? WORKSPACE_ROOM_EXPANDED_W : WORKSPACE_ROOM_DEFAULT_W;
+    const nextH = next ? WORKSPACE_ROOM_EXPANDED_H : WORKSPACE_ROOM_DEFAULT_H;
+    const cx = shape.x + w / 2;
+    const cy = shape.y + h / 2;
+    editor.updateShape<WorkspaceRoomShape>({
+      id: shape.id,
+      type: "workspace-room",
+      x: cx - nextW / 2,
+      y: cy - nextH / 2,
+      props: { w: nextW, h: nextH, expanded: next },
+    });
+  };
+
   return (
     <HTMLContainer
       style={{
@@ -164,23 +197,40 @@ function WorkspaceRoomView({ shape }: { shape: WorkspaceRoomShape }) {
           style={{ background: meta.accent }}
         />
 
-        {/* Kind label row: glyph + caps label */}
-        <div className="flex items-center gap-2 px-5 pt-5">
-          <span
-            className="inline-flex h-6 w-6 items-center justify-center rounded-lg"
-            style={{
-              background: meta.accentSoft,
-              color: meta.accent,
-            }}
+        {/* Header row: kind label on the left, expand/collapse on the
+            right. The expand toggle stops pointer-down propagation so
+            tldraw doesn't start a drag when the user clicks it. */}
+        <div className="flex items-center justify-between gap-2 px-5 pt-5">
+          <div className="flex items-center gap-2">
+            <span
+              className="inline-flex h-6 w-6 items-center justify-center rounded-lg"
+              style={{
+                background: meta.accentSoft,
+                color: meta.accent,
+              }}
+            >
+              <Icon size={14} strokeWidth={1.75} />
+            </span>
+            <span
+              className="font-mono text-[10px] uppercase tracking-[0.18em]"
+              style={{ color: meta.accent }}
+            >
+              {meta.label}
+            </span>
+          </div>
+          <button
+            onPointerDown={stopEventPropagation}
+            onClick={handleToggleExpand}
+            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gray-400 transition hover:bg-gray-100 hover:text-gray-700"
+            title={expanded ? "Collapse card" : "Expand card"}
+            aria-label={expanded ? "Collapse card" : "Expand card"}
           >
-            <Icon size={14} strokeWidth={1.75} />
-          </span>
-          <span
-            className="font-mono text-[10px] uppercase tracking-[0.18em]"
-            style={{ color: meta.accent }}
-          >
-            {meta.label}
-          </span>
+            {expanded ? (
+              <Minimize2 size={12} strokeWidth={1.75} />
+            ) : (
+              <Maximize2 size={12} strokeWidth={1.75} />
+            )}
+          </button>
         </div>
 
         {/* Per-kind body */}
@@ -188,14 +238,16 @@ function WorkspaceRoomView({ shape }: { shape: WorkspaceRoomShape }) {
           <BrainstormRoomBody
             artifactId={artifact_id}
             cachedTitle={cached_title}
+            expanded={expanded}
           />
         ) : kind === "strategy" ? (
           <StrategyRoomBody
             artifactId={artifact_id}
             cachedTitle={cached_title}
+            expanded={expanded}
           />
         ) : (
-          <StubRoomBody kind={kind} />
+          <StubRoomBody kind={kind} expanded={expanded} />
         )}
       </div>
     </HTMLContainer>
@@ -217,9 +269,11 @@ interface BrainstormSummary {
 function BrainstormRoomBody({
   artifactId,
   cachedTitle,
+  expanded,
 }: {
   artifactId: string;
   cachedTitle: string;
+  expanded: boolean;
 }) {
   const [data, setData] = useState<BrainstormSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -260,9 +314,22 @@ function BrainstormRoomBody({
 
   return (
     <div className="flex h-[calc(100%-44px)] flex-col px-5 pb-4 pt-2">
-      <h3 className="font-display-tight line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight text-gray-900">
+      <h3
+        className={
+          expanded
+            ? "font-display-tight line-clamp-4 text-[18px] font-semibold leading-snug tracking-tight text-gray-900"
+            : "font-display-tight line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight text-gray-900"
+        }
+      >
         {title}
       </h3>
+
+      {expanded && (
+        <p className="mt-3 text-[12px] leading-relaxed text-gray-500">
+          A voice-augmented brainstorm canvas. Open to add nodes, refine
+          components, and let the synthesizer turn your ideas into a strategy.
+        </p>
+      )}
 
       {/* Meta row */}
       <div className="mt-auto flex items-center justify-between gap-2">
@@ -289,11 +356,18 @@ function BrainstormRoomBody({
         <button
           onPointerDown={(e) => e.stopPropagation()}
           onClick={handleOpen}
-          className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700"
+          className={
+            expanded
+              ? "inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-gray-700"
+              : "inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700"
+          }
           title="Open this brainstorm in a new tab"
         >
-          Open
-          <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} />
+          {expanded ? "Open in new tab" : "Open"}
+          <ArrowUpRight
+            className={expanded ? "h-3.5 w-3.5" : "h-3 w-3"}
+            strokeWidth={1.75}
+          />
         </button>
       </div>
     </div>
@@ -323,9 +397,11 @@ interface StrategySummary {
 function StrategyRoomBody({
   artifactId,
   cachedTitle,
+  expanded,
 }: {
   artifactId: string;
   cachedTitle: string;
+  expanded: boolean;
 }) {
   const [data, setData] = useState<StrategySummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -354,6 +430,7 @@ function StrategyRoomBody({
   }, [artifactId]);
 
   const statement = data?.statement?.trim() || cachedTitle || "Untitled strategy";
+  const pitch = data?.pitch?.trim() || "";
   const totalSteps = data?.total_steps ?? 0;
   const doneSteps = data?.done_steps ?? 0;
   const riskCount = data?.risk_count ?? 0;
@@ -374,9 +451,21 @@ function StrategyRoomBody({
 
   return (
     <div className="flex h-[calc(100%-44px)] flex-col px-5 pb-4 pt-2">
-      <h3 className="font-display-tight line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight text-gray-900">
+      <h3
+        className={
+          expanded
+            ? "font-display-tight line-clamp-4 text-[18px] font-semibold leading-snug tracking-tight text-gray-900"
+            : "font-display-tight line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight text-gray-900"
+        }
+      >
         {statement}
       </h3>
+
+      {expanded && pitch && (
+        <p className="mt-2 line-clamp-3 text-[12px] leading-relaxed text-gray-600">
+          {pitch}
+        </p>
+      )}
 
       {/* Effort-weighted progress strip — matches the strategy doc's
           ProgressStrip vocabulary so canvas + doc speak the same
@@ -430,11 +519,18 @@ function StrategyRoomBody({
           onPointerDown={(e) => e.stopPropagation()}
           onClick={handleOpen}
           disabled={!openHref}
-          className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700 disabled:opacity-50"
+          className={
+            expanded
+              ? "inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-gray-700 disabled:opacity-50"
+              : "inline-flex items-center gap-1 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-gray-700 disabled:opacity-50"
+          }
           title="Open this strategy in a new tab"
         >
-          Open
-          <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} />
+          {expanded ? "Open in new tab" : "Open"}
+          <ArrowUpRight
+            className={expanded ? "h-3.5 w-3.5" : "h-3 w-3"}
+            strokeWidth={1.75}
+          />
         </button>
       </div>
     </div>
@@ -448,16 +544,30 @@ function StrategyRoomBody({
 
 function StubRoomBody({
   kind,
+  expanded,
 }: {
   kind: WorkspaceRoomShape["props"]["kind"];
+  expanded: boolean;
 }) {
   return (
     <div className="flex h-[calc(100%-44px)] flex-col items-start justify-center px-5">
-      <p className="font-display-tight text-[15px] font-semibold leading-snug tracking-tight text-gray-900">
+      <p
+        className={
+          expanded
+            ? "font-display-tight text-[18px] font-semibold leading-snug tracking-tight text-gray-900"
+            : "font-display-tight text-[15px] font-semibold leading-snug tracking-tight text-gray-900"
+        }
+      >
         {KIND_META[kind].label} room
       </p>
-      <p className="mt-1 inline-flex items-center gap-1 text-[11px] text-gray-500">
-        <Sparkles className="h-3 w-3" />
+      <p
+        className={
+          expanded
+            ? "mt-2 inline-flex items-center gap-1 text-[12px] text-gray-500"
+            : "mt-1 inline-flex items-center gap-1 text-[11px] text-gray-500"
+        }
+      >
+        <Sparkles className={expanded ? "h-3.5 w-3.5" : "h-3 w-3"} />
         Coming soon — renderer not built yet
       </p>
     </div>

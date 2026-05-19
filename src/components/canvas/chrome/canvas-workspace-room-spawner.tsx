@@ -80,6 +80,7 @@ export function CanvasWorkspaceRoomSpawner() {
               artifact_id: props.artifact_id,
               cached_title: props.cached_title,
               spawnedAt: Date.now(),
+              expanded: false,
             },
           },
         ]);

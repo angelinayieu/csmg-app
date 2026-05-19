@@ -644,6 +644,11 @@ export type WorkspaceRoomShape = TLBaseShape<
     /** ms timestamp at spawn — used to gate the entrance animation
      *  so re-mounts (tldraw page switches) don't replay it. */
     spawnedAt: number;
+    /** When true the renderer shows a larger card with richer detail
+     *  (pitch line, fuller meta, second action row). Toggle lives in
+     *  the card's header. Drives w/h preset + body layout branching —
+     *  same shape, two states. Collapsed by default on spawn. */
+    expanded: boolean;
   }
 >;
 
@@ -1705,6 +1710,44 @@ export type OriginPromptShape = TLBaseShape<
   }
 >;
 
+// ── Clarifier seed card ────────────────────────────────────────────
+//
+// Phase C — quiet-mode canvas needs the user's MCQ answers visible as
+// real artifacts (not buried in synthesis_data). Spawned on first
+// mount when synthesis_data.user_assertions is non-empty AND
+// synthesis_data.meta.seeded_at is null. One card per typed assertion.
+//
+// `slot` is the AnswerSlot the assertion fills (exploration_angle,
+// variation_axis, target_metric, system_boundary, state_variable,
+// observation_point, timeframe, constraint). `kind` is the visual
+// grouping derived from slot — keeps the per-mode color/icon table
+// compact (slot list can grow without forcing new visuals).
+export type SeedCardShape = TLBaseShape<
+  "seed-card",
+  {
+    w: number;
+    h: number;
+    /** AnswerSlot value carried through from the clarifier. */
+    slot: string;
+    /** Visual grouping: angle / axis / boundary / metric / state / constraint. */
+    kind:
+      | "angle"
+      | "axis"
+      | "boundary"
+      | "metric"
+      | "state"
+      | "constraint";
+    /** The MCQ question that produced this assertion. */
+    question: string;
+    /** The user's selected/written answer — the load-bearing payload. */
+    value: string;
+    /** Iso timestamp when the user answered. Display-only. */
+    answeredAt: string;
+    /** Once promoted to a real entity, this is set so the card knows. */
+    promotedEntityId: string | null;
+  }
+>;
+
 export type CanvasCustomShape =
   | KGNodeShape
   | KGFormationShape
@@ -1714,6 +1757,7 @@ export type CanvasCustomShape =
   | ProposalChainRibbonShape
   | TaxonomyCardShape
   | VariantCardShape
+  | SeedCardShape
   | StickyNoteShape
   | SynthesisCardShape
   | SummaryCardShape
