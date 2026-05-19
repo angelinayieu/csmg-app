@@ -126,6 +126,9 @@ export async function POST(req: Request, ctx: Ctx) {
   const actualValue = body.actual_value ?? null;
 
   // Light calibration — only runs when actual_value carries a numeric.
+  // When the observation has predicted_entity_ids, calibration sharpens:
+  // we only resolve predictions whose parent app's dominant_entity_ids
+  // overlap the observation's entity selection.
   let calibration: CalibrationApplied | null = null;
   if (actualValue && typeof actualValue.value === "number") {
     calibration = await scoreCalibration(
@@ -133,6 +136,7 @@ export async function POST(req: Request, ctx: Ctx) {
       spaceId,
       user.id,
       actualValue,
+      predictedEntityIds,
     );
   } else {
     calibration = {
@@ -224,6 +228,7 @@ async function scoreCalibration(
   spaceId: string,
   userId: string,
   actualValue: { metric: string; value: number; unit?: string },
+  predictedEntityIds: string[],
 ): Promise<CalibrationApplied> {
   // Pull open predictions whose metric_label fuzzily matches the
   // observation's metric name. ilike pattern keeps it tolerant to
@@ -232,7 +237,7 @@ async function scoreCalibration(
   const { data: openPreds } = await db
     .from("prediction_ledger")
     .select(
-      "id, metric_label, predicted_value, predicted_value_text, prediction_kind",
+      "id, app_id, metric_label, predicted_value, predicted_value_text, prediction_kind",
     )
     .eq("space_id", spaceId)
     .eq("user_id", userId)
@@ -241,14 +246,49 @@ async function scoreCalibration(
     .limit(20);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const matches = (openPreds ?? []) as Array<any>;
+  let matches = (openPreds ?? []) as Array<any>;
+
+  // Sharpen by entity overlap when the observation specifies entities.
+  // We look up the apps that own those predictions and filter to ones
+  // whose dominant_entity_ids intersect the observation's selection.
+  // Predictions with no app_id stay in the pool only if the
+  // observation didn't specify entities (the user is saying "I don't
+  // know which entities; match by metric label alone").
+  if (predictedEntityIds.length > 0 && matches.length > 0) {
+    const appIds = Array.from(
+      new Set(matches.map((m) => m.app_id).filter(Boolean)),
+    ) as string[];
+    if (appIds.length > 0) {
+      const { data: appRows } = await db
+        .from("apps")
+        .select("id, dominant_entity_ids")
+        .in("id", appIds);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const appsById = new Map<string, string[]>();
+      for (const a of (appRows ?? []) as Array<any>) {
+        appsById.set(a.id, (a.dominant_entity_ids as string[]) ?? []);
+      }
+      const obsEntitySet = new Set(predictedEntityIds);
+      matches = matches.filter((m) => {
+        if (!m.app_id) return false; // strict mode: app required
+        const dom = appsById.get(m.app_id) ?? [];
+        return dom.some((id) => obsEntitySet.has(id));
+      });
+    } else {
+      // No predictions have an app_id — entity filter can't narrow,
+      // so leave the metric-label-matched set untouched.
+    }
+  }
 
   if (matches.length === 0) {
     return {
       verdict: "no_match",
       matched_prediction_ids: [],
       deviation_summary: [],
-      narrative: `No open predictions for "${actualValue.metric}" — observation recorded for the future.`,
+      narrative:
+        predictedEntityIds.length > 0
+          ? `No open predictions match "${actualValue.metric}" on the entities you pinned — observation recorded for the future.`
+          : `No open predictions for "${actualValue.metric}" — observation recorded for the future.`,
     };
   }
 

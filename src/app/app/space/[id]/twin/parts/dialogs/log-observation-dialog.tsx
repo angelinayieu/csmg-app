@@ -13,14 +13,16 @@
 //   - Outcomes tab "Log observation" button (replaces the Phase 1
 //     dashed placeholder)
 //
-// Entity multi-select is deferred to Phase 3 — for now the user can
-// reference entities in the free-text and we let the Skeptic pick
-// them up later. predicted_entity_ids stays empty by default.
+// Entity multi-select: the user can pin the observation to specific
+// entities so calibration matching considers entity overlap, not
+// just metric-label fuzzy match. Entities are lazy-loaded on dialog
+// open via /api/spaces/[id]/entities.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Sparkles } from "lucide-react";
 import { ObservationIcon } from "@/components/twin/icons/twin-icons";
+import type { Entity } from "@/types";
 import type { ObservationRow } from "@/app/api/spaces/[id]/observations/route";
 
 interface Props {
@@ -49,6 +51,14 @@ export function LogObservationDialog({
   const [mounted, setMounted] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
+  // Entity multi-select state.
+  const [entities, setEntities] = useState<Entity[] | null>(null);
+  const [entitiesLoading, setEntitiesLoading] = useState(false);
+  const [selectedEntityIds, setSelectedEntityIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [entityFilter, setEntityFilter] = useState("");
+
   useEffect(() => {
     setMounted(true);
   }, []);
@@ -70,8 +80,72 @@ export function LogObservationDialog({
       setValue("");
       setUnit("");
       setError(null);
+      setSelectedEntityIds(new Set());
+      setEntityFilter("");
     }
   }, [open]);
+
+  // Lazy-load entities on dialog open (only once per session).
+  useEffect(() => {
+    if (!open || entities !== null) return;
+    let cancelled = false;
+    setEntitiesLoading(true);
+    fetch(`/api/spaces/${spaceId}/entities`, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = (await res.json()) as { entities: Entity[] };
+        if (cancelled) return;
+        // Sort by importance then alphabetical so the most relevant
+        // entities float up in the picker.
+        const importanceWeight: Record<string, number> = {
+          fundamental: 0,
+          critical: 1,
+          high: 2,
+          medium: 3,
+          low: 4,
+        };
+        const sorted = [...json.entities].sort((a, b) => {
+          const ai = a.importance ? (importanceWeight[a.importance] ?? 5) : 5;
+          const bi = b.importance ? (importanceWeight[b.importance] ?? 5) : 5;
+          if (ai !== bi) return ai - bi;
+          return a.name.localeCompare(b.name);
+        });
+        setEntities(sorted);
+      })
+      .catch((err) => {
+        console.warn("[log-observation] entity fetch failed:", err);
+        if (!cancelled) setEntities([]); // Empty array = stop retrying
+      })
+      .finally(() => {
+        if (!cancelled) setEntitiesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, spaceId, entities]);
+
+  // Filtered entity list for the picker. Case-insensitive substring
+  // match on name + description.
+  const filteredEntities = useMemo(() => {
+    if (!entities) return [];
+    const q = entityFilter.trim().toLowerCase();
+    if (q.length === 0) return entities.slice(0, 30); // cap initial render
+    return entities
+      .filter((e) => {
+        const haystack = `${e.name} ${e.description ?? ""}`.toLowerCase();
+        return haystack.includes(q);
+      })
+      .slice(0, 50);
+  }, [entities, entityFilter]);
+
+  const toggleEntity = (id: string) => {
+    setSelectedEntityIds((curr) => {
+      const next = new Set(curr);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   // Esc-to-close + body scroll lock.
   useEffect(() => {
@@ -126,6 +200,7 @@ export function LogObservationDialog({
           observation_text: trimmed,
           tags,
           actual_value: actualValue,
+          predicted_entity_ids: Array.from(selectedEntityIds),
         }),
       });
 
@@ -263,6 +338,65 @@ export function LogObservationDialog({
               )}
             </div>
 
+            {/* ── Entity multi-select ──────────────────────────── */}
+            <div className="rounded-xl border border-black/[0.05] bg-white/40 px-3.5 py-3">
+              <div className="flex items-baseline justify-between">
+                <label className="text-[12.5px] font-medium text-gray-900">
+                  Which entities does this speak to?
+                </label>
+                {selectedEntityIds.size > 0 && (
+                  <span className="text-[10.5px] font-medium text-gray-500">
+                    {selectedEntityIds.size} selected
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 text-[11px] leading-snug text-gray-500">
+                Optional — pinning entities sharpens calibration so the
+                twin only resolves predictions about these nodes.
+              </p>
+
+              {entitiesLoading && entities === null ? (
+                <div className="mt-3 flex h-16 items-center justify-center text-[11px] italic text-gray-400">
+                  Loading entities…
+                </div>
+              ) : entities && entities.length === 0 ? (
+                <div className="mt-3 text-[11px] italic text-gray-400">
+                  No entities yet — log this observation as free-text
+                  and the twin will learn entities as you go.
+                </div>
+              ) : (
+                <>
+                  <input
+                    value={entityFilter}
+                    onChange={(e) => setEntityFilter(e.target.value)}
+                    placeholder={`Filter ${entities?.length ?? 0} entities…`}
+                    className="mt-3 w-full rounded-lg border border-black/[0.06] bg-white/70 px-2.5 py-1.5 text-[12px] text-gray-900 placeholder:text-gray-400 focus:border-black/[0.12] focus:outline-none"
+                  />
+                  <div
+                    className="mt-2 flex max-h-[140px] flex-wrap gap-1 overflow-y-auto"
+                    aria-label="Entity picker"
+                  >
+                    {filteredEntities.map((entity) => {
+                      const active = selectedEntityIds.has(entity.id);
+                      return (
+                        <EntityPickChip
+                          key={entity.id}
+                          entity={entity}
+                          active={active}
+                          onToggle={() => toggleEntity(entity.id)}
+                        />
+                      );
+                    })}
+                    {entities && filteredEntities.length === 0 && (
+                      <div className="text-[11px] italic text-gray-400">
+                        No entities match &quot;{entityFilter}&quot;.
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
             {error && (
               <div className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">
                 {error}
@@ -309,5 +443,50 @@ export function LogObservationDialog({
       `}</style>
     </div>,
     document.body,
+  );
+}
+
+// ── Entity pick chip ──────────────────────────────────────────────
+//
+// Compact pill, toggleable. Color dot reflects entity category so the
+// user can scan by type (concrete / abstract / process / etc).
+
+const CATEGORY_DOT: Record<string, string> = {
+  concrete: "var(--accent-500)",
+  abstract: "#a78bfa",
+  process: "#34d399",
+  relational: "#f472b6",
+  epistemic: "#fbbf24",
+};
+
+function EntityPickChip({
+  entity,
+  active,
+  onToggle,
+}: {
+  entity: Entity;
+  active: boolean;
+  onToggle: () => void;
+}) {
+  const dot = CATEGORY_DOT[entity.entity_category] ?? "var(--accent-500)";
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      title={entity.description ?? entity.name}
+      className={`inline-flex max-w-[200px] items-center gap-1.5 truncate rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition ${
+        active
+          ? "border-gray-900 bg-gray-900 text-white"
+          : "border-black/[0.06] bg-white/60 text-gray-700 hover:border-black/[0.15] hover:bg-white"
+      }`}
+      aria-pressed={active}
+    >
+      <span
+        aria-hidden
+        className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+        style={{ background: active ? "rgba(255,255,255,0.8)" : dot }}
+      />
+      <span className="truncate">{entity.name}</span>
+    </button>
   );
 }
