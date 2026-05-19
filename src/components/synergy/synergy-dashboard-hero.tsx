@@ -45,6 +45,11 @@ import {
 } from "@/types/reasoning-settings";
 import { toast } from "@/lib/hooks/use-toast";
 
+// Minimum perceptual airtime for the rolling-cube loader. Without
+// it, fast bootstraps blink and feel jarring; the modal's loader is
+// part of the dashboard's deliberate motion design.
+const LOADER_FLOOR_MS = 380;
+
 interface Props {
   greeting: string;
   firstName: string;
@@ -65,6 +70,8 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
     askClarifyingQuestions: true,
   });
   const [submitState, setSubmitState] = useState<SubmitState>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const activeMeta =
@@ -91,27 +98,187 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
     }
   };
 
+  const cancelInFlight = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setSubmitState(null);
+    setRouteError(null);
+  };
+
+  // Universal-canvas Phase C: every pill submission routes via the
+  // user's workspace, with the new artifact materialized as a room
+  // there. The previous flow (direct land-in-new-space) is preserved
+  // ONLY for brain_probe, which is intentionally lightweight — a fast
+  // empty thinking-canvas with no workspace overhead.
+  //
+  // Flow per pill:
+  //   brain_probe       → create space → land in new space's whiteboard (legacy)
+  //   brainstorm_speed  → create brainstorm session → land in workspace,
+  //                       spawn brainstorm room, fullscreen iframe of
+  //                       synergy whiteboard with ?autopilot=1
+  //   precise_rd        → create space (pipeline) → land in workspace,
+  //                       spawn space room, fullscreen iframe of the new
+  //                       space's whiteboard so the user watches the pipeline
+  //                       paint while the room sits in workspace
+  //   digital_twin      → same as precise_rd; the new space's twin reveal
+  //                       cinematic fires inside the iframe
   const routeToDestination = async (result: DashboardClarifyResult) => {
     setSubmitState("routing");
-    const { destination } = activeMeta;
-    const params = new URLSearchParams();
-    params.set(destination.promptField, result.refinedPrompt);
-    params.set("mode", mode);
-    if (reasoning.lenses.length > 0) {
-      params.set("lenses", reasoning.lenses.join(","));
+    setRouteError(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      // Brain Probe keeps its lightweight legacy flow — land directly
+      // in the new space's whiteboard, no workspace round-trip. This
+      // pill is for fast no-commitment thinking; the workspace canvas
+      // adds an extra hop that doesn't fit.
+      if (mode === "brain_probe") {
+        const fetchPromise = fetch("/api/intake/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          signal: controller.signal,
+          body: JSON.stringify({
+            text: result.refinedPrompt,
+            reasoningDepth: reasoning.depth,
+            reasoning_settings: { ...reasoning, experienceMode: mode },
+            skipPipeline: true,
+            skipPlanGate: true,
+            clarifying_qa_pairs: result.answers,
+            inferred_baseline: result.baseline,
+          }),
+        });
+        const [res] = await Promise.all([
+          fetchPromise,
+          new Promise((r) => setTimeout(r, LOADER_FLOOR_MS)),
+        ]);
+        const raw = await res.text();
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (!res.ok) {
+          throw new Error(
+            (parsed?.error as string | undefined) ??
+              `Bootstrap failed (${res.status})`,
+          );
+        }
+        const spaceId = parsed?.spaceId as string | undefined;
+        if (!spaceId) throw new Error("Bootstrap did not return a space id");
+        abortRef.current = null;
+        router.push(`/app/space/${spaceId}/whiteboard`);
+        return;
+      }
+
+      // For brainstorm_speed / precise_rd / digital_twin: ensure the
+      // workspace exists, then create the artifact, then route to the
+      // workspace with spawn params so the room materializes there.
+      const workspacePromise = fetch("/api/workspace/ensure", {
+        method: "GET",
+        credentials: "include",
+        signal: controller.signal,
+      });
+
+      let spawnKind: "brainstorm" | "space";
+      let artifactId: string;
+      let artifactName: string;
+      let artifactRunId: string | null = null;
+      let fullscreenQuery: string | null = null;
+
+      if (mode === "brainstorm_speed") {
+        // POST /api/synergy/sessions creates the brainstorm row and
+        // (if seedText is provided) seeds a core node so the user
+        // lands on a non-empty board. Autopilot fires when the
+        // synergy page reads ?autopilot=1.
+        const sessRes = await fetch("/api/synergy/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          signal: controller.signal,
+          body: JSON.stringify({
+            seedText: result.refinedPrompt,
+            title: result.refinedPrompt.slice(0, 60),
+          }),
+        });
+        if (!sessRes.ok) throw new Error("Couldn't create the brainstorm");
+        const sessJson = (await sessRes.json()) as {
+          id?: string;
+          title?: string;
+        };
+        if (!sessJson.id) throw new Error("No session id returned");
+        spawnKind = "brainstorm";
+        artifactId = sessJson.id;
+        artifactName = sessJson.title ?? result.refinedPrompt.slice(0, 60);
+        // Autopilot inside the fullscreen iframe.
+        fullscreenQuery = "autopilot=1";
+      } else {
+        // precise_rd + digital_twin: full intake/bootstrap (pipeline).
+        const fetchPromise = fetch("/api/intake/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          signal: controller.signal,
+          body: JSON.stringify({
+            text: result.refinedPrompt,
+            reasoningDepth: reasoning.depth,
+            reasoning_settings: { ...reasoning, experienceMode: mode },
+            skipPipeline: false,
+            clarifying_qa_pairs: result.answers,
+            inferred_baseline: result.baseline,
+          }),
+        });
+        const [res] = await Promise.all([
+          fetchPromise,
+          new Promise((r) => setTimeout(r, LOADER_FLOOR_MS)),
+        ]);
+        const raw = await res.text();
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (!res.ok) {
+          throw new Error(
+            (parsed?.error as string | undefined) ??
+              `Bootstrap failed (${res.status})`,
+          );
+        }
+        const spaceId = parsed?.spaceId as string | undefined;
+        const runId = (parsed?.runId as string | null | undefined) ?? null;
+        if (!spaceId) throw new Error("Bootstrap did not return a space id");
+        spawnKind = "space";
+        artifactId = spaceId;
+        artifactName = result.refinedPrompt.slice(0, 60);
+        artifactRunId = runId;
+        if (runId) fullscreenQuery = `run=${runId}`;
+      }
+
+      // Resolve the workspace now (we kicked it off in parallel above).
+      const workspaceRes = await workspacePromise;
+      if (!workspaceRes.ok) {
+        throw new Error("Couldn't open your workspace");
+      }
+      const workspaceJson = (await workspaceRes.json()) as {
+        workspace?: { id: string };
+      };
+      const workspaceId = workspaceJson.workspace?.id;
+      if (!workspaceId) throw new Error("No workspace id");
+
+      const params = new URLSearchParams();
+      params.set("spawn", spawnKind);
+      params.set("id", artifactId);
+      params.set("name", artifactName);
+      params.set("fullscreen", "1");
+      if (artifactRunId) params.set("runArtifactId", artifactRunId);
+      if (fullscreenQuery) params.set("fullscreenQuery", fullscreenQuery);
+
+      abortRef.current = null;
+      router.push(`/app/space/${workspaceId}/whiteboard?${params.toString()}`);
+    } catch (err) {
+      if ((err as { name?: string })?.name === "AbortError") return;
+      abortRef.current = null;
+      const message =
+        err instanceof Error ? err.message : "Couldn't start your space";
+      console.error("[dashboard-hero] bootstrap failed:", err);
+      setRouteError(message);
+      // Drop back into the clarifying step so the modal renders the
+      // inline error with a Retry. The modal's `routeError` prop
+      // unblocks the picker so the user keeps their answers.
+      setSubmitState("clarifying");
     }
-    if (reasoning.buildBaselineFirst) params.set("baseline", "1");
-    if (!reasoning.showAlternatives) params.set("single", "1");
-    if (result.baseline) {
-      // The destination can read this hint to pre-fill an objective
-      // statement card if it wants — keep payload small.
-      params.set("objective", result.baseline.primary_objective.slice(0, 200));
-    }
-    // Brief delay so the rolling-cube loader is visible long enough
-    // to feel intentional; otherwise destinations that render fast
-    // produce a jarring blink. 380ms hits the perceptual sweet spot.
-    await new Promise((r) => setTimeout(r, 380));
-    router.push(`${destination.route}?${params.toString()}`);
   };
 
   return (
@@ -246,14 +413,17 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
       {/* Clarify-then-route modal. Mounted only while a submit is
           in flight so re-opening with a different prompt remounts
           fresh state. busy=true once we've started routing so the
-          user sees the rolling cube + status. */}
+          user sees the rolling cube + status. routeError surfaces
+          bootstrap failures inline so the user can retry without
+          losing their refined prompt + MCQ answers. */}
       {submitState !== null && (
         <DashboardClarifyModal
           prompt={text.trim()}
           mode={mode}
           busy={submitState === "routing"}
           busyLabel={`Routing to ${activeMeta.label}`}
-          onCancel={() => setSubmitState(null)}
+          routeError={routeError}
+          onCancel={cancelInFlight}
           onContinue={(r) => void routeToDestination(r)}
         />
       )}

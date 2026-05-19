@@ -154,6 +154,43 @@ export async function SynergyDashboard() {
           {/* ── Hero ── */}
           <SynergyDashboardHero greeting={greeting} firstName={firstName} />
 
+          {/* ── Your workspace ──
+              Universal-canvas Phase C. A single canvas where every
+              brainstorm / strategy / R&D space / twin the user has
+              touched accumulates as a room. The pill bar's submits
+              route through here too — the workspace is the canonical
+              home. */}
+          <div className="mt-12">
+            <Link
+              href="/app/workspace"
+              className="group block rounded-3xl border border-white/60 bg-white/60 px-6 py-5 backdrop-blur-xl transition hover:bg-white/80"
+              style={{
+                boxShadow:
+                  "inset 0 1px 0 rgba(255,255,255,0.7), 0 8px 22px -10px rgba(15,23,42,0.10)",
+              }}
+            >
+              <div className="flex items-center gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-gray-900 to-gray-700 text-white">
+                  <Compass className="h-5 w-5" strokeWidth={1.75} />
+                </div>
+                <div className="flex-1">
+                  <p className="font-display-tight text-[15px] font-semibold tracking-tight text-gray-900">
+                    Open your workspace
+                  </p>
+                  <p className="mt-0.5 text-[12.5px] leading-snug text-gray-600">
+                    Your home canvas — every brainstorm, strategy, R&D
+                    space, and twin you&rsquo;ve made lives here as a room
+                    you can compose.
+                  </p>
+                </div>
+                <ArrowRight
+                  className="h-4 w-4 shrink-0 text-gray-400 transition group-hover:translate-x-0.5 group-hover:text-gray-700"
+                  strokeWidth={1.75}
+                />
+              </div>
+            </Link>
+          </div>
+
           {/* ── Recent brainstorms ── */}
           {recentSessions.length > 0 && (
             <SectionHeader

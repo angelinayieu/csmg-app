@@ -26,7 +26,7 @@ export async function GET() {
     const { data, error } = await db
       .from("spaces")
       .select(
-        "id, name, entity_count, edge_count, maturity, digital_twin_state, twin_initialized_at, updated_at",
+        "id, name, entity_count, edge_count, maturity, digital_twin_state, twin_initialized_at, updated_at, reasoning_settings",
       )
       .eq("user_id", user.id)
       .eq("archived", false)
@@ -41,7 +41,26 @@ export async function GET() {
       );
     }
 
-    return NextResponse.json({ spaces: data ?? [] });
+    // Filter out the user's workspace row (Phase C). Workspaces are
+    // flagged via reasoning_settings.is_workspace and hosted at the
+    // top of the homepage — exposing them in the room picker would
+    // let the user spawn their own workspace as a room inside itself,
+    // which is recursive and confusing. Done post-fetch (small list,
+    // cheap) instead of via PostgREST's JSON-path filter to avoid the
+    // SQL-NULL semantics gotcha (NULL != 'true' is NULL, not true).
+    const filtered = (data ?? []).filter((s: { reasoning_settings?: { is_workspace?: boolean } | null }) => {
+      const rs = s.reasoning_settings ?? null;
+      return !(rs && typeof rs === "object" && rs.is_workspace === true);
+    }).map((s: Record<string, unknown>) => {
+      // Strip reasoning_settings from the response payload — picker
+      // doesn't need it; keeping the response shape unchanged for
+      // existing callers.
+      const { reasoning_settings: _ignored, ...rest } = s;
+      void _ignored;
+      return rest;
+    });
+
+    return NextResponse.json({ spaces: filtered });
   } catch (e) {
     console.error("[/api/spaces/list GET] exception:", e);
     return NextResponse.json(

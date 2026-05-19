@@ -150,6 +150,121 @@ export default function WhiteboardPage() {
   // canvas window before the first SSE event paints.
   const runIdFromQuery = searchParams.get("run");
 
+  // Phase C — universal-canvas room spawn deep link.
+  //
+  // Homepage pills route via the user's workspace with these params:
+  //   ?spawn=brainstorm|strategy|space|twin
+  //   &id=<artifact uuid>
+  //   &name=<cached title for instant render>          (optional)
+  //   &fromStrategy=<strategy id>                       (optional)
+  //   &fromBrainstorm=<brainstorm session id>           (optional)
+  //   &fullscreen=1                                     (optional)
+  //
+  // On mount, dispatch the matching canvas-workspace:add-* event so
+  // the in-canvas spawner materializes the room and (optionally) the
+  // fullscreen overlay opens it immediately. We do this once per
+  // navigation by keying on the params; navigating away + back with
+  // the same params would re-fire, but that's fine — the spawner
+  // dedupes provenance arrows and harmless extra rooms can be
+  // selected + deleted.
+  const spawnKindParam = searchParams.get("spawn");
+  const spawnIdParam = searchParams.get("id");
+  const spawnNameParam = searchParams.get("name");
+  const spawnFromStrategyParam = searchParams.get("fromStrategy");
+  const spawnFromBrainstormParam = searchParams.get("fromBrainstorm");
+  const spawnFullscreenParam = searchParams.get("fullscreen");
+  // ?runArtifactId=<uuid> + ?fullscreenQuery=<encoded query string>
+  // let the dashboard hero forward (a) a run_id to subscribe to inside
+  // the fullscreen iframe so the user watches the pipeline paint and
+  // (b) arbitrary query params (e.g. autopilot=1) for brainstorm rooms.
+  const spawnRunArtifactIdParam = searchParams.get("runArtifactId");
+  const spawnFullscreenQueryParam = searchParams.get("fullscreenQuery");
+  useEffect(() => {
+    if (!spawnKindParam || !spawnIdParam) return;
+    if (typeof window === "undefined") return;
+    // Wait a tick for the editor + spawner to mount before we dispatch.
+    const handle = window.setTimeout(() => {
+      const detail: Record<string, string> = {};
+      if (spawnKindParam === "brainstorm") {
+        detail.sessionId = spawnIdParam;
+      } else if (spawnKindParam === "strategy") {
+        detail.strategyId = spawnIdParam;
+        if (spawnFromBrainstormParam) {
+          detail.fromBrainstormSessionId = spawnFromBrainstormParam;
+        }
+      } else if (spawnKindParam === "space" || spawnKindParam === "twin") {
+        detail.spaceId = spawnIdParam;
+        if (spawnFromStrategyParam) detail.fromStrategyId = spawnFromStrategyParam;
+        if (spawnFromBrainstormParam) detail.fromBrainstormSessionId = spawnFromBrainstormParam;
+      } else {
+        return;
+      }
+      if (spawnNameParam) {
+        detail.name = spawnNameParam;
+        detail.title = spawnNameParam;
+      }
+      window.dispatchEvent(
+        new CustomEvent(`canvas-workspace:add-${spawnKindParam}`, { detail }),
+      );
+
+      // If fullscreen=1, ask the fullscreen overlay to open this
+      // artifact after a brief beat so the room has a chance to spawn.
+      // Strategy's full URL requires its session_id (which arrives via
+      // ?fromBrainstorm=); without it we skip fullscreen rather than
+      // sending the overlay to a broken URL.
+      if (spawnFullscreenParam === "1") {
+        let href: string | null = null;
+        if (spawnKindParam === "brainstorm") {
+          href = `/app/synergy/${spawnIdParam}`;
+        } else if (spawnKindParam === "strategy") {
+          href = spawnFromBrainstormParam
+            ? `/app/synergy/${spawnFromBrainstormParam}/strategy`
+            : null;
+        } else if (spawnKindParam === "space") {
+          // Forward the runId so the iframe's SSE picks up the pipeline
+          // events on first paint instead of waiting for re-subscription.
+          const runId = spawnRunArtifactIdParam;
+          href = runId
+            ? `/app/space/${spawnIdParam}/whiteboard?run=${runId}`
+            : `/app/space/${spawnIdParam}/whiteboard`;
+        } else if (spawnKindParam === "twin") {
+          href = `/app/space/${spawnIdParam}/twin`;
+        }
+        // Tack on any free-form query the spawner asked us to forward
+        // (autopilot=1 for brainstorm speedrun, etc.). Honors any
+        // existing ?query in the href computed above.
+        if (href && spawnFullscreenQueryParam) {
+          const sep = href.includes("?") ? "&" : "?";
+          href = `${href}${sep}${spawnFullscreenQueryParam}`;
+        }
+        if (href) {
+          window.setTimeout(() => {
+            window.dispatchEvent(
+              new CustomEvent("canvas-workspace:open-fullscreen", {
+                detail: {
+                  kind: spawnKindParam,
+                  artifactId: spawnIdParam,
+                  title: spawnNameParam ?? "",
+                  href,
+                },
+              }),
+            );
+          }, 350);
+        }
+      }
+    }, 600);
+    return () => window.clearTimeout(handle);
+  }, [
+    spawnKindParam,
+    spawnIdParam,
+    spawnNameParam,
+    spawnFromStrategyParam,
+    spawnFromBrainstormParam,
+    spawnFullscreenParam,
+    spawnRunArtifactIdParam,
+    spawnFullscreenQueryParam,
+  ]);
+
   // Phase 1 unified canvas — chrome gating from the experience pill
   // the user picked on the dashboard. Persisted into
   // space.reasoning_settings.experienceMode by /api/intake/bootstrap.
