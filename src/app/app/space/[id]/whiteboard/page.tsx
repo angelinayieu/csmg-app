@@ -75,6 +75,7 @@ import { PipelineErrorBanner } from "@/components/canvas/chrome/pipeline-error-b
 // in-canvas spawner via window events for shape creation.
 import { CanvasAddButtons } from "@/components/canvas/chrome/canvas-add-buttons";
 import { CanvasWorkspaceRoomPicker } from "@/components/canvas/chrome/canvas-workspace-room-picker";
+import { CanvasWorkspaceRoomFullscreen } from "@/components/canvas/chrome/canvas-workspace-room-fullscreen";
 import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
 import {
   isExperienceMode,
@@ -331,6 +332,12 @@ export default function WhiteboardPage() {
       <div className="chrome-dimmable fixed right-6 top-20 z-40">
         <CanvasWorkspaceRoomPicker />
       </div>
+
+      {/* Universal-canvas Phase A.5 — fullscreen overlay portal that
+          renders the artifact's actual surface in an iframe above the
+          canvas. Listens for `canvas-workspace:open-fullscreen` events
+          dispatched by each room's Fullscreen button. */}
+      <CanvasWorkspaceRoomFullscreen />
 
       {/* Baseline launcher — opens the situation drawer. Stacked above
           Snapshots so all three bottom-right anchors are visible. */}

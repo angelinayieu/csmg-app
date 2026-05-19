@@ -29,6 +29,7 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
+  Expand,
   FileText,
   Layers,
   Maximize2,
@@ -333,11 +334,28 @@ function BrainstormRoomBody({
   const updated = data?.updated_at;
   const nodeCount = data?.node_count;
 
+  const openHref = artifactId ? `/app/synergy/${artifactId}` : null;
+
   const handleOpen = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (typeof window === "undefined" || !artifactId) return;
+    if (typeof window === "undefined" || !openHref) return;
     // Open in a new tab — keeps the workspace canvas accessible.
-    window.open(`/app/synergy/${artifactId}`, "_blank");
+    window.open(openHref, "_blank");
+  };
+
+  const handleFullscreen = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!openHref) return;
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:open-fullscreen", {
+        detail: {
+          kind: "brainstorm",
+          artifactId,
+          title,
+          href: openHref,
+        },
+      }),
+    );
   };
 
   // Promotion bridge: brainstorm → strategy. Fires the existing
@@ -426,6 +444,16 @@ function BrainstormRoomBody({
               {generating ? "Generating…" : "Generate strategy"}
             </button>
           )}
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={handleFullscreen}
+            disabled={!openHref}
+            className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-gray-50 text-gray-600 ring-1 ring-black/[0.04] transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50"
+            title="Open fullscreen over the canvas"
+            aria-label="Open fullscreen"
+          >
+            <Expand className="h-3 w-3" strokeWidth={1.75} />
+          </button>
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={handleOpen}
@@ -522,6 +550,21 @@ function StrategyRoomBody({
     e.stopPropagation();
     if (typeof window === "undefined" || !openHref) return;
     window.open(openHref, "_blank");
+  };
+
+  const handleFullscreen = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!openHref) return;
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:open-fullscreen", {
+        detail: {
+          kind: "strategy",
+          artifactId,
+          title: statement,
+          href: openHref,
+        },
+      }),
+    );
   };
 
   // Promotion bridge: strategy → R&D space. Packages the strategy's
@@ -637,6 +680,16 @@ function StrategyRoomBody({
               {promoting ? "Promoting…" : "Take deeper"}
             </button>
           )}
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={handleFullscreen}
+            disabled={!openHref}
+            className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-gray-50 text-gray-600 ring-1 ring-black/[0.04] transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50"
+            title="Open fullscreen over the canvas"
+            aria-label="Open fullscreen"
+          >
+            <Expand className="h-3 w-3" strokeWidth={1.75} />
+          </button>
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={handleOpen}
@@ -759,6 +812,16 @@ function SpaceRoomBody({
     window.open(openHref, "_blank");
   };
 
+  const handleFullscreen = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!artifactId) return;
+    window.dispatchEvent(
+      new CustomEvent("canvas-workspace:open-fullscreen", {
+        detail: { kind: mode, artifactId, title: name, href: openHref },
+      }),
+    );
+  };
+
   // Promotion bridges (Phase A.4).
   // Strategy-style "go to next stage" actions live in the expanded
   // body. Space room: "Build twin →" spawns a sibling twin room
@@ -865,6 +928,15 @@ function SpaceRoomBody({
               Build twin
             </button>
           )}
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={handleFullscreen}
+            className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-gray-50 text-gray-600 ring-1 ring-black/[0.04] transition hover:bg-gray-100 hover:text-gray-900"
+            title="Open fullscreen over the canvas"
+            aria-label="Open fullscreen"
+          >
+            <Expand className="h-3 w-3" strokeWidth={1.75} />
+          </button>
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={handleOpen}
