@@ -32,7 +32,10 @@ import {
 } from "@/lib/twin/aggregate-layer-distribution";
 import { runNarratorAgent } from "@/lib/twin/agents/narrator-agent";
 import { runCoachAgent } from "@/lib/twin/agents/coach-agent";
-import { computeAgentTimings } from "@/lib/twin/compute-agent-inputs";
+import {
+  computeAgentTimings,
+  computeRecentChangeNote,
+} from "@/lib/twin/compute-agent-inputs";
 import type { Space, Entity, Edge, Cycle } from "@/types";
 import type { SynthesisData } from "@/types/synthesis";
 import type { ImprovementGoal } from "@/types/goals";
@@ -322,9 +325,11 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
 
   // 7) Run Narrator agent. Soft-fail to null on agent error so the
-  //    page still renders.
+  //    page still renders. recentChangeNote comes from space_changelog
+  //    so the narrator can say "you approved a strategy 4d ago" etc.
   const topLeverage =
     synthesisData?.leverage_points?.[0]?.entity_name ?? null;
+  const recentChangeNote = await computeRecentChangeNote(db, spaceId);
   let narratorSummary: string | null = null;
   try {
     const narratorOut = await runNarratorAgent({
@@ -332,7 +337,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       twinMacro: twinState.macro,
       topLeverageName: topLeverage,
       layerCount: layers.length,
-      recentChangeNote: null, // Phase 3 — wire to pipeline_run_events
+      recentChangeNote,
     });
     narratorSummary = narratorOut.summary;
   } catch (err) {

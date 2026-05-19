@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 import { computeTwinState } from "@/lib/twin/compute-twin-state";
 import { runNarratorAgent } from "@/lib/twin/agents/narrator-agent";
+import { computeRecentChangeNote } from "@/lib/twin/compute-agent-inputs";
 import type { Space, Entity, Edge, Cycle } from "@/types";
 import type { SynthesisData } from "@/types/synthesis";
 import type { ImprovementGoal } from "@/types/goals";
@@ -109,6 +110,7 @@ export async function POST(_req: Request, ctx: Ctx) {
 
   // Run the agent. Soft-fail to a polite stub so the UI never sees
   // an opaque 500.
+  const recentChangeNote = await computeRecentChangeNote(db, spaceId);
   let summary: string | null = null;
   try {
     const out = await runNarratorAgent({
@@ -116,7 +118,7 @@ export async function POST(_req: Request, ctx: Ctx) {
       twinMacro: twinState.macro,
       topLeverageName: topLeverage,
       layerCount: layers.length,
-      recentChangeNote: null, // W6 — will fill from pipeline_run_events
+      recentChangeNote,
     });
     summary = out.summary;
   } catch (err) {

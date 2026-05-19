@@ -111,9 +111,10 @@ export function TwinOperatingTab({ spaceId, bundle }: Props) {
         className="rounded-2xl border border-dashed border-gray-300 px-6 py-5 text-[12.5px] leading-relaxed text-gray-500"
         style={{ background: "transparent" }}
       >
-        <span className="font-medium text-gray-600">Coming in Phase 2:</span>{" "}
+        <span className="font-medium text-gray-600">Coming in Phase 3:</span>{" "}
         The full operating shell — build-mode chooser, approval queue, and
-        live lab cards — will render inline here.
+        live lab cards — will render inline here once the shell is
+        refactored to read from the page bundle.
       </div>
     </div>
   );
