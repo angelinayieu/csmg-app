@@ -81,14 +81,19 @@ export async function POST(request: Request, ctx: RouteContext) {
 
   // RLS will block reads from a session the user doesn't own; we still
   // check explicitly so we can return 404 instead of an empty array.
+  // Also pull clarifier_qa so we can inject the user's MCQ answers
+  // as soft constraints into every round's LLM context. One read,
+  // no extra LLM call. Null/missing clarifier_qa = no injection
+  // (legacy sessions + sessions created without the modal).
   const { data: session } = await db
     .from("brainstorm_sessions")
-    .select("id")
+    .select("id, clarifier_qa")
     .eq("id", sessionId)
     .single();
   if (!session) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
+  const clarifierContext = formatClarifierContext(session.clarifier_qa);
 
   const { data: nodeRows, error: nodesErr } = await db
     .from("brainstorm_nodes")
@@ -133,6 +138,7 @@ export async function POST(request: Request, ctx: RouteContext) {
       nodes,
       childCount,
       precision,
+      clarifierContext,
     });
   }
 
@@ -142,6 +148,7 @@ export async function POST(request: Request, ctx: RouteContext) {
       sessionId,
       nodes,
       precision,
+      clarifierContext,
     });
   }
 
@@ -172,16 +179,24 @@ export async function POST(request: Request, ctx: RouteContext) {
       target,
       nodes,
       precision,
+      clarifierContext,
     });
   }
 
   // ── Default: VARIATIONS (legacy behavior) ──
+  // clarifierContext is appended to the user message (not the system
+  // prompt) since it's session-specific data, not behavioral
+  // instruction. Empty string when no MCQ data exists → no
+  // behavior change for legacy sessions.
   const parentNode = target.parent_id
     ? nodes.find((n) => n.id === target.parent_id)
     : undefined;
-  const userMsg = parentNode
+  const baseUserMsg = parentNode
     ? `Existing context:\nparent: ${parentNode.label}\n\nNew thought:\n${target.label}`
     : target.label;
+  const userMsg = clarifierContext
+    ? `${baseUserMsg}\n\n${clarifierContext}`
+    : baseUserMsg;
   const system = systemForMode("variations", precision);
   const schema = schemaForMode("variations");
 
@@ -269,10 +284,17 @@ async function runDecomposeRound(args: {
   target: DbNode;
   nodes: DbNode[];
   precision: number;
+  /** Pre-formatted user MCQ context to inject as soft constraints
+   *  (variation_axis / target_metric / system_boundary / timeframe).
+   *  Empty string when no MCQ data exists. */
+  clarifierContext: string;
 }) {
-  const { db, sessionId, target, precision } = args;
+  const { db, sessionId, target, precision, clarifierContext } = args;
   const system = systemForMode("decompose", precision);
   const schema = schemaForMode("decompose");
+  const userMsg = clarifierContext
+    ? `${target.label}\n\n${clarifierContext}`
+    : target.label;
 
   let parsed: {
     upstream: string[];
@@ -283,7 +305,7 @@ async function runDecomposeRound(args: {
   try {
     parsed = await llmJSON({
       system,
-      user: target.label,
+      user: userMsg,
       maxTokens: 1500,
       temperature: 0.6,
       responseSchema: schema as { name: string; schema: Record<string, unknown> },
@@ -362,8 +384,12 @@ async function runRankRound(args: {
   nodes: DbNode[];
   childCount: Map<string, number>;
   precision: number;
+  /** Pre-formatted user MCQ context — appended to the variations-to-
+   *  rank prompt so the LLM scores against the user's stated
+   *  target_metric / variation_axis instead of generic feasibility. */
+  clarifierContext: string;
 }) {
-  const { db, sessionId, nodes, precision } = args;
+  const { db, sessionId, nodes, precision, clarifierContext } = args;
 
   // Group variation nodes by parent
   const variationsByParent = new Map<string, DbNode[]>();
@@ -402,9 +428,12 @@ async function runRankRound(args: {
   const system = systemForMode("rank", precision);
   const schema = schemaForMode("rank");
 
-  const userMsg = `Parent thread:\n${bestParent.label}\n\nVariations to rank:\n${bestVariations
+  const baseRankMsg = `Parent thread:\n${bestParent.label}\n\nVariations to rank:\n${bestVariations
     .map((v, i) => `${i + 1}. ${v.label}`)
     .join("\n")}`;
+  const userMsg = clarifierContext
+    ? `${baseRankMsg}\n\n${clarifierContext}`
+    : baseRankMsg;
 
   let parsed: {
     ranked: Array<{ label: string; score: number; why: string }>;
@@ -493,8 +522,14 @@ async function runConvergeRound(args: {
   sessionId: string;
   nodes: DbNode[];
   precision: number;
+  /** Pre-formatted user MCQ context — the converge LLM uses this to
+   *  tilt cluster naming + scope_cut rationale toward the user's
+   *  stated target_metric / variation_axis / system_boundary, and
+   *  to favor the cluster that best honors the user's intent as
+   *  the recommended pick. */
+  clarifierContext: string;
 }) {
-  const { db, sessionId, nodes, precision } = args;
+  const { db, sessionId, nodes, precision, clarifierContext } = args;
 
   // Find the seed. Prefer kind="core"; fall back to the oldest node
   // (creation order) if no core exists.
@@ -572,7 +607,9 @@ async function runConvergeRound(args: {
 Brainstorm board descendants (${sorted.length} nodes):
 ${nodeBlock}
 
-Cluster these into 2-3 MVP candidates. Pick one to recommend.`;
+Cluster these into 2-3 MVP candidates. Pick one to recommend.${
+    clarifierContext ? `\n\n${clarifierContext}` : ""
+  }`;
 
   let parsed: {
     clusters: Array<{
@@ -677,4 +714,53 @@ Cluster these into 2-3 MVP candidates. Pick one to recommend.`;
     expanded: { id: seed.id, label: seed.label },
     new_nodes: (inserted ?? []) as InsertedNode[],
   });
+}
+
+// ── Helper: format the user's homepage MCQ answers into a soft-
+// constraint block the LLM can read. Returns an empty string when
+// the session has no clarifier_qa (legacy sessions, sessions
+// without the modal, malformed payload) — empty string lets every
+// round handler skip injection with a single truthy check.
+//
+// Slot labels are humanized so the LLM doesn't have to interpret
+// the enum keys. Unslotted answers fall through under "clarification".
+//
+// Wording matters here: we tell the LLM these are SOFT constraints,
+// not hard rules. The user's stated metric/timeframe/axis biases
+// generation but doesn't force it — if a fundamentally better answer
+// requires breaking the constraint, the LLM should still propose it.
+const SLOT_HUMAN_LABEL: Record<string, string> = {
+  exploration_angle: "exploration angle",
+  variation_axis: "variation axis",
+  target_metric: "target metric",
+  system_boundary: "system boundary",
+  state_variable: "key state variable",
+  observation_point: "observation point",
+  timeframe: "timeframe",
+  constraint: "constraint",
+};
+
+function formatClarifierContext(clarifierQa: unknown): string {
+  if (!clarifierQa || typeof clarifierQa !== "object") return "";
+  const qa = clarifierQa as { pairs?: unknown };
+  if (!Array.isArray(qa.pairs) || qa.pairs.length === 0) return "";
+
+  const lines: string[] = [];
+  for (const raw of qa.pairs) {
+    if (!raw || typeof raw !== "object") continue;
+    const p = raw as Record<string, unknown>;
+    const answer = typeof p.answer === "string" ? p.answer.trim() : "";
+    if (!answer) continue;
+    const slotKey = typeof p.slot === "string" ? p.slot : "constraint";
+    const label = SLOT_HUMAN_LABEL[slotKey] ?? "clarification";
+    lines.push(`• ${label}: ${answer.slice(0, 300)}`);
+  }
+  if (lines.length === 0) return "";
+
+  return [
+    "User clarifications (treat as soft constraints — they reflect the",
+    "user's preferred angles, not hard rules. Use them to steer the",
+    "output toward what the user cares about most):",
+    ...lines,
+  ].join("\n");
 }

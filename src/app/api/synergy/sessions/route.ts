@@ -57,6 +57,40 @@ export async function GET() {
 interface CreateBody {
   title?: unknown;
   seedText?: unknown;
+  /** Wave: MCQ-to-autopilot wiring. Homepage clarifier emits typed
+   *  Q&A pairs (one per slot — variation_axis / target_metric /
+   *  timeframe / etc). Persisted to brainstorm_sessions.clarifier_qa
+   *  JSONB so the autopilot round handler can inject them as soft
+   *  constraints into each round's LLM context. Shape matches
+   *  TypedClarifierAnswer[] from src/types/clarifier-answer.ts. */
+  clarifying_qa_pairs?: unknown;
+  /** Optional source mode tag so downstream consumers can tell
+   *  brainstorm_speed sessions apart from manually-created ones.
+   *  Stored alongside the pairs in clarifier_qa.mode. */
+  source_mode?: unknown;
+}
+
+/** Defensive shape-check for the clarifier pairs we'll persist. Trusts
+ *  the structure but rejects obviously-malformed entries so a bad
+ *  payload doesn't poison the row. */
+function sanitizeClarifierPairs(raw: unknown): Array<{
+  question: string;
+  answer: string;
+  slot?: string;
+}> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ question: string; answer: string; slot?: string }> = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    const question = typeof e.question === "string" ? e.question.trim().slice(0, 400) : "";
+    const answer = typeof e.answer === "string" ? e.answer.trim().slice(0, 800) : "";
+    if (!question || !answer) continue;
+    const slot = typeof e.slot === "string" ? e.slot.slice(0, 40) : undefined;
+    out.push(slot ? { question, answer, slot } : { question, answer });
+  }
+  // Cap at 8 so a bug-spamming client can't write unbounded JSON.
+  return out.slice(0, 8);
 }
 
 export async function POST(request: Request) {
@@ -75,12 +109,32 @@ export async function POST(request: Request) {
       ? body.seedText.trim().slice(0, 400)
       : null;
 
+  // Build the clarifier_qa JSONB only when the caller passed
+  // non-empty MCQ pairs. Keeping the column null for empty input
+  // means the autopilot route can skip injection cleanly with a
+  // single null-check instead of an empty-array handler.
+  const pairs = sanitizeClarifierPairs(body.clarifying_qa_pairs);
+  const sourceMode =
+    typeof body.source_mode === "string" ? body.source_mode.slice(0, 40) : undefined;
+  const clarifier_qa =
+    pairs.length > 0
+      ? {
+          pairs,
+          captured_at: new Date().toISOString(),
+          ...(sourceMode ? { mode: sourceMode } : {}),
+        }
+      : null;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const insertRow: Record<string, any> = { owner_id: user.id, title };
+  if (clarifier_qa) insertRow.clarifier_qa = clarifier_qa;
+
   const { data: session, error } = await db
     .from("brainstorm_sessions")
-    .insert({ owner_id: user.id, title })
+    .insert(insertRow)
     .select("*")
     .single();
 

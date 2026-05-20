@@ -187,6 +187,14 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
         // (if seedText is provided) seeds a core node so the user
         // lands on a non-empty board. Autopilot fires when the
         // synergy page reads ?autopilot=1.
+        //
+        // clarifying_qa_pairs are persisted to brainstorm_sessions.
+        // clarifier_qa so the autopilot round handler can inject
+        // them as soft constraints into each round's LLM context
+        // (variations / decompose / rank / converge). Without this
+        // pass-through, the homepage MCQ work is invisible to the
+        // speedrun — answers reach the seed only via the prompt
+        // suffix, not as structured slot-typed assertions.
         const sessRes = await fetch("/api/synergy/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -195,6 +203,7 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
           body: JSON.stringify({
             seedText: result.refinedPrompt,
             title: result.refinedPrompt.slice(0, 60),
+            clarifying_qa_pairs: result.answers,
           }),
         });
         if (!sessRes.ok) throw new Error("Couldn't create the brainstorm");
