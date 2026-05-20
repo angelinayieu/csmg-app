@@ -2,8 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useSpaceData } from "@/contexts/space-data-context";
-import { useOperatingTwinData } from "./hooks/use-operating-twin-data";
+import {
+  useOperatingTwinData,
+  type OperatingTwinDataInputs,
+} from "./hooks/use-operating-twin-data";
 import { LeftPanel } from "./panels/left-panel";
 import { CenterStage } from "./panels/center-stage";
 import { RightPanel } from "./panels/right-panel";
@@ -11,7 +13,30 @@ import { InsufficientDataPanel } from "./insufficient-data-panel";
 import { BuildModeChooser } from "./build-mode-chooser";
 import { SystemProposalModal } from "./system-proposal-modal";
 import { InteractiveBuildFlow } from "./interactive-build-flow";
+import type { Entity } from "@/types";
 import type { LabCard, TwinBuildMode, ApprovalItem } from "@/types/operating-twin";
+
+// ── Props contract ────────────────────────────────────────────────
+//
+// W4 — the shell is now props-driven. Mount from either:
+//   - Legacy TwinSurface (SpaceDataProvider tree): pass useSpaceData
+//     fields through as inputs
+//   - New Twin Detail Page Operating tab: pass data lazy-fetched
+//     from /api/spaces/[id]/operating-twin-context
+//
+// Optional callbacks let consumers opt-in to entity selection,
+// data refresh, and chat-open behaviors. When undefined those
+// features no-op gracefully (e.g. the new Twin Detail Page doesn't
+// have a NodeDetail slide-out so onSelectEntity stays absent).
+
+export interface OperatingTwinShellProps {
+  inputs: OperatingTwinDataInputs;
+  onSelectEntity?: (entity: Entity) => void;
+  /** Sync or async — useSpaceData.refresh() is sync (router.refresh)
+   *  while the new Twin Detail Page passes an async bundle refetch. */
+  onRefresh?: () => void | Promise<void>;
+  onOpenChat?: () => void;
+}
 
 // localStorage keys (per-space)
 const storageKey = (spaceId: string, k: string) => `interaxis:operating-twin:${spaceId}:${k}`;
@@ -24,10 +49,15 @@ type Stage =
   | "interactive"
   | "ready";
 
-export function OperatingTwinShell() {
-  const ctx = useSpaceData();
+export function OperatingTwinShell({
+  inputs,
+  onSelectEntity,
+  onRefresh,
+  onOpenChat,
+}: OperatingTwinShellProps) {
+  const ctx = inputs;
   const router = useRouter();
-  const model = useOperatingTwinData();
+  const model = useOperatingTwinData(inputs);
 
   // Stage state — authoritative source: `spaces.digital_twin_state`.
   // localStorage is kept as a fallback for the legacy build flow (pre-Phase 2 spaces).
@@ -84,12 +114,13 @@ export function OperatingTwinShell() {
 
   const handleLabClick = useCallback(
     (lab: LabCard) => {
+      if (!onSelectEntity) return; // No-op when consumer hasn't wired entity selection.
       if (lab.primary_entity_id) {
         const entity = ctx.entities.find((e) => e.id === lab.primary_entity_id);
-        if (entity) ctx.setSelectedEntity(entity);
+        if (entity) onSelectEntity(entity);
       }
     },
-    [ctx],
+    [ctx.entities, onSelectEntity],
   );
 
   const handleApprovalClick = useCallback(
@@ -105,7 +136,12 @@ export function OperatingTwinShell() {
   if (stage === "insufficient") {
     return (
       <div className="h-full overflow-hidden">
-        <InsufficientDataPanel sufficiency={model.sufficiency} />
+        <InsufficientDataPanel
+          sufficiency={model.sufficiency}
+          spaceId={ctx.space.id}
+          onRefresh={onRefresh}
+          onContinueInChat={onOpenChat}
+        />
       </div>
     );
   }
@@ -119,7 +155,7 @@ export function OperatingTwinShell() {
       >
         <LeftPanel model={model} onApprovalClick={handleApprovalClick} />
         <CenterStage model={model} onLabClick={handleLabClick} />
-        <RightPanel model={model} />
+        <RightPanel model={model} spaceId={ctx.space.id} />
       </div>
 
       {/* Modals */}

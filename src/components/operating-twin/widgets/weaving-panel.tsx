@@ -4,10 +4,13 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Sparkles, RefreshCw, ArrowUpRight, Link2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useSpaceData } from "@/contexts/space-data-context";
 import type { RankedBridge } from "@/lib/weaving/rank-bridges";
 
 interface WeavingPanelProps {
+  /** Required — was previously read from useSpaceData; now passed
+   *  explicitly so the panel works under either SpaceDataProvider
+   *  (legacy TwinSurface) or the new bundle-driven shell. */
+  spaceId: string;
   className?: string;
 }
 
@@ -27,8 +30,7 @@ interface RerankResponse {
   has_chains: boolean;
 }
 
-export function WeavingPanel({ className }: WeavingPanelProps) {
-  const ctx = useSpaceData();
+export function WeavingPanel({ spaceId, className }: WeavingPanelProps) {
   const router = useRouter();
 
   const [ranked, setRanked] = useState<RankedBridge[]>([]);
@@ -47,7 +49,7 @@ export function WeavingPanel({ className }: WeavingPanelProps) {
       const res = await fetch("/api/weave/rerank", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spaceId: ctx.space.id }),
+        body: JSON.stringify({ spaceId: spaceId }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Failed" }));
@@ -61,7 +63,7 @@ export function WeavingPanel({ className }: WeavingPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, [ctx.space.id]);
+  }, [spaceId]);
 
   useEffect(() => {
     loadRanked();
@@ -76,7 +78,7 @@ export function WeavingPanel({ className }: WeavingPanelProps) {
       const res = await fetch("/api/causal-chains/weave-enrich", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spaceId: ctx.space.id, maxPeers: 3 }),
+        body: JSON.stringify({ spaceId: spaceId, maxPeers: 3 }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Failed" }));
@@ -93,7 +95,7 @@ export function WeavingPanel({ className }: WeavingPanelProps) {
     } finally {
       setEnriching(false);
     }
-  }, [ctx.space.id, router]);
+  }, [spaceId, router]);
 
   const top = ranked.slice(0, 4);
 

@@ -7,15 +7,18 @@ import { WeavingPanel } from "../widgets/weaving-panel";
 
 interface RightPanelProps {
   model: OperatingTwinModel;
+  /** Threaded through to WeavingPanel — previously the panel read
+   *  this from useSpaceData; now passed explicitly. */
+  spaceId: string;
 }
 
-export function RightPanel({ model }: RightPanelProps) {
+export function RightPanel({ model, spaceId }: RightPanelProps) {
   const { system_pulse, recent_insights, connected_services } = model;
 
   return (
     <div className="flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto">
       {/* Cross-space weaving */}
-      <WeavingPanel />
+      <WeavingPanel spaceId={spaceId} />
 
       {/* System pulse */}
       <div className="bg-white rounded-[14px] border border-black/5 p-5">

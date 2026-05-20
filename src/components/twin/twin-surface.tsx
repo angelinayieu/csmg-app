@@ -88,7 +88,15 @@ export function TwinSurface({
   onOpenTwin,
   onSetGoal,
 }: TwinSurfaceProps) {
-  const { space, entities: ctxEntities, edges: ctxEdges, cycles: ctxCycles, activeGoal, setShowGoalSetter } = useSpaceData();
+  const ctx = useSpaceData();
+  const {
+    space,
+    entities: ctxEntities,
+    edges: ctxEdges,
+    cycles: ctxCycles,
+    activeGoal,
+    setShowGoalSetter,
+  } = ctx;
 
   const entities = override?.entities ?? ctxEntities;
   const edges = override?.edges ?? ctxEdges;
@@ -266,8 +274,27 @@ export function TwinSurface({
       ) : null}
 
       {/* Operation layer — the OperatingTwinShell. This is the "live state
-          vs baseline" FSM with build-mode chooser + approval items. */}
-      {enabled.has("operation") ? <OperatingTwinShell /> : null}
+          vs baseline" FSM with build-mode chooser + approval items.
+          W4 — shell is now props-driven. We thread the legacy useSpaceData
+          fields through so this call site keeps its existing behavior. */}
+      {enabled.has("operation") ? (
+        <OperatingTwinShell
+          inputs={{
+            space: ctx.space,
+            entities: ctx.entities,
+            edges: ctx.edges,
+            cycles: ctx.cycles,
+            claims: ctx.claims,
+            propositions: ctx.propositions,
+            activeGoal: ctx.activeGoal ?? null,
+            childGoals: ctx.childGoals ?? [],
+            pendingObjectives: ctx.pendingObjectives ?? [],
+          }}
+          onSelectEntity={ctx.setSelectedEntity}
+          onRefresh={ctx.refresh}
+          onOpenChat={() => ctx.setChatOpen(true)}
+        />
+      ) : null}
 
       {/* Experiment layer — agent orchestration DAG. Today the default
           pipeline; UseCaseTemplate.agent_workflow overrides this per-template

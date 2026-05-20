@@ -2,23 +2,33 @@
 
 import { useState } from "react";
 import { AlertCircle, Search, Database, MessageCircle, Check } from "lucide-react";
-import { useSpaceData } from "@/contexts/space-data-context";
 import type { DataSufficiencyReport } from "@/types/operating-twin";
 
 interface InsufficientDataPanelProps {
   sufficiency: DataSufficiencyReport;
+  /** Required for the built-in fallbacks (deep-research API + canvas
+   *  link). The shell threads this from inputs.space.id. */
+  spaceId: string;
   onRunDeepResearch?: () => Promise<void> | void;
   onEnrichKG?: () => Promise<void> | void;
+  /** Open the chat side-panel. Falls back to no-op when absent
+   *  (e.g. on the new Twin Detail Page which doesn't have a chat
+   *  panel mounted). */
   onContinueInChat?: () => void;
+  /** Optional refresh callback fired after the built-in deep-research
+   *  fallback completes. Absent on the new Twin Detail Page; the
+   *  realtime hook + bundle refetch handle re-render there. */
+  onRefresh?: () => Promise<void> | void;
 }
 
 export function InsufficientDataPanel({
   sufficiency,
+  spaceId,
   onRunDeepResearch,
   onEnrichKG,
   onContinueInChat,
+  onRefresh,
 }: InsufficientDataPanelProps) {
-  const ctx = useSpaceData();
   const [running, setRunning] = useState<string | null>(null);
 
   const handleDeepResearch = async () => {
@@ -32,9 +42,9 @@ export function InsufficientDataPanel({
         await fetch(`/api/pipeline/research-deep`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ spaceId: ctx.space.id }),
+          body: JSON.stringify({ spaceId }),
         });
-        ctx.refresh();
+        if (onRefresh) await onRefresh();
       }
     } finally {
       setRunning(null);
@@ -49,7 +59,7 @@ export function InsufficientDataPanel({
         await onEnrichKG();
       } else {
         // Fallback: suggest the user run Deepen on the graph page
-        window.location.href = `/app/space/${ctx.space.id}/graph`;
+        window.location.href = `/app/space/${spaceId}/graph`;
       }
     } finally {
       setRunning(null);
@@ -59,9 +69,11 @@ export function InsufficientDataPanel({
   const handleChat = () => {
     if (onContinueInChat) {
       onContinueInChat();
-    } else {
-      ctx.setChatOpen(true);
     }
+    // No fallback — the new Twin Detail Page doesn't mount the chat
+    // panel; in that context the button is effectively informational
+    // (clicking does nothing). Legacy TwinSurface always passes
+    // onContinueInChat through, so this button stays functional there.
   };
 
   return (

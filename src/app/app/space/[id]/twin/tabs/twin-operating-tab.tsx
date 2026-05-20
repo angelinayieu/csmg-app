@@ -5,18 +5,18 @@
 // The "live state vs baseline" lens — labs running, predictions on
 // trial, build state of the operating twin.
 //
-// Phase 1 scope: render a clean landing card that explains the
-// operating-twin concept + shows lab status + offers a CTA to the
-// legacy embedded shell (which depends on SpaceDataProvider).
+// W4 (Phase 3): inline-embeds OperatingTwinShell using the
+// /operating-twin-context endpoint. The shell was refactored to
+// accept props instead of useSpaceData, so we can mount it without
+// wrapping the entire Twin Detail Page in SpaceDataProvider.
 //
-// Phase 2 will inline-embed OperatingTwinShell here by either passing
-// bundle data as props or wrapping the page in SpaceDataProvider.
-// For now we surface the state honestly instead of forcing a context
-// that this page's bundle architecture intentionally avoids.
+// Loading + error states keep layout stable so users never see a
+// content jump when switching to this tab.
 
-import Link from "next/link";
-import { ArrowUpRight, Beaker, Sparkles } from "lucide-react";
-import { MechanismIcon, InterventionAppIcon } from "@/components/twin/icons/twin-icons";
+import { useEffect, useState } from "react";
+import { Beaker } from "lucide-react";
+import { OperatingTwinShell } from "@/components/operating-twin/operating-twin-shell";
+import type { OperatingTwinContextPayload } from "@/app/api/spaces/[id]/operating-twin-context/route";
 import type { TwinPageBundle } from "@/app/api/spaces/[id]/twin-page-bundle/route";
 
 interface Props {
@@ -25,76 +25,106 @@ interface Props {
 }
 
 export function TwinOperatingTab({ spaceId, bundle }: Props) {
-  const hasLabs = bundle.space_metadata.has_active_labs;
+  const [ctxData, setCtxData] = useState<OperatingTwinContextPayload | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetch(`/api/spaces/${spaceId}/operating-twin-context`, {
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = (await res.json()) as OperatingTwinContextPayload;
+        if (!cancelled) setCtxData(json);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Failed to load");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId]);
+
+  // The shell renders inside a fixed-height container — the parent
+  // tab has natural flow, so we give the shell enough vertical room
+  // (~70vh) to lay out its 3-panel grid without scrolling the page.
   return (
     <div className="space-y-5">
-      <section
-        className="relative overflow-hidden rounded-2xl px-8 py-7"
-        style={{
-          background: "var(--glass-card-bg)",
-          boxShadow: "var(--shadow-card)",
-          backdropFilter: "blur(var(--blur-card))",
-          WebkitBackdropFilter: "blur(var(--blur-card))",
-        }}
-      >
-        <div className="flex items-start gap-4">
-          <span
-            aria-hidden
-            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl"
-            style={{
-              background: "rgba(15,23,42,0.04)",
-              color: "var(--accent-500)",
+      {loading && <OperatingShellSkeleton />}
+
+      {error && !ctxData && (
+        <ErrorCard message={error} />
+      )}
+
+      {ctxData && (
+        <div
+          className="overflow-hidden rounded-2xl"
+          style={{
+            background: "var(--glass-card-bg)",
+            boxShadow: "var(--shadow-card)",
+            backdropFilter: "blur(var(--blur-card))",
+            WebkitBackdropFilter: "blur(var(--blur-card))",
+            height: "min(72vh, 820px)",
+          }}
+        >
+          <OperatingTwinShell
+            inputs={{
+              space: ctxData.space,
+              entities: ctxData.entities,
+              edges: ctxData.edges,
+              cycles: ctxData.cycles,
+              claims: ctxData.claims,
+              propositions: ctxData.propositions,
+              activeGoal: ctxData.activeGoal,
+              childGoals: ctxData.childGoals,
+              pendingObjectives: ctxData.pendingObjectives,
             }}
-          >
-            <Beaker className="h-4 w-4" strokeWidth={1.75} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-gray-500">
-              Operating twin
-            </div>
-            <h2 className="mt-1.5 font-display-tight text-[22px] font-semibold leading-tight text-gray-900">
-              {hasLabs
-                ? "Labs are running"
-                : "No active labs yet"}
-            </h2>
-            <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-gray-600">
-              The operating twin is the live, observable side of your system.
-              It tracks the state-vs-baseline gap, runs labs, and routes
-              approval items as the twin acts in reality.
-            </p>
-
-            <div className="mt-5 flex flex-wrap items-center gap-2">
-              <Link
-                href={`/app/space/${spaceId}?tab=operation`}
-                className="inline-flex items-center gap-1.5 rounded-full bg-gray-900 px-4 py-2 text-[12.5px] font-medium text-white transition hover:bg-gray-700"
-              >
-                Open operating shell
-                <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} />
-              </Link>
-              {!hasLabs && (
-                <span className="inline-flex items-center gap-1 text-[11.5px] text-gray-500">
-                  <Sparkles className="h-3 w-3" strokeWidth={1.75} />
-                  Build mode will guide you through standing one up.
-                </span>
-              )}
-            </div>
-          </div>
+            // entity selection / chat aren't wired on this page yet —
+            // those slide-outs live on the canvas. Omitting the
+            // callbacks makes the buttons no-op gracefully (per the
+            // shell's prop contract).
+            onRefresh={async () => {
+              // Soft refresh: re-fetch our own context payload.
+              try {
+                const res = await fetch(
+                  `/api/spaces/${spaceId}/operating-twin-context`,
+                  { cache: "no-store" },
+                );
+                if (!res.ok) return;
+                setCtxData(
+                  (await res.json()) as OperatingTwinContextPayload,
+                );
+              } catch {
+                /* non-fatal */
+              }
+            }}
+          />
         </div>
-      </section>
+      )}
 
-      {/* Status cards — what the operating shell would surface once mounted */}
+      {/* Quick status row — reads from the bundle (already loaded)
+          so the user gets a glance even while the shell hydrates. */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <StatusCard
           label="Active mechanisms"
           value={bundle.mechanisms.filter((m) => m.status === "active").length}
-          glyph={<MechanismIcon size={13} />}
           subtitle="Live transforms wired in"
         />
         <StatusCard
           label="Materialized apps"
           value={bundle.mechanisms.reduce((acc, m) => acc + m.app_count, 0)}
-          glyph={<InterventionAppIcon size={13} />}
           subtitle="Across all mechanisms"
         />
         <StatusCard
@@ -102,35 +132,90 @@ export function TwinOperatingTab({ spaceId, bundle }: Props) {
           value={
             bundle.prediction_history.filter((p) => !p.resolved_at).length
           }
-          glyph={<Beaker className="h-3 w-3" strokeWidth={1.75} />}
           subtitle="Awaiting outcome"
         />
-      </div>
-
-      <div
-        className="rounded-2xl border border-dashed border-gray-300 px-6 py-5 text-[12.5px] leading-relaxed text-gray-500"
-        style={{ background: "transparent" }}
-      >
-        <span className="font-medium text-gray-600">Coming in Phase 3:</span>{" "}
-        The full operating shell — build-mode chooser, approval queue, and
-        live lab cards — will render inline here once the shell is
-        refactored to read from the page bundle.
       </div>
     </div>
   );
 }
 
-// ── Status pill card ───────────────────────────────────────────────
+// ── Loading skeleton ───────────────────────────────────────────────
+
+function OperatingShellSkeleton() {
+  return (
+    <div
+      className="overflow-hidden rounded-2xl"
+      style={{
+        background: "var(--glass-card-bg)",
+        boxShadow: "var(--shadow-card)",
+        backdropFilter: "blur(var(--blur-card))",
+        WebkitBackdropFilter: "blur(var(--blur-card))",
+        height: "min(72vh, 820px)",
+      }}
+    >
+      <div className="h-full animate-pulse p-3">
+        <div
+          className="h-full grid gap-2.5"
+          style={{ gridTemplateColumns: "280px 1fr 300px" }}
+        >
+          <div className="rounded-[14px] bg-black/[0.04]" />
+          <div className="rounded-[14px] bg-black/[0.04]" />
+          <div className="rounded-[14px] bg-black/[0.04]" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Error card ─────────────────────────────────────────────────────
+
+function ErrorCard({ message }: { message: string }) {
+  return (
+    <article
+      className="relative rounded-2xl px-8 py-7"
+      style={{
+        background: "var(--glass-card-bg)",
+        boxShadow: "var(--shadow-card)",
+        backdropFilter: "blur(var(--blur-card))",
+        WebkitBackdropFilter: "blur(var(--blur-card))",
+      }}
+    >
+      <div className="flex items-start gap-4">
+        <span
+          aria-hidden
+          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl"
+          style={{
+            background: "rgba(15,23,42,0.04)",
+            color: "var(--accent-500)",
+          }}
+        >
+          <Beaker className="h-4 w-4" strokeWidth={1.75} />
+        </span>
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-gray-500">
+            Operating twin
+          </div>
+          <h2 className="mt-1.5 font-display-tight text-[20px] font-semibold leading-tight text-gray-900">
+            Couldn&apos;t load the operating context
+          </h2>
+          <p className="mt-2 text-[13px] leading-relaxed text-gray-600">
+            {message}
+          </p>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+// ── Status card ────────────────────────────────────────────────────
 
 function StatusCard({
   label,
   value,
-  glyph,
   subtitle,
 }: {
   label: string;
   value: number;
-  glyph: React.ReactNode;
   subtitle: string;
 }) {
   return (
@@ -143,13 +228,10 @@ function StatusCard({
         WebkitBackdropFilter: "blur(var(--blur-card))",
       }}
     >
-      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-gray-500">
-        <span aria-hidden style={{ color: "var(--accent-500)" }}>
-          {glyph}
-        </span>
+      <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-gray-500">
         {label}
       </div>
-      <div className="mt-3 font-display-tight text-[36px] font-semibold leading-none text-gray-900">
+      <div className="mt-3 font-display-tight text-[36px] font-semibold leading-none text-gray-900 tabular-nums">
         {value}
       </div>
       <div className="mt-auto pt-3 text-[11px] text-gray-500">{subtitle}</div>

@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSpaceData } from "@/contexts/space-data-context";
 import {
   computeTwinState,
   computeEntityHealthContributions,
   type RecentPredictionSignal,
 } from "@/lib/twin/compute-twin-state";
 import type { SynthesisData } from "@/types/synthesis";
+import type { Space, Entity, Edge, Cycle, Claim, Proposition } from "@/types";
+import type { ImprovementGoal, SuggestedObjective } from "@/types/goals";
 import type {
   OperatingTwinModel,
   LabCard,
@@ -25,6 +26,27 @@ import type {
   DataSufficiencyReport,
   TrendDirection,
 } from "@/types/operating-twin";
+
+// ── Inputs contract ───────────────────────────────────────────────
+//
+// W4 Phase 3 — extracted from useSpaceData() so the shell works in
+// both the legacy SpaceDataProvider tree AND the new Twin Detail
+// Page's Operating tab (which lazy-fetches via a dedicated endpoint).
+//
+// All fields the hook reads from context, threaded explicitly.
+// Optional fields are the ones the hook already treated as nullable.
+
+export interface OperatingTwinDataInputs {
+  space: Space;
+  entities: Entity[];
+  edges: Edge[];
+  cycles: Cycle[];
+  claims: Claim[];
+  propositions: Proposition[];
+  activeGoal: ImprovementGoal | null;
+  childGoals: ImprovementGoal[];
+  pendingObjectives: SuggestedObjective[];
+}
 
 const MAX_LABS = 10;
 
@@ -76,8 +98,12 @@ function sizeFromContribution(absContribution: number): "xl" | "l" | "m" | "s" {
 
 // ── Main hook ──
 
-export function useOperatingTwinData(): OperatingTwinModel {
-  const ctx = useSpaceData();
+export function useOperatingTwinData(
+  inputs: OperatingTwinDataInputs,
+): OperatingTwinModel {
+  // Alias so the deep ctx.* reads below stay identical without a
+  // line-by-line rewrite. Cheap reassignment; no runtime cost.
+  const ctx = inputs;
 
   // Tier 6: pull recent resolved predictions for this space so
   // computeTwinState can factor surprise density into risk_exposure +
