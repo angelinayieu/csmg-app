@@ -34,6 +34,7 @@ import { runNarratorAgent } from "@/lib/twin/agents/narrator-agent";
 import { runCoachAgent } from "@/lib/twin/agents/coach-agent";
 import {
   computeAgentTimings,
+  computeGoalProgress,
   computeRecentChangeNote,
 } from "@/lib/twin/compute-agent-inputs";
 import type { Space, Entity, Edge, Cycle } from "@/types";
@@ -358,7 +359,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       spaceName: space.name,
       twinMacro: twinState.macro,
       activeGoalTitle: activeGoal?.title ?? null,
-      activeGoalProgress: null, // Phase 3 — compute from goal + tracker
+      activeGoalProgress: computeGoalProgress(activeGoal),
       daysSinceLastObservation: timings.daysSinceLastObservation,
       daysSinceLastPrediction: timings.daysSinceLastPrediction,
       activeMechanismKinds: mechanisms
@@ -443,39 +444,3 @@ export async function GET(_req: Request, ctx: Ctx) {
   });
 }
 
-// ── Goal progress helper ──────────────────────────────────────────
-//
-// Returns a clamped 0..1 fraction of how far the current value has
-// moved from baseline toward target. Span carries the sign — works
-// for both "minimize" (target < baseline) and "maximize" goals
-// without explicit branching. Returns null when any required field
-// is missing/non-numeric, or when baseline === target (degenerate).
-//
-// The Overview hero card already renders `Math.round(progress*100)%`
-// when progress !== null, so wiring this fills the dead `—` chip.
-
-function computeGoalProgress(goal: ImprovementGoal): number | null {
-  const baseline = numOrNull(
-    (goal as unknown as { baseline_value: unknown }).baseline_value,
-  );
-  const current = numOrNull(
-    (goal as unknown as { current_value: unknown }).current_value,
-  );
-  const target = numOrNull(
-    (goal as unknown as { target_value: unknown }).target_value,
-  );
-  if (baseline === null || current === null || target === null) return null;
-  const span = target - baseline;
-  if (span === 0) return null;
-  const raw = (current - baseline) / span;
-  return Math.max(0, Math.min(1, raw));
-}
-
-function numOrNull(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}

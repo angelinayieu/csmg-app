@@ -167,7 +167,11 @@ export function TwinDetailClient({
               <TwinOutcomesTab spaceId={spaceId} bundle={bundle} setBundle={setBundle} />
             )}
             {activeTab === "operating" && (
-              <TwinOperatingTab spaceId={spaceId} bundle={bundle} />
+              <TwinOperatingTab
+                spaceId={spaceId}
+                bundle={bundle}
+                lastEventAt={lastEventAt}
+              />
             )}
           </div>
         </article>

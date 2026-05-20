@@ -1,13 +1,18 @@
 // ── Twin agent input enrichers ─────────────────────────────────────
 //
-// W6. Helpers that fill the previously-null `daysSinceLastObservation`
-// + `daysSinceLastPrediction` fields the Narrator and Coach agents
-// read. Pure data-fetch + arithmetic — no agent calls — so they
+// W6. Helpers that fill the previously-null narrator/coach input
+// slots. Pure data-fetch + arithmetic — no agent calls — so they
 // drop into both the bundle endpoint and the dedicated refresh
 // endpoints without behavior drift.
 //
 // Soft-fail throughout: any query error returns null and the
 // agent's prompt simply treats it as "never observed / never run."
+//
+// Phase 3 extension: computeGoalProgress() centralizes the math the
+// bundle endpoint uses so refresh-coach computes the same value
+// instead of always passing null.
+
+import type { ImprovementGoal } from "@/types/goals";
 
 export interface EnrichedAgentTimings {
   daysSinceLastObservation: number | null;
@@ -79,6 +84,43 @@ function prettyChangeType(kind: string | null): string | null {
   const cleaned = kind.replace(/_/g, " ").trim();
   if (!cleaned) return null;
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/**
+ * Goal progress as a clamped 0..1 fraction of how far current has
+ * moved from baseline toward target. Span carries the sign — works
+ * for both "minimize" and "maximize" goals without explicit
+ * branching. Returns null when any required field is missing or
+ * when baseline === target (degenerate).
+ *
+ * Used by the bundle endpoint AND the refresh-coach endpoint so
+ * both pass the same progress signal to the Coach agent.
+ */
+export function computeGoalProgress(goal: ImprovementGoal | null): number | null {
+  if (!goal) return null;
+  const baseline = numOrNull(
+    (goal as unknown as { baseline_value: unknown }).baseline_value,
+  );
+  const current = numOrNull(
+    (goal as unknown as { current_value: unknown }).current_value,
+  );
+  const target = numOrNull(
+    (goal as unknown as { target_value: unknown }).target_value,
+  );
+  if (baseline === null || current === null || target === null) return null;
+  const span = target - baseline;
+  if (span === 0) return null;
+  const raw = (current - baseline) / span;
+  return Math.max(0, Math.min(1, raw));
+}
+
+function numOrNull(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 /**

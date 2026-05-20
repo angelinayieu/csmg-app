@@ -17,7 +17,10 @@ import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 import { computeTwinState } from "@/lib/twin/compute-twin-state";
 import { runCoachAgent } from "@/lib/twin/agents/coach-agent";
-import { computeAgentTimings } from "@/lib/twin/compute-agent-inputs";
+import {
+  computeAgentTimings,
+  computeGoalProgress,
+} from "@/lib/twin/compute-agent-inputs";
 import type { CoachActionType } from "@/lib/twin/agents/coach-agent";
 import type { Space, Entity, Edge, Cycle } from "@/types";
 import type { SynthesisData } from "@/types/synthesis";
@@ -159,7 +162,7 @@ export async function POST(req: Request, ctx: Ctx) {
       spaceName: space.name,
       twinMacro: twinState.macro,
       activeGoalTitle: activeGoal?.title ?? null,
-      activeGoalProgress: null, // Phase 3
+      activeGoalProgress: computeGoalProgress(activeGoal),
       daysSinceLastObservation: timings.daysSinceLastObservation,
       daysSinceLastPrediction: timings.daysSinceLastPrediction,
       activeMechanismKinds,

@@ -22,9 +22,13 @@ import type { TwinPageBundle } from "@/app/api/spaces/[id]/twin-page-bundle/rout
 interface Props {
   spaceId: string;
   bundle: TwinPageBundle;
+  /** Most recent realtime event timestamp from the page-level
+   *  subscription. When it ticks, we re-fetch the operating context
+   *  so the inline shell stays as alive as the bundle-driven tabs. */
+  lastEventAt: number | null;
 }
 
-export function TwinOperatingTab({ spaceId, bundle }: Props) {
+export function TwinOperatingTab({ spaceId, bundle, lastEventAt }: Props) {
   const [ctxData, setCtxData] = useState<OperatingTwinContextPayload | null>(
     null,
   );
@@ -56,6 +60,29 @@ export function TwinOperatingTab({ spaceId, bundle }: Props) {
       cancelled = true;
     };
   }, [spaceId]);
+
+  // Realtime sync — when the page-level subscription fires, refetch
+  // the operating context (silently, no skeleton flash) so the inline
+  // shell stays in sync with mechanism/prediction/observation events.
+  // Skip the initial mount where lastEventAt is still null.
+  useEffect(() => {
+    if (lastEventAt === null) return;
+    let cancelled = false;
+    fetch(`/api/spaces/${spaceId}/operating-twin-context`, {
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const json = (await res.json()) as OperatingTwinContextPayload;
+        if (!cancelled) setCtxData(json);
+      })
+      .catch(() => {
+        /* non-fatal */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lastEventAt, spaceId]);
 
   // The shell renders inside a fixed-height container — the parent
   // tab has natural flow, so we give the shell enough vertical room
