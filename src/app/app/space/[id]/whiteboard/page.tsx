@@ -75,6 +75,7 @@ import { PipelineErrorBanner } from "@/components/canvas/chrome/pipeline-error-b
 // in-canvas spawner via window events for shape creation.
 import { CanvasAddButtons } from "@/components/canvas/chrome/canvas-add-buttons";
 import { CanvasWorkspaceRoomPicker } from "@/components/canvas/chrome/canvas-workspace-room-picker";
+import { CanvasWorkspaceTemplatePicker } from "@/components/canvas/chrome/canvas-workspace-template-picker";
 import { CanvasWorkspaceRoomFullscreen } from "@/components/canvas/chrome/canvas-workspace-room-fullscreen";
 import { useLayerOntology } from "@/lib/hooks/use-layer-ontology";
 import {
@@ -487,8 +488,14 @@ export default function WhiteboardPage() {
           user bring any of their existing brainstorm sessions onto
           this canvas as a WorkspaceRoomShape. Top-right anchor so it
           sits near the existing top chrome (mode toggle, etc.) and
-          doesn't crowd the bottom-right action stack. */}
-      <div className="chrome-dimmable fixed right-6 top-20 z-40">
+          doesn't crowd the bottom-right action stack.
+          Phase C Step 5 — paired with CanvasWorkspaceTemplatePicker
+          (workspace canvases only) which sits left of "Add room" and
+          surfaces the 4 mode templates (brain_probe / brainstorm_speed /
+          precise_rd / digital_twin) so users start fresh work without
+          leaving the canvas. */}
+      <div className="chrome-dimmable fixed right-6 top-20 z-40 flex items-center gap-2">
+        {isWorkspace && <CanvasWorkspaceTemplatePicker />}
         <CanvasWorkspaceRoomPicker />
       </div>
 
