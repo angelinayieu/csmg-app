@@ -95,6 +95,11 @@ export type StructuralEvent =
   | KgPlanApprovedEvent
   | KgPlanRejectedEvent
   | LayerOntologyMaterializedEvent
+  // Cross-layer cascade prediction (D-track β) — fires when the
+  // synthesize hop refreshes the layer_dependencies table for a
+  // space. Canvas LayerStackShape arrows + variant ripple chips
+  // listen for this and refetch.
+  | LayerDependenciesMaterializedEvent
   // Phase 2 (research-strategy migration) — surface claims that don't
   // yet meet the triangulation bar (≥2 independent supporting sources)
   // so research can target them next pass, AND active contradiction
@@ -142,7 +147,21 @@ export type StructuralEvent =
   // banner can render an accumulated error/warning trail during the
   // run. See DIVERGE_CONVERGE_ARCHITECTURE_PLAN.md §5 Sprint C.
   | PipelineWarningEvent
-  | PipelineErrorEvent;
+  | PipelineErrorEvent
+  // ── Hidden signal detection (2026-05-19) ──
+  // Surfaces structural-analysis findings from `extractSignals()` —
+  // cascade vulnerabilities, structural holes, hidden mediating
+  // variables, flip-prone loops — as live canvas shapes anchored to
+  // the entities they reference. Up until now signals were computed
+  // and persisted into `synthesis_data.signal_extraction` but never
+  // surfaced anywhere except as tactic-chip slugs inside the strategy
+  // hero card. The painter listens for these events and spawns
+  // HiddenSignalShape near the primary anchor entity; the cluster
+  // event aggregates the suppressed long tail into one shape so the
+  // canvas stays scannable. See `src/lib/synthesis/emit-signal-events.ts`
+  // for the filter + batch emit logic.
+  | SignalDetectedEvent
+  | SignalClusterEvent;
 
 // ── Phase 2E · Tier 2 — probability space axes ──
 //
@@ -1464,6 +1483,30 @@ export interface LayerOntologyMaterializedEvent {
   starterSlug: string | null;
 }
 
+// ── Cross-layer cascade prediction (D-track β) ────────────────────
+//
+// Emitted by the synthesize cascade-prediction hop when the
+// `layer_dependencies` table has been refreshed for a space — i.e.
+// after predictAndPersistLayerCascades() succeeds. Canvas surfaces
+// (LayerStackShape inter-layer arrows, variant ripple chips) listen
+// for this so they refetch the dependencies endpoint and repaint the
+// inter-layer arrows live.
+//
+// Emit site: src/app/api/pipeline/synthesize/route.ts:2922
+// Producer:  src/lib/pipeline/cross-layer-cascade-prediction.ts
+// DDL:       supabase/migrations/20260620_layer_dependencies.sql
+export interface LayerDependenciesMaterializedEvent {
+  type: "layer_dependencies_materialized";
+  /** How many cascade rows the LLM emitted (pre-validation). */
+  emitted: number;
+  /** How many rows actually got persisted after validation. */
+  inserted: number;
+  /** How many candidates were dropped by validation (invalid layer
+   *  id, self-loop, bad enum, out-of-range strength/confidence,
+   *  empty mechanism). */
+  skipped: number;
+}
+
 // ── Phase 2 · Triangulation gap-flagging ──────────────────────────────
 //
 // Emitted by claim-producer (via triangulation-gap-detector) when a
@@ -1874,4 +1917,85 @@ export interface PipelineErrorEvent {
    *  set to true so the banner blocks further pipeline progress
    *  perceptually. Defaults to false when omitted. */
   fatal?: boolean;
+}
+
+// ── Hidden signal detection events (2026-05-19) ──
+//
+// One structural-analysis finding from `extractSignals()` (in
+// `src/lib/intelligence/signal-extraction.ts`). Fired by the
+// `emitFilteredSignalEvents` helper invoked from synthesize/route.ts
+// after each of the two extraction passes (pre-synthesis pass at
+// line ~1031, post-synthesis pass at line ~2084).
+//
+// Deterministic `signalId` is a stable hash of signalType + the
+// sorted primary entity IDs so Pass 2 re-emissions upsert the same
+// canvas shape rather than stacking duplicates.
+//
+// Entity IDs use the display code form ("C7", "X3") to match the
+// kg-node shape's `entityId` prop — the painter looks up the
+// existing kg-node shape and anchors the signal shape adjacent.
+export interface SignalDetectedEvent {
+  type: "signal_detected";
+  /** Stable hash of signalType + sorted primaryEntityIds — used as
+   *  the tldraw shape id so re-emission updates in place. */
+  signalId: string;
+  signalType:
+    | "structural_hole"
+    | "hidden_variable"
+    | "cascade_vulnerability"
+    | "flip_prone_loop";
+  /** One-line headline (e.g. "Single point of failure: User Trust"). */
+  name: string;
+  /** 1-2 sentence body explaining the finding. */
+  description: string;
+  /** 0-1 — how much this could change the trajectory if true. */
+  trajectoryImpact: number;
+  /** 0-1 — how confident the detector is that this signal exists. */
+  confidence: number;
+  /** Computed severity tier driving visual intensity. For
+   *  cascade_vulnerability this mirrors the source's "critical | high
+   *  | moderate" verbatim; for other types it's derived from
+   *  trajectory_impact × confidence. */
+  severity: "critical" | "moderate" | "low";
+  /** Display entity codes (e.g. ["C7"]) the signal is primarily
+   *  about. Cardinality varies by type:
+   *    - cascade_vulnerability: 1 (the SPOF entity)
+   *    - structural_hole: 2 (entity_a + entity_b)
+   *    - hidden_variable: 2 (the two endpoints)
+   *    - flip_prone_loop: 2 (the weakest edge's endpoints)
+   *  The painter anchors the shape to the midpoint when 2, offset
+   *  from the entity when 1. */
+  primaryEntityIds: string[];
+  /** Additional related entities (e.g. cascade's critical_downstream
+   *  array or flip-prone-loop's full cycle membership). Used to
+   *  light up adjacent kg-nodes on hover, NOT for positioning. */
+  secondaryEntityIds: string[];
+  /** Why this finding matters for the trajectory — surfaced in the
+   *  expanded view inside the shape. */
+  reasoning: string;
+  /** What the user should do to validate/invalidate the signal —
+   *  rendered as a CTA in the expanded view. */
+  validationAction?: string;
+}
+
+// One aggregated event representing the long tail of lower-priority
+// signals that were filtered out of the per-shape emission. Renders
+// as a single HiddenSignalCluster shape (small chip in the canvas
+// margin) showing the suppressed count + the type breakdown. Click
+// expands a side-panel listing the suppressed signals individually.
+//
+// Emitted at most ONCE per extraction pass (so 0-2 per synthesize
+// run). The painter upserts by clusterId so Pass 2's cluster
+// replaces Pass 1's rather than stacking.
+export interface SignalClusterEvent {
+  type: "signal_cluster";
+  /** Stable per-space cluster id (e.g. "signal-cluster-${spaceId}")
+   *  so Pass 2 upserts the same shape. */
+  clusterId: string;
+  spaceId: string;
+  /** Number of signals suppressed (not individually emitted). */
+  suppressedCount: number;
+  /** Type breakdown for the chip label ("12 signals: 4 holes, 5 vars,
+   *  3 windows"). */
+  topTypes: string[];
 }

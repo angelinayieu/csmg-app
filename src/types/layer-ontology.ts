@@ -88,3 +88,72 @@ export interface LayerOntologyRow {
   created_at: string;
   updated_at: string;
 }
+
+// ── Layer Dependencies (cross-layer cascades) ────────────────────
+//
+// Sibling artifact to LayerOntologyRow. Each row asserts a directed
+// propagation claim between two layers in the same space's ontology:
+//   "from_layer_id → to_layer_id, via <mechanism>, with strength s,
+//    lag ≈ <lag_label>, confidence c."
+//
+// Written by predictAndPersistLayerCascades(); read by the strategy-
+// variants generator (to thread cascade payloads into
+// recommendation.layer_focus.cascade) and by canvas LayerStackShape
+// to render inter-layer arrows.
+//
+// DDL: supabase/migrations/20260620_layer_dependencies.sql
+// Writer/reader: src/lib/pipeline/cross-layer-cascade-prediction.ts
+
+/** Closed vocabulary of cascade kinds. Mirror exactly VALID_KINDS in
+ *  cross-layer-cascade-prediction.ts and the CHECK constraint in the
+ *  migration — these three places must stay in sync. */
+export type LayerDependencyKind =
+  | "causal"
+  | "modulatory"
+  | "inhibitory"
+  | "compensatory"
+  | "reinforcing";
+
+/** Provenance of a cascade row. The writer only deletes its own
+ *  llm_inferred rows before regen; user-authored / hybrid survive. */
+export type LayerDependencySource =
+  | "llm_inferred"
+  | "user_authored"
+  | "hybrid";
+
+/** A persisted cross-layer cascade row. Field shapes mirror the
+ *  insert payload at lines 289-303 of cross-layer-cascade-prediction.ts
+ *  and the column list in 20260620_layer_dependencies.sql. */
+export interface LayerDependencyRow {
+  id: string;
+  space_id: string;
+  user_id: string;
+  /** Endpoints — both reference layer_ontology rows in the same space.
+   *  Self-loops are forbidden (DB CHECK constraint). */
+  from_layer_id: string;
+  to_layer_id: string;
+  kind: LayerDependencyKind;
+  /** 0..1 — effect size of the cascade when it fires. */
+  strength: number;
+  /** Free-text lag descriptor ("minutes", "days", "weeks", "months",
+   *  "varies"). Null when the LLM declined to commit. */
+  lag_label: string | null;
+  /** Optional numeric lag estimate in hours. Null when the LLM
+   *  couldn't ground a number. */
+  lag_hours: number | null;
+  /** The load-bearing mechanism claim. Empty strings rejected at
+   *  both writer + DB level. */
+  mechanism: string;
+  /** Optional summary of the KG-edge evidence supporting this
+   *  cascade. Free-text so the user can audit "why this cascade". */
+  evidence_summary: string | null;
+  /** 0..1 — evidence-grounding score. Cascades with no edge evidence
+   *  MUST have confidence ≤ 0.5 per the prompt. */
+  confidence: number;
+  source: LayerDependencySource;
+  /** Which synthesize hop wrote this row. Today always
+   *  "synthesize-cascade-prediction". */
+  source_synthesis_step: string | null;
+  created_at: string;
+  updated_at: string;
+}
