@@ -13,6 +13,7 @@
 // drawer layout stable so the user never sees content jump.
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { X, ArrowUpRight } from "lucide-react";
@@ -246,7 +247,12 @@ function DrawerBody({
         <Section label="Entities this touches">
           <div className="flex flex-wrap gap-1.5">
             {mechanism.entities.map((e) => (
-              <EntityRefChip key={e.id} entity={e} />
+              <EntityRefChip
+                key={e.id}
+                entity={e}
+                spaceId={spaceId}
+                onNavigate={onClose}
+              />
             ))}
           </div>
         </Section>
@@ -327,13 +333,22 @@ const CATEGORY_DOT: Record<string, string> = {
 
 function EntityRefChip({
   entity,
+  spaceId,
+  onNavigate,
 }: {
   entity: MechanismSummary["entities"][number];
+  spaceId: string;
+  /** Close the drawer on click — the route change unmounts the
+   *  TwinDetailClient tree anyway, but closing first avoids the
+   *  drawer flashing during navigation. */
+  onNavigate?: () => void;
 }) {
   const dot = CATEGORY_DOT[entity.entity_category] ?? "var(--accent-500)";
   return (
-    <span
-      className="inline-flex max-w-[200px] items-center gap-1.5 truncate rounded-full border border-black/[0.05] bg-white/60 px-2.5 py-1 text-[11.5px] font-medium text-gray-700"
+    <Link
+      href={`/app/space/${spaceId}/entity/${entity.id}`}
+      onClick={onNavigate}
+      className="inline-flex max-w-[200px] items-center gap-1.5 truncate rounded-full border border-black/[0.05] bg-white/60 px-2.5 py-1 text-[11.5px] font-medium text-gray-700 transition hover:border-black/[0.15] hover:bg-white hover:text-gray-900"
       title={`${entity.entity_category}${entity.importance ? ` · ${entity.importance}` : ""}`}
     >
       <span
@@ -342,7 +357,7 @@ function EntityRefChip({
         style={{ background: dot }}
       />
       <span className="truncate">{entity.name}</span>
-    </span>
+    </Link>
   );
 }
 

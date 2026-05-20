@@ -17,12 +17,14 @@
 // trailing row so we never silently drop nodes.
 
 import { useMemo } from "react";
+import Link from "next/link";
 import type { Entity } from "@/types";
 import type { TwinWorkflowData } from "@/app/api/spaces/[id]/twin-workflow-data/route";
 import type { TwinPageBundle } from "@/app/api/spaces/[id]/twin-page-bundle/route";
 import { LayerIcon } from "@/components/twin/icons/twin-icons";
 
 interface Props {
+  spaceId: string;
   workflowData: TwinWorkflowData;
   layerOntology: TwinPageBundle["layer_ontology"];
 }
@@ -31,7 +33,11 @@ type LayerRow = TwinPageBundle["layer_ontology"][number] & {
   entities: Entity[];
 };
 
-export function TwinLayerStackView({ workflowData, layerOntology }: Props) {
+export function TwinLayerStackView({
+  spaceId,
+  workflowData,
+  layerOntology,
+}: Props) {
   // Group entities by layer_ontology_id, falling back to an "Unmapped"
   // bucket. `layer_ontology_id` is on the row but not in the
   // generated db.types.ts yet — cast through `unknown` to read it.
@@ -104,10 +110,10 @@ export function TwinLayerStackView({ workflowData, layerOntology }: Props) {
 
       <ol className="divide-y divide-black/[0.04]">
         {layered.map((row) => (
-          <LayerBand key={row.id} row={row} />
+          <LayerBand key={row.id} row={row} spaceId={spaceId} />
         ))}
         {unmapped.length > 0 && (
-          <UnmappedBand entities={unmapped} />
+          <UnmappedBand entities={unmapped} spaceId={spaceId} />
         )}
       </ol>
     </article>
@@ -116,7 +122,7 @@ export function TwinLayerStackView({ workflowData, layerOntology }: Props) {
 
 // ── Per-layer band ────────────────────────────────────────────────
 
-function LayerBand({ row }: { row: LayerRow }) {
+function LayerBand({ row, spaceId }: { row: LayerRow; spaceId: string }) {
   return (
     <li className="grid grid-cols-[180px_1fr] gap-6 px-7 py-5">
       <div className="flex flex-col gap-1.5">
@@ -146,7 +152,7 @@ function LayerBand({ row }: { row: LayerRow }) {
         ) : (
           <div className="flex flex-wrap gap-1.5">
             {row.entities.map((e) => (
-              <EntityChip key={e.id} entity={e} />
+              <EntityChip key={e.id} entity={e} spaceId={spaceId} />
             ))}
           </div>
         )}
@@ -157,7 +163,13 @@ function LayerBand({ row }: { row: LayerRow }) {
 
 // ── Unmapped trailing band ────────────────────────────────────────
 
-function UnmappedBand({ entities }: { entities: Entity[] }) {
+function UnmappedBand({
+  entities,
+  spaceId,
+}: {
+  entities: Entity[];
+  spaceId: string;
+}) {
   return (
     <li className="grid grid-cols-[180px_1fr] gap-6 px-7 py-5">
       <div className="flex flex-col gap-1.5">
@@ -179,7 +191,7 @@ function UnmappedBand({ entities }: { entities: Entity[] }) {
       </div>
       <div className="flex flex-wrap gap-1.5">
         {entities.map((e) => (
-          <EntityChip key={e.id} entity={e} muted />
+          <EntityChip key={e.id} entity={e} spaceId={spaceId} muted />
         ))}
       </div>
     </li>
@@ -196,11 +208,20 @@ const CATEGORY_DOT: Record<string, string> = {
   epistemic: "#fbbf24",
 };
 
-function EntityChip({ entity, muted }: { entity: Entity; muted?: boolean }) {
+function EntityChip({
+  entity,
+  spaceId,
+  muted,
+}: {
+  entity: Entity;
+  spaceId: string;
+  muted?: boolean;
+}) {
   const dot = CATEGORY_DOT[entity.entity_category] ?? "var(--accent-500)";
   return (
-    <span
-      className="inline-flex max-w-[220px] items-center gap-1.5 truncate rounded-full border border-black/[0.05] px-2.5 py-1 text-[11.5px] font-medium text-gray-700"
+    <Link
+      href={`/app/space/${spaceId}/entity/${entity.id}`}
+      className="inline-flex max-w-[220px] items-center gap-1.5 truncate rounded-full border border-black/[0.05] px-2.5 py-1 text-[11.5px] font-medium text-gray-700 transition hover:border-black/[0.15] hover:bg-white hover:text-gray-900"
       style={{
         background: muted ? "transparent" : "rgba(255,255,255,0.6)",
       }}
@@ -212,6 +233,6 @@ function EntityChip({ entity, muted }: { entity: Entity; muted?: boolean }) {
         style={{ background: dot }}
       />
       <span className="truncate">{entity.name}</span>
-    </span>
+    </Link>
   );
 }

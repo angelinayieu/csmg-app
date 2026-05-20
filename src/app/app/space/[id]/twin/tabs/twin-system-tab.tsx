@@ -102,6 +102,7 @@ export function TwinSystemTab({ spaceId, bundle }: Props) {
       )}
       {workflowData && mode === "layers" && (
         <TwinLayerStackView
+          spaceId={spaceId}
           workflowData={workflowData}
           layerOntology={bundle.layer_ontology}
         />
