@@ -5,6 +5,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
+import { insertRoomEvent, previewLabel } from "@/lib/synergy/room-events";
 
 interface Body {
   id?: unknown;
@@ -103,5 +104,19 @@ export async function POST(request: Request, ctx: RouteContext) {
       { status: 500 },
     );
   }
+
+  // Append a Timeline event (soft-fail). The summary mirrors what the
+  // rail will render: short preview of the label, e.g. "Sketch first."
+  // Linked-create (parent_id set) is logged as node_linked so the rail
+  // can hint "added under …" if it wants.
+  void insertRoomEvent(db, {
+    roomId,
+    actorId: user.id,
+    kind: payload.parent_id ? "node_linked" : "node_added",
+    targetNodeId: inserted.id,
+    summary: previewLabel(inserted.label),
+    payload: payload.parent_id ? { parent_id: payload.parent_id } : null,
+  });
+
   return NextResponse.json({ node: inserted }, { status: 201 });
 }
