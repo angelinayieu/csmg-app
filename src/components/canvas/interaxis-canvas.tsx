@@ -211,15 +211,25 @@ export function InteraxisCanvas({
 }: InteraxisCanvasProps) {
   const [editor, setEditor] = useState<Editor | null>(null);
 
+  // Universal-canvas Phase C — workspace mode discriminator.
+  // A "workspace" is a regular spaces row flagged with
+  // reasoning_settings.is_workspace=true. It reuses this same canvas
+  // route but suppresses every operational R&D-pipeline overlay /
+  // spawner (8 stage rooms, twin snapshot, mechanism cards, scene
+  // director, KG hydrator, etc.) so the canvas stays a blank surface
+  // hosting only the user's WorkspaceRoomShape rooms.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isWorkspace = ((space as any)?.reasoning_settings as { is_workspace?: unknown } | undefined)?.is_workspace === true;
+
   // Stable context value for the InFrontOfTheCanvas overlay tree.
   // Re-creating the object only when entities/edges length changes is
   // enough — overlays consume length/array contents directly, not the
   // object identity, so this minimizes context-driven re-renders
   // without remounting the overlay components themselves.
   const overlayPropsValue = useMemo<CanvasOverlayProps>(
-    () => ({ spaceId: space.id, entities, edges }),
+    () => ({ spaceId: space.id, entities, edges, isWorkspace }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [space.id, entities.length, edges.length],
+    [space.id, entities.length, edges.length, isWorkspace],
   );
   const [tool, setTool] = useState<CanvasTool>("select");
 
@@ -444,6 +454,172 @@ export function InteraxisCanvas({
       cancelled = true;
     };
   }, [editor, spaceDataCtx.activeGoal, space.id]);
+
+  // ── Phase C: typed-clarifier seed cards (quiet modes) ────────────
+  //
+  // On first mount, read `space.synthesis_data.user_assertions`. If
+  // present, spawn one seed-card per assertion in a left-rail grid.
+  // Persistence: a localStorage flag keyed by space id prevents
+  // re-spawning across reloads when the user has deleted cards.
+  //
+  // Soft-fail throughout — a malformed user_assertions blob just
+  // means no seed cards spawn, identical to today's blank-canvas
+  // behavior for quiet modes.
+  const seedAssertions = useMemo(() => {
+    try {
+      const ua = (
+        space as unknown as {
+          synthesis_data?: {
+            user_assertions?: Record<
+              string,
+              Array<{ value?: unknown; question?: unknown; answered_at?: unknown }>
+            >;
+          };
+        }
+      )?.synthesis_data?.user_assertions;
+      if (!ua || typeof ua !== "object") return [];
+      const out: Array<{
+        slot: import("@/types/clarifier-answer").AnswerSlot;
+        value: string;
+        question: string;
+        answeredAt: string;
+      }> = [];
+      const VALID: ReadonlyArray<
+        import("@/types/clarifier-answer").AnswerSlot
+      > = [
+        "exploration_angle",
+        "variation_axis",
+        "target_metric",
+        "system_boundary",
+        "state_variable",
+        "observation_point",
+        "timeframe",
+        "constraint",
+      ];
+      for (const [slot, entries] of Object.entries(ua)) {
+        if (!VALID.includes(slot as (typeof VALID)[number])) continue;
+        if (!Array.isArray(entries)) continue;
+        for (const e of entries) {
+          if (!e || typeof e !== "object") continue;
+          const value = typeof e.value === "string" ? e.value.trim() : "";
+          if (!value) continue;
+          const question =
+            typeof e.question === "string" ? e.question.trim() : "";
+          const answeredAt =
+            typeof e.answered_at === "string"
+              ? e.answered_at
+              : new Date().toISOString();
+          out.push({
+            slot: slot as (typeof VALID)[number],
+            value,
+            question,
+            answeredAt,
+          });
+        }
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }, [space]);
+
+  useEffect(() => {
+    if (!editor || seedAssertions.length === 0) return;
+    const flagKey = `interaxis:seed_cards_spawned:${space.id}`;
+    if (typeof window !== "undefined" && window.localStorage.getItem(flagKey) === "1") return;
+
+    // Slot → visual kind. Multiple slots can share a kind (state vars
+    // + observation points both render as "state"; timeframe shares
+    // "constraint" with the explicit constraint slot).
+    const slotToKind: Record<
+      import("@/types/clarifier-answer").AnswerSlot,
+      import("./shapes/types").SeedCardShape["props"]["kind"]
+    > = {
+      exploration_angle: "angle",
+      variation_axis: "axis",
+      target_metric: "metric",
+      system_boundary: "boundary",
+      state_variable: "state",
+      observation_point: "state",
+      timeframe: "constraint",
+      constraint: "constraint",
+    };
+
+    // Left-rail grid: stack cards vertically just outside the
+    // typical viewport's left edge so they're visible without
+    // blocking the center where pipeline shapes land. Two columns
+    // if there are more than 4 cards.
+    const cardW = 220;
+    const cardH = 132;
+    const gapX = 16;
+    const gapY = 14;
+    const vp = editor.getViewportPageBounds();
+    const railX = (vp?.minX ?? 0) + 24;
+    const railY = (vp?.minY ?? 0) + 100;
+    const colCount = seedAssertions.length > 4 ? 2 : 1;
+
+    editor.markHistoryStoppingPoint(`seed-cards:${space.id}`);
+    const shapesToCreate = seedAssertions
+      .map((a, i) => {
+        const col = i % colCount;
+        const row = Math.floor(i / colCount);
+        const shapeId = createShapeId(`seed-${space.id}-${i}`);
+        if (editor.getShape(shapeId)) return null;
+        return {
+          id: shapeId,
+          type: "seed-card" as const,
+          x: railX + col * (cardW + gapX),
+          y: railY + row * (cardH + gapY),
+          meta: { spaceId: space.id },
+          props: {
+            w: cardW,
+            h: cardH,
+            slot: a.slot,
+            kind: slotToKind[a.slot] ?? "constraint",
+            question: a.question,
+            value: a.value,
+            answeredAt: a.answeredAt,
+            promotedEntityId: null,
+          },
+        };
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+    if (shapesToCreate.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      editor.createShapes(shapesToCreate as any[]);
+    }
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(flagKey, "1");
+    }
+  }, [editor, seedAssertions, space.id]);
+
+  // ── Phase C: seed-card promote → entity sync ─────────────────────
+  // The seed-card shape util fires `seed-card:promoted` after a
+  // successful POST to /api/spaces/[id]/promote-seed. Listen here so
+  // we can flip the shape's `promotedEntityId` prop — the util can't
+  // touch the editor directly.
+  useEffect(() => {
+    if (!editor) return;
+    const onPromoted = (e: Event) => {
+      const d = (e as CustomEvent<{ shapeId?: string; entityId?: string }>)
+        .detail;
+      if (!d?.shapeId || !d.entityId) return;
+      const shape = editor.getShape(d.shapeId as TLShapeId);
+      // Project convention casts custom-shape updates via any — tldraw's
+      // TLShape map doesn't enumerate our union (same reason
+      // canvas-operational-seed-spawner uses `as any[]` on createShapes).
+      if (!shape || (shape.type as string) !== "seed-card") return;
+      editor.updateShape({
+        id: d.shapeId as TLShapeId,
+        type: "seed-card",
+        props: { promotedEntityId: d.entityId },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+    };
+    window.addEventListener("seed-card:promoted", onPromoted);
+    return () => window.removeEventListener("seed-card:promoted", onPromoted);
+  }, [editor]);
 
   // ── Auto-cascade: strategy snapshot + app cards next to goal ──
   // Once a goal has been placed, cascade the downstream chain onto the
@@ -3380,6 +3556,7 @@ export function InteraxisCanvas({
       <BrainstormContextProvider
         settings={brainstorm.settings}
         spaceId={space.id}
+        seedAssertions={seedAssertions}
       >
         {/* Phase 1 Step 23 — canvas error boundary. Catches any throw
             from tldraw, shape utils, the pipeline painter, or
@@ -4092,6 +4269,11 @@ export function InteraxisCanvas({
         // populate the strategy hero card's spaceId prop, which the
         // shape needs for its swap-rank API call and detail-page link.
         spaceId={space?.id ?? null}
+        // Universal-canvas Phase C — workspaces have no pipeline runs,
+        // so the painter has nothing to subscribe to. Disable
+        // explicitly (rather than relying on runId being null) to
+        // make the suppression intent clear at this call site.
+        disabled={isWorkspace}
         onCompleted={onPipelineRunCompleted}
         onSignatureProgress={onSignatureProgress}
       />
@@ -4117,6 +4299,25 @@ export function InteraxisCanvas({
         >
           Quiet · <kbd className="rounded border border-gray-200 bg-gray-50 px-1 py-0.5 font-mono text-[9px] text-gray-500">Q</kbd>
         </button>
+      )}
+
+      {/* Universal-canvas Phase C — workspace identity badge. Tiny
+          top-left chip that only appears on the user's workspace
+          canvas (reasoning_settings.is_workspace === true). Tells the
+          user "you're in workspace mode" so the absence of R&D chrome
+          (Baseline, Evidence, Snapshots, the pipeline gates) reads as
+          intentional rather than broken. Non-interactive label. */}
+      {isWorkspace && (
+        <div
+          className="pointer-events-none absolute top-3 left-3 z-30 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/85 px-2.5 py-1 text-[10px] font-semibold text-gray-500 shadow-sm backdrop-blur-md"
+          title="This is your workspace canvas — brainstorms, strategies, R&D spaces, and twins live here as composable rooms."
+        >
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-60" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
+          </span>
+          Workspace
+        </div>
       )}
 
       {/* Asset library drawer — Phase A1.1 v2: universal asset catalog

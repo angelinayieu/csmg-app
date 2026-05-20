@@ -38,6 +38,7 @@ import { CanvasImageVisionBridge } from "./chrome/canvas-image-vision-bridge";
 import { CanvasSubjectCardSpawner } from "./chrome/canvas-subject-card-spawner";
 import { CanvasSubjectCardHydrator } from "./chrome/canvas-subject-card-hydrator";
 import { CanvasWorkspaceRoomSpawner } from "./chrome/canvas-workspace-room-spawner";
+import { CanvasWorkspaceAutoPopulate } from "./chrome/canvas-workspace-auto-populate";
 import { CanvasTwinRevealOrchestrator } from "./chrome/canvas-twin-reveal-orchestrator";
 import { CanvasActivityTracker } from "./chrome/canvas-activity-tracker";
 import {
@@ -80,6 +81,13 @@ export interface CanvasOverlayProps {
   spaceId: string;
   entities: Entity[];
   edges: Edge[];
+  /** Universal-canvas Phase C — when true, this space is the user's
+   *  blank workspace canvas (reasoning_settings.is_workspace === true)
+   *  and the operational R&D-pipeline overlays / spawners should NOT
+   *  mount. Workspaces only host WorkspaceRoomShape rooms; everything
+   *  else (8 stage rooms, cascade connectors, KG hydrators, twin reveal,
+   *  scene director, etc.) is meaningless without a pipeline run. */
+  isWorkspace: boolean;
 }
 
 export const CanvasOverlayPropsContext = createContext<CanvasOverlayProps | null>(null);
@@ -90,13 +98,13 @@ function useCanvasOverlayProps(): CanvasOverlayProps {
     // Defensive default — if InFrontOfTheCanvas mounts before the
     // provider (theoretically possible during a remount), render with
     // empty data so the overlay tree doesn't throw.
-    return { spaceId: "", entities: [], edges: [] };
+    return { spaceId: "", entities: [], edges: [], isWorkspace: false };
   }
   return v;
 }
 
 function CanvasOverlays() {
-  const { spaceId, entities, edges } = useCanvasOverlayProps();
+  const { spaceId, entities, edges, isWorkspace } = useCanvasOverlayProps();
   return (
     <>
       <ThreadTethersOverlay />
@@ -113,31 +121,31 @@ function CanvasOverlays() {
           collapsible chip top-left of the canvas. Auto-hides when
           no asset has produced anything. Click a row → zooms to
           that paper's contributions on canvas. */}
-      <ResearchLibraryChip />
+      {!isWorkspace && <ResearchLibraryChip />}
       {/* D8 — KG communities overview chip. Surfaces the modularity-
           greedy partitions the decompose pipeline computed (the
           GraphRAG-style hierarchical communities table). Auto-hides
           when no detection run has populated the table yet. Click a
           row → zooms to that community's entities on canvas. */}
-      <CommunitiesChip spaceId={spaceId} />
+      {!isWorkspace && <CommunitiesChip spaceId={spaceId} />}
       {/* M6 — Mediator Proposal Engine review surface. Auto-hides
           when no proposals are pending. Top-right floating chip;
           click → side drawer with approve/reject per proposal +
           "re-run bridge detection" button. */}
-      <CanvasBridgeGapsButton spaceId={spaceId} />
+      {!isWorkspace && <CanvasBridgeGapsButton spaceId={spaceId} />}
       {/* Top-left chip surfacing preflight contract status:
             • not-yet-approved → bright "Open preflight" CTA
             • approved + matches → muted "Preflight approved" badge
             • approved + drifted → amber warning to re-approve
           Auto-hides when the space has too few entities for a contract. */}
-      <CanvasPreflightChip spaceId={spaceId} />
+      {!isWorkspace && <CanvasPreflightChip spaceId={spaceId} />}
       <CanvasStageIndicator />
-      <CanvasLassoSystemButton spaceId={spaceId} />
+      {!isWorkspace && <CanvasLassoSystemButton spaceId={spaceId} />}
       {/* Phase 6C — sibling button: lasso → save-as-subject. Same
           extractor, atomic /from-lasso endpoint creates both the
           scoping System and the Subject in one POST. Spawns the
           SubjectCard via the same window-event bridge. */}
-      <CanvasLassoSubjectButton spaceId={spaceId} />
+      {!isWorkspace && <CanvasLassoSubjectButton spaceId={spaceId} />}
       {/* Lasso → Summarize. Mounts to the LEFT of the system+subject
           buttons. Uses the unified shape-content extractor (handles
           all 41 shape types, not just entity-bearing ones), POSTs the
@@ -168,44 +176,53 @@ function CanvasOverlays() {
           across all apps in this space and pops a panel listing the
           top scorers + their champion status. Self-hides until the
           Lab Room exists on canvas. */}
-      <LabLeaderboardChip spaceId={spaceId} />
+      {!isWorkspace && <LabLeaderboardChip spaceId={spaceId} />}
       {/* Phase 2 — final-plan card bridge. Listens for
           final-plan-card:spawn (fired by useStrategyAuto.confirm)
           and final-plan-card:action (fired by the shape's header
           buttons + view-mode tabs). Spawns the card, regenerates
           the brief, switches view modes, and paints a flowchart
           when the user clicks the Flowchart tab. */}
-      <CanvasFinalPlanCardBridge spaceId={spaceId} />
+      {!isWorkspace && <CanvasFinalPlanCardBridge spaceId={spaceId} />}
       {/* Phase 1.4 — fan-out connectors from the strategy hero card to
           every app card on canvas. Returns null; idempotent across
           re-renders. Arrows are tagged with meta.strategyAppFanout
           so the overlay can clean up stale connectors when shapes
           come and go. */}
-      <CanvasStrategyAppFanout spaceId={spaceId} />
+      {!isWorkspace && <CanvasStrategyAppFanout spaceId={spaceId} />}
       {/* Two-phase image ingest bridge — listens for the
           ingested-file:vision-{start,complete,error} window events
           fired by useIngest's phase-2 dispatcher and updates the
           matching file-card shape's status badges. On success it
           also calls /api/canvas/materialize-from-image so the
           extracted entities + edges land next to the card. */}
-      <CanvasImageVisionBridge spaceId={spaceId} />
+      {!isWorkspace && <CanvasImageVisionBridge spaceId={spaceId} />}
       {/* Phase 4 — bridges the chrome-layer +Subject button (which
           lives outside the editor tree) to editor.createShapes
           inside the tree. Listens for the
           interaxis:spawn-subject-card window event. */}
-      <CanvasSubjectCardSpawner spaceId={spaceId} />
+      {!isWorkspace && <CanvasSubjectCardSpawner spaceId={spaceId} />}
       {/* Universal-canvas Phase A — listens for
           canvas-workspace:add-brainstorm window events from the
           CanvasWorkspaceRoomPicker chrome and spawns a
           WorkspaceRoomShape at the viewport center. First step toward
           making this canvas the universal workspace surface. */}
       <CanvasWorkspaceRoomSpawner />
+      {/* Universal-canvas Phase C, Step 1 — on a workspace canvas's
+          first ever open, seed brainstorm + strategy rooms (plus the
+          provenance arrows between them) so the user sees their
+          existing work instead of a blank canvas. Idempotent via
+          reasoning_settings.auto_populated_at — runs at most once per
+          workspace, ever. Pure side-effect; returns null. */}
+      {isWorkspace && <CanvasWorkspaceAutoPopulate spaceId={spaceId} />}
       {/* Cinematic Phase 1 — the "twin is ready" climax. Watches for
           a twin-snapshot (or workspace-room kind=twin) being added to
           the canvas; when one lands, it pauses the painter's
           normal cadence, zooms the camera in, fades a "Your digital
           twin is ready" headline, then pulls back and offers an
-          "Open the twin" CTA. Fires once per mount. */}
+          "Open the twin" CTA. Fires once per mount.
+          NOTE: kept on workspace so that twin rooms pinned via "+ Add
+          room" still trigger the cinematic when added. */}
       <CanvasTwinRevealOrchestrator spaceId={spaceId} />
       {/* Cinematic Phase 3 — chrome dimming during unfurl. Watches
           shape additions in the editor store; when shapes are being
@@ -220,13 +237,13 @@ function CanvasOverlays() {
           the shape between collapsed/expanded footprints, reframes
           the camera, and toggles a body attribute so other canvas
           shapes dim during the expanded state. */}
-      <CanvasStrategyExpandResponder />
+      {!isWorkspace && <CanvasStrategyExpandResponder />}
       {/* Entity glow responder. When the user hovers a tactic row in
           the expanded strategy hero card, the source entities cited
           by that tactic pulse with a 1.5s glow halo on the canvas.
           Click → camera pans to the first cited entity. This is the
           "trace strategy back to KG" visualization. */}
-      <CanvasEntityGlowResponder />
+      {!isWorkspace && <CanvasEntityGlowResponder />}
       {/* Cinematic Phase 4 — scene director. Watches for high-value
           shape spawns (synthesis cards, hypothesis ladders, strategy
           hero card) and queues a per-shape "spotlight" sequence:
@@ -237,14 +254,14 @@ function CanvasOverlays() {
           orchestrator via the data-canvas-twin-reveal-active body
           attribute: the director pauses while the twin moment owns
           the camera. */}
-      <CanvasSceneDirector />
+      {!isWorkspace && <CanvasSceneDirector />}
       {/* Hydrator counterpart — fetches pre-existing subjects from
           the DB on mount and paints SubjectCard shapes for any that
           aren't already on the canvas. Required for template-
           materialized spaces (where subjects exist as DB rows
           before the canvas is ever opened) and lab-proposal-wizard
           approvals (same situation). Idempotent + filters dupes. */}
-      <CanvasSubjectCardHydrator spaceId={spaceId} />
+      {!isWorkspace && <CanvasSubjectCardHydrator spaceId={spaceId} />}
       {/* KG overview — for template-seeded spaces, paints a single
           compact mini-graph (KGFormationShape) summarizing the
           seeded entities + edges with the top-6 hubs and their
@@ -253,43 +270,49 @@ function CanvasOverlays() {
           nothing for non-template spaces (where useSyncEntities
           stays disabled and the pipeline produces shells/synthesis
           cards). Idempotent. */}
-      <CanvasKgOverviewSpawner
-        spaceId={spaceId}
-        entities={entities}
-        edges={edges}
-      />
+      {!isWorkspace && (
+        <CanvasKgOverviewSpawner
+          spaceId={spaceId}
+          entities={entities}
+          edges={edges}
+        />
+      )}
       {/* Operational view seeder — A4 (operational whiteboard track).
           Reads durable data (twin-proposal ranked_strategies, twin-state
           macro) and reconstructs the persistent strategy-hero-card +
           twin-snapshot shapes if they're not already on the canvas.
           Idempotent + respects user dismissal via localStorage flag,
-          matching the existing app-card / kg-overview cascade pattern. */}
-      <CanvasOperationalSeedSpawner spaceId={spaceId} />
+          matching the existing app-card / kg-overview cascade pattern.
+          Universal-canvas Phase C — suppressed on workspace canvases,
+          which start blank and only host user-pinned room artifacts. */}
+      {!isWorkspace && <CanvasOperationalSeedSpawner spaceId={spaceId} />}
       {/* Room-transition connectors — B1 (operational whiteboard).
           Watches the editor's room shapes; once two consecutive cascade
           rooms exist (intake → landscape → kg → proposal → twin → lab
           → reflexive → results), places an animated arrow between
           them. Re-runs whenever a room is created, moved, or resized.
           Idempotent via deterministic shape IDs. */}
-      <CanvasRoomTransitionSpawner spaceId={spaceId} />
+      {!isWorkspace && <CanvasRoomTransitionSpawner spaceId={spaceId} />}
       {/* Cascade artifact connectors — B2 + B3 (operational whiteboard).
           Watches for subject-card / strategy-hero-card / twin-snapshot
           / app-card shapes and draws persistent elbow arrows between
           them so the operational flow reads as
           persona → strategy-hero → twin-snapshot → app-card.
           Bindings track source/target positions automatically. */}
-      <CanvasCascadeConnectorSpawner spaceId={spaceId} />
+      {!isWorkspace && <CanvasCascadeConnectorSpawner spaceId={spaceId} />}
       {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
           user-triggered force-directed reflow over the main KG.
           Lives in CanvasOverlays so it has the tldraw editor context
           it needs to read shapes + bindings. Bottom-right above the
           bottom dock so it's discoverable without dominating. */}
-      <div
-        className="pointer-events-none absolute bottom-20 right-6 z-30"
-        aria-label="Layout controls"
-      >
-        <RelaxLayoutButton />
-      </div>
+      {!isWorkspace && (
+        <div
+          className="pointer-events-none absolute bottom-20 right-6 z-30"
+          aria-label="Layout controls"
+        >
+          <RelaxLayoutButton />
+        </div>
+      )}
     </>
   );
 }

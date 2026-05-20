@@ -97,7 +97,34 @@ import { SynergyGlassDock } from "@/components/synergy/synergy-glass-dock";
 // operating-twin shell. Returns a small set of booleans the JSX
 // below reads directly. Modes default to "show everything" when
 // experienceMode is absent so existing spaces keep their behavior.
-function chromeForMode(mode: ExperienceMode | null) {
+//
+// Universal-canvas Phase C — workspace mode is a HARD short-circuit:
+// when the space is the user's blank workspace canvas, every R&D-
+// pipeline chrome surface (baseline, evidence, snapshots, all the
+// gates, the mode chip) is suppressed. Only the cross-space Connect
+// launcher and the WorkspaceRoom picker (mounted unconditionally
+// below) remain. This keeps the workspace canvas honest to the
+// homepage pill's promise: "every brainstorm, strategy, R&D space,
+// and twin you've made lives here as a room you can compose" — not
+// "an empty R&D pipeline waiting for entities."
+function chromeForMode(mode: ExperienceMode | null, isWorkspace: boolean) {
+  if (isWorkspace) {
+    return {
+      showKgPlanGate: false,
+      showFramingGate: false,
+      showLabProposalGate: false,
+      showLabProposalChip: false,
+      showEvidenceLauncher: false,
+      showBaselineLauncher: false,
+      showSnapshotsLauncher: false,
+      // Keep Connect — workspaces still benefit from cross-space
+      // weave/bridges (a user can connect their workspace to a
+      // collaborator's space).
+      showConnectLauncher: true,
+      emphasizeTwin: false,
+      isLight: false,
+    };
+  }
   // brain_probe / brainstorm_speed are the lightweight brainstorm
   // surfaces — they share the canvas but skip the heavy R&D gates.
   const isLight = mode === "brain_probe" || mode === "brainstorm_speed";
@@ -123,6 +150,11 @@ function readExperienceMode(reasoningSettings: unknown): ExperienceMode | null {
   if (!reasoningSettings || typeof reasoningSettings !== "object") return null;
   const raw = (reasoningSettings as { experienceMode?: unknown }).experienceMode;
   return isExperienceMode(raw) ? raw : null;
+}
+
+function readIsWorkspace(reasoningSettings: unknown): boolean {
+  if (!reasoningSettings || typeof reasoningSettings !== "object") return false;
+  return (reasoningSettings as { is_workspace?: unknown }).is_workspace === true;
 }
 
 // Dynamic-import the canvas so tldraw (~600KB + Three.js neighbours)
@@ -270,7 +302,13 @@ export default function WhiteboardPage() {
   // space.reasoning_settings.experienceMode by /api/intake/bootstrap.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const experienceMode = readExperienceMode((space as any)?.reasoning_settings);
-  const chrome = chromeForMode(experienceMode);
+  // Universal-canvas Phase C — workspace mode discriminator. Hard
+  // short-circuit inside chromeForMode below suppresses every R&D-
+  // pipeline chrome surface when the space is the user's blank
+  // workspace canvas. See readIsWorkspace() above for the flag check.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isWorkspace = readIsWorkspace((space as any)?.reasoning_settings);
+  const chrome = chromeForMode(experienceMode, isWorkspace);
   const [connectOpen, setConnectOpen] = useState(false);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [situationOpen, setSituationOpen] = useState(false);
@@ -347,8 +385,12 @@ export default function WhiteboardPage() {
 
       {/* Phase 1 unified canvas — top-right experience mode chip.
           Renders only when the space was created with an explicit
-          mode (legacy spaces from before Phase 1 hide the chip). */}
-      {experienceMode && (
+          mode (legacy spaces from before Phase 1 hide the chip).
+          Universal-canvas Phase C — workspaces don't carry an
+          experience mode (no pipeline ran), so the chip self-hides
+          via `experienceMode` being null. Belt-and-suspenders with
+          isWorkspace to keep the workspace canvas chrome-free. */}
+      {!isWorkspace && experienceMode && (
         <CanvasExperienceModeChip
           mode={experienceMode}
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -436,8 +478,10 @@ export default function WhiteboardPage() {
           unless spaces.manual_authoring_enabled is true (researcher
           opt-in). Bottom-left anchor so it doesn't crowd the
           existing Connect / Snapshots / Baseline / Evidence stack
-          on the bottom-right. */}
-      <CanvasAddButtonsMount spaceId={space.id} space={space} />
+          on the bottom-right. Universal-canvas Phase C — workspaces
+          don't carry a layer ontology, so the +Variable form has no
+          dropdown content; suppress entirely. */}
+      {!isWorkspace && <CanvasAddButtonsMount spaceId={space.id} space={space} />}
 
       {/* Universal-canvas Phase A — "Add brainstorm" picker. Lets the
           user bring any of their existing brainstorm sessions onto
@@ -455,15 +499,21 @@ export default function WhiteboardPage() {
       <CanvasWorkspaceRoomFullscreen />
 
       {/* Baseline launcher — opens the situation drawer. Stacked above
-          Snapshots so all three bottom-right anchors are visible. */}
-      <button
-        onClick={() => setSituationOpen(true)}
-        className="chrome-dimmable fixed bottom-[8.5rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
-        title="Baseline — view the system's analysis of your current state (inputs, process, outputs, knowns, unknowns)"
-      >
-        <Activity className="h-3.5 w-3.5 text-cyan-600" />
-        Baseline
-      </button>
+          Snapshots so all three bottom-right anchors are visible.
+          Universal-canvas Phase C — gated on chrome.showBaselineLauncher
+          so workspace canvases (which have no pipeline-baseline data)
+          suppress this button. R&D spaces (every other mode) still
+          show it unconditionally. */}
+      {chrome.showBaselineLauncher && (
+        <button
+          onClick={() => setSituationOpen(true)}
+          className="chrome-dimmable fixed bottom-[8.5rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+          title="Baseline — view the system's analysis of your current state (inputs, process, outputs, knowns, unknowns)"
+        >
+          <Activity className="h-3.5 w-3.5 text-cyan-600" />
+          Baseline
+        </button>
+      )}
 
       {/* Evidence launcher — opens the evidence_registries drawer
           (rigorous mode). Stacked above Baseline. Surfaces the L2M-
