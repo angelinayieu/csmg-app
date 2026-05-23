@@ -47,12 +47,19 @@ function SpaceShellInner({ children }: { children: ReactNode }) {
   const expansion = useExpansion({ spaceId: ctx.space.id });
 
   // ── Projection shell state ──────────────────────────────────────────
-  // The projection is open for every route EXCEPT the whiteboard (which
-  // gets the full canvas to itself). Origin rect tracks the active
-  // sidebar button — captured on click and re-synced on every active-
-  // route change so direct URL loads still anchor the tail correctly.
+  // The projection is open for every route EXCEPT the whiteboard AND
+  // the triple-lab synthesis workspace — both own their full viewport
+  // via h-screen w-full and would fight the ProjectionPanel's
+  // constrained card. Origin rect tracks the active sidebar button —
+  // captured on click and re-synced on every active-route change so
+  // direct URL loads still anchor the tail correctly.
   const whiteboardHref = `/app/space/${ctx.space.id}/whiteboard`;
+  const tripleLabHref = `/app/space/${ctx.space.id}/triple-lab`;
   const isWhiteboardRoute = pathname === whiteboardHref;
+  const isTripleLabRoute = pathname === tripleLabHref;
+  // Both routes get the same "render at root" treatment — see the
+  // conditional render below.
+  const isFullViewportRoute = isWhiteboardRoute || isTripleLabRoute;
   const [originRect, setOriginRect] = useState<DOMRect | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   // Hover-peek: when the panel is fullscreen the sidebar slides off
@@ -187,19 +194,19 @@ function SpaceShellInner({ children }: { children: ReactNode }) {
         />
       </div>
 
-      {/* Whiteboard route: children render at root so WhiteboardPage's
-          own `fixed inset-0` overlay can take the full viewport. The
-          projection panel stays closed (no card, no backdrop) so the
-          tldraw canvas isn't competing with anything but the floating
-          sidebar above it. */}
-      {isWhiteboardRoute && children}
+      {/* Full-viewport routes (whiteboard + triple-lab): children render
+          at root so the page's own `fixed inset-0` / `h-screen w-full`
+          layout owns the viewport. The projection panel stays closed
+          (no card, no backdrop) so the canvas isn't competing with
+          anything but the floating sidebar above it. */}
+      {isFullViewportRoute && children}
 
       {/* Every other route: children render inside the projection card.
           The card holds the SpaceHeader, the routed main, the KG mini-
           map, and the chat overlay. AnimatePresence handles enter/exit
           so closing returns to the bare canvas with a smooth fade. */}
       <ProjectionPanel
-        open={!isWhiteboardRoute}
+        open={!isFullViewportRoute}
         originRect={originRect}
         fullscreen={fullscreen}
         onToggleFullscreen={() => setFullscreen((v) => !v)}

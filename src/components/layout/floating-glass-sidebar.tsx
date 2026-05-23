@@ -356,11 +356,18 @@ export const FloatingGlassSidebar = forwardRef<
                         else buttonRefs.current.delete(item.id);
                       }}
                       onActivate={(rect) => {
+                        // Full-viewport destinations (whiteboard +
+                        // triple-lab) tell the parent to drop the
+                        // projection's fullscreen state — they own the
+                        // viewport themselves and don't render inside
+                        // the projection panel.
+                        const isFullViewport =
+                          item.id === "whiteboard" || item.id === "triple-lab";
                         onActivate({
                           rect,
                           id: item.id,
                           href: item.href,
-                          dismissProjection: item.id === "whiteboard",
+                          dismissProjection: isFullViewport,
                         });
                         router.push(item.href);
                       }}
