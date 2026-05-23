@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Paperclip, Loader2, X, Brain, Plus, GitFork, Search, Focus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { MemorySettings } from "@/lib/brainstorm/brainstorm-settings";
+import { SHOW_DOCK_PLACEHOLDER_MODES } from "@/lib/whiteboard/canvas-feature-flags";
 
 // Phase 4 (2026-07-04) — explicit dock modes that map onto real
 // endpoints. "Add" was the dock's silent default before; "Decompose"
@@ -104,6 +105,15 @@ const MODE_META: Record<
 };
 
 const MODE_ORDER: DockMode[] = ["add", "decompose", "solve", "probe"];
+
+// `solve` and `probe` are placeholder modes — disabled until their
+// orchestrators land. Gate them behind SHOW_DOCK_PLACEHOLDER_MODES so
+// the dock doesn't ship greyed-out chips users can't act on. The full
+// MODE_ORDER stays defined above so flipping the flag back is a one-
+// liner with no further plumbing.
+const VISIBLE_MODES: DockMode[] = SHOW_DOCK_PLACEHOLDER_MODES
+  ? MODE_ORDER
+  : MODE_ORDER.filter((m) => m !== "solve" && m !== "probe");
 
 const DEPTH_META: Record<DockDepth, { label: string; hint: string }> = {
   quick: { label: "Quick", hint: "1 LLM pass · ~10s" },
@@ -367,7 +377,7 @@ export function CanvasBottomDock({
             aria-label="Submit mode"
             className="inline-flex items-center gap-0.5 rounded-full bg-gray-100/80 p-0.5"
           >
-            {MODE_ORDER.map((m) => {
+            {VISIBLE_MODES.map((m) => {
               const meta = MODE_META[m];
               const enabled = modeAvailability[m];
               const active = mode === m;

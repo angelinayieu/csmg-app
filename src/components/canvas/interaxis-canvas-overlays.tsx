@@ -51,6 +51,7 @@ import { CanvasOperationalSeedSpawner } from "./chrome/canvas-operational-seed-s
 import { CanvasRoomTransitionSpawner } from "./chrome/canvas-room-transition-spawner";
 import { CanvasCascadeConnectorSpawner } from "./chrome/canvas-cascade-connector-spawner";
 import { RelaxLayoutButton } from "./chrome/relax-layout-button";
+import { SHOW_TOP_STAGE_INDICATOR } from "@/lib/whiteboard/canvas-feature-flags";
 
 // Hide tldraw's stock UI — we supply our own chrome (top bar, left tool
 // dock, HUD rail, bottom dock, command palette, shortcut help). Leaving
@@ -139,7 +140,7 @@ function CanvasOverlays() {
             • approved + drifted → amber warning to re-approve
           Auto-hides when the space has too few entities for a contract. */}
       {!isWorkspace && <CanvasPreflightChip spaceId={spaceId} />}
-      <CanvasStageIndicator />
+      {SHOW_TOP_STAGE_INDICATOR && <CanvasStageIndicator />}
       {!isWorkspace && <CanvasLassoSystemButton spaceId={spaceId} />}
       {/* Phase 6C — sibling button: lasso → save-as-subject. Same
           extractor, atomic /from-lasso endpoint creates both the
