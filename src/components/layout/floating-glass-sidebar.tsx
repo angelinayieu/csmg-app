@@ -12,7 +12,7 @@ import {
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { LayoutGrid, FlaskConical, BookOpen, Database, Activity } from "lucide-react";
+import { LayoutGrid, FlaskConical, BookOpen, Database, Activity, Microscope } from "lucide-react";
 import { IconDashboard } from "@/components/dashboard/glass-glyphs";
 import { cn } from "@/lib/utils";
 
@@ -119,6 +119,13 @@ export const FloatingGlassSidebar = forwardRef<
         label: "Whiteboard",
         href: `${base}/whiteboard`,
         icon: <LayoutGrid className="h-[15px] w-[15px]" />,
+        group: "workspace",
+      },
+      {
+        id: "triple-lab",
+        label: "Synthesis Lab",
+        href: `${base}/triple-lab`,
+        icon: <Microscope className="h-[15px] w-[15px]" />,
         group: "workspace",
       },
       {

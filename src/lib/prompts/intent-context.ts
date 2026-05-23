@@ -652,3 +652,20 @@ export const CONTEXT_OPTIONS: { value: string; label: string }[] = [
   { value: "investment", label: "Investment" },
   { value: "education", label: "Education" },
 ];
+
+// ── Guardrail-answers injection ────────────────────────────────────
+// Re-exports buildGuardrailBlock so callers can interpolate it into
+// any prompt the same way they already interpolate buildIntentBlock /
+// buildGoalBlock. The pattern every prompt-builder should follow:
+//
+//   const intent = buildSynthesisIntentBlock(intent);
+//   const goal   = buildGoalBlock(goal);
+//   const guard  = buildGuardrailBlock(space.guardrail_answers);
+//   const prompt = `${BASE_PROMPT}\n${intent}\n${goal}\n${guard}\n...`;
+//
+// Guardrail block goes LAST so its constraints override any softer
+// language earlier in the prompt — the LLM sees the user's hard
+// constraints right before the task.
+
+export { buildGuardrailBlock } from "./guardrail-questions";
+export type { GuardrailAnswer } from "./guardrail-questions";
