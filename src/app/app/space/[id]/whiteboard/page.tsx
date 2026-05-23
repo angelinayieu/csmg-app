@@ -498,64 +498,58 @@ export default function WhiteboardPage() {
           dispatched by each room's Fullscreen button. */}
       <CanvasWorkspaceRoomFullscreen />
 
-      {/* Baseline launcher — opens the situation drawer. Stacked above
-          Snapshots so all three bottom-right anchors are visible.
-          Universal-canvas Phase C — gated on chrome.showBaselineLauncher
-          so workspace canvases (which have no pipeline-baseline data)
-          suppress this button. R&D spaces (every other mode) still
-          show it unconditionally. */}
-      {chrome.showBaselineLauncher && (
+      {/* Bottom-right floating action stack (Phase 1, step 1.2). The
+          four launchers previously used hand-tuned absolute positions
+          (`bottom-6`, `bottom-20`, `bottom-[8.5rem]`, `bottom-[11rem]`)
+          to stack themselves — which left visible gaps whenever a
+          mode-gated launcher was hidden (e.g. brainstorm_speed hides
+          Snapshots + Evidence, so Connect → Baseline had a 56-px hole
+          between them). Wrapping in `flex flex-col-reverse` makes the
+          gaps disappear and gives consistent 8-px spacing regardless
+          of which launchers the current mode enables. Order matters:
+          Connect (the primary gradient CTA) is the first child so it
+          renders at the BOTTOM of the stack — closest to the user's
+          thumb. The conditional secondaries stack above it. */}
+      <div className="chrome-dimmable fixed bottom-6 right-6 z-50 flex flex-col-reverse items-end gap-2">
         <button
-          onClick={() => setSituationOpen(true)}
-          className="chrome-dimmable fixed bottom-[8.5rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
-          title="Baseline — view the system's analysis of your current state (inputs, process, outputs, knowns, unknowns)"
+          onClick={() => setConnectOpen(true)}
+          className="flex items-center gap-1.5 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 px-4 py-2.5 text-[12px] font-semibold text-white shadow-lg transition-all hover:-translate-y-px hover:shadow-xl"
+          title="Connect this whiteboard to others (weave + bridges)"
         >
-          <Activity className="h-3.5 w-3.5 text-cyan-600" />
-          Baseline
+          <GitBranch className="h-3.5 w-3.5" />
+          Connect
         </button>
-      )}
-
-      {/* Evidence launcher — opens the evidence_registries drawer
-          (rigorous mode). Stacked above Baseline. Surfaces the L2M-
-          style effect-size extractions from research artifacts the
-          user has attached, with full LLM × parser provenance and
-          approve/reject review actions. Hidden in brainstorm modes
-          — there's no pipeline producing evidence rows. */}
-      {chrome.showEvidenceLauncher && (
-        <button
-          onClick={() => setEvidenceOpen(true)}
-          className="chrome-dimmable fixed bottom-[11rem] right-6 z-50 flex items-center gap-1.5 rounded-full border border-purple-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
-          title="Evidence registry — review effect sizes extracted from research artifacts (rigorous mode)"
-        >
-          <Beaker className="h-3.5 w-3.5 text-purple-600" />
-          Evidence
-        </button>
-      )}
-
-      {/* R5 Phase A — Snapshots launcher, stacked above Connect so
-          both bottom-right anchors have clear hit targets. Hidden in
-          brainstorm modes — there's no KG to snapshot yet. */}
-      {chrome.showSnapshotsLauncher && (
-        <button
-          onClick={() => setSnapshotsOpen(true)}
-          className="chrome-dimmable fixed bottom-20 right-6 z-50 flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
-          title="Snapshots & scenarios — freeze the KG and test interventions against it"
-        >
-          <Camera className="h-3.5 w-3.5 text-blue-600" />
-          Snapshots
-        </button>
-      )}
-
-      {/* Connect launcher — bottom-right floating button. Opens the
-          weave + bridges side panel for this whiteboard. */}
-      <button
-        onClick={() => setConnectOpen(true)}
-        className="chrome-dimmable fixed bottom-6 right-6 z-50 flex items-center gap-1.5 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 px-4 py-2.5 text-[12px] font-semibold text-white shadow-lg transition-all hover:-translate-y-px hover:shadow-xl"
-        title="Connect this whiteboard to others (weave + bridges)"
-      >
-        <GitBranch className="h-3.5 w-3.5" />
-        Connect
-      </button>
+        {chrome.showSnapshotsLauncher && (
+          <button
+            onClick={() => setSnapshotsOpen(true)}
+            className="flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+            title="Snapshots & scenarios — freeze the KG and test interventions against it"
+          >
+            <Camera className="h-3.5 w-3.5 text-blue-600" />
+            Snapshots
+          </button>
+        )}
+        {chrome.showBaselineLauncher && (
+          <button
+            onClick={() => setSituationOpen(true)}
+            className="flex items-center gap-1.5 rounded-full border border-gray-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+            title="Baseline — view the system's analysis of your current state (inputs, process, outputs, knowns, unknowns)"
+          >
+            <Activity className="h-3.5 w-3.5 text-cyan-600" />
+            Baseline
+          </button>
+        )}
+        {chrome.showEvidenceLauncher && (
+          <button
+            onClick={() => setEvidenceOpen(true)}
+            className="flex items-center gap-1.5 rounded-full border border-purple-200/70 bg-white/95 px-3.5 py-2 text-[12px] font-semibold text-gray-700 shadow-sm transition-all hover:-translate-y-px hover:bg-white hover:shadow-md"
+            title="Evidence registry — review effect sizes extracted from research artifacts (rigorous mode)"
+          >
+            <Beaker className="h-3.5 w-3.5 text-purple-600" />
+            Evidence
+          </button>
+        )}
+      </div>
 
       <ConnectPanel
         open={connectOpen}

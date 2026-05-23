@@ -304,11 +304,20 @@ function CanvasOverlays() {
       {/* T2.1 — Relax layout button (docs/KG_DEPTH_CRITIQUE.md):
           user-triggered force-directed reflow over the main KG.
           Lives in CanvasOverlays so it has the tldraw editor context
-          it needs to read shapes + bindings. Bottom-right above the
-          bottom dock so it's discoverable without dominating. */}
+          (via useForceRelaxation → useEditor) it needs to read shapes
+          + bindings.
+
+          Phase 1 step 1.2: sits to the LEFT of the page-level
+          bottom-right action stack (Baseline / Evidence / Snapshots /
+          Connect) at the same vertical level, so it stays at thumb-
+          reach without colliding with whichever launchers the current
+          mode has enabled. Previously positioned at bottom-20 right-6,
+          which collided with the Snapshots launcher (both
+          right-6, same vertical) — Snapshots' higher z-index hid
+          Relax whenever Snapshots was rendered. */}
       {!isWorkspace && (
         <div
-          className="pointer-events-none absolute bottom-20 right-6 z-30"
+          className="pointer-events-none absolute bottom-6 right-[11rem] z-40"
           aria-label="Layout controls"
         >
           <RelaxLayoutButton />
