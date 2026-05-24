@@ -207,14 +207,22 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
           }),
         });
         if (!sessRes.ok) throw new Error("Couldn't create the brainstorm");
+        // /api/synergy/sessions returns { session, seedNode } — the
+        // session object is nested. An older shape returned the row
+        // flat at top level; we accept both for backward compat so
+        // a partial deploy doesn't tank the homepage.
         const sessJson = (await sessRes.json()) as {
+          session?: { id?: string; title?: string };
+          // Fallback shape (older endpoint):
           id?: string;
           title?: string;
         };
-        if (!sessJson.id) throw new Error("No session id returned");
+        const sessionId = sessJson.session?.id ?? sessJson.id;
+        const sessionTitle = sessJson.session?.title ?? sessJson.title;
+        if (!sessionId) throw new Error("No session id returned");
         spawnKind = "brainstorm";
-        artifactId = sessJson.id;
-        artifactName = sessJson.title ?? result.refinedPrompt.slice(0, 60);
+        artifactId = sessionId;
+        artifactName = sessionTitle ?? result.refinedPrompt.slice(0, 60);
         // Autopilot inside the fullscreen iframe.
         fullscreenQuery = "autopilot=1";
       } else {
