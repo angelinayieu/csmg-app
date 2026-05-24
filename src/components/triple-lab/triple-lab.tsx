@@ -223,14 +223,25 @@ export function TripleLab({ spaceId }: TripleLabProps) {
   // screen. Resets to false naturally on space change (component
   // remount) but persists across re-renders within the same session.
   const [emptyStateDismissed, setEmptyStateDismissed] = useState<boolean>(false);
+  // Total user-added rooms across all 3 columns. ANY room counts as
+  // "user has started" — even a scratch note signals intent — so the
+  // empty-state overlay dismisses to reveal the room(s). Without this
+  // a freshly-promoted brainstorm space (no entities yet) would have
+  // the brainstorm room hidden behind the overlay, breaking the whole
+  // promote-to-lab handoff.
+  const totalUserRooms =
+    labRoomsByColumn.left.length +
+    labRoomsByColumn.middle.length +
+    labRoomsByColumn.right.length;
   const dataIsPresent = useMemo(() => {
     if (spaceData.entities.length > 0) return true;
+    if (totalUserRooms > 0) return true;
     if (!synthesisData) return false;
     const hasLeverage = (synthesisData.leverage_points?.length ?? 0) > 0;
     const hasBottleneck = !!synthesisData.master_bottleneck;
     const hasAxioms = (synthesisData.axioms?.length ?? 0) > 0;
     return hasLeverage || hasBottleneck || hasAxioms;
-  }, [spaceData.entities.length, synthesisData]);
+  }, [spaceData.entities.length, totalUserRooms, synthesisData]);
   // Show overlay ONLY when the space has no data AND user hasn't
   // manually dismissed it. The moment they submit, dataIsPresent is
   // still false but emptyStateDismissed flips true → overlay slides
@@ -736,14 +747,14 @@ function LeftColumnSurface({
   handleProgress: (progress: UploadProgress) => void;
   toggleColumn: (idx: 0 | 1 | 2) => void;
   roomsLeft: LabRoomRow[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   createLabRoom: (slot: "left" | "middle" | "right", kind: string, roomConfig?: Record<string, any>) => Promise<LabRoomRow | null>;
   patchLabRoom: (
     roomId: string,
     patch: {
       collapsed?: boolean;
       position?: number;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       room_config?: Record<string, any>;
     },
   ) => Promise<LabRoomRow | null>;

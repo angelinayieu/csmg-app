@@ -15,10 +15,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   Check,
   Cloud,
+  FlaskConical,
   Loader2,
   Sparkles,
   Target,
@@ -133,10 +135,41 @@ export function SynergyWhiteboard({
   autoStartVoice = false,
   autoStartAutopilot = false,
 }: Props) {
+  const router = useRouter();
   const [tool, setTool] = useState<SynergyTool>("select");
   const [autoMode, setAutoMode] = useState(true);
   const [nodes, setNodes] = useState<ClientNode[]>([]);
   const [strokes, setStrokes] = useState<ClientStroke[]>([]);
+
+  // ── Phase 5e: Promote-to-Synthesis-Lab bridge ──────────────────────
+  // CTA in the top toolbar lets the user dock this brainstorm session
+  // as a room in a Synthesis Lab. The endpoint is idempotent — second
+  // click routes to the existing promoted space instead of duplicating.
+  const [promoting, setPromoting] = useState(false);
+  const handlePromoteToLab = useCallback(async () => {
+    if (promoting) return;
+    setPromoting(true);
+    try {
+      const res = await fetch(
+        `/api/synergy/sessions/${sessionId}/promote-to-lab`,
+        { method: "POST" },
+      );
+      const json = (await res.json().catch(() => null)) as
+        | { space_id?: string; lab_url?: string; error?: string }
+        | null;
+      if (!res.ok || !json?.space_id) {
+        toast.error(json?.error ?? "Could not open in Synthesis Lab");
+        return;
+      }
+      router.push(
+        json.lab_url ?? `/app/space/${json.space_id}/triple-lab`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPromoting(false);
+    }
+  }, [promoting, sessionId, router]);
   // Sprint synergy-3 — lateral edges. In-memory only (V1); page reload
   // currently loses them. Persistence schema lands once the UX is
   // validated. connectFromId tracks the first card the user clicked
@@ -1880,6 +1913,26 @@ export function SynergyWhiteboard({
           >
             <Target className="h-3 w-3" /> Process
           </Link>
+          {/* Phase 5e — Promote-to-Lab bridge. Routes the user into a
+           *  Synthesis Lab space pre-seeded with this brainstorm as a
+           *  room in the left column. Second click on an already-
+           *  promoted session re-uses the existing space (the endpoint
+           *  matches on synthesis_data.provenance.from_brainstorm_session_id),
+           *  so this can double as "Return to my lab". */}
+          <button
+            onClick={handlePromoteToLab}
+            disabled={promoting}
+            title="Dock this brainstorm into a Synthesis Lab as a room — fresh space the first time, returns to your existing one after that."
+            className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-indigo-700 backdrop-blur transition hover:bg-indigo-50 disabled:cursor-wait disabled:opacity-60"
+          >
+            {promoting ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <FlaskConical className="h-3 w-3" />
+            )}
+            {promoting ? "Opening…" : "Open in Synthesis Lab"}
+            <ArrowRight className="h-3 w-3" />
+          </button>
           <button
             onClick={() => focus.open()}
             title="Enter Focus Mode — converge + publish"
