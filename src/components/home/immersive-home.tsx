@@ -1629,9 +1629,13 @@ function mapSurfacePath(surface: string | undefined): string {
       return "/intake-review";
     case "structured_form":
     case undefined:
-      return "/whiteboard";
+      // Default landing is now the Synthesis Lab (triple-lab) — the
+      // universal entry per the locked design. Other surfaces stay
+      // canonical to their explicit template (journal stays journal,
+      // overview stays overview, etc.).
+      return "/triple-lab";
     default:
-      return "/whiteboard";
+      return "/triple-lab";
   }
 }
 

@@ -21,9 +21,10 @@ function surfaceForResume(surface: string | undefined): string {
       return "/intake-review";
     case "structured_form":
     case undefined:
-      return "/whiteboard";
+      // Default landing on the universal Synthesis Lab entry surface.
+      return "/triple-lab";
     default:
-      return "/whiteboard";
+      return "/triple-lab";
   }
 }
 

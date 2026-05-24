@@ -544,7 +544,10 @@ function WhiteboardCard({
     }
     e.preventDefault();
     startTransition(() => {
-      router.push(`/app/space/${space.id}/whiteboard`);
+      // Cards in the home grid land on the Synthesis Lab (universal
+      // entry surface). The lab autoroutes to triple-lab via the
+      // space root redirect, so we go direct to skip the bounce.
+      router.push(`/app/space/${space.id}/triple-lab`);
     });
   }
 
@@ -677,7 +680,7 @@ function WhiteboardCard({
 
   return (
     <Link
-      href={`/app/space/${space.id}/whiteboard`}
+      href={`/app/space/${space.id}/triple-lab`}
       onClick={handleNavigate}
       aria-busy={isPending}
       className={cardClass}

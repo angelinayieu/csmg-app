@@ -167,10 +167,14 @@ export function PendingIntakeRunner({ surfaceFor }: Props) {
               (json.error as string) ?? `Bootstrap failed (${res.status})`,
             );
           }
+          // Landing-page → authed handoff: land on the Synthesis Lab
+          // (the universal entry surface). The run id rides through
+          // ?run= so the lab's live-synthesis hook picks up the
+          // in-flight chain immediately.
           const dest =
             typeof json.runId === "string" && json.runId.length > 0
-              ? `/app/space/${json.spaceId}/whiteboard?run=${json.runId}`
-              : `/app/space/${json.spaceId}/whiteboard`;
+              ? `/app/space/${json.spaceId}/triple-lab?run=${json.runId}`
+              : `/app/space/${json.spaceId}/triple-lab`;
           if (!cancelled) {
             clearPendingIntake();
             router.push(dest);
