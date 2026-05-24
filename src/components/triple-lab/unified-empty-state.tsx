@@ -29,6 +29,11 @@ interface UnifiedEmptyStateProps {
    *  contract as the raw-signal panel's drop handler — parent forwards
    *  to the same code path. */
   onFilesDropped: (files: File[]) => void;
+  /** Fired the moment the user clicks Decompose on the idea-entry
+   *  card. Parent should dismiss the overlay so the user can watch
+   *  the 3-panel layout populate in real time — instead of staring
+   *  at a loading screen for the 60-180s the chain takes. */
+  onSubmitStarted?: () => void;
 }
 
 // Local sub-state. "idle" = show prompt + drop affordance.
@@ -39,6 +44,7 @@ type EmptyStateMode = "idle" | "decomposing" | "error";
 export function UnifiedEmptyState({
   spaceId,
   onFilesDropped,
+  onSubmitStarted,
 }: UnifiedEmptyStateProps) {
   const router = useRouter();
 
@@ -101,6 +107,11 @@ export function UnifiedEmptyState({
     if (text.length < 12) return;
     setMode("decomposing");
     setErrorMessage(null);
+    // Tell the parent to dismiss the overlay IMMEDIATELY so the user
+    // can watch the 3-panel layout populate in real time while the
+    // chain runs server-side. The fetch below stays in flight; we
+    // just stop blocking the user's view of the work happening.
+    onSubmitStarted?.();
     try {
       const res = await fetch("/api/pipeline/decompose", {
         method: "POST",
@@ -139,7 +150,7 @@ export function UnifiedEmptyState({
       setMode("error");
       setErrorMessage(err instanceof Error ? err.message : "Network error");
     }
-  }, [idea, spaceId, router]);
+  }, [idea, spaceId, router, onSubmitStarted]);
 
   // ⌘⏎ submit, Esc to clear-and-refocus
   useEffect(() => {

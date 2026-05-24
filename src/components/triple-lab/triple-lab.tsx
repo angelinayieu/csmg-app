@@ -21,6 +21,9 @@ import { CardActionHost } from "./card-action-host";
 import { UploadProgressToast } from "./upload-progress-toast";
 import { backgrounds, colors } from "./tokens";
 import { LiveSynthesisRefresh } from "./use-live-synthesis-refresh";
+import { PipelineProgressStrip } from "./pipeline-progress-strip";
+import { useLabRooms } from "./rooms/use-lab-rooms";
+import { UserRoomsStack } from "./rooms/user-rooms-stack";
 
 // Persist split ratios in localStorage so the user's preferred sizing
 // is remembered across reloads. Keyed by space so each space can have
@@ -139,6 +142,18 @@ export function TripleLab({ spaceId }: TripleLabProps) {
     },
     [setCollapsed],
   );
+  // ── Phase 5d: user-added rooms ──────────────────────────────────────
+  // Each column may have a stack of user-added rooms (brainstorm,
+  // scratch notes, etc.) docked above its default panel. The hook owns
+  // fetch + mutations; UserRoomsStack consumes one column slice and
+  // dispatches body renderers from ROOM_REGISTRY.
+  const {
+    rooms: labRoomsByColumn,
+    createRoom: createLabRoom,
+    deleteRoom: deleteLabRoom,
+    patchRoom: patchLabRoom,
+  } = useLabRooms(spaceId);
+
   // Derive width style for each column. Collapsed = fixed 48px;
   // expanded = its fraction of the remaining width (after subtracting
   // collapsed strip widths). Uses CSS calc so the resize transition
@@ -197,16 +212,26 @@ export function TripleLab({ spaceId }: TripleLabProps) {
   // overlay disappears and the panels show their normal contents
   // (including the per-panel empty states for partial-data cases).
   const synthesisData = (spaceData.space.synthesis_data as SynthesisData | null) ?? null;
-  const isFullyEmpty = useMemo(() => {
-    if (spaceData.entities.length > 0) return false;
-    if (!synthesisData) return true;
-    // Treat synthesis_data as "has content" only if at least one rich
-    // section landed. Empty {} or {generated_at: ...} doesn't count.
+  // Manual dismiss flag — set true when the user submits the empty-
+  // state idea entry OR drops a file. Means "the overlay should NOT
+  // re-appear even if entities are still 0" so the user can watch
+  // the panels populate in real time instead of staring at a loading
+  // screen. Resets to false naturally on space change (component
+  // remount) but persists across re-renders within the same session.
+  const [emptyStateDismissed, setEmptyStateDismissed] = useState<boolean>(false);
+  const dataIsPresent = useMemo(() => {
+    if (spaceData.entities.length > 0) return true;
+    if (!synthesisData) return false;
     const hasLeverage = (synthesisData.leverage_points?.length ?? 0) > 0;
     const hasBottleneck = !!synthesisData.master_bottleneck;
     const hasAxioms = (synthesisData.axioms?.length ?? 0) > 0;
-    return !(hasLeverage || hasBottleneck || hasAxioms);
+    return hasLeverage || hasBottleneck || hasAxioms;
   }, [spaceData.entities.length, synthesisData]);
+  // Show overlay ONLY when the space has no data AND user hasn't
+  // manually dismissed it. The moment they submit, dataIsPresent is
+  // still false but emptyStateDismissed flips true → overlay slides
+  // out → panels visible → user watches generation happen live.
+  const isFullyEmpty = !dataIsPresent && !emptyStateDismissed;
 
   // ── Upload progress toast wiring ────────────────────────────────────
   // The toast lives at page level and exposes an imperative push
@@ -364,10 +389,22 @@ export function TripleLab({ spaceId }: TripleLabProps) {
        *  unchanged for 60-90s while the chain ran. */}
       <LiveSynthesisRefresh activeRunId={activeRunId} />
       <CardActionHost spaceId={spaceId}>
+      {/* Outer flex-col so the PipelineProgressStrip sits ABOVE the
+       *  3-column panel layout. The strip auto-renders nothing when
+       *  no run is active, so it collapses to zero height — no layout
+       *  jiggle on first paint. */}
+      <div
+        className="flex h-screen w-full flex-col overflow-hidden"
+        style={{ background: backgrounds.pageRoot }}
+      >
+        {/* Top: real pipeline progress (replaces the old fake label loop) */}
+        <PipelineProgressStrip hasActiveRun={activeRunId !== null} />
+
+        {/* Inner: the 3-column layout. flex-1 lets it consume the
+         *  remaining vertical space below the strip. */}
       <div
         ref={containerRef}
-        className="relative flex h-screen w-full overflow-hidden bg-slate-50"
-        style={{ background: backgrounds.pageRoot }}
+        className="relative flex w-full flex-1 overflow-hidden"
       >
         {/* ── Focus-mode picker (top-left floating) ───────────────────
          *
@@ -403,17 +440,38 @@ export function TripleLab({ spaceId }: TripleLabProps) {
                 onClick={() => toggleColumn(0)}
                 side="right"
               />
-              <RawSignalPanel
-                spaceId={spaceId}
-                entities={spaceData.entities}
-                edges={spaceData.edges}
-                expansionMode={expansionMode}
-                onExpansionModeChange={setExpansionMode}
-                selectedEntityId={selectedEntityId}
-                onSelectEntity={setSelectedEntityId}
-                onAssetReady={openDrawer}
-                onUploadProgress={handleProgress}
-              />
+              <div className="flex h-full flex-col">
+                {/* User-added rooms stack (Phase 5d) — capped at ~55%
+                 *  of column height so the default panel always has
+                 *  room to breathe. The stack itself scrolls when the
+                 *  user has many expanded rooms. */}
+                <div
+                  className="shrink-0 overflow-y-auto"
+                  style={{ maxHeight: "55%" }}
+                >
+                  <UserRoomsStack
+                    spaceId={spaceId}
+                    slot="left"
+                    rooms={labRoomsByColumn.left}
+                    onCreate={createLabRoom}
+                    onPatch={patchLabRoom}
+                    onDelete={deleteLabRoom}
+                  />
+                </div>
+                <div className="min-h-0 flex-1">
+                  <RawSignalPanel
+                    spaceId={spaceId}
+                    entities={spaceData.entities}
+                    edges={spaceData.edges}
+                    expansionMode={expansionMode}
+                    onExpansionModeChange={setExpansionMode}
+                    selectedEntityId={selectedEntityId}
+                    onSelectEntity={setSelectedEntityId}
+                    onAssetReady={openDrawer}
+                    onUploadProgress={handleProgress}
+                  />
+                </div>
+              </div>
             </>
           )}
         </div>
@@ -446,15 +504,32 @@ export function TripleLab({ spaceId }: TripleLabProps) {
                 onClick={() => toggleColumn(1)}
                 side="left"
               />
-              <KgPanel
-                spaceId={spaceId}
-                entities={spaceData.entities}
-                edges={spaceData.edges}
-                cycles={spaceData.cycles}
-                bridges={spaceData.bridges}
-                selectedEntityId={selectedEntityId}
-                onSelectEntity={setSelectedEntityId}
-              />
+              <div className="flex h-full flex-col">
+                <div
+                  className="shrink-0 overflow-y-auto"
+                  style={{ maxHeight: "55%" }}
+                >
+                  <UserRoomsStack
+                    spaceId={spaceId}
+                    slot="middle"
+                    rooms={labRoomsByColumn.middle}
+                    onCreate={createLabRoom}
+                    onPatch={patchLabRoom}
+                    onDelete={deleteLabRoom}
+                  />
+                </div>
+                <div className="min-h-0 flex-1">
+                  <KgPanel
+                    spaceId={spaceId}
+                    entities={spaceData.entities}
+                    edges={spaceData.edges}
+                    cycles={spaceData.cycles}
+                    bridges={spaceData.bridges}
+                    selectedEntityId={selectedEntityId}
+                    onSelectEntity={setSelectedEntityId}
+                  />
+                </div>
+              </div>
             </>
           )}
         </div>
@@ -484,36 +559,60 @@ export function TripleLab({ spaceId }: TripleLabProps) {
                 onClick={() => toggleColumn(2)}
                 side="left"
               />
-              <InsightsPanel
-                spaceId={spaceId}
-                // DB types synthesis_data as Json (free-form), but it always
-                // matches SynthesisData shape in practice. Cast at the
-                // boundary so the panel can navigate the rich shape without
-                // unsafe access everywhere. Null when synthesize hasn't run.
-                synthesisData={synthesisData}
-                entities={spaceData.entities}
-                selectedEntityId={selectedEntityId}
-                onSelectEntity={setSelectedEntityId}
-              />
+              <div className="flex h-full flex-col">
+                <div
+                  className="shrink-0 overflow-y-auto"
+                  style={{ maxHeight: "55%" }}
+                >
+                  <UserRoomsStack
+                    spaceId={spaceId}
+                    slot="right"
+                    rooms={labRoomsByColumn.right}
+                    onCreate={createLabRoom}
+                    onPatch={patchLabRoom}
+                    onDelete={deleteLabRoom}
+                  />
+                </div>
+                <div className="min-h-0 flex-1">
+                  <InsightsPanel
+                    spaceId={spaceId}
+                    // DB types synthesis_data as Json (free-form), but it always
+                    // matches SynthesisData shape in practice. Cast at the
+                    // boundary so the panel can navigate the rich shape without
+                    // unsafe access everywhere. Null when synthesize hasn't run.
+                    synthesisData={synthesisData}
+                    entities={spaceData.entities}
+                    selectedEntityId={selectedEntityId}
+                    onSelectEntity={setSelectedEntityId}
+                  />
+                </div>
+              </div>
             </>
           )}
         </div>
 
         {/* ── Unified empty state overlay ──────────────────────────
          *
-         * Mounted ABOVE the panels but BELOW the drawer (z-30). Only
-         * renders when the space has zero entities AND no synthesis.
-         * Acts as its own drop zone — drop a file anywhere in the
-         * viewport and the same processFileDrops helper the raw-signal
-         * panel uses fires. Disappears as soon as the first entity
-         * lands, revealing the panels underneath.
+         * Mounted ABOVE the panels but BELOW the drawer (z-30). Shows
+         * when the space has zero data AND the user hasn't manually
+         * dismissed (via submitting an idea or dropping a file).
+         *
+         * The moment the user kicks off the pipeline, the overlay
+         * dismisses and the user sees the 3-panel layout populating
+         * in real time — instead of staring at a loading screen for
+         * 2-3 minutes. See `onSubmitStarted` below.
          */}
         {isFullyEmpty && (
           <UnifiedEmptyState
             spaceId={spaceId}
-            onFilesDropped={onEmptyStateFiles}
+            onFilesDropped={(files) => {
+              setEmptyStateDismissed(true);
+              onEmptyStateFiles(files);
+            }}
+            onSubmitStarted={() => setEmptyStateDismissed(true)}
           />
         )}
+      </div>
       </div>
 
       {/* ── HITL extraction-review drawer ────────────────────────────
