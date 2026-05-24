@@ -163,7 +163,10 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
         const spaceId = parsed?.spaceId as string | undefined;
         if (!spaceId) throw new Error("Bootstrap did not return a space id");
         abortRef.current = null;
-        router.push(`/app/space/${spaceId}/whiteboard`);
+        // Brain Probe entry — land on the Synthesis Lab (universal
+        // entry surface) instead of /whiteboard. The lab's live-
+        // synthesis hook picks up the in-flight bootstrap chain.
+        router.push(`/app/space/${spaceId}/triple-lab`);
         return;
       }
 
@@ -283,7 +286,11 @@ export function SynergyDashboardHero({ greeting, firstName }: Props) {
       if (fullscreenQuery) params.set("fullscreenQuery", fullscreenQuery);
 
       abortRef.current = null;
-      router.push(`/app/space/${workspaceId}/whiteboard?${params.toString()}`);
+      // Brainstorm Speedrun / Precise R&D / Build Digital Twin entry
+      // — all land on the Synthesis Lab. The spawn params ride through
+      // unchanged; downstream handlers in triple-lab can consume them
+      // (or the whiteboard via in-lab toggle if the user pivots).
+      router.push(`/app/space/${workspaceId}/triple-lab?${params.toString()}`);
     } catch (err) {
       if ((err as { name?: string })?.name === "AbortError") return;
       abortRef.current = null;

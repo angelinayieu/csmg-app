@@ -47,7 +47,11 @@ export default async function CanvasRedirectPage({
   }
 
   if (canvas.scope === "project" && canvas.scope_ref_id) {
-    redirect(`/app/space/${canvas.scope_ref_id}/whiteboard`);
+    // Project-scoped canvas → land on the space's Synthesis Lab.
+    // The nested-app branch below stays on /whiteboard because per-app
+    // surfaces are still canonical to the tldraw canvas (no per-app
+    // triple-lab variant yet).
+    redirect(`/app/space/${canvas.scope_ref_id}/triple-lab`);
   }
 
   if (canvas.scope === "app" && canvas.scope_ref_id) {

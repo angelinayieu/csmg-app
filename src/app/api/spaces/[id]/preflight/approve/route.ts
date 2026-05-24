@@ -117,7 +117,8 @@ export async function POST(
       ok: true,
       approval_id: existing.id,
       preflight_hash: existing.preflight_hash,
-      redirect_to: `/app/space/${spaceId}/whiteboard`,
+      // Preflight approval → Synthesis Lab (universal entry).
+      redirect_to: `/app/space/${spaceId}/triple-lab`,
       enabled_optins: existing.enabled_optins,
       already_approved: true,
     } satisfies ApproveResponse);
@@ -192,7 +193,8 @@ export async function POST(
     ok: true,
     approval_id: approvalId,
     preflight_hash: preflight.preflight_hash,
-    redirect_to: `/app/space/${spaceId}/whiteboard`,
+    // Preflight first-approval → Synthesis Lab (universal entry).
+    redirect_to: `/app/space/${spaceId}/triple-lab`,
     enabled_optins: enabledOptins,
     already_approved: false,
   } satisfies ApproveResponse);

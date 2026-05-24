@@ -36,7 +36,10 @@ export default async function WorkspacePage() {
     .maybeSingle();
 
   if (existing.data?.id) {
-    redirect(`/app/space/${existing.data.id}/whiteboard`);
+    // Workspace exists — drop the user on the Synthesis Lab (universal
+    // entry surface). They can pivot into /whiteboard from the
+    // sidebar if they want the raw tldraw canvas.
+    redirect(`/app/space/${existing.data.id}/triple-lab`);
   }
 
   // None exists — create one. Same shape as /api/workspace/ensure.
@@ -66,5 +69,7 @@ export default async function WorkspacePage() {
     redirect("/app");
   }
 
-  redirect(`/app/space/${insert.data.id}/whiteboard`);
+  // Freshly-created workspace — land on Synthesis Lab as the
+  // universal entry surface.
+  redirect(`/app/space/${insert.data.id}/triple-lab`);
 }
