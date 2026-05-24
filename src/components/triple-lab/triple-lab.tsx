@@ -20,6 +20,7 @@ import { processFileDrops, type UploadProgress } from "./upload-flow";
 import { CardActionHost } from "./card-action-host";
 import { UploadProgressToast } from "./upload-progress-toast";
 import { backgrounds } from "./tokens";
+import { LiveSynthesisRefresh } from "./use-live-synthesis-refresh";
 
 // Persist split ratios in localStorage so the user's preferred sizing
 // is remembered across reloads. Keyed by space so each space can have
@@ -258,6 +259,15 @@ export function TripleLab({ spaceId }: TripleLabProps) {
     // CardActionHost wraps the layout so per-card hover actions
     // (Connect / Solve / Probe) can open page-level modals + panels.
     <RunEventStoreProvider runId={activeRunId}>
+      {/* Mount the live-synthesis refresher as a sibling so it lives
+       *  INSIDE the SSE provider's children tree (it reads the event
+       *  store via useRunEventStoreOptional). Renders nothing; it's
+       *  a side-effect-only component that calls router.refresh()
+       *  on synthesis-emitting events + a 12s fallback poll while a
+       *  run is in flight. Closes the gap where the user dropped a
+       *  paper, committed, and then watched the empty state sit
+       *  unchanged for 60-90s while the chain ran. */}
+      <LiveSynthesisRefresh activeRunId={activeRunId} />
       <CardActionHost spaceId={spaceId}>
       <div
         ref={containerRef}

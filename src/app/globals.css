@@ -2328,3 +2328,13 @@ body[data-canvas-strategy-expanded="true"]
   to { transform: rotate(360deg); }
 }
 
+/* ── Insight-card arrival ──────────────────────────────────────────
+ * Used by InsightsFeedMode when a new structural event lands.
+ * Gentle scale + slide-in so the card reads as "just arrived" without
+ * shouting at the user — the feed is meant for sustained reading.
+ */
+@keyframes insight-card-arrive {
+  0%   { opacity: 0; transform: translateY(-8px) scale(0.97); }
+  100% { opacity: 1; transform: translateY(0)   scale(1); }
+}
+

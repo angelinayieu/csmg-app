@@ -1,15 +1,25 @@
 "use client";
 
-// KG panel — middle column. Live d3-force visualization of the
-// knowledge graph as it develops. Nodes colored by knowledge_layer;
-// edges weighted by confidence; cycles highlighted; bridges in cyan.
-// Subscribes to the SSE event store for live entity/edge insertion
-// animations.
+// KG panel — middle column. Switches between two modes:
+//   - INSIGHTS (default): chronological feed of structural events as
+//     the pipeline runs (cycles, bridges, signals, root causes, twin
+//     proposals, strategy consensus). The user sees the pipeline
+//     THINKING.
+//   - GRAPH: live d3-force visualization of the knowledge graph
+//     formation. The user sees WHERE in the topology insights land.
+//
+// Default is INSIGHTS because that's the dominant value — most users
+// want to see what the pipeline FOUND, not just where the dots are.
+// Graph mode is one click away for users who want the spatial view.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
 import type { Entity, Edge, Cycle, Bridge } from "@/types";
 import { useRunEventStoreOptional } from "@/components/canvas/hooks/run-event-store";
+import { InsightsFeedMode } from "./insights-feed-mode";
+import { colors, tracking } from "./tokens";
+
+type KgViewMode = "insights" | "graph";
 
 // d3-force needs mutable simulation nodes — we shadow Entity / Edge
 // onto a simulation-friendly shape. d3 mutates these in place each
@@ -61,6 +71,28 @@ export function KgPanel({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 600, h: 600 });
   const eventStore = useRunEventStoreOptional();
+
+  // View mode toggle: default to "insights" because the live event
+  // feed is the dominant value (users want to see WHAT the pipeline
+  // is finding). "graph" stays one click away for the topology view.
+  // localStorage-persisted so per-space preference is remembered.
+  const [viewMode, setViewMode] = useState<KgViewMode>(() => {
+    if (typeof window === "undefined") return "insights";
+    try {
+      const stored = window.localStorage.getItem("triple-lab:kg-view-mode");
+      return stored === "graph" || stored === "insights" ? stored : "insights";
+    } catch {
+      return "insights";
+    }
+  });
+  const onModeChange = (next: KgViewMode) => {
+    setViewMode(next);
+    try {
+      window.localStorage.setItem("triple-lab:kg-view-mode", next);
+    } catch {
+      // Private browsing — fine, preference resets next mount.
+    }
+  };
 
   // Zoom controller (set by the simulation effect, used by the
   // selection-centering effect). Holds the d3 zoom behavior + svg
@@ -530,11 +562,14 @@ export function KgPanel({
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div
         className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200/60 px-5 py-4"
-        style={{ background: "rgba(255, 255, 255, 0.65)" }}
+        style={{ background: colors.neutral.panelBgFlat }}
       >
         <div>
-          <div className="text-[9px] font-bold uppercase tracking-[0.22em] text-slate-500">
-            ◈ Knowledge graph
+          <div
+            className="text-[9px] font-bold uppercase text-slate-500"
+            style={{ letterSpacing: tracking.eyebrow }}
+          >
+            {viewMode === "insights" ? "✦ Live insights" : "◈ Knowledge graph"}
           </div>
           <div className="mt-0.5 text-sm font-semibold text-slate-900">
             {entities.length} ent · {edges.length} edg
@@ -543,14 +578,31 @@ export function KgPanel({
             </span>
           </div>
         </div>
-        {liveTick && (
-          <LiveTickPill type={liveTick.event.type} />
-        )}
+
+        <div className="flex items-center gap-2">
+          {liveTick && viewMode === "graph" && (
+            <LiveTickPill type={liveTick.event.type} />
+          )}
+
+          {/* ── Mode toggle ──
+           *
+           * Segmented control with two options. Default highlights
+           * Insights (the dominant view). One click swaps to Graph.
+           * Keeps the same visual grammar as the dock-mode chips
+           * elsewhere in the app. */}
+          <ModeToggle mode={viewMode} onChange={onModeChange} />
+        </div>
       </div>
 
-      {/* ── Graph SVG ──────────────────────────────────────────────── */}
+      {/* ── Body: feed or graph based on mode ───────────────────────── */}
       <div className="relative flex-1 overflow-hidden">
-        {entities.length === 0 ? (
+        {viewMode === "insights" ? (
+          <InsightsFeedMode
+            entities={entities}
+            selectedEntityId={selectedEntityId}
+            onSelectEntity={onSelectEntity}
+          />
+        ) : entities.length === 0 ? (
           <KgEmptyState />
         ) : (
           <svg
@@ -645,6 +697,66 @@ function LiveTickPill({ type }: { type: string }) {
       </span>
       Just landed · {label}
     </div>
+  );
+}
+
+// ── Mode toggle (Insights / Graph) ───────────────────────────────────
+// Segmented control. The active option carries the brand gradient +
+// shadow so the user's current mode reads at a glance. Hover on the
+// inactive option lifts it slightly to telegraph it's clickable.
+function ModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: KgViewMode;
+  onChange: (next: KgViewMode) => void;
+}) {
+  return (
+    <div
+      className="flex items-center gap-0.5 rounded-full p-0.5"
+      style={{ background: colors.neutral.chipBgStrong }}
+    >
+      <ModeButton
+        active={mode === "insights"}
+        onClick={() => onChange("insights")}
+        label="Insights"
+        glyph="✦"
+      />
+      <ModeButton
+        active={mode === "graph"}
+        onClick={() => onChange("graph")}
+        label="Graph"
+        glyph="◈"
+      />
+    </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  label,
+  glyph,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  glyph: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold transition-all"
+      style={{
+        background: active ? colors.brand.gradient : "transparent",
+        color: active ? "white" : "rgb(71, 85, 105)",
+        boxShadow: active ? `0 4px 10px ${colors.brand.shadow}` : "none",
+      }}
+    >
+      <span className="font-mono text-[10px]">{glyph}</span>
+      {label}
+    </button>
   );
 }
 

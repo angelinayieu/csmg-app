@@ -94,6 +94,17 @@ export function InsightsPanel({
           <InsightsEmptyState />
         ) : (
           <div className="flex flex-col gap-4">
+            {/* Top-ranked insights — combines bottleneck + top leverage
+             *  points + critical risks + HIDDEN axioms into one ordered
+             *  list. Bottleneck always #1 (highest counterfactual
+             *  unlock); rest are ordered by their priority in
+             *  synthesis_data (which the LLM already ranked). */}
+            <TopRankedSection
+              synthesisData={synthesisData}
+              entitiesById={entitiesById}
+              selectedEntityId={selectedEntityId}
+              onSelectEntity={onSelectEntity}
+            />
             <BottleneckSection
               bottleneck={synthesisData.master_bottleneck ?? null}
               entitiesById={entitiesById}
@@ -161,6 +172,302 @@ function CountChip({ n, label, color }: { n: number; label: string; color: strin
     >
       {n}
       <span className="ml-1 text-[9px] font-medium opacity-80">{label}</span>
+    </div>
+  );
+}
+
+// ── Top-ranked insights section ──────────────────────────────────────
+// The first thing the user sees in the right panel. Combines the
+// highest-priority insight from each category into a single ranked
+// list:
+//
+//   #1  Master bottleneck   (always — highest counterfactual unlock)
+//   #2-4 Top leverage points (synthesis returns them prio-ordered)
+//   #5  HIDDEN axiom (most underrated finding — the unstated assumption)
+//
+// Each row shows: rank · entity · 1-line summary · impact chip.
+// Clicking a row selects the matching entity in the middle KG panel
+// (haloed + pan/zoom on graph mode, anchored in feed mode).
+function TopRankedSection({
+  synthesisData,
+  entitiesById,
+  selectedEntityId,
+  onSelectEntity,
+}: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  synthesisData: any;
+  entitiesById: Map<string, Entity>;
+  selectedEntityId: string | null;
+  onSelectEntity: (id: string | null) => void;
+}) {
+  // Build the ranked list. Each entry knows its source category so
+  // the visual tag + accent color can be derived without a switch
+  // at render time.
+  type RankEntry = {
+    rank: number;
+    kind: "bottleneck" | "leverage" | "risk" | "hidden_axiom" | "convergence";
+    entityId: string | null;
+    title: string;
+    summary: string | null;
+    impactNote: string | null;
+  };
+
+  const entries: RankEntry[] = [];
+
+  // #1: Bottleneck
+  if (synthesisData?.master_bottleneck) {
+    const b = synthesisData.master_bottleneck;
+    const e = b.entity_id ? entitiesById.get(b.entity_id) ?? null : null;
+    entries.push({
+      rank: entries.length + 1,
+      kind: "bottleneck",
+      entityId: b.entity_id ?? null,
+      title: e?.name ?? "Master bottleneck",
+      summary:
+        typeof b.summary === "string"
+          ? b.summary
+          : typeof b.counterfactual_unlock === "string"
+          ? `Unlocks: ${b.counterfactual_unlock}`
+          : null,
+      impactNote:
+        typeof b.blast_radius === "number"
+          ? `blast ${b.blast_radius}`
+          : "biggest single unlock",
+    });
+  }
+
+  // #2-#4: Top 3 leverage points (synthesis returns them prio-ordered)
+  const lev = Array.isArray(synthesisData?.leverage_points)
+    ? synthesisData.leverage_points
+    : [];
+  for (let i = 0; i < Math.min(3, lev.length); i++) {
+    const l = lev[i];
+    const e = l.entity_id ? entitiesById.get(l.entity_id) ?? null : null;
+    entries.push({
+      rank: entries.length + 1,
+      kind: "leverage",
+      entityId: l.entity_id ?? null,
+      title: e?.name ?? l.entity_name ?? `Leverage #${i + 1}`,
+      summary: typeof l.summary === "string" ? l.summary : null,
+      impactNote:
+        l.mechanism_grounding?.evidence_strength
+          ? l.mechanism_grounding.evidence_strength
+          : null,
+    });
+  }
+
+  // #5: Critical risk (top-of-list if any are flagged severe)
+  const risks = Array.isArray(synthesisData?.risk_points)
+    ? synthesisData.risk_points
+    : [];
+  if (risks.length > 0 && entries.length < 6) {
+    const r = risks[0];
+    const e = r.entity_id ? entitiesById.get(r.entity_id) ?? null : null;
+    entries.push({
+      rank: entries.length + 1,
+      kind: "risk",
+      entityId: r.entity_id ?? null,
+      title: e?.name ?? r.entity_name ?? "Top risk",
+      summary: typeof r.summary === "string" ? r.summary : null,
+      impactNote:
+        typeof r.blast_radius === "number" ? `blast ${r.blast_radius}` : null,
+    });
+  }
+
+  // Hidden axiom (the most-underrated finding — surface explicitly)
+  const axioms = Array.isArray(synthesisData?.axioms)
+    ? synthesisData.axioms
+    : [];
+  const hiddenAx = axioms.find(
+    (a: { visibility?: string }) => a.visibility === "HIDDEN",
+  );
+  if (hiddenAx && entries.length < 6) {
+    entries.push({
+      rank: entries.length + 1,
+      kind: "hidden_axiom",
+      entityId: null,
+      title:
+        typeof hiddenAx.claim === "string"
+          ? hiddenAx.claim
+          : "Hidden axiom",
+      summary:
+        typeof hiddenAx.if_false === "string"
+          ? `If false: ${hiddenAx.if_false}`
+          : null,
+      impactNote: hiddenAx.load_bearing ?? null,
+    });
+  }
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div
+      className="overflow-hidden rounded-xl border bg-white"
+      style={{
+        borderColor: "rgba(79, 70, 229, 0.18)",
+        boxShadow: "0 8px 22px rgba(79, 70, 229, 0.10)",
+      }}
+    >
+      {/* Header */}
+      <div
+        className="flex items-center justify-between px-3 py-2"
+        style={{
+          background:
+            "linear-gradient(90deg, rgba(79, 70, 229, 0.06) 0%, rgba(79, 70, 229, 0.02) 100%)",
+        }}
+      >
+        <div className="flex items-center gap-1.5">
+          <span
+            className="text-[8.5px] font-bold uppercase tracking-[0.22em]"
+            style={{ color: "#4F46E5" }}
+          >
+            ★ Top ranked
+          </span>
+          <span className="text-[9px] text-slate-500">
+            · by impact
+          </span>
+        </div>
+        <span className="text-[9px] font-mono text-slate-400">
+          {entries.length}
+        </span>
+      </div>
+
+      {/* Ranked rows */}
+      <div className="flex flex-col">
+        {entries.map((entry) => (
+          <RankRow
+            key={`rank-${entry.rank}`}
+            entry={entry}
+            selected={
+              entry.entityId !== null && entry.entityId === selectedEntityId
+            }
+            onClick={() => {
+              if (entry.entityId) {
+                onSelectEntity(
+                  selectedEntityId === entry.entityId ? null : entry.entityId,
+                );
+              }
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Per-row palette — accent color + kind label by kind.
+function rankTone(kind: string): {
+  accent: string;
+  bg: string;
+  fg: string;
+  label: string;
+} {
+  switch (kind) {
+    case "bottleneck":
+      return {
+        accent: "#DC2626",
+        bg: "rgba(220, 38, 38, 0.08)",
+        fg: "#991B1B",
+        label: "BOTTLENECK",
+      };
+    case "leverage":
+      return {
+        accent: "#F59E0B",
+        bg: "rgba(245, 158, 11, 0.10)",
+        fg: "#92400E",
+        label: "LEVERAGE",
+      };
+    case "risk":
+      return {
+        accent: "#EF4444",
+        bg: "rgba(239, 68, 68, 0.08)",
+        fg: "#991B1B",
+        label: "RISK",
+      };
+    case "hidden_axiom":
+      return {
+        accent: "#4F46E5",
+        bg: "rgba(79, 70, 229, 0.10)",
+        fg: "#4338CA",
+        label: "HIDDEN AX",
+      };
+    case "convergence":
+      return {
+        accent: "#10B981",
+        bg: "rgba(16, 185, 129, 0.10)",
+        fg: "#0F766E",
+        label: "CONVERGE",
+      };
+    default:
+      return {
+        accent: "#64748B",
+        bg: "rgba(15, 23, 42, 0.04)",
+        fg: "#334155",
+        label: "INSIGHT",
+      };
+  }
+}
+
+function RankRow({
+  entry,
+  selected,
+  onClick,
+}: {
+  entry: {
+    rank: number;
+    kind: string;
+    title: string;
+    summary: string | null;
+    impactNote: string | null;
+  };
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const tone = rankTone(entry.kind);
+  return (
+    <div
+      onClick={onClick}
+      className="flex cursor-pointer items-start gap-2.5 border-t border-slate-100 px-3 py-2 transition-colors hover:bg-slate-50"
+      style={{
+        background: selected ? tone.bg : "transparent",
+      }}
+    >
+      {/* Rank chip */}
+      <div
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+        style={{
+          background: tone.bg,
+          color: tone.accent,
+        }}
+      >
+        {entry.rank}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span
+            className="rounded px-1 text-[8px] font-bold uppercase tracking-wider"
+            style={{ background: tone.bg, color: tone.fg }}
+          >
+            {tone.label}
+          </span>
+          {entry.impactNote && (
+            <span className="text-[8.5px] uppercase tracking-wider text-slate-400">
+              {entry.impactNote}
+            </span>
+          )}
+        </div>
+
+        <div className="mt-0.5 text-[12px] font-semibold leading-snug text-slate-900">
+          {entry.title}
+        </div>
+
+        {entry.summary && (
+          <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
+            {entry.summary}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
