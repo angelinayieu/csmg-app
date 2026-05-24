@@ -26,6 +26,7 @@ import { backgrounds, colors, tracking } from "./tokens";
 import { LiveSynthesisRefresh } from "./use-live-synthesis-refresh";
 import { PipelineProgressStrip } from "./pipeline-progress-strip";
 import { PipelineErrorBanner } from "./pipeline-error-banner";
+import { PipelineModePicker, type PipelineMode } from "./pipeline-mode-picker";
 import { useLabRooms } from "./rooms/use-lab-rooms";
 import { UserRoomsStack } from "./rooms/user-rooms-stack";
 
@@ -190,6 +191,18 @@ export function TripleLab({ spaceId }: TripleLabProps) {
   // shows Claude-suggested expansion chips beneath each card. Off by
   // default to avoid the LLM cost on first paint; user opts in.
   const [expansionMode, setExpansionMode] = useState<boolean>(false);
+
+  // ── Pipeline mode (Phase 7b) ──────────────────────────────────────
+  // Controls how aggressively chain pipelines commit AI outputs:
+  //   autopilot    → auto-commit each stage (default)
+  //   review_each  → candidate drawer after each stage (Phase 7c)
+  //   manual       → no chain pipelines fire
+  // Held here so any panel that needs to gate behavior on the mode
+  // (e.g. RawSignalPanel skipping auto-extract in manual mode, or
+  // KgPanel showing a "manual mode" badge) can read from one place.
+  // The picker UI lives in the TopLeftPickerBar and pushes the
+  // change to /api/spaces/[id]/pipeline-mode + this local state.
+  const [pipelineMode, setPipelineMode] = useState<PipelineMode>("autopilot");
 
   // ── Extraction-review (HITL) drawer ─────────────────────────────────
   // Hoisted to page-level so the drawer overlays the entire layout,
@@ -422,23 +435,44 @@ export function TripleLab({ spaceId }: TripleLabProps) {
         <PipelineErrorBanner />
 
         {/* Inner: the 3-column layout. flex-1 lets it consume the
-         *  remaining vertical space below the strip. */}
+         *  remaining vertical space below the strip.
+         *
+         *  `data-pipeline-mode` exposes the current mode to the DOM so
+         *  future Phase 7c gates can read it via CSS selectors (e.g.
+         *  `[data-pipeline-mode="manual"] .auto-only { display: none }`)
+         *  AND so devtools can show the active mode at a glance. */}
       <div
         ref={containerRef}
         className="relative flex w-full flex-1 overflow-hidden"
+        data-pipeline-mode={pipelineMode}
       >
-        {/* ── Focus-mode picker (top-left floating) ───────────────────
+        {/* ── Top-left picker bar (floating) ────────────────────────
          *
-         * Three preset chips: Wide (3 cols), Split (middle+right),
-         * Focus (middle only). Plus the user can toggle individual
-         * columns via the chevron in each panel header. localStorage-
-         * persisted per space so the user's chosen focus survives
-         * reload. Floating in the top-left corner so it doesn't
-         * compete with panel chrome. */}
-        <FocusModePicker
-          collapsed={collapsed}
-          onSetMode={setFocusMode}
-        />
+         * Two visually-adjacent but conceptually-distinct toggles:
+         *
+         *   FocusModePicker     → "how do I see the lab?" (layout)
+         *   PipelineModePicker  → "how aggressively does AI commit?" (behavior)
+         *
+         * Each is a chip-group. They share a row with a tiny visual
+         * separator so the user reads them as related-but-different
+         * affordances, not one monolithic control. */}
+        <div className="absolute left-3 top-3 z-30 flex items-center gap-2">
+          <FocusModePicker
+            collapsed={collapsed}
+            onSetMode={setFocusMode}
+          />
+          {/* Hair-thin separator so the two pickers visually parse as
+           *  two groups, not one wide blob. */}
+          <span
+            className="h-5 w-px"
+            style={{ background: colors.neutral.borderFaint }}
+            aria-hidden
+          />
+          <PipelineModePicker
+            spaceId={spaceId}
+            onChange={setPipelineMode}
+          />
+        </div>
 
         {/* ── LEFT: reasoning whiteboard (Phase 6a) ────────────────────
          *
@@ -910,8 +944,11 @@ function FocusModePicker({
   const isFocus = collapsed[0] && !collapsed[1] && collapsed[2];
 
   return (
+    // Positioning is now provided by the parent TopLeftPickerBar
+    // (Phase 7b) so the FocusModePicker and PipelineModePicker can
+    // sit side-by-side without competing absolute coordinates.
     <div
-      className="absolute left-3 top-3 z-30 flex items-center gap-0.5 rounded-full p-0.5 shadow-sm"
+      className="flex items-center gap-0.5 rounded-full p-0.5 shadow-sm"
       style={{
         background: "rgba(255, 255, 255, 0.88)",
         border: `1px solid ${colors.neutral.borderFaint}`,
