@@ -33,9 +33,16 @@ export type RoomSourceKind = "brainstorm_session" | "none";
 export interface RoomBodyProps {
   spaceId: string;
   roomId: string;
-   
+
   roomConfig: Record<string, any>;
   onRequestDelete: () => void;
+  /** Optional. Rooms that produce candidate entities (e.g. scratch_note's
+   *  "Materialize" button — Phase 8) fire this with the new batch_id
+   *  so the host can open the CandidateReviewDrawer focused on that
+   *  batch. Omitting it means the host doesn't surface a review path;
+   *  the room body should still render the action and rely on the
+   *  pending-pill poll to surface candidates within ~30s. */
+  onMaterialized?: (batchId: string) => void;
 }
 
 export interface RoomMeta {

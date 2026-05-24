@@ -41,6 +41,10 @@ interface UserRoomsStackProps {
     },
   ) => Promise<unknown>;
   onDelete: (roomId: string) => Promise<boolean>;
+  /** Forwarded to room bodies that produce candidate entities
+   *  (Phase 8). The host uses this to open the CandidateReviewDrawer
+   *  on the new batch immediately after materialize succeeds. */
+  onMaterialized?: (batchId: string) => void;
 }
 
 export function UserRoomsStack({
@@ -50,6 +54,7 @@ export function UserRoomsStack({
   onCreate,
   onPatch,
   onDelete,
+  onMaterialized,
 }: UserRoomsStackProps) {
   const [modalOpen, setModalOpen] = useState(false);
 
@@ -112,6 +117,7 @@ export function UserRoomsStack({
               roomId={room.id}
               roomConfig={room.room_config ?? {}}
               onRequestDelete={() => void onDelete(room.id)}
+              onMaterialized={onMaterialized}
             />
           </RoomShell>
         );

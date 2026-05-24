@@ -217,6 +217,19 @@ export function TripleLab({ spaceId }: TripleLabProps) {
   // (`candidates_ready` emitted by the gated routes) so the drawer
   // opens within milliseconds of staging, not on the next 30s tick.
   const [reviewDrawerOpen, setReviewDrawerOpen] = useState(false);
+  // When non-null, the drawer fetches just this batch. Set by the
+  // room-materialize path (Phase 8) so a freshly-materialized batch
+  // opens in focus, not buried under unrelated pending batches.
+  // Cleared on drawer close so the next implicit open (via pending
+  // pill) shows everything pending across batches.
+  const [reviewBatchId, setReviewBatchId] = useState<string | null>(null);
+  // Single handler the room bodies fire when their Materialize call
+  // succeeds. Sets the batch focus + opens the drawer immediately so
+  // the user doesn't wait for the 30s pending-pill poll to catch up.
+  const handleRoomMaterialized = useCallback((batchId: string) => {
+    setReviewBatchId(batchId);
+    setReviewDrawerOpen(true);
+  }, []);
   // Raw poll value — updated only by the effect below. The displayed
   // count derives this through `displayedPendingCount` so we don't
   // need to setState-to-zero when mode flips (which would trip the
@@ -594,6 +607,7 @@ export function TripleLab({ spaceId }: TripleLabProps) {
               createLabRoom={createLabRoom}
               patchLabRoom={patchLabRoom}
               deleteLabRoom={deleteLabRoom}
+              onRoomMaterialized={handleRoomMaterialized}
             />
           )}
         </div>
@@ -638,6 +652,7 @@ export function TripleLab({ spaceId }: TripleLabProps) {
                     onCreate={createLabRoom}
                     onPatch={patchLabRoom}
                     onDelete={deleteLabRoom}
+                    onMaterialized={handleRoomMaterialized}
                   />
                 </div>
                 <div className="min-h-0 flex-1">
@@ -693,6 +708,7 @@ export function TripleLab({ spaceId }: TripleLabProps) {
                     onCreate={createLabRoom}
                     onPatch={patchLabRoom}
                     onDelete={deleteLabRoom}
+                    onMaterialized={handleRoomMaterialized}
                   />
                 </div>
                 <div className="min-h-0 flex-1">
@@ -798,15 +814,22 @@ export function TripleLab({ spaceId }: TripleLabProps) {
        * staging in review_each mode. */}
       <CandidateReviewDrawer
         spaceId={spaceId}
-        batchId={null}
+        batchId={reviewBatchId}
         open={reviewDrawerOpen}
-        onClose={() => setReviewDrawerOpen(false)}
+        onClose={() => {
+          setReviewDrawerOpen(false);
+          // Clear batch focus so the next implicit open (e.g. via
+          // the pending-pill) shows EVERY pending batch, not just the
+          // last one we focused on.
+          setReviewBatchId(null);
+        }}
         onCommitted={() => {
           // Refresh the page state so the newly-committed entities
           // appear on the whiteboard / KG view, and clear the pending
           // count immediately (the next poll tick would also clear it
           // but instant feedback is better UX).
           setPendingCandidateCount(0);
+          setReviewBatchId(null);
           router.refresh();
         }}
       />
@@ -865,6 +888,7 @@ function LeftColumnSurface({
   createLabRoom,
   patchLabRoom,
   deleteLabRoom,
+  onRoomMaterialized,
 }: {
   spaceId: string;
   entities: Entity[];
@@ -893,6 +917,10 @@ function LeftColumnSurface({
     },
   ) => Promise<LabRoomRow | null>;
   deleteLabRoom: (roomId: string) => Promise<boolean>;
+  /** Forwarded to UserRoomsStack so scratch_note's Materialize button
+   *  can ask the host to open the CandidateReviewDrawer focused on
+   *  the new batch (Phase 8). */
+  onRoomMaterialized: (batchId: string) => void;
 }) {
   const router = useRouter();
   const [dropActive, setDropActive] = useState(false);
@@ -952,6 +980,7 @@ function LeftColumnSurface({
           onCreate={createLabRoom}
           onPatch={patchLabRoom}
           onDelete={deleteLabRoom}
+          onMaterialized={onRoomMaterialized}
         />
       </div>
 
