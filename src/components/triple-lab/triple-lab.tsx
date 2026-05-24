@@ -19,7 +19,7 @@ import { UnifiedEmptyState } from "./unified-empty-state";
 import { processFileDrops, type UploadProgress } from "./upload-flow";
 import { CardActionHost } from "./card-action-host";
 import { UploadProgressToast } from "./upload-progress-toast";
-import { backgrounds } from "./tokens";
+import { backgrounds, colors } from "./tokens";
 import { LiveSynthesisRefresh } from "./use-live-synthesis-refresh";
 
 // Persist split ratios in localStorage so the user's preferred sizing
@@ -53,6 +53,40 @@ function saveSplits(spaceId: string, splits: [number, number, number]) {
   }
 }
 
+// Per-column collapse state persistence. Defaults to all-expanded so a
+// first-time visitor sees the full 3-panel layout.
+function loadCollapsed(spaceId: string): [boolean, boolean, boolean] {
+  if (typeof window === "undefined") return [false, false, false];
+  try {
+    const raw = window.localStorage.getItem(
+      `triple-lab:collapsed:${spaceId}`,
+    );
+    if (!raw) return [false, false, false];
+    const parsed = JSON.parse(raw) as unknown[];
+    if (!Array.isArray(parsed) || parsed.length !== 3) {
+      return [false, false, false];
+    }
+    return [Boolean(parsed[0]), Boolean(parsed[1]), Boolean(parsed[2])];
+  } catch {
+    return [false, false, false];
+  }
+}
+
+function saveCollapsed(
+  spaceId: string,
+  collapsed: [boolean, boolean, boolean],
+) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      `triple-lab:collapsed:${spaceId}`,
+      JSON.stringify(collapsed),
+    );
+  } catch {
+    // ignore
+  }
+}
+
 interface TripleLabProps {
   spaceId: string;
 }
@@ -63,6 +97,67 @@ export function TripleLab({ spaceId }: TripleLabProps) {
     loadSplits(spaceId),
   );
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // ── Column collapse state (Phase 5a) ─────────────────────────────────
+  // Each column can be independently collapsed to a 48px vertical strip
+  // with a rotated label. Click the strip to expand. localStorage-
+  // persisted per space so the user's focus preference survives reloads.
+  // Guard: at least one column must stay expanded — collapsing the last
+  // expanded one is a no-op.
+  const [collapsed, setCollapsedRaw] = useState<[boolean, boolean, boolean]>(
+    () => loadCollapsed(spaceId),
+  );
+  const setCollapsed = useCallback(
+    (next: [boolean, boolean, boolean]) => {
+      // Guard: don't allow all three collapsed.
+      if (next[0] && next[1] && next[2]) return;
+      setCollapsedRaw(next);
+      saveCollapsed(spaceId, next);
+    },
+    [spaceId],
+  );
+  const toggleColumn = useCallback(
+    (idx: 0 | 1 | 2) => {
+      const next = [...collapsed] as [boolean, boolean, boolean];
+      next[idx] = !next[idx];
+      setCollapsed(next);
+    },
+    [collapsed, setCollapsed],
+  );
+  // Focus-mode presets. Wide = all 3 expanded; Split = collapse left;
+  // Focus = collapse left + right (middle only). Setting a preset
+  // overwrites all 3 collapse flags; user can still fine-tune after.
+  const setFocusMode = useCallback(
+    (mode: "wide" | "split" | "focus") => {
+      const next: [boolean, boolean, boolean] =
+        mode === "wide"
+          ? [false, false, false]
+          : mode === "split"
+          ? [true, false, false]
+          : [true, false, true];
+      setCollapsed(next);
+    },
+    [setCollapsed],
+  );
+  // Derive width style for each column. Collapsed = fixed 48px;
+  // expanded = its fraction of the remaining width (after subtracting
+  // collapsed strip widths). Uses CSS calc so the resize transition
+  // animates smoothly between states.
+  const COLLAPSED_W = 48;
+  const widthFor = (idx: 0 | 1 | 2): string => {
+    if (collapsed[idx]) return `${COLLAPSED_W}px`;
+    // Sum of fractions of EXPANDED columns
+    let expandedSum = 0;
+    for (let i = 0; i < 3; i++) {
+      if (!collapsed[i]) expandedSum += splits[i];
+    }
+    if (expandedSum === 0) return "0%";
+    let collapsedCount = 0;
+    for (let i = 0; i < 3; i++) if (collapsed[i]) collapsedCount += 1;
+    const collapsedPx = collapsedCount * COLLAPSED_W;
+    const fraction = splits[idx] / expandedSum;
+    return `calc((100% - ${collapsedPx}px) * ${fraction})`;
+  };
 
   // Cross-panel selection: clicking an entity in any panel highlights
   // the matching node in the middle KG panel and scrolls the right
@@ -274,60 +369,134 @@ export function TripleLab({ spaceId }: TripleLabProps) {
         className="relative flex h-screen w-full overflow-hidden bg-slate-50"
         style={{ background: backgrounds.pageRoot }}
       >
+        {/* ── Focus-mode picker (top-left floating) ───────────────────
+         *
+         * Three preset chips: Wide (3 cols), Split (middle+right),
+         * Focus (middle only). Plus the user can toggle individual
+         * columns via the chevron in each panel header. localStorage-
+         * persisted per space so the user's chosen focus survives
+         * reload. Floating in the top-left corner so it doesn't
+         * compete with panel chrome. */}
+        <FocusModePicker
+          collapsed={collapsed}
+          onSetMode={setFocusMode}
+        />
+
         {/* ── LEFT: raw signal ─────────────────────────────────────── */}
         <div
           className="relative h-full overflow-hidden"
-          style={{ width: `${splits[0] * 100}%` }}
+          style={{
+            width: widthFor(0),
+            transition: "width 280ms cubic-bezier(0.22, 1, 0.36, 1)",
+          }}
         >
-          <RawSignalPanel
-            spaceId={spaceId}
-            entities={spaceData.entities}
-            edges={spaceData.edges}
-            expansionMode={expansionMode}
-            onExpansionModeChange={setExpansionMode}
-            selectedEntityId={selectedEntityId}
-            onSelectEntity={setSelectedEntityId}
-            onAssetReady={openDrawer}
-            onUploadProgress={handleProgress}
-          />
+          {collapsed[0] ? (
+            <CollapsedStrip
+              label="Raw signal"
+              glyph="◉"
+              tone="indigo"
+              onExpand={() => toggleColumn(0)}
+            />
+          ) : (
+            <>
+              <CollapseButton
+                onClick={() => toggleColumn(0)}
+                side="right"
+              />
+              <RawSignalPanel
+                spaceId={spaceId}
+                entities={spaceData.entities}
+                edges={spaceData.edges}
+                expansionMode={expansionMode}
+                onExpansionModeChange={setExpansionMode}
+                selectedEntityId={selectedEntityId}
+                onSelectEntity={setSelectedEntityId}
+                onAssetReady={openDrawer}
+                onUploadProgress={handleProgress}
+              />
+            </>
+          )}
         </div>
 
-        <Divider onMouseDown={onDividerMouseDown(0)} />
+        {/* Divider hidden when either adjacent column is collapsed
+         *  (drag has no meaning between an expanded and a collapsed
+         *  strip). Strip click handles the expand instead. */}
+        {!collapsed[0] && !collapsed[1] && (
+          <Divider onMouseDown={onDividerMouseDown(0)} />
+        )}
 
         {/* ── MIDDLE: KG dev ───────────────────────────────────────── */}
         <div
           className="relative h-full overflow-hidden"
-          style={{ width: `${splits[1] * 100}%` }}
+          style={{
+            width: widthFor(1),
+            transition: "width 280ms cubic-bezier(0.22, 1, 0.36, 1)",
+          }}
         >
-          <KgPanel
-            spaceId={spaceId}
-            entities={spaceData.entities}
-            edges={spaceData.edges}
-            cycles={spaceData.cycles}
-            bridges={spaceData.bridges}
-            selectedEntityId={selectedEntityId}
-            onSelectEntity={setSelectedEntityId}
-          />
+          {collapsed[1] ? (
+            <CollapsedStrip
+              label="Insights"
+              glyph="✦"
+              tone="indigo"
+              onExpand={() => toggleColumn(1)}
+            />
+          ) : (
+            <>
+              <CollapseButton
+                onClick={() => toggleColumn(1)}
+                side="left"
+              />
+              <KgPanel
+                spaceId={spaceId}
+                entities={spaceData.entities}
+                edges={spaceData.edges}
+                cycles={spaceData.cycles}
+                bridges={spaceData.bridges}
+                selectedEntityId={selectedEntityId}
+                onSelectEntity={setSelectedEntityId}
+              />
+            </>
+          )}
         </div>
 
-        <Divider onMouseDown={onDividerMouseDown(1)} />
+        {!collapsed[1] && !collapsed[2] && (
+          <Divider onMouseDown={onDividerMouseDown(1)} />
+        )}
 
         {/* ── RIGHT: insights ──────────────────────────────────────── */}
         <div
           className="relative h-full overflow-hidden"
-          style={{ width: `${splits[2] * 100}%` }}
+          style={{
+            width: widthFor(2),
+            transition: "width 280ms cubic-bezier(0.22, 1, 0.36, 1)",
+          }}
         >
-          <InsightsPanel
-            spaceId={spaceId}
-            // DB types synthesis_data as Json (free-form), but it always
-            // matches SynthesisData shape in practice. Cast at the
-            // boundary so the panel can navigate the rich shape without
-            // unsafe access everywhere. Null when synthesize hasn't run.
-            synthesisData={synthesisData}
-            entities={spaceData.entities}
-            selectedEntityId={selectedEntityId}
-            onSelectEntity={setSelectedEntityId}
-          />
+          {collapsed[2] ? (
+            <CollapsedStrip
+              label="Artifacts"
+              glyph="◆"
+              tone="indigo"
+              onExpand={() => toggleColumn(2)}
+            />
+          ) : (
+            <>
+              <CollapseButton
+                onClick={() => toggleColumn(2)}
+                side="left"
+              />
+              <InsightsPanel
+                spaceId={spaceId}
+                // DB types synthesis_data as Json (free-form), but it always
+                // matches SynthesisData shape in practice. Cast at the
+                // boundary so the panel can navigate the rich shape without
+                // unsafe access everywhere. Null when synthesize hasn't run.
+                synthesisData={synthesisData}
+                entities={spaceData.entities}
+                selectedEntityId={selectedEntityId}
+                onSelectEntity={setSelectedEntityId}
+              />
+            </>
+          )}
         </div>
 
         {/* ── Unified empty state overlay ──────────────────────────
@@ -425,5 +594,185 @@ function Divider({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }
         }}
       />
     </div>
+  );
+}
+
+// ── FocusModePicker (Phase 5a) ───────────────────────────────────────
+// Floating top-left chip-group with three presets:
+//   Wide  = all 3 columns expanded
+//   Split = collapse left, focus on middle + right
+//   Focus = collapse left + right, middle only
+//
+// Each chip lights up when its preset matches the current collapse
+// state. Clicking a chip sets all 3 collapse flags atomically. The
+// user can still fine-tune via per-column chevrons after picking a
+// preset — picker just re-highlights to the matching mode (or none
+// if the combo doesn't match any preset).
+function FocusModePicker({
+  collapsed,
+  onSetMode,
+}: {
+  collapsed: [boolean, boolean, boolean];
+  onSetMode: (mode: "wide" | "split" | "focus") => void;
+}) {
+  const isWide = !collapsed[0] && !collapsed[1] && !collapsed[2];
+  const isSplit = collapsed[0] && !collapsed[1] && !collapsed[2];
+  const isFocus = collapsed[0] && !collapsed[1] && collapsed[2];
+
+  return (
+    <div
+      className="absolute left-3 top-3 z-30 flex items-center gap-0.5 rounded-full p-0.5 shadow-sm"
+      style={{
+        background: "rgba(255, 255, 255, 0.88)",
+        border: `1px solid ${colors.neutral.borderFaint}`,
+        backdropFilter: "blur(8px)",
+      }}
+    >
+      <FocusChip
+        active={isWide}
+        onClick={() => onSetMode("wide")}
+        label="Wide"
+        glyphs="▤▤▤"
+        title="All three columns expanded"
+      />
+      <FocusChip
+        active={isSplit}
+        onClick={() => onSetMode("split")}
+        label="Split"
+        glyphs="▤◧"
+        title="Middle + right expanded (focus on reasoning + outputs)"
+      />
+      <FocusChip
+        active={isFocus}
+        onClick={() => onSetMode("focus")}
+        label="Focus"
+        glyphs="◉"
+        title="Middle only (focus on reasoning)"
+      />
+    </div>
+  );
+}
+
+function FocusChip({
+  active,
+  onClick,
+  label,
+  glyphs,
+  title,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  glyphs: string;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold transition-all"
+      style={{
+        background: active ? colors.brand.gradient : "transparent",
+        color: active ? "white" : "rgb(71, 85, 105)",
+        boxShadow: active ? `0 3px 8px ${colors.brand.shadow}` : "none",
+      }}
+    >
+      <span className="font-mono text-[10px]">{glyphs}</span>
+      {label}
+    </button>
+  );
+}
+
+// ── CollapsedStrip ──────────────────────────────────────────────────
+// 48px-wide vertical strip that replaces a collapsed column's contents.
+// Shows a rotated label + glyph; clicking anywhere on the strip
+// expands the column back. Subtle ambient gradient so the strip
+// reads as "tucked away" rather than empty.
+function CollapsedStrip({
+  label,
+  glyph,
+  tone,
+  onExpand,
+}: {
+  label: string;
+  glyph: string;
+  tone: "indigo" | "teal" | "amber";
+  onExpand: () => void;
+}) {
+  // tone retained for future per-column accent variants; today all
+  // columns share the brand accent for visual consistency.
+  void tone;
+  return (
+    <button
+      type="button"
+      onClick={onExpand}
+      className="group flex h-full w-full flex-col items-center justify-center gap-3 transition-colors"
+      style={{
+        background: colors.neutral.panelBgFlat,
+        borderLeft: `1px solid ${colors.neutral.borderFaint}`,
+        borderRight: `1px solid ${colors.neutral.borderFaint}`,
+      }}
+      title={`Expand ${label}`}
+    >
+      <span
+        className="font-mono text-[14px] font-bold transition-colors group-hover:scale-110"
+        style={{
+          color: colors.brand.fg,
+          transition: "transform 220ms ease, color 220ms ease",
+        }}
+      >
+        {glyph}
+      </span>
+      <span
+        className="text-[10px] font-bold uppercase text-slate-500 group-hover:text-slate-900"
+        style={{
+          letterSpacing: "0.22em",
+          writingMode: "vertical-rl",
+          transform: "rotate(180deg)",
+        }}
+      >
+        {label}
+      </span>
+      <span
+        className="text-[10px] text-slate-400 group-hover:text-indigo-600"
+        style={{ transition: "color 220ms ease" }}
+      >
+        ›
+      </span>
+    </button>
+  );
+}
+
+// ── CollapseButton ─────────────────────────────────────────────────
+// Small chevron tucked into the top corner of an expanded column.
+// Side = which edge to pin to ('left' for middle/right columns,
+// 'right' for the left column). Click → column collapses to a strip.
+function CollapseButton({
+  onClick,
+  side,
+}: {
+  onClick: () => void;
+  side: "left" | "right";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Collapse column"
+      className="absolute z-20 flex h-6 w-6 items-center justify-center rounded-full transition-colors hover:bg-slate-200"
+      style={{
+        top: 14,
+        [side]: 6,
+        background: "rgba(255, 255, 255, 0.85)",
+        border: `1px solid ${colors.neutral.borderFaint}`,
+        color: colors.neutral.fg500,
+        backdropFilter: "blur(4px)",
+      }}
+    >
+      <span className="font-mono text-[12px] leading-none">
+        {side === "right" ? "‹" : "›"}
+      </span>
+    </button>
   );
 }
