@@ -61,6 +61,7 @@ interface KgPanelProps {
 }
 
 export function KgPanel({
+  spaceId,
   entities,
   edges,
   cycles,
@@ -612,6 +613,7 @@ export function KgPanel({
           />
         ) : viewMode === "claims" ? (
           <ClaimStackMode
+            spaceId={spaceId}
             entities={entities}
             edges={edges}
             selectedEntityId={selectedEntityId}
