@@ -107,10 +107,24 @@ export const FloatingGlassSidebar = forwardRef<
 
   const items: SidebarItem[] = useMemo(
     () => [
+      // Synthesis Lab is the new default landing (the space root
+      // redirects here). Placed first in the sidebar so the user's
+      // eye lands on the default surface; everything else is
+      // additional / advanced.
+      {
+        id: "triple-lab",
+        label: "Synthesis Lab",
+        href: `${base}/triple-lab`,
+        icon: <Microscope className="h-[15px] w-[15px]" />,
+        group: "overview",
+      },
       {
         id: "dashboard",
+        // Dashboard moved to /dashboard subroute since /app/space/[id]
+        // root now redirects to Synthesis Lab. The production-sequence
+        // view + twin surface + trajectory panel all live there now.
         label: "Dashboard",
-        href: base,
+        href: `${base}/dashboard`,
         icon: <IconDashboard className="h-[15px] w-[15px]" />,
         group: "overview",
       },
@@ -119,13 +133,6 @@ export const FloatingGlassSidebar = forwardRef<
         label: "Whiteboard",
         href: `${base}/whiteboard`,
         icon: <LayoutGrid className="h-[15px] w-[15px]" />,
-        group: "workspace",
-      },
-      {
-        id: "triple-lab",
-        label: "Synthesis Lab",
-        href: `${base}/triple-lab`,
-        icon: <Microscope className="h-[15px] w-[15px]" />,
         group: "workspace",
       },
       {

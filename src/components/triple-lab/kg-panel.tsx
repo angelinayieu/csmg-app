@@ -17,9 +17,10 @@ import * as d3 from "d3";
 import type { Entity, Edge, Cycle, Bridge } from "@/types";
 import { useRunEventStoreOptional } from "@/components/canvas/hooks/run-event-store";
 import { InsightsFeedMode } from "./insights-feed-mode";
+import { ClaimStackMode } from "./claim-stack-mode";
 import { colors, tracking } from "./tokens";
 
-type KgViewMode = "insights" | "graph";
+type KgViewMode = "insights" | "claims" | "graph";
 
 // d3-force needs mutable simulation nodes — we shadow Entity / Edge
 // onto a simulation-friendly shape. d3 mutates these in place each
@@ -80,7 +81,10 @@ export function KgPanel({
     if (typeof window === "undefined") return "insights";
     try {
       const stored = window.localStorage.getItem("triple-lab:kg-view-mode");
-      return stored === "graph" || stored === "insights" ? stored : "insights";
+      if (stored === "graph" || stored === "insights" || stored === "claims") {
+        return stored;
+      }
+      return "insights";
     } catch {
       return "insights";
     }
@@ -569,7 +573,11 @@ export function KgPanel({
             className="text-[9px] font-bold uppercase text-slate-500"
             style={{ letterSpacing: tracking.eyebrow }}
           >
-            {viewMode === "insights" ? "✦ Live insights" : "◈ Knowledge graph"}
+            {viewMode === "insights"
+              ? "✦ Live insights"
+              : viewMode === "claims"
+              ? "≡ Claim stack"
+              : "◈ Knowledge graph"}
           </div>
           <div className="mt-0.5 text-sm font-semibold text-slate-900">
             {entities.length} ent · {edges.length} edg
@@ -594,11 +602,18 @@ export function KgPanel({
         </div>
       </div>
 
-      {/* ── Body: feed or graph based on mode ───────────────────────── */}
+      {/* ── Body: feed / claim stack / graph based on mode ─────────── */}
       <div className="relative flex-1 overflow-hidden">
         {viewMode === "insights" ? (
           <InsightsFeedMode
             entities={entities}
+            selectedEntityId={selectedEntityId}
+            onSelectEntity={onSelectEntity}
+          />
+        ) : viewMode === "claims" ? (
+          <ClaimStackMode
+            entities={entities}
+            edges={edges}
             selectedEntityId={selectedEntityId}
             onSelectEntity={onSelectEntity}
           />
@@ -721,6 +736,12 @@ function ModeToggle({
         onClick={() => onChange("insights")}
         label="Insights"
         glyph="✦"
+      />
+      <ModeButton
+        active={mode === "claims"}
+        onClick={() => onChange("claims")}
+        label="Claims"
+        glyph="≡"
       />
       <ModeButton
         active={mode === "graph"}
