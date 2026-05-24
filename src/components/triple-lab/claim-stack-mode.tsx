@@ -16,7 +16,7 @@
 // PHASE 2a (this build) — static render only. Drag-to-reorder,
 // expansion tray, and causal chain arrows ship in Phases 2b/2c/2d.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Entity, Edge } from "@/types";
 import { useRouter } from "next/navigation";
 import { colors, tracking } from "./tokens";
@@ -64,6 +64,56 @@ export function ClaimStackMode({
   // the user is hovering over so we can render a drop indicator.
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  // ── Causal arrow positioning (Phase 2d) ─────────────────────────────
+  // The claim layer wrapper is position: relative so the SVG overlay
+  // and the card-position math share a coordinate space. We measure
+  // each card's top + height relative to this container, then bow
+  // bezier curves through the right gutter to draw causal-edge arrows
+  // between any two claims linked by an edge with dimension='causal'.
+  const claimLayerContainerRef = useRef<HTMLDivElement | null>(null);
+  const cardRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  // Position cache: entity_id → { top, height } in container-relative
+  // coords. State (not ref) so the SVG re-renders when positions
+  // change after a resize / reorder / expansion-tray toggle.
+  const [cardPositions, setCardPositions] = useState<
+    Map<string, { top: number; height: number }>
+  >(new Map());
+  const [containerWidth, setContainerWidth] = useState<number>(0);
+
+  // Recompute positions whenever the DOM layout changes. We tap into
+  // both ResizeObserver (catches expansion-tray height changes + viewport
+  // resize) and the claim ordering itself (when drag reorders cards).
+  useEffect(() => {
+    const container = claimLayerContainerRef.current;
+    if (!container) return;
+    const recompute = () => {
+      const cRect = container.getBoundingClientRect();
+      setContainerWidth(cRect.width);
+      const next = new Map<string, { top: number; height: number }>();
+      cardRefs.current.forEach((el, id) => {
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        next.set(id, {
+          top: r.top - cRect.top,
+          height: r.height,
+        });
+      });
+      setCardPositions(next);
+    };
+    recompute();
+    const ro = new ResizeObserver(recompute);
+    ro.observe(container);
+    // Also observe each individual card so expansion-tray toggles
+    // trigger a recompute even when the container's total height
+    // doesn't change visibly.
+    cardRefs.current.forEach((el) => {
+      if (el) ro.observe(el);
+    });
+    return () => ro.disconnect();
+    // Re-run when the claim list or selection changes (selection
+    // toggles the expansion tray which mutates layout).
+  }, [selectedEntityId, entities, edges]);
 
   // After a successful drop we POST the new ordering. The endpoint
   // accepts a batch of (entity_id, weight) pairs so we send the whole
@@ -236,7 +286,15 @@ export function ClaimStackMode({
         {/* Claims are the ONLY drag-reorderable layer. Goal + Evidence
          *  stay static — semantic ordering there belongs to synthesis,
          *  not user preference. The claim layer is where the user's
-         *  domain knowledge most often overrides the LLM's prior. */}
+         *  domain knowledge most often overrides the LLM's prior.
+         *  Wrapped in a position: relative container with extra right
+         *  padding so the SVG causal-arrow overlay (Phase 2d) can bow
+         *  curves out to the right without clipping. */}
+        <div
+          ref={claimLayerContainerRef}
+          className="relative"
+          style={{ paddingRight: 36 }}
+        >
         <LayerSection
           label="Claims"
           glyph="≡"
@@ -250,76 +308,115 @@ export function ClaimStackMode({
           emptyHint="No claims yet. Decompose your idea or drop a paper."
           headerHint={
             layers.claim.length > 1
-              ? "drag to reorder by impact"
+              ? "drag to reorder · causal arrows on the right"
               : undefined
           }
         >
           {layers.claim.map((e, idx) => (
-            <DraggableClaimCard
+            // Wrap each claim card + its (conditional) expansion tray
+            // in a ref'd div so the causal-arrow overlay can measure
+            // its position. The div also keeps the tray spatially
+            // attached to its claim card (the tray is "what this
+            // specific claim breaks down into", not floating).
+            <div
               key={e.id}
-              entity={e}
-              isDragging={dragId === e.id}
-              isDropTarget={dragOverId === e.id && dragId !== e.id}
-              selected={selectedEntityId === e.id}
-              onSelect={() =>
-                onSelectEntity(selectedEntityId === e.id ? null : e.id)
-              }
-              footerNote={
-                causalOutDegree.get(e.id)
-                  ? `${causalOutDegree.get(e.id)} downstream effects`
-                  : null
-              }
-              // Drag handlers — native HTML5 drag-and-drop, no
-              // external lib. Sufficient for a single-column reorder.
-              onDragStart={(ev) => {
-                setDragId(e.id);
-                ev.dataTransfer.effectAllowed = "move";
-                // Set a dummy payload so Firefox treats it as a drag
-                // (it ignores drags with empty dataTransfer).
-                ev.dataTransfer.setData("text/plain", e.id);
+              ref={(el) => {
+                if (el) cardRefs.current.set(e.id, el);
+                else cardRefs.current.delete(e.id);
               }}
-              onDragEnd={() => {
-                setDragId(null);
-                setDragOverId(null);
-              }}
-              onDragEnter={() => {
-                if (dragId && dragId !== e.id) setDragOverId(e.id);
-              }}
-              onDragOver={(ev) => {
-                if (dragId && dragId !== e.id) {
+            >
+              <DraggableClaimCard
+                entity={e}
+                isDragging={dragId === e.id}
+                isDropTarget={dragOverId === e.id && dragId !== e.id}
+                selected={selectedEntityId === e.id}
+                onSelect={() =>
+                  onSelectEntity(selectedEntityId === e.id ? null : e.id)
+                }
+                footerNote={
+                  causalOutDegree.get(e.id)
+                    ? `${causalOutDegree.get(e.id)} downstream effects`
+                    : null
+                }
+                // Drag handlers — native HTML5 drag-and-drop, no
+                // external lib. Sufficient for a single-column reorder.
+                onDragStart={(ev) => {
+                  setDragId(e.id);
+                  ev.dataTransfer.effectAllowed = "move";
+                  // Set a dummy payload so Firefox treats it as a drag
+                  // (it ignores drags with empty dataTransfer).
+                  ev.dataTransfer.setData("text/plain", e.id);
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setDragOverId(null);
+                }}
+                onDragEnter={() => {
+                  if (dragId && dragId !== e.id) setDragOverId(e.id);
+                }}
+                onDragOver={(ev) => {
+                  if (dragId && dragId !== e.id) {
+                    ev.preventDefault();
+                    ev.dataTransfer.dropEffect = "move";
+                  }
+                }}
+                onDrop={(ev) => {
                   ev.preventDefault();
-                  ev.dataTransfer.dropEffect = "move";
-                }
-              }}
-              onDrop={(ev) => {
-                ev.preventDefault();
-                if (!dragId || dragId === e.id) {
+                  if (!dragId || dragId === e.id) {
+                    setDragId(null);
+                    setDragOverId(null);
+                    return;
+                  }
+                  // Compute new ordering by removing the dragged item
+                  // and re-inserting before the drop target.
+                  const ids = layers.claim.map((x) => x.id);
+                  const fromIdx = ids.indexOf(dragId);
+                  const toIdx = ids.indexOf(e.id);
+                  if (fromIdx === -1 || toIdx === -1) {
+                    setDragId(null);
+                    setDragOverId(null);
+                    return;
+                  }
+                  const next = [...ids];
+                  next.splice(fromIdx, 1);
+                  const insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx;
+                  next.splice(insertAt, 0, dragId);
                   setDragId(null);
                   setDragOverId(null);
-                  return;
-                }
-                // Compute new ordering by removing the dragged item
-                // and re-inserting before the drop target.
-                const ids = layers.claim.map((x) => x.id);
-                const fromIdx = ids.indexOf(dragId);
-                const toIdx = ids.indexOf(e.id);
-                if (fromIdx === -1 || toIdx === -1) {
-                  setDragId(null);
-                  setDragOverId(null);
-                  return;
-                }
-                const next = [...ids];
-                next.splice(fromIdx, 1);
-                const insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx;
-                next.splice(insertAt, 0, dragId);
-                setDragId(null);
-                setDragOverId(null);
-                void persistOrdering(next);
-              }}
-              rankIndex={idx}
-            />
+                  void persistOrdering(next);
+                }}
+                rankIndex={idx}
+              />
+              {/* Expansion tray — Phase 2c. Rendered inline below the
+               *  currently-selected claim card. Shows sub-components
+               *  (1-hop downstream entities via structural/functional
+               *  edges) as candidate variations the user could promote
+               *  to lab experiments. Lab proposals + experiment_variants
+               *  integration ships in Phase 2c-extended. */}
+              {selectedEntityId === e.id && (
+                <ClaimExpansionTray
+                  claim={e}
+                  entities={entities}
+                  edges={edges}
+                  onSelectEntity={onSelectEntity}
+                />
+              )}
+            </div>
           ))}
         </LayerSection>
+
+        {/* Causal-arrow SVG overlay — Phase 2d. Renders on top of the
+         *  LayerSection (pointer-events: none so it doesn't block
+         *  drag/click). Bezier curves arc through the right gutter
+         *  (paddingRight: 36 on the wrapper above) so they don't
+         *  cross the cards themselves. */}
+        <CausalArrowOverlay
+          claims={layers.claim}
+          edges={edges}
+          positions={cardPositions}
+          containerWidth={containerWidth}
+        />
+        </div>
 
         {layers.claim.length > 0 && layers.evidence.length > 0 && (
           <StackConnector label="backed by" />
@@ -747,5 +844,298 @@ function DraggableClaimCard({
         )}
       </div>
     </div>
+  );
+}
+
+// ── ClaimExpansionTray — Phase 2c ────────────────────────────────────
+// Inline tray rendered immediately below a selected claim card. Shows
+// "what this claim breaks down into" — 1-hop downstream entities via
+// structural/functional edges. Each row is a candidate variation the
+// user could promote to a lab experiment.
+//
+// Why these edge kinds:
+//   - structural (composes / part_of / contains / has_property): claim
+//     decomposes into its sub-components (variables / mechanisms)
+//   - functional (enables / amplifies / gates / requires): claim
+//     depends on these (what would need to be true)
+//
+// Causal edges (causes / contributes-to) live in Phase 2d as arrows
+// BETWEEN claims, not as expansion children.
+function ClaimExpansionTray({
+  claim,
+  entities,
+  edges,
+  onSelectEntity,
+}: {
+  claim: Entity;
+  entities: Entity[];
+  edges: Edge[];
+  onSelectEntity: (id: string | null) => void;
+}) {
+  // Build a quick id → entity lookup so we don't re-scan the list.
+  const byId = useMemo(() => {
+    const m = new Map<string, Entity>();
+    for (const e of entities) m.set(e.id, e);
+    return m;
+  }, [entities]);
+
+  // 1-hop downstream entities via the kind-of edges that represent
+  // decomposition / composition. Direction = OUT (claim → component).
+  const children = useMemo(() => {
+    const STRUCTURAL_FUNCTIONAL = new Set<string>([
+      "composes",
+      "part_of",
+      "part-of",
+      "contains",
+      "has_property",
+      "has-property",
+      "enables",
+      "amplifies",
+      "gates",
+      "requires",
+      "is-a",
+      "instance-of",
+    ]);
+    const out: Array<{ entity: Entity; relation: string }> = [];
+    for (const e of edges) {
+      if (e.source_entity_id !== claim.id) continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rel = ((e as any).relationship_type as string | null) ?? "";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dim = ((e as any).dimension as string | null) ?? "";
+      const accept =
+        STRUCTURAL_FUNCTIONAL.has(rel.toLowerCase()) ||
+        dim === "structural" ||
+        dim === "functional";
+      if (!accept) continue;
+      const child = byId.get(e.target_entity_id);
+      if (!child) continue;
+      out.push({ entity: child, relation: rel || dim || "relates_to" });
+    }
+    // Stable order: by entity name so the tray doesn't jitter across
+    // refetches.
+    out.sort((a, b) => a.entity.name.localeCompare(b.entity.name));
+    return out;
+  }, [byId, edges, claim.id]);
+
+  return (
+    <div
+      className="overflow-hidden rounded-lg border"
+      style={{
+        marginLeft: 18,
+        borderColor: `${colors.state.leverage}66`,
+        background: colors.state.leverageSoft,
+        boxShadow: `0 4px 14px ${colors.state.leverage}1A`,
+      }}
+    >
+      <div
+        className="flex items-center justify-between border-b px-3 py-1.5"
+        style={{
+          borderBottomColor: `${colors.state.leverage}33`,
+          background: `${colors.state.leverage}1A`,
+        }}
+      >
+        <div className="flex items-center gap-1.5">
+          <span
+            className="font-mono text-[10px] font-bold"
+            style={{ color: colors.state.leverage }}
+          >
+            ⤷
+          </span>
+          <span
+            className="text-[8.5px] font-bold uppercase"
+            style={{
+              color: colors.state.leverageFgDark,
+              letterSpacing: tracking.eyebrowTight,
+            }}
+          >
+            Decomposes into · {children.length}
+          </span>
+        </div>
+        <span
+          className="text-[8.5px] uppercase tracking-wider"
+          style={{ color: colors.state.leverageFgDark, opacity: 0.7 }}
+        >
+          candidate variations
+        </span>
+      </div>
+
+      {children.length === 0 ? (
+        <div className="px-3 py-2.5 text-[10.5px] italic text-slate-600">
+          No structural / functional sub-components yet. Use the card
+          action menu → Decompose to break this claim down.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1 px-3 py-2">
+          {children.map((c) => (
+            <div
+              key={c.entity.id}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                onSelectEntity(c.entity.id);
+              }}
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-white"
+            >
+              <span
+                className="font-mono text-[10px]"
+                style={{ color: colors.state.leverage }}
+              >
+                ◦
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-semibold text-slate-900">
+                  {c.entity.name}
+                </div>
+                {c.entity.description && (
+                  <div
+                    className="line-clamp-1 text-[10px] text-slate-600"
+                    title={c.entity.description}
+                  >
+                    {c.entity.description}
+                  </div>
+                )}
+              </div>
+              <span
+                className="rounded px-1 text-[8px] font-bold uppercase tracking-wider"
+                style={{
+                  background: "white",
+                  color: colors.state.leverageFgDark,
+                  border: `1px solid ${colors.state.leverage}33`,
+                }}
+              >
+                {c.relation.replace(/_/g, " ")}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CausalArrowOverlay — Phase 2d ────────────────────────────────────
+// Renders SVG bezier arrows between any two claim cards linked by an
+// edge with dimension='causal'. Positioned absolute inside the claim
+// layer's wrapper (which has paddingRight: 36 to host the curves).
+//
+// Path math:
+//   - Start: right edge of source card, vertically centered
+//   - End:   right edge of target card, vertically centered
+//   - Control point: bowed out further right by 28px so the curve
+//     reads as "this flows down (or up) to that"
+//   - Arrowhead marker at the END (target)
+//
+// pointer-events: none so the SVG never blocks drag / click on the
+// cards themselves. overflow: visible because the bezier sometimes
+// extends a few pixels beyond the wrapper's right edge.
+function CausalArrowOverlay({
+  claims,
+  edges,
+  positions,
+  containerWidth,
+}: {
+  claims: Entity[];
+  edges: Edge[];
+  positions: Map<string, { top: number; height: number }>;
+  containerWidth: number;
+}) {
+  // Causal edges where BOTH endpoints are claims in this layer.
+  const causalArrows = useMemo(() => {
+    const claimIdSet = new Set(claims.map((c) => c.id));
+    const out: Array<{
+      id: string;
+      sourceId: string;
+      targetId: string;
+      confidence: number;
+    }> = [];
+    for (const e of edges) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dim = (e as any).dimension as string | null | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rel = ((e as any).relationship_type as string | null) ?? "";
+      const isCausal =
+        dim === "causal" ||
+        rel === "causes" ||
+        rel === "contributes_to" ||
+        rel === "contributes-to" ||
+        rel === "inhibits";
+      if (!isCausal) continue;
+      if (!claimIdSet.has(e.source_entity_id)) continue;
+      if (!claimIdSet.has(e.target_entity_id)) continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const conf = typeof (e as any).confidence === "number" ? (e as any).confidence : 0.5;
+      out.push({
+        id: e.id,
+        sourceId: e.source_entity_id,
+        targetId: e.target_entity_id,
+        confidence: conf,
+      });
+    }
+    return out;
+  }, [claims, edges]);
+
+  // Bail if we don't have positions yet (first paint before
+  // ResizeObserver fires) — render an empty SVG so the layout stays
+  // stable but no arrows appear yet.
+  if (positions.size === 0 || containerWidth === 0) {
+    return null;
+  }
+
+  // The right-edge anchor for arrows. Cards live inside the LayerSection
+  // which sits in the wrapper with paddingRight=36. The cards extend to
+  // approximately containerWidth - 36. We anchor arrows at the right
+  // edge of the cards and bow OUT into the gutter.
+  const cardRightEdge = containerWidth - 36;
+  const gutterCenter = containerWidth - 18;
+
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0"
+      style={{ overflow: "visible" }}
+      width="100%"
+      height="100%"
+    >
+      <defs>
+        {/* Arrowhead marker — applied at the end of each path */}
+        <marker
+          id="causal-arrowhead"
+          viewBox="0 0 10 10"
+          refX="8"
+          refY="5"
+          markerWidth="6"
+          markerHeight="6"
+          orient="auto"
+        >
+          <path
+            d="M 0 0 L 10 5 L 0 10 z"
+            fill={colors.state.cycle}
+          />
+        </marker>
+      </defs>
+      {causalArrows.map((arrow) => {
+        const src = positions.get(arrow.sourceId);
+        const tgt = positions.get(arrow.targetId);
+        if (!src || !tgt) return null;
+        const y1 = src.top + src.height / 2;
+        const y2 = tgt.top + tgt.height / 2;
+        // Bezier control points sit in the gutter, further to the
+        // right the bigger the vertical gap (so long arrows arc more
+        // smoothly). cy* are derived to give an even S-curve.
+        const dy = Math.abs(y2 - y1);
+        const cx = gutterCenter + Math.min(20, dy / 6);
+        const path = `M ${cardRightEdge} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${cardRightEdge} ${y2}`;
+        return (
+          <path
+            key={arrow.id}
+            d={path}
+            fill="none"
+            stroke={colors.state.cycle}
+            strokeWidth={0.8 + arrow.confidence * 1.6}
+            strokeOpacity={0.55 + arrow.confidence * 0.35}
+            markerEnd="url(#causal-arrowhead)"
+          />
+        );
+      })}
+    </svg>
   );
 }
