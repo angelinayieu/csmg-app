@@ -14,13 +14,18 @@
 // noisy — those run constantly and dilute the signal). Only
 // structurally-significant events make the feed.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useRouter } from "next/navigation";
 import type { Entity } from "@/types";
 import { useRunEventStoreOptional } from "@/components/canvas/hooks/run-event-store";
 import { colors, tracking } from "./tokens";
 
 interface InsightsFeedModeProps {
+  /** Space id — required so the empty-state idea-entry can POST to
+   *  /api/pipeline/decompose with the right existingSpaceId. Threaded
+   *  in from kg-panel.tsx (which already takes spaceId as a prop). */
+  spaceId: string;
   entities: Entity[];
   selectedEntityId: string | null;
   onSelectEntity: (id: string | null) => void;
@@ -261,6 +266,7 @@ function importanceFor(eventType: string, _streamed: unknown): number {
 }
 
 export function InsightsFeedMode({
+  spaceId,
   entities,
   selectedEntityId,
   onSelectEntity,
@@ -362,7 +368,11 @@ export function InsightsFeedMode({
         className="flex-1 overflow-y-auto px-4 py-4"
       >
         {insights.length === 0 ? (
-          <FeedEmptyState hasStream={!!store} />
+          <FeedEmptyState
+            spaceId={spaceId}
+            hasStream={!!store}
+            entitiesEmpty={entities.length === 0}
+          />
         ) : (
           <div className="flex flex-col gap-2.5">
             <AnimatePresence initial={false}>
@@ -411,23 +421,204 @@ export function InsightsFeedMode({
 }
 
 // ── Empty state ──────────────────────────────────────────────────────
-function FeedEmptyState({ hasStream }: { hasStream: boolean }) {
+//
+// When entities are zero, this surface IS the primary entry CTA — a
+// big "Start from an idea" textarea + submit button posting straight
+// to /api/pipeline/decompose. Mirrors UnifiedEmptyState's flow but
+// lives inside the middle column so the user always has somewhere to
+// type, even if the page-level overlay was suppressed by orphan
+// synthesis data, lingering rooms, or a previously-dismissed session.
+//
+// When entities exist but no insights have arrived yet (mid-run), the
+// surface degrades to the informational "Insights will surface here"
+// hint — same as before — because the entry has clearly been made.
+function FeedEmptyState({
+  spaceId,
+  hasStream,
+  entitiesEmpty,
+}: {
+  spaceId: string;
+  hasStream: boolean;
+  entitiesEmpty: boolean;
+}) {
+  const router = useRouter();
+  const [idea, setIdea] = useState<string>("");
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const canSubmit = idea.trim().length >= 12 && !submitting;
+
+  const submit = useCallback(async () => {
+    const text = idea.trim();
+    if (text.length < 12) return;
+    setSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetch("/api/pipeline/decompose", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          text,
+          existingSpaceId: spaceId,
+          reasoningDepth: "deep",
+          intent: { source: "triple_lab_middle_feed_entry" },
+        }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try {
+          const body = (await res.json()) as { error?: string };
+          if (body.error) msg = body.error;
+        } catch {
+          /* not JSON */
+        }
+        setErrorMessage(msg);
+        setSubmitting(false);
+        return;
+      }
+      // Trigger a router refresh so the SSE provider / spaceData
+      // re-fetches and the panels start populating. The empty state
+      // will unmount as soon as entities arrive.
+      router.refresh();
+      // Keep submitting=true so the input stays disabled while we
+      // wait for the first entity to land (which causes parent to
+      // unmount us). If the request hangs we'll re-enable on error.
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Network error");
+      setSubmitting(false);
+    }
+  }, [idea, spaceId, router]);
+
+  // ⌘⏎ / Ctrl+⏎ submit shortcut.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit) {
+        e.preventDefault();
+        void submit();
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [canSubmit, submit]);
+
+  // Degraded state: entities exist, insights just haven't arrived yet.
+  // Keep the original informational pattern — no entry CTA needed
+  // since the pipeline is clearly already in flight.
+  if (!entitiesEmpty) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
+        <div
+          className="mb-3 flex h-10 w-10 items-center justify-center rounded-full"
+          style={{ background: colors.brand.bgSoft }}
+        >
+          <span style={{ color: colors.brand.fg, fontSize: 16 }}>✦</span>
+        </div>
+        <div className="text-sm font-semibold text-slate-700">
+          {hasStream
+            ? "Insights will surface here as the pipeline runs"
+            : "Insights stream when a run is active"}
+        </div>
+        <div className="mt-1 max-w-[280px] text-xs leading-relaxed text-slate-500">
+          Every cycle, bridge, hidden signal, root cause, and strategy
+          proposal lands as a card in this feed — ranked by importance,
+          freshest at the top.
+        </div>
+      </div>
+    );
+  }
+
+  // Primary state: zero entities — show the big idea entry. This is
+  // the ONLY entry surface the user is guaranteed to see when the page
+  // loads, so it carries the full submission UX.
   return (
-    <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
-      <div
-        className="mb-3 flex h-10 w-10 items-center justify-center rounded-full"
-        style={{ background: colors.brand.bgSoft }}
-      >
-        <span style={{ color: colors.brand.fg, fontSize: 16 }}>✦</span>
-      </div>
-      <div className="text-sm font-semibold text-slate-700">
-        {hasStream ? "Insights will surface here as the pipeline runs"
-                   : "Insights stream when a run is active"}
-      </div>
-      <div className="mt-1 max-w-[280px] text-xs leading-relaxed text-slate-500">
-        Drop a paper or trigger a decompose — every cycle, bridge,
-        hidden signal, root cause, and strategy proposal lands as a
-        card in this feed.
+    <div className="flex h-full flex-col items-center justify-center px-6 py-10">
+      <div className="w-full max-w-[440px]">
+        <div className="mb-5 text-center">
+          <div
+            className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full"
+            style={{
+              background: colors.brand.bgSoft,
+              boxShadow: `0 4px 14px ${colors.brand.shadow}`,
+            }}
+          >
+            <span style={{ color: colors.brand.fg, fontSize: 18 }}>◉</span>
+          </div>
+          <div
+            className="text-[9.5px] font-bold uppercase"
+            style={{
+              color: colors.brand.fgDark,
+              letterSpacing: tracking.eyebrow,
+            }}
+          >
+            Start from an idea
+          </div>
+          <div className="mt-1 text-[15px] font-semibold leading-snug text-slate-900">
+            What are you trying to figure out?
+          </div>
+          <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500">
+            Type a question, hypothesis, or messy thought — the pipeline
+            will decompose it and start surfacing claims, evidence, and
+            cycles in this column live.
+          </div>
+        </div>
+
+        <div
+          className="rounded-2xl border bg-white p-3 shadow-sm transition-all focus-within:shadow-md"
+          style={{
+            borderColor: colors.brand.haloSoft,
+          }}
+        >
+          <textarea
+            ref={textareaRef}
+            value={idea}
+            onChange={(e) => setIdea(e.target.value)}
+            disabled={submitting}
+            placeholder="e.g. why does my team keep shipping features nobody uses despite shipping fast?"
+            rows={4}
+            className="w-full resize-none bg-transparent text-[13px] leading-relaxed text-slate-900 placeholder:text-slate-400 focus:outline-none disabled:opacity-50"
+            autoFocus
+          />
+
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span className="text-[10px] text-slate-400">
+              {idea.trim().length < 12
+                ? `${Math.max(0, 12 - idea.trim().length)} more chars to enable`
+                : "⌘⏎ to start"}
+            </span>
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={!canSubmit}
+              className="rounded-lg px-3 py-1.5 text-[11.5px] font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-40"
+              style={{
+                background: canSubmit ? colors.brand.gradient : "#E2E8F0",
+                color: canSubmit ? "white" : "#94A3B8",
+                boxShadow: canSubmit
+                  ? `0 4px 12px ${colors.brand.shadow}`
+                  : "none",
+              }}
+            >
+              {submitting ? "Starting…" : "Start ▶"}
+            </button>
+          </div>
+        </div>
+
+        {errorMessage && (
+          <div
+            className="mt-2 rounded-md border px-3 py-2 text-[11px]"
+            style={{
+              borderColor: `${colors.state.bottleneck}33`,
+              background: colors.state.bottleneckSoft,
+              color: colors.state.bottleneckFg,
+            }}
+          >
+            {errorMessage}
+          </div>
+        )}
+
+        <div className="mt-4 text-center text-[10px] text-slate-400">
+          You can also drop a PDF anywhere on this page — same pipeline.
+        </div>
       </div>
     </div>
   );

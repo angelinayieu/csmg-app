@@ -607,6 +607,7 @@ export function KgPanel({
       <div className="relative flex-1 overflow-hidden">
         {viewMode === "insights" ? (
           <InsightsFeedMode
+            spaceId={spaceId}
             entities={entities}
             selectedEntityId={selectedEntityId}
             onSelectEntity={onSelectEntity}
