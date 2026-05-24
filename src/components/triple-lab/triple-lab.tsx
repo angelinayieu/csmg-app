@@ -313,15 +313,37 @@ export function TripleLab({ spaceId }: TripleLabProps) {
     labRoomsByColumn.left.length +
     labRoomsByColumn.middle.length +
     labRoomsByColumn.right.length;
+  // Did the user already give us a seed from the homepage hero or any
+  // other intake entry path? `spaces.input_text` is populated by
+  // intake/bootstrap (homepage prompt) and by /api/synergy/sessions/
+  // [id]/promote-to-lab (brainstorm title), so a non-empty value means
+  // "the user has ALREADY typed their seed somewhere upstream — DON'T
+  // ask them again on the lab's empty-state overlay." Without this
+  // check, a homepage prompt user lands in the lab and sees:
+  //   1. The homepage prompt (already submitted)
+  //   2. The UnifiedEmptyState overlay asking "What are you trying to
+  //      figure out?" → second prompt for the same thing
+  //   3. (Previously) The FeedEmptyState middle-panel prompt → third
+  // Tightening this prevents layers 2 (and indirectly the confusion
+  // around layer 3 which has now been removed entirely).
+  const hasUpstreamSeed =
+    typeof spaceData.space.input_text === "string" &&
+    spaceData.space.input_text.trim().length > 0;
   const dataIsPresent = useMemo(() => {
     if (spaceData.entities.length > 0) return true;
     if (totalUserRooms > 0) return true;
+    if (hasUpstreamSeed) return true;
     if (!synthesisData) return false;
     const hasLeverage = (synthesisData.leverage_points?.length ?? 0) > 0;
     const hasBottleneck = !!synthesisData.master_bottleneck;
     const hasAxioms = (synthesisData.axioms?.length ?? 0) > 0;
     return hasLeverage || hasBottleneck || hasAxioms;
-  }, [spaceData.entities.length, totalUserRooms, synthesisData]);
+  }, [
+    spaceData.entities.length,
+    totalUserRooms,
+    hasUpstreamSeed,
+    synthesisData,
+  ]);
   // Show overlay ONLY when the space has no data AND user hasn't
   // manually dismissed it. The moment they submit, dataIsPresent is
   // still false but emptyStateDismissed flips true → overlay slides

@@ -120,6 +120,12 @@ export function UnifiedEmptyState({
           text,
           existingSpaceId: spaceId,
           reasoningDepth: "deep",
+          // autoAdvance kicks the full chain: research → synthesize →
+          // strategy → twin → lab. Without it the route stops after
+          // entity/edge insert, so the MIDDLE insights feed never sees
+          // the cycle/bridge/signal/proposal events that drive its
+          // cards, and the RIGHT artifacts panel stays empty.
+          autoAdvance: true,
           intent: {
             source: "triple_lab_idea_entry",
           },

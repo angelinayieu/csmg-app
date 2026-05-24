@@ -14,9 +14,8 @@
 // noisy — those run constantly and dilute the signal). Only
 // structurally-significant events make the feed.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useRouter } from "next/navigation";
 import type { Entity } from "@/types";
 import { useRunEventStoreOptional } from "@/components/canvas/hooks/run-event-store";
 import { colors, tracking } from "./tokens";
@@ -52,6 +51,11 @@ const INSIGHT_EVENT_TYPES = new Set<string>([
   "structural_analog_found",
   "taxonomy_inferred",
   "causal_stage_ready",
+  // Fast Haiku preflight emits these within ~5-10s of submit so the
+  // feed isn't empty during Pass 1's long reasoning phase. Marked
+  // visually distinct from canonical insights (lower importance,
+  // muted accent, "early guess" eyebrow).
+  "preliminary_hypothesis",
 ]);
 
 // Per-kind labels + tone. Defines the visual language for the feed —
@@ -193,6 +197,13 @@ const KIND_META: Record<
     fg: colors.state.leverageFgDark,
     glyph: "⟶",
   },
+  preliminary_hypothesis: {
+    eyebrow: "Early guess",
+    accent: colors.neutral.fg500,
+    bg: colors.neutral.chipBg,
+    fg: colors.neutral.fg700,
+    glyph: "?",
+  },
 };
 
 // Generic fallback so unknown event types still render (forward-compat
@@ -260,13 +271,22 @@ function importanceFor(eventType: string, _streamed: unknown): number {
     case "taxonomy_inferred":
     case "causal_stage_ready":
       return 26;
+    // Preliminary hypotheses sit BELOW everything real — they're fast
+    // early guesses, not deep-reasoning output. As soon as canonical
+    // insights land, these get pushed down the feed.
+    case "preliminary_hypothesis":
+      return 12;
     default:
       return 18;
   }
 }
 
 export function InsightsFeedMode({
-  spaceId,
+  // spaceId retained in the prop type for callers (some pass it for
+  // future per-space behavior), but the in-flight FeedEmptyState no
+  // longer needs it after the duplicate idea-entry was removed. We
+  // void-reference it to keep the prop documented + lint-quiet.
+  spaceId: _spaceId,
   entities,
   selectedEntityId,
   onSelectEntity,
@@ -369,7 +389,6 @@ export function InsightsFeedMode({
       >
         {insights.length === 0 ? (
           <FeedEmptyState
-            spaceId={spaceId}
             hasStream={!!store}
             entitiesEmpty={entities.length === 0}
           />
@@ -432,196 +451,266 @@ export function InsightsFeedMode({
 // When entities exist but no insights have arrived yet (mid-run), the
 // surface degrades to the informational "Insights will surface here"
 // hint — same as before — because the entry has clearly been made.
+// Informational ONLY — the prompt entry lives at the page level
+// (UnifiedEmptyState overlay) and at the homepage. Earlier this
+// surface had its own "Start from an idea" textarea as a fallback,
+// but having THREE duplicate prompt-entry surfaces (homepage + page
+// overlay + middle panel) on the same flow was confusing users.
+// Reverted so the middle panel is purely the insights stream — entry
+// belongs to the canonical surface.
 function FeedEmptyState({
-  spaceId,
   hasStream,
   entitiesEmpty,
 }: {
-  spaceId: string;
   hasStream: boolean;
   entitiesEmpty: boolean;
 }) {
-  const router = useRouter();
-  const [idea, setIdea] = useState<string>("");
-  const [submitting, setSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const canSubmit = idea.trim().length >= 12 && !submitting;
-
-  const submit = useCallback(async () => {
-    const text = idea.trim();
-    if (text.length < 12) return;
-    setSubmitting(true);
-    setErrorMessage(null);
-    try {
-      const res = await fetch("/api/pipeline/decompose", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          text,
-          existingSpaceId: spaceId,
-          reasoningDepth: "deep",
-          intent: { source: "triple_lab_middle_feed_entry" },
-        }),
-      });
-      if (!res.ok) {
-        let msg = `HTTP ${res.status}`;
-        try {
-          const body = (await res.json()) as { error?: string };
-          if (body.error) msg = body.error;
-        } catch {
-          /* not JSON */
-        }
-        setErrorMessage(msg);
-        setSubmitting(false);
-        return;
-      }
-      // Trigger a router refresh so the SSE provider / spaceData
-      // re-fetches and the panels start populating. The empty state
-      // will unmount as soon as entities arrive.
-      router.refresh();
-      // Keep submitting=true so the input stays disabled while we
-      // wait for the first entity to land (which causes parent to
-      // unmount us). If the request hangs we'll re-enable on error.
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Network error");
-      setSubmitting(false);
-    }
-  }, [idea, spaceId, router]);
-
-  // ⌘⏎ / Ctrl+⏎ submit shortcut.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit) {
-        e.preventDefault();
-        void submit();
-      }
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [canSubmit, submit]);
-
-  // Degraded state: entities exist, insights just haven't arrived yet.
-  // Keep the original informational pattern — no entry CTA needed
-  // since the pipeline is clearly already in flight.
-  if (!entitiesEmpty) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
-        <div
-          className="mb-3 flex h-10 w-10 items-center justify-center rounded-full"
-          style={{ background: colors.brand.bgSoft }}
-        >
-          <span style={{ color: colors.brand.fg, fontSize: 16 }}>✦</span>
-        </div>
-        <div className="text-sm font-semibold text-slate-700">
-          {hasStream
-            ? "Insights will surface here as the pipeline runs"
-            : "Insights stream when a run is active"}
-        </div>
-        <div className="mt-1 max-w-[280px] text-xs leading-relaxed text-slate-500">
-          Every cycle, bridge, hidden signal, root cause, and strategy
-          proposal lands as a card in this feed — ranked by importance,
-          freshest at the top.
-        </div>
-      </div>
-    );
+  // Entities present + active stream → rich live activity card so the
+  // user sees what's happening instead of staring at a static line.
+  if (!entitiesEmpty && hasStream) {
+    return <LiveActivitySurface />;
   }
-
-  // Primary state: zero entities — show the big idea entry. This is
-  // the ONLY entry surface the user is guaranteed to see when the page
-  // loads, so it carries the full submission UX.
+  // All other cases: informational placeholder. Either truly empty
+  // (entry happens at page/homepage level) or entities exist but no
+  // run streaming (the page-level overlay has already surfaced the
+  // entry path).
+  const headline = entitiesEmpty
+    ? "Insights stream once you start a run"
+    : "Insights stream when a run is active";
   return (
-    <div className="flex h-full flex-col items-center justify-center px-6 py-10">
-      <div className="w-full max-w-[440px]">
-        <div className="mb-5 text-center">
-          <div
-            className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full"
-            style={{
-              background: colors.brand.bgSoft,
-              boxShadow: `0 4px 14px ${colors.brand.shadow}`,
-            }}
-          >
-            <span style={{ color: colors.brand.fg, fontSize: 18 }}>◉</span>
-          </div>
-          <div
-            className="text-[9.5px] font-bold uppercase"
-            style={{
-              color: colors.brand.fgDark,
-              letterSpacing: tracking.eyebrow,
-            }}
-          >
-            Start from an idea
-          </div>
-          <div className="mt-1 text-[15px] font-semibold leading-snug text-slate-900">
-            What are you trying to figure out?
-          </div>
-          <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500">
-            Type a question, hypothesis, or messy thought — the pipeline
-            will decompose it and start surfacing claims, evidence, and
-            cycles in this column live.
-          </div>
-        </div>
+    <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
+      <div
+        className="mb-3 flex h-10 w-10 items-center justify-center rounded-full"
+        style={{ background: colors.brand.bgSoft }}
+      >
+        <span style={{ color: colors.brand.fg, fontSize: 16 }}>✦</span>
+      </div>
+      <div className="text-sm font-semibold text-slate-700">{headline}</div>
+      <div className="mt-1 max-w-[280px] text-xs leading-relaxed text-slate-500">
+        Every cycle, bridge, hidden signal, root cause, and strategy
+        proposal lands as a card in this feed — ranked by importance,
+        freshest at the top.
+      </div>
+    </div>
+  );
+}
 
-        <div
-          className="rounded-2xl border bg-white p-3 shadow-sm transition-all focus-within:shadow-md"
-          style={{
-            borderColor: colors.brand.haloSoft,
-          }}
-        >
-          <textarea
-            ref={textareaRef}
-            value={idea}
-            onChange={(e) => setIdea(e.target.value)}
-            disabled={submitting}
-            placeholder="e.g. why does my team keep shipping features nobody uses despite shipping fast?"
-            rows={4}
-            className="w-full resize-none bg-transparent text-[13px] leading-relaxed text-slate-900 placeholder:text-slate-400 focus:outline-none disabled:opacity-50"
-            autoFocus
-          />
+// (Phase 6d primary-entry FeedEmptyState was deleted here — it
+// duplicated the homepage hero + UnifiedEmptyState overlay producing
+// three layers of "Start from an idea" prompts on the same flow.
+// See SHA 9efd153 for the deleted markup if it's ever needed.)
 
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <span className="text-[10px] text-slate-400">
-              {idea.trim().length < 12
-                ? `${Math.max(0, 12 - idea.trim().length)} more chars to enable`
-                : "⌘⏎ to start"}
-            </span>
-            <button
-              type="button"
-              onClick={() => void submit()}
-              disabled={!canSubmit}
-              className="rounded-lg px-3 py-1.5 text-[11.5px] font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-40"
+// ── Live activity surface ──────────────────────────────────────────
+//
+// Rendered when a pipeline run is in flight but insight-type events
+// haven't landed yet (decompose / research stages take ~60-120s
+// before the first cycle_detected / signal_detected emits). Without
+// this surface the middle column stares blank for the entire
+// decompose phase, which makes the user think the system is hung.
+//
+// Reads directly from the SSE store: current stage, entity/edge
+// counts, and the last reasoning chunk preview. Pulses softly so
+// the user reads "live activity" instead of "static placeholder."
+function LiveActivitySurface() {
+  // Reads the store unconditionally (gated by hasStream upstream so
+  // we're guaranteed a provider). Cheaper than threading store down
+  // via props — the parent already paid the context-subscribe cost.
+  const store = useRunEventStoreOptional();
+  // Tick every 1s so elapsed time updates live. We track wall-clock
+  // ms in state so elapsedSec's useMemo body can read it as a pure
+  // value (calling Date.now() during render trips react-hooks/purity).
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const events = store?.events ?? [];
+  // Counts from the store — same source the painter / KG uses, so
+  // these match the LEFT panel exactly.
+  const entityCount = useMemo(
+    () => events.filter((e) => e.event.type === "entity_added").length,
+    [events],
+  );
+  const edgeCount = useMemo(
+    () => events.filter((e) => e.event.type === "edge_added").length,
+    [events],
+  );
+  const cycleCount = useMemo(
+    () => events.filter((e) => e.event.type === "cycle_detected").length,
+    [events],
+  );
+  // Latest stage_boundary tells us which stage the chain is in.
+  // Walk from newest backwards so we don't re-iterate on each render.
+  const latestStage = useMemo<{
+    label: string;
+    glyph: string;
+  } | null>(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i].event;
+      if (ev.type !== "stage_boundary") continue;
+      const stageKey = (ev as { stage?: string }).stage ?? "";
+      return STAGE_LABELS[stageKey] ?? { label: stageKey || "Running", glyph: "●" };
+    }
+    return null;
+  }, [events]);
+  // Latest reasoning_chunk preview — last 140 chars trimmed at a word
+  // boundary so the preview reads as a natural sentence fragment.
+  const reasoningPreview = useMemo<string | null>(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i].event;
+      if (ev.type !== "reasoning_chunk") continue;
+      const full = (ev as { textSoFar?: string }).textSoFar ?? "";
+      if (full.length < 30) return null;
+      const tail = full.slice(-180);
+      // Snap to next word boundary to avoid mid-word starts.
+      const firstSpace = tail.indexOf(" ");
+      const cleaned = firstSpace > 0 ? tail.slice(firstSpace + 1) : tail;
+      return cleaned.length > 140 ? cleaned.slice(-140) : cleaned;
+    }
+    return null;
+  }, [events]);
+  // Elapsed time since the first event in the store (proxy for "run
+  // started"). Bounded so very long-running stale subscriptions don't
+  // produce absurd labels.
+  const elapsedSec = useMemo(() => {
+    if (events.length === 0) return 0;
+    const first = events[0].emittedAt;
+    const firstMs =
+      typeof first === "number" ? first : Date.parse(String(first));
+    if (!Number.isFinite(firstMs)) return 0;
+    return Math.min(3600, Math.max(0, Math.floor((nowMs - firstMs) / 1000)));
+  }, [events, nowMs]);
+
+  const stageLabel = latestStage?.label ?? "Decomposing";
+  const stageGlyph = latestStage?.glyph ?? "≡";
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center px-5 py-10">
+      <div
+        className="w-full max-w-[380px] rounded-2xl border bg-white p-5 shadow-sm"
+        style={{ borderColor: colors.brand.haloSoft }}
+      >
+        {/* Eyebrow row: pulsing dot + stage label + elapsed */}
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span
+              className="inline-block h-2 w-2 animate-pulse rounded-full"
+              style={{ background: colors.brand.fg }}
+            />
+            <span
+              className="text-[9.5px] font-bold uppercase"
               style={{
-                background: canSubmit ? colors.brand.gradient : "#E2E8F0",
-                color: canSubmit ? "white" : "#94A3B8",
-                boxShadow: canSubmit
-                  ? `0 4px 12px ${colors.brand.shadow}`
-                  : "none",
+                color: colors.brand.fgDark,
+                letterSpacing: tracking.eyebrow,
               }}
             >
-              {submitting ? "Starting…" : "Start ▶"}
-            </button>
+              Pipeline running
+            </span>
+          </div>
+          <span className="font-mono text-[10px] text-slate-400">
+            {formatElapsed(elapsedSec)}
+          </span>
+        </div>
+
+        {/* Current stage header */}
+        <div className="mb-4 flex items-center gap-2.5">
+          <div
+            className="flex h-9 w-9 items-center justify-center rounded-full text-[15px]"
+            style={{
+              background: colors.brand.bgSoft,
+              color: colors.brand.fg,
+            }}
+          >
+            {stageGlyph}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13.5px] font-semibold text-slate-900">
+              {stageLabel}…
+            </div>
+            <div className="text-[10.5px] text-slate-500">
+              Insights surface as the chain progresses to synthesis.
+            </div>
           </div>
         </div>
 
-        {errorMessage && (
+        {/* Live counts row */}
+        <div className="mb-4 grid grid-cols-3 gap-2">
+          <ActivityStat label="Entities" value={entityCount} />
+          <ActivityStat label="Edges" value={edgeCount} />
+          <ActivityStat label="Cycles" value={cycleCount} />
+        </div>
+
+        {/* Reasoning prose preview */}
+        {reasoningPreview && (
           <div
-            className="mt-2 rounded-md border px-3 py-2 text-[11px]"
+            className="rounded-md border px-3 py-2 text-[10.5px] leading-snug text-slate-600"
             style={{
-              borderColor: `${colors.state.bottleneck}33`,
-              background: colors.state.bottleneckSoft,
-              color: colors.state.bottleneckFg,
+              borderColor: colors.brand.haloSoft,
+              background: "#F8FAFC",
             }}
           >
-            {errorMessage}
+            <div
+              className="mb-1 text-[8.5px] font-bold uppercase text-slate-400"
+              style={{ letterSpacing: tracking.eyebrow }}
+            >
+              Currently reasoning
+            </div>
+            <div className="line-clamp-3 italic text-slate-600">
+              …{reasoningPreview}
+            </div>
           </div>
         )}
 
-        <div className="mt-4 text-center text-[10px] text-slate-400">
-          You can also drop a PDF anywhere on this page — same pipeline.
+        <div className="mt-3 text-center text-[9.5px] text-slate-400">
+          Synthesis typically begins after ~90 seconds.
         </div>
       </div>
     </div>
   );
+}
+
+function ActivityStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div
+      className="rounded-md border px-2 py-1.5 text-center"
+      style={{ borderColor: colors.brand.haloSoft, background: "white" }}
+    >
+      <div
+        className="font-mono text-[15px] font-semibold leading-none"
+        style={{ color: colors.brand.fgDark }}
+      >
+        {value}
+      </div>
+      <div
+        className="mt-1 text-[8.5px] font-medium uppercase text-slate-400"
+        style={{ letterSpacing: tracking.eyebrow }}
+      >
+        {label}
+      </div>
+    </div>
+  );
+}
+
+// Canonical stage_boundary.stage → display label + glyph. Mirrors
+// pipeline-progress-strip's stage table so labels stay consistent
+// across the lab. If a new stage shows up that isn't mapped here
+// we fall back to the raw key so it's still legible.
+const STAGE_LABELS: Record<string, { label: string; glyph: string }> = {
+  intake: { label: "Decomposing", glyph: "≡" },
+  landscape: { label: "Mapping landscape", glyph: "▦" },
+  kg: { label: "Building knowledge graph", glyph: "≡" },
+  proposal: { label: "Synthesizing insights", glyph: "✦" },
+  twin: { label: "Composing strategy", glyph: "◆" },
+  lab: { label: "Generating lab options", glyph: "⚗" },
+  reflexive: { label: "Materializing apps", glyph: "□" },
+  results: { label: "Finalizing results", glyph: "★" },
+};
+
+function formatElapsed(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
 }
 
 // ── Single insight card ─────────────────────────────────────────────
@@ -945,6 +1034,12 @@ function describeEvent(
       return {
         title: typeof ev.label === "string" ? ev.label : "Causal stage ready",
         subtitle: null,
+        entityIds: [],
+      };
+    case "preliminary_hypothesis":
+      return {
+        title: typeof ev.headline === "string" ? ev.headline : "Early hypothesis",
+        subtitle: typeof ev.body === "string" ? ev.body : null,
         entityIds: [],
       };
     default:
