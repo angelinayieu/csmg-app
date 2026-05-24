@@ -31,15 +31,14 @@ import {
   ArrowUpRight,
   Expand,
   FileText,
-  Layers,
   Maximize2,
-  MessageCircleQuestion,
   Minimize2,
   Network,
   Sparkles,
   TestTube,
 } from "lucide-react";
 import type { WorkspaceRoomShape } from "./types";
+import { ROOM_REGISTRY } from "@/lib/whiteboard/room-registry";
 
 // Collapsed preset — compact card the picker lands on by default.
 export const WORKSPACE_ROOM_DEFAULT_W = 360;
@@ -53,49 +52,11 @@ export const WORKSPACE_ROOM_EXPANDED_W = 540;
 export const WORKSPACE_ROOM_EXPANDED_H = 380;
 const ENTRANCE_MS = 700;
 
-// Per-kind visual treatment. Keeps the kinds distinguishable on the
-// canvas without needing the user to read the label — quick glance =
-// instant recognition.
-const KIND_META: Record<
-  WorkspaceRoomShape["props"]["kind"],
-  {
-    label: string;
-    Icon: typeof Layers;
-    accent: string;
-    accentSoft: string;
-  }
-> = {
-  brainstorm: {
-    label: "Brainstorm",
-    Icon: Layers,
-    accent: "#0A84FF",
-    accentSoft: "rgba(10, 132, 255, 0.08)",
-  },
-  strategy: {
-    label: "Strategy",
-    Icon: FileText,
-    accent: "#7C3AED",
-    accentSoft: "rgba(124, 58, 237, 0.08)",
-  },
-  twin: {
-    label: "Digital Twin",
-    Icon: TestTube,
-    accent: "#10B981",
-    accentSoft: "rgba(16, 185, 129, 0.08)",
-  },
-  probe: {
-    label: "Brain Probe",
-    Icon: MessageCircleQuestion,
-    accent: "#F59E0B",
-    accentSoft: "rgba(245, 158, 11, 0.08)",
-  },
-  space: {
-    label: "R&D Space",
-    Icon: Network,
-    accent: "#E11D48",
-    accentSoft: "rgba(225, 29, 72, 0.08)",
-  },
-};
+// Per-kind visual treatment is owned by src/lib/whiteboard/room-registry.ts.
+// `ROOM_REGISTRY[kind]` provides label, Icon, accent + accentSoft, plus
+// picker visibility / ordering. Defined there (rather than inline here)
+// so the picker can derive its tab strip from the same source — no
+// drift between shape and chrome.
 
 export class WorkspaceRoomShapeUtil extends BaseBoxShapeUtil<WorkspaceRoomShape> {
   static override type = "workspace-room" as const;
@@ -145,7 +106,7 @@ function WorkspaceRoomView({ shape }: { shape: WorkspaceRoomShape }) {
   const editor = useEditor();
   const { w, h, kind, artifact_id, cached_title, spawnedAt, expanded } =
     shape.props;
-  const meta = KIND_META[kind];
+  const meta = ROOM_REGISTRY[kind];
   const Icon = meta.Icon;
 
   // Entrance animation — plays once on spawn so the user sees the
@@ -1106,7 +1067,7 @@ function StubRoomBody({
             : "font-display-tight text-[15px] font-semibold leading-snug tracking-tight text-gray-900"
         }
       >
-        {KIND_META[kind].label} room
+        {ROOM_REGISTRY[kind].label} room
       </p>
       <p
         className={

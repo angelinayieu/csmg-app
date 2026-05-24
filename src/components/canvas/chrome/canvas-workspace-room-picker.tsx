@@ -23,17 +23,20 @@
 // table.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2, Plus, X } from "lucide-react";
 import {
-  FileText,
-  Layers,
-  Loader2,
-  Network,
-  Plus,
-  TestTube,
-  X,
-} from "lucide-react";
+  PICKER_KINDS,
+  ROOM_REGISTRY,
+  type RoomKind,
+} from "@/lib/whiteboard/room-registry";
 
-type PickerTab = "brainstorm" | "strategy" | "space" | "twin";
+// PickerTab was a hardcoded 4-string union ("brainstorm" | "strategy" |
+// "space" | "twin") that drifted from the shape's 5-kind enum. The
+// active tab now narrows to RoomKind (the canonical kind union) and
+// PICKER_KINDS — the subset of kinds with pickerVisible: true —
+// drives the tab strip. Adding/removing tabs is now a single edit
+// inside ROOM_REGISTRY rather than two synchronized edits here and
+// in workspace-room-shape.tsx.
 
 interface BrainstormItem {
   id: string;
@@ -62,19 +65,14 @@ interface SpaceItem {
   updated_at: string;
 }
 
-const TAB_META: Record<
-  PickerTab,
-  { label: string; Icon: typeof Layers; available: boolean }
-> = {
-  brainstorm: { label: "Brainstorm", Icon: Layers, available: true },
-  strategy: { label: "Strategy", Icon: FileText, available: true },
-  space: { label: "R&D Space", Icon: Network, available: true },
-  twin: { label: "Twin", Icon: TestTube, available: true },
-};
+// Per-tab visual + availability metadata lives in
+// src/lib/whiteboard/room-registry.ts. PICKER_KINDS (above) gives
+// the ordered, picker-visible subset; ROOM_REGISTRY[kind] gives the
+// label / Icon / accent used per tab.
 
 export function CanvasWorkspaceRoomPicker() {
   const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<PickerTab>("brainstorm");
+  const [activeTab, setActiveTab] = useState<RoomKind>("brainstorm");
   const popoverRef = useRef<HTMLDivElement>(null);
 
   const [brainstorms, setBrainstorms] = useState<BrainstormItem[] | null>(null);
@@ -216,28 +214,21 @@ export function CanvasWorkspaceRoomPicker() {
           </div>
 
           <div className="flex items-center gap-0.5 overflow-x-auto border-b border-black/[0.04] px-2 pt-2">
-            {(Object.keys(TAB_META) as PickerTab[]).map((tab) => {
-              const meta = TAB_META[tab];
+            {PICKER_KINDS.map((tab) => {
+              const meta = ROOM_REGISTRY[tab];
               const Icon = meta.Icon;
               const active = activeTab === tab;
               return (
                 <button
                   key={tab}
-                  onClick={() => meta.available && setActiveTab(tab)}
-                  disabled={!meta.available}
+                  onClick={() => setActiveTab(tab)}
                   className={[
                     "inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-medium transition",
                     active
                       ? "bg-gray-100 text-gray-900"
-                      : meta.available
-                        ? "text-gray-500 hover:bg-black/[0.03] hover:text-gray-900"
-                        : "cursor-not-allowed text-gray-300",
+                      : "text-gray-500 hover:bg-black/[0.03] hover:text-gray-900",
                   ].join(" ")}
-                  title={
-                    meta.available
-                      ? `Add ${meta.label.toLowerCase()} room`
-                      : `${meta.label} room — coming soon`
-                  }
+                  title={`Add ${meta.label.toLowerCase()} room`}
                 >
                   <Icon className="h-3 w-3" strokeWidth={1.75} />
                   {meta.label}
