@@ -126,8 +126,12 @@ export function IntakeProposalView({ runId, spaceId }: Props) {
     };
   }, [spaceId, plan, pollExhausted]);
 
+  // After the clarifying-questions / four-pane proposal review, the
+  // user continues onto the Synthesis Lab (/triple-lab) — the new
+  // universal entry surface. Name kept as goToWhiteboard for minimal
+  // call-site blast radius; the destination is what matters.
   const goToWhiteboard = useCallback(() => {
-    router.push(`/app/space/${spaceId}/whiteboard?run=${runId}`);
+    router.push(`/app/space/${spaceId}/triple-lab?run=${runId}`);
   }, [router, runId, spaceId]);
 
   const handleApprove = useCallback(async () => {

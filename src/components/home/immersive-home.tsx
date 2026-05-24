@@ -460,11 +460,19 @@ export function ImmersiveHome({
            *  Optional for backward-compat with older bootstrap builds. */
           redirectTo?: string;
         };
+        // Homepage submit always lands on the Synthesis Lab (triple-lab).
+        // The server-decided `redirectTo` is still honored when it points
+        // to /app/intake-proposal/[runId] (the clarifying-questions four-
+        // pane page) — that page itself routes onward to /triple-lab via
+        // its continue button. The fallback path here is for when the
+        // server omits redirectTo (legacy bootstrap responses): we go
+        // directly to triple-lab with the runId so the lab's live-
+        // synthesis hook picks up the in-flight chain immediately.
         const destination =
           data.redirectTo ??
           (data.runId
-            ? `/app/space/${data.spaceId}/whiteboard?run=${data.runId}`
-            : `/app/space/${data.spaceId}/whiteboard`);
+            ? `/app/space/${data.spaceId}/triple-lab?run=${data.runId}`
+            : `/app/space/${data.spaceId}/triple-lab`);
         router.push(destination);
       } catch (err) {
         console.error("[ImmersiveHome] fireBootstrap failed:", err);

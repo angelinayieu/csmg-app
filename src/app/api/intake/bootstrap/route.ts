@@ -1019,13 +1019,13 @@ export async function POST(request: Request) {
     // C1 — proposal-gate redirect. When the plan-gate is on (default
     // for thin prompts + opt-out only for long prompts), route the
     // user through the dedicated /app/intake-proposal/[runId] page so
-    // they see the four-pane proposal BEFORE landing on the canvas.
-    // When skipPlanGate=true (legacy fast-path), go straight to the
-    // whiteboard. The client falls back to the whiteboard URL if the
-    // field is absent on the response (full backward-compat with old
-    // home builds that don't yet read redirectTo).
+    // they see the four-pane proposal BEFORE landing on the lab.
+    // When skipPlanGate=true (fast-path or legacy), go straight to the
+    // Synthesis Lab (/triple-lab) — the new universal entry surface.
+    // The lab's live-synthesis hook picks up the in-flight chain via
+    // ?run=<runId> so the user sees insights stream in immediately.
     const redirectTo = skipPlanGate
-      ? `/app/space/${spaceId}/whiteboard${runId ? `?run=${runId}` : ""}`
+      ? `/app/space/${spaceId}/triple-lab${runId ? `?run=${runId}` : ""}`
       : `/app/intake-proposal/${runId ?? spaceId}`;
 
     return NextResponse.json({ spaceId, runId, redirectTo });
