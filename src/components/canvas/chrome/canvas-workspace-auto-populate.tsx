@@ -77,8 +77,29 @@ export function CanvasWorkspaceAutoPopulate({ spaceId }: { spaceId: string }) {
     let cancelled = false;
 
     (async () => {
-      // 1 — server-side idempotency check.
-      let populated = true;
+      // 1 — idempotency. Originally a server-side cache check against
+      // /api/workspace/auto-populate, but that endpoint never shipped:
+      // every fetch 404'd, the default `populated = true` short-
+      // circuited, and seeding silently never ran. New workspace
+      // canvases stayed blank.
+      //
+      // The fix is two-layered:
+      //   • Client-side: if ANY workspace-room shape already exists on
+      //     the canvas, this workspace has been seeded once before, so
+      //     skip. This is the durable signal — the shapes are part of
+      //     the tldraw document, persisted via the canvas autosave, so
+      //     they survive remounts.
+      //   • Server-side (forward-compat): we STILL try the GET, and
+      //     respect a `populated: true` response if the endpoint is
+      //     created later. The default flips from `true` to `false`
+      //     so a 404 (or any non-ok response) falls through to seeding
+      //     instead of skipping it.
+      const existingWorkspaceRooms = editor
+        .getCurrentPageShapes()
+        .some((s) => s.type === "workspace-room");
+      if (existingWorkspaceRooms) return;
+
+      let populated = false;
       try {
         const res = await fetch(
           `/api/workspace/auto-populate?spaceId=${encodeURIComponent(spaceId)}`,
@@ -88,9 +109,10 @@ export function CanvasWorkspaceAutoPopulate({ spaceId }: { spaceId: string }) {
           const json = (await res.json()) as { populated: boolean };
           populated = json.populated;
         }
+        // Non-ok (incl. 404) → leave populated=false → proceed to seed.
       } catch {
-        // Network blip — bail rather than risk double-seeding later.
-        return;
+        // Network blip — leave populated=false; the client-side
+        // shape-existence guard above is the safety net.
       }
       if (cancelled || populated) return;
 
