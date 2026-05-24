@@ -1,843 +1,729 @@
 "use client";
 
-// Insights panel — right column. Renders the live synthesis_data
-// (master bottleneck, leverage points, axioms, hidden signals,
-// convergences, open questions, action plan) plus the guardrail
-// question queue. Sections collapse cleanly when empty so the panel
-// stays light during early raw-signal phase.
+// Right panel — Final Artifacts (Phase 3).
+//
+// Per the locked design vote, the right panel surfaces the PROCESSED
+// OUTPUTS of the pipeline:
+//
+//   • Strategy options (primary + ranked alternatives)
+//   • Lab proposals (twin_proposals kind=lab_twin)
+//   • Twin proposals (problem framing + strategy twins)
+//   • Variations (experiment_variants by app)
+//   • Apps + their interventions
+//   • Lab scaffolds (materialized labs)
+//   • Screens (placeholder — Phase 4)
+//
+// Synthesis-style insights (bottleneck / leverage / axioms / hidden
+// signals) live in the MIDDLE panel only now (Insights mode + Claims
+// mode). The right panel is for "what should I DO with this insight"
+// — strategies, experiments, prototypes.
+//
+// Data: polls /api/spaces/[id]/final-artifacts every 12s + on
+// router.refresh from the live-synthesis hook. One round-trip per
+// poll instead of 5 separate fetches.
+//
+// The file name stays `insights-panel.tsx` (and the export stays
+// `InsightsPanel`) so triple-lab.tsx doesn't need to change. Future
+// rename can happen as a follow-up.
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Entity } from "@/types";
 import type { SynthesisData } from "@/types/synthesis";
+import type {
+  FinalArtifactsResponse,
+  FinalArtifactStrategyOption,
+  FinalArtifactTwinProposal,
+  FinalArtifactVariant,
+  FinalArtifactApp,
+  FinalArtifactIntervention,
+  FinalArtifactLabScaffold,
+} from "@/app/api/spaces/[id]/final-artifacts/route";
 import { GuardrailQuestionQueue } from "./guardrail-question-queue";
+import { colors, backgrounds, tracking } from "./tokens";
 
 interface InsightsPanelProps {
   spaceId: string;
+  // synthesisData is still passed in case Phase 3-extended wants to
+  // show a small "synthesis last ran 3m ago" stamp. Not used in this
+  // build but kept on the prop contract so triple-lab.tsx is stable.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   synthesisData: SynthesisData | null;
+  // Entities kept for potential future cross-referencing. Not used
+  // in this build.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   entities: Entity[];
   selectedEntityId: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onSelectEntity: (id: string | null) => void;
 }
 
+const POLL_INTERVAL_MS = 12_000;
+
 export function InsightsPanel({
   spaceId,
-  synthesisData,
-  entities,
-  selectedEntityId,
-  onSelectEntity,
 }: InsightsPanelProps) {
-  const entitiesById = useMemo(() => {
-    const m = new Map<string, Entity>();
-    for (const e of entities) m.set(e.id, e);
-    return m;
-  }, [entities]);
+  const [data, setData] = useState<FinalArtifactsResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Headline counts at the top so the user can scan freshness at a
-  // glance without scrolling. Only count sections that have data.
-  const headline = useMemo(() => {
-    if (!synthesisData) return null;
-    return {
-      leverage: synthesisData.leverage_points?.length ?? 0,
-      risks: synthesisData.risk_points?.length ?? 0,
-      axioms: (synthesisData.axioms?.length ?? 0),
-      hiddenAxioms:
-        synthesisData.axioms?.filter((a) => a.visibility === "HIDDEN").length ?? 0,
-      signals: synthesisData.signal_extraction?.structural_holes?.length ?? 0,
-      convergences: synthesisData.insight_convergences?.length ?? 0,
-      openQ: synthesisData.open_questions?.length ?? 0,
-    };
-  }, [synthesisData]);
+  const fetchArtifacts = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/spaces/${spaceId}/final-artifacts`, {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        setError(`HTTP ${res.status}`);
+        return;
+      }
+      const body = (await res.json()) as FinalArtifactsResponse;
+      setData(body);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setLoading(false);
+    }
+  }, [spaceId]);
+
+  // Initial fetch + 12s polling. Polling stops when the panel
+  // unmounts. We don't pause when nothing is running because the user
+  // may navigate here right as a chain completes — over-fetching by
+  // 1-2 cycles is cheap insurance.
+  useEffect(() => {
+    void fetchArtifacts();
+    const interval = window.setInterval(() => {
+      void fetchArtifacts();
+    }, POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [fetchArtifacts]);
 
   return (
     <div
       className="flex h-full flex-col"
-      style={{
-        background:
-          "linear-gradient(180deg, #FBFCFE 0%, #F4F6FB 100%)",
-      }}
+      style={{ background: backgrounds.insightsPanel }}
     >
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div
         className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200/60 px-5 py-4"
-        style={{ background: "rgba(255, 255, 255, 0.65)" }}
+        style={{ background: colors.neutral.panelBgFlat }}
       >
         <div>
-          <div className="text-[9px] font-bold uppercase tracking-[0.22em] text-slate-500">
-            ✦ Insights
+          <div
+            className="text-[9px] font-bold uppercase text-slate-500"
+            style={{ letterSpacing: tracking.eyebrow }}
+          >
+            ◆ Final artifacts
           </div>
           <div className="mt-0.5 text-sm font-semibold text-slate-900">
-            {synthesisData ? "Live" : "Awaiting synthesis"}
+            {loading && !data
+              ? "Loading…"
+              : data
+              ? data.counts.total > 0
+                ? `${data.counts.total} artifact${data.counts.total === 1 ? "" : "s"}`
+                : "Awaiting pipeline output"
+              : error
+              ? "Service unavailable"
+              : "—"}
           </div>
         </div>
-        {headline && (
-          <div className="flex items-center gap-1.5">
-            {headline.leverage > 0 && (
-              <CountChip n={headline.leverage} label="lev" color="#F59E0B" />
-            )}
-            {headline.risks > 0 && (
-              <CountChip n={headline.risks} label="risk" color="#EF4444" />
-            )}
-            {headline.axioms > 0 && (
-              <CountChip
-                n={headline.axioms}
-                label={headline.hiddenAxioms > 0 ? `ax · ${headline.hiddenAxioms}h` : "ax"}
-                color="#4F46E5"
-              />
-            )}
-          </div>
+        {data && data.last_synthesis_at && (
+          <FreshnessChip generatedAt={data.last_synthesis_at} />
         )}
       </div>
 
       {/* ── Scrollable body ────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto px-5 py-4">
-        {!synthesisData ? (
-          <InsightsEmptyState />
+        {error && !data ? (
+          <ErrorState message={error} onRetry={fetchArtifacts} />
+        ) : !data || data.counts.total === 0 ? (
+          <EmptyState />
         ) : (
           <div className="flex flex-col gap-4">
-            {/* Top-ranked insights — combines bottleneck + top leverage
-             *  points + critical risks + HIDDEN axioms into one ordered
-             *  list. Bottleneck always #1 (highest counterfactual
-             *  unlock); rest are ordered by their priority in
-             *  synthesis_data (which the LLM already ranked). */}
-            <TopRankedSection
-              synthesisData={synthesisData}
-              entitiesById={entitiesById}
-              selectedEntityId={selectedEntityId}
-              onSelectEntity={onSelectEntity}
+            <StrategyOptionsSection options={data.strategy_options} />
+            <LabProposalsSection spaceId={spaceId} proposals={data.lab_proposals} />
+            <TwinProposalsSection spaceId={spaceId} proposals={data.twin_proposals} />
+            <VariationsSection variations={data.variations} apps={data.apps} />
+            <AppsSection
+              spaceId={spaceId}
+              apps={data.apps}
+              interventions={data.interventions}
             />
-            <BottleneckSection
-              bottleneck={synthesisData.master_bottleneck ?? null}
-              entitiesById={entitiesById}
-              selectedEntityId={selectedEntityId}
-              onSelectEntity={onSelectEntity}
-            />
-            <LeverageSection
-              leverage={synthesisData.leverage_points ?? []}
-              entitiesById={entitiesById}
-              selectedEntityId={selectedEntityId}
-              onSelectEntity={onSelectEntity}
-            />
-            <RiskSection
-              risks={synthesisData.risk_points ?? []}
-              entitiesById={entitiesById}
-              selectedEntityId={selectedEntityId}
-              onSelectEntity={onSelectEntity}
-            />
-            <AxiomsSection axioms={synthesisData.axioms ?? []} />
-            <HiddenSignalsSection
-              signals={synthesisData.signal_extraction ?? null}
-            />
-            <ConvergencesSection
-              convergences={synthesisData.insight_convergences ?? []}
-              entitiesById={entitiesById}
-            />
-            <OpenQuestionsSection
-              questions={synthesisData.open_questions ?? []}
-            />
+            <LabScaffoldsSection scaffolds={data.lab_scaffolds} />
+            <ScreensPlaceholderSection />
           </div>
         )}
       </div>
 
-      {/* ── Guardrail queue (Phase 3) ──────────────────────────────── */}
+      {/* ── Guardrail queue (unchanged) ───────────────────────────── */}
       <GuardrailQuestionQueue spaceId={spaceId} />
     </div>
   );
 }
 
-// ── Empty state ──────────────────────────────────────────────────────
-function InsightsEmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center py-12 text-center">
-      <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-400">
-        No synthesis yet
-      </div>
-      <div className="mt-2 max-w-[240px] text-xs leading-relaxed text-slate-500">
-        Drop signal in the left panel. When the chain runs, leverage
-        points, hidden signals, and the master bottleneck will surface
-        here.
-      </div>
-    </div>
-  );
-}
-
-// ── Headline count chip ──────────────────────────────────────────────
-function CountChip({ n, label, color }: { n: number; label: string; color: string }) {
+// ── Header freshness chip ───────────────────────────────────────────
+function FreshnessChip({ generatedAt }: { generatedAt: string }) {
+  // "Now" is captured once at mount (useState initializer) + ticks
+  // every 30s so the chip updates without putting Date.now() in the
+  // render hot path (which the react-hooks/purity rule disallows).
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
+  const ms = nowMs - new Date(generatedAt).getTime();
+  const label =
+    ms < 60_000
+      ? `synth ${Math.max(0, Math.floor(ms / 1000))}s ago`
+      : ms < 3_600_000
+      ? `synth ${Math.floor(ms / 60_000)}m ago`
+      : ms < 86_400_000
+      ? `synth ${Math.floor(ms / 3_600_000)}h ago`
+      : `synth ${Math.floor(ms / 86_400_000)}d ago`;
   return (
     <div
-      className="rounded-full px-2 py-0.5 text-[10px] font-bold"
+      className="rounded-full px-2 py-0.5 text-[9.5px] font-medium"
       style={{
-        background: `${color}1A`,
-        color,
+        background: colors.brand.bgSoft,
+        color: colors.brand.fgDark,
       }}
     >
-      {n}
-      <span className="ml-1 text-[9px] font-medium opacity-80">{label}</span>
+      {label}
     </div>
   );
 }
 
-// ── Top-ranked insights section ──────────────────────────────────────
-// The first thing the user sees in the right panel. Combines the
-// highest-priority insight from each category into a single ranked
-// list:
-//
-//   #1  Master bottleneck   (always — highest counterfactual unlock)
-//   #2-4 Top leverage points (synthesis returns them prio-ordered)
-//   #5  HIDDEN axiom (most underrated finding — the unstated assumption)
-//
-// Each row shows: rank · entity · 1-line summary · impact chip.
-// Clicking a row selects the matching entity in the middle KG panel
-// (haloed + pan/zoom on graph mode, anchored in feed mode).
-function TopRankedSection({
-  synthesisData,
-  entitiesById,
-  selectedEntityId,
-  onSelectEntity,
-}: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  synthesisData: any;
-  entitiesById: Map<string, Entity>;
-  selectedEntityId: string | null;
-  onSelectEntity: (id: string | null) => void;
-}) {
-  // Build the ranked list. Each entry knows its source category so
-  // the visual tag + accent color can be derived without a switch
-  // at render time.
-  type RankEntry = {
-    rank: number;
-    kind: "bottleneck" | "leverage" | "risk" | "hidden_axiom" | "convergence";
-    entityId: string | null;
-    title: string;
-    summary: string | null;
-    impactNote: string | null;
-  };
-
-  const entries: RankEntry[] = [];
-
-  // #1: Bottleneck
-  if (synthesisData?.master_bottleneck) {
-    const b = synthesisData.master_bottleneck;
-    const e = b.entity_id ? entitiesById.get(b.entity_id) ?? null : null;
-    entries.push({
-      rank: entries.length + 1,
-      kind: "bottleneck",
-      entityId: b.entity_id ?? null,
-      title: e?.name ?? "Master bottleneck",
-      summary:
-        typeof b.summary === "string"
-          ? b.summary
-          : typeof b.counterfactual_unlock === "string"
-          ? `Unlocks: ${b.counterfactual_unlock}`
-          : null,
-      impactNote:
-        typeof b.blast_radius === "number"
-          ? `blast ${b.blast_radius}`
-          : "biggest single unlock",
-    });
-  }
-
-  // #2-#4: Top 3 leverage points (synthesis returns them prio-ordered)
-  const lev = Array.isArray(synthesisData?.leverage_points)
-    ? synthesisData.leverage_points
-    : [];
-  for (let i = 0; i < Math.min(3, lev.length); i++) {
-    const l = lev[i];
-    const e = l.entity_id ? entitiesById.get(l.entity_id) ?? null : null;
-    entries.push({
-      rank: entries.length + 1,
-      kind: "leverage",
-      entityId: l.entity_id ?? null,
-      title: e?.name ?? l.entity_name ?? `Leverage #${i + 1}`,
-      summary: typeof l.summary === "string" ? l.summary : null,
-      impactNote:
-        l.mechanism_grounding?.evidence_strength
-          ? l.mechanism_grounding.evidence_strength
-          : null,
-    });
-  }
-
-  // #5: Critical risk (top-of-list if any are flagged severe)
-  const risks = Array.isArray(synthesisData?.risk_points)
-    ? synthesisData.risk_points
-    : [];
-  if (risks.length > 0 && entries.length < 6) {
-    const r = risks[0];
-    const e = r.entity_id ? entitiesById.get(r.entity_id) ?? null : null;
-    entries.push({
-      rank: entries.length + 1,
-      kind: "risk",
-      entityId: r.entity_id ?? null,
-      title: e?.name ?? r.entity_name ?? "Top risk",
-      summary: typeof r.summary === "string" ? r.summary : null,
-      impactNote:
-        typeof r.blast_radius === "number" ? `blast ${r.blast_radius}` : null,
-    });
-  }
-
-  // Hidden axiom (the most-underrated finding — surface explicitly)
-  const axioms = Array.isArray(synthesisData?.axioms)
-    ? synthesisData.axioms
-    : [];
-  const hiddenAx = axioms.find(
-    (a: { visibility?: string }) => a.visibility === "HIDDEN",
+// ── Empty + error states ─────────────────────────────────────────────
+function EmptyState() {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 text-center">
+      <div
+        className="mb-3 flex h-10 w-10 items-center justify-center rounded-full"
+        style={{ background: colors.brand.bgSoft }}
+      >
+        <span style={{ color: colors.brand.fg, fontSize: 16 }}>◆</span>
+      </div>
+      <div className="text-sm font-semibold text-slate-700">
+        Artifacts will appear here
+      </div>
+      <div className="mt-1 max-w-[260px] text-xs leading-relaxed text-slate-500">
+        Once the pipeline runs synthesize → strategy → apps → labs,
+        every output lands here as a clickable artifact.
+      </div>
+    </div>
   );
-  if (hiddenAx && entries.length < 6) {
-    entries.push({
-      rank: entries.length + 1,
-      kind: "hidden_axiom",
-      entityId: null,
-      title:
-        typeof hiddenAx.claim === "string"
-          ? hiddenAx.claim
-          : "Hidden axiom",
-      summary:
-        typeof hiddenAx.if_false === "string"
-          ? `If false: ${hiddenAx.if_false}`
-          : null,
-      impactNote: hiddenAx.load_bearing ?? null,
-    });
-  }
+}
 
-  if (entries.length === 0) return null;
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 text-center">
+      <div
+        className="mb-2 text-sm font-semibold"
+        style={{ color: colors.state.bottleneckFg }}
+      >
+        Couldn&apos;t load artifacts
+      </div>
+      <div className="mb-3 text-xs text-slate-500">{message}</div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="rounded-md px-3 py-1.5 text-[11px] font-bold text-white"
+        style={{ background: colors.brand.gradient }}
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
 
+// ── Generic section wrapper ─────────────────────────────────────────
+function ArtifactSection({
+  title,
+  count,
+  glyph,
+  tone,
+  emptyHint,
+  children,
+}: {
+  title: string;
+  count: number;
+  glyph: string;
+  tone: { accent: string; bg: string; fg: string };
+  emptyHint?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState<boolean>(count > 0);
   return (
     <div
       className="overflow-hidden rounded-xl border bg-white"
-      style={{
-        borderColor: "rgba(79, 70, 229, 0.18)",
-        boxShadow: "0 8px 22px rgba(79, 70, 229, 0.10)",
-      }}
+      style={{ borderColor: colors.neutral.borderFaint }}
     >
-      {/* Header */}
-      <div
-        className="flex items-center justify-between px-3 py-2"
-        style={{
-          background:
-            "linear-gradient(90deg, rgba(79, 70, 229, 0.06) 0%, rgba(79, 70, 229, 0.02) 100%)",
-        }}
-      >
-        <div className="flex items-center gap-1.5">
-          <span
-            className="text-[8.5px] font-bold uppercase tracking-[0.22em]"
-            style={{ color: "#4F46E5" }}
-          >
-            ★ Top ranked
-          </span>
-          <span className="text-[9px] text-slate-500">
-            · by impact
-          </span>
-        </div>
-        <span className="text-[9px] font-mono text-slate-400">
-          {entries.length}
-        </span>
-      </div>
-
-      {/* Ranked rows */}
-      <div className="flex flex-col">
-        {entries.map((entry) => (
-          <RankRow
-            key={`rank-${entry.rank}`}
-            entry={entry}
-            selected={
-              entry.entityId !== null && entry.entityId === selectedEntityId
-            }
-            onClick={() => {
-              if (entry.entityId) {
-                onSelectEntity(
-                  selectedEntityId === entry.entityId ? null : entry.entityId,
-                );
-              }
-            }}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Per-row palette — accent color + kind label by kind.
-function rankTone(kind: string): {
-  accent: string;
-  bg: string;
-  fg: string;
-  label: string;
-} {
-  switch (kind) {
-    case "bottleneck":
-      return {
-        accent: "#DC2626",
-        bg: "rgba(220, 38, 38, 0.08)",
-        fg: "#991B1B",
-        label: "BOTTLENECK",
-      };
-    case "leverage":
-      return {
-        accent: "#F59E0B",
-        bg: "rgba(245, 158, 11, 0.10)",
-        fg: "#92400E",
-        label: "LEVERAGE",
-      };
-    case "risk":
-      return {
-        accent: "#EF4444",
-        bg: "rgba(239, 68, 68, 0.08)",
-        fg: "#991B1B",
-        label: "RISK",
-      };
-    case "hidden_axiom":
-      return {
-        accent: "#4F46E5",
-        bg: "rgba(79, 70, 229, 0.10)",
-        fg: "#4338CA",
-        label: "HIDDEN AX",
-      };
-    case "convergence":
-      return {
-        accent: "#10B981",
-        bg: "rgba(16, 185, 129, 0.10)",
-        fg: "#0F766E",
-        label: "CONVERGE",
-      };
-    default:
-      return {
-        accent: "#64748B",
-        bg: "rgba(15, 23, 42, 0.04)",
-        fg: "#334155",
-        label: "INSIGHT",
-      };
-  }
-}
-
-function RankRow({
-  entry,
-  selected,
-  onClick,
-}: {
-  entry: {
-    rank: number;
-    kind: string;
-    title: string;
-    summary: string | null;
-    impactNote: string | null;
-  };
-  selected: boolean;
-  onClick: () => void;
-}) {
-  const tone = rankTone(entry.kind);
-  return (
-    <div
-      onClick={onClick}
-      className="flex cursor-pointer items-start gap-2.5 border-t border-slate-100 px-3 py-2 transition-colors hover:bg-slate-50"
-      style={{
-        background: selected ? tone.bg : "transparent",
-      }}
-    >
-      {/* Rank chip */}
-      <div
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
-        style={{
-          background: tone.bg,
-          color: tone.accent,
-        }}
-      >
-        {entry.rank}
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span
-            className="rounded px-1 text-[8px] font-bold uppercase tracking-wider"
-            style={{ background: tone.bg, color: tone.fg }}
-          >
-            {tone.label}
-          </span>
-          {entry.impactNote && (
-            <span className="text-[8.5px] uppercase tracking-wider text-slate-400">
-              {entry.impactNote}
-            </span>
-          )}
-        </div>
-
-        <div className="mt-0.5 text-[12px] font-semibold leading-snug text-slate-900">
-          {entry.title}
-        </div>
-
-        {entry.summary && (
-          <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
-            {entry.summary}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Section wrapper ──────────────────────────────────────────────────
-function Section({
-  title,
-  count,
-  children,
-  defaultOpen = true,
-}: {
-  title: string;
-  count?: number | string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="overflow-hidden rounded-xl border border-slate-200/70 bg-white/80">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left transition-colors hover:bg-slate-50"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-3 py-2 transition-colors hover:bg-slate-50"
+        style={{ background: tone.bg }}
       >
-        <div className="flex items-center gap-2">
-          <div
-            className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-700"
+        <div className="flex items-center gap-1.5">
+          <span
+            className="font-mono text-[11px] font-bold"
+            style={{ color: tone.accent }}
+          >
+            {glyph}
+          </span>
+          <span
+            className="text-[9px] font-bold uppercase"
+            style={{ color: tone.fg, letterSpacing: tracking.eyebrow }}
           >
             {title}
-          </div>
-          {count !== undefined && count !== null && count !== "" && (
-            <div className="rounded-full bg-slate-100 px-1.5 text-[9px] font-bold text-slate-600">
-              {count}
-            </div>
-          )}
+          </span>
         </div>
-        <span className="text-[10px] text-slate-400">{open ? "▾" : "▸"}</span>
+        <div className="flex items-center gap-1.5">
+          <span
+            className="font-mono text-[10px] font-bold"
+            style={{ color: tone.fg }}
+          >
+            {count}
+          </span>
+          <span className="text-[10px] text-slate-400">{open ? "▾" : "▸"}</span>
+        </div>
       </button>
-      {open && <div className="px-3 pb-3">{children}</div>}
+      {open &&
+        (count === 0 && emptyHint ? (
+          <div className="px-3 py-2.5 text-[10.5px] italic text-slate-500">
+            {emptyHint}
+          </div>
+        ) : (
+          <div className="px-3 py-2.5">{children}</div>
+        ))}
     </div>
   );
 }
 
-// ── Bottleneck section ───────────────────────────────────────────────
-function BottleneckSection({
-  bottleneck,
-  entitiesById,
-  selectedEntityId,
-  onSelectEntity,
+// ── Strategy Options ────────────────────────────────────────────────
+function StrategyOptionsSection({
+  options,
 }: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  bottleneck: any | null;
-  entitiesById: Map<string, Entity>;
-  selectedEntityId: string | null;
-  onSelectEntity: (id: string | null) => void;
+  options: FinalArtifactStrategyOption[];
 }) {
-  if (!bottleneck) return null;
-  const entity = bottleneck.entity_id
-    ? entitiesById.get(bottleneck.entity_id)
-    : null;
-  const selected = bottleneck.entity_id === selectedEntityId;
   return (
-    <Section title="Master bottleneck">
-      <div
-        className="cursor-pointer rounded-lg p-2 transition-colors hover:bg-slate-50"
-        onClick={() =>
-          bottleneck.entity_id &&
-          onSelectEntity(selected ? null : bottleneck.entity_id)
-        }
-        style={{
-          background: selected ? "rgba(220, 38, 38, 0.06)" : "transparent",
-        }}
-      >
-        {entity && (
-          <div className="text-[12px] font-bold text-slate-900">
-            {entity.name}
-          </div>
-        )}
-        {bottleneck.summary && (
-          <div className="mt-1 text-[11px] leading-relaxed text-slate-700">
-            {bottleneck.summary}
-          </div>
-        )}
-        {bottleneck.counterfactual_unlock && (
-          <div
-            className="mt-2 rounded-md px-2 py-1.5 text-[10.5px] leading-relaxed"
-            style={{
-              background: "rgba(220, 38, 38, 0.07)",
-              color: "rgb(127, 29, 29)",
-            }}
-          >
-            <span className="font-semibold">Unlock: </span>
-            {bottleneck.counterfactual_unlock}
-          </div>
-        )}
-      </div>
-    </Section>
-  );
-}
-
-// ── Leverage section ─────────────────────────────────────────────────
-function LeverageSection({
-  leverage,
-  entitiesById,
-  selectedEntityId,
-  onSelectEntity,
-}: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  leverage: any[];
-  entitiesById: Map<string, Entity>;
-  selectedEntityId: string | null;
-  onSelectEntity: (id: string | null) => void;
-}) {
-  if (leverage.length === 0) return null;
-  return (
-    <Section title="Leverage points" count={leverage.length}>
-      <div className="flex flex-col gap-1.5">
-        {leverage.slice(0, 6).map((lev, idx) => {
-          const ent = lev.entity_id ? entitiesById.get(lev.entity_id) : null;
-          const selected = lev.entity_id === selectedEntityId;
-          return (
-            <div
-              key={`lev-${idx}`}
-              onClick={() =>
-                lev.entity_id &&
-                onSelectEntity(selected ? null : lev.entity_id)
-              }
-              className="cursor-pointer rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50"
-              style={{
-                background: selected ? "rgba(245, 158, 11, 0.08)" : "transparent",
-              }}
-            >
-              <div className="text-[11.5px] font-semibold text-slate-900">
-                {ent?.name ?? lev.entity_name ?? "Leverage point"}
-              </div>
-              {lev.summary && (
-                <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
-                  {lev.summary}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </Section>
-  );
-}
-
-// ── Risk section ─────────────────────────────────────────────────────
-function RiskSection({
-  risks,
-  entitiesById,
-  selectedEntityId,
-  onSelectEntity,
-}: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  risks: any[];
-  entitiesById: Map<string, Entity>;
-  selectedEntityId: string | null;
-  onSelectEntity: (id: string | null) => void;
-}) {
-  if (risks.length === 0) return null;
-  return (
-    <Section title="Risk points" count={risks.length} defaultOpen={false}>
-      <div className="flex flex-col gap-1.5">
-        {risks.slice(0, 6).map((r, idx) => {
-          const ent = r.entity_id ? entitiesById.get(r.entity_id) : null;
-          const selected = r.entity_id === selectedEntityId;
-          return (
-            <div
-              key={`risk-${idx}`}
-              onClick={() =>
-                r.entity_id && onSelectEntity(selected ? null : r.entity_id)
-              }
-              className="cursor-pointer rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50"
-              style={{
-                background: selected ? "rgba(239, 68, 68, 0.08)" : "transparent",
-              }}
-            >
-              <div className="text-[11.5px] font-semibold text-slate-900">
-                {ent?.name ?? r.entity_name ?? "Risk"}
-              </div>
-              {r.summary && (
-                <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
-                  {r.summary}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </Section>
-  );
-}
-
-// ── Axioms section ───────────────────────────────────────────────────
-function AxiomsSection({
-  axioms,
-}: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  axioms: any[];
-}) {
-  if (axioms.length === 0) return null;
-  const hiddenCount = axioms.filter((a) => a.visibility === "HIDDEN").length;
-  return (
-    <Section
-      title="Axioms"
-      count={hiddenCount > 0 ? `${axioms.length} · ${hiddenCount} hidden` : axioms.length}
+    <ArtifactSection
+      title="Strategy options"
+      glyph="◆"
+      tone={{
+        accent: "#7C3AED",
+        bg: "rgba(124, 58, 237, 0.10)",
+        fg: "#6D28D9",
+      }}
+      count={options.length}
+      emptyHint="No ranked strategies yet — synthesize + strategy-refresh haven't completed."
     >
       <div className="flex flex-col gap-1.5">
-        {axioms.map((a, idx) => (
+        {options.slice(0, 5).map((opt) => (
           <div
-            key={`ax-${idx}`}
+            key={`strat-${opt.rank}`}
             className="rounded-md px-2 py-1.5"
             style={{
-              background:
-                a.visibility === "HIDDEN"
-                  ? "rgba(79, 70, 229, 0.06)"
-                  : "transparent",
+              background: opt.is_primary
+                ? "rgba(124, 58, 237, 0.06)"
+                : "transparent",
+              border: opt.is_primary
+                ? "1px solid rgba(124, 58, 237, 0.18)"
+                : "1px solid transparent",
             }}
           >
-            <div className="mb-0.5 flex items-center gap-1.5">
-              <span
-                className="text-[8.5px] font-bold uppercase tracking-wider"
-                style={{
-                  color:
-                    a.visibility === "HIDDEN"
-                      ? "#4F46E5"
-                      : a.visibility === "IMPLICIT"
-                      ? "#0891B2"
-                      : "#64748B",
-                }}
-              >
-                {a.visibility ?? "—"} · {a.scope ?? "node"}
-              </span>
-            </div>
-            <div className="text-[11px] font-medium leading-snug text-slate-900">
-              {a.claim ?? "—"}
-            </div>
-            {a.if_false && (
-              <div className="mt-0.5 text-[10px] italic text-slate-500">
-                If false: {a.if_false}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </Section>
-  );
-}
-
-// ── Hidden signals section ───────────────────────────────────────────
-function HiddenSignalsSection({
-  signals,
-}: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  signals: any | null;
-}) {
-  if (!signals) return null;
-  const structural = signals.structural_holes?.length ?? 0;
-  const hidden = signals.hidden_variables?.length ?? 0;
-  const cascade = signals.cascade_vulnerabilities?.length ?? 0;
-  const flip = signals.flip_prone_loops?.length ?? 0;
-  const total = structural + hidden + cascade + flip;
-  if (total === 0) return null;
-  return (
-    <Section title="Hidden signals" count={total} defaultOpen={false}>
-      <div className="grid grid-cols-2 gap-1.5">
-        {structural > 0 && <SignalChip label="Structural holes" n={structural} />}
-        {hidden > 0 && <SignalChip label="Hidden mediators" n={hidden} />}
-        {cascade > 0 && <SignalChip label="Cascade SPOFs" n={cascade} />}
-        {flip > 0 && <SignalChip label="Flip-prone loops" n={flip} />}
-      </div>
-    </Section>
-  );
-}
-
-function SignalChip({ label, n }: { label: string; n: number }) {
-  return (
-    <div
-      className="flex items-center justify-between rounded-md px-2 py-1.5"
-      style={{ background: "rgba(15, 23, 42, 0.03)" }}
-    >
-      <span className="text-[10.5px] text-slate-700">{label}</span>
-      <span className="font-mono text-[10px] font-bold text-slate-900">{n}</span>
-    </div>
-  );
-}
-
-// ── Convergences section ─────────────────────────────────────────────
-function ConvergencesSection({
-  convergences,
-  entitiesById,
-}: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  convergences: any[];
-  entitiesById: Map<string, Entity>;
-}) {
-  if (convergences.length === 0) return null;
-  return (
-    <Section title="Convergences" count={convergences.length} defaultOpen={false}>
-      <div className="flex flex-col gap-1.5">
-        {convergences.slice(0, 4).map((c, idx) => (
-          <div key={`conv-${idx}`} className="rounded-md px-2 py-1.5">
             <div className="flex items-center gap-1.5">
               <span
-                className="text-[8.5px] font-bold uppercase tracking-wider"
+                className="rounded-full px-1.5 text-[8.5px] font-bold"
                 style={{
-                  color:
-                    c.strength === "strong"
-                      ? "#10B981"
-                      : c.strength === "moderate"
-                      ? "#0891B2"
-                      : "#64748B",
+                  background: opt.is_primary ? "#7C3AED" : "rgba(124, 58, 237, 0.18)",
+                  color: opt.is_primary ? "white" : "#6D28D9",
                 }}
               >
-                {c.strength ?? "moderate"} · {c.signal_count ?? "?"} signals
+                #{opt.rank}
               </span>
-              {c.has_hidden_axiom && (
+              {opt.is_primary && (
                 <span
-                  className="rounded px-1 text-[8.5px] font-bold uppercase"
-                  style={{ background: "rgba(79, 70, 229, 0.12)", color: "#4F46E5" }}
+                  className="text-[8.5px] font-bold uppercase tracking-wider"
+                  style={{ color: "#6D28D9" }}
                 >
-                  hidden ax
+                  PRIMARY
+                </span>
+              )}
+              {opt.posture && (
+                <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
+                  · {opt.posture}
+                </span>
+              )}
+              {opt.confidence !== null && (
+                <span className="ml-auto text-[9px] font-mono text-slate-500">
+                  conf {Math.round(opt.confidence * 100)}%
                 </span>
               )}
             </div>
-            <div className="mt-0.5 text-[11px] font-semibold text-slate-900">
-              {c.concern_label ?? "Convergence"}
+            <div className="mt-0.5 text-[11.5px] font-semibold text-slate-900">
+              {opt.title}
             </div>
-            {c.shared_entity_ids && c.shared_entity_ids.length > 0 && (
-              <div className="mt-0.5 text-[10px] text-slate-500">
-                Touches:{" "}
-                {c.shared_entity_ids
-                  .slice(0, 3)
-                  .map((id: string) => entitiesById.get(id)?.name ?? id)
-                  .join(", ")}
+            {opt.summary && (
+              <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
+                {opt.summary}
               </div>
             )}
           </div>
         ))}
       </div>
-    </Section>
+    </ArtifactSection>
   );
 }
 
-// ── Open questions section ──────────────────────────────────────────
-function OpenQuestionsSection({
-  questions,
+// ── Twin Proposals (problem + strategy twins) ───────────────────────
+function TwinProposalsSection({
+  spaceId,
+  proposals,
 }: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  questions: any[];
+  spaceId: string;
+  proposals: FinalArtifactTwinProposal[];
 }) {
-  if (questions.length === 0) return null;
+  if (proposals.length === 0) return null;
   return (
-    <Section
-      title="Open questions"
-      count={questions.length}
-      defaultOpen={false}
+    <ArtifactSection
+      title="Twin proposals"
+      glyph="⊙"
+      tone={{
+        accent: colors.state.ok,
+        bg: colors.state.okSoft,
+        fg: colors.state.okFg,
+      }}
+      count={proposals.length}
     >
-      <ul className="flex list-disc flex-col gap-1 pl-4">
-        {questions.slice(0, 8).map((q, idx) => (
-          <li
-            key={`oq-${idx}`}
-            className="text-[10.5px] leading-snug text-slate-700"
-          >
-            {typeof q === "string" ? q : q.question ?? q.text ?? "—"}
-          </li>
+      <div className="flex flex-col gap-1.5">
+        {proposals.slice(0, 6).map((tp) => (
+          <ProposalRow key={tp.id} proposal={tp} spaceId={spaceId} />
         ))}
-      </ul>
-    </Section>
+      </div>
+    </ArtifactSection>
+  );
+}
+
+// ── Lab Proposals (twin_proposals kind=lab_twin) ────────────────────
+function LabProposalsSection({
+  spaceId,
+  proposals,
+}: {
+  spaceId: string;
+  proposals: FinalArtifactTwinProposal[];
+}) {
+  return (
+    <ArtifactSection
+      title="Lab proposals"
+      glyph="⚗"
+      tone={{
+        accent: "#0F766E",
+        bg: "rgba(15, 118, 110, 0.10)",
+        fg: "#0F766E",
+      }}
+      count={proposals.length}
+      emptyHint="Lab proposals appear after strategy-refresh completes."
+    >
+      <div className="flex flex-col gap-1.5">
+        {proposals.slice(0, 6).map((tp) => (
+          <ProposalRow key={tp.id} proposal={tp} spaceId={spaceId} />
+        ))}
+      </div>
+    </ArtifactSection>
+  );
+}
+
+// Shared row for twin / lab / strategy proposals
+function ProposalRow({
+  proposal,
+  spaceId,
+}: {
+  proposal: FinalArtifactTwinProposal;
+  spaceId: string;
+}) {
+  const isLab = proposal.kind === "lab_twin";
+  const targetHref = isLab
+    ? `/app/space/${spaceId}/lab/pick`
+    : `/app/space/${spaceId}/twin`;
+  const statusTone =
+    proposal.user_status === "approved"
+      ? { bg: colors.state.okSoft, color: colors.state.okFg, label: "APPROVED" }
+      : proposal.user_status === "rejected"
+      ? {
+          bg: colors.state.bottleneckSoft,
+          color: colors.state.bottleneckFg,
+          label: "REJECTED",
+        }
+      : { bg: colors.brand.bgSoft, color: colors.brand.fgDark, label: "PENDING" };
+  return (
+    <a
+      href={targetHref}
+      className="block rounded-md border bg-white px-2 py-1.5 transition-colors hover:bg-slate-50"
+      style={{ borderColor: colors.neutral.borderFaint }}
+    >
+      <div className="flex items-center gap-1.5">
+        <span
+          className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
+          style={{ background: statusTone.bg, color: statusTone.color }}
+        >
+          {statusTone.label}
+        </span>
+        <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
+          · {proposal.kind.replace("_", " ")}
+        </span>
+      </div>
+      <div className="mt-0.5 text-[11.5px] font-semibold leading-snug text-slate-900">
+        {proposal.label}
+      </div>
+      {proposal.summary && (
+        <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
+          {proposal.summary}
+        </div>
+      )}
+    </a>
+  );
+}
+
+// ── Variations ──────────────────────────────────────────────────────
+function VariationsSection({
+  variations,
+  apps,
+}: {
+  variations: FinalArtifactVariant[];
+  apps: FinalArtifactApp[];
+}) {
+  // Map app_id → app name for inline display.
+  const appNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of apps) m.set(a.id, a.name);
+    return m;
+  }, [apps]);
+  return (
+    <ArtifactSection
+      title="Variations"
+      glyph="↹"
+      tone={{
+        accent: colors.state.leverage,
+        bg: colors.state.leverageSoft,
+        fg: colors.state.leverageFgDark,
+      }}
+      count={variations.length}
+      emptyHint="Variations appear after writer-path completes (variant factory + IV scorer)."
+    >
+      <div className="flex flex-col gap-1.5">
+        {variations.slice(0, 8).map((v) => (
+          <div
+            key={v.id}
+            className="rounded-md border bg-white px-2 py-1.5"
+            style={{
+              borderColor: v.is_active
+                ? colors.state.leverage
+                : colors.neutral.borderFaint,
+              borderLeftWidth: 3,
+              borderLeftColor: v.accent_color ?? colors.state.leverage,
+            }}
+          >
+            <div className="flex items-center gap-1.5">
+              {v.is_active && (
+                <span
+                  className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
+                  style={{
+                    background: colors.state.leverageChip,
+                    color: colors.state.leverageFgDark,
+                  }}
+                >
+                  ACTIVE
+                </span>
+              )}
+              <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
+                {v.status}
+              </span>
+              {v.app_id && appNameById.has(v.app_id) && (
+                <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
+                  · {appNameById.get(v.app_id)}
+                </span>
+              )}
+              {v.aggregate_quality !== null && (
+                <span className="ml-auto text-[9px] font-mono text-slate-500">
+                  q {v.aggregate_quality.toFixed(2)}
+                </span>
+              )}
+            </div>
+            <div className="mt-0.5 text-[11.5px] font-semibold text-slate-900">
+              {v.label}
+            </div>
+            {v.summary && (
+              <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
+                {v.summary}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </ArtifactSection>
+  );
+}
+
+// ── Apps + Interventions ────────────────────────────────────────────
+function AppsSection({
+  spaceId,
+  apps,
+  interventions,
+}: {
+  spaceId: string;
+  apps: FinalArtifactApp[];
+  interventions: FinalArtifactIntervention[];
+}) {
+  // Group interventions by app for inline summary.
+  const intvByApp = useMemo(() => {
+    const m = new Map<string, FinalArtifactIntervention[]>();
+    for (const iv of interventions) {
+      if (!iv.app_id) continue;
+      const arr = m.get(iv.app_id) ?? [];
+      arr.push(iv);
+      m.set(iv.app_id, arr);
+    }
+    return m;
+  }, [interventions]);
+  return (
+    <ArtifactSection
+      title="Apps + interventions"
+      glyph="□"
+      tone={{
+        accent: colors.state.info,
+        bg: colors.state.infoChip,
+        fg: colors.state.infoFg,
+      }}
+      count={apps.length}
+      emptyHint="Apps appear after strategy-refresh + generate-apps complete."
+    >
+      <div className="flex flex-col gap-1.5">
+        {apps.slice(0, 8).map((a) => (
+          <a
+            key={a.id}
+            href={`/app/space/${spaceId}/app/${a.id}/whiteboard`}
+            className="block rounded-md border bg-white px-2 py-1.5 transition-colors hover:bg-slate-50"
+            style={{ borderColor: colors.neutral.borderFaint }}
+          >
+            <div className="flex items-center gap-1.5">
+              <span
+                className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
+                style={{
+                  background:
+                    a.status === "active"
+                      ? colors.state.okSoft
+                      : colors.neutral.chipBgStrong,
+                  color:
+                    a.status === "active"
+                      ? colors.state.okFg
+                      : colors.neutral.fg700,
+                }}
+              >
+                {a.status}
+              </span>
+              {a.app_type && (
+                <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
+                  · {a.app_type}
+                </span>
+              )}
+              <span className="ml-auto text-[9px] font-mono text-slate-500">
+                {intvByApp.get(a.id)?.length ?? a.intervention_count} iv
+              </span>
+            </div>
+            <div className="mt-0.5 text-[11.5px] font-semibold text-slate-900">
+              {a.name}
+            </div>
+            {a.description && (
+              <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
+                {a.description}
+              </div>
+            )}
+            {a.stale_reason && (
+              <div
+                className="mt-1 rounded px-1.5 py-0.5 text-[9px] font-medium"
+                style={{
+                  background: colors.state.leverageSoft,
+                  color: colors.state.leverageFgDark,
+                }}
+              >
+                stale · {a.stale_reason}
+              </div>
+            )}
+          </a>
+        ))}
+      </div>
+    </ArtifactSection>
+  );
+}
+
+// ── Lab Scaffolds ───────────────────────────────────────────────────
+function LabScaffoldsSection({
+  scaffolds,
+}: {
+  scaffolds: FinalArtifactLabScaffold[];
+}) {
+  if (scaffolds.length === 0) return null;
+  return (
+    <ArtifactSection
+      title="Lab scaffolds"
+      glyph="⚙"
+      tone={{
+        accent: "#0E7490",
+        bg: "rgba(8, 145, 178, 0.08)",
+        fg: "#0E7490",
+      }}
+      count={scaffolds.length}
+    >
+      <div className="flex flex-col gap-1.5">
+        {scaffolds.slice(0, 6).map((ls) => (
+          <div
+            key={ls.id}
+            className="rounded-md border bg-white px-2 py-1.5"
+            style={{ borderColor: colors.neutral.borderFaint }}
+          >
+            <div className="flex items-center gap-1.5">
+              <span
+                className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
+                style={{
+                  background: colors.state.infoChip,
+                  color: colors.state.infoFg,
+                }}
+              >
+                {ls.status}
+              </span>
+              <span className="text-[9px] font-mono text-slate-500">
+                {ls.subject_count} subjects
+              </span>
+              {ls.approved_at && (
+                <span className="ml-auto text-[9px] font-mono text-slate-500">
+                  approved
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </ArtifactSection>
+  );
+}
+
+// ── Screens (placeholder for Phase 4) ───────────────────────────────
+// Future: generated prototype images from /api/canvas/generate-screen.
+// For now, a one-row placeholder that hints at what's coming.
+function ScreensPlaceholderSection() {
+  return (
+    <ArtifactSection
+      title="Screens"
+      glyph="▦"
+      tone={{
+        accent: colors.brand.fg,
+        bg: colors.brand.bgSoft,
+        fg: colors.brand.fgDark,
+      }}
+      count={0}
+      emptyHint="Phase 4 — generated prototype images for each variation will land here. Auto-recommendation picks app / website / twin per use case."
+    >
+      {null}
+    </ArtifactSection>
   );
 }
