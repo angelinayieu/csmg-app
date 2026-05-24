@@ -340,7 +340,10 @@ export function TripleLab({ spaceId }: TripleLabProps) {
          * lands, revealing the panels underneath.
          */}
         {isFullyEmpty && (
-          <UnifiedEmptyState onFilesDropped={onEmptyStateFiles} />
+          <UnifiedEmptyState
+            spaceId={spaceId}
+            onFilesDropped={onEmptyStateFiles}
+          />
         )}
       </div>
 
