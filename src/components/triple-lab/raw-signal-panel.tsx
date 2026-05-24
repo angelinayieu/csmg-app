@@ -75,6 +75,11 @@ interface RawSignalPanelProps {
    *  drops that originated here. Without it the parse-wait would be
    *  silent for 30-90s. */
   onUploadProgress?: (progress: UploadProgress) => void;
+  /** When true, this panel does NOT bind its own drag/drop handlers.
+   *  Used when the panel is nested inside LibraryDrawer (Phase 6b) so
+   *  the outer LEFT-column wrapper owns the single drop zone. Default
+   *  false preserves the original standalone behavior. */
+  disableDropZone?: boolean;
 }
 
 export function RawSignalPanel({
@@ -87,6 +92,7 @@ export function RawSignalPanel({
   onSelectEntity,
   onAssetReady,
   onUploadProgress,
+  disableDropZone = false,
 }: RawSignalPanelProps) {
   const router = useRouter();
   const rawEntities = useMemo(() => entities.filter(isRawSignal), [entities]);
@@ -135,10 +141,10 @@ export function RawSignalPanel({
   return (
     <div
       className="flex h-full flex-col"
-      onDragEnter={onDragEnter}
-      onDragLeave={onDragLeave}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
+      onDragEnter={disableDropZone ? undefined : onDragEnter}
+      onDragLeave={disableDropZone ? undefined : onDragLeave}
+      onDragOver={disableDropZone ? undefined : onDragOver}
+      onDrop={disableDropZone ? undefined : onDrop}
     >
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div

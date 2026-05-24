@@ -12,16 +12,20 @@ import { useExtractionReview } from "@/components/canvas/hooks/use-extraction-re
 import { ExtractionChecklistDrawer } from "@/components/canvas/chrome/extraction-checklist-drawer";
 import { useRouter } from "next/navigation";
 import type { SynthesisData } from "@/types/synthesis";
-import { RawSignalPanel } from "./raw-signal-panel";
+import type { Entity, Edge } from "@/types";
+import type { LabRoomRow } from "@/app/api/spaces/[id]/lab-rooms/route";
+import { ReasoningWhiteboard } from "./reasoning-whiteboard";
+import { LibraryDrawer } from "./library-drawer";
 import { KgPanel } from "./kg-panel";
 import { InsightsPanel } from "./insights-panel";
 import { UnifiedEmptyState } from "./unified-empty-state";
 import { processFileDrops, type UploadProgress } from "./upload-flow";
 import { CardActionHost } from "./card-action-host";
 import { UploadProgressToast } from "./upload-progress-toast";
-import { backgrounds, colors } from "./tokens";
+import { backgrounds, colors, tracking } from "./tokens";
 import { LiveSynthesisRefresh } from "./use-live-synthesis-refresh";
 import { PipelineProgressStrip } from "./pipeline-progress-strip";
+import { PipelineErrorBanner } from "./pipeline-error-banner";
 import { useLabRooms } from "./rooms/use-lab-rooms";
 import { UserRoomsStack } from "./rooms/user-rooms-stack";
 
@@ -400,6 +404,12 @@ export function TripleLab({ spaceId }: TripleLabProps) {
         {/* Top: real pipeline progress (replaces the old fake label loop) */}
         <PipelineProgressStrip hasActiveRun={activeRunId !== null} />
 
+        {/* Pipeline error banner — surfaces fatal/warning pipeline_error
+         *  events directly under the progress strip so failures are
+         *  visible instead of silently stalling. Renders null when
+         *  no error events have arrived. */}
+        <PipelineErrorBanner />
+
         {/* Inner: the 3-column layout. flex-1 lets it consume the
          *  remaining vertical space below the strip. */}
       <div
@@ -419,7 +429,18 @@ export function TripleLab({ spaceId }: TripleLabProps) {
           onSetMode={setFocusMode}
         />
 
-        {/* ── LEFT: raw signal ─────────────────────────────────────── */}
+        {/* ── LEFT: reasoning whiteboard (Phase 6a) ────────────────────
+         *
+         * The whiteboard is now the LEFT column's primary surface —
+         * spatial mind-map of the LLM's reasoning around the idea seed.
+         * The old card list moves into a collapsible Library drawer at
+         * the bottom (Phase 6b).
+         *
+         * A column-level drop zone wraps both surfaces so the user can
+         * drop a file ANYWHERE in the left column (over the whiteboard,
+         * the library header, etc.) and it lands in the same /api/ingest
+         * pipeline. The drop overlay paints over the whole column,
+         * not just one sub-surface. */}
         <div
           className="relative h-full overflow-hidden"
           style={{
@@ -429,50 +450,28 @@ export function TripleLab({ spaceId }: TripleLabProps) {
         >
           {collapsed[0] ? (
             <CollapsedStrip
-              label="Raw signal"
+              label="Whiteboard"
               glyph="◉"
               tone="indigo"
               onExpand={() => toggleColumn(0)}
             />
           ) : (
-            <>
-              <CollapseButton
-                onClick={() => toggleColumn(0)}
-                side="right"
-              />
-              <div className="flex h-full flex-col">
-                {/* User-added rooms stack (Phase 5d) — capped at ~55%
-                 *  of column height so the default panel always has
-                 *  room to breathe. The stack itself scrolls when the
-                 *  user has many expanded rooms. */}
-                <div
-                  className="shrink-0 overflow-y-auto"
-                  style={{ maxHeight: "55%" }}
-                >
-                  <UserRoomsStack
-                    spaceId={spaceId}
-                    slot="left"
-                    rooms={labRoomsByColumn.left}
-                    onCreate={createLabRoom}
-                    onPatch={patchLabRoom}
-                    onDelete={deleteLabRoom}
-                  />
-                </div>
-                <div className="min-h-0 flex-1">
-                  <RawSignalPanel
-                    spaceId={spaceId}
-                    entities={spaceData.entities}
-                    edges={spaceData.edges}
-                    expansionMode={expansionMode}
-                    onExpansionModeChange={setExpansionMode}
-                    selectedEntityId={selectedEntityId}
-                    onSelectEntity={setSelectedEntityId}
-                    onAssetReady={openDrawer}
-                    onUploadProgress={handleProgress}
-                  />
-                </div>
-              </div>
-            </>
+            <LeftColumnSurface
+              spaceId={spaceId}
+              entities={spaceData.entities}
+              edges={spaceData.edges}
+              expansionMode={expansionMode}
+              setExpansionMode={setExpansionMode}
+              selectedEntityId={selectedEntityId}
+              setSelectedEntityId={setSelectedEntityId}
+              openDrawer={openDrawer}
+              handleProgress={handleProgress}
+              toggleColumn={toggleColumn}
+              roomsLeft={labRoomsByColumn.left}
+              createLabRoom={createLabRoom}
+              patchLabRoom={patchLabRoom}
+              deleteLabRoom={deleteLabRoom}
+            />
           )}
         </div>
 
@@ -692,6 +691,187 @@ function Divider({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }
           background: hover ? "rgba(79, 70, 229, 0.5)" : "rgba(15, 23, 42, 0.08)",
         }}
       />
+    </div>
+  );
+}
+
+// ── LeftColumnSurface (Phase 6a/6b) ──────────────────────────────────
+//
+// The LEFT column's body: a top user-rooms stack, the reasoning
+// whiteboard (primary surface), and the library drawer (collapsible).
+// A column-level drag/drop handler wraps all three so the user can
+// drop a file ANYWHERE in the column — over the whiteboard background,
+// the library header, or even the rooms strip — and the drop routes
+// through processFileDrops with the same callbacks the unified empty
+// state uses. The drop overlay paints over the whole column for
+// crisp feedback, not one sub-surface at a time.
+function LeftColumnSurface({
+  spaceId,
+  entities,
+  edges,
+  expansionMode,
+  setExpansionMode,
+  selectedEntityId,
+  setSelectedEntityId,
+  openDrawer,
+  handleProgress,
+  toggleColumn,
+  roomsLeft,
+  createLabRoom,
+  patchLabRoom,
+  deleteLabRoom,
+}: {
+  spaceId: string;
+  entities: Entity[];
+  edges: Edge[];
+  expansionMode: boolean;
+  setExpansionMode: (v: boolean) => void;
+  selectedEntityId: string | null;
+  setSelectedEntityId: (id: string | null) => void;
+  openDrawer: (
+    assetId: string,
+    assetName: string,
+    assetClass: string | null,
+  ) => Promise<void>;
+  handleProgress: (progress: UploadProgress) => void;
+  toggleColumn: (idx: 0 | 1 | 2) => void;
+  roomsLeft: LabRoomRow[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  createLabRoom: (slot: "left" | "middle" | "right", kind: string, roomConfig?: Record<string, any>) => Promise<LabRoomRow | null>;
+  patchLabRoom: (
+    roomId: string,
+    patch: {
+      collapsed?: boolean;
+      position?: number;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      room_config?: Record<string, any>;
+    },
+  ) => Promise<LabRoomRow | null>;
+  deleteLabRoom: (roomId: string) => Promise<boolean>;
+}) {
+  const router = useRouter();
+  const [dropActive, setDropActive] = useState(false);
+  const dragCount = useRef(0);
+  const onDragEnter = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    dragCount.current += 1;
+    if (dragCount.current === 1) setDropActive(true);
+  }, []);
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    dragCount.current = Math.max(0, dragCount.current - 1);
+    if (dragCount.current === 0) setDropActive(false);
+  }, []);
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+  const onDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      dragCount.current = 0;
+      setDropActive(false);
+      const files = Array.from(e.dataTransfer.files ?? []);
+      if (files.length === 0) return;
+      await processFileDrops(files, {
+        spaceId,
+        onAssetReady: openDrawer,
+        onRefresh: () => router.refresh(),
+        onProgress: handleProgress,
+      });
+    },
+    [spaceId, router, openDrawer, handleProgress],
+  );
+
+  return (
+    <div
+      className="relative flex h-full flex-col overflow-hidden"
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
+      <CollapseButton onClick={() => toggleColumn(0)} side="right" />
+
+      {/* User-added rooms stack — tightened cap from 55% → 30% so the
+       *  whiteboard has clear visual priority as the primary surface. */}
+      <div
+        className="shrink-0 overflow-y-auto"
+        style={{ maxHeight: "30%" }}
+      >
+        <UserRoomsStack
+          spaceId={spaceId}
+          slot="left"
+          rooms={roomsLeft}
+          onCreate={createLabRoom}
+          onPatch={patchLabRoom}
+          onDelete={deleteLabRoom}
+        />
+      </div>
+
+      {/* Reasoning whiteboard — flex-1 so it consumes whatever vertical
+       *  space remains after the rooms stack + library drawer. min-h-0
+       *  is the critical bit that lets flex children with overflow:hidden
+       *  actually shrink (otherwise they bottom out at intrinsic size). */}
+      <div className="relative min-h-0 flex-1">
+        <ReasoningWhiteboard
+          spaceId={spaceId}
+          entities={entities}
+          edges={edges}
+          selectedEntityId={selectedEntityId}
+          onSelectEntity={setSelectedEntityId}
+        />
+      </div>
+
+      {/* Library drawer — collapsible bottom strip. Default closed.
+       *  Holds the old card list (RawSignalPanel) so the user still has
+       *  inventory access without it dominating the column. */}
+      <LibraryDrawer
+        spaceId={spaceId}
+        entities={entities}
+        edges={edges}
+        expansionMode={expansionMode}
+        onExpansionModeChange={setExpansionMode}
+        selectedEntityId={selectedEntityId}
+        onSelectEntity={setSelectedEntityId}
+        onAssetReady={openDrawer}
+        onUploadProgress={handleProgress}
+      />
+
+      {/* Column-level drop overlay — covers the whole column so the
+       *  user gets clear feedback that the drop will land in this lab,
+       *  not just one sub-panel. */}
+      {dropActive && (
+        <div
+          className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center"
+          style={{
+            background: `radial-gradient(circle at 50% 50%, ${colors.drop.halo} 0%, ${colors.drop.bgVignetteEnd} 80%)`,
+            backdropFilter: "blur(2px)",
+          }}
+        >
+          <div
+            className="rounded-2xl border-2 border-dashed px-6 py-5 text-center"
+            style={{
+              borderColor: colors.drop.borderStrong,
+              background: "rgba(10, 14, 22, 0.7)",
+            }}
+          >
+            <div
+              className="text-[9px] font-bold uppercase"
+              style={{
+                color: colors.drop.fg,
+                letterSpacing: tracking.eyebrow,
+              }}
+            >
+              ◉ Drop to seed
+            </div>
+            <div className="mt-1 text-sm font-bold text-slate-50">
+              Add to the whiteboard
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
