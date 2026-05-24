@@ -16,8 +16,9 @@ import { RawSignalPanel } from "./raw-signal-panel";
 import { KgPanel } from "./kg-panel";
 import { InsightsPanel } from "./insights-panel";
 import { UnifiedEmptyState } from "./unified-empty-state";
-import { processFileDrops } from "./upload-flow";
+import { processFileDrops, type UploadProgress } from "./upload-flow";
 import { CardActionHost } from "./card-action-host";
+import { UploadProgressToast } from "./upload-progress-toast";
 import { backgrounds } from "./tokens";
 
 // Persist split ratios in localStorage so the user's preferred sizing
@@ -111,15 +112,35 @@ export function TripleLab({ spaceId }: TripleLabProps) {
     return !(hasLeverage || hasBottleneck || hasAxioms);
   }, [spaceData.entities.length, synthesisData]);
 
+  // ── Upload progress toast wiring ────────────────────────────────────
+  // The toast lives at page level and exposes an imperative push
+  // handle so any surface that calls processFileDrops can forward
+  // progress events into one shared stack. Stored as a ref because
+  // it changes identity only on mount/unmount of the toast — never
+  // during a drop — so the upload effects don't churn on every tick.
+  const toastHandleRef = useRef<{ push: (p: UploadProgress) => void } | null>(
+    null,
+  );
+  const handleProgress = useCallback((progress: UploadProgress) => {
+    toastHandleRef.current?.push(progress);
+  }, []);
+  const registerToastHandle = useCallback(
+    (handle: { push: (p: UploadProgress) => void }) => {
+      toastHandleRef.current = handle;
+    },
+    [],
+  );
+
   const onEmptyStateFiles = useCallback(
     async (files: File[]) => {
       await processFileDrops(files, {
         spaceId,
         onAssetReady: openDrawer,
         onRefresh: () => router.refresh(),
+        onProgress: handleProgress,
       });
     },
-    [spaceId, openDrawer, router],
+    [spaceId, openDrawer, router, handleProgress],
   );
 
   // ── Resize handlers ────────────────────────────────────────────────
@@ -257,6 +278,7 @@ export function TripleLab({ spaceId }: TripleLabProps) {
             selectedEntityId={selectedEntityId}
             onSelectEntity={setSelectedEntityId}
             onAssetReady={openDrawer}
+            onUploadProgress={handleProgress}
           />
         </div>
 
@@ -351,6 +373,18 @@ export function TripleLab({ spaceId }: TripleLabProps) {
           }}
         />
       )}
+
+      {/* ── Upload progress toast ───────────────────────────────────
+       *
+       * Bottom-left stack showing the stage of each in-flight file
+       * drop. The previous build had a silent 30-90s dead zone
+       * between drop and drawer-open (parse worker runs async); now
+       * the user sees "Uploading → Parsing → Opening review" so they
+       * know the system is working. Same stack serves both drop
+       * paths (raw-signal panel + unified empty state) via the
+       * shared handleProgress callback above.
+       */}
+      <UploadProgressToast registerHandle={registerToastHandle} />
       </CardActionHost>
     </RunEventStoreProvider>
   );

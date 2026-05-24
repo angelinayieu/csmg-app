@@ -12,7 +12,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { Entity, Edge } from "@/types";
 import { useRouter } from "next/navigation";
 import { ExpansionRecommendationStrip } from "./expansion-recommendation-strip";
-import { processFileDrops } from "./upload-flow";
+import { processFileDrops, type UploadProgress } from "./upload-flow";
 import { useCardActions } from "./card-action-host";
 import { AddRelatedStrip } from "./add-related-strip";
 import { colors, tracking } from "./tokens";
@@ -70,6 +70,11 @@ interface RawSignalPanelProps {
     assetName: string,
     assetClass: string | null,
   ) => Promise<void>;
+  /** Forwarded to processFileDrops so the page-level toast stack can
+   *  show stage updates ("Uploading → Parsing → Opening review") for
+   *  drops that originated here. Without it the parse-wait would be
+   *  silent for 30-90s. */
+  onUploadProgress?: (progress: UploadProgress) => void;
 }
 
 export function RawSignalPanel({
@@ -81,6 +86,7 @@ export function RawSignalPanel({
   selectedEntityId,
   onSelectEntity,
   onAssetReady,
+  onUploadProgress,
 }: RawSignalPanelProps) {
   const router = useRouter();
   const rawEntities = useMemo(() => entities.filter(isRawSignal), [entities]);
@@ -120,9 +126,10 @@ export function RawSignalPanel({
         spaceId,
         onAssetReady,
         onRefresh: () => router.refresh(),
+        onProgress: onUploadProgress,
       });
     },
-    [spaceId, router, onAssetReady],
+    [spaceId, router, onAssetReady, onUploadProgress],
   );
 
   return (

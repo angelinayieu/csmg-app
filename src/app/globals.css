@@ -2314,3 +2314,17 @@ body[data-canvas-strategy-expanded="true"]
   40%          { opacity: 1;    transform: scale(1); }
 }
 
+/* ── Upload-progress toast (Synthesis Lab) ─────────────────────────
+ * Indeterminate sweep bar + spinner used in the bottom-left toast
+ * stack that surfaces during the parse wait. Without these the user
+ * sat staring at a frozen empty state for 30-90s — these signal
+ * "the system is working" even when no other UI is moving.
+ */
+@keyframes upload-toast-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(380%); }
+}
+@keyframes upload-toast-spin {
+  to { transform: rotate(360deg); }
+}
+

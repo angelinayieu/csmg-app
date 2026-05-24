@@ -8,6 +8,29 @@
 // the upload finishes (for text / markdown / image — those materialize
 // inline server-side, no drawer needed).
 
+// Progress states the parent UI can render. Each callback fires once
+// per state change so consumers can drive a toast / inline strip /
+// asset card status badge without polling.
+export type UploadStage =
+  | "uploading"      // POST /api/ingest in flight
+  | "parsing"        // file uploaded, parse-worker running, polling
+  | "opening_review" // parse done, opening HITL drawer
+  | "materialized"   // non-research class (text/md/image) — inline
+  | "done"           // drawer is open (caller takes over)
+  | "error";         // upload, parse, or drawer-open failed
+
+export interface UploadProgress {
+  fileName: string;
+  // Stable per-drop id so a parent rendering N concurrent toasts can
+  // dedupe + animate each independently.
+  id: string;
+  stage: UploadStage;
+  // Set when stage === "error"; tells the user what went wrong.
+  errorMessage?: string;
+  // Set once we have the server-side asset id (post-upload).
+  assetId?: string;
+}
+
 export interface UploadFlowDeps {
   spaceId: string;
   /** Called once per parsed research-class asset so the parent can
@@ -21,6 +44,10 @@ export interface UploadFlowDeps {
   /** Called after each upload so the panel can pull fresh entities.
    *  Usually router.refresh(). */
   onRefresh: () => void;
+  /** Optional — fires on every state change so the parent can render
+   *  progress (toast, status badge, etc.). Without this the upload
+   *  is silent (legacy behavior). */
+  onProgress?: (progress: UploadProgress) => void;
 }
 
 export async function processFileDrops(
@@ -28,6 +55,18 @@ export async function processFileDrops(
   deps: UploadFlowDeps,
 ): Promise<void> {
   for (const file of files) {
+    // Stable per-drop id so the parent can key toasts/cards. Uses
+    // crypto.randomUUID when available so concurrent drops don't
+    // collide on time-based ids.
+    const dropId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `drop-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const emit = (partial: Omit<UploadProgress, "fileName" | "id">) =>
+      deps.onProgress?.({ fileName: file.name, id: dropId, ...partial });
+
+    emit({ stage: "uploading" });
+
     const formData = new FormData();
     formData.append("file", file);
     formData.append("space_id", deps.spaceId);
@@ -45,12 +84,24 @@ export async function processFileDrops(
         body: formData,
       });
       if (!res.ok) {
-        console.warn("[triple-lab/upload] ingest failed:", res.status);
+        // Try to lift a meaningful error message off the response.
+        // /api/ingest returns { error, code? } on failure paths.
+        let serverMsg = `HTTP ${res.status}`;
+        try {
+          const body = (await res.json()) as { error?: string; code?: string };
+          if (body.error) serverMsg = body.error;
+        } catch {
+          // Response wasn't JSON — keep the HTTP status fallback.
+        }
+        console.warn("[triple-lab/upload] ingest failed:", res.status, serverMsg);
+        emit({ stage: "error", errorMessage: serverMsg });
         continue;
       }
       ingestResponse = (await res.json()) as typeof ingestResponse;
     } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
       console.warn("[triple-lab/upload] ingest threw:", err);
+      emit({ stage: "error", errorMessage: msg });
       continue;
     }
 
@@ -64,7 +115,12 @@ export async function processFileDrops(
     const sourceName =
       ingestResponse.source_name ?? file.name ?? "Untitled asset";
 
-    if (!assetId) continue;
+    if (!assetId) {
+      // Upload was accepted but we got no asset id back — defensive
+      // fallback. Treat as materialized so the toast clears.
+      emit({ stage: "materialized" });
+      continue;
+    }
 
     const shouldReview =
       assetClass === "research_pdf" || assetClass === "internal_doc";
@@ -72,18 +128,33 @@ export async function processFileDrops(
     if (!shouldReview) {
       // Text / markdown / image — materialized inline by the ingest
       // route, no HITL needed.
+      emit({ stage: "materialized", assetId });
       continue;
     }
 
     // Research-class asset: wait for parse to complete (preview
     // endpoint needs normalized_text). Poll up to 90s @ 1.2s cadence.
-    await pollUntilParsed(assetId);
+    emit({ stage: "parsing", assetId });
+    const parseOk = await pollUntilParsed(assetId);
+    if (!parseOk) {
+      emit({
+        stage: "error",
+        assetId,
+        errorMessage:
+          "Parse timed out after 90s. The PDF may be unusually large or scanned. Try again or check the asset detail page.",
+      });
+      continue;
+    }
 
     // Drawer time.
+    emit({ stage: "opening_review", assetId });
     try {
       await deps.onAssetReady(assetId, sourceName, assetClass);
+      emit({ stage: "done", assetId });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to open review";
       console.warn("[triple-lab/upload] open drawer failed:", err);
+      emit({ stage: "error", assetId, errorMessage: msg });
     }
   }
 }
@@ -94,7 +165,7 @@ export async function processFileDrops(
 // after(). The HITL preview endpoint needs normalized_text, so we
 // can't open the drawer until parse_status flips to "ready" (or
 // "error"). Same pattern as the asset-card-shape poll loop.
-async function pollUntilParsed(assetId: string): Promise<void> {
+async function pollUntilParsed(assetId: string): Promise<boolean> {
   const INTERVAL_MS = 1200;
   const TIMEOUT_MS = 90_000;
   const start = Date.now();
@@ -110,7 +181,7 @@ async function pollUntilParsed(assetId: string): Promise<void> {
         // drawer so the user sees the error banner. Everything else
         // (pending / parsing) → keep polling.
         if (body.parse_status === "ready" || body.parse_status === "error") {
-          return;
+          return true;
         }
       }
     } catch {
@@ -122,4 +193,5 @@ async function pollUntilParsed(assetId: string): Promise<void> {
     "[triple-lab/upload] parse-status poll timed out after 90s for",
     assetId,
   );
+  return false;
 }
