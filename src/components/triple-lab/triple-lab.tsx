@@ -27,6 +27,7 @@ import { LiveSynthesisRefresh } from "./use-live-synthesis-refresh";
 import { PipelineProgressStrip } from "./pipeline-progress-strip";
 import { PipelineErrorBanner } from "./pipeline-error-banner";
 import { PipelineModePicker, type PipelineMode } from "./pipeline-mode-picker";
+import { CandidateReviewDrawer } from "./candidate-review-drawer";
 import { useLabRooms } from "./rooms/use-lab-rooms";
 import { UserRoomsStack } from "./rooms/user-rooms-stack";
 
@@ -204,6 +205,59 @@ export function TripleLab({ spaceId }: TripleLabProps) {
   // change to /api/spaces/[id]/pipeline-mode + this local state.
   const [pipelineMode, setPipelineMode] = useState<PipelineMode>("autopilot");
 
+  // ── Candidate review drawer (Phase 7c-3) ───────────────────────────
+  // When the space is in review_each mode, chain stages stage their
+  // proposed artifacts to pipeline_candidates instead of committing.
+  // The drawer reads from there and lets the user pick which to
+  // commit. Drawer is mounted at page level (overlays the whole
+  // layout, like extraction-review) and triggered by the pending-pill
+  // below — itself driven by a light poll of the candidates endpoint.
+  //
+  // Phase 7c-4 will replace the poll with an SSE event subscription
+  // (`candidates_ready` emitted by the gated routes) so the drawer
+  // opens within milliseconds of staging, not on the next 30s tick.
+  const [reviewDrawerOpen, setReviewDrawerOpen] = useState(false);
+  // Raw poll value — updated only by the effect below. The displayed
+  // count derives this through `displayedPendingCount` so we don't
+  // need to setState-to-zero when mode flips (which would trip the
+  // react-hooks/set-state-in-effect lint rule).
+  const [pendingCandidateCount, setPendingCandidateCount] = useState(0);
+  useEffect(() => {
+    // Only poll when the user is actually in review mode — autopilot
+    // and manual modes never produce pending candidates today. We
+    // simply don't start the poll loop in those modes; the displayed
+    // value is gated below via `displayedPendingCount`.
+    if (pipelineMode !== "review_each") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch(
+          `/api/spaces/${spaceId}/candidates?status=pending`,
+          { cache: "no-store" },
+        );
+        if (!res.ok || cancelled) return;
+        const body = (await res.json()) as { candidates: unknown[] };
+        if (!cancelled) {
+          setPendingCandidateCount(body.candidates?.length ?? 0);
+        }
+      } catch {
+        // Soft-fail. Pill just stays at the previous value.
+      }
+    };
+    void tick();
+    const interval = window.setInterval(tick, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [spaceId, pipelineMode]);
+  // Displayed pill count — only when in review mode does the underlying
+  // poll value actually mean something to show. Switching away from
+  // review_each visually hides the pill but doesn't reset the cached
+  // value (so flipping back doesn't blink to 0 before the next poll).
+  const displayedPendingCount =
+    pipelineMode === "review_each" ? pendingCandidateCount : 0;
+
   // ── Extraction-review (HITL) drawer ─────────────────────────────────
   // Hoisted to page-level so the drawer overlays the entire layout,
   // not just the left panel. The raw-signal panel calls openDrawer()
@@ -377,15 +431,14 @@ export function TripleLab({ spaceId }: TripleLabProps) {
         const body = (await res.json()) as {
           run: { id: string; status: string } | null;
         };
-        // Only subscribe to running runs — completed ones don't emit
-        // new events. The provider handles backlog replay so we still
-        // get a snapshot of the latest completed run on first paint.
+        // Subscribe to ANY status. The SSE stream endpoint replays
+        // backlog from completed runs and tails new events from
+        // running ones. Filtering by status === "running" lost the
+        // backlog — which is exactly what the MIDDLE insights panel
+        // needs to render cycle/bridge/signal/proposal cards from
+        // the most recent finished chain.
         if (!cancelled) {
-          if (body.run && body.run.status === "running") {
-            setActiveRunId(body.run.id);
-          } else {
-            setActiveRunId(null);
-          }
+          setActiveRunId(body.run?.id ?? null);
         }
       } catch {
         // Soft-fail: leave activeRunId as-is. The next tick will retry.
@@ -472,6 +525,31 @@ export function TripleLab({ spaceId }: TripleLabProps) {
             spaceId={spaceId}
             onChange={setPipelineMode}
           />
+          {/* Pending-review pill — only renders when there are
+           *  candidates waiting. Click opens the CandidateReviewDrawer
+           *  with all pending grouped by batch. Today this pill is
+           *  driven by a 30s poll (Phase 7c-3); Phase 7c-4 replaces
+           *  the poll with an SSE `candidates_ready` event so the
+           *  pill appears within ms of staging. */}
+          {displayedPendingCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setReviewDrawerOpen(true)}
+              className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold shadow-sm transition-all hover:scale-105"
+              style={{
+                background: colors.brand.gradient,
+                color: "white",
+                boxShadow: `0 4px 12px ${colors.brand.shadowStrong}`,
+                letterSpacing: tracking.eyebrowTight,
+              }}
+              title={`Review ${displayedPendingCount} pending candidate${
+                displayedPendingCount === 1 ? "" : "s"
+              }`}
+            >
+              <span className="font-mono text-[11px] leading-none">◐</span>
+              {displayedPendingCount} pending
+            </button>
+          )}
         </div>
 
         {/* ── LEFT: reasoning whiteboard (Phase 6a) ────────────────────
@@ -710,6 +788,28 @@ export function TripleLab({ spaceId }: TripleLabProps) {
        * shared handleProgress callback above.
        */}
       <UploadProgressToast registerHandle={registerToastHandle} />
+
+      {/* ── Candidate review drawer (Phase 7c-3) ───────────────────
+       *
+       * Page-level mount so the right-side overlay covers the whole
+       * layout, not just one column. Opens when the user clicks the
+       * "N pending" pill in the top-left picker bar. Phase 7c-4 will
+       * also wire SSE-driven auto-opening when a chain stage finishes
+       * staging in review_each mode. */}
+      <CandidateReviewDrawer
+        spaceId={spaceId}
+        batchId={null}
+        open={reviewDrawerOpen}
+        onClose={() => setReviewDrawerOpen(false)}
+        onCommitted={() => {
+          // Refresh the page state so the newly-committed entities
+          // appear on the whiteboard / KG view, and clear the pending
+          // count immediately (the next poll tick would also clear it
+          // but instant feedback is better UX).
+          setPendingCandidateCount(0);
+          router.refresh();
+        }}
+      />
       </CardActionHost>
     </RunEventStoreProvider>
   );
