@@ -88,6 +88,14 @@ export function LabLeaderboardChip({ spaceId }: Props) {
 
   // Initial fetch when the lab room first appears, and refresh on
   // window focus so a re-run elsewhere shows up here.
+  //
+  // Auto-refresh on writer-path SSE signals used to live here as
+  // window-event listeners (`pipeline-event:variant_proposed` and
+  // `pipeline-event:app_result_ready`) — but nothing in the codebase
+  // ever dispatched those window events. The painter writes SSE
+  // events into the local run-event store, not as window events. The
+  // dead listeners are removed; if real-time refresh is needed
+  // later, subscribe to the run-event store directly.
   useEffect(() => {
     if (!labRoomRect) return;
     void refresh();
@@ -95,20 +103,6 @@ export function LabLeaderboardChip({ spaceId }: Props) {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [labRoomRect, refresh]);
-
-  // Auto-refresh on writer-path event signals (variant_proposed,
-  // app_result_ready) so the leaderboard stays live during a run.
-  useEffect(() => {
-    function onSignal() {
-      void refresh();
-    }
-    window.addEventListener("pipeline-event:variant_proposed", onSignal);
-    window.addEventListener("pipeline-event:app_result_ready", onSignal);
-    return () => {
-      window.removeEventListener("pipeline-event:variant_proposed", onSignal);
-      window.removeEventListener("pipeline-event:app_result_ready", onSignal);
-    };
-  }, [refresh]);
 
   const total = entries?.length ?? 0;
   const topEntries = useMemo(() => entries?.slice(0, 8) ?? [], [entries]);
