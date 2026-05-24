@@ -32,6 +32,7 @@ import { CanvasSummaryArrowFader } from "./chrome/canvas-summary-arrow-fader";
 import { CanvasSummaryCardActions } from "./chrome/canvas-summary-card-actions";
 import { CanvasRoomExtendHandler } from "./chrome/canvas-room-extend-handler";
 import { LabLeaderboardChip } from "./chrome/lab-leaderboard-chip";
+import { CanvasSelectionActionChip } from "./chrome/canvas-selection-action-chip";
 import { CanvasFinalPlanCardBridge } from "./chrome/canvas-final-plan-card-bridge";
 import { CanvasStrategyAppFanout } from "./chrome/canvas-strategy-app-fanout";
 import { CanvasImageVisionBridge } from "./chrome/canvas-image-vision-bridge";
@@ -141,6 +142,15 @@ function CanvasOverlays() {
           Auto-hides when the space has too few entities for a contract. */}
       {!isWorkspace && <CanvasPreflightChip spaceId={spaceId} />}
       {SHOW_TOP_STAGE_INDICATOR && <CanvasStageIndicator />}
+      {/* Global selection chip — surfaces CardActionMenu (Decompose
+          / Connect / Research / Probe / Related) for any selected
+          entity-bearing shape that doesn't already mount the menu
+          itself. Restores access to the power-function surface that
+          was orphaned when kg-node global painting was disabled.
+          Self-hides when no recognized shape is selected. Safe to
+          mount in workspace mode too — the recognized shape types
+          (sticky-note, stage-node with entityId) don't appear there. */}
+      <CanvasSelectionActionChip />
       {!isWorkspace && <CanvasLassoSystemButton spaceId={spaceId} />}
       {/* Phase 6C — sibling button: lasso → save-as-subject. Same
           extractor, atomic /from-lasso endpoint creates both the

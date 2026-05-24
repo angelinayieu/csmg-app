@@ -96,7 +96,8 @@ export function CanvasWorkspaceAutoPopulate({ spaceId }: { spaceId: string }) {
       //     instead of skipping it.
       const existingWorkspaceRooms = editor
         .getCurrentPageShapes()
-        .some((s) => s.type === "workspace-room");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .some((s: any) => s.type === "workspace-room");
       if (existingWorkspaceRooms) return;
 
       let populated = false;
