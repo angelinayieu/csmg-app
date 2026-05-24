@@ -38,7 +38,16 @@ import type {
   FinalArtifactIntervention,
   FinalArtifactLabScaffold,
 } from "@/app/api/spaces/[id]/final-artifacts/route";
+import type {
+  ScreenRow,
+  ScreensListResponse,
+} from "@/app/api/spaces/[id]/screens/route";
 import { GuardrailQuestionQueue } from "./guardrail-question-queue";
+import {
+  GenerateScreenModal,
+  type GenerateScreenTarget,
+} from "./generate-screen-modal";
+import { ScreenLightbox } from "./screen-lightbox";
 import { colors, backgrounds, tracking } from "./tokens";
 
 interface InsightsPanelProps {
@@ -66,6 +75,16 @@ export function InsightsPanel({
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Screens state (Phase 4) ─────────────────────────────────────────
+  // Separate poll because /screens has its own cadence + can refresh
+  // on demand right after a generation success. Modal + lightbox state
+  // live at the panel root so they overlay everything correctly.
+  const [screens, setScreens] = useState<ScreenRow[]>([]);
+  const [modalTarget, setModalTarget] = useState<GenerateScreenTarget | null>(
+    null,
+  );
+  const [lightboxScreen, setLightboxScreen] = useState<ScreenRow | null>(null);
+
   const fetchArtifacts = useCallback(async () => {
     try {
       const res = await fetch(`/api/spaces/${spaceId}/final-artifacts`, {
@@ -85,17 +104,43 @@ export function InsightsPanel({
     }
   }, [spaceId]);
 
+  const fetchScreens = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/spaces/${spaceId}/screens?limit=80`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const body = (await res.json()) as ScreensListResponse;
+      setScreens(body.screens);
+    } catch {
+      // Non-fatal — section just renders empty until next poll.
+    }
+  }, [spaceId]);
+
   // Initial fetch + 12s polling. Polling stops when the panel
   // unmounts. We don't pause when nothing is running because the user
   // may navigate here right as a chain completes — over-fetching by
   // 1-2 cycles is cheap insurance.
   useEffect(() => {
     void fetchArtifacts();
+    void fetchScreens();
     const interval = window.setInterval(() => {
       void fetchArtifacts();
+      void fetchScreens();
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [fetchArtifacts]);
+  }, [fetchArtifacts, fetchScreens]);
+
+  // ── Open-screen-modal handler — passed to artifact rows ──
+  // We hoist this so VariationRow / AppRow / StrategyRow can all
+  // trigger it with their target context without each row needing
+  // its own modal instance.
+  const openGenerateModal = useCallback(
+    (target: GenerateScreenTarget) => {
+      setModalTarget(target);
+    },
+    [],
+  );
 
   return (
     <div
@@ -139,23 +184,91 @@ export function InsightsPanel({
           <EmptyState />
         ) : (
           <div className="flex flex-col gap-4">
-            <StrategyOptionsSection options={data.strategy_options} />
+            <StrategyOptionsSection
+              options={data.strategy_options}
+              onGenerateScreen={openGenerateModal}
+            />
             <LabProposalsSection spaceId={spaceId} proposals={data.lab_proposals} />
             <TwinProposalsSection spaceId={spaceId} proposals={data.twin_proposals} />
-            <VariationsSection variations={data.variations} apps={data.apps} />
+            <VariationsSection
+              variations={data.variations}
+              apps={data.apps}
+              onGenerateScreen={openGenerateModal}
+            />
             <AppsSection
               spaceId={spaceId}
               apps={data.apps}
               interventions={data.interventions}
+              onGenerateScreen={openGenerateModal}
             />
             <LabScaffoldsSection scaffolds={data.lab_scaffolds} />
-            <ScreensPlaceholderSection />
+            <ScreensSection
+              screens={screens}
+              onOpenLightbox={setLightboxScreen}
+            />
           </div>
         )}
       </div>
 
       {/* ── Guardrail queue (unchanged) ───────────────────────────── */}
       <GuardrailQuestionQueue spaceId={spaceId} />
+
+      {/* ── Generate-screen modal ──
+       *  Mounted at the panel root so it overlays the entire right
+       *  column. modalTarget=null means closed; setting via
+       *  openGenerateModal opens with target pre-filled. */}
+      <GenerateScreenModal
+        target={modalTarget}
+        spaceId={spaceId}
+        onClose={() => setModalTarget(null)}
+        onSuccess={(row) => {
+          setModalTarget(null);
+          // Optimistically prepend the new screen so the section
+          // shows it immediately, then refresh from the server on
+          // the next poll cycle to sync remote state.
+          setScreens((prev) => [row, ...prev]);
+          void fetchScreens();
+        }}
+      />
+
+      {/* ── Lightbox ──
+       *  Same root mount so backdrop click + Esc work without portal
+       *  collisions. lightboxScreen=null means closed. */}
+      {lightboxScreen && (
+        <ScreenLightbox
+          screen={lightboxScreen}
+          onClose={() => setLightboxScreen(null)}
+          onRegenerate={() => {
+            // Close the lightbox + open the modal pre-filled with
+            // the source target. User can tweak brief/type and submit.
+            setLightboxScreen(null);
+            setModalTarget({
+              kind:
+                lightboxScreen.target_kind as GenerateScreenTarget["kind"],
+              id: lightboxScreen.target_id ?? null,
+              label:
+                lightboxScreen.target_label ??
+                `${lightboxScreen.target_kind} screen`,
+              hints: undefined,
+            });
+          }}
+          onDelete={async () => {
+            // Optimistic local removal + best-effort server delete.
+            // Failure leaves the row server-side; next poll catches.
+            setScreens((prev) =>
+              prev.filter((s) => s.id !== lightboxScreen.id),
+            );
+            setLightboxScreen(null);
+            // TODO: wire DELETE /api/spaces/[id]/screens/[id] when
+            // we add it. For now this is local-only.
+          }}
+          targetHref={
+            lightboxScreen.target_kind === "app" && lightboxScreen.target_id
+              ? `/app/space/${spaceId}/app/${lightboxScreen.target_id}/whiteboard`
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }
@@ -302,8 +415,10 @@ function ArtifactSection({
 // ── Strategy Options ────────────────────────────────────────────────
 function StrategyOptionsSection({
   options,
+  onGenerateScreen,
 }: {
   options: FinalArtifactStrategyOption[];
+  onGenerateScreen: (target: GenerateScreenTarget) => void;
 }) {
   return (
     <ArtifactSection
@@ -321,7 +436,7 @@ function StrategyOptionsSection({
         {options.slice(0, 5).map((opt) => (
           <div
             key={`strat-${opt.rank}`}
-            className="rounded-md px-2 py-1.5"
+            className="group relative rounded-md px-2 py-1.5"
             style={{
               background: opt.is_primary
                 ? "rgba(124, 58, 237, 0.06)"
@@ -368,6 +483,31 @@ function StrategyOptionsSection({
                 {opt.summary}
               </div>
             )}
+            {/* +Screen CTA — only on hover, primary strategies get
+             *  the affordance most often so this is well-positioned
+             *  in the top-right gutter of the row. */}
+            <button
+              type="button"
+              onClick={(ev) => {
+                ev.stopPropagation();
+                onGenerateScreen({
+                  kind: "strategy",
+                  id: null,
+                  label: opt.title,
+                  hints: {
+                    target_summary: opt.summary,
+                    posture: opt.posture ?? undefined,
+                  },
+                });
+              }}
+              className="absolute right-1.5 top-1.5 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider opacity-0 transition-opacity group-hover:opacity-100"
+              style={{
+                background: colors.brand.bgSoft,
+                color: colors.brand.fgDark,
+              }}
+            >
+              ⊕ Screen
+            </button>
           </div>
         ))}
       </div>
@@ -488,14 +628,16 @@ function ProposalRow({
 function VariationsSection({
   variations,
   apps,
+  onGenerateScreen,
 }: {
   variations: FinalArtifactVariant[];
   apps: FinalArtifactApp[];
+  onGenerateScreen: (target: GenerateScreenTarget) => void;
 }) {
-  // Map app_id → app name for inline display.
-  const appNameById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const a of apps) m.set(a.id, a.name);
+  // Map app_id → app name for inline display + for the hint context.
+  const appsById = useMemo(() => {
+    const m = new Map<string, FinalArtifactApp>();
+    for (const a of apps) m.set(a.id, a);
     return m;
   }, [apps]);
   return (
@@ -511,54 +653,82 @@ function VariationsSection({
       emptyHint="Variations appear after writer-path completes (variant factory + IV scorer)."
     >
       <div className="flex flex-col gap-1.5">
-        {variations.slice(0, 8).map((v) => (
-          <div
-            key={v.id}
-            className="rounded-md border bg-white px-2 py-1.5"
-            style={{
-              borderColor: v.is_active
-                ? colors.state.leverage
-                : colors.neutral.borderFaint,
-              borderLeftWidth: 3,
-              borderLeftColor: v.accent_color ?? colors.state.leverage,
-            }}
-          >
-            <div className="flex items-center gap-1.5">
-              {v.is_active && (
-                <span
-                  className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
+        {variations.slice(0, 8).map((v) => {
+          const parentApp = v.app_id ? appsById.get(v.app_id) : null;
+          return (
+            <div
+              key={v.id}
+              className="group rounded-md border bg-white px-2 py-1.5"
+              style={{
+                borderColor: v.is_active
+                  ? colors.state.leverage
+                  : colors.neutral.borderFaint,
+                borderLeftWidth: 3,
+                borderLeftColor: v.accent_color ?? colors.state.leverage,
+              }}
+            >
+              <div className="flex items-center gap-1.5">
+                {v.is_active && (
+                  <span
+                    className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
+                    style={{
+                      background: colors.state.leverageChip,
+                      color: colors.state.leverageFgDark,
+                    }}
+                  >
+                    ACTIVE
+                  </span>
+                )}
+                <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
+                  {v.status}
+                </span>
+                {parentApp && (
+                  <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
+                    · {parentApp.name}
+                  </span>
+                )}
+                {v.aggregate_quality !== null && (
+                  <span className="ml-auto text-[9px] font-mono text-slate-500">
+                    q {v.aggregate_quality.toFixed(2)}
+                  </span>
+                )}
+              </div>
+              <div className="mt-0.5 text-[11.5px] font-semibold text-slate-900">
+                {v.label}
+              </div>
+              {v.summary && (
+                <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
+                  {v.summary}
+                </div>
+              )}
+              {/* +Screen CTA — only on hover so the row stays calm at rest */}
+              <div className="mt-1.5 flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    onGenerateScreen({
+                      kind: "variation",
+                      id: v.id,
+                      label: v.label,
+                      hints: {
+                        target_summary: v.summary ?? undefined,
+                        app_type: parentApp?.app_type ?? undefined,
+                      },
+                    });
+                  }}
+                  className="rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider opacity-0 transition-opacity group-hover:opacity-100"
                   style={{
-                    background: colors.state.leverageChip,
-                    color: colors.state.leverageFgDark,
+                    background: colors.brand.bgSoft,
+                    color: colors.brand.fgDark,
                   }}
                 >
-                  ACTIVE
-                </span>
-              )}
-              <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
-                {v.status}
-              </span>
-              {v.app_id && appNameById.has(v.app_id) && (
-                <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
-                  · {appNameById.get(v.app_id)}
-                </span>
-              )}
-              {v.aggregate_quality !== null && (
-                <span className="ml-auto text-[9px] font-mono text-slate-500">
-                  q {v.aggregate_quality.toFixed(2)}
-                </span>
-              )}
-            </div>
-            <div className="mt-0.5 text-[11.5px] font-semibold text-slate-900">
-              {v.label}
-            </div>
-            {v.summary && (
-              <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
-                {v.summary}
+                  ⊕ Screen
+                </button>
               </div>
-            )}
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </div>
     </ArtifactSection>
   );
@@ -569,10 +739,12 @@ function AppsSection({
   spaceId,
   apps,
   interventions,
+  onGenerateScreen,
 }: {
   spaceId: string;
   apps: FinalArtifactApp[];
   interventions: FinalArtifactIntervention[];
+  onGenerateScreen: (target: GenerateScreenTarget) => void;
 }) {
   // Group interventions by app for inline summary.
   const intvByApp = useMemo(() => {
@@ -598,59 +770,93 @@ function AppsSection({
       emptyHint="Apps appear after strategy-refresh + generate-apps complete."
     >
       <div className="flex flex-col gap-1.5">
-        {apps.slice(0, 8).map((a) => (
-          <a
-            key={a.id}
-            href={`/app/space/${spaceId}/app/${a.id}/whiteboard`}
-            className="block rounded-md border bg-white px-2 py-1.5 transition-colors hover:bg-slate-50"
-            style={{ borderColor: colors.neutral.borderFaint }}
-          >
-            <div className="flex items-center gap-1.5">
-              <span
-                className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
+        {apps.slice(0, 8).map((a) => {
+          const ivs = intvByApp.get(a.id) ?? [];
+          return (
+            <div
+              key={a.id}
+              className="group relative rounded-md border bg-white px-2 py-1.5 transition-colors hover:bg-slate-50"
+              style={{ borderColor: colors.neutral.borderFaint }}
+            >
+              <a
+                href={`/app/space/${spaceId}/app/${a.id}/whiteboard`}
+                className="block"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className="rounded px-1 text-[8.5px] font-bold uppercase tracking-wider"
+                    style={{
+                      background:
+                        a.status === "active"
+                          ? colors.state.okSoft
+                          : colors.neutral.chipBgStrong,
+                      color:
+                        a.status === "active"
+                          ? colors.state.okFg
+                          : colors.neutral.fg700,
+                    }}
+                  >
+                    {a.status}
+                  </span>
+                  {a.app_type && (
+                    <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
+                      · {a.app_type}
+                    </span>
+                  )}
+                  <span className="ml-auto text-[9px] font-mono text-slate-500">
+                    {ivs.length} iv
+                  </span>
+                </div>
+                <div className="mt-0.5 text-[11.5px] font-semibold text-slate-900">
+                  {a.name}
+                </div>
+                {a.description && (
+                  <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
+                    {a.description}
+                  </div>
+                )}
+                {a.stale_reason && (
+                  <div
+                    className="mt-1 rounded px-1.5 py-0.5 text-[9px] font-medium"
+                    style={{
+                      background: colors.state.leverageSoft,
+                      color: colors.state.leverageFgDark,
+                    }}
+                  >
+                    stale · {a.stale_reason}
+                  </div>
+                )}
+              </a>
+              {/* +Screen CTA — appears on hover, positioned in the
+               *  top-right corner so it doesn't compete with the
+               *  status chip. */}
+              <button
+                type="button"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                  onGenerateScreen({
+                    kind: "app",
+                    id: a.id,
+                    label: a.name,
+                    hints: {
+                      target_summary: a.description ?? undefined,
+                      app_type: a.app_type ?? undefined,
+                      intervention_titles: ivs.map((iv) => iv.title),
+                    },
+                  });
+                }}
+                className="absolute right-1.5 top-1.5 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider opacity-0 transition-opacity group-hover:opacity-100"
                 style={{
-                  background:
-                    a.status === "active"
-                      ? colors.state.okSoft
-                      : colors.neutral.chipBgStrong,
-                  color:
-                    a.status === "active"
-                      ? colors.state.okFg
-                      : colors.neutral.fg700,
+                  background: colors.brand.bgSoft,
+                  color: colors.brand.fgDark,
                 }}
               >
-                {a.status}
-              </span>
-              {a.app_type && (
-                <span className="text-[8.5px] uppercase tracking-wider text-slate-500">
-                  · {a.app_type}
-                </span>
-              )}
-              <span className="ml-auto text-[9px] font-mono text-slate-500">
-                {intvByApp.get(a.id)?.length ?? a.intervention_count} iv
-              </span>
+                ⊕ Screen
+              </button>
             </div>
-            <div className="mt-0.5 text-[11.5px] font-semibold text-slate-900">
-              {a.name}
-            </div>
-            {a.description && (
-              <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-slate-600">
-                {a.description}
-              </div>
-            )}
-            {a.stale_reason && (
-              <div
-                className="mt-1 rounded px-1.5 py-0.5 text-[9px] font-medium"
-                style={{
-                  background: colors.state.leverageSoft,
-                  color: colors.state.leverageFgDark,
-                }}
-              >
-                stale · {a.stale_reason}
-              </div>
-            )}
-          </a>
-        ))}
+          );
+        })}
       </div>
     </ArtifactSection>
   );
@@ -707,10 +913,49 @@ function LabScaffoldsSection({
   );
 }
 
-// ── Screens (placeholder for Phase 4) ───────────────────────────────
-// Future: generated prototype images from /api/canvas/generate-screen.
-// For now, a one-row placeholder that hints at what's coming.
-function ScreensPlaceholderSection() {
+// ── Screens (Phase 4) ───────────────────────────────────────────────
+// Renders generated prototype mockups grouped by target artifact.
+// Each group: "Screens for X" header + 2-column thumbnail grid +
+// click → lightbox.
+//
+// Aspect ratios:
+//   portrait  → 9:16 (mobile)
+//   landscape → 16:10 (web/dashboard)
+//   square    → 1:1
+// We CSS-clip thumbnails to a uniform tile while preserving the
+// underlying aspect via object-cover, so the grid stays regular but
+// the image is recognizable.
+function ScreensSection({
+  screens,
+  onOpenLightbox,
+}: {
+  screens: ScreenRow[];
+  onOpenLightbox: (screen: ScreenRow) => void;
+}) {
+  // Group by target — `${kind}:${id ?? "none"}` as the key. Use a
+  // stable display name from the most recent screen in the group
+  // (we order newest-first, so it's the first row we see).
+  const groups = useMemo(() => {
+    const map = new Map<
+      string,
+      { label: string; kind: string; rows: ScreenRow[] }
+    >();
+    for (const s of screens) {
+      const key = `${s.target_kind}:${s.target_id ?? "none"}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.rows.push(s);
+      } else {
+        map.set(key, {
+          label: s.target_label ?? `${s.target_kind} screen`,
+          kind: s.target_kind,
+          rows: [s],
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [screens]);
+
   return (
     <ArtifactSection
       title="Screens"
@@ -720,10 +965,150 @@ function ScreensPlaceholderSection() {
         bg: colors.brand.bgSoft,
         fg: colors.brand.fgDark,
       }}
-      count={0}
-      emptyHint="Phase 4 — generated prototype images for each variation will land here. Auto-recommendation picks app / website / twin per use case."
+      count={screens.length}
+      emptyHint="Hover any app, variation, or strategy → click ⊕ Screen to generate a prototype mockup."
     >
-      {null}
+      <div className="flex flex-col gap-3">
+        {groups.map((group, gIdx) => (
+          <div key={`grp-${gIdx}`} className="flex flex-col gap-1.5">
+            {/* Group header */}
+            <div className="flex items-baseline justify-between gap-2">
+              <div
+                className="truncate text-[10px] font-semibold uppercase"
+                style={{
+                  color: colors.brand.fgDark,
+                  letterSpacing: tracking.eyebrowTight,
+                }}
+                title={group.label}
+              >
+                {group.label}
+              </div>
+              <div className="shrink-0 text-[9px] font-mono text-slate-500">
+                {group.rows.length} screen{group.rows.length === 1 ? "" : "s"}
+              </div>
+            </div>
+
+            {/* Thumbnail grid — 2 columns. Aspect-ratio per screen via
+             *  inline style. Generating screens render as shimmering
+             *  skeletons at the right aspect; errors show a dim card. */}
+            <div className="grid grid-cols-2 gap-1.5">
+              {group.rows.slice(0, 4).map((s) => (
+                <ScreenThumb
+                  key={s.id}
+                  screen={s}
+                  onClick={() => onOpenLightbox(s)}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </ArtifactSection>
+  );
+}
+
+// ── Single thumbnail tile ──────────────────────────────────────────
+function ScreenThumb({
+  screen,
+  onClick,
+}: {
+  screen: ScreenRow;
+  onClick: () => void;
+}) {
+  // Map aspect_ratio enum to CSS aspect-ratio. Tiles share a uniform
+  // height target via the parent grid, so we set aspect on the inner
+  // image only and let the wrapper take the natural aspect.
+  const aspectStyle =
+    screen.aspect_ratio === "portrait"
+      ? { aspectRatio: "9 / 16" }
+      : screen.aspect_ratio === "square"
+      ? { aspectRatio: "1 / 1" }
+      : { aspectRatio: "16 / 10" };
+
+  if (screen.status === "ready" && screen.image_url) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="group relative block overflow-hidden rounded-lg border bg-white transition-all hover:-translate-y-0.5"
+        style={{
+          ...aspectStyle,
+          borderColor: colors.neutral.borderFaint,
+          boxShadow: colors.neutral.cardShadow,
+        }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={screen.image_url}
+          alt={screen.target_label ?? "Generated screen"}
+          className="h-full w-full object-cover transition-transform group-hover:scale-[1.03]"
+          loading="lazy"
+        />
+        {/* Type chip in the corner */}
+        <span
+          className="absolute left-1 top-1 rounded-full px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wider"
+          style={{
+            background: "rgba(8, 12, 22, 0.7)",
+            color: "white",
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          {screen.artifact_type}
+        </span>
+      </button>
+    );
+  }
+
+  if (screen.status === "generating" || screen.status === "pending") {
+    return (
+      <div
+        className="relative overflow-hidden rounded-lg border"
+        style={{
+          ...aspectStyle,
+          borderColor: colors.brand.haloSoft,
+          background: colors.brand.bgSoft,
+        }}
+      >
+        {/* Shimmer effect */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background: `linear-gradient(90deg, transparent 0%, ${colors.brand.bgChip} 50%, transparent 100%)`,
+            animation: "upload-toast-sweep 1.8s ease-in-out infinite",
+          }}
+        />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span
+            className="text-[9px] font-bold uppercase tracking-wider"
+            style={{
+              color: colors.brand.fgDark,
+              letterSpacing: tracking.eyebrowTight,
+            }}
+          >
+            Generating…
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  return (
+    <div
+      className="flex items-center justify-center rounded-lg border p-3 text-center"
+      style={{
+        ...aspectStyle,
+        borderColor: colors.state.bottleneckSoft,
+        background: "white",
+      }}
+    >
+      <div
+        className="text-[10px] leading-snug"
+        style={{ color: colors.state.bottleneckFg }}
+      >
+        Failed
+        {screen.error_message ? `: ${screen.error_message.slice(0, 40)}…` : ""}
+      </div>
+    </div>
   );
 }
