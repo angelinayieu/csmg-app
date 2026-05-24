@@ -15,7 +15,7 @@
 // "results" stage (or when no events have arrived in 30s after a
 // "results"-exit). If no run is active, returns null.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useEventsOfType } from "@/components/canvas/hooks/run-event-store";
 import { colors, tracking } from "./tokens";
 
@@ -53,11 +53,21 @@ export function PipelineProgressStrip({
 }: PipelineProgressStripProps) {
   const stageEvents = useEventsOfType("stage_boundary");
 
-  // Track when we first saw a stage event so we can compute elapsed
-  // time + show "X seconds ago" or similar. Reset when the store
-  // identity changes (new run).
-  const firstEventAtRef = useRef<number | null>(null);
-  const [, forceTick] = useState<number>(0);
+  // `nowMs` ticks every second from a useEffect. We read it during
+  // render instead of calling Date.now() inline, because React 19's
+  // purity rule forbids impure calls in render. The tick interval
+  // is gated on hasActiveRun so we don't burn CPU when idle.
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+
+  // First-event timestamp — derived purely from stageEvents[0].
+  // Memoized so the elapsed-seconds calc stays cheap even when
+  // hundreds of events pile up. emittedAt is an ISO string from the
+  // SSE store; we parse to epoch ms once.
+  const firstEventAtMs = useMemo<number | null>(() => {
+    if (stageEvents.length === 0) return null;
+    const parsed = Date.parse(String(stageEvents[0].emittedAt));
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [stageEvents]);
 
   // Derive each stage's status from the stream of boundary events.
   // The reducer walks events in order and updates a map of stage → status.
@@ -65,7 +75,7 @@ export function PipelineProgressStrip({
     const status: Record<string, StageStatus> = {};
     for (const s of STAGES) status[s.key] = "pending";
     for (const ev of stageEvents) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const payload = ev.event as any;
       const stage = payload.stage as string | undefined;
       const phase = payload.phase as "enter" | "exit" | undefined;
@@ -82,32 +92,21 @@ export function PipelineProgressStrip({
   // Most recent stage_boundary event — drives the headline label
   // ("Currently: Decompose · 47s") and the message subtext.
   const latest = stageEvents[stageEvents.length - 1];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const latestStage = (latest?.event as any)?.stage as string | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const latestPhase = (latest?.event as any)?.phase as
     | "enter"
     | "exit"
     | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const latestMessage = (latest?.event as any)?.message as string | undefined;
   const currentMeta = STAGES.find((s) => s.key === latestStage);
-
-  // First-event timestamp (used for elapsed display + auto-dismiss).
-  // Tick every second so the elapsed string updates.
-  // emittedAt is an ISO string from the SSE store — parse to epoch
-  // ms once so the elapsed maths is straightforward.
-  useEffect(() => {
-    if (stageEvents.length > 0 && firstEventAtRef.current === null) {
-      const parsed = Date.parse(String(stageEvents[0].emittedAt));
-      firstEventAtRef.current = Number.isFinite(parsed) ? parsed : Date.now();
-    }
-  }, [stageEvents]);
 
   useEffect(() => {
     if (!hasActiveRun) return;
     const interval = window.setInterval(() => {
-      forceTick((n) => n + 1);
+      setNowMs(Date.now());
     }, 1000);
     return () => window.clearInterval(interval);
   }, [hasActiveRun]);
@@ -123,15 +122,15 @@ export function PipelineProgressStrip({
     latestStage === "results" &&
     latestPhase === "exit" &&
     Number.isFinite(latestEmittedMs) &&
-    Date.now() - latestEmittedMs > 5_000;
+    nowMs - latestEmittedMs > 5_000;
 
   // Don't show when no run is active OR all stages done + dismissed.
   if (!hasActiveRun && stageEvents.length === 0) return null;
   if (allDone) return null;
 
   const elapsedSec =
-    firstEventAtRef.current !== null
-      ? Math.floor((Date.now() - firstEventAtRef.current) / 1000)
+    firstEventAtMs !== null
+      ? Math.floor((nowMs - firstEventAtMs) / 1000)
       : 0;
   const elapsedLabel =
     elapsedSec < 60

@@ -15,6 +15,7 @@
 // structurally-significant events make the feed.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import type { Entity } from "@/types";
 import { useRunEventStoreOptional } from "@/components/canvas/hooks/run-event-store";
 import { colors, tracking } from "./tokens";
@@ -199,6 +200,66 @@ const FALLBACK_META = {
   glyph: "·",
 };
 
+// Importance scoring — drives the auto-rerank of the feed. Higher =
+// more important = floats to the top. The exact numbers don't matter
+// in isolation; what matters is the ORDER (and that ties get broken
+// by recency in the sort below). When a new high-importance insight
+// lands it bumps lower-importance items down — the framer-motion
+// `layout` prop animates the cards smoothly into their new slots
+// (FLIP-style). This is what makes the panel feel alive instead of
+// static. Tune the constants if you re-prioritize what the user
+// should notice first.
+//
+// Reasoning behind the ordering:
+//   - Root cause + strategy consensus are the "answers" — surface first
+//   - Twin proposals (lab/strategy/problem framings) come next as
+//     they're the next-action-able artifacts
+//   - Signal clusters > single signals (clusters are more informative)
+//   - Cycles + bridges are structural revelations (high but below
+//     the synthesizers)
+//   - Per-step intermediates (kg plan, taxonomy, causal stages) sit
+//     lower — useful to see, but not what you came for
+//
+ 
+function importanceFor(eventType: string, _streamed: unknown): number {
+  switch (eventType) {
+    case "root_cause_identified":
+      return 100;
+    case "strategy_consensus_ready":
+      return 92;
+    case "twin_proposal_ready":
+      return 88;
+    case "signal_cluster":
+      return 78;
+    case "cycle_detected":
+      return 72;
+    case "bridge_formed":
+      return 68;
+    case "proposal_ready":
+      return 62;
+    case "signal_detected":
+      return 58;
+    case "convergence_detected":
+      return 54;
+    case "contradiction_found":
+      return 50;
+    case "why_chain_deepened":
+      return 44;
+    case "lab_proposed":
+    case "framing_approved":
+      return 38;
+    case "framing_proposed":
+      return 34;
+    case "kg_plan_proposed":
+    case "structural_analog_found":
+    case "taxonomy_inferred":
+    case "causal_stage_ready":
+      return 26;
+    default:
+      return 18;
+  }
+}
+
 export function InsightsFeedMode({
   entities,
   selectedEntityId,
@@ -229,6 +290,12 @@ export function InsightsFeedMode({
     subtitle: string | null;
     entityIds: string[];
     emittedAt: number;
+    /** Importance score 0-100, used to rank the feed. Higher =
+     *  more important. Drives both the sort and the per-card "rank"
+     *  badge. When a high-importance insight lands it visibly jumps
+     *  to the top, displacing lower-ranked ones (FLIP animation
+     *  driven by framer-motion's `layout` prop). */
+    importance: number;
   }
   const insights = useMemo<FeedInsight[]>(() => {
     if (!store) return [];
@@ -250,7 +317,7 @@ export function InsightsFeedMode({
       out.push({
         // Each event in the store has a stable id; if absent we
         // synthesize one from type + emittedAt so dedup works.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         id: ((streamed as any).id as string | undefined) ?? `${eventType}-${emittedAtMs}`,
         type: eventType,
         meta,
@@ -258,10 +325,18 @@ export function InsightsFeedMode({
         subtitle,
         entityIds,
         emittedAt: emittedAtMs,
+        importance: importanceFor(eventType, streamed),
       });
     }
-    // Newest first
-    out.sort((a, b) => b.emittedAt - a.emittedAt);
+    // Sort by importance DESC, with recency as tiebreaker. So a brand-
+    // new high-importance insight (e.g. bottleneck identified) jumps
+    // to position #1, displacing older items down. The framer-motion
+    // `layout` prop on each card animates the reorder smoothly.
+    out.sort((a, b) => {
+      const di = b.importance - a.importance;
+      if (di !== 0) return di;
+      return b.emittedAt - a.emittedAt;
+    });
     return out;
   }, [store, entities]);
 
@@ -290,22 +365,44 @@ export function InsightsFeedMode({
           <FeedEmptyState hasStream={!!store} />
         ) : (
           <div className="flex flex-col gap-2.5">
-            {insights.map((insight) => {
-              // "Fresh" = arrived strictly AFTER we mounted.
-              const isFreshlySeen = insight.emittedAt > mountTime;
-              return (
-                <InsightCard
-                  key={insight.id}
-                  insight={insight}
-                  isFresh={isFreshlySeen}
-                  selected={
-                    selectedEntityId !== null &&
-                    insight.entityIds.includes(selectedEntityId)
-                  }
-                  onSelectEntity={onSelectEntity}
-                />
-              );
-            })}
+            <AnimatePresence initial={false}>
+              {insights.map((insight, idx) => {
+                // "Fresh" = arrived strictly AFTER we mounted.
+                const isFreshlySeen = insight.emittedAt > mountTime;
+                return (
+                  <motion.div
+                    key={insight.id}
+                    layout
+                    initial={
+                      isFreshlySeen
+                        ? { opacity: 0, y: -8, scale: 0.98 }
+                        : false
+                    }
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.97 }}
+                    transition={{
+                      // Spring physics keeps the reorder snappy but
+                      // not jarring — items glide rather than teleport.
+                      type: "spring",
+                      stiffness: 380,
+                      damping: 34,
+                      mass: 0.7,
+                    }}
+                  >
+                    <InsightCard
+                      insight={insight}
+                      isFresh={isFreshlySeen}
+                      rank={idx + 1}
+                      selected={
+                        selectedEntityId !== null &&
+                        insight.entityIds.includes(selectedEntityId)
+                      }
+                      onSelectEntity={onSelectEntity}
+                    />
+                  </motion.div>
+                );
+              })}
+            </AnimatePresence>
           </div>
         )}
       </div>
@@ -340,6 +437,7 @@ function FeedEmptyState({ hasStream }: { hasStream: boolean }) {
 function InsightCard({
   insight,
   isFresh,
+  rank,
   selected,
   onSelectEntity,
 }: {
@@ -351,8 +449,14 @@ function InsightCard({
     subtitle: string | null;
     entityIds: string[];
     emittedAt: number;
+    importance: number;
   };
   isFresh: boolean;
+  /** 1-indexed position in the importance-sorted feed. Drives the
+   *  little "#1 / #2 …" badge in the corner. Top 3 get an emphasized
+   *  treatment to underline that these are the highest-impact items
+   *  right now (and will move down if a more important insight lands). */
+  rank: number;
   selected: boolean;
   onSelectEntity: (id: string | null) => void;
 }) {
@@ -361,6 +465,7 @@ function InsightCard({
     // panel + middle graph can both react.
     if (insight.entityIds.length > 0) onSelectEntity(insight.entityIds[0]);
   };
+  const isTopRanked = rank <= 3;
 
   return (
     <div
@@ -369,17 +474,28 @@ function InsightCard({
       style={{
         borderColor: selected
           ? insight.meta.accent
+          : isTopRanked
+          ? `${insight.meta.accent}55`
           : colors.neutral.borderFaint,
         boxShadow: selected
           ? `0 6px 18px ${colors.brand.shadow}`
           : isFresh
           ? `0 4px 14px ${insight.meta.accent}22`
+          : isTopRanked
+          ? `0 2px 10px ${insight.meta.accent}15`
           : colors.neutral.cardShadow,
         animation: isFresh ? "insight-card-arrive 480ms ease-out" : undefined,
       }}
     >
-      {/* Accent stripe — color-codes the insight type at a glance */}
-      <div style={{ height: 2, background: insight.meta.accent }} />
+      {/* Accent stripe — color-codes the insight type at a glance.
+          Top-3 ranked cards get a thicker stripe so the eye lands on
+          the most important insights first. */}
+      <div
+        style={{
+          height: isTopRanked ? 3 : 2,
+          background: insight.meta.accent,
+        }}
+      />
 
       <div className="px-3 py-2.5">
         <div className="mb-1 flex items-center gap-1.5">
@@ -395,6 +511,22 @@ function InsightCard({
               {insight.meta.glyph}
             </span>
             {insight.meta.eyebrow}
+          </span>
+          {/* Rank badge — tiny chip showing this insight's position in
+              the importance-ordered feed. Cards animate to new slots
+              when an inbound event displaces them, and the badge
+              updates in lockstep, so the user SEES the rerank. */}
+          <span
+            className="flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[8.5px] font-bold tabular-nums"
+            style={{
+              background: isTopRanked
+                ? insight.meta.accent
+                : colors.neutral.chipBg,
+              color: isTopRanked ? "white" : colors.neutral.fg500,
+            }}
+            title={`Importance ${insight.importance}/100 — rank #${rank}`}
+          >
+            #{rank}
           </span>
           <span className="ml-auto text-[9.5px] text-slate-400">
             {formatAge(insight.emittedAt)}
@@ -432,13 +564,13 @@ function formatAge(ms: number): string {
 // case-by-case with optional chaining + fallbacks so an unexpected
 // shape never crashes the card.
 //
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 function describeEvent(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   streamed: any,
   entities: Entity[],
 ): { title: string; subtitle: string | null; entityIds: string[] } {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const ev = streamed.event as any;
   const type = ev.type as string;
   const nameById = new Map<string, string>(entities.map((e) => [e.id, e.name]));
