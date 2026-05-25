@@ -4,6 +4,8 @@
  * Derived directly from supabase/schema.sql CHECK constraints.
  */
 
+import { inferCausalRole } from "./decomposition/infer-causal-role";
+
 // ── Canonical enum values (match Postgres CHECK constraints exactly) ──
 
 export const ENTITY_CATEGORIES = ["concrete", "abstract", "process", "relational", "epistemic", "fault"] as const;
@@ -493,9 +495,21 @@ export function sanitizeEntity(raw: any, spaceId: string): SanitizedEntity {
       : null,
     authority_level: typeof raw.authority_level === "string" ? raw.authority_level.trim() : null,
     knowledge_layer: typeof raw.knowledge_layer === "string" ? raw.knowledge_layer.trim() : null,
+    // Causal role: prefer the LLM's tag when present, otherwise infer
+    // deterministically from name/description/category. The LLM-omission
+    // case used to write null, which collapsed the Claims-stack view
+    // into a single undifferentiated layer (every entity defaulted to
+    // 'claim'). Fallback heuristic lives in infer-causal-role.ts and
+    // is mirrored in SQL by migration 20260824_causal_role_backfill.
     causal_role: typeof raw.causal_role === "string"
       ? coerce(raw.causal_role, CAUSAL_ROLES, "truth")
-      : null,
+      : inferCausalRole({
+          name: str(raw.name, "Unknown Entity"),
+          description: typeof raw.description === "string" ? raw.description.trim() : null,
+          entity_category: inferCategoryFromType(raw.entity_type, raw.entity_category),
+          importance: coerce(raw.importance, IMPORTANCE_LEVELS, "moderate"),
+          knowledge_layer: typeof raw.knowledge_layer === "string" ? raw.knowledge_layer.trim() : null,
+        }),
     // ── D1 · measurement spec extraction ──
     // Accepts the canonical { unit, scale, protocol, cost_estimate,
     // observability } shape from the structurer prompt, AND tolerates
