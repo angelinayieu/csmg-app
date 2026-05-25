@@ -40,26 +40,38 @@ For 5-8 of the most LOAD-BEARING phrases / words in the objective, produce a ric
 ────────────────────────────────────────────────────────────────────
 SCOPE — drives visual treatment in the UI
 ────────────────────────────────────────────────────────────────────
-  scope = "word"
-    Pick this when the load is on a SINGLE concept word whose
-    interpretation varies wildly across AIs/contexts. The user
-    wants to know precisely what YOU think this word means.
-    Examples: "value", "truth", "depth", "quality", "intelligence",
-    "passion", "curiosity", "vivid", "strategic", "deep", "smart".
-    1-2 word phrases (e.g. "deep dive") can also be word-scope when
-    the concept is the unit.
-    UI: renders as a PILL HIGHLIGHT (soft layer-colored background).
 
-  scope = "phrase"
-    Pick this when the MEANING comes from multi-word combination —
-    the phrase as a whole is the interpretive unit. Typically 3+ words.
-    Examples: "calculates the true value of an app", "personalized
-    guidance for curiosity", "vivid search experiences".
-    UI: dotted underline (thickness scales with weight).
+⚠ HARD RULE — word-scope is the DEFAULT. phrase-scope is the rare exception.
 
-When a phrase contains a loaded concept word (e.g. "the true value of
-an app" contains "value"), PREFER annotating the WORD with word-scope
-over the phrase. Word-scope annotations carry the rich semantic breakdown.
+The user has explicitly complained that annotating phrases hides the AI's interpretation of LOADED CONCEPT WORDS. Every objective contains words whose meanings vary wildly across AIs and contexts ("money", "value", "passive", "intentional", "history", "engagement", "incentivized", "personal", "experience", "smart", "deep", "vivid", "strategic", "relevant", "good", "true", "passion", "curiosity"). The USER wants to know precisely what YOU think those words mean — and the rich semantic breakdown (dimensions[] + inference_chain[]) only renders for word-scope annotations.
+
+When you see a phrase like "converting to money" or "intentional web searching":
+  ✗ WRONG: annotate "converting to money" as scope=phrase. The user can't see what you mean by "money."
+  ✓ RIGHT: annotate "money" as scope=word with dimensions[] like:
+      [{name: "Direct cash earnings", why: "Cashout / payouts to the user"},
+       {name: "Saved expenses", why: "Subscription replacement, time-cost reduction"},
+       {name: "Future opportunity value", why: "Data that compounds into income later"},
+       {name: "Implicit barter", why: "Attention/data the platform monetizes on the user's behalf"}]
+    Plus inference_chain showing how "money" connects to user outcome.
+
+DECISION RULE (binding):
+  1. Scan the objective. List every NOUN, ADJECTIVE, and ADVERB that is conceptually loaded — a word whose meaning is NOT pinned by context alone, where 5 different AIs would each interpret it differently. These are word-scope candidates.
+  2. Annotate each of these as scope="word". Their pill highlight + Layers tab is the user's primary tool for semantic clarity.
+  3. ONLY then, if a multi-word phrase carries meaning that lives in the COMBINATION (not in any single word), annotate it as scope="phrase". This should be ≤30% of your annotations.
+  4. NEVER annotate a phrase that contains an un-annotated loaded concept word. The word always wins.
+
+EXAMPLES from a real objective like "How is what you're searching converting to money? Search using the app, connect your past search history, differentiate intentional searching from passive":
+  • "money"        → scope=word ✓ (loaded — could mean income, savings, opportunity, etc.)
+  • "history"      → scope=word ✓ (loaded — what counts as history? what's stored?)
+  • "intentional"  → scope=word ✓ (loaded — opposed to what? how is it detected?)
+  • "passive"      → scope=word ✓ (loaded — passive how? user-perceived or system-detected?)
+  • "incentivized" → scope=word ✓ (loaded — extrinsic or intrinsic reward? mechanism?)
+  • "relevant"     → scope=word ✓ (loaded — relevance to whom, measured how?)
+  Phrase-scope should appear only for genuine multi-word units where no single word carries the load.
+
+UI rendering:
+  scope = "word"   → PILL HIGHLIGHT (saturated semi-transparent background, like a real highlighter mark)
+  scope = "phrase" → dotted underline (thickness scales with weight)
 
 ────────────────────────────────────────────────────────────────────
 REQUIRED FIELDS
@@ -164,13 +176,19 @@ ${GLYPH_KINDS.map(
   frame — ≤80 chars. Discipline / worldview implied.
     "Behavioral econ frame, not pedagogy."
 
-  stakes — ≤140 chars. Why THIS phrase matters for THIS objective.
+  stakes — ≤200 chars. Why THIS phrase matters for THIS specific objective. Reference the actual entity/constraint at stake. NEVER generic — always tied to something the user wrote.
 
-  fragility — ≤140 chars. When does this reading break?
+  fragility — STRUCTURED tripartite. Apply a pre-mortem: "Assume this reading is wrong 6 months from now. What broke?" Emit:
+    {
+      when  — the SPECIFIC condition that triggers the break (≤160 chars). Concrete event/state from the user's domain, not a hedge. BAD: "if not universally applicable". GOOD: "if the user redefines 'value' mid-session from money-saved to creative-satisfaction".
+      why   — the CAUSAL MECHANISM that turns condition into failure (≤220 chars). State the chain: "X happens → Y assumption breaks → Z effect". NOT just restating the claim.
+      sign  — the EARLY WARNING SIGNAL you'd see in the wild before failure (≤140 chars). Concrete + observable. E.g. "user-corrected confidence trending down across sessions" / "user adding new sub-objectives that contradict prior ones".
+    }
+    All three fields REQUIRED when fragility is included. Null the whole object only when no genuine fragility comes to mind.
 
   tensions — array of { phrase, kind, note } where
     kind = "tension" | "harmony". References OTHER phrases in the
-    same objective. ≤2 entries.
+    same objective. ≤2 entries. The note field MUST name the CAUSAL MECHANISM linking the two phrases — not just claim they relate. BAD: "Both emphasize depth." GOOD: "Both require the user to invest cognitive effort upfront — gives them a shared adoption-cost dependency."
 
   linked_sub_objective_id — id of the anchoring sub-objective | null.
 
@@ -187,6 +205,30 @@ SELECTION
 
 PHRASE EXACTNESS:
   The "phrase" field MUST be a verbatim substring of the input text.
+
+────────────────────────────────────────────────────────────────────
+ANTI-VAGUENESS LEXICON — load-bearing rigor enforcement
+────────────────────────────────────────────────────────────────────
+Professional strategists distinguish between CLAIMS (assertions) and REASONS (mechanisms). The user has zero tolerance for claims-without-mechanism. Every WHY field across every dimension must answer "by what causal chain?", not just restate the assertion.
+
+FORBIDDEN PHRASES (replace any usage with concrete mechanism):
+  ✗ "not universally applicable"  → name the SPECIFIC condition + the SPECIFIC mechanism that fails
+  ✗ "may not always work"          → name a SPECIFIC scenario + WHY
+  ✗ "could fail in edge cases"     → name the EDGE + the mechanism
+  ✗ "may need to be adjusted"      → name what triggers the adjustment + how
+  ✗ "depending on context"         → name the CONTEXT VARIABLE + how it changes the conclusion
+  ✗ "potentially significant"       → quantify or skip
+  ✗ "may scale issues"             → name the BOTTLENECK that breaks at scale
+
+REQUIRED MOVES (apply to every WHY field):
+  ✓ PRE-MORTEM — when writing fragility: assume this is wrong; what specific event reveals it?
+  ✓ INVERSION — instead of "how does X work", answer "what specific failure mode rules X out?"
+  ✓ FMEA TRIPLET — condition + mechanism + early signal. Never just one of three.
+  ✓ SPECIFICITY LADDER — every claim names something from the USER'S TEXT (entity, domain, constraint). Generic claims = rejected.
+  ✓ STEELMAN — when writing not_reading or tensions, state the strongest version of the rival reading.
+
+PROFESSIONAL THINKING POSTURE:
+  You are a senior strategist briefing a peer. Peers don't accept platitudes. They demand mechanism. If a claim could appear in a generic consulting deck, you have failed. Every annotation is a falsifiable hypothesis backed by specific causal reasoning grounded in the user's actual text.
 
 Return strict JSON.`;
 }
@@ -300,7 +342,16 @@ export const RESPONSE_SCHEMA = {
             mechanism: { type: ["string", "null"] },
             frame: { type: ["string", "null"] },
             stakes: { type: ["string", "null"] },
-            fragility: { type: ["string", "null"] },
+            fragility: {
+              type: ["object", "null"],
+              additionalProperties: false,
+              properties: {
+                when: { type: "string" },
+                why: { type: "string" },
+                sign: { type: "string" },
+              },
+              required: ["when", "why", "sign"],
+            },
             tensions: {
               type: ["array", "null"],
               items: {

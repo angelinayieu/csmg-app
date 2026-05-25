@@ -36,7 +36,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Cog,
+  GitCompare,
   Layers as LayersIcon,
+  RefreshCw,
   Sparkles,
   Star,
   Target,
@@ -47,6 +49,11 @@ import {
   AnnotationGlyph,
   type GlyphKind,
 } from "@/components/objective/icons/annotation-glyphs";
+import { AnnotationCompareModal } from "@/components/objective/annotation-compare-modal";
+import type {
+  AnnotationVersion,
+  ArbitrationRecord,
+} from "@/lib/objective-canvas/annotation-versions";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -77,6 +84,12 @@ export interface AnnotationTension {
   phrase: string;
   kind: "tension" | "harmony";
   note: string;
+}
+
+export interface AnnotationFragility {
+  when: string;
+  why: string;
+  sign: string;
 }
 
 export type AnnotationScope = "word" | "phrase";
@@ -113,7 +126,10 @@ export interface ObjectiveAnnotation {
   mechanism: string | null;
   frame: string | null;
   stakes: string | null;
-  fragility: string | null;
+  /** Structured pre-mortem — when / why / sign. Replaces legacy
+   *  single-string fragility (still rendered if only `when` is set
+   *  for migration of old payloads). */
+  fragility: AnnotationFragility | null;
   tensions: AnnotationTension[];
   linked_sub_objective_id: string | null;
   layer_tag: AnnotationLayerTag;
@@ -174,6 +190,76 @@ export function AnnotatedObjectiveCard({
   const [paintedCount, setPaintedCount] = useState(0);
   const [loading, setLoading] = useState(initialAnnotations.length === 0);
   const fetchedRef = useRef(false);
+
+  // ── Versions state (Deepen / Compare / Synthesize loop) ──
+  const [versions, setVersions] = useState<AnnotationVersion[] | null>(null);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [deepening, setDeepening] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [deepenError, setDeepenError] = useState<string | null>(null);
+
+  async function loadVersions() {
+    if (versions !== null || versionsLoading) return;
+    setVersionsLoading(true);
+    try {
+      const res = await fetch(
+        `/api/brainstorm/annotations/versions?spaceId=${encodeURIComponent(spaceId)}`,
+      );
+      const json = await res.json();
+      if (res.ok && Array.isArray(json.versions)) {
+        setVersions(json.versions);
+      }
+    } catch (err) {
+      console.warn("[AnnotatedObjective] versions load failed", err);
+    } finally {
+      setVersionsLoading(false);
+    }
+  }
+
+  async function runDeepen() {
+    setDeepening(true);
+    setDeepenError(null);
+    try {
+      const res = await fetch("/api/brainstorm/annotations/deepen", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ spaceId }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setDeepenError(json?.error ?? "Deepen failed.");
+        return;
+      }
+      setAnnotations(json.annotations);
+      // Force version reload next time the user interacts.
+      setVersions(null);
+    } catch (err) {
+      setDeepenError(
+        err instanceof Error ? err.message : "Network error.",
+      );
+    } finally {
+      setDeepening(false);
+    }
+  }
+
+  function openCompare() {
+    setCompareOpen(true);
+    void loadVersions();
+  }
+
+  function handleSynthesized(
+    newAnnotations: ObjectiveAnnotation[],
+    arbitration: ArbitrationRecord[],
+    newVersionId: string,
+  ) {
+    setAnnotations(newAnnotations);
+    setVersions(null);
+    // arbitration + newVersionId are unused at this layer — they
+    // live in the version history loaded on next compare. Voiding
+    // here to keep the typecheck honest.
+    void arbitration;
+    void newVersionId;
+  }
 
   const subTitleById = useMemo(() => {
     const m = new Map<string, string>();
@@ -453,9 +539,9 @@ export function AnnotatedObjectiveCard({
           )}
         </div>
 
-        {/* Footer meta */}
+        {/* Footer — meta + Deepen / Compare controls */}
         <div
-          className="mt-5 flex items-center justify-between pt-4"
+          className="mt-5 flex flex-wrap items-center justify-between gap-3 pt-4"
           style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
         >
           <span
@@ -468,16 +554,71 @@ export function AnnotatedObjectiveCard({
                 ? `${annotations.length} phrases · ${linkedCount} link to sub-objectives`
                 : "No annotations yet"}
           </span>
-          {annotations.length > 0 && !reading && (
-            <span
-              className="hidden text-[10.5px] font-light md:inline"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              Hover any underline to read the AI&rsquo;s mind
-            </span>
+          {annotations.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={runDeepen}
+                disabled={deepening}
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
+                style={{
+                  background: deepening
+                    ? appleVibe.surface.chip
+                    : "rgba(15,23,42,0.06)",
+                  color: appleVibe.text.secondary,
+                  cursor: deepening ? "wait" : "pointer",
+                }}
+                title="Run the 7 deepening probes on this reading"
+              >
+                <RefreshCw
+                  className="h-2.5 w-2.5"
+                  strokeWidth={2}
+                  style={{
+                    transform: deepening ? "rotate(360deg)" : "none",
+                    transition: "transform 1.6s linear",
+                  }}
+                />
+                {deepening ? "Deepening…" : "Deepen"}
+              </button>
+              <button
+                type="button"
+                onClick={openCompare}
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
+                style={{
+                  background: appleVibe.surface.chip,
+                  color: appleVibe.text.secondary,
+                }}
+                title="Compare annotation versions side-by-side"
+              >
+                <GitCompare className="h-2.5 w-2.5" strokeWidth={2} />
+                Compare versions
+              </button>
+            </div>
           )}
         </div>
+        {deepenError && (
+          <div
+            role="alert"
+            className="mt-2 rounded-lg px-3 py-2 text-[11.5px]"
+            style={{
+              background: "rgba(220,38,38,0.06)",
+              border: "1px solid rgba(220,38,38,0.18)",
+              color: "rgba(127,29,29,0.95)",
+            }}
+          >
+            {deepenError}
+          </div>
+        )}
       </div>
+
+      {/* Compare modal */}
+      <AnnotationCompareModal
+        open={compareOpen}
+        spaceId={spaceId}
+        versions={versions ?? []}
+        onClose={() => setCompareOpen(false)}
+        onSynthesized={handleSynthesized}
+      />
     </div>
   );
 }
@@ -564,21 +705,27 @@ function AnnotatedMark({
         className="relative inline cursor-help"
         style={{
           color: hovered || linked ? color : "inherit",
-          // Word-scope pill: soft background fill in layer color,
-          // narrow rounded shape. The pill says "this concept is
-          // being semantically unpacked" — distinct from the
-          // dotted-underline interpretive treatment of phrases.
+          // Word-scope pill: saturated semi-transparent fill in the
+          // layer color, like a real pastel highlighter mark on
+          // paper. Earlier alphas (~9%) were too faint to read as
+          // highlights — bumped to ~30-45% so the pill is
+          // immediately visible without being obnoxious.
+          //   resting → ~30% alpha   (hex 4D)
+          //   hovered → ~52% alpha   (hex 85) — pulls forward on focus
+          //   linked  → ~22% alpha   (hex 38) — paired across phrases
           background: isWord
             ? painted
               ? hovered
-                ? `${color}26`
-                : `${color}18`
+                ? `${color}85`
+                : linked
+                  ? `${color}38`
+                  : `${color}4D`
               : "transparent"
             : "transparent",
           borderRadius: isWord ? 6 : 0,
           padding: isWord ? "1px 5px" : "0",
           margin: isWord ? "0 1px" : "0",
-          boxShadow: isWord && hovered ? `inset 0 0 0 1px ${color}3D` : "none",
+          boxShadow: isWord && hovered ? `inset 0 0 0 1px ${color}66` : "none",
           transition:
             "background 220ms ease, color 220ms ease, box-shadow 220ms ease",
         }}
@@ -693,7 +840,9 @@ const TAB_LABEL: Record<TabKey, string> = {
   like: "Like / Unlike",
   how: "How",
   stakes: "Stakes",
-  warn: "⚠",
+  // Renamed from "⚠" so the unicode triangle doesn't render
+  // alongside the AlertTriangle icon (was rendering as double-icon).
+  warn: "Risk",
 };
 
 function PopoverCard({
@@ -1064,21 +1213,72 @@ function TabBody({
   }
 
   if (tab === "warn") {
+    const fr = annotation.fragility;
     return (
-      <div className="space-y-2">
-        {annotation.fragility && (
-          <p
-            className="text-[12px] font-light leading-snug"
-            style={{ color: appleVibe.text.secondary }}
+      <div className="space-y-3">
+        {fr && (fr.when || fr.why || fr.sign) && (
+          <div
+            className="rounded-lg p-2.5"
+            style={{
+              background: "rgba(220,38,38,0.05)",
+              border: "1px solid rgba(220,38,38,0.18)",
+            }}
           >
-            <span
-              className="font-semibold"
-              style={{ color: "rgba(127,29,29,0.95)" }}
+            <div
+              className="mb-1.5 text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+              style={{ color: "rgba(127,29,29,0.85)" }}
             >
-              Fragile when:
-            </span>{" "}
-            {annotation.fragility}
-          </p>
+              Pre-mortem
+            </div>
+            {fr.when && (
+              <div className="mb-1.5">
+                <div
+                  className="text-[9.5px] font-semibold uppercase tracking-wider"
+                  style={{ color: "rgba(127,29,29,0.85)" }}
+                >
+                  When
+                </div>
+                <p
+                  className="mt-0.5 text-[11.5px] font-light leading-snug"
+                  style={{ color: appleVibe.text.secondary }}
+                >
+                  {fr.when}
+                </p>
+              </div>
+            )}
+            {fr.why && (
+              <div className="mb-1.5">
+                <div
+                  className="text-[9.5px] font-semibold uppercase tracking-wider"
+                  style={{ color: "rgba(127,29,29,0.85)" }}
+                >
+                  Why it breaks
+                </div>
+                <p
+                  className="mt-0.5 text-[11.5px] font-light leading-snug"
+                  style={{ color: appleVibe.text.secondary }}
+                >
+                  {fr.why}
+                </p>
+              </div>
+            )}
+            {fr.sign && (
+              <div>
+                <div
+                  className="text-[9.5px] font-semibold uppercase tracking-wider"
+                  style={{ color: "rgba(127,29,29,0.85)" }}
+                >
+                  Early signal
+                </div>
+                <p
+                  className="mt-0.5 text-[11.5px] font-light leading-snug"
+                  style={{ color: appleVibe.text.secondary }}
+                >
+                  {fr.sign}
+                </p>
+              </div>
+            )}
+          </div>
         )}
         {annotation.tensions
           .filter((t) => t.kind === "tension")
