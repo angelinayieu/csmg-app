@@ -33,9 +33,12 @@ import {
   AlertTriangle,
   ArrowUpRight,
   BookOpen,
+  ChevronLeft,
+  ChevronRight,
   Cog,
   Layers as LayersIcon,
   Sparkles,
+  Star,
   Target,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -54,10 +57,19 @@ export type AnnotationLayerTag =
   | "objective"
   | null;
 
+export interface AnnotationExtension {
+  name: string;
+  why: string;
+}
+
 export interface AnnotationAnalogy {
   referent: string;
-  why_same: string;
+  domain: string;
   glyph: GlyphKind;
+  why_same: string;
+  why_differs: string | null;
+  extensions: AnnotationExtension[];
+  generativity: number;
 }
 
 export interface AnnotationTension {
@@ -93,7 +105,10 @@ export interface ObjectiveAnnotation {
   not_reading: string | null;
   crystal: string | null;
   confidence: number | null;
-  like: AnnotationAnalogy | null;
+  /** 3-5 analogies from distant domains. Replaces the v3 single
+   *  `like` field; old payloads with `like` are migrated by the
+   *  server into a single-entry `analogies[]`. */
+  analogies: AnnotationAnalogy[];
   mechanism: string | null;
   frame: string | null;
   stakes: string | null;
@@ -468,7 +483,7 @@ function availableTabs(a: ObjectiveAnnotation): TabKey[] {
   const tabs: TabKey[] = ["read"];
   if (a.dimensions.length > 0 || a.inference_chain.length > 0)
     tabs.push("layers");
-  if (a.like) tabs.push("like");
+  if (a.analogies.length > 0) tabs.push("like");
   if (a.mechanism || a.frame) tabs.push("how");
   if (a.stakes) tabs.push("stakes");
   if (a.fragility || a.tensions.some((t) => t.kind === "tension"))
@@ -488,7 +503,7 @@ function defaultTab(a: ObjectiveAnnotation): TabKey {
   }
   if (a.dimensions.length > 0 || a.inference_chain.length > 0)
     return "layers";
-  if (a.like) return "like";
+  if (a.analogies.length > 0) return "like";
   if (a.mechanism || a.frame) return "how";
   if (a.stakes) return "stakes";
   return "read";
@@ -600,10 +615,12 @@ function AnnotatedMark({
             />
           )}
         </AnimatePresence>
-        {/* Faint glyph beside the phrase when an analogy exists.
-            For word-scope pills we render the glyph after the closing
-            pill edge, not inside, so the pill doesn't grow. */}
-        {annotation.like && painted && (
+        {/* Faint glyph beside the phrase using the TOP analogy's
+            glyph (highest generativity — already sorted by the
+            generator). Indicates "this concept has analogies" at a
+            glance; the count of dots inside the popover communicates
+            how many lenses are available. */}
+        {annotation.analogies.length > 0 && painted && (
           <span
             className="ml-0.5 inline-flex translate-y-[-1px] items-center"
             aria-hidden
@@ -613,7 +630,10 @@ function AnnotatedMark({
               transition: "opacity 220ms ease",
             }}
           >
-            <AnnotationGlyph kind={annotation.like.glyph} size={12} />
+            <AnnotationGlyph
+              kind={annotation.analogies[0]!.glyph}
+              size={12}
+            />
           </span>
         )}
       </motion.span>
@@ -663,7 +683,7 @@ const TAB_ICONS: Record<TabKey, React.ReactNode> = {
 const TAB_LABEL: Record<TabKey, string> = {
   read: "Read",
   layers: "Layers",
-  like: "Like",
+  like: "Like / Unlike",
   how: "How",
   stakes: "Stakes",
   warn: "⚠",
@@ -986,38 +1006,8 @@ function TabBody({
     );
   }
 
-  if (tab === "like" && annotation.like) {
-    return (
-      <div className="space-y-2">
-        <div className="flex items-start gap-3">
-          <div
-            className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl"
-            style={{
-              background: `${color}10`,
-              color,
-              border: `1px solid ${color}30`,
-            }}
-            aria-hidden
-          >
-            <AnnotationGlyph kind={annotation.like.glyph} size={26} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div
-              className="text-[12px] font-semibold leading-snug"
-              style={{ color: appleVibe.text.primary }}
-            >
-              Like {annotation.like.referent}
-            </div>
-            <p
-              className="mt-0.5 text-[11.5px] font-light leading-snug"
-              style={{ color: appleVibe.text.secondary }}
-            >
-              {annotation.like.why_same}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
+  if (tab === "like" && annotation.analogies.length > 0) {
+    return <AnalogyCarousel analogies={annotation.analogies} color={color} />;
   }
 
   if (tab === "how") {
@@ -1129,6 +1119,215 @@ function TabBody({
     >
       No content for this lens.
     </p>
+  );
+}
+
+// ── Analogy carousel (Like / Unlike tab body) ──
+//
+// Stacked navigator across the polyhedron of analogies for one
+// annotation. Each card shows: domain chip + glyph, why_same, the
+// "BUT unlike…" disanalogy (if present), 2-4 candidate extensions
+// (generative payoff), generativity star rating. Prev/next + dot
+// indicator at the bottom.
+
+function AnalogyCarousel({
+  analogies,
+  color,
+}: {
+  analogies: AnnotationAnalogy[];
+  color: string;
+}) {
+  const [cursor, setCursor] = useState(0);
+  const total = analogies.length;
+  // Safety: keep cursor in bounds when analogies change.
+  useEffect(() => {
+    if (cursor >= total) setCursor(0);
+  }, [cursor, total]);
+  const a = analogies[cursor]!;
+  const stars = Math.max(1, Math.round(a.generativity * 5));
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Domain chip + glyph header */}
+      <div className="flex items-start gap-3">
+        <div
+          className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl"
+          style={{
+            background: `${color}10`,
+            color,
+            border: `1px solid ${color}30`,
+          }}
+          aria-hidden
+        >
+          <AnnotationGlyph kind={a.glyph} size={26} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span
+              className="inline-block rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]"
+              style={{ background: `${color}1A`, color }}
+            >
+              {a.domain}
+            </span>
+            <span
+              className="text-[10px] font-light"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              {cursor + 1} of {total}
+            </span>
+          </div>
+          <div
+            className="mt-1 text-[12px] font-semibold leading-snug"
+            style={{ color: appleVibe.text.primary }}
+          >
+            Like {a.referent}
+          </div>
+          <p
+            className="mt-0.5 text-[11.5px] font-light leading-snug"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            {a.why_same}
+          </p>
+        </div>
+      </div>
+
+      {/* Disanalogy: "BUT unlike…" — where the analogy breaks */}
+      {a.why_differs && (
+        <div
+          className="rounded-lg p-2.5"
+          style={{
+            background: "rgba(220,38,38,0.04)",
+            border: "1px solid rgba(220,38,38,0.16)",
+          }}
+        >
+          <div
+            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: "rgba(127,29,29,0.85)" }}
+          >
+            But unlike
+          </div>
+          <p
+            className="mt-0.5 text-[11.5px] font-light leading-snug"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            {a.why_differs}
+          </p>
+        </div>
+      )}
+
+      {/* Generative extensions — candidate features the analogy implies */}
+      {a.extensions.length > 0 && (
+        <div>
+          <div
+            className="mb-1.5 text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            If this holds, build
+          </div>
+          <ul className="space-y-1">
+            {a.extensions.map((e, i) => (
+              <li
+                key={i}
+                className="rounded-md px-2 py-1.5"
+                style={{
+                  background: appleVibe.surface.base,
+                  border: `1px solid ${appleVibe.stroke.hairline}`,
+                }}
+              >
+                <div
+                  className="text-[11.5px] font-semibold leading-snug"
+                  style={{ color: appleVibe.text.primary }}
+                >
+                  {e.name}
+                </div>
+                <p
+                  className="mt-0.5 text-[10.5px] font-light italic leading-snug"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  {e.why}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Footer: prev / dots / generativity stars / next */}
+      <div
+        className="flex items-center justify-between pt-1"
+        style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setCursor((c) => (c - 1 + total) % total);
+          }}
+          disabled={total < 2}
+          className="flex h-6 w-6 items-center justify-center rounded-md transition-colors"
+          style={{
+            background: total < 2 ? "transparent" : appleVibe.surface.chip,
+            color: appleVibe.text.tertiary,
+            opacity: total < 2 ? 0.3 : 1,
+          }}
+          aria-label="Previous analogy"
+        >
+          <ChevronLeft className="h-3 w-3" strokeWidth={2.5} />
+        </button>
+
+        <div className="flex items-center gap-1.5">
+          {/* Dot indicator */}
+          <span className="flex items-center gap-0.5">
+            {analogies.map((_, i) => (
+              <span
+                key={i}
+                className="block h-1 w-1 rounded-full transition-colors"
+                style={{
+                  background:
+                    i === cursor ? color : "rgba(15,23,42,0.18)",
+                }}
+                aria-hidden
+              />
+            ))}
+          </span>
+          {/* Generativity stars */}
+          <span
+            className="ml-1 flex items-center"
+            aria-label={`Generativity ${stars} of 5`}
+          >
+            {[0, 1, 2, 3, 4].map((i) => (
+              <Star
+                key={i}
+                className="h-2.5 w-2.5"
+                strokeWidth={1.75}
+                style={{
+                  color: i < stars ? color : "rgba(15,23,42,0.18)",
+                  fill: i < stars ? color : "transparent",
+                }}
+              />
+            ))}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setCursor((c) => (c + 1) % total);
+          }}
+          disabled={total < 2}
+          className="flex h-6 w-6 items-center justify-center rounded-md transition-colors"
+          style={{
+            background: total < 2 ? "transparent" : appleVibe.surface.chip,
+            color: appleVibe.text.tertiary,
+            opacity: total < 2 ? 0.3 : 1,
+          }}
+          aria-label="Next analogy"
+        >
+          <ChevronRight className="h-3 w-3" strokeWidth={2.5} />
+        </button>
+      </div>
+    </div>
   );
 }
 

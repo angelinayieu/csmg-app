@@ -23,10 +23,27 @@ export type AnnotationLayerTag =
 
 export type AnnotationScope = "word" | "phrase";
 
+export interface AnnotationExtension {
+  /** Short candidate-feature name (≤6 words). */
+  name: string;
+  /** Why this follows from the analogy holding. */
+  why: string;
+}
+
 export interface AnnotationAnalogy {
   referent: string;
-  why_same: string;
+  /** Distant-domain label — see DOMAIN CATALOG in the prompt. */
+  domain: string;
   glyph: GlyphKind;
+  why_same: string;
+  /** The disanalogy — where the mapping BREAKS in this user's
+   *  context. Often where the novel feature lives. */
+  why_differs: string | null;
+  /** 2-4 candidate features that follow if the analogy holds —
+   *  generative payoff. */
+  extensions: AnnotationExtension[];
+  /** 0..1 — how generative this analogy is. Sort desc. */
+  generativity: number;
 }
 
 export interface AnnotationTension {
@@ -66,7 +83,9 @@ export interface ObjectiveAnnotation {
   not_reading: string | null;
   crystal: string | null;
   confidence: number | null;
-  like: AnnotationAnalogy | null;
+  /** v4 — 3-5 analogies from maximally distant domains. The
+   *  Analogy Polyhedron. */
+  analogies: AnnotationAnalogy[];
   mechanism: string | null;
   frame: string | null;
   stakes: string | null;
@@ -186,16 +205,57 @@ export async function generateObjectiveAnnotations(
           .slice(0, 5)
       : [];
 
-    let like: AnnotationAnalogy | null = null;
-    if (a.like && typeof a.like === "object") {
-      const lo = a.like as Record<string, unknown>;
-      const ref = stringOrNull(lo.referent, 60);
-      const why = stringOrNull(lo.why_same, 180);
-      const glyph = typeof lo.glyph === "string" ? lo.glyph : "";
-      if (ref && why && ALLOWED_GLYPHS.has(glyph)) {
-        like = { referent: ref, why_same: why, glyph: glyph as GlyphKind };
-      }
+    // ── Analogies (v4) ──
+    // Validate each entry; dedupe by domain (distance rule); cap to 5;
+    // sort by generativity descending. Back-compat: if the LLM still
+    // emits a legacy single `like` object, fold it in as the first
+    // analogy entry.
+    let analogies: AnnotationAnalogy[] = [];
+    const rawAnalogies: unknown[] = Array.isArray(a.analogies)
+      ? (a.analogies as unknown[])
+      : [];
+    if (rawAnalogies.length === 0 && a.like && typeof a.like === "object") {
+      rawAnalogies.push(a.like);
     }
+    const seenDomains = new Set<string>();
+    for (const raw of rawAnalogies) {
+      if (!raw || typeof raw !== "object") continue;
+      const r = raw as Record<string, unknown>;
+      const ref = stringOrNull(r.referent, 60);
+      const why_same = stringOrNull(r.why_same, 200);
+      const glyph = typeof r.glyph === "string" ? r.glyph : "";
+      if (!ref || !why_same || !ALLOWED_GLYPHS.has(glyph)) continue;
+      const domain = stringOrNull(r.domain, 40) ?? "General";
+      const domainKey = domain.toLowerCase();
+      if (seenDomains.has(domainKey)) continue;
+      seenDomains.add(domainKey);
+      const why_differs = stringOrNull(r.why_differs, 220);
+      const extensions: AnnotationExtension[] = Array.isArray(r.extensions)
+        ? (r.extensions as unknown[])
+            .map((e): AnnotationExtension | null => {
+              if (!e || typeof e !== "object") return null;
+              const er = e as Record<string, unknown>;
+              const name = stringOrNull(er.name, 60);
+              const why = stringOrNull(er.why, 200);
+              if (!name || !why) return null;
+              return { name, why };
+            })
+            .filter((x): x is AnnotationExtension => x !== null)
+            .slice(0, 4)
+        : [];
+      const generativity = clampFloat(r.generativity) ?? 0.5;
+      analogies.push({
+        referent: ref,
+        domain,
+        glyph: glyph as GlyphKind,
+        why_same,
+        why_differs,
+        extensions,
+        generativity,
+      });
+    }
+    analogies.sort((x, y) => y.generativity - x.generativity);
+    analogies = analogies.slice(0, 5);
 
     const mechanism = stringOrNull(a.mechanism, 160);
     const frame = stringOrNull(a.frame, 100);
@@ -241,7 +301,7 @@ export async function generateObjectiveAnnotations(
       not_reading,
       crystal,
       confidence,
-      like,
+      analogies,
       mechanism,
       frame,
       stakes,

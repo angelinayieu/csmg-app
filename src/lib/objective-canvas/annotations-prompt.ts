@@ -117,12 +117,45 @@ OPTIONAL FIELDS (include only what genuinely applies)
     This makes your inference auditable. The user can disagree with
     any hop and tell you to revise.
 
-  like — analogy mapping to a familiar structure:
-    { referent, why_same, glyph } where glyph ∈
+  analogies — 3-5 ANALOGIES FROM MAXIMALLY DISTANT DOMAINS.
+    Single-analogy thinking narrows; multiple analogies from distant
+    domains DIVERGE. Each item:
+      {
+        referent    — the familiar thing ("Currency exchange", "REM sleep cycle", "Tasting menu", "Coral reef")
+        domain      — ONE of the structural domains (see catalog below)
+        glyph       — pick ONE glyph kind (see catalog)
+        why_same    — 1 sentence on what RELATION transfers (structure-mapping, not surface similarity)
+        why_differs — 1 sentence on where the analogy BREAKS in this user's context (the disanalogy — this is where novel features live). Null only if the analogy is a near-perfect fit.
+        extensions  — 2-4 candidate features that would follow IF this analogy holds. Each: { name (≤6 words), why (1 sentence on why this follows from the analogy) }. These are the generative payoff of the analogy.
+        generativity— 0..1 — how generative this analogy is (how much novel feature thinking it unlocks). Sort the analogies array by generativity descending.
+      }
+
+    DOMAIN CATALOG (pick at MOST ONE analogy from each domain):
+      • Finance / Economics       (markets, trading, currency)
+      • Biology / Ecology         (organisms, ecosystems, evolution)
+      • Physics / Engineering     (forces, materials, systems)
+      • Music / Performance       (rhythm, harmony, virtuosity)
+      • Sports / Athletics        (training, competition, recovery)
+      • Architecture / Spatial    (structures, paths, sanctuaries)
+      • Ritual / Spirituality     (rites, practice, transcendence)
+      • Cooking / Hospitality     (recipes, tasting, service)
+      • Gaming / Play             (loops, narratives, mastery)
+      • Storytelling / Narrative  (arcs, characters, beats)
+      • Manufacturing / Craft     (process, tools, quality)
+      • Medicine / Healing        (diagnosis, intervention, healing)
+
+    GLYPH KINDS (pick the underlying structural shape per analogy):
 ${GLYPH_KINDS.map(
   (k) => `      "${k}" — ${GLYPH_MEANINGS[k]}`,
 ).join("\n")}
-    Skip if no genuine analogy comes to mind.
+
+    DISTANCE RULE (load-bearing — do NOT violate):
+      The 3-5 analogies you emit MUST come from MAXIMALLY DISTANT
+      domains. No two analogies may share a domain. Lookalike clusters
+      ("Like Duolingo + Khan Academy + Codecademy") are rejected —
+      that's one analogy in three costumes, not three analogies.
+
+    Skip the entire field only if NO genuine analogy comes to mind.
 
   mechanism — short string (≤120 chars). The causal-rule version
     ("Variable reinforcement → habit formation"). When you have
@@ -225,18 +258,44 @@ export const RESPONSE_SCHEMA = {
                 required: ["step", "via"],
               },
             },
-            like: {
-              type: ["object", "null"],
-              additionalProperties: false,
-              properties: {
-                referent: { type: "string" },
-                why_same: { type: "string" },
-                glyph: {
-                  type: "string",
-                  enum: GLYPH_KINDS as unknown as string[],
+            analogies: {
+              type: ["array", "null"],
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  referent: { type: "string" },
+                  domain: { type: "string" },
+                  glyph: {
+                    type: "string",
+                    enum: GLYPH_KINDS as unknown as string[],
+                  },
+                  why_same: { type: "string" },
+                  why_differs: { type: ["string", "null"] },
+                  extensions: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      additionalProperties: false,
+                      properties: {
+                        name: { type: "string" },
+                        why: { type: "string" },
+                      },
+                      required: ["name", "why"],
+                    },
+                  },
+                  generativity: { type: "number" },
                 },
+                required: [
+                  "referent",
+                  "domain",
+                  "glyph",
+                  "why_same",
+                  "why_differs",
+                  "extensions",
+                  "generativity",
+                ],
               },
-              required: ["referent", "why_same", "glyph"],
             },
             mechanism: { type: ["string", "null"] },
             frame: { type: ["string", "null"] },
@@ -271,7 +330,7 @@ export const RESPONSE_SCHEMA = {
             "confidence",
             "dimensions",
             "inference_chain",
-            "like",
+            "analogies",
             "mechanism",
             "frame",
             "stakes",
