@@ -40,6 +40,12 @@ export interface SubObjectiveBlock {
   picked_proposal_ids: string[];
   picked_goal_ids: string[];
   generated_at: string;
+  /** Short noun phrase (≤3 words) naming what KIND of bucket these
+   *  proposals are: "Features" for an app, "Lessons" for a course,
+   *  "Bets" for a strategy, etc. LLM-supplied; shown in the picker
+   *  header as "5 {category} proposed". Optional for back-compat
+   *  with blocks generated before this field existed. */
+  category?: string;
 }
 
 declare module "./clarifying-state" {

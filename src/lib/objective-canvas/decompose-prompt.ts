@@ -15,21 +15,43 @@ export interface BuildDecomposeArgs {
 export function buildSystemPrompt(): string {
   return `You are a strategy decomposer.
 
-The user has refined an objective through a short clarifying-question pass. Your job is to propose 4–5 SUB-OBJECTIVES that, taken together, would meaningfully deliver on the parent objective.
+The user has refined an objective through a short clarifying-question pass. Your job is to do two things:
+
+JOB 1 — NAME THE CATEGORY
+Pick the single best noun that describes what KIND of bucket these sub-objectives are. The category is dictated by the parent objective:
+  - Building an app / product           → "Features"
+  - Building a curriculum / course      → "Lessons" or "Modules"
+  - Designing a workout                 → "Movements" or "Exercises"
+  - Running a research program          → "Research areas" or "Investigations"
+  - Defining a business strategy        → "Strategic moves" or "Bets"
+  - Writing a book / report             → "Sections" or "Chapters"
+  - Optimizing operations               → "Workflows" or "Levers"
+The category is ONE WORD or a short noun phrase (≤3 words). Pick from the parent's actual domain — never invent abstract jargon ("Initiatives", "Components", "Items" — too generic).
+
+JOB 2 — PROPOSE 4–5 SUB-OBJECTIVES (within that category)
 
 SUB-OBJECTIVE RULES:
-- Each sub-objective is independently meaningful — a person could spend a week on it without needing the others.
-- Cumulatively the set covers the load-bearing facets of the parent. Don't return overlapping or trivially-subdividing items.
+- Each is independently meaningful — a person could spend a week on it without needing the others.
+- Cumulatively the set covers the load-bearing facets of the parent. No overlapping, no trivially-subdividing.
 - Each is concrete enough to spawn its own Pain → Features → Outcomes → Objective layered analysis downstream.
-- Avoid generic categories ("research", "communication", "operations") — they must reference the user's actual domain.
 
-OUTPUT RULES:
+TITLE RULES (strict):
+- title MUST be a NOUN PHRASE naming the thing itself. Not an action.
+- title MUST NOT start with action verbs: Develop / Implement / Create / Design / Build / Enhance / Establish / Drive / Deliver / Provide / Enable / Generate / Produce / Conduct.
+- BAD: "Develop Vivid Search Interface" / "Implement Gamification Elements" / "Enhance AI Personalization"
+- GOOD: "Vivid search interface" / "Gamification layer" / "AI personalization engine"
+- ≤6 words. Title-case is fine; no terminal punctuation.
+
+SUMMARY + RATIONALE:
+- summary: 1 sentence describing what the sub-objective IS (state of the world), not what you'll DO to it.
+- rationale: 1 sentence on why it's load-bearing for the parent objective.
+
+OUTPUT:
 - Return 4–5 proposals. No fewer, no more.
 - Mark exactly 3 with recommended=true (the ones you'd start with if the user could only do three).
-- confidence ∈ [0,1] = your plausibility estimate.
-- title ≤ 8 words, summary 1–2 sentences, rationale 1 sentence on why this sub-objective matters for the parent.
+- confidence ∈ [0,1] — your plausibility estimate.
 
-ANTI-PLATITUDE RULE:
+ANTI-PLATITUDE:
 If a proposal could appear unchanged on a different user's objective, rewrite it to reference something specific from THIS user's prompt or clarifying answers.
 
 Return strict JSON.`;
@@ -65,6 +87,10 @@ export const RESPONSE_SCHEMA = {
     type: "object",
     additionalProperties: false,
     properties: {
+      // The picker UI shows this above the proposals as
+      // "5 {category} proposed" so the user knows what kind of
+      // bucket they're picking from (Features / Lessons / Bets / …).
+      category: { type: "string" },
       proposals: {
         type: "array",
         items: {
@@ -81,6 +107,6 @@ export const RESPONSE_SCHEMA = {
         },
       },
     },
-    required: ["proposals"],
+    required: ["category", "proposals"],
   },
 } as const;

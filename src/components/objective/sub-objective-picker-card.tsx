@@ -152,7 +152,9 @@ export function SubObjectivePickerCard({
   return (
     <Shell>
       <div className="flex items-center justify-between">
-        <Eyebrow>Sub-objectives · {block.proposals.length} proposed</Eyebrow>
+        <Eyebrow>
+          {block.proposals.length} {block.category || "proposed"}
+        </Eyebrow>
         <button
           type="button"
           onClick={() => runAction("propose", { mode: "regenerate" })}
@@ -179,12 +181,11 @@ export function SubObjectivePickerCard({
         Outcomes → Objective layered analysis.
       </p>
 
-      <ul className="mt-5 flex flex-col gap-2.5">
-        {block.proposals.map((p, idx) => (
+      <ul className="mt-5 flex flex-col gap-2">
+        {block.proposals.map((p) => (
           <ProposalRow
             key={p.id}
             proposal={p}
-            index={idx}
             picked={picked.has(p.id)}
             onToggle={() => togglePick(p.id)}
             disabled={busy}
@@ -235,18 +236,18 @@ export function SubObjectivePickerCard({
 
 function ProposalRow({
   proposal,
-  index,
   picked,
   onToggle,
   disabled,
 }: {
   proposal: SubObjectiveProposal;
-  index: number;
   picked: boolean;
   onToggle: () => void;
   disabled: boolean;
 }) {
   const confidencePct = Math.round(proposal.confidence * 100);
+  const confidenceDot =
+    confidencePct >= 75 ? "#16A34A" : confidencePct >= 50 ? "#D97706" : "#DC2626";
   return (
     <li>
       <button
@@ -257,22 +258,20 @@ function ProposalRow({
         className="flex w-full items-start gap-3 rounded-2xl p-3.5 text-left transition-all"
         style={{
           background: picked
-            ? "rgba(15,23,42,0.04)"
-            : appleVibe.surface.base,
+            ? "rgba(15,23,42,0.025)"
+            : "rgba(255,255,255,0.55)",
           border: `1px solid ${
-            picked ? appleVibe.stroke.medium : appleVibe.stroke.hairline
+            picked ? "rgba(15,23,42,0.18)" : appleVibe.stroke.hairline
           }`,
           borderRadius: appleVibe.radius.md,
           cursor: disabled ? "wait" : "pointer",
         }}
       >
-        {/* Checkbox */}
+        {/* Compact checkbox — circle, slightly smaller */}
         <div
-          className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md"
+          className="mt-0.5 flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full"
           style={{
-            background: picked
-              ? appleVibe.accent.primary
-              : appleVibe.surface.card,
+            background: picked ? appleVibe.accent.primary : "transparent",
             border: `1px solid ${
               picked ? appleVibe.accent.primary : appleVibe.stroke.medium
             }`,
@@ -281,36 +280,31 @@ function ProposalRow({
         >
           {picked && (
             <Check
-              className="h-3 w-3"
-              strokeWidth={3}
+              className="h-2.5 w-2.5"
+              strokeWidth={3.5}
               style={{ color: appleVibe.text.onAccent }}
             />
           )}
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span
-              className="font-mono text-[10px] font-semibold"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              {String(index + 1).padStart(2, "0")}
-            </span>
+          {/* Title + recommended chip — no numbering, single line */}
+          <div className="flex items-baseline gap-1.5">
             <h3
               className="text-[14px] font-semibold leading-snug tracking-tight"
-              style={{ color: appleVibe.text.primary }}
+              style={{ color: appleVibe.text.primary, letterSpacing: "-0.005em" }}
             >
               {proposal.title}
             </h3>
             {proposal.recommended && (
               <span
-                className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wider"
+                className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
                 style={{
                   background: "rgba(124,58,237,0.08)",
                   color: "rgba(91,33,182,0.95)",
                 }}
               >
-                <Sparkle className="h-2.5 w-2.5" />
+                <Sparkle className="h-2 w-2" />
                 Top
               </span>
             )}
@@ -318,54 +312,47 @@ function ProposalRow({
 
           {proposal.summary && (
             <p
-              className="mt-1 text-[12.5px] font-light leading-snug"
+              className="mt-1 line-clamp-2 text-[12px] font-light leading-snug"
               style={{ color: appleVibe.text.secondary }}
             >
               {proposal.summary}
             </p>
           )}
 
-          <div className="mt-1.5 flex items-center gap-3">
-            <ConfidencePill pct={confidencePct} />
+          {/* Single compact meta line: confidence dot · pct · rationale */}
+          <div className="mt-2 flex items-center gap-1.5">
+            <span
+              className="block h-1.5 w-1.5 flex-shrink-0 rounded-full"
+              style={{ background: confidenceDot }}
+              aria-hidden
+            />
+            <span
+              className="font-mono text-[10px] font-medium"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              {confidencePct}%
+            </span>
             {proposal.rationale && (
-              <span
-                className="line-clamp-1 text-[11px] font-light italic"
-                style={{ color: appleVibe.text.tertiary }}
-                title={proposal.rationale}
-              >
-                {proposal.rationale}
-              </span>
+              <>
+                <span
+                  className="text-[10px]"
+                  style={{ color: appleVibe.text.faint }}
+                >
+                  ·
+                </span>
+                <span
+                  className="line-clamp-1 text-[11px] font-light italic"
+                  style={{ color: appleVibe.text.tertiary }}
+                  title={proposal.rationale}
+                >
+                  {proposal.rationale}
+                </span>
+              </>
             )}
           </div>
         </div>
       </button>
     </li>
-  );
-}
-
-function ConfidencePill({ pct }: { pct: number }) {
-  return (
-    <span
-      className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
-      style={{
-        background: appleVibe.surface.chip,
-        color: appleVibe.text.secondary,
-      }}
-    >
-      <span
-        className="block h-1 w-1 rounded-full"
-        style={{
-          background:
-            pct >= 75
-              ? "#16A34A"
-              : pct >= 50
-                ? "#D97706"
-                : "#DC2626",
-        }}
-        aria-hidden
-      />
-      {pct}%
-    </span>
   );
 }
 

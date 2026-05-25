@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const proposals = await generateSubObjectiveProposals({
+    const { proposals, category } = await generateSubObjectiveProposals({
       objective,
       clarifying: state.clarifying ?? null,
     });
@@ -94,6 +94,7 @@ export async function POST(req: NextRequest) {
       picked_proposal_ids: [],
       picked_goal_ids: [],
       generated_at: new Date().toISOString(),
+      category,
     };
 
     const nextSynth = writeSubObjectiveBlock(space.synthesis_data, block);
