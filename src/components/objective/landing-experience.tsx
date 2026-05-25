@@ -131,36 +131,14 @@ export function LandingExperience({
               onMouseEnter={() => setStackHovered(true)}
               onMouseLeave={() => setStackHovered(false)}
             >
-              {/* Explore — left-tilted, sits behind Create when
-                  Create is active. We push it slightly out of the
-                  way once Create is being pressed so the focal
-                  card has the spotlight. */}
+              {/* Create — left-tilted, primary, on top. layoutId
+                  bridges to the entry stage. */}
               <motion.div
                 initial={reduce ? false : { opacity: 0, x: 10, y: 14 }}
                 animate={{ opacity: 1, x: 0, y: 0 }}
-                transition={{ duration: 0.5, delay: 0.12, ease: "easeOut" }}
-                className="absolute"
-                style={{ left: 40, top: 20, zIndex: stackHovered ? 1 : 2 }}
-              >
-                <PortalCard
-                  variant="secondary"
-                  title="Explore"
-                  subtitle="Browse templates, patterns, and starter canvases."
-                  icon={<Compass className="h-5 w-5" strokeWidth={1.75} />}
-                  badge="Coming soon"
-                  disabled
-                  restRotation={-5}
-                />
-              </motion.div>
-
-              {/* Create — right-tilted, primary. layoutId bridges
-                  to the entry stage. */}
-              <motion.div
-                initial={reduce ? false : { opacity: 0, x: -10, y: 14 }}
-                animate={{ opacity: 1, x: 0, y: 0 }}
                 transition={{ duration: 0.5, delay: 0.05, ease: "easeOut" }}
                 className="absolute"
-                style={{ right: 40, top: 20, zIndex: 3 }}
+                style={{ left: 40, top: 20, zIndex: 3 }}
               >
                 <PortalCard
                   layoutId="portal-card"
@@ -169,6 +147,27 @@ export function LandingExperience({
                   subtitle="Start a new objective from scratch."
                   icon={<Plus className="h-5 w-5" strokeWidth={2.25} />}
                   onActivate={() => setStage("entry")}
+                  restRotation={-5}
+                />
+              </motion.div>
+
+              {/* Explore — right-tilted, behind Create. We push it
+                  slightly out of the way when the stack is hovered
+                  so the focal card has the spotlight. */}
+              <motion.div
+                initial={reduce ? false : { opacity: 0, x: -10, y: 14 }}
+                animate={{ opacity: 1, x: 0, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.12, ease: "easeOut" }}
+                className="absolute"
+                style={{ right: 40, top: 20, zIndex: stackHovered ? 1 : 2 }}
+              >
+                <PortalCard
+                  variant="secondary"
+                  title="Explore"
+                  subtitle="Browse templates, patterns, and starter canvases."
+                  icon={<Compass className="h-5 w-5" strokeWidth={1.75} />}
+                  badge="Coming soon"
+                  disabled
                   restRotation={5}
                 />
               </motion.div>

@@ -36,6 +36,10 @@ export interface MainCanvasSub {
    *  Empty until at least one edge is approved. */
   approvedItems: ApprovedItem[];
   generatedAt: string | null;
+  /** Synthesized room-level negative outcome — populated by the
+   *  room generator. Rendered under the sub title as "Counters: …"
+   *  so the user sees the causal chain across the canvas. */
+  topNegativeOutcome: string | null;
 }
 
 interface Props {
@@ -152,13 +156,31 @@ function SubCard({ spaceId, sub }: { spaceId: string; sub: MainCanvasSub }) {
         {sub.title}
       </h3>
 
-      {sub.description && (
+      {/* Once the room has generated, the LLM-synthesized negative
+          outcome IS the most useful subtitle — replaces the raw
+          description. Falls back to description before generation. */}
+      {sub.topNegativeOutcome ? (
         <p
-          className="line-clamp-3 text-[12.5px] font-light leading-snug"
+          className="line-clamp-2 text-[12px] font-light italic leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
-          {sub.description}
+          <span
+            className="not-italic font-semibold"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Counters:
+          </span>{" "}
+          {sub.topNegativeOutcome}
         </p>
+      ) : (
+        sub.description && (
+          <p
+            className="line-clamp-3 text-[12.5px] font-light leading-snug"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            {sub.description}
+          </p>
+        )
       )}
 
       {/* Approved-layer chip strip — Phase 8. Only renders when the

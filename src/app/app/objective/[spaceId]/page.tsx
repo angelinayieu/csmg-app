@@ -79,7 +79,7 @@ export default async function ObjectiveCanvasPage({
       const { data: childRows } = await db
         .from("improvement_goals")
         .select(
-          "id, title, description, auto_detection_rationale, room_layers_generated_at, created_at",
+          "id, title, description, auto_detection_rationale, room_layers_generated_at, top_negative_outcome, created_at",
         )
         .eq("space_id", spaceId)
         .eq("parent_goal_id", parentGoalId)
@@ -90,6 +90,7 @@ export default async function ObjectiveCanvasPage({
         description: string | null;
         auto_detection_rationale: string | null;
         room_layers_generated_at: string | null;
+        top_negative_outcome: string | null;
       }>);
 
       // For each sub-objective, find approved-edge endpoints and the
@@ -176,6 +177,7 @@ export default async function ObjectiveCanvasPage({
         description: r.description,
         rationale: r.auto_detection_rationale,
         generatedAt: r.room_layers_generated_at,
+        topNegativeOutcome: r.top_negative_outcome,
         approvedItems: (approvedItemsBySub.get(r.id) ?? []).sort(
           (a, b) => LAYER_ORDER[a.layer] - LAYER_ORDER[b.layer],
         ),
