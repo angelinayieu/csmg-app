@@ -21,12 +21,22 @@
 // (room_categories + the items' sub_category slugs + chains). No
 // extra fetches. Lives on screen but stays out of the way.
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { ChevronDown, AlertTriangle } from "lucide-react";
+import {
+  ChevronDown,
+  AlertTriangle,
+  Pencil,
+  Check,
+  X as XIcon,
+} from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ChainTriple } from "@/lib/objective-canvas/compute-chains";
-import type { RoomCategories } from "@/lib/objective-canvas/generate-categories";
+import type {
+  RoomCategories,
+  RoomCategorySet,
+} from "@/lib/objective-canvas/generate-categories";
 
 interface LaneItemLite {
   id: string;
@@ -46,6 +56,15 @@ interface Props {
   /** Edge ids the user has approved — drives the "X approved /
    *  Y pending" counts on each archetype. */
   approvedEdgeIds: Set<string>;
+  /** Room context needed for the category-edit PATCH endpoint.
+   *  When absent, the inline editor is disabled (categories shown
+   *  read-only). */
+  spaceId?: string;
+  subObjectiveId?: string;
+  /** Called when the user clicks the "X gaps" warning chip — lets
+   *  the parent scroll the side panel into view to give the user
+   *  the retry CTA. */
+  onGapsClick?: () => void;
 }
 
 interface ArchetypeRow {
@@ -77,8 +96,100 @@ export function PortfolioStrip({
   outcomeItems,
   chains,
   approvedEdgeIds,
+  spaceId,
+  subObjectiveId,
+  onGapsClick,
 }: Props) {
+  const router = useRouter();
   const [expanded, setExpanded] = useState(false);
+  // Local optimistic mirror of categories — lets renames render
+  // instantly while the PATCH is in flight. Reverts on failure.
+  const [localCategories, setLocalCategories] = useState(categories);
+  const [editing, setEditing] = useState<{ lane: keyof RoomCategories; slug: string } | null>(
+    null,
+  );
+  const [draft, setDraft] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+  const [savingTransition, startSaving] = useTransition();
+  const editEnabled = !!spaceId && !!subObjectiveId;
+
+  // Sync local mirror when parent categories change (e.g., after
+  // a refresh).
+  useMemo(() => {
+    setLocalCategories(categories);
+  }, [categories]);
+
+  function commitEdit(lane: keyof RoomCategories, slug: string) {
+    if (!editEnabled) return;
+    const trimmed = draft.trim();
+    if (trimmed.length === 0) {
+      setEditError("Label can't be empty.");
+      return;
+    }
+    setEditError(null);
+    // Optimistic update.
+    const prev = localCategories;
+    const next: RoomCategories = {
+      friction: localCategories.friction.map((c) =>
+        c.slug === slug && lane === "friction"
+          ? { ...c, label: trimmed }
+          : c,
+      ),
+      mechanism: localCategories.mechanism.map((c) =>
+        c.slug === slug && lane === "mechanism"
+          ? { ...c, label: trimmed }
+          : c,
+      ),
+      result: localCategories.result.map((c) =>
+        c.slug === slug && lane === "result"
+          ? { ...c, label: trimmed }
+          : c,
+      ),
+    };
+    setLocalCategories(next);
+    setEditing(null);
+    startSaving(async () => {
+      try {
+        const res = await fetch(
+          "/api/brainstorm/room/categories/update",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              spaceId,
+              subObjectiveId,
+              categories: {
+                [lane]: [{ slug, label: trimmed }],
+              },
+            }),
+          },
+        );
+        if (!res.ok) {
+          setLocalCategories(prev);
+          const json = await res.json().catch(() => ({}));
+          setEditError(json?.error ?? "Couldn't save. Try again.");
+          return;
+        }
+        router.refresh();
+      } catch (err) {
+        setLocalCategories(prev);
+        setEditError(
+          err instanceof Error ? err.message : "Network error.",
+        );
+      }
+    });
+  }
+
+  function startEdit(
+    lane: keyof RoomCategories,
+    cat: RoomCategorySet,
+  ) {
+    if (!editEnabled) return;
+    setEditing({ lane, slug: cat.slug });
+    setDraft(cat.label);
+    setEditError(null);
+  }
+  void savingTransition;
 
   // ── Archetype mix ──
   const archetypeRows: ArchetypeRow[] = useMemo(() => {
@@ -99,9 +210,9 @@ export function PortfolioStrip({
         byKey.set(key, {
           key,
           triple: [
-            lookupCategory(categories.friction, c.categoryTriple.painSlug),
-            lookupCategory(categories.mechanism, c.categoryTriple.featureSlug),
-            lookupCategory(categories.result, c.categoryTriple.resultSlug),
+            lookupCategory(localCategories.friction, c.categoryTriple.painSlug),
+            lookupCategory(localCategories.mechanism, c.categoryTriple.featureSlug),
+            lookupCategory(localCategories.result, c.categoryTriple.resultSlug),
           ],
           count: 1,
           approved: isApproved ? 1 : 0,
@@ -140,9 +251,9 @@ export function PortfolioStrip({
       };
     }
     return {
-      friction: bucket(painItems, categories.friction),
-      mechanism: bucket(featureItems, categories.mechanism),
-      result: bucket(outcomeItems, categories.result),
+      friction: bucket(painItems, localCategories.friction),
+      mechanism: bucket(featureItems, localCategories.mechanism),
+      result: bucket(outcomeItems, localCategories.result),
     };
   }, [painItems, featureItems, outcomeItems, categories]);
 
@@ -191,9 +302,9 @@ export function PortfolioStrip({
   // If no categories exist, hide the strip entirely — there's
   // nothing to diagnose.
   const hasAnyCategories =
-    categories.friction.length +
-      categories.mechanism.length +
-      categories.result.length >
+    localCategories.friction.length +
+      localCategories.mechanism.length +
+      localCategories.result.length >
     0;
   if (!hasAnyCategories) return null;
 
@@ -293,18 +404,29 @@ export function PortfolioStrip({
 
         <div className="flex flex-shrink-0 items-center gap-2">
           {gapWarnings.length > 0 && !expanded && (
-            <span
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+            <button
+              type="button"
+              onClick={(e) => {
+                // Don't toggle the strip — gaps chip is its own
+                // affordance. Scroll the side panel into view so
+                // the user can act on the gap (either via the
+                // retry CTA when no chains exist, or by approving
+                // chains that touch the gap categories).
+                e.stopPropagation();
+                onGapsClick?.();
+              }}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors"
               style={{
                 background: "rgba(217,119,6,0.10)",
                 color: "rgba(146,64,14,0.95)",
                 border: "1px solid rgba(217,119,6,0.22)",
+                cursor: onGapsClick ? "pointer" : "default",
               }}
-              title={`${gapWarnings.length} sub-categories with items but no chains touching them`}
+              title={`${gapWarnings.length} sub-categories with items but no chains touching them. Click to open the correlation panel.`}
             >
               <AlertTriangle className="h-2.5 w-2.5" strokeWidth={2.5} />
               {gapWarnings.length} gap{gapWarnings.length === 1 ? "" : "s"}
-            </span>
+            </button>
           )}
           {diversity && (
             <span
@@ -349,21 +471,69 @@ export function PortfolioStrip({
             <div className="mt-1.5 grid gap-2 sm:grid-cols-3">
               <CoverageColumn
                 lane="Friction"
+                laneKey="friction"
                 color={appleVibe.stage.pain}
                 rows={laneCoverage.friction.rows}
                 untagged={laneCoverage.friction.untagged}
+                editEnabled={editEnabled}
+                editing={editing}
+                draft={draft}
+                onStartEdit={(slug) => {
+                  const cat = localCategories.friction.find(
+                    (c) => c.slug === slug,
+                  );
+                  if (cat) startEdit("friction", cat);
+                }}
+                onDraftChange={setDraft}
+                onCommit={(slug) => commitEdit("friction", slug)}
+                onCancel={() => {
+                  setEditing(null);
+                  setEditError(null);
+                }}
               />
               <CoverageColumn
                 lane="Mechanism"
+                laneKey="mechanism"
                 color={appleVibe.stage.features}
                 rows={laneCoverage.mechanism.rows}
                 untagged={laneCoverage.mechanism.untagged}
+                editEnabled={editEnabled}
+                editing={editing}
+                draft={draft}
+                onStartEdit={(slug) => {
+                  const cat = localCategories.mechanism.find(
+                    (c) => c.slug === slug,
+                  );
+                  if (cat) startEdit("mechanism", cat);
+                }}
+                onDraftChange={setDraft}
+                onCommit={(slug) => commitEdit("mechanism", slug)}
+                onCancel={() => {
+                  setEditing(null);
+                  setEditError(null);
+                }}
               />
               <CoverageColumn
                 lane="Result"
+                laneKey="result"
                 color={appleVibe.stage.outcomes}
                 rows={laneCoverage.result.rows}
                 untagged={laneCoverage.result.untagged}
+                editEnabled={editEnabled}
+                editing={editing}
+                draft={draft}
+                onStartEdit={(slug) => {
+                  const cat = localCategories.result.find(
+                    (c) => c.slug === slug,
+                  );
+                  if (cat) startEdit("result", cat);
+                }}
+                onDraftChange={setDraft}
+                onCommit={(slug) => commitEdit("result", slug)}
+                onCancel={() => {
+                  setEditing(null);
+                  setEditError(null);
+                }}
               />
             </div>
           </div>
@@ -460,14 +630,30 @@ export function PortfolioStrip({
 
 function CoverageColumn({
   lane,
+  laneKey,
   color,
   rows,
   untagged,
+  editEnabled,
+  editing,
+  draft,
+  onStartEdit,
+  onDraftChange,
+  onCommit,
+  onCancel,
 }: {
   lane: string;
+  laneKey: keyof RoomCategories;
   color: string;
   rows: Array<{ slug: string; label: string; color: string; count: number }>;
   untagged: number;
+  editEnabled: boolean;
+  editing: { lane: keyof RoomCategories; slug: string } | null;
+  draft: string;
+  onStartEdit: (slug: string) => void;
+  onDraftChange: (v: string) => void;
+  onCommit: (slug: string) => void;
+  onCancel: () => void;
 }) {
   return (
     <div>
@@ -483,31 +669,110 @@ function CoverageColumn({
         {lane}
       </div>
       <ul className="space-y-0.5">
-        {rows.map((r) => (
-          <li
-            key={r.slug}
-            className="flex items-center justify-between text-[11px]"
-          >
-            <span
-              className="line-clamp-1"
-              style={{
-                color:
-                  r.count === 0 ? appleVibe.text.faint : appleVibe.text.primary,
-              }}
+        {rows.map((r) => {
+          const isEditing =
+            editing !== null &&
+            editing.lane === laneKey &&
+            editing.slug === r.slug;
+          if (isEditing) {
+            return (
+              <li
+                key={r.slug}
+                className="flex items-center gap-1 text-[11px]"
+              >
+                <input
+                  type="text"
+                  autoFocus
+                  value={draft}
+                  maxLength={32}
+                  onChange={(e) => onDraftChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onCommit(r.slug);
+                    if (e.key === "Escape") onCancel();
+                  }}
+                  className="min-w-0 flex-1 rounded px-1 py-0.5 text-[11px] outline-none"
+                  style={{
+                    background: "rgba(255,255,255,0.95)",
+                    border: `1px solid ${color}66`,
+                    color: appleVibe.text.primary,
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => onCommit(r.slug)}
+                  className="inline-flex h-[18px] w-[18px] items-center justify-center rounded"
+                  style={{
+                    background: appleVibe.accent.primary,
+                    color: appleVibe.text.onAccent,
+                  }}
+                  title="Save"
+                >
+                  <Check className="h-3 w-3" strokeWidth={3} />
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="inline-flex h-[18px] w-[18px] items-center justify-center rounded"
+                  style={{
+                    background: appleVibe.surface.chip,
+                    color: appleVibe.text.tertiary,
+                  }}
+                  title="Cancel"
+                >
+                  <XIcon className="h-3 w-3" strokeWidth={2} />
+                </button>
+              </li>
+            );
+          }
+          return (
+            <li
+              key={r.slug}
+              className="group flex items-center justify-between text-[11px]"
             >
-              {r.label}
-            </span>
-            <span
-              className="ml-1 font-mono text-[10px]"
-              style={{
-                color:
-                  r.count === 0 ? appleVibe.text.faint : appleVibe.text.tertiary,
-              }}
-            >
-              {r.count}
-            </span>
-          </li>
-        ))}
+              <span
+                className="line-clamp-1"
+                style={{
+                  color:
+                    r.count === 0
+                      ? appleVibe.text.faint
+                      : appleVibe.text.primary,
+                }}
+              >
+                {r.label}
+              </span>
+              <div className="ml-1 flex items-center gap-1">
+                {editEnabled && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStartEdit(r.slug);
+                    }}
+                    className="inline-flex h-[14px] w-[14px] items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100"
+                    style={{
+                      background: appleVibe.surface.chip,
+                      color: appleVibe.text.tertiary,
+                    }}
+                    title="Rename category"
+                  >
+                    <Pencil className="h-2 w-2" strokeWidth={2} />
+                  </button>
+                )}
+                <span
+                  className="font-mono text-[10px]"
+                  style={{
+                    color:
+                      r.count === 0
+                        ? appleVibe.text.faint
+                        : appleVibe.text.tertiary,
+                  }}
+                >
+                  {r.count}
+                </span>
+              </div>
+            </li>
+          );
+        })}
         {untagged > 0 && (
           <li className="flex items-center justify-between text-[11px] italic">
             <span style={{ color: appleVibe.text.tertiary }}>

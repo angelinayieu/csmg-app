@@ -486,6 +486,12 @@ export function SubObjectiveRoomView({
           setError(json?.detail ? `${base} — ${json.detail}` : base);
           return;
         }
+        // Surface correlation soft-fail as a non-fatal warning so
+        // the user knows to retry from the side panel instead of
+        // discovering the empty correlation state by accident.
+        if (typeof json?.correlation_warning === "string") {
+          setError(`Heads up — ${json.correlation_warning}`);
+        }
         router.refresh();
       } catch (err) {
         setError(
@@ -516,24 +522,9 @@ export function SubObjectiveRoomView({
       {/* Header bar with Generate / Regenerate */}
       <div className="mb-6 flex items-center justify-between gap-3">
         <div>
-          <div
-            className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: appleVibe.text.tertiary }}
-          >
-            4-stage room
-          </div>
-          {generatedAt ? (
+          {!generatedAt && (
             <p
-              className="mt-1 text-[12.5px] font-light"
-              style={{ color: appleVibe.text.secondary }}
-            >
-              Cards collapsed by default. Click any card to reveal its
-              root causes / first principles and the connections it
-              participates in.
-            </p>
-          ) : (
-            <p
-              className="mt-1 text-[12.5px] font-light"
+              className="text-[12.5px] font-light"
               style={{ color: appleVibe.text.secondary }}
             >
               We&rsquo;ll spin out pain points first, then outcomes, then
@@ -622,6 +613,16 @@ export function SubObjectiveRoomView({
         }))}
         chains={computeChains(edges, entityIndex)}
         approvedEdgeIds={approvedEdgeIds}
+        spaceId={spaceId}
+        subObjectiveId={subObjectiveId}
+        onGapsClick={() => {
+          const el = document.getElementById(
+            "correlation-side-panel-anchor",
+          );
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }}
       />
 
       {/* Three-column layout — Objective lane removed (it just

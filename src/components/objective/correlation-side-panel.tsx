@@ -327,6 +327,7 @@ export function CorrelationSidePanel({
 
   return (
     <aside
+      id="correlation-side-panel-anchor"
       className="flex h-fit w-full flex-col rounded-3xl p-4 lg:sticky lg:top-24 lg:w-[380px]"
       style={{
         background: appleVibe.surface.card,
