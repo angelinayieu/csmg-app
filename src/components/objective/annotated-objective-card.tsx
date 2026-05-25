@@ -34,6 +34,7 @@ import {
   ArrowUpRight,
   BookOpen,
   Cog,
+  Layers as LayersIcon,
   Sparkles,
   Target,
 } from "lucide-react";
@@ -65,12 +66,30 @@ export interface AnnotationTension {
   note: string;
 }
 
+export type AnnotationScope = "word" | "phrase";
+
+export interface AnnotationDimension {
+  name: string;
+  why: string;
+}
+
+export interface AnnotationChainHop {
+  step: string;
+  via: string;
+}
+
 export interface ObjectiveAnnotation {
   phrase: string;
   start_offset: number;
   end_offset: number;
+  scope: AnnotationScope;
   reading: string;
   weight: number;
+  /** v3 — factors that compose this concept's meaning. Rich on
+   *  word-scope annotations; usually empty for phrase-scope. */
+  dimensions: AnnotationDimension[];
+  /** v3 — causal hops from this concept to ultimate impact. */
+  inference_chain: AnnotationChainHop[];
   not_reading: string | null;
   crystal: string | null;
   confidence: number | null;
@@ -443,10 +462,12 @@ export function AnnotatedObjectiveCard({
 
 // ── Inline mark with tabbed popover ────────────────────────────────
 
-type TabKey = "read" | "like" | "how" | "stakes" | "warn";
+type TabKey = "read" | "layers" | "like" | "how" | "stakes" | "warn";
 
 function availableTabs(a: ObjectiveAnnotation): TabKey[] {
   const tabs: TabKey[] = ["read"];
+  if (a.dimensions.length > 0 || a.inference_chain.length > 0)
+    tabs.push("layers");
   if (a.like) tabs.push("like");
   if (a.mechanism || a.frame) tabs.push("how");
   if (a.stakes) tabs.push("stakes");
@@ -455,8 +476,18 @@ function availableTabs(a: ObjectiveAnnotation): TabKey[] {
   return tabs;
 }
 
-/** Pick the tab that's richest for THIS annotation as default. */
+/** Pick the tab that's richest for THIS annotation as default.
+ *  Word-scope annotations strongly prefer Layers when present —
+ *  it's the structured semantic breakdown the user is asking for. */
 function defaultTab(a: ObjectiveAnnotation): TabKey {
+  if (
+    a.scope === "word" &&
+    (a.dimensions.length > 0 || a.inference_chain.length > 0)
+  ) {
+    return "layers";
+  }
+  if (a.dimensions.length > 0 || a.inference_chain.length > 0)
+    return "layers";
   if (a.like) return "like";
   if (a.mechanism || a.frame) return "how";
   if (a.stakes) return "stakes";
@@ -496,6 +527,7 @@ function AnnotatedMark({
   }, [tabs, activeTab]);
 
   const thickness = underlineThickness(annotation.weight);
+  const isWord = annotation.scope === "word";
 
   return (
     <span
@@ -510,35 +542,53 @@ function AnnotatedMark({
         className="relative inline cursor-help"
         style={{
           color: hovered || linked ? color : "inherit",
-          transition: "color 220ms ease",
+          // Word-scope pill: soft background fill in layer color,
+          // narrow rounded shape. The pill says "this concept is
+          // being semantically unpacked" — distinct from the
+          // dotted-underline interpretive treatment of phrases.
+          background: isWord
+            ? painted
+              ? hovered
+                ? `${color}26`
+                : `${color}18`
+              : "transparent"
+            : "transparent",
+          borderRadius: isWord ? 6 : 0,
+          padding: isWord ? "1px 5px" : "0",
+          margin: isWord ? "0 1px" : "0",
+          boxShadow: isWord && hovered ? `inset 0 0 0 1px ${color}3D` : "none",
+          transition:
+            "background 220ms ease, color 220ms ease, box-shadow 220ms ease",
         }}
       >
         {annotation.phrase}
-        {/* Weighted dotted underline */}
-        <motion.span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 -bottom-0.5"
-          style={{
-            transformOrigin: "left center",
-            height: 0,
-            borderBottom: `${thickness}px dotted ${color}`,
-          }}
-          initial={false}
-          animate={
-            reduce
-              ? { scaleX: painted ? 1 : 0 }
-              : painted
-                ? { scaleX: 1, opacity: [0, 1, 0.6, 1] }
-                : { scaleX: 0, opacity: 0 }
-          }
-          transition={{
-            scaleX: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
-            opacity: { duration: 0.7, times: [0, 0.4, 0.7, 1] },
-          }}
-        />
+        {/* Phrase-scope: weighted dotted underline */}
+        {!isWord && (
+          <motion.span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 -bottom-0.5"
+            style={{
+              transformOrigin: "left center",
+              height: 0,
+              borderBottom: `${thickness}px dotted ${color}`,
+            }}
+            initial={false}
+            animate={
+              reduce
+                ? { scaleX: painted ? 1 : 0 }
+                : painted
+                  ? { scaleX: 1, opacity: [0, 1, 0.6, 1] }
+                  : { scaleX: 0, opacity: 0 }
+            }
+            transition={{
+              scaleX: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
+              opacity: { duration: 0.7, times: [0, 0.4, 0.7, 1] },
+            }}
+          />
+        )}
         {/* Linked-glow when another hovered annotation tensions/harmonies */}
         <AnimatePresence>
-          {linked && !hovered && (
+          {linked && !hovered && !isWord && (
             <motion.span
               aria-hidden
               className="pointer-events-none absolute inset-x-[-3px] inset-y-[-2px] rounded-md"
@@ -550,7 +600,9 @@ function AnnotatedMark({
             />
           )}
         </AnimatePresence>
-        {/* Faint glyph beside the phrase when an analogy exists */}
+        {/* Faint glyph beside the phrase when an analogy exists.
+            For word-scope pills we render the glyph after the closing
+            pill edge, not inside, so the pill doesn't grow. */}
         {annotation.like && painted && (
           <span
             className="ml-0.5 inline-flex translate-y-[-1px] items-center"
@@ -601,6 +653,7 @@ function AnnotatedMark({
 
 const TAB_ICONS: Record<TabKey, React.ReactNode> = {
   read: <BookOpen className="h-3 w-3" strokeWidth={2} />,
+  layers: <LayersIcon className="h-3 w-3" strokeWidth={2} />,
   like: <Sparkles className="h-3 w-3" strokeWidth={2} />,
   how: <Cog className="h-3 w-3" strokeWidth={2} />,
   stakes: <Target className="h-3 w-3" strokeWidth={2} />,
@@ -609,6 +662,7 @@ const TAB_ICONS: Record<TabKey, React.ReactNode> = {
 
 const TAB_LABEL: Record<TabKey, string> = {
   read: "Read",
+  layers: "Layers",
   like: "Like",
   how: "How",
   stakes: "Stakes",
@@ -831,6 +885,102 @@ function TabBody({
           >
             <span className="font-semibold">Frame:</span> {annotation.frame}
           </p>
+        )}
+      </div>
+    );
+  }
+
+  if (tab === "layers") {
+    return (
+      <div className="space-y-3">
+        {annotation.dimensions.length > 0 && (
+          <div>
+            <div
+              className="mb-1.5 text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              Composed of
+            </div>
+            <ul className="space-y-1.5">
+              {annotation.dimensions.map((d, i) => (
+                <li
+                  key={i}
+                  className="rounded-lg px-2.5 py-1.5"
+                  style={{
+                    background: `${color}0F`,
+                    border: `1px solid ${color}24`,
+                  }}
+                >
+                  <div
+                    className="flex items-center gap-1.5 text-[11.5px] font-semibold"
+                    style={{ color: appleVibe.text.primary }}
+                  >
+                    <span
+                      className="block h-1 w-1 flex-shrink-0 rounded-full"
+                      style={{ background: color }}
+                      aria-hidden
+                    />
+                    {d.name}
+                  </div>
+                  <p
+                    className="mt-0.5 pl-2.5 text-[11px] font-light leading-snug"
+                    style={{ color: appleVibe.text.secondary }}
+                  >
+                    {d.why}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {annotation.inference_chain.length > 0 && (
+          <div>
+            <div
+              className="mb-1.5 text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              Inference chain
+            </div>
+            <ol className="space-y-1">
+              {annotation.inference_chain.map((hop, i) => {
+                const isLast = i === annotation.inference_chain.length - 1;
+                return (
+                  <li key={i} className="relative pl-4">
+                    {/* Step dot + connector */}
+                    <span
+                      className="absolute left-0 top-1 block h-1.5 w-1.5 rounded-full"
+                      style={{ background: color }}
+                      aria-hidden
+                    />
+                    {!isLast && (
+                      <span
+                        className="absolute left-[2.5px] top-3 block w-px"
+                        style={{
+                          height: "calc(100% + 4px)",
+                          background: `${color}40`,
+                        }}
+                        aria-hidden
+                      />
+                    )}
+                    <div
+                      className="text-[11.5px] font-semibold leading-snug"
+                      style={{ color: appleVibe.text.primary }}
+                    >
+                      {hop.step}
+                    </div>
+                    {!isLast && (
+                      <div
+                        className="text-[10.5px] font-light italic leading-snug"
+                        style={{ color: appleVibe.text.tertiary }}
+                      >
+                        via {hop.via}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
         )}
       </div>
     );

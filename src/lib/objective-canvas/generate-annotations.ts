@@ -1,8 +1,6 @@
-// ── Objective annotation generator (v2) ──
+// ── Objective annotation generator (v3) ──
 //
-// Calls the LLM, validates the rich annotation shape, resolves
-// phrase offsets, drops hallucinated phrases, deduplicates
-// overlapping ranges, and sorts left-to-right.
+// Adds scope + dimensions[] + inference_chain[] on top of v2.
 
 import { llmJSON } from "@/lib/llm";
 import {
@@ -23,6 +21,8 @@ export type AnnotationLayerTag =
   | "objective"
   | null;
 
+export type AnnotationScope = "word" | "phrase";
+
 export interface AnnotationAnalogy {
   referent: string;
   why_same: string;
@@ -30,10 +30,23 @@ export interface AnnotationAnalogy {
 }
 
 export interface AnnotationTension {
-  /** The other phrase from the same objective. */
   phrase: string;
   kind: "tension" | "harmony";
   note: string;
+}
+
+export interface AnnotationDimension {
+  /** Short noun (≤4 words). */
+  name: string;
+  /** 1 sentence on what this factor contributes. */
+  why: string;
+}
+
+export interface AnnotationChainHop {
+  /** Short noun phrase naming the step (≤5 words). */
+  step: string;
+  /** 1 sentence on why this transitions to the next step. */
+  via: string;
 }
 
 export interface ObjectiveAnnotation {
@@ -41,9 +54,13 @@ export interface ObjectiveAnnotation {
   phrase: string;
   start_offset: number;
   end_offset: number;
+  scope: AnnotationScope;
   reading: string;
-  /** 0..1 — drives underline thickness (heatmap). */
   weight: number;
+
+  // Word-scope deep structure
+  dimensions: AnnotationDimension[];
+  inference_chain: AnnotationChainHop[];
 
   // Optional richness
   not_reading: string | null;
@@ -72,6 +89,7 @@ export interface GenerateAnnotationsOptions {
 
 const ALLOWED_TAGS = new Set(["features", "outcomes", "pain", "objective"]);
 const ALLOWED_GLYPHS = new Set<string>(GLYPH_KINDS);
+const ALLOWED_SCOPES = new Set(["word", "phrase"]);
 
 export async function generateObjectiveAnnotations(
   opts: GenerateAnnotationsOptions,
@@ -83,14 +101,12 @@ export async function generateObjectiveAnnotations(
     user: buildUserPrompt(opts),
     responseSchema: RESPONSE_SCHEMA,
     temperature: 0.4,
-    maxTokens: 3200,
+    maxTokens: 4200,
   });
 
   const rawItems = Array.isArray(raw?.annotations) ? raw.annotations : [];
   const validSubObjectiveIds = new Set(opts.subObjectives.map((s) => s.id));
 
-  // Resolve each phrase to an offset range; drop hallucinated
-  // phrases. Track ranges already taken so we don't double-highlight.
   const taken: Array<[number, number]> = [];
   const cleaned: ObjectiveAnnotation[] = [];
 
@@ -99,7 +115,6 @@ export async function generateObjectiveAnnotations(
     const reading = typeof a.reading === "string" ? a.reading.trim() : "";
     if (phrase.length === 0 || reading.length === 0) continue;
 
-    // Locate the phrase. Try exact, then case-insensitive fallback.
     let start = opts.objective.indexOf(phrase);
     let resolvedPhrase = phrase;
     if (start < 0) {
@@ -126,12 +141,50 @@ export async function generateObjectiveAnnotations(
     }
     taken.push([start, end]);
 
-    // ── Clean optional fields ──
+    // ── Scope: derive from LLM, falling back to phrase if missing ──
+    const scope: AnnotationScope =
+      typeof a.scope === "string" && ALLOWED_SCOPES.has(a.scope)
+        ? (a.scope as AnnotationScope)
+        : resolvedPhrase.trim().split(/\s+/).length <= 2
+          ? "word"
+          : "phrase";
 
     const not_reading = stringOrNull(a.not_reading, 200);
     const crystal = stringOrNull(a.crystal, 24);
     const confidence = clampFloat(a.confidence);
     const weight = clampFloat(a.weight) ?? 0.6;
+
+    // ── dimensions[] ──
+    const dimensions: AnnotationDimension[] = Array.isArray(a.dimensions)
+      ? (a.dimensions as unknown[])
+          .map((d): AnnotationDimension | null => {
+            if (!d || typeof d !== "object") return null;
+            const dr = d as Record<string, unknown>;
+            const name = stringOrNull(dr.name, 60);
+            const why = stringOrNull(dr.why, 200);
+            if (!name || !why) return null;
+            return { name, why };
+          })
+          .filter((x): x is AnnotationDimension => x !== null)
+          .slice(0, 5)
+      : [];
+
+    // ── inference_chain[] ──
+    const inference_chain: AnnotationChainHop[] = Array.isArray(
+      a.inference_chain,
+    )
+      ? (a.inference_chain as unknown[])
+          .map((h): AnnotationChainHop | null => {
+            if (!h || typeof h !== "object") return null;
+            const hr = h as Record<string, unknown>;
+            const step = stringOrNull(hr.step, 80);
+            const via = stringOrNull(hr.via, 200);
+            if (!step || !via) return null;
+            return { step, via };
+          })
+          .filter((x): x is AnnotationChainHop => x !== null)
+          .slice(0, 5)
+      : [];
 
     let like: AnnotationAnalogy | null = null;
     if (a.like && typeof a.like === "object") {
@@ -180,8 +233,11 @@ export async function generateObjectiveAnnotations(
       phrase: resolvedPhrase,
       start_offset: start,
       end_offset: end,
+      scope,
       reading: reading.slice(0, 220),
       weight: clamp01(weight),
+      dimensions,
+      inference_chain,
       not_reading,
       crystal,
       confidence,

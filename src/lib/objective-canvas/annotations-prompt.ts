@@ -1,25 +1,24 @@
-// ── Objective annotation prompt (v2) ──
+// ── Objective annotation prompt (v3) ──
 //
-// Rich annotation generator. For 5-8 load-bearing phrases in the
-// user's typed objective, the LLM produces a layered annotation:
+// Adds three structural layers on top of v2:
 //
-//   reading      "Read as: …"     committed interpretation
-//   not_reading  "Not: …"         what was ruled out (negative space)
-//   crystal      one noun         essence of the phrase
-//   weight       0..1             how load-bearing (drives underline)
-//   confidence   0..1             how committed we are
-//   like         { referent, why_same, glyph }   analogy + structural shape
-//   mechanism    short string     causal chain underneath
-//   frame        short string     discipline / worldview implied
-//   stakes       short string     why it matters for THIS objective
-//   fragility    short string     where the reading breaks
-//   tensions     phrase refs      harmonies/contradictions across the text
-//   linked_sub_objective_id      the sub-objective it anchors
-//   layer_tag    pain/features/outcomes/objective | null
+//   scope            "word" | "phrase" — drives visual treatment.
+//                    word-scope renders as a PILL HIGHLIGHT (the
+//                    concept itself is being unpacked); phrase-scope
+//                    renders as a dotted underline (the phrase is
+//                    being interpreted).
+//   dimensions[]     For conceptually-loaded words: 3-5 factors
+//                    that COMPOSE the meaning in this objective's
+//                    context. Each has a `name` + `why`.
+//   inference_chain[]The causal hops from concept → ultimate impact,
+//                    with the `via` (reason) labeled between steps.
 //
-// Most fields are optional — the LLM is told to include only
-// dimensions that meaningfully apply. Annotations with only
-// `reading` are still valid; the card adapts its tabs.
+// These let the user see WHAT THE AI ACTUALLY THINKS the word
+// means (not just a one-line definition). "Value" becomes
+// "Time saved + Money saved + Cognitive load + Compound effects",
+// each with its own sub-explanation. The inference chain shows
+// the path from the word to user impact ("App use → reclaimed
+// hours → flow → income/wellbeing").
 
 import {
   GLYPH_KINDS,
@@ -34,74 +33,127 @@ export interface AnnotationSubObjectiveRef {
 }
 
 export function buildSystemPrompt(): string {
-  return `You annotate the user's typed objective the way a thoughtful reader marks up a text — committing to a reading, naming the shape via analogy, surfacing mechanism, stakes, and fragility.
+  return `You annotate the user's typed objective the way a thoughtful reader marks up a text — but you go DEEPER on conceptually-loaded words by unpacking the factors that compose them and the causal chain to ultimate impact.
 
-For 5-8 of the most LOAD-BEARING phrases in the objective, produce a rich annotation.
+For 5-8 of the most LOAD-BEARING phrases / words in the objective, produce a rich annotation.
 
-REQUIRED FIELDS:
-  phrase   — verbatim substring from the user's text (exact casing, exact spacing). If the phrase appears multiple times, choose the first occurrence.
-  reading  — "Read as: …" — the committed interpretation. 1 sentence. Concrete, not dictionary.
-  weight   — 0..1 — how LOAD-BEARING this phrase is in the objective (drives underline thickness). 1.0 = removing this phrase would change the objective fundamentally; 0.3 = supporting detail.
+────────────────────────────────────────────────────────────────────
+SCOPE — drives visual treatment in the UI
+────────────────────────────────────────────────────────────────────
+  scope = "word"
+    Pick this when the load is on a SINGLE concept word whose
+    interpretation varies wildly across AIs/contexts. The user
+    wants to know precisely what YOU think this word means.
+    Examples: "value", "truth", "depth", "quality", "intelligence",
+    "passion", "curiosity", "vivid", "strategic", "deep", "smart".
+    1-2 word phrases (e.g. "deep dive") can also be word-scope when
+    the concept is the unit.
+    UI: renders as a PILL HIGHLIGHT (soft layer-colored background).
 
-OPTIONAL FIELDS (include only what genuinely applies — quality over coverage):
+  scope = "phrase"
+    Pick this when the MEANING comes from multi-word combination —
+    the phrase as a whole is the interpretive unit. Typically 3+ words.
+    Examples: "calculates the true value of an app", "personalized
+    guidance for curiosity", "vivid search experiences".
+    UI: dotted underline (thickness scales with weight).
 
-  not_reading — "Not: …" — what you considered and ruled out. This shows the user the path NOT taken. Same length as reading.
+When a phrase contains a loaded concept word (e.g. "the true value of
+an app" contains "value"), PREFER annotating the WORD with word-scope
+over the phrase. Word-scope annotations carry the rich semantic breakdown.
 
-  crystal — ONE NOUN that compresses the phrase's essence. Examples:
-    • "gamification" → "Loop"
-    • "ai personalization" → "Lens"
-    • "deep dive" → "Well"
-    • "curiosity" → "Pull"
+────────────────────────────────────────────────────────────────────
+REQUIRED FIELDS
+────────────────────────────────────────────────────────────────────
+  phrase    — verbatim substring from the user's text (exact casing).
+  scope     — "word" | "phrase" (see above).
+  reading   — "Read as: …" — committed interpretation. 1 sentence.
+  weight    — 0..1 — how load-bearing this is. Drives underline thickness for phrase-scope; doesn't affect pill scope.
 
-  confidence — 0..1 — how confident you are in the reading. Lower when the phrase is genuinely ambiguous.
+────────────────────────────────────────────────────────────────────
+OPTIONAL FIELDS (include only what genuinely applies)
+────────────────────────────────────────────────────────────────────
 
-  like — analogy to a familiar structure:
-    {
-      referent   — the familiar thing ("Duolingo streaks", "a magnifying glass", "Stack Overflow rep")
-      why_same   — one sentence on the structural similarity
-      glyph      — pick ONE from this set based on the underlying SHAPE of the concept:
+  not_reading — "Not: …" — the path you considered and ruled out.
+
+  crystal — ONE NOUN compressing the phrase's essence.
+    "gamification" → "Loop" | "value" → "Worth" | "curiosity" → "Pull"
+
+  confidence — 0..1 — how confident you are in the reading.
+
+  dimensions — STRONGLY ENCOURAGED for word-scope. 3-5 factors that
+    COMPOSE this concept's meaning in THIS objective's context. Each:
+      { name: short noun (≤4 words), why: 1 sentence on what this
+        factor contributes }
+    Example for "value":
+      [
+        { name: "Time saved",
+          why: "Hours per day reclaimed from manual work" },
+        { name: "Money saved",
+          why: "Subscription / labor replacement vs status quo" },
+        { name: "Cognitive load reduction",
+          why: "Decisions deferred to the system" },
+        { name: "Compound effects",
+          why: "Better state → downstream wins over weeks" }
+      ]
+    The user reads this and knows EXACTLY what factors you weighed.
+    For phrase-scope, include only if there are clear composing
+    sub-concepts — otherwise skip.
+
+  inference_chain — the causal path from this concept to ULTIMATE
+    user impact. 3-5 hops. Each hop:
+      { step: short noun phrase (≤5 words),
+        via: 1 sentence on why this transitions to the next step }
+    Example for "value":
+      [
+        { step: "App use",
+          via: "Reduces friction in target task" },
+        { step: "Reclaimed hours + lower cognitive load",
+          via: "Enables deeper work in remaining time" },
+        { step: "More flow + better decisions",
+          via: "Aggregate outcomes over weeks" },
+        { step: "Income or wellbeing gains",
+          via: "What the user ultimately cares about" }
+      ]
+    This makes your inference auditable. The user can disagree with
+    any hop and tell you to revise.
+
+  like — analogy mapping to a familiar structure:
+    { referent, why_same, glyph } where glyph ∈
 ${GLYPH_KINDS.map(
-  (k) => `        "${k}" — ${GLYPH_MEANINGS[k]}`,
+  (k) => `      "${k}" — ${GLYPH_MEANINGS[k]}`,
 ).join("\n")}
-    }
-    Skip 'like' if no genuine analogy comes to mind — generic ones ("like a tool") are worse than nothing.
+    Skip if no genuine analogy comes to mind.
 
-  mechanism — short string (≤120 chars) — the causal chain underneath. E.g. "Variable reinforcement → habit formation."
+  mechanism — short string (≤120 chars). The causal-rule version
+    ("Variable reinforcement → habit formation"). When you have
+    inference_chain, prefer that; mechanism is the elevator pitch.
 
-  frame — short string (≤80 chars) — the discipline / worldview implied. E.g. "Behavioral econ frame, not pedagogy."
+  frame — ≤80 chars. Discipline / worldview implied.
+    "Behavioral econ frame, not pedagogy."
 
-  stakes — short string (≤140 chars) — why this phrase matters for THIS specific objective. Reference the objective's intent.
+  stakes — ≤140 chars. Why THIS phrase matters for THIS objective.
 
-  fragility — short string (≤140 chars) — the failure mode of THIS reading. When does this break?
+  fragility — ≤140 chars. When does this reading break?
 
-  tensions — array of { phrase, kind, note } where kind = "tension" | "harmony", referencing OTHER phrases in the same objective. Use to surface internal coherence or contradictions. ≤2 entries per annotation.
+  tensions — array of { phrase, kind, note } where
+    kind = "tension" | "harmony". References OTHER phrases in the
+    same objective. ≤2 entries.
 
-  linked_sub_objective_id — id of the sub-objective that anchors on this phrase, or null.
+  linked_sub_objective_id — id of the anchoring sub-objective | null.
 
-  layer_tag — "features" | "outcomes" | "pain" | "objective" | null — drives the underline color.
+  layer_tag — "features" | "outcomes" | "pain" | "objective" | null.
 
-SELECTION RULES (be selective — 5 great > 8 mediocre):
-  - Pick CONCRETE NOUNS and DOMAIN WORDS first.
-  - Pick AMBIGUOUS ADJECTIVES you commit to a specific reading of.
-  - Pick PHRASES that became sub-objective anchors (look at sub_objectives).
-  - Skip filler verbs (help, make), articles, and generic words (better, more, things).
-
-NOTE QUALITY:
-  - BAD: "Gamification refers to using game elements." (dictionary)
-  - GOOD: reading = "Read as: reward + progress signals that hook engagement, not points-for-points-sake."
-    + not_reading = "Not: arbitrary badges layered on top of an existing experience."
-    + crystal = "Loop"
-    + like = { referent: "Duolingo streaks", why_same: "Same micro-reward loop keeps users returning", glyph: "loop" }
-    + mechanism = "Variable reinforcement schedule → habit formation"
-    + frame = "Behavioral econ, not pedagogy"
-    + stakes = "Without this, depth feels like work, not curiosity"
-    + fragility = "Fails when intrinsic motivation already exists"
-    + linked_sub_objective_id = "..."
-    + layer_tag = "features"
-    + weight = 0.85
+────────────────────────────────────────────────────────────────────
+SELECTION
+────────────────────────────────────────────────────────────────────
+  - 5-8 annotations TOTAL. Quality over coverage.
+  - Concrete nouns + domain words first.
+  - Conceptually-loaded words ("value", "deep", "strategic") get
+    word-scope + rich dimensions[] + inference_chain[].
+  - Skip filler verbs (help, make), articles, generic ("better").
 
 PHRASE EXACTNESS:
-  The "phrase" field MUST be a verbatim substring of the input text. Otherwise we cannot locate it for highlighting.
+  The "phrase" field MUST be a verbatim substring of the input text.
 
 Return strict JSON.`;
 }
@@ -127,11 +179,11 @@ export function buildUserPrompt(args: {
 ${args.objective}
 """${subBlock}
 
-Produce 5-8 RICH annotations per the system instructions. Each phrase must be a verbatim substring of the text above. Include every dimension that genuinely applies; skip the ones that don't.`;
+Produce 5-8 RICH annotations per the system instructions. Each phrase must be a verbatim substring of the text above. When a phrase contains a loaded concept word, prefer annotating the WORD with word-scope so you can populate dimensions[] and inference_chain[].`;
 }
 
 export const RESPONSE_SCHEMA = {
-  name: "objective_annotations_v2",
+  name: "objective_annotations_v3",
   schema: {
     type: "object",
     additionalProperties: false,
@@ -143,11 +195,36 @@ export const RESPONSE_SCHEMA = {
           additionalProperties: false,
           properties: {
             phrase: { type: "string" },
+            scope: { type: "string", enum: ["word", "phrase"] },
             reading: { type: "string" },
             weight: { type: "number" },
             not_reading: { type: ["string", "null"] },
             crystal: { type: ["string", "null"] },
             confidence: { type: ["number", "null"] },
+            dimensions: {
+              type: ["array", "null"],
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  name: { type: "string" },
+                  why: { type: "string" },
+                },
+                required: ["name", "why"],
+              },
+            },
+            inference_chain: {
+              type: ["array", "null"],
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  step: { type: "string" },
+                  via: { type: "string" },
+                },
+                required: ["step", "via"],
+              },
+            },
             like: {
               type: ["object", "null"],
               additionalProperties: false,
@@ -186,11 +263,14 @@ export const RESPONSE_SCHEMA = {
           },
           required: [
             "phrase",
+            "scope",
             "reading",
             "weight",
             "not_reading",
             "crystal",
             "confidence",
+            "dimensions",
+            "inference_chain",
             "like",
             "mechanism",
             "frame",
