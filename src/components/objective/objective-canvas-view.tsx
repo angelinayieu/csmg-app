@@ -48,6 +48,7 @@ import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { ClarifyingQuestionsCard } from "./clarifying-questions-card";
 import { SubObjectivePickerCard } from "./sub-objective-picker-card";
 import { MainCanvasView, type MainCanvasSub } from "./main-canvas-view";
+import type { ObjectiveAnnotation } from "./annotated-objective-card";
 import type {
   ClarifyingBlock,
   ObjectiveCanvasStage,
@@ -61,6 +62,10 @@ interface Props {
   initialClarifying: ClarifyingBlock | null;
   initialSubObjectives: SubObjectiveBlock | null;
   initialMainSubs: MainCanvasSub[];
+  /** Server-rendered annotations on the core objective text. Empty
+   *  array = not yet generated; the annotated card lazy-fetches on
+   *  first paint. */
+  initialCoreAnnotations: ObjectiveAnnotation[];
   /** Phase 10 integration contract — host wants to drop this into a
    *  panel. See module header. Defaults to false (standalone). */
   embedded?: boolean;
@@ -77,6 +82,7 @@ export function ObjectiveCanvasView({
   initialClarifying,
   initialSubObjectives,
   initialMainSubs,
+  initialCoreAnnotations,
   embedded = false,
   // onExit is reserved for the host's chrome; not consumed here.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -126,6 +132,7 @@ export function ObjectiveCanvasView({
         )}
         {stage === "main" && (
           <MainCanvasView
+            coreAnnotations={initialCoreAnnotations}
             spaceId={spaceId}
             objective={objective}
             subs={initialMainSubs}

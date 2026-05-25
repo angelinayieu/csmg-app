@@ -55,10 +55,11 @@ export default async function ObjectiveCanvasPage({
   // edges — Phase 8's "approved fork strip" surfaces those under
   // each card.
   let initialMainSubs: MainCanvasSub[] = [];
+  let initialCoreAnnotations: import("@/components/objective/annotated-objective-card").ObjectiveAnnotation[] = [];
   if (state.stage === "main" || state.stage === "done") {
     const { data: parentRows } = await db
       .from("improvement_goals")
-      .select("id")
+      .select("id, annotations")
       .eq("space_id", spaceId)
       .is("parent_goal_id", null)
       .order("created_at", { ascending: false })
@@ -67,6 +68,13 @@ export default async function ObjectiveCanvasPage({
       Array.isArray(parentRows) && parentRows.length > 0
         ? (parentRows[0]?.id as string)
         : null;
+    if (Array.isArray(parentRows) && parentRows.length > 0) {
+      const rawAnns = parentRows[0]?.annotations;
+      if (Array.isArray(rawAnns)) {
+        initialCoreAnnotations =
+          rawAnns as import("@/components/objective/annotated-objective-card").ObjectiveAnnotation[];
+      }
+    }
     if (parentGoalId) {
       const { data: childRows } = await db
         .from("improvement_goals")
@@ -214,6 +222,7 @@ export default async function ObjectiveCanvasPage({
             initialClarifying={state.clarifying ?? null}
             initialSubObjectives={state.sub_objectives ?? null}
             initialMainSubs={initialMainSubs}
+            initialCoreAnnotations={initialCoreAnnotations}
           />
         </div>
       </div>

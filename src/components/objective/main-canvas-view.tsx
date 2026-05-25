@@ -8,14 +8,17 @@
 // (/app/objective/[spaceId]/sub/[subId]) for the 4-stage layered
 // analysis (Phase 5+).
 //
-// Layout is a styled HTML grid for Phase 4 — visually reads like a
-// whiteboard but doesn't yet mount tldraw. The card / connector
-// styling matches the rest of the canvas (Apple-vibe).
+// The center node is rendered by <AnnotatedObjectiveCard /> — the
+// user's raw text with AI-extracted phrase annotations (dotted
+// underlines, hover popovers, optional margin-notes mode).
 
 import Link from "next/link";
 import { ArrowRight, Check, Layers } from "lucide-react";
-import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import {
+  AnnotatedObjectiveCard,
+  type ObjectiveAnnotation,
+} from "@/components/objective/annotated-objective-card";
 
 export interface ApprovedItem {
   id: string;
@@ -39,17 +42,42 @@ interface Props {
   spaceId: string;
   objective: string;
   subs: MainCanvasSub[];
+  /** Server-rendered annotations on the core objective text.
+   *  Empty array = not yet generated; the AnnotatedObjectiveCard
+   *  will lazy-fetch on mount. */
+  coreAnnotations: ObjectiveAnnotation[];
 }
 
-export function MainCanvasView({ spaceId, objective, subs }: Props) {
+export function MainCanvasView({
+  spaceId,
+  objective,
+  subs,
+  coreAnnotations,
+}: Props) {
+  // Pass the sub list (id + title only) down so the annotated card
+  // can resolve linked_sub_objective_id → title for hover popovers.
+  const subStubs = subs.map((s) => ({ id: s.id, title: s.title }));
+
   return (
     <div className="relative mx-auto w-full max-w-5xl">
-      {/* Core objective node */}
-      <CoreNode objective={objective} />
+      {/* Annotated core objective — the centerpiece */}
+      <AnnotatedObjectiveCard
+        spaceId={spaceId}
+        objective={objective}
+        initialAnnotations={coreAnnotations}
+        subObjectives={subStubs}
+      />
 
-      {/* Fork connectors + sub-objective cards */}
+      {/* Trunk → fork connector */}
       <div
-        className="relative mx-auto mt-12 grid w-full gap-5"
+        aria-hidden
+        className="mx-auto mt-6 h-8 w-px"
+        style={{ background: appleVibe.stroke.medium }}
+      />
+
+      {/* Sub-objective cards */}
+      <div
+        className="relative mx-auto mt-2 grid w-full gap-5"
         style={{
           gridTemplateColumns:
             subs.length <= 2
@@ -69,50 +97,6 @@ export function MainCanvasView({ spaceId, objective, subs }: Props) {
   );
 }
 
-function CoreNode({ objective }: { objective: string }) {
-  return (
-    <div className="mx-auto max-w-2xl text-center">
-      <div
-        className="mx-auto inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]"
-        style={{
-          background: "rgba(124,58,237,0.08)",
-          color: "rgba(91,33,182,0.95)",
-        }}
-      >
-        <Sparkle className="h-3 w-3" />
-        Core objective
-      </div>
-
-      <div
-        className="mx-auto mt-3 rounded-3xl px-6 py-5"
-        style={{
-          background: appleVibe.surface.card,
-          border: `1px solid ${appleVibe.stroke.soft}`,
-          boxShadow: appleVibe.shadow.card,
-          borderRadius: appleVibe.radius.xl,
-        }}
-      >
-        <p
-          className="text-[16px] font-semibold leading-snug tracking-tight"
-          style={{
-            color: appleVibe.text.primary,
-            fontFamily: appleVibe.font.display,
-            letterSpacing: "-0.015em",
-          }}
-        >
-          {objective}
-        </p>
-      </div>
-
-      {/* Trunk down to the fork. Pure visual; not interactive. */}
-      <div
-        aria-hidden
-        className="mx-auto mt-4 h-8 w-px"
-        style={{ background: appleVibe.stroke.medium }}
-      />
-    </div>
-  );
-}
 
 function SubCard({ spaceId, sub }: { spaceId: string; sub: MainCanvasSub }) {
   const hasApproved = sub.approvedItems.length > 0;
