@@ -25,6 +25,7 @@ import {
 import { SynergyAmbientBg } from "@/components/synergy/synergy-ambient-bg";
 import { SynergyDashboardHero } from "@/components/synergy/synergy-dashboard-hero";
 import { SynergyGlassDock } from "@/components/synergy/synergy-glass-dock";
+import { BlankWhiteboardButton } from "@/components/synergy/blank-whiteboard-button";
 import { firstNameFromProfile, timeGreeting } from "@/lib/synergy/greeting";
 
 interface RecentSession {
@@ -181,6 +182,44 @@ export async function SynergyDashboard() {
                     Your home canvas — every brainstorm, strategy, R&D
                     space, and twin you&rsquo;ve made lives here as a room
                     you can compose.
+                  </p>
+                </div>
+                <ArrowRight
+                  className="h-4 w-4 shrink-0 text-gray-400 transition group-hover:translate-x-0.5 group-hover:text-gray-700"
+                  strokeWidth={1.75}
+                />
+              </div>
+            </Link>
+          </div>
+
+          {/* ── Start a blank whiteboard / Distill your thoughts ──
+              Two clean entry points sitting side-by-side:
+              - Blank whiteboard: visual surface (sticky notes, arrows,
+                lasso → AI insight).
+              - Distill: text dump → 4-layer cascade (Concepts →
+                Clusters → Ranked Insights → Main Idea). For when the
+                user wants converging answers, not a free-form board. */}
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <BlankWhiteboardButton />
+            <Link
+              href="/app/distill"
+              className="group block rounded-3xl border border-white/60 bg-white/60 px-6 py-5 backdrop-blur-xl transition hover:bg-white/80"
+              style={{
+                boxShadow:
+                  "inset 0 1px 0 rgba(255,255,255,0.7), 0 8px 22px -10px rgba(15,23,42,0.10)",
+              }}
+            >
+              <div className="flex items-center gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white">
+                  <Target className="h-5 w-5" strokeWidth={1.75} />
+                </div>
+                <div className="flex-1">
+                  <p className="font-display-tight text-[15px] font-semibold tracking-tight text-gray-900">
+                    Distill your thoughts
+                  </p>
+                  <p className="mt-0.5 text-[12.5px] leading-snug text-gray-600">
+                    Dump your text. Watch it fold into concepts, clusters,
+                    ranked insights, and one main idea.
                   </p>
                 </div>
                 <ArrowRight
