@@ -16,7 +16,15 @@
 // so the panel speaks the same language as the rest of the room.
 
 import { useMemo, useState, useTransition } from "react";
-import { Check, Filter, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  Check,
+  Filter,
+  RefreshCw,
+  Sparkles,
+  X,
+  AlertTriangle,
+} from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { RoomEdge } from "./sub-objective-room-view";
 import {
@@ -109,6 +117,40 @@ export function CorrelationSidePanel({
   detail,
   roomCategories,
 }: Props) {
+  const router = useRouter();
+  const [retrying, startRetry] = useTransition();
+  const [retryError, setRetryError] = useState<string | null>(null);
+
+  // Retry / generate correlations only — runs the correlation LLM
+  // step against existing entities without regenerating the whole
+  // room. Surfaces errors (the existing soft-fail in /room/generate
+  // hid them behind a console.warn).
+  function runCorrelationsRetry(mode: "initial" | "regenerate") {
+    setRetryError(null);
+    startRetry(async () => {
+      try {
+        const res = await fetch(
+          "/api/brainstorm/room/correlations/generate",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ spaceId, subObjectiveId, mode }),
+          },
+        );
+        const json = await res.json();
+        if (!res.ok) {
+          const base = json?.error ?? "Correlation generation failed.";
+          setRetryError(json?.detail ? `${base} — ${json.detail}` : base);
+          return;
+        }
+        router.refresh();
+      } catch (err) {
+        setRetryError(
+          err instanceof Error ? err.message : "Network error.",
+        );
+      }
+    });
+  }
   // Resolve a chain's category triple into {label, color} display
   // data. Used as the archetype label on each ChainCard.
   function resolveArchetype(chain: ChainTriple): ChainArchetype {
@@ -295,41 +337,141 @@ export function CorrelationSidePanel({
       aria-label="Correlation chains panel"
     >
       <header>
-        <div
-          className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
-          style={{ color: appleVibe.text.tertiary }}
-        >
-          Correlations
+        <div className="flex items-center justify-between">
+          <div
+            className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Correlations
+          </div>
+          {edges.length > 0 && (
+            <button
+              type="button"
+              onClick={() => runCorrelationsRetry("regenerate")}
+              disabled={retrying}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-semibold"
+              style={{
+                background: appleVibe.surface.chip,
+                color: appleVibe.text.tertiary,
+                cursor: retrying ? "wait" : "pointer",
+              }}
+              title="Re-run the correlation LLM step against the existing entities"
+            >
+              <RefreshCw className="h-2.5 w-2.5" strokeWidth={2.5} />
+              {retrying ? "Retrying…" : "Re-run"}
+            </button>
+          )}
         </div>
         <h3
           className="mt-1 text-[14px] font-semibold tracking-tight"
           style={{ color: appleVibe.text.primary }}
         >
-          {viewMode === "chains"
-            ? `${filteredChains.length} of ${chains.length} chains`
-            : `${filteredEdges.length} of ${edges.length} edges`}
+          {edges.length === 0
+            ? "No correlations yet"
+            : viewMode === "chains"
+              ? `${filteredChains.length} of ${chains.length} chains`
+              : `${filteredEdges.length} of ${edges.length} edges`}
         </h3>
         <p
           className="mt-0.5 text-[11px] font-light leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
-          Each chain is a complete{" "}
-          <span style={{ color: appleVibe.stage.pain }}>
-            {laneLabels.pain.toLowerCase()}
-          </span>{" "}
-          →{" "}
-          <span style={{ color: appleVibe.stage.features }}>
-            {laneLabels.features.toLowerCase()}
-          </span>{" "}
-          →{" "}
-          <span style={{ color: appleVibe.stage.outcomes }}>
-            {laneLabels.outcomes.toLowerCase()}
-          </span>{" "}
-          bet. Approve the ones you want promoted to the main canvas.
+          {edges.length === 0 ? (
+            <>
+              The room has items but they aren&rsquo;t linked yet. Each
+              correlation forms one complete{" "}
+              <span style={{ color: appleVibe.stage.pain }}>
+                {laneLabels.pain.toLowerCase()}
+              </span>{" "}
+              →{" "}
+              <span style={{ color: appleVibe.stage.features }}>
+                {laneLabels.features.toLowerCase()}
+              </span>{" "}
+              →{" "}
+              <span style={{ color: appleVibe.stage.outcomes }}>
+                {laneLabels.outcomes.toLowerCase()}
+              </span>{" "}
+              chain — the strategic bet you&rsquo;ll approve. Run the
+              correlation step to populate.
+            </>
+          ) : (
+            <>
+              Each chain is a complete{" "}
+              <span style={{ color: appleVibe.stage.pain }}>
+                {laneLabels.pain.toLowerCase()}
+              </span>{" "}
+              →{" "}
+              <span style={{ color: appleVibe.stage.features }}>
+                {laneLabels.features.toLowerCase()}
+              </span>{" "}
+              →{" "}
+              <span style={{ color: appleVibe.stage.outcomes }}>
+                {laneLabels.outcomes.toLowerCase()}
+              </span>{" "}
+              bet. Approve the ones you want promoted to the main canvas.
+            </>
+          )}
         </p>
       </header>
 
-      {/* View toggle — Chains (primary) vs All edges */}
+      {/* Empty state — surfaces the "no edges" recovery path */}
+      {edges.length === 0 && (
+        <div
+          className="mt-3 rounded-2xl p-3"
+          style={{
+            background: "rgba(15,23,42,0.03)",
+            border: `1px dashed ${appleVibe.stroke.medium}`,
+            borderRadius: appleVibe.radius.md,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => runCorrelationsRetry("initial")}
+            disabled={retrying}
+            className="flex w-full items-center justify-center gap-1.5 rounded-2xl px-3 py-2 text-[12px] font-semibold"
+            style={{
+              background: appleVibe.accent.primary,
+              color: appleVibe.text.onAccent,
+              borderRadius: appleVibe.radius.md,
+              cursor: retrying ? "wait" : "pointer",
+              opacity: retrying ? 0.7 : 1,
+            }}
+          >
+            <Sparkles className="h-3.5 w-3.5" strokeWidth={2} />
+            {retrying ? "Generating…" : "Generate correlations"}
+          </button>
+          <p
+            className="mt-2 text-[10.5px] font-light italic leading-snug"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Cheaper than &quot;Regenerate the room&quot; — only the
+            correlation LLM call runs. Existing items stay intact.
+          </p>
+        </div>
+      )}
+
+      {retryError && (
+        <div
+          role="alert"
+          className="mt-3 flex items-start gap-2 rounded-xl px-3 py-2 text-[11px]"
+          style={{
+            background: "rgba(220,38,38,0.06)",
+            border: "1px solid rgba(220,38,38,0.18)",
+            color: "rgba(127,29,29,0.95)",
+          }}
+        >
+          <AlertTriangle
+            className="h-3 w-3 flex-shrink-0"
+            strokeWidth={2}
+          />
+          <span className="leading-snug">{retryError}</span>
+        </div>
+      )}
+
+      {/* View toggle — Chains (primary) vs All edges.
+          Hidden when there are no edges; the empty state above
+          carries the active CTA so the toggle would be noise. */}
+      {edges.length > 0 && (
       <div className="mt-3 inline-flex w-fit rounded-full p-0.5" style={{
         background: appleVibe.surface.chip,
       }}>
@@ -364,9 +506,10 @@ export function CorrelationSidePanel({
           All edges
         </button>
       </div>
+      )}
 
       {/* Edges-only filter chips */}
-      {viewMode === "edges" && (
+      {edges.length > 0 && viewMode === "edges" && (
         <>
           <div className="mt-3 flex items-center gap-1.5">
             <Filter
@@ -423,38 +566,43 @@ export function CorrelationSidePanel({
         </>
       )}
 
-      {/* Strength threshold (applies to both views) */}
-      <div className="mt-3 flex items-center gap-1.5">
-        <span
-          className="text-[10px] font-semibold uppercase tracking-wider"
-          style={{ color: appleVibe.text.tertiary }}
-        >
-          Strength
-        </span>
-      </div>
-      <div className="mt-1.5 flex flex-wrap gap-1.5">
-        {THRESHOLD_MODES.map((m) => {
-          const active = threshold === m.id;
-          return (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => setThreshold(m.id)}
-              className="inline-flex items-center rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
-              style={{
-                background: active
-                  ? appleVibe.accent.primary
-                  : appleVibe.surface.chip,
-                color: active
-                  ? appleVibe.text.onAccent
-                  : appleVibe.text.secondary,
-              }}
+      {/* Strength threshold (applies to both views) — hidden in
+          empty state since there's nothing to threshold. */}
+      {edges.length > 0 && (
+        <>
+          <div className="mt-3 flex items-center gap-1.5">
+            <span
+              className="text-[10px] font-semibold uppercase tracking-wider"
+              style={{ color: appleVibe.text.tertiary }}
             >
-              {m.label}
-            </button>
-          );
-        })}
-      </div>
+              Strength
+            </span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {THRESHOLD_MODES.map((m) => {
+              const active = threshold === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setThreshold(m.id)}
+                  className="inline-flex items-center rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
+                  style={{
+                    background: active
+                      ? appleVibe.accent.primary
+                      : appleVibe.surface.chip,
+                    color: active
+                      ? appleVibe.text.onAccent
+                      : appleVibe.text.secondary,
+                  }}
+                >
+                  {m.label}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* Rows */}
       <ul

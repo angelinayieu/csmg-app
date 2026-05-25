@@ -766,7 +766,11 @@ export function SubObjectiveRoomView({
           </div>
         </div>
 
-        {hasEdges && (
+        {/* Always render the side panel — even with 0 edges. The
+            empty state inside the panel surfaces a "Generate
+            correlations" CTA so a soft-failed correlation step is
+            recoverable without regenerating the entire room. */}
+        {generatedAt && (
           <CorrelationSidePanel
             spaceId={spaceId}
             subObjectiveId={subObjectiveId}
