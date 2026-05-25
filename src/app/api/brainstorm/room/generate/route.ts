@@ -12,6 +12,7 @@
 // Returns a summary (counts) so the UI can show a toast; the room
 // page re-queries on next render.
 
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import {
@@ -20,6 +21,34 @@ import {
   type RoomContext,
 } from "@/lib/objective-canvas/layered-generation";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
+
+// ── entities table contracts (Phase 6) ────────────────────────────
+// entity_category has a CHECK constraint to one of these values;
+// entity_type is free-text but we mirror the layer for readability.
+const ENTITY_CATEGORY_BY_LAYER = {
+  pain: "fault",
+  features: "concrete",
+  outcomes: "abstract",
+  objective: "abstract",
+} as const;
+
+const ENTITY_TYPE_BY_LAYER = {
+  pain: "pain_point",
+  features: "feature",
+  outcomes: "outcome",
+  objective: "objective_anchor",
+} as const;
+
+// source_tag has a CHECK constraint to {explicit, implicit, assumed};
+// canvas items are AI-derived from the user's typed objective → "implicit".
+const SOURCE_TAG = "implicit" as const;
+
+// Build a stable per-row entity_id (required, non-null on entities).
+// Format: oc_<layer>_<short uuid> keeps it readable in DB inspection
+// without colliding across rooms.
+function buildEntityId(layer: keyof typeof ENTITY_CATEGORY_BY_LAYER): string {
+  return `oc_${layer}_${randomUUID().slice(0, 8)}`;
+}
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -188,43 +217,40 @@ export async function POST(req: NextRequest) {
   // The "objective" layer always carries a single anchor: the core
   // objective text. It exists so cross-layer edges to "objective"
   // have a valid target.
+  //
+  // Required columns on `entities` not obvious from the type system:
+  //   entity_id        text NOT NULL         (we generate per-row)
+  //   source_tag       text NOT NULL CHECK   (must be explicit/implicit/assumed)
+  //   entity_category  text NOT NULL CHECK   (must be concrete/abstract/process/relational/epistemic/fault)
+  // Missing any of these → "entity insert failed" 500.
+  const buildRow = (
+    layer: keyof typeof ENTITY_CATEGORY_BY_LAYER,
+    name: string,
+    description: string,
+    confidence: number,
+  ) => ({
+    space_id: spaceId,
+    parent_sub_objective_id: subObjectiveId,
+    layer_ontology_id: layersBySlug.get(layer)!.id,
+    entity_id: buildEntityId(layer),
+    name,
+    description,
+    entity_type: ENTITY_TYPE_BY_LAYER[layer],
+    entity_category: ENTITY_CATEGORY_BY_LAYER[layer],
+    source_tag: SOURCE_TAG,
+    confidence,
+  });
+
   const entityRows = [
-    ...pain.map((p) => ({
-      space_id: spaceId,
-      parent_sub_objective_id: subObjectiveId,
-      layer_ontology_id: layersBySlug.get("pain")!.id,
-      name: p.name,
-      description: p.description,
-      entity_type: "pain_point",
-      confidence: 0.7,
-    })),
-    ...outcomes.map((o) => ({
-      space_id: spaceId,
-      parent_sub_objective_id: subObjectiveId,
-      layer_ontology_id: layersBySlug.get("outcomes")!.id,
-      name: o.name,
-      description: o.description,
-      entity_type: "outcome",
-      confidence: 0.7,
-    })),
-    ...features.map((f) => ({
-      space_id: spaceId,
-      parent_sub_objective_id: subObjectiveId,
-      layer_ontology_id: layersBySlug.get("features")!.id,
-      name: f.name,
-      description: f.description,
-      entity_type: "feature",
-      confidence: 0.65,
-    })),
-    {
-      space_id: spaceId,
-      parent_sub_objective_id: subObjectiveId,
-      layer_ontology_id: layersBySlug.get("objective")!.id,
-      name: sub.title,
-      description: coreObjectiveText.slice(0, 600),
-      entity_type: "objective_anchor",
-      confidence: 1.0,
-    },
+    ...pain.map((p) => buildRow("pain", p.name, p.description, 0.7)),
+    ...outcomes.map((o) => buildRow("outcomes", o.name, o.description, 0.7)),
+    ...features.map((f) => buildRow("features", f.name, f.description, 0.65)),
+    buildRow(
+      "objective",
+      sub.title,
+      coreObjectiveText.slice(0, 600),
+      1.0,
+    ),
   ];
 
   const entityInsert = await db
@@ -275,6 +301,19 @@ export async function POST(req: NextRequest) {
 
   let edgeCount = 0;
   if (correlations.length > 0) {
+    // edges CHECK constraints (Phase 6 wire-up):
+    //   source_tag ∈ {stated, inferred, predicted}  → "inferred" for AI-derived
+    //   polarity   ∈ {positive, negative, neutral, conditional}
+    //                LLM may emit "ambiguous" — map that to "conditional"
+    //   dimension  ∈ {structural, functional, temporal, causal, ...}
+    const mapPolarity = (
+      p: string,
+    ): "positive" | "negative" | "neutral" | "conditional" => {
+      if (p === "positive" || p === "negative" || p === "neutral") return p;
+      // "ambiguous" or anything else collapses to "conditional" — the
+      // polarity is real but depends on context the LLM couldn't pin down.
+      return "conditional";
+    };
     const edgeRows = correlations.map((c) => ({
       space_id: spaceId,
       parent_sub_objective_id: subObjectiveId,
@@ -282,9 +321,9 @@ export async function POST(req: NextRequest) {
       target_entity_id: c.targetId,
       relationship_type: c.relationship,
       dimension: "causal",
-      source_tag: "objective_canvas_room",
+      source_tag: "inferred",
       strength: c.strength,
-      polarity: c.polarity,
+      polarity: mapPolarity(c.polarity),
       confidence: 0.6,
       conditions: c.rationale.slice(0, 500),
     }));

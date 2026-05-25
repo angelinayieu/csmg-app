@@ -124,7 +124,11 @@ export function SubObjectiveRoomView({
         });
         const json = await res.json();
         if (!res.ok) {
-          setError(json?.error ?? "Generation failed. Try again.");
+          // Surface both the top-level error AND the optional `detail`
+          // (DB constraint messages live here). Without this, room
+          // bugs read as "entity insert failed" with no clue why.
+          const base = json?.error ?? "Generation failed. Try again.";
+          setError(json?.detail ? `${base} — ${json.detail}` : base);
           return;
         }
         router.refresh();
