@@ -21,32 +21,42 @@ export default async function ObjectiveCanvasNewPage() {
   const user = await getAuthUser();
   if (!user) redirect("/auth/login");
 
+  // Whiteboard surface — full-bleed dot grid, edge to edge.
+  // This is the visual "you've entered the canvas" cue. Animates in
+  // on first paint so navigating from the landing feels like a
+  // transform, not a hard cut.
   return (
     <div
-      className="fixed inset-0 z-40 overflow-y-auto"
-      style={{ background: "#fafafa" }}
+      className="fixed inset-0 z-40 overflow-y-auto whiteboard-surface"
+      style={{
+        background: "#fafafa",
+        backgroundImage:
+          "radial-gradient(rgba(15,23,42,0.085) 1.1px, transparent 1.1px)",
+        backgroundSize: "22px 22px",
+        backgroundPosition: "0 0",
+      }}
     >
-      {/* Subtle off-white grid behind the card — reads like a
-          whiteboard, not a form page. */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0"
-        style={{
-          backgroundImage:
-            "radial-gradient(rgba(15,23,42,0.045) 1px, transparent 1px)",
-          backgroundSize: "24px 24px",
-          maskImage:
-            "radial-gradient(ellipse at center, rgba(0,0,0,0.9), transparent 70%)",
-          WebkitMaskImage:
-            "radial-gradient(ellipse at center, rgba(0,0,0,0.9), transparent 70%)",
-        }}
-      />
-
       <HomeTabNav />
 
       <div className="relative mx-auto flex min-h-screen max-w-5xl items-center justify-center px-6">
         <ObjectiveEntryCard />
       </div>
+
+      <style>{`
+        .whiteboard-surface {
+          animation: whiteboard-fade-in 360ms ease-out both;
+        }
+        @keyframes whiteboard-fade-in {
+          from {
+            background-color: #fafafa;
+            background-image: radial-gradient(rgba(15,23,42,0) 1.1px, transparent 1.1px);
+          }
+          to {
+            background-color: #fafafa;
+            background-image: radial-gradient(rgba(15,23,42,0.085) 1.1px, transparent 1.1px);
+          }
+        }
+      `}</style>
     </div>
   );
 }
