@@ -17,6 +17,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
+import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { ArrowRight, Plus, Sparkles } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -70,6 +71,8 @@ export default async function ObjectiveCanvasLandingPage() {
             "radial-gradient(ellipse at center, rgba(0,0,0,0.85), transparent 75%)",
         }}
       />
+
+      <HomeTabNav />
 
       <div className="relative mx-auto max-w-5xl px-6 pb-24 pt-24">
         {/* Hero */}

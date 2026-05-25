@@ -31,7 +31,7 @@ export function HomeTabNav() {
 
   return (
     <nav
-      className="pointer-events-auto fixed inset-x-0 top-3 z-30 flex justify-center"
+      className="pointer-events-auto fixed inset-x-0 top-3 z-50 flex justify-center"
       aria-label="Primary home tabs"
     >
       <div

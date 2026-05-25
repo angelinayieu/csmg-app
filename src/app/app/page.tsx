@@ -15,6 +15,7 @@ import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { HomeShell } from "@/components/home/home-shell";
 import { SynergyDashboard } from "@/components/synergy/synergy-dashboard";
+import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { TEMPLATE_LIST } from "@/lib/use-cases/library";
 import type { Space } from "@/types";
 
@@ -50,8 +51,14 @@ export default async function StudioPage({
   }
 
   // ── Synergy dashboard (default) ──
+  // HomeTabNav lets users hop to the new Objective Canvas (/app/objective).
   if (!showLegacy) {
-    return <SynergyDashboard />;
+    return (
+      <>
+        <HomeTabNav />
+        <SynergyDashboard />
+      </>
+    );
   }
 
   // ── Legacy Studio surface — preserved via /app?legacy=1 ──
