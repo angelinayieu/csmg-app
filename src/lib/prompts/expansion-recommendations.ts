@@ -39,6 +39,8 @@
 //       hidden?" — forces articulation of the VALUE of the
 //       expansion, not just its plausibility.
 
+import { buildGuardrailBlock } from "./guardrail-questions";
+
 export interface ExpansionContext {
   // The card being expanded
   entity: {
@@ -65,9 +67,10 @@ export interface ExpansionContext {
     layer_ontology_labels: string[]; // L0..L4 names from layer_ontology
     user_goal: string | null;
   };
-  // Guardrail answers the user has provided so far (Phase 3 feeds these
-  // in; Phase 2 may pass empty). Format: { question_id: answer_text }.
-  guardrail_answers: Record<string, string>;
+  // User-set guardrail answers — canonical shape now (was a legacy
+  // qid→string map). Rendered via the shared buildGuardrailBlock
+  // helper so the prompt block stays consistent across surfaces.
+  guardrail_answers: Record<string, import("./guardrail-questions").GuardrailAnswer>;
 }
 
 export interface ExpansionRecommendation {
@@ -159,12 +162,9 @@ export function isAntiGeneric(name: string): boolean {
 export function buildExpansionRecommendationsPrompt(
   ctx: ExpansionContext,
 ): { system: string; user: string } {
-  const guardrailBlock =
-    Object.keys(ctx.guardrail_answers).length === 0
-      ? ""
-      : `\n\n## USER-PROVIDED GUARDRAILS\nThe user has answered guardrail questions to tighten what counts as a good recommendation. Treat every answer as a CONSTRAINT — recommendations that violate any of these answers should be filtered out, not softened.\n\n${Object.entries(ctx.guardrail_answers)
-          .map(([qid, ans]) => `- [${qid}] ${ans}`)
-          .join("\n")}`;
+  // Render via the shared helper — same constraints text + budget cap
+  // as every other prompt site (decompose, synth, critique, strategy).
+  const guardrailBlock = buildGuardrailBlock(ctx.guardrail_answers);
 
   const ontologyBlock =
     ctx.space_meta.layer_ontology_labels.length > 0

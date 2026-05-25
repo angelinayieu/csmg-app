@@ -366,6 +366,12 @@ export interface GuardrailAnswer {
   category: string;
 }
 
+// Hard cap on the rendered block. Four verbose answers can blow ~2KB
+// each at 2000-char inputs; capping at ~1500 chars keeps the
+// budget impact bounded without truncating short typical replies.
+const MAX_BLOCK_CHARS = 1500;
+const MAX_ANSWER_CHARS = 280;
+
 export function buildGuardrailBlock(
   answers: Record<string, GuardrailAnswer> | null | undefined,
 ): string {
@@ -399,10 +405,21 @@ export function buildGuardrailBlock(
     if (!items || items.length === 0) continue;
     lines.push(`### ${cat.toUpperCase()}`);
     for (const [_, a] of items) {
+      const ans =
+        a.answer.length > MAX_ANSWER_CHARS
+          ? `${a.answer.slice(0, MAX_ANSWER_CHARS - 1)}…`
+          : a.answer;
       lines.push(`- Q: ${a.question_text}`);
-      lines.push(`  A: ${a.answer}`);
+      lines.push(`  A: ${ans}`);
     }
     lines.push("");
   }
-  return lines.join("\n");
+  const rendered = lines.join("\n");
+  if (rendered.length <= MAX_BLOCK_CHARS) return rendered;
+  // Over budget — keep the header + a truncation marker so the LLM
+  // still sees that constraints exist, just compressed.
+  return (
+    rendered.slice(0, MAX_BLOCK_CHARS - 50) +
+    "\n…(remaining guardrails truncated for token budget)\n"
+  );
 }

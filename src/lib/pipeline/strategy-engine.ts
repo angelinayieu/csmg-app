@@ -94,6 +94,15 @@ export interface MultiStepStrategyParams {
    */
   similarPatternsBlock?: string;
   /**
+   * User-set guardrail block (see src/lib/prompts/guardrail-questions.ts).
+   * Rendered from `buildGuardrailBlock(space.guardrail_answers)`. The
+   * engine prefixes it to every LLM-bearing step (diagnosis, synthesis,
+   * verification, l4/l3/l2/l1, final strategy) so the constraints
+   * propagate uniformly. Empty string when the user has not answered
+   * any clarification questions yet.
+   */
+  guardrailBlock?: string;
+  /**
    * Phase 2I — domain proficiency preface. Rendered from
    * `formatLearningContext(db, userId, domain)`, tells the LLM how
    * deep the user already is in this domain (coverage, calibration,
@@ -347,6 +356,11 @@ export async function generateMultiStepStrategy(
 ): Promise<MultiStepStrategyResult> {
   const startTime = Date.now();
   const stepTimings = { diagnosis_ms: 0, synthesis_ms: 0, verification_ms: 0, layer_generation_ms: 0, final_ms: 0 };
+  // Helper to append the user-set guardrail block as a HARD-constraint
+  // suffix to any step's system prompt. Empty string when the user has
+  // not answered any clarification questions yet (no-op concat).
+  const withGuardrails = (system: string): string =>
+    params.guardrailBlock ? `${system}\n${params.guardrailBlock}` : system;
   // Track which steps fell into a fallback path. Each catch below pushes its
   // step name; the names are attached to the returned recommendation so the
   // UI can render a "degraded run" banner instead of the engine silently
@@ -427,7 +441,7 @@ export async function generateMultiStepStrategy(
     });
 
     diagnosis = await llmJSON<StrategicDiagnosis>({
-      system: diagPrompt.system,
+      system: withGuardrails(diagPrompt.system),
       user: diagPrompt.user,
       maxTokens: 6144,
       temperature: 0.2,
@@ -517,7 +531,7 @@ export async function generateMultiStepStrategy(
     });
 
     synthesisResult = await llmJSON<StrategySynthesisResult>({
-      system: synthPrompt.system,
+      system: withGuardrails(synthPrompt.system),
       user: synthPrompt.user,
       maxTokens: 8192,
       temperature: 0.3,
@@ -571,7 +585,7 @@ export async function generateMultiStepStrategy(
     });
 
     verification = await llmJSON<StrategyVerification>({
-      system: verifyPrompt.system,
+      system: withGuardrails(verifyPrompt.system),
       user: verifyPrompt.user,
       maxTokens: 6144,
       temperature: 0.2,
@@ -842,7 +856,7 @@ export async function generateMultiStepStrategy(
   let finalCallFailed = false;
   try {
     stratResponse = await llmJSON<StratResponseShape>({
-      system: stratPrompt.system,
+      system: withGuardrails(stratPrompt.system),
       user: stratUserWithBaseline,
       maxTokens: 16384,
       temperature: 0.3,
@@ -1174,7 +1188,7 @@ async function generateLayersBottomUp(params: {
   let l4Insights: L4AtomicInsight[] = [];
   try {
     const l4Response = await llmJSON<{ l4_insights: L4AtomicInsight[] }>({
-      system: l4Prompt.system,
+      system: withGuardrails(l4Prompt.system),
       user: l4Prompt.user,
       maxTokens: 4096,
       temperature: 0.4,
@@ -1231,7 +1245,7 @@ async function generateLayersBottomUp(params: {
   let l3Reasoning: L3ReasoningUnit[] = [];
   try {
     const l3Response = await llmJSON<{ l3_reasoning: L3ReasoningUnit[] }>({
-      system: l3Prompt.system,
+      system: withGuardrails(l3Prompt.system),
       user: l3Prompt.user,
       maxTokens: 5120,
       temperature: 0.3,
@@ -1272,7 +1286,7 @@ async function generateLayersBottomUp(params: {
   let l2Methods: L2MethodChain[] = [];
   try {
     const l2Response = await llmJSON<{ l2_methods: L2MethodChain[] }>({
-      system: l2Prompt.system,
+      system: withGuardrails(l2Prompt.system),
       user: l2Prompt.user,
       maxTokens: 6144,
       temperature: 0.3,
@@ -1323,7 +1337,7 @@ async function generateLayersBottomUp(params: {
   let l1Outcomes: L1Outcome[] = [];
   try {
     const l1Response = await llmJSON<{ l1_outcomes: L1Outcome[] }>({
-      system: l1Prompt.system,
+      system: withGuardrails(l1Prompt.system),
       user: l1Prompt.user,
       maxTokens: 3072,
       temperature: 0.2,

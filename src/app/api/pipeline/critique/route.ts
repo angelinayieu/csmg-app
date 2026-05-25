@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { llmJSON } from "@/lib/llm";
 import { safeAuth, verifySpaceOwnership, refreshSpaceCounts } from "@/lib/api-helpers";
 import { CRITIC_SYSTEM_PROMPT, buildObjectiveAwareCriticPrompt, buildClusterScopedCriticPrompt } from "@/lib/prompts/critic";
+import { buildGuardrailBlock, type GuardrailAnswer } from "@/lib/prompts/guardrail-questions";
 import { sanitizeEdge, sanitizeCycle, resilientInsert } from "@/lib/sanitize";
 import type { Entity, Edge, Cycle } from "@/types";
 import { computeCascadeFromEntity, markStaleStructures } from "@/lib/twin/cascade-propagation";
@@ -111,10 +112,11 @@ export async function POST(request: Request) {
 
   try {
     // Fetch current data
-    const [entitiesRes, edgesRes, cyclesRes] = await Promise.all([
+    const [entitiesRes, edgesRes, cyclesRes, spaceRes] = await Promise.all([
       db.from("entities").select("*").eq("space_id", spaceId),
       db.from("edges").select("*").eq("space_id", spaceId),
       db.from("cycles").select("*").eq("space_id", spaceId),
+      db.from("spaces").select("guardrail_answers").eq("id", spaceId).maybeSingle(),
     ]);
 
     const entities = (entitiesRes.data ?? []) as Entity[];
@@ -219,9 +221,19 @@ export async function POST(request: Request) {
     }
 
     // Use objective-aware prompt when objectives exist
-    const criticPrompt = objectives.length > 0
+    const basePrompt = objectives.length > 0
       ? buildObjectiveAwareCriticPrompt(objectives)
       : CRITIC_SYSTEM_PROMPT;
+
+    // Append the user's explicit guardrail answers. These are HARD
+    // constraints that should filter critique candidates — see
+    // src/lib/prompts/guardrail-questions.ts. Soft-fail: empty block
+    // when no answers exist.
+    const guardrailBlock = buildGuardrailBlock(
+      (spaceRes?.data as { guardrail_answers: Record<string, GuardrailAnswer> | null } | null)
+        ?.guardrail_answers ?? null,
+    );
+    const criticPrompt = guardrailBlock ? `${basePrompt}\n${guardrailBlock}` : basePrompt;
 
     // ── Decide: single-call critique or cluster-bounded parallel critique ──
     // For graphs under ~50 entities, one call is efficient and holistic.

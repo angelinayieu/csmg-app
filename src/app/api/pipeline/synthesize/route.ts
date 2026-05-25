@@ -2,6 +2,7 @@ import { NextResponse, after } from "next/server";
 import { llmJSON } from "@/lib/llm";
 import { safeAuth, safeJsonParse, verifyMultiSpaceOwnership, refreshSpaceCounts } from "@/lib/api-helpers";
 import { getSynthesisPrompt, buildDecompReconciliationContext } from "@/lib/prompts/synthesis";
+import { buildGuardrailBlock, type GuardrailAnswer } from "@/lib/prompts/guardrail-questions";
 import { getGoalRecommendationsPrompt } from "@/lib/prompts/goal-recommendations";
 import { getObjectiveDetectionPrompt } from "@/lib/prompts/objective-detection";
 import { detectChanges } from "@/lib/twin/compute-changes";
@@ -22,6 +23,7 @@ import { resilientInsert } from "@/lib/sanitize";
 import type { SpaceContext } from "@/lib/pipeline/cross-space-context";
 import { extractSignals } from "@/lib/intelligence/signal-extraction";
 import { generateResearchTriggers } from "@/lib/intelligence/research-triggers";
+import { emitFilteredSignalEvents } from "@/lib/synthesis/emit-signal-events";
 import { scoreSynthesisQuality } from "@/lib/validation/synthesis-quality";
 import { checkGoalFitness } from "@/lib/validation/goal-fitness";
 import type { SynthesisQualityScore, GoalFitnessResult, QualityFlag } from "@/types/synthesis";
@@ -161,6 +163,11 @@ export async function POST(request: Request) {
     let activeGoal: ImprovementGoal | null = null;
     let userInputText: string | undefined;
     let rawDecompositionContext: string | undefined;
+    // Guardrail block — captured from the root space inside the loop
+    // below, then prefixed to the synthesis user prompt as a HARD
+    // constraint on what proposals can claim. Soft-fail: empty string
+    // when no answers exist.
+    let guardrailSection = "";
     const rootSpaceId = spaceIds[0];
     if (goalId) {
       const { data: goalData } = await db
@@ -200,7 +207,7 @@ export async function POST(request: Request) {
         db.from("cycles").select("*").eq("space_id", spaceId),
         db
           .from("spaces")
-          .select("name, description, synthesis_data, input_text, situation_frame, raw_decomposition")
+          .select("name, description, synthesis_data, input_text, situation_frame, raw_decomposition, guardrail_answers")
           .eq("id", spaceId)
           .single(),
       ]);
@@ -290,6 +297,14 @@ export async function POST(request: Request) {
       // Capture user's original input text for objective grounding
       if (!userInputText && (spaceRes.data as any)?.input_text) {
         userInputText = (spaceRes.data as any).input_text as string;
+      }
+      // Capture guardrail answers from the root space (first iteration).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (!guardrailSection && spaceId === rootSpaceId && (spaceRes.data as any)?.guardrail_answers) {
+        guardrailSection = buildGuardrailBlock(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (spaceRes.data as any).guardrail_answers as Record<string, GuardrailAnswer> | null,
+        );
       }
       // Capture raw decomposition prose for Pass 1 reasoning context (first space only)
       if (!rawDecompositionContext && (spaceRes.data as any)?.raw_decomposition) {
@@ -1030,6 +1045,18 @@ YOU MUST address each signal in your synthesis:
       console.warn("Pre-synthesis signal extraction failed (non-critical):", preSigErr);
     }
 
+    // ── Emit Pass 1 signals as canvas events ──
+    // Surfaces the structural-analysis findings (cascade vulnerabilities,
+    // structural holes, hidden mediators, flip-prone loops) as live
+    // HiddenSignalShape on the canvas BEFORE the 45-90s synthesis LLM
+    // call. The user sees the highest-leverage findings while synthesis
+    // is still cooking. Pass 2 (after synthesis) upserts the same shapes
+    // with richer detection if available. Soft-fail: emission errors
+    // never block the pipeline.
+    if (preSignalResult) {
+      await emitFilteredSignalEvents(db, pipelineRunId, preSignalResult, rootSpaceId);
+    }
+
     // Wave D L0.2 — inject the user baseline (persona_tags +
     // behavior_summary + goal_preferences) so synthesis respects the
     // user's lean. Non-fatal — empty baseline collapses to empty string.
@@ -1060,7 +1087,7 @@ YOU MUST address each signal in your synthesis:
     try {
       synthesis = await llmJSON<SynthesisData>({
         system: getSynthesisPrompt(intent, activeGoal, epistemicClassification),
-        user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${rawDecompositionContext ?? ""}${baselineBlock}${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}`,
+        user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${guardrailSection}${rawDecompositionContext ?? ""}${baselineBlock}${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}`,
         maxTokens: 16384,
         temperature: 0.3,
       });
@@ -1194,7 +1221,7 @@ REQUIREMENTS FOR THIS PASS:
           // Re-run synthesis LLM call with the same base prompt + regen guidance appended
           const regenSynthesis = await llmJSON<SynthesisData>({
             system: getSynthesisPrompt(intent, activeGoal, epistemicClassification),
-            user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${rawDecompositionContext ?? ""}${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}${regenGuidance}`,
+            user: `Generate a strategic synthesis from this complete analysis data. Bring your full domain expertise — reference real frameworks, name real precedents, identify non-obvious risks that only an expert would catch. Every insight must be specific to THIS situation.\n\n${guardrailSection}${rawDecompositionContext ?? ""}${contextInput}${interactionSection}${bridgesSection}${reasoningSection}${disputedSection}${qualityFeedback}${staleWarning}${hiddenSignalsSection}${deepResearchSection}${preSignalSection}${expansionSection}${regenGuidance}`,
             maxTokens: 16384,
             temperature: 0.3,
           });
@@ -1510,6 +1537,9 @@ REQUIREMENTS FOR THIS PASS:
           // Phase 1 — chosen framing block; engine threads it into
           // diagnosis + synthesis prompts.
           chosenFramingBlock: stratChosenFramingBlock,
+          // User-set guardrail constraints — engine threads them into
+          // every LLM-bearing step's system prompt as HARD limits.
+          guardrailBlock: guardrailSection,
           // Surface each of the engine's 5 LLM-bearing steps as a
           // structural event. Without this the HUD shows a single
           // stale "Synthesizing strategic insights…" message for the
@@ -2083,6 +2113,14 @@ REQUIREMENTS FOR THIS PASS:
         // Accumulate into final synthesis data
         finalSynthData.signal_extraction = signalResult;
         finalSynthData.research_triggers = triggerResult;
+
+        // ── Emit Pass 2 signals as canvas events ──
+        // Deterministic signalId means this UPSERTS the same canvas
+        // shapes spawned by Pass 1 (above the LLM call) rather than
+        // stacking duplicates. Pass 2 typically detects a richer
+        // set since synthesis may have created new edges via entity
+        // feedback. Soft-fail: never blocks pipeline completion.
+        await emitFilteredSignalEvents(db, pipelineRunId, signalResult, rootSpaceId);
 
         // Auto-update research schedule focus areas if intelligence_radar exists
         const existingRadar = (existingData as Record<string, unknown>)?.intelligence_radar as

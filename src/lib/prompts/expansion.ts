@@ -21,6 +21,17 @@ interface ExpansionPromptInput {
     parentSubComponents: SubComponent[];
     drillingIntoComponent: SubComponent;
   };
+  /** Phase D — user-asserted steering hint sourced from
+   *  - the entity's own `manifold.expand_hint` (set by promote-seed for
+   *    user-asserted entities), OR
+   *  - `space.synthesis_data.user_assertions` aggregated for the
+   *    space (the active-mode slot values: angles / axes / metrics /
+   *    boundaries / constraints).
+   *  Treated as STEERING, not as a constraint to enumerate: the LLM
+   *  biases sub-component selection toward components that bear on
+   *  this hint, but should NOT pad the decomposition with off-topic
+   *  components just to mention the hint. */
+  userContextHint?: string;
 }
 
 // ── Depth-level guidance ──
@@ -184,6 +195,23 @@ Type: ${e.entity_type ?? "unknown"} | Category: ${e.entity_category ?? "unknown"
 Importance: ${e.importance ?? "unknown"} | Confidence: ${e.confidence ?? "?"}
 Description: ${truncate(e.description, 500)}${entityFlags.length > 0 ? `\nFlags: ${entityFlags.join(", ")}` : ""}${manifoldStr}
 ═══ END ENTITY ═══`);
+
+  // 3a. User context hint (Phase D — typed-clarifier steering)
+  // Treat as STEERING, not as a constraint to enumerate. The hint
+  // tells you which dimensions of the entity the user cares about;
+  // bias sub-component selection toward components that bear on this,
+  // but do NOT pad the decomposition with off-topic components just
+  // to mention the hint. If the entity has no overlap with the hint,
+  // continue to decompose the entity naturally.
+  if (input.userContextHint && input.userContextHint.trim().length > 0) {
+    parts.push(`═══ USER CONTEXT (steering, not constraint) ═══
+The user has flagged the following as the angle / axis / scope / metric they care about when this entity is decomposed:
+
+${truncate(input.userContextHint, 600)}
+
+Bias your sub-component selection and pathway emphasis toward components that bear on this hint. Do NOT invent components solely to mention it; do NOT skip components that are genuinely part of the entity's internal structure just because they don't touch the hint. The hint adjusts WEIGHTS, not the FILTER.
+═══ END USER CONTEXT ═══`);
+  }
 
   // 4. Connected entities and relationship types
   if (input.connectedEdges.length > 0) {

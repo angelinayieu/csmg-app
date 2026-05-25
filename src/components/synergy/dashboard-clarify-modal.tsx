@@ -37,6 +37,10 @@ import {
   EXPERIENCE_MODES,
   type ExperienceMode,
 } from "@/types/experience-mode";
+import type {
+  AnswerSlot,
+  TypedClarifierAnswer,
+} from "@/types/clarifier-answer";
 import { RollingCubeLoader } from "@/components/synergy/rolling-cube-loader";
 
 interface MCQOption {
@@ -49,6 +53,10 @@ interface ClarifyingQuestion {
   rationale: string;
   kind: "mcq" | "free_text";
   options?: MCQOption[];
+  /** Phase B — typed slot the clarifier generated this question to
+   *  fill. Carried through to onContinue so bootstrap can route the
+   *  answer into synthesis_data.user_assertions[slot][]. */
+  slot?: AnswerSlot;
 }
 
 interface InferredBaseline {
@@ -63,9 +71,10 @@ export interface DashboardClarifyResult {
   /** Inferred baseline summary, returned so the destination can
    *  display it as the "objective statement" if it likes. */
   baseline: InferredBaseline | null;
-  /** Q+A pairs the user actually filled. Skipped questions are
-   *  excluded. */
-  answers: Array<{ question: string; answer: string }>;
+  /** Typed Q+A pairs the user actually filled. Skipped questions
+   *  are excluded. `slot` is undefined when the clarifier didn't
+   *  type the question (legacy response). */
+  answers: TypedClarifierAnswer[];
 }
 
 interface Props {
@@ -86,6 +95,11 @@ interface Props {
   busy?: boolean;
   /** Optional busy label below the cube. */
   busyLabel?: string;
+  /** Bootstrap / routing failure message. When set, the modal
+   *  surfaces it inline above the question stack with a Retry
+   *  affordance so the user keeps their MCQ answers + baseline
+   *  on a transient failure. */
+  routeError?: string | null;
 }
 
 const TARGET_QUESTION_COUNT = 3;
@@ -97,6 +111,7 @@ export function DashboardClarifyModal({
   onContinue,
   busy = false,
   busyLabel,
+  routeError = null,
 }: Props) {
   const meta = EXPERIENCE_MODES.find((m) => m.id === mode) ?? EXPERIENCE_MODES[0];
 
@@ -117,7 +132,10 @@ export function DashboardClarifyModal({
       method: "POST",
       headers: { "content-type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ text: prompt }),
+      // Phase B — forward mode so the clarifier branches its system
+      // prompt (mode directive + slot vocabulary). Without this the
+      // dashboard pills all collapse to the precise_rd shape.
+      body: JSON.stringify({ text: prompt, mode }),
     })
       .then(async (r) => {
         const json = (await r.json()) as {
@@ -198,10 +216,12 @@ export function DashboardClarifyModal({
       setIndex(index + 1);
       return;
     }
-    // Compile + emit
-    const compiled = (questions ?? []).map((q, i) => ({
+    // Compile + emit. Carry the typed `slot` from each question so
+    // bootstrap can route the answer into user_assertions[slot][].
+    const compiled: TypedClarifierAnswer[] = (questions ?? []).map((q, i) => ({
       question: q.question,
       answer: (answers[i] ?? "").trim(),
+      ...(q.slot ? { slot: q.slot } : {}),
     }));
     const filled = compiled.filter((qa) => qa.answer.length > 0);
     const suffix =
@@ -361,6 +381,35 @@ export function DashboardClarifyModal({
                   <X className="h-3.5 w-3.5" strokeWidth={2} />
                 </button>
               </div>
+
+              {/* Bootstrap / routing error banner. Surfaces inline so
+                  the user retries without losing the refined prompt
+                  + MCQ answers. Tapping Retry re-fires goNext from
+                  the last card. */}
+              {routeError && (
+                <div
+                  className="mx-6 mt-4 flex items-center justify-between gap-3 rounded-xl px-3 py-2.5"
+                  style={{
+                    background: "rgba(254, 226, 226, 0.65)",
+                    border: "1px solid rgba(239, 68, 68, 0.32)",
+                  }}
+                >
+                  <div className="min-w-0">
+                    <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-rose-700">
+                      Couldn&apos;t route
+                    </div>
+                    <p className="mt-0.5 truncate text-[12px] leading-snug text-rose-900">
+                      {routeError}
+                    </p>
+                  </div>
+                  <button
+                    onClick={goNext}
+                    className="shrink-0 rounded-full bg-rose-600 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-rose-700"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
 
               {/* Inferred baseline strip — only on the first question,
                   collapsed into one short row. Lets the user see what

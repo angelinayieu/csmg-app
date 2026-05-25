@@ -10,6 +10,7 @@ import type { ImprovementGoal, SuggestedObjective } from "@/types/goals";
 import { computeInteractionFields } from "@/lib/interactions/compute-fields";
 import { computeFieldIntersections } from "@/lib/interactions/compute-intersections";
 import { generateMultiStepStrategy } from "@/lib/pipeline/strategy-engine";
+import { buildGuardrailBlock, type GuardrailAnswer } from "@/lib/prompts/guardrail-questions";
 // Tier 2: multi-objective strategy fan-out
 import {
   resolveActiveObjectives,
@@ -154,7 +155,7 @@ export async function POST(request: Request) {
   // Verify ownership
   const { data: spaceRow } = await db
     .from("spaces")
-    .select("id, user_id, synthesis_data, reasoning_settings")
+    .select("id, user_id, synthesis_data, reasoning_settings, guardrail_answers")
     .eq("id", spaceId)
     .single();
 
@@ -163,6 +164,14 @@ export async function POST(request: Request) {
   }
 
   const synthData = spaceRow.synthesis_data as Record<string, unknown> | null;
+
+  // User-set guardrail block — propagated to every strategy-engine
+  // step's system prompt as HARD constraints. Empty string when no
+  // clarification answers exist; no-op interpolation in that case.
+  const guardrailBlock = buildGuardrailBlock(
+    (spaceRow as { guardrail_answers: Record<string, GuardrailAnswer> | null })
+      .guardrail_answers ?? null,
+  );
 
   // Load user-controlled output toggles. These were captured at intake
   // and persisted to spaces.reasoning_settings; we read them here so
@@ -1911,6 +1920,9 @@ export async function POST(request: Request) {
             kgSupplementsBlock,
             similarPatternsBlock,
             learningContextBlock,
+            // User-set guardrails — engine threads them into every
+            // LLM-bearing step (diagnosis/synth/verify/L4/L3/L2/L1/final).
+            guardrailBlock,
             // Wave D L0.3 — thread the Wave A junction through so the
             // final strategy prompt names actual entities that serve
             // this goal.

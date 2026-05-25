@@ -63,9 +63,12 @@ export async function POST(req: NextRequest) {
   if (!entity) return NextResponse.json({ error: "Entity not found" }, { status: 404 });
 
   // 6. Fetch space (for context)
+  // Phase D: also pull synthesis_data so we can derive the
+  // userContextHint from typed clarifier assertions when the caller
+  // didn't supply an explicit context_hint.
   const { data: space } = await db
     .from("spaces")
-    .select("id, name, description, input_text, user_id")
+    .select("id, name, description, input_text, user_id, synthesis_data")
     .eq("id", space_id)
     .eq("user_id", user.id)
     .single();
@@ -126,6 +129,62 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 8a. Resolve userContextHint (Phase D — typed-clarifier steering)
+  // Priority:
+  //   (a) explicit context_hint on the request body — caller knows best
+  //   (b) entity.manifold.expand_hint — set by promote-seed for
+  //       user-asserted seed entities, so subsequent expand calls
+  //       inherit the slot value automatically
+  //   (c) aggregated synthesis_data.user_assertions slot values for
+  //       the space — broad-strokes steering when the entity isn't
+  //       itself user-asserted but the user set assertions at intake
+  // Soft-fail: any parse error degrades to no hint (current behavior).
+  let userContextHint: string | undefined =
+    typeof context_hint === "string" && context_hint.trim().length > 0
+      ? context_hint.trim()
+      : undefined;
+  if (!userContextHint) {
+    try {
+      const m = (entity as { manifold?: Record<string, unknown> }).manifold;
+      const hint = m && typeof m.expand_hint === "string" ? m.expand_hint.trim() : "";
+      if (hint) userContextHint = hint;
+    } catch {
+      /* non-fatal */
+    }
+  }
+  if (!userContextHint) {
+    try {
+      const sd = (space as { synthesis_data?: unknown }).synthesis_data;
+      const root =
+        sd && typeof sd === "object"
+          ? (sd as Record<string, unknown>)
+          : typeof sd === "string"
+            ? (JSON.parse(sd) as Record<string, unknown>)
+            : {};
+      const ua = root.user_assertions as
+        | Record<string, Array<{ value?: unknown }>>
+        | undefined;
+      if (ua && typeof ua === "object") {
+        const segments: string[] = [];
+        for (const [slot, entries] of Object.entries(ua)) {
+          if (!Array.isArray(entries) || entries.length === 0) continue;
+          const values = entries
+            .map((e) => (typeof e?.value === "string" ? e.value.trim() : ""))
+            .filter((s) => s.length > 0);
+          if (values.length === 0) continue;
+          // Render slot name in a readable form (e.g. "target metric").
+          const label = slot.replace(/_/g, " ");
+          segments.push(`${label}: ${values.join("; ")}`);
+        }
+        if (segments.length > 0) {
+          userContextHint = segments.join(" | ");
+        }
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }
+
   // 9. Build prompt
   const { systemPrompt, userPrompt } = buildExpansionPrompt({
     entity: entity as Entity,
@@ -136,6 +195,7 @@ export async function POST(req: NextRequest) {
     userInputText: (space as Record<string, unknown>).input_text as string | undefined,
     depthLevel: depth_level,
     parentContext,
+    userContextHint,
   });
 
   // 10. LLM call

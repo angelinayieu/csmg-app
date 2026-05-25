@@ -15,10 +15,28 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { BrainstormSettings } from "@/lib/brainstorm/brainstorm-settings";
+import type { AnswerSlot } from "@/types/clarifier-answer";
+
+/**
+ * Phase C — typed-clarifier assertions sourced from
+ * spaces.synthesis_data.user_assertions. Read by the seed-card
+ * spawner on first mount and by shapes that want to surface
+ * which slot a particular card came from.
+ */
+export interface SeedAssertion {
+  slot: AnswerSlot;
+  value: string;
+  question: string;
+  answeredAt: string;
+}
 
 export interface BrainstormContextValue {
   settings: BrainstormSettings;
   spaceId: string;
+  /** Per-slot list of user-asserted commitments from the clarifier.
+   *  Empty/missing when the user skipped MCQs or didn't toggle the
+   *  ask-questions setting. */
+  seedAssertions?: SeedAssertion[];
 }
 
 const BrainstormContext = createContext<BrainstormContextValue | null>(null);
@@ -30,15 +48,17 @@ const BrainstormContext = createContext<BrainstormContextValue | null>(null);
 export function BrainstormContextProvider({
   settings,
   spaceId,
+  seedAssertions,
   children,
 }: {
   settings: BrainstormSettings;
   spaceId: string;
+  seedAssertions?: SeedAssertion[];
   children: ReactNode;
 }) {
   const value = useMemo<BrainstormContextValue>(
-    () => ({ settings, spaceId }),
-    [settings, spaceId],
+    () => ({ settings, spaceId, seedAssertions }),
+    [settings, spaceId, seedAssertions],
   );
   return (
     <BrainstormContext.Provider value={value}>

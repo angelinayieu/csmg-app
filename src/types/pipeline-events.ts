@@ -161,7 +161,15 @@ export type StructuralEvent =
   // canvas stays scannable. See `src/lib/synthesis/emit-signal-events.ts`
   // for the filter + batch emit logic.
   | SignalDetectedEvent
-  | SignalClusterEvent;
+  | SignalClusterEvent
+  // Preliminary hypothesis — emitted by a fast Haiku preflight at the
+  // start of decompose so the user sees substantive content within
+  // 5-10s instead of waiting 60-90s for Pass 1 to finish. These are
+  // shallow, fast guesses about what the question is asking, what
+  // forces might be at play, and what the LLM expects to find. They
+  // get superseded by the deeper synthesize-stage insights but
+  // close the "is this working" gap during the long reasoning phase.
+  | PreliminaryHypothesisEvent;
 
 // ── Phase 2E · Tier 2 — probability space axes ──
 //
@@ -1998,4 +2006,36 @@ export interface SignalClusterEvent {
   /** Type breakdown for the chip label ("12 signals: 4 holes, 5 vars,
    *  3 windows"). */
   topTypes: string[];
+}
+
+/**
+ * Preliminary hypothesis — fast Haiku-class LLM call at the very
+ * start of decompose. Produces 2-4 shallow hypotheses about what the
+ * question is, what forces likely matter, what tensions to look for.
+ * These exist purely to give the user something to react to within
+ * 5-10s of clicking "Start", before the deep reasoning kicks in.
+ *
+ * Painter doesn't render these on the canvas (they're not structural
+ * — too speculative). They surface ONLY in the middle insights feed
+ * as low-confidence cards that get displaced when real
+ * synthesis-stage insights land.
+ */
+export interface PreliminaryHypothesisEvent {
+  type: "preliminary_hypothesis";
+  /** Stable id — `hyp-${idx}` plus a millisecond suffix so re-emissions
+   *  don't collide across runs of the same user input. */
+  hypothesisId: string;
+  /** What the LLM thinks the user is actually asking. Short headline. */
+  headline: string;
+  /** 1-2 sentence expansion of the headline. Treated as a hypothesis,
+   *  not a finding — the UI marks it explicitly as "early guess." */
+  body: string;
+  /** Loose category for visual treatment: "framing" = how to read the
+   *  question; "force" = a likely causal force at play; "tension" = a
+   *  potential contradiction the LLM sniffed; "lever" = where the user
+   *  might want to intervene. */
+  category: "framing" | "force" | "tension" | "lever";
+  /** Self-reported confidence 0..1. Always low (~0.3-0.5) — these are
+   *  early guesses, not the deep-reasoning output. */
+  confidence: number;
 }

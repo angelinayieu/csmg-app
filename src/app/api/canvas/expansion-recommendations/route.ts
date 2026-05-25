@@ -199,13 +199,13 @@ export async function POST(request: Request) {
     layerLabels = (layers ?? []).map((l) => l.label).filter(Boolean);
   }
 
-  // Guardrail answers (Phase 3 fills these in; Phase 2 reads even if
-  // the column doesn't exist yet — type-cast as Record so a missing
-  // column resolves to {} cleanly).
+  // Guardrail answers — canonical shape is now Record<string,
+  // GuardrailAnswer>. Empty object when the column is null / missing,
+  // so the prompt block resolves to "" via buildGuardrailBlock.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const guardrailAnswers = ((space as any).guardrail_answers ?? {}) as Record<
     string,
-    string
+    import("@/lib/prompts/guardrail-questions").GuardrailAnswer
   >;
 
   // Rings summary — pulled from node_signature if it's been

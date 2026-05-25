@@ -575,7 +575,27 @@ export function buildDecompReconciliationContext(
 
   // Extract open questions
   if (Array.isArray(synthesisData.open_questions) && synthesisData.open_questions.length > 0) {
-    parts.push(`OPEN QUESTIONS:\n${JSON.stringify(synthesisData.open_questions, null, 1)}`);
+    // Phase A3 — preserve-verbatim directive. The synthesize dedup
+    // loop at /api/pipeline/synthesize/route.ts:1659-1699 reconciles
+    // user_answer across regenerations by lowercased-text match. On
+    // the FIRST synthesis pass over pre-seeded clarifier questions,
+    // that match misses because the LLM phrases its own open_questions
+    // differently — so the Phase 4b banner ("N user answers informed
+    // this strategy") reads 0 until a strategy-refresh. Telling the
+    // LLM explicitly to preserve answered questions verbatim makes the
+    // first-pass dedup land cleanly.
+    const answeredCount = (
+      synthesisData.open_questions as Array<{ user_answer?: unknown }>
+    ).filter(
+      (q) => typeof q.user_answer === "string" && q.user_answer.trim().length > 0,
+    ).length;
+    const preserveDirective =
+      answeredCount > 0
+        ? `\n\nPRESERVE-VERBATIM RULE: ${answeredCount} of the open_questions above already has a non-empty user_answer (the user pre-answered them via the clarifier). For each such question, include it in your output with its question text, user_answer, and answered_at fields UNCHANGED. Do not rephrase the question or strip the user_answer. You MAY add new open_questions after the preserved ones, but you MUST NOT replace or merge an answered question with a paraphrased one.`
+        : "";
+    parts.push(
+      `OPEN QUESTIONS:\n${JSON.stringify(synthesisData.open_questions, null, 1)}${preserveDirective}`,
+    );
   }
 
   // Extract contradictions

@@ -28,6 +28,10 @@ import {
   AlertCircle,
 } from "lucide-react";
 import type { ReasoningLens } from "@/types/reasoning-settings";
+import type {
+  AnswerSlot,
+  TypedClarifierAnswer,
+} from "@/types/clarifier-answer";
 
 interface ClarifyingQuestion {
   question: string;
@@ -37,6 +41,13 @@ interface ClarifyingQuestion {
   // ignored here. The dashboard modal renders them as clickable rows.
   kind: "mcq" | "free_text";
   options?: Array<{ label: string; detail: string }>;
+  /** Phase B — typed slot the clarifier generated this question to
+   *  fill. Carried through to onContinue so bootstrap routes the
+   *  answer into synthesis_data.user_assertions[slot][]. The
+   *  immersive-home flow doesn't have an experience mode (it's the
+   *  pre-pill intake surface), so the clarifier defaults to the
+   *  precise_rd slot vocabulary here. */
+  slot?: AnswerSlot;
 }
 
 interface InferredBaseline {
@@ -49,7 +60,7 @@ export interface ClarifyingQuestionsStepProps {
   prompt: string;
   lenses: ReasoningLens[];
   onCancel: () => void;
-  onContinue: (answers: Array<{ question: string; answer: string }>) => void;
+  onContinue: (answers: TypedClarifierAnswer[]) => void;
 }
 
 export function ClarifyingQuestionsStep({
@@ -104,10 +115,11 @@ export function ClarifyingQuestionsStep({
       onContinue([]);
       return;
     }
-    const filled = questions
+    const filled: TypedClarifierAnswer[] = questions
       .map((q, idx) => ({
         question: q.question,
         answer: (answers[idx] ?? "").trim(),
+        ...(q.slot ? { slot: q.slot } : {}),
       }))
       .filter((qa) => qa.answer.length > 0);
     onContinue(filled);

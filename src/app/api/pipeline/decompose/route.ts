@@ -3,6 +3,7 @@ import { llmGenerate, llmJSON, llmStream } from "@/lib/llm";
 import { getDecompositionPrompt, getStructuringPrompt } from "@/lib/prompts/tier-prompts";
 import { safeAuth, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { buildDecompIntentBlock, buildDomainDecompBlock } from "@/lib/prompts/intent-context";
+import { buildGuardrailBlock, type GuardrailAnswer } from "@/lib/prompts/guardrail-questions";
 import { buildFrameworkDecompBlock } from "@/lib/pipeline/decomposition-router";
 import type { UserIntent } from "@/types/analysis";
 import type { EpistemicClassification } from "@/types/epistemic";
@@ -334,7 +335,30 @@ ${text}`;
     const intentPrefix = buildDecompIntentBlock(intent);
     const domainPrefix = buildDomainDecompBlock(intent?.context_type);
     const frameworkPrefix = buildFrameworkDecompBlock(epistemicClassification);
-    const combinedPrefix = [intentPrefix, domainPrefix, frameworkPrefix].filter(Boolean).join("\n");
+
+    // Guardrail block — the user's explicit answers to clarification
+    // questions act as HARD constraints on what Pass 1 may emit. Loaded
+    // here so it can ride alongside the other prompt prefixes. Soft-fail
+    // — a fetch flub or absent column → empty string → no regression.
+    let guardrailPrefix = "";
+    if (existingSpaceId) {
+      try {
+        const { data: spaceRow } = await db
+          .from("spaces")
+          .select("guardrail_answers")
+          .eq("id", existingSpaceId)
+          .maybeSingle();
+        const answers = (spaceRow as { guardrail_answers: Record<string, GuardrailAnswer> | null } | null)
+          ?.guardrail_answers ?? null;
+        guardrailPrefix = buildGuardrailBlock(answers);
+      } catch (err) {
+        console.warn("[decompose] guardrail load soft-failed:", err);
+      }
+    }
+
+    const combinedPrefix = [intentPrefix, domainPrefix, frameworkPrefix, guardrailPrefix]
+      .filter(Boolean)
+      .join("\n");
     const enrichedPrompt = combinedPrefix ? combinedPrefix + "\n\n" + userPrompt : userPrompt;
 
     // Token budgets scale with depth — deep mode needs much more space
@@ -1251,6 +1275,30 @@ ${enrichedPrompt}`;
       message: `Decomposing: ${spaceName.slice(0, 80)}`,
     });
 
+    // ── Haiku preflight — early-hypothesis emission ─────────────────
+    //
+    // Fires a fast Haiku LLM call (5-10s) so the user sees substantive
+    // content within seconds, before Pass 1's 60-90s reasoning grinds.
+    // Emits 2-4 preliminary_hypothesis events that surface in the
+    // middle insights feed as low-confidence "early guess" cards.
+    // They get pushed down the rank when real synthesize-stage
+    // insights land (importanceFor returns 12 vs. 50+ for canonical).
+    //
+    // Soft-fail: any error → swallow → main pipeline continues. We do
+    // NOT await the side-effect promise (after() handles it after the
+    // response is sent) so this never blocks Pass 1.
+    // runId is non-null at this point (created right above) — narrow
+    // the type for the helper signature.
+    if (runId) {
+      const preflightRunId = runId;
+      after(emitPreliminaryHypotheses(db, preflightRunId, text).catch((err) => {
+        console.warn(
+          "[decompose] Haiku preflight soft-failed (non-fatal):",
+          err instanceof Error ? err.message : err,
+        );
+      }));
+    }
+
     // ── Link parent entity to newly created sub-space ──
     const originEntityId = spaceConfig?.originated_from_entity_id;
     if (originEntityId) {
@@ -1676,13 +1724,29 @@ ${enrichedPrompt}`;
       cyclesInserted = inserted;
 
       // Emit cycle_detected events — classification drives the canvas
-      // ring color (reinforcing_positive / balancing / etc.).
-      const cycleEvents: StructuralEvent[] = sanitizedCycles.map((c, i) => ({
-        type: "cycle_detected",
-        cycleId: c.cycle_id ?? `cycle-${i}`,
-        classification: c.classification ?? "balancing",
-        entityIds: Array.isArray(c.entity_ids) ? c.entity_ids : [],
-      }));
+      // ring color AND now (L1.1) carries optional preview props so the
+      // painter can spawn a cycle-loop-shape inside the KG room with
+      // accurate name + multiplier + growth-type without a follow-up DB
+      // fetch. Optional fields are back-compat with consumers that
+      // pre-date L1.1 (they'll just ignore the extras).
+      const cycleEvents: StructuralEvent[] = sanitizedCycles.map((c, i) => {
+        const entityIds = Array.isArray(c.entity_ids) ? c.entity_ids : [];
+        return {
+          type: "cycle_detected",
+          cycleId: c.cycle_id ?? `cycle-${i}`,
+          classification: c.classification ?? "balancing",
+          entityIds,
+          // ── L1.1 preview fields ──
+          name: typeof c.name === "string" && c.name.length > 0 ? c.name : undefined,
+          multiplier:
+            typeof c.estimated_multiplier === "number"
+              ? c.estimated_multiplier
+              : null,
+          growthType:
+            typeof c.growth_type === "string" ? c.growth_type : null,
+          firstEntityId: entityIds[0] ?? null,
+        };
+      });
       await emitBatchEvents(db, runId, cycleEvents);
     }
 
@@ -2423,5 +2487,128 @@ ${enrichedPrompt}`;
       });
     }
     return NextResponse.json({ error: `Decomposition failed: ${sanitizeErrorMessage(err)}` }, { status: 500 });
+  }
+}
+
+// ── Haiku preflight ──────────────────────────────────────────────────
+//
+// Fast Claude Haiku call producing 2-4 preliminary hypotheses about
+// what the user's question is, what forces likely matter, what
+// tensions might be at play. Designed to land within ~5-10s so the
+// user sees substantive content in the insights feed long before
+// Pass 1 finishes (60-120s). Each hypothesis becomes a single
+// `preliminary_hypothesis` structural event — the middle panel
+// renders them as low-confidence "early guess" cards.
+//
+// Pipeline awareness: this runs in parallel with Pass 1 via `after()`
+// — it's a side-effect, not a dependency. If it fails, the main
+// chain proceeds unaffected. If it succeeds, the user sees content
+// faster.
+//
+// Token budget: 600 tokens. Big enough for 3-4 substantive cards,
+// small enough that Haiku returns in <10s on average.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function emitPreliminaryHypotheses(db: any, runId: string, userText: string): Promise<void> {
+  const trimmed = userText.slice(0, 1500).trim();
+  if (trimmed.length < 12) return;
+
+  const system = `You are a fast-reasoning preflight assistant. Before a deep LLM decomposes the user's question into a knowledge graph, you produce 2-4 preliminary HYPOTHESES — first-pass guesses about what the question is asking, what forces likely matter, what tensions might exist, or where the user might want to intervene.
+
+These are EARLY GUESSES, not deep analysis. Be specific, name real concepts, but stay shallow. The deep pipeline will refine or refute each one.
+
+Output STRICT JSON:
+{
+  "hypotheses": [
+    {
+      "headline": "short title — what you think this question is really about",
+      "body": "1-2 sentence expansion",
+      "category": "framing" | "force" | "tension" | "lever",
+      "confidence": 0.3 | 0.4 | 0.5
+    }
+  ]
+}
+
+CATEGORIES:
+- framing: how to read the question itself ("this is really a coordination problem disguised as a tech problem")
+- force: a causal force or mechanism likely at play
+- tension: a contradiction or tradeoff the user may not have surfaced
+- lever: where intervention might pay off
+
+Return 2-4 hypotheses. No prose outside the JSON.`;
+
+  const user = `User's question: """${trimmed}"""`;
+
+  let raw: string;
+  try {
+    raw = await llmGenerate({
+      provider: "anthropic",
+      model: "claude-haiku-4-5-20251001",
+      system,
+      user,
+      maxTokens: 600,
+      temperature: 0.4,
+    });
+  } catch (err) {
+    console.warn("[decompose:preflight] Haiku call failed:", err instanceof Error ? err.message : err);
+    return;
+  }
+
+  // Strip markdown fences + any leading prose Haiku occasionally adds.
+  const cleaned = raw
+    .replace(/```json\s*/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace < 0 || lastBrace <= firstBrace) {
+    console.warn("[decompose:preflight] No JSON object found in Haiku output");
+    return;
+  }
+  const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
+
+  let parsed: { hypotheses?: unknown };
+  try {
+    parsed = JSON.parse(jsonStr) as { hypotheses?: unknown };
+  } catch (err) {
+    console.warn("[decompose:preflight] JSON parse failed:", err instanceof Error ? err.message : err);
+    return;
+  }
+  const list = Array.isArray(parsed.hypotheses) ? parsed.hypotheses : [];
+  if (list.length === 0) return;
+
+  const valid = list
+    .filter((h: unknown): h is Record<string, unknown> =>
+      typeof h === "object" && h !== null,
+    )
+    .slice(0, 4)
+    .map((h, idx) => {
+      const headline = typeof h.headline === "string" ? h.headline.trim().slice(0, 140) : "";
+      const body = typeof h.body === "string" ? h.body.trim().slice(0, 280) : "";
+      const catRaw = typeof h.category === "string" ? h.category.toLowerCase() : "framing";
+      const category: "framing" | "force" | "tension" | "lever" =
+        catRaw === "force" || catRaw === "tension" || catRaw === "lever"
+          ? catRaw
+          : "framing";
+      const confRaw = typeof h.confidence === "number" ? h.confidence : 0.4;
+      const confidence = Math.max(0.2, Math.min(0.6, confRaw));
+      return { headline, body, category, confidence, idx };
+    })
+    .filter((h) => h.headline.length > 0 && h.body.length > 0);
+
+  if (valid.length === 0) return;
+
+  const stamp = Date.now();
+  const events: StructuralEvent[] = valid.map((h) => ({
+    type: "preliminary_hypothesis",
+    hypothesisId: `hyp-${stamp}-${h.idx}`,
+    headline: h.headline,
+    body: h.body,
+    category: h.category,
+    confidence: h.confidence,
+  }));
+  try {
+    await emitBatchEvents(db, runId, events);
+  } catch (err) {
+    console.warn("[decompose:preflight] emit failed:", err instanceof Error ? err.message : err);
   }
 }
