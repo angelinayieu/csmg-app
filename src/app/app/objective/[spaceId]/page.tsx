@@ -12,6 +12,7 @@ import { ObjectiveCanvasView } from "@/components/objective/objective-canvas-vie
 import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import type { MainCanvasSub } from "@/components/objective/main-canvas-view";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
+import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { ArrowLeft } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -69,11 +70,12 @@ export default async function ObjectiveCanvasPage({
         ? (parentRows[0]?.id as string)
         : null;
     if (Array.isArray(parentRows) && parentRows.length > 0) {
-      const rawAnns = parentRows[0]?.annotations;
-      if (Array.isArray(rawAnns)) {
-        initialCoreAnnotations =
-          rawAnns as import("@/components/objective/annotated-objective-card").ObjectiveAnnotation[];
-      }
+      // Normalize at the read boundary — annotations in the DB may be in
+      // pre-v3 shape (single `like` field, no `analogies[]`/`dimensions[]`/
+      // `inference_chain[]`/`scope`). The v3 card accesses those fields
+      // directly and crashes on undefined; the normalizer migrates v2 →
+      // v3 and fills missing arrays with [].
+      initialCoreAnnotations = normalizeAnnotations(parentRows[0]?.annotations);
     }
     if (parentGoalId) {
       const { data: childRows } = await db

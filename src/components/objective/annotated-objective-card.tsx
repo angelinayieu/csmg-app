@@ -47,6 +47,7 @@ import {
   AnnotationGlyph,
   type GlyphKind,
 } from "@/components/objective/icons/annotation-glyphs";
+import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -161,8 +162,12 @@ export function AnnotatedObjectiveCard({
   subObjectives,
 }: Props) {
   const reduce = useReducedMotion();
-  const [annotations, setAnnotations] = useState<ObjectiveAnnotation[]>(
-    initialAnnotations,
+  // Defense-in-depth: normalize on the way in even though the server route
+  // already normalizes. Cheap, and guards against props passed by other
+  // hosts (the embedded contract in [spaceId]/page.tsx exposes this card
+  // to integration points that may not run the normalizer themselves).
+  const [annotations, setAnnotations] = useState<ObjectiveAnnotation[]>(() =>
+    normalizeAnnotations(initialAnnotations),
   );
   const [reading, setReading] = useState(false); // margin-notes toggle
   const [hovered, setHovered] = useState<number | null>(null);
@@ -214,7 +219,9 @@ export function AnnotatedObjectiveCard({
         });
         const json = await res.json();
         if (res.ok && Array.isArray(json.annotations)) {
-          setAnnotations(json.annotations);
+          // API cache short-circuit returns raw DB annotations untouched —
+          // may be in v2 shape. Normalize before handing to the renderer.
+          setAnnotations(normalizeAnnotations(json.annotations));
         }
       } catch (err) {
         console.warn("[AnnotatedObjective] lazy generate failed", err);
