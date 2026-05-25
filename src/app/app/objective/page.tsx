@@ -46,15 +46,21 @@ export default async function ObjectiveCanvasLandingPage() {
     recent = (tagged.data ?? []) as ObjectiveCanvasRow[];
   }
 
-  // Credit balance for the top-right profile chip. Falls through to
-  // 0 if the profiles row hasn't been created yet (new accounts).
-  const { data: profile } = await db
-    .from("profiles")
-    .select("credit_balance")
-    .eq("id", user.id)
-    .single();
+  // Credit balance for the top-right profile chip + synergy display
+  // name for the time-aware greeting. Both fall through cleanly if
+  // the rows don't exist yet (new accounts).
+  const [{ data: profile }, { data: synergyProfile }] = await Promise.all([
+    db.from("profiles").select("credit_balance").eq("id", user.id).single(),
+    db
+      .from("synergy_profiles")
+      .select("display_name")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  ]);
   const creditBalance: number =
     (profile?.credit_balance as number | undefined) ?? 0;
+  const displayName: string | null =
+    (synergyProfile?.display_name as string | null) ?? null;
 
   return (
     <div
@@ -67,7 +73,11 @@ export default async function ObjectiveCanvasLandingPage() {
       />
       <HomeTabNav />
 
-      <LandingExperience recent={recent} />
+      <LandingExperience
+        recent={recent}
+        userEmail={user.email ?? ""}
+        displayName={displayName}
+      />
     </div>
   );
 }

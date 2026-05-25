@@ -2,26 +2,28 @@
 
 // ── Landing experience ──
 //
-// State-based orchestrator for /app/objective. No route change
-// between the portal landing and the entry form — clicking the
-// portal card animates it expanding into the entry card via
-// Framer Motion's `layoutId` (shared element). When the user
-// submits, we navigate to /app/objective/[spaceId].
+// State-based orchestrator for /app/objective. Two stages:
 //
-// States:
-//   "portal" → portal card centered, recent list below
-//   "entry"  → entry form expanded into the same card slot
+//   "portal" → time-aware greeting + Create/Explore card pair +
+//              recent list. No route change to enter the form —
+//              clicking Create transitions in-place via Framer
+//              Motion's layoutId.
+//   "entry"  → entry form expanded from the Create card slot.
 //
-// Direct linking: /app/objective/new still works — that route now
-// just redirects here with ?stage=entry, which we read on mount.
+// Direct linking: /app/objective/new redirects here with
+// ?stage=entry so deep links land on the form directly.
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Sparkle } from "@/components/objective/icons/sparkle";
+import { Compass, Plus } from "lucide-react";
 import { PortalCard } from "@/components/objective/portal-card";
 import { ObjectiveEntryCard } from "@/components/objective/objective-entry-card";
+import {
+  firstName,
+  timeGreeting,
+} from "@/lib/objective-canvas/greeting";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 interface RecentCanvas {
@@ -32,31 +34,37 @@ interface RecentCanvas {
 
 interface Props {
   recent: RecentCanvas[];
+  userEmail: string;
+  displayName?: string | null;
 }
 
 type Stage = "portal" | "entry";
 
-export function LandingExperience({ recent }: Props) {
+export function LandingExperience({
+  recent,
+  userEmail,
+  displayName,
+}: Props) {
   const params = useSearchParams();
   const initialStage: Stage =
     params.get("stage") === "entry" ? "entry" : "portal";
   const [stage, setStage] = useState<Stage>(initialStage);
   const reduce = useReducedMotion();
 
-  // Whiteboard texture is the "you've entered the canvas" cue. We
-  // fade it in only when the user moves to the entry stage.
   const showWhiteboard = stage === "entry";
+  const greeting = timeGreeting();
+  const name = firstName(displayName, userEmail);
 
-  // Lock body scroll while the entry card is mid-transition so the
-  // expanding card animation isn't disrupted by scroll snap.
+  // Lock scroll briefly during the layout animation so the
+  // expanding card isn't disrupted by user scrolling.
   useEffect(() => {
     if (stage === "entry") {
       document.body.style.overflow = "hidden";
-      const timer = setTimeout(() => {
+      const t = setTimeout(() => {
         document.body.style.overflow = "";
       }, 700);
       return () => {
-        clearTimeout(timer);
+        clearTimeout(t);
         document.body.style.overflow = "";
       };
     }
@@ -67,7 +75,7 @@ export function LandingExperience({ recent }: Props) {
       className="relative w-full"
       style={{ fontFamily: appleVibe.font.stack }}
     >
-      {/* Whiteboard texture — only visible after entering */}
+      {/* Whiteboard dot grid — invisible until entry */}
       <motion.div
         aria-hidden
         className="pointer-events-none fixed inset-0 -z-10"
@@ -78,11 +86,9 @@ export function LandingExperience({ recent }: Props) {
           backgroundImage:
             "radial-gradient(rgba(15,23,42,0.085) 1.1px, transparent 1.1px)",
           backgroundSize: "22px 22px",
-          backgroundPosition: "0 0",
         }}
       />
 
-      {/* ── Stage: portal ── */}
       <AnimatePresence mode="wait">
         {stage === "portal" && (
           <motion.div
@@ -92,57 +98,70 @@ export function LandingExperience({ recent }: Props) {
             transition={{ duration: 0.18, ease: "easeIn" }}
             className="relative mx-auto flex min-h-screen max-w-5xl flex-col items-center justify-center px-6 pb-24 pt-28"
           >
-            {/* Hero */}
+            {/* Greeting — single short line, no subtitle, no badge.
+                The cards below explain themselves. */}
             <motion.div
               initial={reduce ? false : { opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, ease: "easeOut" }}
-              className="mb-8 text-center"
+              transition={{ duration: 0.55, ease: "easeOut" }}
+              className="mb-10 text-center"
             >
-              <div
-                className="mx-auto inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[10.5px] font-semibold uppercase tracking-[0.14em]"
-                style={{
-                  background: appleVibe.surface.chip,
-                  color: appleVibe.text.tertiary,
-                  border: `1px solid ${appleVibe.stroke.hairline}`,
-                }}
-              >
-                <Sparkle className="h-3 w-3" />
-                Objective Canvas
-              </div>
               <h1
-                className="mt-4 text-[40px] font-semibold leading-tight tracking-tight"
+                className="text-[44px] font-semibold leading-tight tracking-tight"
                 style={{
                   color: appleVibe.text.primary,
                   fontFamily: appleVibe.font.display,
-                  letterSpacing: "-0.025em",
+                  letterSpacing: "-0.028em",
                 }}
               >
-                What are you working on?
+                {greeting},{" "}
+                <span style={{ color: appleVibe.text.tertiary }}>{name}</span>
               </h1>
-              <p
-                className="mx-auto mt-2 max-w-xl text-[14.5px] font-light"
-                style={{ color: appleVibe.text.secondary }}
-              >
-                Start with an objective. We&rsquo;ll refine it through a few
-                questions, propose sub-objectives, and unfurl them on a
-                whiteboard.
-              </p>
             </motion.div>
 
-            {/* Portal */}
-            <PortalCard onOpen={() => setStage("entry")} />
+            {/* Two cards — Create (active) + Explore (placeholder) */}
+            <div className="grid w-full max-w-3xl grid-cols-1 gap-4 md:grid-cols-2">
+              <motion.div
+                initial={reduce ? false : { opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.05, ease: "easeOut" }}
+              >
+                <PortalCard
+                  layoutId="portal-card"
+                  variant="primary"
+                  title="Create"
+                  subtitle="Start a new objective from scratch — we'll refine it with you and unfurl it onto a whiteboard."
+                  icon={<Plus className="h-5 w-5" strokeWidth={2.25} />}
+                  onActivate={() => setStage("entry")}
+                />
+              </motion.div>
 
-            {/* Recent — only on the portal stage */}
+              <motion.div
+                initial={reduce ? false : { opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.12, ease: "easeOut" }}
+              >
+                <PortalCard
+                  variant="secondary"
+                  title="Explore"
+                  subtitle="Browse use case templates, patterns, and starter canvases curated for fast starts."
+                  icon={<Compass className="h-5 w-5" strokeWidth={1.75} />}
+                  badge="Coming soon"
+                  disabled
+                />
+              </motion.div>
+            </div>
+
+            {/* Recent — same as before */}
             {recent.length > 0 && (
               <motion.div
                 initial={reduce ? false : { opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, delay: 0.1, ease: "easeOut" }}
-                className="mx-auto mt-12 w-full max-w-2xl"
+                transition={{ duration: 0.55, delay: 0.18, ease: "easeOut" }}
+                className="mx-auto mt-14 w-full max-w-3xl"
               >
                 <h2
-                  className="mb-3 text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+                  className="mb-3 text-[10.5px] font-semibold uppercase tracking-[0.16em]"
                   style={{ color: appleVibe.text.tertiary }}
                 >
                   Recent
@@ -180,7 +199,6 @@ export function LandingExperience({ recent }: Props) {
           </motion.div>
         )}
 
-        {/* ── Stage: entry ── */}
         {stage === "entry" && (
           <motion.div
             key="entry"
