@@ -28,7 +28,10 @@ const LAYER_ORDER: Array<"pain" | "features" | "outcomes" | "objective"> = [
   "objective",
 ];
 
-const LANE_LABELS: Record<(typeof LAYER_ORDER)[number], string> = {
+// Canonical fallback labels — used only when the room hasn't been
+// generated yet (no LLM lane_labels persisted) AND the
+// layer_ontology row carries the seed name.
+const CANONICAL_LANE_LABELS: Record<(typeof LAYER_ORDER)[number], string> = {
   pain: "Pain points",
   features: "Features",
   outcomes: "Outcomes",
@@ -43,6 +46,11 @@ interface Sub {
   user_id: string;
   parent_goal_id: string | null;
   room_layers_generated_at: string | null;
+  top_negative_outcome: string | null;
+  /** LLM-picked domain-specific lane labels — overrides the
+   *  canonical names when present. Shape:
+   *  { pain, features, outcomes, objective }. */
+  room_lane_labels: Record<string, string> | null;
 }
 
 export default async function SubObjectiveRoomPage({
@@ -62,7 +70,7 @@ export default async function SubObjectiveRoomPage({
   const { data: sub } = (await db
     .from("improvement_goals")
     .select(
-      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at",
+      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels",
     )
     .eq("id", subId)
     .maybeSingle()) as { data: Sub | null };
@@ -105,14 +113,28 @@ export default async function SubObjectiveRoomPage({
   // ── Entities scoped to this sub-objective ──
   const { data: entityRows } = await db
     .from("entities")
-    .select("id, name, description, entity_type, layer_ontology_id")
+    .select(
+      "id, name, description, entity_type, layer_ontology_id, causal_chain",
+    )
     .eq("parent_sub_objective_id", subId);
+
+  // Label precedence (highest wins):
+  //   1. sub.room_lane_labels[slug]   — domain-adaptive, LLM-picked
+  //   2. layer_ontology.label          — per-space seed
+  //   3. CANONICAL_LANE_LABELS[slug]   — last-resort fallback
+  const laneLabelFor = (slug: (typeof LAYER_ORDER)[number]): string => {
+    const adaptive = sub.room_lane_labels?.[slug];
+    if (typeof adaptive === "string" && adaptive.trim().length > 0) {
+      return adaptive.trim();
+    }
+    return CANONICAL_LANE_LABELS[slug];
+  };
 
   const lanes: RoomLane[] = LAYER_ORDER.map((slug) => {
     const meta = layerBySlug.get(slug);
     return {
       slug,
-      label: LANE_LABELS[slug],
+      label: laneLabelFor(slug),
       color:
         meta?.color ??
         (slug === "pain"
@@ -133,6 +155,7 @@ export default async function SubObjectiveRoomPage({
     description: string | null;
     entity_type: string;
     layer_ontology_id: string | null;
+    causal_chain: Record<string, unknown> | null;
   }>) {
     const layer = e.layer_ontology_id
       ? layerById.get(e.layer_ontology_id)
@@ -145,6 +168,7 @@ export default async function SubObjectiveRoomPage({
       name: e.name,
       description: e.description,
       entity_type: e.entity_type,
+      causal_chain: e.causal_chain,
     });
   }
 
@@ -203,13 +227,31 @@ export default async function SubObjectiveRoomPage({
           >
             {sub.title}
           </h1>
-          {sub.description && (
+          {/* Room anchor — the single most-impactful downstream
+              consequence across all pains. Replaces the long
+              sub-objective description as the header subtitle. */}
+          {sub.top_negative_outcome ? (
             <p
-              className="mt-2 text-[14px] font-light leading-snug"
+              className="mt-2 text-[13px] font-light italic leading-snug"
               style={{ color: appleVibe.text.secondary }}
             >
-              {sub.description}
+              <span
+                className="not-italic font-semibold"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                Counters:
+              </span>{" "}
+              {sub.top_negative_outcome}
             </p>
+          ) : (
+            sub.description && (
+              <p
+                className="mt-2 text-[13px] font-light leading-snug"
+                style={{ color: appleVibe.text.secondary }}
+              >
+                {sub.description}
+              </p>
+            )
           )}
         </div>
 

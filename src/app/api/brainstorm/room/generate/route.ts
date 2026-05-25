@@ -198,36 +198,33 @@ export async function POST(req: NextRequest) {
   };
 
   // ── Generate (3 LLM calls back to back) ─────────────────────────
-  let pain: Array<{ name: string; description: string }>;
-  let outcomes: Array<{ name: string; description: string }>;
-  let features: Array<{ name: string; description: string }>;
+  // v2 returns rich items with their causal chains (pain →
+  // negative_outcome, root_causes[], influence_rank; feature →
+  // positive_outcome, first_principles[]; outcome → measured_by)
+  // plus the room-level top_negative_outcome.
+  let gen: Awaited<ReturnType<typeof runLayeredGeneration>>;
   try {
-    const gen = await runLayeredGeneration(ctx);
-    pain = gen.pain;
-    outcomes = gen.outcomes;
-    features = gen.features;
+    gen = await runLayeredGeneration(ctx);
   } catch (err) {
     return NextResponse.json(
       { error: `generation failed: ${sanitizeErrorMessage(err)}` },
       { status: 500 },
     );
   }
+  const { pain, outcomes, features, top_negative_outcome, lane_labels } = gen;
 
   // ── Persist entities ────────────────────────────────────────────
-  // The "objective" layer always carries a single anchor: the core
-  // objective text. It exists so cross-layer edges to "objective"
-  // have a valid target.
-  //
-  // Required columns on `entities` not obvious from the type system:
+  // Required columns on `entities`:
   //   entity_id        text NOT NULL         (we generate per-row)
   //   source_tag       text NOT NULL CHECK   (must be explicit/implicit/assumed)
   //   entity_category  text NOT NULL CHECK   (must be concrete/abstract/process/relational/epistemic/fault)
-  // Missing any of these → "entity insert failed" 500.
+  // Plus our v2 jsonb: causal_chain.
   const buildRow = (
     layer: keyof typeof ENTITY_CATEGORY_BY_LAYER,
     name: string,
     description: string,
     confidence: number,
+    causal_chain: Record<string, unknown> | null,
   ) => ({
     space_id: spaceId,
     parent_sub_objective_id: subObjectiveId,
@@ -239,17 +236,43 @@ export async function POST(req: NextRequest) {
     entity_category: ENTITY_CATEGORY_BY_LAYER[layer],
     source_tag: SOURCE_TAG,
     confidence,
+    causal_chain,
   });
 
   const entityRows = [
-    ...pain.map((p) => buildRow("pain", p.name, p.description, 0.7)),
-    ...outcomes.map((o) => buildRow("outcomes", o.name, o.description, 0.7)),
-    ...features.map((f) => buildRow("features", f.name, f.description, 0.65)),
+    // Pain: name is the EFFECT title; description is the
+    // negative_outcome (one line); causal_chain carries the root
+    // causes + the LLM's influence rank used for lane ordering.
+    ...pain.map((p) =>
+      buildRow("pain", p.name, p.negative_outcome, 0.7, {
+        negative_outcome: p.negative_outcome,
+        root_causes: p.root_causes,
+        influence_rank: p.influence_rank,
+      }),
+    ),
+    // Outcome: name is the state; description holds the
+    // measured_by signal; causal_chain mirrors it for symmetry.
+    ...outcomes.map((o) =>
+      buildRow("outcomes", o.name, o.measured_by, 0.7, {
+        measured_by: o.measured_by,
+      }),
+    ),
+    // Feature: name is the feature; description is the
+    // positive_outcome; causal_chain carries first_principles.
+    ...features.map((f) =>
+      buildRow("features", f.name, f.positive_outcome, 0.65, {
+        positive_outcome: f.positive_outcome,
+        first_principles: f.first_principles,
+      }),
+    ),
+    // Objective anchor: a single entity so cross-layer edges to
+    // "objective" have a valid target.
     buildRow(
       "objective",
       sub.title,
       coreObjectiveText.slice(0, 600),
       1.0,
+      null,
     ),
   ];
 
@@ -338,10 +361,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Mark generation complete ────────────────────────────────────
+  // ── Mark generation complete + persist room header anchor +
+  //    adaptive lane labels. lane_labels is a jsonb the room page
+  //    reads to override the canonical Pain/Features/Outcomes/
+  //    Objective names with domain-appropriate ones. ──
   await db
     .from("improvement_goals")
-    .update({ room_layers_generated_at: new Date().toISOString() })
+    .update({
+      room_layers_generated_at: new Date().toISOString(),
+      top_negative_outcome: top_negative_outcome || null,
+      room_lane_labels: lane_labels,
+    })
     .eq("id", subObjectiveId);
 
   return NextResponse.json({
