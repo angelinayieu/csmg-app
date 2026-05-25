@@ -81,7 +81,6 @@ export function SubObjectiveRoomView({
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
-  const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set());
   const [highlightedCauses, setHighlightedCauses] = useState<Set<string>>(
     new Set(),
   );
@@ -694,22 +693,31 @@ export function SubObjectiveRoomView({
             entityIndex={entityIndex}
             approvedEdgeIds={approvedEdgeIds}
             onApprovalChange={handleApprovalChange}
-            onHighlightChange={setHighlightedIds}
+            // Panel→cards hover-to-link: panel sets the same
+            // hoveredEntityId state the cards do, so linkedIds
+            // derivation works in both directions.
+            onHoverEntity={setHoveredEntityId}
+            laneLabels={{
+              pain: lanes.find((l) => l.slug === "pain")!.label,
+              features: lanes.find((l) => l.slug === "features")!.label,
+              outcomes: lanes.find((l) => l.slug === "outcomes")!.label,
+              objective: lanes.find((l) => l.slug === "objective")!.label,
+            }}
+            detail={{
+              rootCausesById: new Map(
+                painItems.map((p) => [p.id, p.root_causes]),
+              ),
+              firstPrinciplesById: new Map(
+                featureItems.map((f) => [f.id, f.first_principles]),
+              ),
+              measuredByById: new Map(
+                outcomeItems.map((o) => [o.id, o.measured_by ?? null]),
+              ),
+            }}
           />
         )}
       </div>
 
-      {/* Subtle highlight indicator — used by the side panel hover */}
-      {highlightedIds.size > 0 && (
-        <div
-          aria-hidden
-          className="pointer-events-none fixed inset-x-0 top-2 z-30 text-center text-[10.5px] font-medium"
-          style={{ color: appleVibe.text.tertiary }}
-        >
-          {/* visual signal that hover-highlight is active — lane cards
-              dim individually elsewhere in a future polish. */}
-        </div>
-      )}
     </div>
   );
 }
