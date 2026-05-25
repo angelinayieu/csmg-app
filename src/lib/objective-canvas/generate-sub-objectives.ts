@@ -24,6 +24,10 @@ interface LlmShape {
 export interface GenerateSubObjectivesOptions {
   objective: string;
   clarifying: ClarifyingBlock | null;
+  /** Optional RESEARCH CONTEXT block pre-built by
+   *  research-service.buildRagBlock(). When present, prepended to
+   *  the user prompt so the LLM grounds proposals in real sources. */
+  ragBlock?: string;
 }
 
 export interface GeneratedSubObjectives {
@@ -54,6 +58,7 @@ export async function generateSubObjectiveProposals(
     user: buildUserPrompt({
       objective: opts.objective,
       clarifying: opts.clarifying,
+      ragBlock: opts.ragBlock,
     }),
     responseSchema: RESPONSE_SCHEMA,
     temperature: 0.55,

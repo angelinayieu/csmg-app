@@ -10,6 +10,11 @@ import type { ClarifyingBlock } from "./clarifying-state";
 export interface BuildDecomposeArgs {
   objective: string;
   clarifying: ClarifyingBlock | null;
+  /** Optional RESEARCH CONTEXT block from research-service.
+   *  buildRagBlock(). When present, prepended to the user prompt so
+   *  the decomposition is grounded in real sources. Empty string =
+   *  no research yet (decomposition falls back to LLM-only). */
+  ragBlock?: string;
 }
 
 export function buildSystemPrompt(): string {
@@ -58,7 +63,7 @@ Return strict JSON.`;
 }
 
 export function buildUserPrompt(args: BuildDecomposeArgs): string {
-  const { objective, clarifying } = args;
+  const { objective, clarifying, ragBlock } = args;
 
   const clarifyingBlock =
     clarifying && clarifying.questions.length > 0
@@ -73,10 +78,16 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
           .join("\n")}`
       : "";
 
+  // RAG context — research-service.buildRagBlock output, prepended
+  // when available. Empty string when no useful research exists, so
+  // the user prompt continues to work in legacy / weak-search modes.
+  const researchBlock =
+    ragBlock && ragBlock.length > 0 ? `\n\n${ragBlock}\n` : "";
+
   return `REFINED OBJECTIVE:
 """
 ${objective.slice(0, 4000)}
-"""${clarifyingBlock}
+"""${clarifyingBlock}${researchBlock}
 
 Propose 4–5 sub-objectives per the system instructions. Mark exactly 3 as recommended=true (the ones most load-bearing for delivering the parent).`;
 }

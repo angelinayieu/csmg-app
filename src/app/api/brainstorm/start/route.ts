@@ -20,6 +20,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
+import { surfacePassToDb } from "@/lib/research/persist-bundle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -230,6 +231,14 @@ export async function POST(req: NextRequest) {
   } else {
     goalId = goalInsert.data.id as string;
   }
+
+  // ── 4. Kick off surface research (fire-and-forget) ─────────────
+  // Runs the broad domain-context search in the background while
+  // the user is redirected into the clarifying card. The clarifying
+  // UI polls /api/brainstorm/research/status to know when it lands.
+  // `void` makes the no-await explicit; we never block the user's
+  // entry on research completion.
+  void surfacePassToDb(db, spaceId, objective);
 
   return NextResponse.json({ spaceId, goalId, pipelineMode });
 }

@@ -46,6 +46,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { ClarifyingQuestionsCard } from "./clarifying-questions-card";
+import { ResearchIndicator } from "./research-indicator";
 import { SubObjectivePickerCard } from "./sub-objective-picker-card";
 import { MainCanvasView, type MainCanvasSub } from "./main-canvas-view";
 import type { ObjectiveAnnotation } from "./annotated-objective-card";
@@ -113,6 +114,18 @@ export function ObjectiveCanvasView({
   return (
     <div className="relative w-full" style={{ fontFamily: appleVibe.font.stack }}>
       {showBanner && <ObjectiveBanner objective={objective} />}
+
+      {/* Research indicator — visible during clarifying + picking
+          stages so the user sees the background work happen. Hidden
+          on main + done (the room view has its own indicators). */}
+      {(stage === "clarifying" || stage === "picking") && !embedded && (
+        <div className="mt-3 flex justify-center">
+          <ResearchIndicator
+            spaceId={spaceId}
+            showDeep={stage === "picking"}
+          />
+        </div>
+      )}
 
       <div className={showBanner ? "mt-6" : ""}>
         {stage === "clarifying" && (

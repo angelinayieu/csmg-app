@@ -17,6 +17,11 @@ import {
   readObjectiveCanvasState,
   writeSubObjectiveBlock,
 } from "@/lib/objective-canvas/sub-objective-state";
+import {
+  buildRagBlock,
+  type SurfaceBundle,
+  type DeepBundle,
+} from "@/lib/research/research-service";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -45,7 +50,9 @@ export async function POST(req: NextRequest) {
 
   const { data: space, error: fetchError } = await db
     .from("spaces")
-    .select("id, user_id, description, input_text, synthesis_data")
+    .select(
+      "id, user_id, description, input_text, synthesis_data, surface_research, deep_research",
+    )
     .eq("id", spaceId)
     .maybeSingle();
   if (fetchError) {
@@ -81,10 +88,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ sub_objectives: existingBlock });
   }
 
+  // ── Build RAG block from research bundles (Tier 2 — research) ──
+  // When research has landed, prepend a RESEARCH CONTEXT block to
+  // the user prompt so the LLM grounds proposals in real sources.
+  // Empty string when no research → falls through to LLM-only.
+  const surface = (space.surface_research as SurfaceBundle | null) ?? null;
+  const deep = (space.deep_research as DeepBundle | null) ?? null;
+  const ragBlock = buildRagBlock(surface, deep, {
+    maxSources: 10,
+    maxCharsPerSnippet: 450,
+  });
+
   try {
     const { proposals, category } = await generateSubObjectiveProposals({
       objective,
       clarifying: state.clarifying ?? null,
+      ragBlock,
     });
 
     const block = {
