@@ -18,6 +18,7 @@ import {
 } from "@/components/objective/sub-objective-room-view";
 import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 
 export const dynamic = "force-dynamic";
 
@@ -28,13 +29,18 @@ const LAYER_ORDER: Array<"pain" | "features" | "outcomes" | "objective"> = [
   "objective",
 ];
 
-// Canonical fallback labels — used only when the room hasn't been
-// generated yet (no LLM lane_labels persisted) AND the
-// layer_ontology row carries the seed name.
+// Canonical lane labels — the SINGLE SOURCE OF TRUTH across every
+// surface (lane headers, side panel filter chips, chain card layer
+// labels, portfolio strip, main canvas sub-card chips). LLM-picked
+// lane_labels are intentionally IGNORED — the labels were
+// stochastic per generation, which broke vocabulary coherence
+// across reloads. The user explicitly asked for "Problems" (not
+// "Frictions" / "Pain points") and "Results" (not "Wins" /
+// "Outcomes"); we honor that everywhere.
 const CANONICAL_LANE_LABELS: Record<(typeof LAYER_ORDER)[number], string> = {
-  pain: "Pain points",
-  features: "Features",
-  outcomes: "Outcomes",
+  pain: "Problems",
+  features: "Mechanisms",
+  outcomes: "Results",
   objective: "Objective",
 };
 
@@ -96,13 +102,17 @@ export default async function SubObjectiveRoomPage({
 
   // ── Parent core objective — drives the "rolls up to" rollup
   //    banner so the user sees this room's place in the broader
-  //    canvas. Falls through to the space's input text if no parent
-  //    row exists. ──
+  //    canvas. Also carries the persisted annotations the canvas
+  //    extracted from the objective text; we surface them as the
+  //    Annotation Lens header inside the room so the user can see
+  //    which semantic readings seeded each generated item. Falls
+  //    through to the space-level root goal if no parent row exists. ──
   let parentObjectiveText: string | null = null;
+  let parentAnnotationsRaw: unknown = null;
   if (sub.parent_goal_id) {
     const { data: parent } = await db
       .from("improvement_goals")
-      .select("title, description")
+      .select("title, description, annotations")
       .eq("id", sub.parent_goal_id)
       .maybeSingle();
     if (parent) {
@@ -110,7 +120,18 @@ export default async function SubObjectiveRoomPage({
         (typeof parent.description === "string" && parent.description.trim()) ||
         (typeof parent.title === "string" && parent.title.trim()) ||
         null;
+      parentAnnotationsRaw = parent.annotations ?? null;
     }
+  } else {
+    // Sub IS the root — fetch the space's root improvement_goal
+    // (parent_goal_id IS NULL) for annotations.
+    const { data: rootGoal } = await db
+      .from("improvement_goals")
+      .select("annotations")
+      .eq("space_id", spaceId)
+      .is("parent_goal_id", null)
+      .maybeSingle();
+    parentAnnotationsRaw = rootGoal?.annotations ?? null;
   }
   if (!parentObjectiveText) {
     const { data: spaceRow } = await db
@@ -123,6 +144,7 @@ export default async function SubObjectiveRoomPage({
       (typeof spaceRow?.input_text === "string" && spaceRow.input_text.trim()) ||
       null;
   }
+  const parentAnnotations = normalizeAnnotations(parentAnnotationsRaw);
 
   // ── Layers ──
   const { data: layerRows } = await db
@@ -152,15 +174,12 @@ export default async function SubObjectiveRoomPage({
     )
     .eq("parent_sub_objective_id", subId);
 
-  // Label precedence (highest wins):
-  //   1. sub.room_lane_labels[slug]   — domain-adaptive, LLM-picked
-  //   2. layer_ontology.label          — per-space seed
-  //   3. CANONICAL_LANE_LABELS[slug]   — last-resort fallback
+  // Canonical labels are the source of truth — LLM-picked
+  // room_lane_labels are stored but intentionally not surfaced.
+  // Stochastic per-generation labels broke coherence across
+  // reloads and confused the user (Frictions→Wins one regen,
+  // Problems→Results the next). One vocabulary, everywhere.
   const laneLabelFor = (slug: (typeof LAYER_ORDER)[number]): string => {
-    const adaptive = sub.room_lane_labels?.[slug];
-    if (typeof adaptive === "string" && adaptive.trim().length > 0) {
-      return adaptive.trim();
-    }
     return CANONICAL_LANE_LABELS[slug];
   };
 
@@ -334,6 +353,7 @@ export default async function SubObjectiveRoomPage({
             generatedAt={sub.room_layers_generated_at}
             pipelineMode={pipelineMode}
             roomCategoriesRaw={sub.room_categories}
+            annotations={parentAnnotations}
           />
         </div>
       </div>

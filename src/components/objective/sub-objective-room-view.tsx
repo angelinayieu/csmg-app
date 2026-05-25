@@ -25,12 +25,31 @@ import { FeatureCard, type FeatureCardItem } from "./cards/feature-card";
 import { OutcomeCard, type OutcomeCardItem } from "./cards/outcome-card";
 import { SharedCausesStrip } from "./cards/shared-causes-strip";
 import { PortfolioStrip } from "./cards/portfolio-strip";
+import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
 import {
   normalizeRoomCategories,
   type RoomCategories,
 } from "@/lib/objective-canvas/generate-categories";
 import type { PipelineMode } from "./mode-pill";
+import type { ObjectiveAnnotation } from "./annotated-objective-card";
+
+/** Provenance entry persisted on each entity's causal_chain.
+ *  Resolved at generation time from the LLM's {index, facet} pairs
+ *  into a full record with the verbatim phrase so the UI can render
+ *  chips without re-fetching the annotation list. Stays in sync
+ *  with AnnotationProvenance in src/lib/objective-canvas/layered-generation.ts. */
+export interface ItemAnnotationProvenance {
+  index: number;
+  phrase: string;
+  facet:
+    | "fragility"
+    | "analogy"
+    | "tension"
+    | "dimension"
+    | "inference"
+    | "reading";
+}
 
 export interface LayerItem {
   id: string;
@@ -82,6 +101,11 @@ interface Props {
    *  the portfolio strip. Empty `{}` is tolerated — categories
    *  just won't render. */
   roomCategoriesRaw?: unknown;
+  /** Annotation Lens — the parent objective's annotations (weight-
+   *  sorted by the generator). Renders the lens header strip and
+   *  feeds the hover-to-link interaction between annotation chips
+   *  and items derived from them. Empty array hides the strip. */
+  annotations?: ObjectiveAnnotation[];
 }
 
 export function SubObjectiveRoomView({
@@ -92,6 +116,7 @@ export function SubObjectiveRoomView({
   generatedAt,
   pipelineMode,
   roomCategoriesRaw,
+  annotations = [],
 }: Props) {
   const roomCategories: RoomCategories = useMemo(
     () => normalizeRoomCategories(roomCategoriesRaw),
@@ -116,11 +141,68 @@ export function SubObjectiveRoomView({
   // Hover-to-link: which card is currently hovered (or null). Linked
   // ids are derived from this + the edges map.
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
+  // Annotation Lens hover state — which annotation index (1-based)
+  // the user is hovering. When set, every card whose provenance
+  // includes this index lights up with a subtle ring; non-matching
+  // cards dim. Set via the lens strip + each card's chip strip.
+  const [hoveredAnnotationIndex, setHoveredAnnotationIndex] = useState<
+    number | null
+  >(null);
   const [approvedEdgeIds, setApprovedEdgeIds] = useState<Set<string>>(() => {
     return new Set(
       edges.filter((e) => e.approved_at != null).map((e) => e.id),
     );
   });
+
+  /** Provenance map: entity id → resolved ItemAnnotationProvenance[].
+   *  Read from each item's causal_chain.derived_from_annotations
+   *  (persisted by the route at generation time). Empty array when
+   *  the item pre-dates the lens or no annotations seeded it. */
+  const provenanceByItemId = useMemo(() => {
+    const map = new Map<string, ItemAnnotationProvenance[]>();
+    for (const lane of lanes) {
+      for (const item of lane.items) {
+        const cc = (item.causal_chain ?? {}) as Record<string, unknown>;
+        const raw = cc.derived_from_annotations;
+        if (!Array.isArray(raw)) {
+          map.set(item.id, []);
+          continue;
+        }
+        const out: ItemAnnotationProvenance[] = [];
+        for (const v of raw) {
+          if (!v || typeof v !== "object") continue;
+          const r = v as Record<string, unknown>;
+          const index =
+            typeof r.index === "number" && Number.isFinite(r.index)
+              ? r.index
+              : null;
+          const phrase = typeof r.phrase === "string" ? r.phrase : "";
+          const facet =
+            typeof r.facet === "string"
+              ? (r.facet as ItemAnnotationProvenance["facet"])
+              : "reading";
+          if (index === null || phrase.length === 0) continue;
+          out.push({ index, phrase, facet });
+        }
+        map.set(item.id, out);
+      }
+    }
+    return map;
+  }, [lanes]);
+
+  /** Reverse index: annotation index → set of item ids derived from it.
+   *  Powers the lens-strip hover → highlight-cards behavior. */
+  const itemIdsByAnnotationIndex = useMemo(() => {
+    const map = new Map<number, Set<string>>();
+    for (const [itemId, provs] of provenanceByItemId.entries()) {
+      for (const p of provs) {
+        const set = map.get(p.index) ?? new Set<string>();
+        set.add(itemId);
+        map.set(p.index, set);
+      }
+    }
+    return map;
+  }, [provenanceByItemId]);
 
   const isEmpty = lanes.every(
     (l) =>
@@ -434,21 +516,67 @@ export function SubObjectiveRoomView({
   // Top pain by influence (root).
   const rootPainId = painItems[0]?.id ?? null;
 
-  // ── Linked entities derived from hover ──
-  // When a card is hovered, walk the edges and collect every entity
-  // id on the other end. Those cards get the glow ring + survive
-  // dim. Empty set when nothing is hovered.
+  // ── Linked entities derived from hover (chain-transitive) ──
+  // Single-hop edge traversal misses a critical user need: when you
+  // hover a Result, you want to see the upstream Mechanism AND the
+  // root Problem that the chain runs through — not just the directly
+  // adjacent node.
+  //
+  // Strategy: compute the full chain triples for the room, then for
+  // any hovered entity, light up every node in every chain that
+  // touches it. We ALSO union with the 1-hop edges so half-chains
+  // (e.g., a Problem with a Mechanism edge but no Result yet) still
+  // highlight what they're connected to.
+  const allChains = useMemo(
+    () => computeChains(edges, entityIndex),
+    [edges, entityIndex],
+  );
   const linkedIds = useMemo(() => {
     if (!hoveredEntityId) return new Set<string>();
     const out = new Set<string>([hoveredEntityId]);
+    // Chain-transitive: any chain (Problem → Mechanism → Result)
+    // that contains the hovered id lights up all three nodes.
+    for (const c of allChains) {
+      if (
+        c.painId === hoveredEntityId ||
+        c.featureId === hoveredEntityId ||
+        c.outcomeId === hoveredEntityId
+      ) {
+        out.add(c.painId);
+        out.add(c.featureId);
+        out.add(c.outcomeId);
+      }
+    }
+    // 1-hop fallback: half-chains + edges that don't compose into a
+    // full triple (e.g., Outcome → Objective) still highlight.
     for (const e of edges) {
       if (e.source_entity_id === hoveredEntityId) out.add(e.target_entity_id);
       else if (e.target_entity_id === hoveredEntityId)
         out.add(e.source_entity_id);
     }
     return out;
-  }, [hoveredEntityId, edges]);
+  }, [hoveredEntityId, edges, allChains]);
   const hoverActive = hoveredEntityId !== null;
+
+  /** Combined edge-hover + lens-hover linking. When the user
+   *  hovers an annotation chip, items derived from that annotation
+   *  light up the same way edge-linked items do. When neither
+   *  signal is active, returns the no-op state. */
+  const lensActive = hoveredAnnotationIndex !== null;
+  const lensLinkedIds = useMemo(() => {
+    if (hoveredAnnotationIndex === null) return new Set<string>();
+    return (
+      itemIdsByAnnotationIndex.get(hoveredAnnotationIndex) ??
+      new Set<string>()
+    );
+  }, [hoveredAnnotationIndex, itemIdsByAnnotationIndex]);
+  const anyHoverActive = hoverActive || lensActive;
+  function linkingFor(id: string): { linked: boolean; dim: boolean } {
+    const edgeLinked = hoverActive && linkedIds.has(id);
+    const lensLinked = lensActive && lensLinkedIds.has(id);
+    const isLinked = edgeLinked || lensLinked;
+    return { linked: isLinked, dim: anyHoverActive && !isLinked };
+  }
 
   // ── Influence-rank → indent bucket for the pain lane ──
   // Root-tier pains (rank ≥ 4) sit flush at the left. Mid-tier (2-3)
@@ -594,6 +722,21 @@ export function SubObjectiveRoomView({
         </div>
       )}
 
+      {/* Annotation Lens strip — surfaces the parent objective's
+          semantic readings that seeded this room's items. Hovering
+          a chip highlights the items it seeded; the "orphan" badge
+          flags annotations the generator missed. Hidden when the
+          room has no annotations (legacy rooms / sub had no parent
+          annotations at generation time). */}
+      {generatedAt && annotations.length > 0 && (
+        <AnnotationLensStrip
+          annotations={annotations}
+          coverageByIndex={itemIdsByAnnotationIndex}
+          hoveredIndex={hoveredAnnotationIndex}
+          onHoverIndex={setHoveredAnnotationIndex}
+        />
+      )}
+
       {/* Portfolio strip — Tier 3 macro diagnostic. Compact line
           always visible; click to expand for coverage + gap warnings.
           Hidden entirely when this room has no categories. */}
@@ -638,7 +781,7 @@ export function SubObjectiveRoomView({
             style={{
               opacity: 1,
             }}
-            data-hover-active={hoverActive ? "true" : undefined}
+            data-hover-active={anyHoverActive ? "true" : undefined}
           >
             {/* PAIN lane */}
             <Lane
@@ -656,13 +799,12 @@ export function SubObjectiveRoomView({
               {painItems.length === 0 && !busy && <EmptyHint />}
               <ul className="flex flex-col gap-2">
                 {painItems.map((p) => {
-                  const isLinked = hoverActive && linkedIds.has(p.id);
-                  const isDimmedByHover = hoverActive && !isLinked;
+                  const { linked, dim } = linkingFor(p.id);
                   return (
                     <div
                       key={p.id}
                       style={{
-                        opacity: isDimmedByHover ? 0.35 : 1,
+                        opacity: dim ? 0.35 : 1,
                         transition: "opacity 180ms ease-out",
                       }}
                     >
@@ -673,10 +815,15 @@ export function SubObjectiveRoomView({
                         highlightedCauses={highlightedCauses}
                         onHoverCause={handleSharedCauseHover}
                         addressedBy={addressedByMap.get(p.id) ?? []}
-                        linked={isLinked}
+                        linked={linked}
                         onHover={setHoveredEntityId}
                         indent={indentForRank(p.influence_rank)}
                         subCategory={categoryFor("friction", p.sub_category_slug)}
+                        derivedFromAnnotations={
+                          provenanceByItemId.get(p.id) ?? []
+                        }
+                        hoveredAnnotationIndex={hoveredAnnotationIndex}
+                        onHoverAnnotation={setHoveredAnnotationIndex}
                       />
                     </div>
                   );
@@ -695,13 +842,12 @@ export function SubObjectiveRoomView({
               {featureItems.length === 0 && !busy && <EmptyHint />}
               <ul className="flex flex-col gap-2">
                 {featureItems.map((f) => {
-                  const isLinked = hoverActive && linkedIds.has(f.id);
-                  const isDimmedByHover = hoverActive && !isLinked;
+                  const { linked, dim } = linkingFor(f.id);
                   return (
                     <div
                       key={f.id}
                       style={{
-                        opacity: isDimmedByHover ? 0.35 : 1,
+                        opacity: dim ? 0.35 : 1,
                         transition: "opacity 180ms ease-out",
                       }}
                     >
@@ -716,12 +862,17 @@ export function SubObjectiveRoomView({
                           )
                         }
                         countersPains={countersPainsMap.get(f.id) ?? []}
-                        linked={isLinked}
+                        linked={linked}
                         onHover={setHoveredEntityId}
                         subCategory={categoryFor(
                           "mechanism",
                           f.sub_category_slug,
                         )}
+                        derivedFromAnnotations={
+                          provenanceByItemId.get(f.id) ?? []
+                        }
+                        hoveredAnnotationIndex={hoveredAnnotationIndex}
+                        onHoverAnnotation={setHoveredAnnotationIndex}
                       />
                     </div>
                   );
@@ -740,24 +891,28 @@ export function SubObjectiveRoomView({
               {outcomeItems.length === 0 && !busy && <EmptyHint />}
               <ul className="flex flex-col gap-2">
                 {outcomeItems.map((o) => {
-                  const isLinked = hoverActive && linkedIds.has(o.id);
-                  const isDimmedByHover = hoverActive && !isLinked;
+                  const { linked, dim } = linkingFor(o.id);
                   return (
                     <div
                       key={o.id}
                       style={{
-                        opacity: isDimmedByHover ? 0.35 : 1,
+                        opacity: dim ? 0.35 : 1,
                         transition: "opacity 180ms ease-out",
                       }}
                     >
                       <OutcomeCard
                         item={o}
-                        linked={isLinked}
+                        linked={linked}
                         onHover={setHoveredEntityId}
                         producedBy={producedByMap.get(o.id) ?? []}
                         dissolves={outcomeDissolvesMap.get(o.id) ?? []}
                         rollsUp={rollsUpSet.has(o.id)}
                         subCategory={categoryFor("result", o.sub_category_slug)}
+                        derivedFromAnnotations={
+                          provenanceByItemId.get(o.id) ?? []
+                        }
+                        hoveredAnnotationIndex={hoveredAnnotationIndex}
+                        onHoverAnnotation={setHoveredAnnotationIndex}
                       />
                     </div>
                   );

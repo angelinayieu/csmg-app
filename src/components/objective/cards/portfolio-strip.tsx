@@ -275,7 +275,7 @@ export function PortfolioStrip({
     const gaps: Array<{ lane: string; label: string; color: string }> = [];
     for (const row of laneCoverage.friction.rows) {
       if (row.count > 0 && !slugsTouchedByChains.friction.has(row.slug))
-        gaps.push({ lane: "Friction", label: row.label, color: row.color });
+        gaps.push({ lane: "Problem", label: row.label, color: row.color });
     }
     for (const row of laneCoverage.mechanism.rows) {
       if (row.count > 0 && !slugsTouchedByChains.mechanism.has(row.slug))
@@ -470,7 +470,7 @@ export function PortfolioStrip({
             </div>
             <div className="mt-1.5 grid gap-2 sm:grid-cols-3">
               <CoverageColumn
-                lane="Friction"
+                lane="Problems"
                 laneKey="friction"
                 color={appleVibe.stage.pain}
                 rows={laneCoverage.friction.rows}
@@ -492,7 +492,7 @@ export function PortfolioStrip({
                 }}
               />
               <CoverageColumn
-                lane="Mechanism"
+                lane="Mechanisms"
                 laneKey="mechanism"
                 color={appleVibe.stage.features}
                 rows={laneCoverage.mechanism.rows}
@@ -514,7 +514,7 @@ export function PortfolioStrip({
                 }}
               />
               <CoverageColumn
-                lane="Result"
+                lane="Results"
                 laneKey="result"
                 color={appleVibe.stage.outcomes}
                 rows={laneCoverage.result.rows}

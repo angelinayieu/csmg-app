@@ -247,7 +247,7 @@ function SubCard({ spaceId, sub }: { spaceId: string; sub: MainCanvasSub }) {
           }}
         >
           <LaneRow
-            label="Frictions"
+            label="Problems"
             laneColor={appleVibe.stage.pain}
             total={sub.laneTotalCounts.friction}
             rows={sub.laneBreakdown.friction}
