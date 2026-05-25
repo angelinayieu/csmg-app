@@ -31,7 +31,13 @@ interface Props {
   onHoverPrinciple: (p: string | null) => void;
   /** Pains this feature counters — derived from edges. */
   countersPains: Array<{ id: string; name: string; pct: number }>;
+  /** True when another card is hovered AND this feature is on the
+   *  receiving end of an edge from it. Glows in feature color. */
+  linked?: boolean;
+  onHover?: (id: string | null) => void;
 }
+
+const FEATURE_COLOR = appleVibe.stage.features;
 
 export function FeatureCard({
   item,
@@ -40,6 +46,8 @@ export function FeatureCard({
   highlightedPrinciples,
   onHoverPrinciple,
   countersPains,
+  linked = false,
+  onHover,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const hasAnyHighlight = highlightedPrinciples.size > 0;
@@ -58,19 +66,28 @@ export function FeatureCard({
       transition={{
         layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] },
       }}
-      className="rounded-2xl px-4 py-3 transition-opacity"
+      className="rounded-2xl px-4 py-3 transition-all"
       style={{
         background: expanded
           ? "rgba(255,255,255,0.94)"
           : "rgba(255,255,255,0.65)",
         border: `1px solid ${
-          expanded ? "rgba(15,23,42,0.12)" : appleVibe.stroke.hairline
+          linked
+            ? FEATURE_COLOR
+            : expanded
+              ? "rgba(15,23,42,0.12)"
+              : appleVibe.stroke.hairline
         }`,
         borderRadius: appleVibe.radius.md,
         opacity: dim ? 0.45 : 1,
         cursor: "pointer",
+        boxShadow: linked
+          ? `0 0 0 3px ${FEATURE_COLOR}1F, 0 8px 22px -12px ${FEATURE_COLOR}66`
+          : undefined,
       }}
       onClick={() => setExpanded((v) => !v)}
+      onMouseEnter={() => onHover?.(item.id)}
+      onMouseLeave={() => onHover?.(null)}
     >
       <div className="flex items-baseline justify-between gap-2">
         <h4
@@ -95,12 +112,21 @@ export function FeatureCard({
         )}
       </div>
 
+      {/* Positive outcome — explicit "produces:" label mirrors
+          the pain card's "leads to:" so the chain reads as
+          consequence, not paraphrase. */}
       {item.positive_outcome && (
         <p
-          className="mt-1 line-clamp-1 text-[11.5px] font-light italic leading-snug"
+          className="mt-1 line-clamp-2 text-[11.5px] font-light leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
-          → {item.positive_outcome}
+          <span
+            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            produces →
+          </span>{" "}
+          <span className="italic">{item.positive_outcome}</span>
         </p>
       )}
 

@@ -81,6 +81,9 @@ export function SubObjectiveRoomView({
   const [highlightedCauses, setHighlightedCauses] = useState<Set<string>>(
     new Set(),
   );
+  // Hover-to-link: which card is currently hovered (or null). Linked
+  // ids are derived from this + the edges map.
+  const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
   const [approvedEdgeIds, setApprovedEdgeIds] = useState<Set<string>>(() => {
     return new Set(
       edges.filter((e) => e.approved_at != null).map((e) => e.id),
@@ -301,6 +304,32 @@ export function SubObjectiveRoomView({
   // Top pain by influence (root).
   const rootPainId = painItems[0]?.id ?? null;
 
+  // ── Linked entities derived from hover ──
+  // When a card is hovered, walk the edges and collect every entity
+  // id on the other end. Those cards get the glow ring + survive
+  // dim. Empty set when nothing is hovered.
+  const linkedIds = useMemo(() => {
+    if (!hoveredEntityId) return new Set<string>();
+    const out = new Set<string>([hoveredEntityId]);
+    for (const e of edges) {
+      if (e.source_entity_id === hoveredEntityId) out.add(e.target_entity_id);
+      else if (e.target_entity_id === hoveredEntityId)
+        out.add(e.source_entity_id);
+    }
+    return out;
+  }, [hoveredEntityId, edges]);
+  const hoverActive = hoveredEntityId !== null;
+
+  // ── Influence-rank → indent bucket for the pain lane ──
+  // Root-tier pains (rank ≥ 4) sit flush at the left. Mid-tier (2-3)
+  // indent 8px. Terminal (<2) indent 16px. Conveys downstream-flow
+  // without losing card width.
+  function indentForRank(rank: number): number {
+    if (rank >= 4) return 0;
+    if (rank >= 2) return 8;
+    return 16;
+  }
+
   // ── Autopilot auto-fire ──
   const autoFiredRef = useRef(false);
   useEffect(() => {
@@ -444,14 +473,25 @@ export function SubObjectiveRoomView({
         </div>
       )}
 
-      {/* Two-column layout: lanes + side panel */}
+      {/* Three-column layout — Objective lane removed (it just
+          duplicated the sub-objective title rendered in the page
+          header). The "rolls up to" rollup banner on the page
+          header carries the parent-objective link instead. */}
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
         <div className="min-w-0 flex-1">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div
+            className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+            // Dim non-linked cards while hovering one — gives the
+            // glow ring its companion contrast cue.
+            style={{
+              opacity: 1,
+            }}
+            data-hover-active={hoverActive ? "true" : undefined}
+          >
             {/* PAIN lane */}
             <Lane
               slug="pain"
-              label="Pain points"
+              label={lanes.find((l) => l.slug === "pain")!.label}
               color={lanes.find((l) => l.slug === "pain")!.color}
               count={painItems.length}
               loading={busy && isEmpty}
@@ -463,90 +503,104 @@ export function SubObjectiveRoomView({
               />
               {painItems.length === 0 && !busy && <EmptyHint />}
               <ul className="flex flex-col gap-2">
-                {painItems.map((p) => (
-                  <PainCard
-                    key={p.id}
-                    item={p}
-                    isRoot={p.id === rootPainId}
-                    sharedCounts={painSharedCounts}
-                    highlightedCauses={highlightedCauses}
-                    onHoverCause={handleSharedCauseHover}
-                    addressedBy={addressedByMap.get(p.id) ?? []}
-                  />
-                ))}
+                {painItems.map((p) => {
+                  const isLinked = hoverActive && linkedIds.has(p.id);
+                  const isDimmedByHover = hoverActive && !isLinked;
+                  return (
+                    <div
+                      key={p.id}
+                      style={{
+                        opacity: isDimmedByHover ? 0.35 : 1,
+                        transition: "opacity 180ms ease-out",
+                      }}
+                    >
+                      <PainCard
+                        item={p}
+                        isRoot={p.id === rootPainId}
+                        sharedCounts={painSharedCounts}
+                        highlightedCauses={highlightedCauses}
+                        onHoverCause={handleSharedCauseHover}
+                        addressedBy={addressedByMap.get(p.id) ?? []}
+                        linked={isLinked}
+                        onHover={setHoveredEntityId}
+                        indent={indentForRank(p.influence_rank)}
+                      />
+                    </div>
+                  );
+                })}
               </ul>
             </Lane>
 
             {/* FEATURE lane */}
             <Lane
               slug="features"
-              label="Features"
+              label={lanes.find((l) => l.slug === "features")!.label}
               color={lanes.find((l) => l.slug === "features")!.color}
               count={featureItems.length}
               loading={busy && isEmpty}
             >
               {featureItems.length === 0 && !busy && <EmptyHint />}
               <ul className="flex flex-col gap-2">
-                {featureItems.map((f) => (
-                  <FeatureCard
-                    key={f.id}
-                    item={f}
-                    isKeystone={f.id === keystoneFeatureId}
-                    sharedCounts={featureSharedCounts}
-                    highlightedPrinciples={highlightedPrinciples}
-                    onHoverPrinciple={(p) =>
-                      setHighlightedPrinciples(p ? new Set([p]) : new Set())
-                    }
-                    countersPains={countersPainsMap.get(f.id) ?? []}
-                  />
-                ))}
+                {featureItems.map((f) => {
+                  const isLinked = hoverActive && linkedIds.has(f.id);
+                  const isDimmedByHover = hoverActive && !isLinked;
+                  return (
+                    <div
+                      key={f.id}
+                      style={{
+                        opacity: isDimmedByHover ? 0.35 : 1,
+                        transition: "opacity 180ms ease-out",
+                      }}
+                    >
+                      <FeatureCard
+                        item={f}
+                        isKeystone={f.id === keystoneFeatureId}
+                        sharedCounts={featureSharedCounts}
+                        highlightedPrinciples={highlightedPrinciples}
+                        onHoverPrinciple={(p) =>
+                          setHighlightedPrinciples(
+                            p ? new Set([p]) : new Set(),
+                          )
+                        }
+                        countersPains={countersPainsMap.get(f.id) ?? []}
+                        linked={isLinked}
+                        onHover={setHoveredEntityId}
+                      />
+                    </div>
+                  );
+                })}
               </ul>
             </Lane>
 
             {/* OUTCOME lane */}
             <Lane
               slug="outcomes"
-              label="Outcomes"
+              label={lanes.find((l) => l.slug === "outcomes")!.label}
               color={lanes.find((l) => l.slug === "outcomes")!.color}
               count={outcomeItems.length}
               loading={busy && isEmpty}
             >
               {outcomeItems.length === 0 && !busy && <EmptyHint />}
               <ul className="flex flex-col gap-2">
-                {outcomeItems.map((o) => (
-                  <OutcomeCard key={o.id} item={o} />
-                ))}
-              </ul>
-            </Lane>
-
-            {/* OBJECTIVE lane */}
-            <Lane
-              slug="objective"
-              label="Objective"
-              color={lanes.find((l) => l.slug === "objective")!.color}
-              count={objectiveItems.length}
-              loading={busy && isEmpty}
-            >
-              {objectiveItems.length === 0 && !busy && <EmptyHint />}
-              <ul className="flex flex-col gap-2">
-                {objectiveItems.map((o) => (
-                  <li
-                    key={o.id}
-                    className="rounded-2xl px-4 py-3"
-                    style={{
-                      background: "rgba(255,255,255,0.65)",
-                      border: `1px solid ${appleVibe.stroke.hairline}`,
-                      borderRadius: appleVibe.radius.md,
-                    }}
-                  >
-                    <h4
-                      className="text-[13.5px] font-semibold leading-snug tracking-tight"
-                      style={{ color: appleVibe.text.primary }}
+                {outcomeItems.map((o) => {
+                  const isLinked = hoverActive && linkedIds.has(o.id);
+                  const isDimmedByHover = hoverActive && !isLinked;
+                  return (
+                    <div
+                      key={o.id}
+                      style={{
+                        opacity: isDimmedByHover ? 0.35 : 1,
+                        transition: "opacity 180ms ease-out",
+                      }}
                     >
-                      {o.name}
-                    </h4>
-                  </li>
-                ))}
+                      <OutcomeCard
+                        item={o}
+                        linked={isLinked}
+                        onHover={setHoveredEntityId}
+                      />
+                    </div>
+                  );
+                })}
               </ul>
             </Lane>
           </div>

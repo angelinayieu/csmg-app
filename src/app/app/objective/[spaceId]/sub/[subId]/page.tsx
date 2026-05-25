@@ -90,6 +90,36 @@ export default async function SubObjectiveRoomPage({
       ? "review_each"
       : "autopilot";
 
+  // ── Parent core objective — drives the "rolls up to" rollup
+  //    banner so the user sees this room's place in the broader
+  //    canvas. Falls through to the space's input text if no parent
+  //    row exists. ──
+  let parentObjectiveText: string | null = null;
+  if (sub.parent_goal_id) {
+    const { data: parent } = await db
+      .from("improvement_goals")
+      .select("title, description")
+      .eq("id", sub.parent_goal_id)
+      .maybeSingle();
+    if (parent) {
+      parentObjectiveText =
+        (typeof parent.description === "string" && parent.description.trim()) ||
+        (typeof parent.title === "string" && parent.title.trim()) ||
+        null;
+    }
+  }
+  if (!parentObjectiveText) {
+    const { data: spaceRow } = await db
+      .from("spaces")
+      .select("description, input_text")
+      .eq("id", spaceId)
+      .maybeSingle();
+    parentObjectiveText =
+      (typeof spaceRow?.description === "string" && spaceRow.description.trim()) ||
+      (typeof spaceRow?.input_text === "string" && spaceRow.input_text.trim()) ||
+      null;
+  }
+
   // ── Layers ──
   const { data: layerRows } = await db
     .from("layer_ontology")
@@ -206,7 +236,7 @@ export default async function SubObjectiveRoomPage({
           Back to canvas
         </Link>
 
-        <div className="mt-6 max-w-2xl">
+        <div className="mt-6 max-w-3xl">
           <div
             className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]"
             style={{
@@ -227,31 +257,65 @@ export default async function SubObjectiveRoomPage({
           >
             {sub.title}
           </h1>
-          {/* Room anchor — the single most-impactful downstream
-              consequence across all pains. Replaces the long
-              sub-objective description as the header subtitle. */}
-          {sub.top_negative_outcome ? (
-            <p
-              className="mt-2 text-[13px] font-light italic leading-snug"
-              style={{ color: appleVibe.text.secondary }}
+
+          {/* ── Room anchor (top_negative_outcome) ──
+              Distinct treatment from the per-pain "leads to →" so
+              the user reads it as the ROOM-LEVEL synthesis: a
+              colored dot in the pain-lane color + non-italic label
+              + heavier weight. This is the macro-scale consequence
+              the entire room exists to counter. */}
+          {sub.top_negative_outcome && (
+            <div
+              className="mt-3 inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5"
+              style={{
+                background: `${appleVibe.stage.pain}0F`,
+                border: `1px solid ${appleVibe.stage.pain}33`,
+              }}
             >
               <span
-                className="not-italic font-semibold"
-                style={{ color: appleVibe.text.tertiary }}
+                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                style={{ background: appleVibe.stage.pain }}
+                aria-hidden
+              />
+              <span
+                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                style={{ color: appleVibe.stage.pain }}
               >
-                Counters:
+                Counters
+              </span>
+              <span
+                className="text-[12.5px] font-medium leading-tight"
+                style={{ color: appleVibe.text.primary }}
+              >
+                {sub.top_negative_outcome}
+              </span>
+            </div>
+          )}
+
+          {/* ── Rollup banner ──
+              Replaces the dead "Objective" lane. Shows the parent
+              core objective with a left-arrow so the user sees how
+              this room ladders up to the bigger ask. Truncated
+              with a full text title-attribute on hover. */}
+          {parentObjectiveText && (
+            <p
+              className="mt-3 line-clamp-2 max-w-2xl text-[12px] font-light leading-snug"
+              style={{ color: appleVibe.text.tertiary }}
+              title={parentObjectiveText}
+            >
+              <span
+                className="font-semibold uppercase tracking-[0.12em]"
+                style={{
+                  color: appleVibe.text.tertiary,
+                  fontSize: "9.5px",
+                }}
+              >
+                ← rolls up to:
               </span>{" "}
-              {sub.top_negative_outcome}
+              {parentObjectiveText.length > 220
+                ? parentObjectiveText.slice(0, 218).trimEnd() + "…"
+                : parentObjectiveText}
             </p>
-          ) : (
-            sub.description && (
-              <p
-                className="mt-2 text-[13px] font-light leading-snug"
-                style={{ color: appleVibe.text.secondary }}
-              >
-                {sub.description}
-              </p>
-            )
           )}
         </div>
 

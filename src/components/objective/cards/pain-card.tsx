@@ -45,7 +45,19 @@ interface Props {
   /** Features that address this pain — derived from approved or
    *  high-strength edges in the room. */
   addressedBy: Array<{ id: string; name: string; pct: number }>;
+  /** True when another card on the canvas is hovered AND this card
+   *  is on the receiving end of an edge from it. Renders a glow
+   *  ring in the lane color. */
+  linked?: boolean;
+  /** Hover handlers — let the parent track which card is hovered
+   *  so it can mark all linked cards as `linked`. */
+  onHover?: (id: string | null) => void;
+  /** Indent (px) — drives the influence-rank-based hierarchy.
+   *  Root pain = 0; downstream = 8/16. */
+  indent?: number;
 }
+
+const PAIN_COLOR = appleVibe.stage.pain;
 
 export function PainCard({
   item,
@@ -54,6 +66,9 @@ export function PainCard({
   highlightedCauses,
   onHoverCause,
   addressedBy,
+  linked = false,
+  onHover,
+  indent = 0,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const hasAnyHighlight = highlightedCauses.size > 0;
@@ -72,19 +87,29 @@ export function PainCard({
       transition={{
         layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] },
       }}
-      className="rounded-2xl px-4 py-3 transition-opacity"
+      className="rounded-2xl px-4 py-3 transition-all"
       style={{
         background: expanded
           ? "rgba(255,255,255,0.94)"
           : "rgba(255,255,255,0.65)",
         border: `1px solid ${
-          expanded ? "rgba(15,23,42,0.12)" : appleVibe.stroke.hairline
+          linked
+            ? PAIN_COLOR
+            : expanded
+              ? "rgba(15,23,42,0.12)"
+              : appleVibe.stroke.hairline
         }`,
         borderRadius: appleVibe.radius.md,
         opacity: dim ? 0.45 : 1,
         cursor: "pointer",
+        marginLeft: indent,
+        boxShadow: linked
+          ? `0 0 0 3px ${PAIN_COLOR}1F, 0 8px 22px -12px ${PAIN_COLOR}66`
+          : undefined,
       }}
       onClick={() => setExpanded((v) => !v)}
+      onMouseEnter={() => onHover?.(item.id)}
+      onMouseLeave={() => onHover?.(null)}
     >
       {/* Header — title + root badge */}
       <div className="flex items-baseline justify-between gap-2">
@@ -110,13 +135,21 @@ export function PainCard({
         )}
       </div>
 
-      {/* Negative outcome — single italic line */}
+      {/* Negative outcome — explicit "leads to:" label so the
+          downstream-consequence relationship reads as causation,
+          not a paraphrase of the title. */}
       {item.negative_outcome && (
         <p
-          className="mt-1 line-clamp-1 text-[11.5px] font-light italic leading-snug"
+          className="mt-1 line-clamp-2 text-[11.5px] font-light leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
-          → {item.negative_outcome}
+          <span
+            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            leads to →
+          </span>{" "}
+          <span className="italic">{item.negative_outcome}</span>
         </p>
       )}
 

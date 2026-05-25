@@ -152,8 +152,22 @@ PAIN RULES:
 - 3-5 pains, ordered by influence_rank descending.
 - ${TITLE_RULES}
 - Pain titles name the EFFECT ("Low engagement depth"), not the cause ("Generic results") and not the outcome ("Superficial browsing"). Those go in the root_causes and negative_outcome fields respectively.
-- negative_outcome is short, single line.
-- root_causes are independent — don't repeat. Cross-pain reuse of identical strings is encouraged (shared causes drive the shared-pill UI).
+
+NEGATIVE_OUTCOME RULES (critical — read carefully):
+- Must be the DOWNSTREAM CONSEQUENCE of the pain, not a paraphrase of the title.
+- Self-test: if removing the title's key noun makes the negative_outcome still meaningful and informative, you've done it right. If they read as synonyms, REWRITE.
+- BAD (synonyms — REJECT):
+    title: "Low Interface Engagement"     → negative_outcome: "Users lose interest quickly"
+    title: "Poor Personalization"         → negative_outcome: "Users feel disconnected"
+- GOOD (downstream — KEEP):
+    title: "Low Interface Engagement"     → negative_outcome: "Product churn within the first session"
+    title: "Poor Personalization"         → negative_outcome: "Users never reach an aha moment"
+    title: "Slow Onboarding"              → negative_outcome: "Trial users abandon before activating value"
+- Single line, ≤14 words, concrete and observable.
+
+SHARED ROOT CAUSES (required, not optional):
+- If two pains share an underlying mechanism, you MUST use the IDENTICAL verbatim root_cause string in both items. Don't paraphrase. Don't pluralize. Don't re-case.
+- Aim for 1-2 root causes that recur across ≥2 pains. The shared-cause UI pill above the lane EXISTS to surface these — if no root_causes overlap, the user sees no systemic insight.
 
 ${ANTI_PLATITUDE}
 
@@ -239,14 +253,23 @@ async function generateOutcomes(
 ): Promise<OutcomeItem[]> {
   const system = `You name the outcomes the sub-objective should produce — anchored on both ends.
 
-An OUTCOME is a desired state — a measurable/observable thing being true when the sub-objective is delivered. Each outcome must plausibly DISSOLVE one or more of the pain points listed, while rolling up toward the parent objective.
+An OUTCOME is what's OBSERVABLY TRUE about the USER (or their world) when the sub-objective lands. Outcomes describe a STATE or a BEHAVIOR — never a capability the system has.
+
+CRITICAL — OUTCOME ≠ FEATURE:
+- Outcomes describe what HAPPENS to the user. Features describe what the system DOES.
+- A feature can produce an outcome, but they are NEVER the same object.
+- ❌ NEVER restate a feature name as an outcome. If a feature is "Gamification Layer", the outcome is NOT "Integrated Gamification Features" — the outcome is "Users complete 5+ topic dives per session" or "Self-reported curiosity score 4/5".
+- ❌ NEVER name an outcome after a system capability ("Simplified User Interface", "Personalized Dashboard"). Those are features.
+- ✅ Outcomes start with the user: "Users return next day at 70%+", "Self-reported flow during sessions", "Time-to-first-aha drops below 90 seconds".
+- Self-test: read your outcome aloud. If it sounds like something an engineer would build, it's a feature — rewrite as the user's experienced state.
 
 For each outcome include MEASURED_BY: a concrete proxy/signal that says "yes this happened" (e.g. "8+ min/session", "85% return next day", "self-reported flow 4/5"). One short line.
 
 OUTCOME RULES:
 - 3-5 outcomes, ordered by how directly they signal sub-objective success.
 - ${TITLE_RULES}
-- name describes the STATE, not the action. "Sustained deep-dive sessions" not "Increase session length".
+- name describes the user-side STATE or BEHAVIOR, not the action and not a feature. "Sustained deep-dive sessions" ✅. "Increase session length" ❌ (action). "Engagement Tracking" ❌ (feature).
+- Avoid feature-style nouns ("Engine", "Dashboard", "Layer", "Interface", "System", "Tool", "Feature", "Mechanism") in outcome titles — they signal you're naming a system part instead of a user state.
 
 ${ANTI_PLATITUDE}
 
@@ -316,7 +339,16 @@ Features are generated LAST because they're anchored by both ends. Every feature
 FEATURE RULES:
 - 3-6 features, ordered by how much pain → outcome they cover.
 - ${TITLE_RULES}
-- first_principles reuse across features is encouraged where real (shared principles drive shared-pill UI).
+- first_principles reuse across features is REQUIRED when two features pull the same lever — use the IDENTICAL verbatim string, don't paraphrase. The shared-principle UI pill depends on exact matches.
+
+CRITICAL — FEATURE ≠ OUTCOME:
+- Feature names describe the SYSTEM'S CAPABILITY ("AI-Powered Curiosity Paths"). Outcomes describe USER STATE ("Users complete 5+ topic dives").
+- Your feature title MUST NOT verbatim match or trivially paraphrase any outcome name in the DESIRED OUTCOMES list below. If it does, you've named a user-state and pretended it's a feature — rewrite.
+
+POSITIVE_OUTCOME RULES:
+- positive_outcome is the DOWNSTREAM consequence the feature produces. Like negative_outcome on a pain — it must be more informative than restating the feature title.
+- BAD (paraphrase — REJECT): "Personalized Interest Dashboards" → "Personalization satisfaction improves"
+- GOOD (downstream — KEEP):  "Personalized Interest Dashboards" → "Users return next day at 70%+"
 
 ${ANTI_PLATITUDE}
 
