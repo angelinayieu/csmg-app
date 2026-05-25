@@ -46,6 +46,13 @@ export interface RoomContext {
    *  (legacy behavior). When populated, each item MUST be tagged
    *  with one slug from its lane's enum. */
   categories?: RoomCategoryEnum;
+  /** Commit-2 research integration — pre-built RESEARCH CONTEXT
+   *  block from research-service.buildRagBlock(). When present
+   *  (and non-empty), prepended to every stage's user prompt so
+   *  the LLM grounds items in real sources and emits citations[]
+   *  per item. When absent / empty, generation falls back to
+   *  pure first-principles reasoning with no citations. */
+  ragBlock?: string;
 }
 
 // ── Output shapes ──────────────────────────────────────────────────
@@ -63,6 +70,11 @@ export interface PainItem {
   /** Tier 3 — sub-category slug picked from RoomCategories.friction.
    *  null when categories weren't provided for this room. */
   sub_category?: string | null;
+  /** Commit-2 research integration — 1-based indices into the
+   *  RESEARCH CONTEXT source list that informed this item. Empty
+   *  when the item is pure first-principles or research is
+   *  unavailable. */
+  citations?: number[];
 }
 
 export interface FeatureItem {
@@ -73,6 +85,8 @@ export interface FeatureItem {
   first_principles: string[];
   /** Tier 3 — sub-category slug picked from RoomCategories.mechanism. */
   sub_category?: string | null;
+  /** Commit-2 — 1-based source indices informing this feature. */
+  citations?: number[];
 }
 
 export interface OutcomeItem {
@@ -81,11 +95,34 @@ export interface OutcomeItem {
   measured_by: string;
   /** Tier 3 — sub-category slug picked from RoomCategories.result. */
   sub_category?: string | null;
+  /** Commit-2 — 1-based source indices informing this outcome. */
+  citations?: number[];
 }
 
 // ── Shared scaffolding ─────────────────────────────────────────────
 
 const ANTI_PLATITUDE = `ANTI-PLATITUDE: every item references something specific from the sub-objective or clarifying answers. Items that could appear unchanged on a different sub-objective MUST be rewritten.`;
+
+/** Shared citation rule injected into every stage prompt when RAG
+ *  context is present. The 1-based indices match the source list
+ *  rendered in buildRagBlock(). Strict: don't invent ids. */
+const CITATION_RULE = `CITATIONS: For each item, include a citations[] array of 1-based source indices from the RESEARCH CONTEXT block above when the item is informed by those sources. Use ONLY indices that exist in the source list — never invent. Empty array [] when the item is pure first-principles. Cite 0-3 sources per item; quality over quantity.`;
+
+/** Render the RAG block + citation rule for prompt prepend. When
+ *  no rag block is provided, returns empty strings so callers can
+ *  template uniformly without conditional logic. */
+function ragSection(ctx: RoomContext): {
+  ragBlock: string;
+  citationRule: string;
+} {
+  if (!ctx.ragBlock || ctx.ragBlock.length === 0) {
+    return { ragBlock: "", citationRule: "" };
+  }
+  return {
+    ragBlock: `\n\n${ctx.ragBlock}\n`,
+    citationRule: `\n\n${CITATION_RULE}\n`,
+  };
+}
 
 const TITLE_RULES = `TITLE: noun phrase, ≤6 words. Do NOT start with action verbs (develop/implement/create/design/build/enhance/establish). Title-case OK; no terminal punctuation.`;
 
@@ -107,6 +144,7 @@ interface PainShape {
     root_causes?: unknown;
     influence_rank?: unknown;
     sub_category?: unknown;
+    citations?: unknown;
   }>;
   top_negative_outcome?: unknown;
   lane_labels?: {
@@ -214,6 +252,7 @@ ${ANTI_PLATITUDE}
 Return strict JSON.`;
 
   const painCats = categoryBlock(ctx, "friction");
+  const rag = ragSection(ctx);
   const itemProps: Record<string, unknown> = {
     name: { type: "string" },
     negative_outcome: { type: "string" },
@@ -230,16 +269,24 @@ Return strict JSON.`;
     itemProps.sub_category = { type: "string", enum: painCats.slugs };
     itemRequired.push("sub_category");
   }
+  if (rag.ragBlock.length > 0) {
+    itemProps.citations = { type: "array", items: { type: "number" } };
+    itemRequired.push("citations");
+  }
 
   const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}${
     ctx.subObjectiveDescription
       ? `\n\n${ctx.subObjectiveDescription}`
       : ""
-  }\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${painCats.instructions}
+  }\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${painCats.instructions}${rag.ragBlock}${rag.citationRule}
 
 Generate 3-5 pain points with full causal chains, plus the single TOP_NEGATIVE_OUTCOME for the room.${
     painCats.slugs.length > 0
       ? " Each pain must include sub_category — the slug of the friction sub-category it belongs to."
+      : ""
+  }${
+    rag.ragBlock.length > 0
+      ? " Each pain must include citations[] — 1-based source indices (use ONLY indices from the RESEARCH CONTEXT list above)."
       : ""
   }`;
 
@@ -297,6 +344,7 @@ interface OutcomeShape {
     name?: unknown;
     measured_by?: unknown;
     sub_category?: unknown;
+    citations?: unknown;
   }>;
 }
 
@@ -329,6 +377,7 @@ ${ANTI_PLATITUDE}
 Return strict JSON.`;
 
   const outcomeCats = categoryBlock(ctx, "result");
+  const ragO = ragSection(ctx);
   const outcomeProps: Record<string, unknown> = {
     name: { type: "string" },
     measured_by: { type: "string" },
@@ -338,15 +387,23 @@ Return strict JSON.`;
     outcomeProps.sub_category = { type: "string", enum: outcomeCats.slugs };
     outcomeRequired.push("sub_category");
   }
+  if (ragO.ragBlock.length > 0) {
+    outcomeProps.citations = { type: "array", items: { type: "number" } };
+    outcomeRequired.push("citations");
+  }
 
   const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}
 
 PAIN POINTS (each with its negative_outcome):
-${painPoints.map((p, i) => `  ${i + 1}. ${p.name} → ${p.negative_outcome}`).join("\n")}${outcomeCats.instructions}
+${painPoints.map((p, i) => `  ${i + 1}. ${p.name} → ${p.negative_outcome}`).join("\n")}${outcomeCats.instructions}${ragO.ragBlock}${ragO.citationRule}
 
 Generate 3-5 outcomes that, taken together, would dissolve those pains and roll up to the parent objective.${
     outcomeCats.slugs.length > 0
       ? " Each outcome must include sub_category — the slug of the result sub-category it belongs to."
+      : ""
+  }${
+    ragO.ragBlock.length > 0
+      ? " Each outcome must include citations[] — 1-based source indices (use ONLY indices from the RESEARCH CONTEXT list above)."
       : ""
   }`;
 
@@ -386,6 +443,7 @@ interface FeatureShape {
     positive_outcome?: unknown;
     first_principles?: unknown;
     sub_category?: unknown;
+    citations?: unknown;
   }>;
 }
 
@@ -421,6 +479,7 @@ ${ANTI_PLATITUDE}
 Return strict JSON.`;
 
   const featureCats = categoryBlock(ctx, "mechanism");
+  const ragF = ragSection(ctx);
   const featureProps: Record<string, unknown> = {
     name: { type: "string" },
     positive_outcome: { type: "string" },
@@ -435,6 +494,10 @@ Return strict JSON.`;
     featureProps.sub_category = { type: "string", enum: featureCats.slugs };
     featureRequired.push("sub_category");
   }
+  if (ragF.ragBlock.length > 0) {
+    featureProps.citations = { type: "array", items: { type: "number" } };
+    featureRequired.push("citations");
+  }
 
   const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}
 
@@ -442,11 +505,15 @@ PAIN POINTS (with negative_outcomes):
 ${painPoints.map((p, i) => `  ${i + 1}. ${p.name} → ${p.negative_outcome}`).join("\n")}
 
 DESIRED OUTCOMES:
-${outcomes.map((o, i) => `  ${i + 1}. ${o.name} (measured by: ${o.measured_by})`).join("\n")}${featureCats.instructions}
+${outcomes.map((o, i) => `  ${i + 1}. ${o.name} (measured by: ${o.measured_by})`).join("\n")}${featureCats.instructions}${ragF.ragBlock}${ragF.citationRule}
 
 Generate 3-6 features that bridge the pains to the outcomes. Each feature must plausibly counter ≥1 pain AND produce ≥1 outcome.${
     featureCats.slugs.length > 0
       ? " Each feature must include sub_category — the slug of the mechanism sub-category it belongs to."
+      : ""
+  }${
+    ragF.ragBlock.length > 0
+      ? " Each feature must include citations[] — 1-based source indices (use ONLY indices from the RESEARCH CONTEXT list above)."
       : ""
   }`;
 
@@ -751,6 +818,20 @@ function cleanSubCategory(raw: unknown): string | null {
   return t.length > 0 ? t.slice(0, 40) : null;
 }
 
+/** Sanitize the LLM-emitted citations[] — keep only positive
+ *  integers, dedup, cap at 5. Returns undefined when the input
+ *  wasn't an array (let callers omit the field cleanly). */
+function cleanCitations(raw: unknown): number[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = new Set<number>();
+  for (const v of raw) {
+    if (typeof v === "number" && Number.isFinite(v) && v >= 1) {
+      out.add(Math.floor(v));
+    }
+  }
+  return Array.from(out).slice(0, 5);
+}
+
 function cleanPains(raw: unknown): PainItem[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -772,6 +853,7 @@ function cleanPains(raw: unknown): PainItem[] {
         root_causes: causes,
         influence_rank: rank,
         sub_category: cleanSubCategory(r.sub_category),
+        citations: cleanCitations(r.citations),
       };
     })
     .filter((p): p is PainItem => p !== null)
@@ -794,6 +876,7 @@ function cleanFeatures(raw: unknown): FeatureItem[] {
         positive_outcome: pos.slice(0, 200),
         first_principles: principles,
         sub_category: cleanSubCategory(r.sub_category),
+        citations: cleanCitations(r.citations),
       };
     })
     .filter((p): p is FeatureItem => p !== null)
@@ -814,6 +897,7 @@ function cleanOutcomes(raw: unknown): OutcomeItem[] {
         name: stripVerbPrefix(name).slice(0, 200),
         measured_by: measured.slice(0, 150),
         sub_category: cleanSubCategory(r.sub_category),
+        citations: cleanCitations(r.citations),
       };
     })
     .filter((p): p is OutcomeItem => p !== null)

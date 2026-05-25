@@ -342,6 +342,25 @@ Return strict JSON with the lens keys.`,
 // ── RAG context builder ──────────────────────────────────────────
 
 /**
+ * Returns the same dedup'd + ordered source list that
+ * `buildRagBlock` renders, but as raw `ResearchSource[]`. Callers
+ * use this to map LLM-emitted citation indices (1-based) into
+ * actual `{ title, url, snippet, lens }` records for persistence
+ * + UI rendering. The indices MUST match buildRagBlock's order
+ * since both operate on the same dedup pipeline.
+ */
+export function collectRagSources(
+  surface: SurfaceBundle | null,
+  deep: DeepBundle | null,
+  maxSources = 12,
+): ResearchSource[] {
+  const all: ResearchSource[] = [];
+  if (deep?.status === "complete") all.push(...(deep.all_sources ?? []));
+  if (surface?.status === "complete") all.push(...(surface.sources ?? []));
+  return dedupByUrl(all).slice(0, maxSources);
+}
+
+/**
  * Render a `RESEARCH CONTEXT` block to prepend to downstream LLM
  * prompts. Pulls from surface + deep, dedups, respects token
  * budget. Returns "" when no useful research exists — caller's

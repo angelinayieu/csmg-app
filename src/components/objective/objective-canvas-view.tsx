@@ -47,6 +47,7 @@ import { useRouter } from "next/navigation";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { ClarifyingQuestionsCard } from "./clarifying-questions-card";
 import { ResearchIndicator } from "./research-indicator";
+import { ResearchSourcesSheet } from "./research-sources-sheet";
 import { SubObjectivePickerCard } from "./sub-objective-picker-card";
 import { MainCanvasView, type MainCanvasSub } from "./main-canvas-view";
 import type { ObjectiveAnnotation } from "./annotated-objective-card";
@@ -91,6 +92,8 @@ export function ObjectiveCanvasView({
 }: Props) {
   const router = useRouter();
   const [stage, setStage] = useState<ObjectiveCanvasStage>(initialStage);
+  // Research sources sheet — opened by clicking the indicator.
+  const [sourcesOpen, setSourcesOpen] = useState(false);
 
   // When the picker confirms, the server inserts the chosen
   // improvement_goals rows and advances the canvas stage. The
@@ -117,14 +120,27 @@ export function ObjectiveCanvasView({
 
       {/* Research indicator — visible during clarifying + picking
           stages so the user sees the background work happen. Hidden
-          on main + done (the room view has its own indicators). */}
+          on main + done (the room view has its own indicators).
+          Clicking the indicator opens the sources sheet so the user
+          can audit what the AI is reading. */}
       {(stage === "clarifying" || stage === "picking") && !embedded && (
         <div className="mt-3 flex justify-center">
           <ResearchIndicator
             spaceId={spaceId}
             showDeep={stage === "picking"}
+            onOpenSources={() => setSourcesOpen(true)}
           />
         </div>
+      )}
+
+      {/* Sources sheet — slide-in from right. Always mounted so the
+          AnimatePresence in/out transitions render correctly. */}
+      {!embedded && (
+        <ResearchSourcesSheet
+          spaceId={spaceId}
+          open={sourcesOpen}
+          onClose={() => setSourcesOpen(false)}
+        />
       )}
 
       <div className={showBanner ? "mt-6" : ""}>

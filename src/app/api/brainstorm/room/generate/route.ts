@@ -27,6 +27,13 @@ import {
   normalizeRoomCategories,
   type RoomCategories,
 } from "@/lib/objective-canvas/generate-categories";
+import {
+  buildRagBlock,
+  collectRagSources,
+  type SurfaceBundle,
+  type DeepBundle,
+  type ResearchSource,
+} from "@/lib/research/research-service";
 
 // ── entities table contracts (Phase 6) ────────────────────────────
 // entity_category has a CHECK constraint to one of these values;
@@ -93,7 +100,9 @@ export async function POST(req: NextRequest) {
   // ── Load space + sub-objective + parent core goal ───────────────
   const { data: space } = await db
     .from("spaces")
-    .select("id, user_id, description, input_text, synthesis_data")
+    .select(
+      "id, user_id, description, input_text, synthesis_data, surface_research, deep_research",
+    )
     .eq("id", spaceId)
     .maybeSingle();
   if (!space || space.user_id !== auth.user.id) {
@@ -250,6 +259,24 @@ export async function POST(req: NextRequest) {
     ),
   };
 
+  // ── Build RAG block from persisted research bundles (Commit 2) ──
+  // When research has landed for this space (surface + deep
+  // bundles populated), prepend a RESEARCH CONTEXT block to every
+  // stage's user prompt + force the LLM to emit citations[] per
+  // item. When research is empty/skipped, ragBlock = "" and
+  // generation falls through to LLM-only.
+  const surfaceBundle =
+    (space.surface_research as SurfaceBundle | null) ?? null;
+  const deepBundle = (space.deep_research as DeepBundle | null) ?? null;
+  const ragBlock = buildRagBlock(surfaceBundle, deepBundle, {
+    maxSources: 12,
+    maxCharsPerSnippet: 500,
+  });
+  // The same dedup'd source list the prompt sees — used below to
+  // persist each item's citation INDEX → URL mapping into
+  // causal_chain so the UI can render real source previews.
+  const ragSources = collectRagSources(surfaceBundle, deepBundle, 12);
+
   const ctx: RoomContext = {
     spaceId,
     userId: auth.user.id,
@@ -262,6 +289,7 @@ export async function POST(req: NextRequest) {
     categories: hasCategories || Object.keys(categoriesEnum.friction).length > 0
       ? categoriesEnum
       : undefined,
+    ragBlock,
   };
 
   // ── Generate (3 LLM calls back to back) ─────────────────────────
@@ -306,36 +334,69 @@ export async function POST(req: NextRequest) {
     causal_chain,
   });
 
+  // Resolve LLM-emitted citation indices (1-based) → actual
+  // ResearchSource records for persistence. We store the
+  // RESOLVED objects (not just the indices) so the UI can render
+  // source previews without re-loading the bundles. Bad indices
+  // (out of bounds, hallucinated) are dropped silently.
+  function resolveCitations(
+    indices: number[] | undefined,
+  ): Array<{ title: string; url: string; snippet: string; lens?: string }> {
+    if (!indices || indices.length === 0) return [];
+    const out: Array<{
+      title: string;
+      url: string;
+      snippet: string;
+      lens?: string;
+    }> = [];
+    for (const i of indices) {
+      const src = ragSources[i - 1]; // 1-based → 0-based
+      if (!src) continue;
+      out.push({
+        title: src.title,
+        url: src.url,
+        snippet: src.snippet,
+        lens: src.lens,
+      });
+    }
+    return out;
+  }
+
   const entityRows = [
     // Pain: name is the EFFECT title; description is the
     // negative_outcome (one line); causal_chain carries the root
     // causes + the LLM's influence rank used for lane ordering +
     // the sub_category slug (Tier 3) used for chip + grouping +
-    // chain archetype derivation.
+    // chain archetype derivation + Commit-2 citations (resolved
+    // to source records so the UI can render previews directly).
     ...pain.map((p) =>
       buildRow("pain", p.name, p.negative_outcome, 0.7, {
         negative_outcome: p.negative_outcome,
         root_causes: p.root_causes,
         influence_rank: p.influence_rank,
         sub_category: p.sub_category ?? null,
+        citations: resolveCitations(p.citations),
       }),
     ),
     // Outcome: name is the state; description holds the
-    // measured_by signal; causal_chain mirrors it + sub_category.
+    // measured_by signal; causal_chain mirrors it + sub_category
+    // + citations.
     ...outcomes.map((o) =>
       buildRow("outcomes", o.name, o.measured_by, 0.7, {
         measured_by: o.measured_by,
         sub_category: o.sub_category ?? null,
+        citations: resolveCitations(o.citations),
       }),
     ),
     // Feature: name is the feature; description is the
     // positive_outcome; causal_chain carries first_principles +
-    // sub_category.
+    // sub_category + citations.
     ...features.map((f) =>
       buildRow("features", f.name, f.positive_outcome, 0.65, {
         positive_outcome: f.positive_outcome,
         first_principles: f.first_principles,
         sub_category: f.sub_category ?? null,
+        citations: resolveCitations(f.citations),
       }),
     ),
     // Objective anchor: a single entity so cross-layer edges to
@@ -385,13 +446,24 @@ export async function POST(req: NextRequest) {
   }));
 
   // ── Generate cross-layer correlations ───────────────────────────
+  // Soft-fail kept so partial generation lands (entities still
+  // persist) BUT we now SURFACE the warning in the response so the
+  // client can show a "first-run correlations failed — retry?"
+  // banner. Otherwise the user discovers the empty side panel by
+  // accident.
   let correlations: Awaited<ReturnType<typeof linkCorrelations>> = [];
+  let correlationWarning: string | null = null;
   try {
     correlations = await linkCorrelations(ctx, itemRefs);
+    if (correlations.length === 0) {
+      correlationWarning =
+        "The correlation step returned 0 edges meeting the strength threshold. Click 'Generate correlations' in the side panel to retry.";
+    }
   } catch (err) {
+    correlationWarning = `Correlation step failed: ${sanitizeErrorMessage(err)}. Retry from the side panel.`;
     console.warn(
       "[room/generate] correlation stage failed (non-fatal):",
-      sanitizeErrorMessage(err),
+      correlationWarning,
     );
   }
 
@@ -461,5 +533,10 @@ export async function POST(req: NextRequest) {
       feature_count: features.length,
       edge_count: edgeCount,
     },
+    // null when correlations populated cleanly; populated string
+    // when the LLM correlation step failed OR returned 0 edges.
+    // The client surfaces this as a banner so the user knows to
+    // retry from the side panel.
+    correlation_warning: correlationWarning,
   });
 }
