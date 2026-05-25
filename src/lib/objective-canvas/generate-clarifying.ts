@@ -17,6 +17,7 @@ interface LlmShape {
   questions?: Array<{
     question?: unknown;
     rationale?: unknown;
+    selection?: unknown;
     options?: Array<{ label?: unknown; detail?: unknown }>;
   }>;
 }
@@ -54,6 +55,8 @@ export async function generateClarifyingQuestions(
       if (question.length === 0) return null;
       const rationale =
         typeof q?.rationale === "string" ? q.rationale.trim() : "";
+      const selection: "single" | "multi" =
+        q?.selection === "multi" ? "multi" : "single";
       const options = Array.isArray(q?.options)
         ? q.options
             .map((o) => ({
@@ -67,6 +70,7 @@ export async function generateClarifyingQuestions(
         id: randomUUID(),
         question,
         rationale,
+        selection,
         options: options.length > 0 ? options : undefined,
       };
     })

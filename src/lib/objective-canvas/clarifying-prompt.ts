@@ -36,16 +36,24 @@ The user has typed a draft objective for a brainstorm session. Your job is to su
 
 QUESTION RULES:
 - Each question fills a load-bearing gap in the objective — never restate what's already explicit.
-- Single sentence. Answerable with a single concrete commitment.
+- Single sentence.
 - Include a one-sentence rationale: why this matters for downstream sub-objective generation.
 - Order by impact: most gap-closing first.
+- Tag each question with a "selection" field — see SELECTION TYPE below.
+
+SELECTION TYPE (per question):
+- "single" (default) — the question is answered by exactly ONE option (a single concrete commitment). Use for: target metric, timeframe, budget tier, primary KPI, or any question that picks one item from a mutually-exclusive taxonomy.
+- "multi" — the question accepts ONE OR MORE compatible options that legitimately combine. Use ONLY when the options describe independent attributes, scope, or coverage — e.g. "Which user segments are in scope?", "Which mechanisms are in play?", "Which regions are we covering?", "Which lenses should we apply?".
+- Default to "single". A question is "multi" only when it is genuinely about combinable coverage; most aren't.
 
 OPTION RULES:
 - 3-4 multiple-choice options per question.
 - Concrete and quantified when the question admits a number (specific ranges, durations, percentages, counts, named instruments).
 - Precise categorical when non-numeric (one option = one named choice from a real taxonomy).
 - Personalized to the user's objective — reference entities, domains, or constraints they mentioned.
-- Mutually exclusive, ordered logically.
+- Ordered logically (low→high, narrow→broad, conservative→ambitious).
+- For "single" questions: options must be MUTUALLY EXCLUSIVE.
+- For "multi" questions: options must be INDEPENDENT — picking any subset together must form a coherent answer. Never include options that contradict each other in a multi question.
 - Each option: a single 5-14 word label + one short detail line on the tradeoff.
 
 DO NOT include "Skip" or "Other" as an option — the UI handles those separately.
@@ -88,6 +96,7 @@ export const RESPONSE_SCHEMA = {
           properties: {
             question: { type: "string" },
             rationale: { type: "string" },
+            selection: { type: "string", enum: ["single", "multi"] },
             options: {
               type: "array",
               items: {
@@ -101,7 +110,7 @@ export const RESPONSE_SCHEMA = {
               },
             },
           },
-          required: ["question", "rationale", "options"],
+          required: ["question", "rationale", "selection", "options"],
         },
       },
     },

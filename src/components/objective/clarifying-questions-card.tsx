@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   ArrowRight,
+  Check,
   Plus,
   RefreshCw,
   SkipForward,
@@ -51,6 +52,10 @@ export function ClarifyingQuestionsCard({
   const [error, setError] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
   const [loadingInitial, setLoadingInitial] = useState(initial === null);
+  // Picks for multi-select questions, keyed by question id so each
+  // question keeps its own staged selection while the user toggles.
+  // Single-select questions don't use this — they commit on click.
+  const [multiPicks, setMultiPicks] = useState<Record<string, string[]>>({});
 
   // ── Auto-generate the first set on mount when none exists yet ──
   useEffect(() => {
@@ -262,46 +267,152 @@ export function ClarifyingQuestionsCard({
 
       {/* MCQ options */}
       {currentQuestion.options && currentQuestion.options.length > 0 && (
-        <div className="mt-4 flex flex-col gap-2">
-          {currentQuestion.options.map((opt) => (
-            <button
-              key={opt.label}
-              type="button"
-              onClick={() => runAction("answer", { value: opt.label })}
-              disabled={busy}
-              className="flex flex-col items-start gap-0.5 rounded-2xl px-3.5 py-2.5 text-left transition-all"
-              style={{
-                background: appleVibe.surface.base,
-                border: `1px solid ${appleVibe.stroke.hairline}`,
-                borderRadius: appleVibe.radius.md,
-                cursor: busy ? "wait" : "pointer",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = appleVibe.stroke.medium;
-                e.currentTarget.style.background = appleVibe.surface.chip;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = appleVibe.stroke.hairline;
-                e.currentTarget.style.background = appleVibe.surface.base;
-              }}
-            >
-              <span
-                className="text-[13px] font-semibold"
-                style={{ color: appleVibe.text.primary }}
-              >
-                {opt.label}
-              </span>
-              {opt.detail && (
-                <span
-                  className="text-[11.5px] font-light leading-snug"
-                  style={{ color: appleVibe.text.secondary }}
-                >
-                  {opt.detail}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        <>
+          {(() => {
+            const isMulti = currentQuestion.selection === "multi";
+            const picks = multiPicks[currentQuestion.id] ?? [];
+            const togglePick = (label: string) => {
+              setMultiPicks((prev) => {
+                const current = prev[currentQuestion.id] ?? [];
+                const next = current.includes(label)
+                  ? current.filter((l) => l !== label)
+                  : [...current, label];
+                return { ...prev, [currentQuestion.id]: next };
+              });
+            };
+            const submitMulti = () => {
+              if (picks.length === 0) return;
+              // Preserve the option order the LLM emitted, not the
+              // toggle order, so the saved string reads naturally.
+              const ordered = (currentQuestion.options ?? [])
+                .map((o) => o.label)
+                .filter((l) => picks.includes(l));
+              runAction("answer", { value: ordered.join(" · ") });
+            };
+            return (
+              <>
+                {isMulti && (
+                  <div
+                    className="mt-3 text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Pick one or more · {picks.length} selected
+                  </div>
+                )}
+                <div className={isMulti ? "mt-1.5 flex flex-col gap-2" : "mt-4 flex flex-col gap-2"}>
+                  {currentQuestion.options!.map((opt) => {
+                    const checked = isMulti && picks.includes(opt.label);
+                    return (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() =>
+                          isMulti
+                            ? togglePick(opt.label)
+                            : runAction("answer", { value: opt.label })
+                        }
+                        disabled={busy}
+                        aria-pressed={isMulti ? checked : undefined}
+                        className="flex items-start gap-3 rounded-2xl px-3.5 py-2.5 text-left transition-all"
+                        style={{
+                          background: checked
+                            ? appleVibe.surface.chip
+                            : appleVibe.surface.base,
+                          border: `1px solid ${
+                            checked
+                              ? appleVibe.accent.primary
+                              : appleVibe.stroke.hairline
+                          }`,
+                          borderRadius: appleVibe.radius.md,
+                          cursor: busy ? "wait" : "pointer",
+                        }}
+                        onMouseEnter={(e) => {
+                          if (checked) return;
+                          e.currentTarget.style.borderColor =
+                            appleVibe.stroke.medium;
+                          e.currentTarget.style.background =
+                            appleVibe.surface.chip;
+                        }}
+                        onMouseLeave={(e) => {
+                          if (checked) return;
+                          e.currentTarget.style.borderColor =
+                            appleVibe.stroke.hairline;
+                          e.currentTarget.style.background =
+                            appleVibe.surface.base;
+                        }}
+                      >
+                        {isMulti && (
+                          <span
+                            className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded"
+                            style={
+                              checked
+                                ? {
+                                    background: appleVibe.accent.primary,
+                                    color: appleVibe.text.onAccent,
+                                  }
+                                : {
+                                    background: appleVibe.surface.base,
+                                    boxShadow: `inset 0 0 0 1px ${appleVibe.stroke.medium}`,
+                                  }
+                            }
+                            aria-hidden
+                          >
+                            {checked && (
+                              <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                            )}
+                          </span>
+                        )}
+                        <span className="flex flex-1 flex-col items-start gap-0.5">
+                          <span
+                            className="text-[13px] font-semibold"
+                            style={{ color: appleVibe.text.primary }}
+                          >
+                            {opt.label}
+                          </span>
+                          {opt.detail && (
+                            <span
+                              className="text-[11.5px] font-light leading-snug"
+                              style={{ color: appleVibe.text.secondary }}
+                            >
+                              {opt.detail}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {isMulti && (
+                  <button
+                    type="button"
+                    onClick={submitMulti}
+                    disabled={busy || picks.length === 0}
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] font-semibold"
+                    style={{
+                      background:
+                        picks.length > 0 && !busy
+                          ? appleVibe.accent.primary
+                          : appleVibe.surface.chip,
+                      color:
+                        picks.length > 0 && !busy
+                          ? appleVibe.text.onAccent
+                          : appleVibe.text.tertiary,
+                      cursor:
+                        picks.length > 0 && !busy ? "pointer" : "not-allowed",
+                    }}
+                  >
+                    <span>
+                      {picks.length === 0
+                        ? "Pick at least one"
+                        : `Save ${picks.length} selection${picks.length === 1 ? "" : "s"}`}
+                    </span>
+                    <ArrowRight className="h-3 w-3" strokeWidth={2.25} />
+                  </button>
+                )}
+              </>
+            );
+          })()}
+        </>
       )}
 
       {/* Free-text escape hatch */}

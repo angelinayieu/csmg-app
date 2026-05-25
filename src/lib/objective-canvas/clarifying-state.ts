@@ -43,6 +43,12 @@ export interface ClarifyingQuestion {
   rationale: string;
   options?: ClarifyingOption[];
   slot?: string;
+  /** How the user picks an answer. "single" = one MCQ option commits;
+   *  "multi" = user toggles 1+ options then explicitly saves. The
+   *  generator tags this per-question; absent on legacy persisted
+   *  questions and treated as "single". When "multi", the saved
+   *  answer.value is the picked labels joined by " · ". */
+  selection?: "single" | "multi";
 }
 
 export interface ClarifyingAnswer {
@@ -164,12 +170,18 @@ function isStage(v: unknown): v is ObjectiveCanvasStage {
 
 function normalizeClarifying(raw: Record<string, unknown>): ClarifyingBlock {
   const questions = Array.isArray(raw.questions)
-    ? (raw.questions as unknown[]).filter(
-        (q): q is ClarifyingQuestion =>
-          isRecord(q) &&
-          typeof q.id === "string" &&
-          typeof q.question === "string",
-      )
+    ? (raw.questions as unknown[])
+        .filter(
+          (q): q is ClarifyingQuestion =>
+            isRecord(q) &&
+            typeof q.id === "string" &&
+            typeof q.question === "string",
+        )
+        .map((q) => ({
+          ...q,
+          selection:
+            q.selection === "multi" ? "multi" : ("single" as "single" | "multi"),
+        }))
     : [];
   const answers = isRecord(raw.answers)
     ? (Object.fromEntries(
