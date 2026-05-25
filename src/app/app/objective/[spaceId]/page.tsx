@@ -13,6 +13,9 @@ import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import type { MainCanvasSub } from "@/components/objective/main-canvas-view";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import { normalizeRoomCategories } from "@/lib/objective-canvas/generate-categories";
+import { computeChains } from "@/lib/objective-canvas/compute-chains";
+import type { RoomEdge } from "@/components/objective/sub-objective-room-view";
 import { ArrowLeft } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -81,7 +84,7 @@ export default async function ObjectiveCanvasPage({
       const { data: childRows } = await db
         .from("improvement_goals")
         .select(
-          "id, title, description, auto_detection_rationale, room_layers_generated_at, top_negative_outcome, created_at",
+          "id, title, description, auto_detection_rationale, room_layers_generated_at, top_negative_outcome, room_categories, created_at",
         )
         .eq("space_id", spaceId)
         .eq("parent_goal_id", parentGoalId)
@@ -93,6 +96,7 @@ export default async function ObjectiveCanvasPage({
         auto_detection_rationale: string | null;
         room_layers_generated_at: string | null;
         top_negative_outcome: string | null;
+        room_categories: unknown;
       }>);
 
       // For each sub-objective, find approved-edge endpoints and the
@@ -108,64 +112,93 @@ export default async function ObjectiveCanvasPage({
       }
 
       const subIds = subs.map((s) => s.id);
-      const approvedItemsBySub = new Map<
-        string,
-        Array<{
-          id: string;
-          name: string;
-          layer: "pain" | "features" | "outcomes" | "objective";
-        }>
-      >();
+
+      // ── All entities scoped to these subs ──
+      // Pulled in one shot so we can compute (a) full lane-by-
+      // sub_category breakdowns for the card-level tree view and
+      // (b) the legacy approvedItems chip strip in one pass.
+      type EntityRow = {
+        id: string;
+        name: string;
+        layer_ontology_id: string | null;
+        parent_sub_objective_id: string | null;
+        causal_chain: Record<string, unknown> | null;
+      };
+      let allEntities: EntityRow[] = [];
+      // ── All edges scoped to these subs (with mechanism in
+      // agent_feedback) — drives both the approvedItems chip strip
+      // and the compute-chains pass for approved archetypes. ──
+      type EdgeRow = {
+        id: string;
+        source_entity_id: string;
+        target_entity_id: string;
+        relationship_type: string;
+        strength: number | null;
+        polarity: string | null;
+        conditions: string | null;
+        approved_at: string | null;
+        agent_feedback: Record<string, unknown> | null;
+        parent_sub_objective_id: string | null;
+      };
+      let allEdges: EdgeRow[] = [];
+
       if (subIds.length > 0) {
-        const { data: approvedEdges } = await db
-          .from("edges")
-          .select("source_entity_id, target_entity_id, parent_sub_objective_id")
-          .in("parent_sub_objective_id", subIds)
-          .not("approved_at", "is", null);
-
-        // Collect unique entity ids across all approved edges.
-        const entityToSub = new Map<string, string>(); // entityId → subId
-        for (const e of (approvedEdges ?? []) as Array<{
-          source_entity_id: string;
-          target_entity_id: string;
-          parent_sub_objective_id: string;
-        }>) {
-          entityToSub.set(e.source_entity_id, e.parent_sub_objective_id);
-          entityToSub.set(e.target_entity_id, e.parent_sub_objective_id);
-        }
-
-        if (entityToSub.size > 0) {
-          const { data: entityRows } = await db
+        const [entRes, edgeRes] = await Promise.all([
+          db
             .from("entities")
-            .select("id, name, layer_ontology_id, parent_sub_objective_id")
-            .in("id", Array.from(entityToSub.keys()));
-          for (const e of (entityRows ?? []) as Array<{
-            id: string;
-            name: string;
-            layer_ontology_id: string | null;
-            parent_sub_objective_id: string | null;
-          }>) {
-            const subId = e.parent_sub_objective_id;
-            if (!subId) continue;
-            const slug = e.layer_ontology_id
-              ? slugByLayerId.get(e.layer_ontology_id)
-              : undefined;
-            if (
-              slug !== "pain" &&
-              slug !== "features" &&
-              slug !== "outcomes" &&
-              slug !== "objective"
-            ) {
-              continue;
-            }
-            const bucket = approvedItemsBySub.get(subId) ?? [];
-            bucket.push({ id: e.id, name: e.name, layer: slug });
-            approvedItemsBySub.set(subId, bucket);
-          }
-        }
+            .select(
+              "id, name, layer_ontology_id, parent_sub_objective_id, causal_chain",
+            )
+            .in("parent_sub_objective_id", subIds),
+          db
+            .from("edges")
+            .select(
+              "id, source_entity_id, target_entity_id, relationship_type, strength, polarity, conditions, approved_at, agent_feedback, parent_sub_objective_id",
+            )
+            .in("parent_sub_objective_id", subIds),
+        ]);
+        allEntities = ((entRes.data ?? []) as EntityRow[]);
+        allEdges = ((edgeRes.data ?? []) as EdgeRow[]);
       }
 
-      // Layer ordering for chip strip = pain → features → outcomes → objective
+      // Index entities by id (for chain compute) and group by sub.
+      const entityById = new Map<string, EntityRow>();
+      const entitiesBySub = new Map<string, EntityRow[]>();
+      for (const e of allEntities) {
+        entityById.set(e.id, e);
+        if (!e.parent_sub_objective_id) continue;
+        const list = entitiesBySub.get(e.parent_sub_objective_id) ?? [];
+        list.push(e);
+        entitiesBySub.set(e.parent_sub_objective_id, list);
+      }
+
+      const edgesBySub = new Map<string, EdgeRow[]>();
+      for (const e of allEdges) {
+        if (!e.parent_sub_objective_id) continue;
+        const list = edgesBySub.get(e.parent_sub_objective_id) ?? [];
+        list.push(e);
+        edgesBySub.set(e.parent_sub_objective_id, list);
+      }
+
+      // Helper: get the sub_category slug out of a causal_chain.
+      const slugOf = (cc: Record<string, unknown> | null): string | null => {
+        if (!cc || typeof cc.sub_category !== "string") return null;
+        return cc.sub_category.length > 0 ? cc.sub_category : null;
+      };
+      const laneOf = (
+        layerOntologyId: string | null,
+      ): "pain" | "features" | "outcomes" | "objective" | null => {
+        if (!layerOntologyId) return null;
+        const slug = slugByLayerId.get(layerOntologyId);
+        return slug === "pain" ||
+          slug === "features" ||
+          slug === "outcomes" ||
+          slug === "objective"
+          ? slug
+          : null;
+      };
+
+      // Layer ordering for chip strip
       const LAYER_ORDER = {
         pain: 0,
         features: 1,
@@ -173,17 +206,177 @@ export default async function ObjectiveCanvasPage({
         objective: 3,
       } as const;
 
-      initialMainSubs = subs.map((r) => ({
-        id: r.id,
-        title: r.title,
-        description: r.description,
-        rationale: r.auto_detection_rationale,
-        generatedAt: r.room_layers_generated_at,
-        topNegativeOutcome: r.top_negative_outcome,
-        approvedItems: (approvedItemsBySub.get(r.id) ?? []).sort(
+      initialMainSubs = subs.map((r) => {
+        const subEntities = entitiesBySub.get(r.id) ?? [];
+        const subEdges = edgesBySub.get(r.id) ?? [];
+
+        // ── Lane breakdown: count items per (lane × sub_category) ──
+        const cats = normalizeRoomCategories(r.room_categories);
+        function laneBucket(
+          laneEntities: EntityRow[],
+          categorySet: Array<{ slug: string; label: string; color: string }>,
+        ) {
+          const counts = new Map<string, number>();
+          let untagged = 0;
+          for (const e of laneEntities) {
+            const slug = slugOf(e.causal_chain);
+            if (!slug) {
+              untagged += 1;
+              continue;
+            }
+            counts.set(slug, (counts.get(slug) ?? 0) + 1);
+          }
+          const rows = categorySet
+            .map((c) => ({
+              label: c.label,
+              color: c.color,
+              count: counts.get(c.slug) ?? 0,
+            }))
+            .filter((c) => c.count > 0);
+          return { rows, untagged };
+        }
+
+        const painEntities = subEntities.filter(
+          (e) => laneOf(e.layer_ontology_id) === "pain",
+        );
+        const featureEntities = subEntities.filter(
+          (e) => laneOf(e.layer_ontology_id) === "features",
+        );
+        const outcomeEntities = subEntities.filter(
+          (e) => laneOf(e.layer_ontology_id) === "outcomes",
+        );
+
+        const frictionBreakdown = laneBucket(painEntities, cats.friction);
+        const mechanismBreakdown = laneBucket(featureEntities, cats.mechanism);
+        const resultBreakdown = laneBucket(outcomeEntities, cats.result);
+
+        // ── Approved archetypes: compute chains + filter to those
+        //    where BOTH underlying edges are approved. Group by
+        //    category triple for the card's "approved plays" list. ──
+        const subEntityIndex = new Map<
+          string,
+          {
+            id: string;
+            name: string;
+            layer: "pain" | "features" | "outcomes" | "objective";
+            subCategorySlug?: string | null;
+          }
+        >();
+        for (const e of subEntities) {
+          const lane = laneOf(e.layer_ontology_id);
+          if (!lane) continue;
+          subEntityIndex.set(e.id, {
+            id: e.id,
+            name: e.name,
+            layer: lane,
+            subCategorySlug: slugOf(e.causal_chain),
+          });
+        }
+        const roomEdges: RoomEdge[] = subEdges.map((e) => ({
+          id: e.id,
+          source_entity_id: e.source_entity_id,
+          target_entity_id: e.target_entity_id,
+          relationship_type: e.relationship_type,
+          strength: e.strength,
+          polarity: e.polarity,
+          conditions: e.conditions,
+          approved_at: e.approved_at,
+          agent_feedback: e.agent_feedback,
+        }));
+        const chains = computeChains(roomEdges, subEntityIndex);
+        const approvedChainArchetypes = new Map<
+          string,
+          {
+            triple: Array<{ label: string; color: string } | null>;
+            count: number;
+          }
+        >();
+        const resolveTripleEntry = (
+          lane: "friction" | "mechanism" | "result",
+          slug: string | null,
+        ): { label: string; color: string } | null => {
+          if (!slug) return null;
+          const hit = cats[lane].find((c) => c.slug === slug);
+          return hit ? { label: hit.label, color: hit.color } : null;
+        };
+        for (const c of chains) {
+          const isApproved =
+            c.painFeatureEdge.approved_at !== null &&
+            c.featureOutcomeEdge.approved_at !== null;
+          if (!isApproved) continue;
+          const p = c.categoryTriple.painSlug ?? "_";
+          const f = c.categoryTriple.featureSlug ?? "_";
+          const rr = c.categoryTriple.resultSlug ?? "_";
+          const key = `${p}::${f}::${rr}`;
+          const existing = approvedChainArchetypes.get(key);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            approvedChainArchetypes.set(key, {
+              triple: [
+                resolveTripleEntry("friction", c.categoryTriple.painSlug),
+                resolveTripleEntry("mechanism", c.categoryTriple.featureSlug),
+                resolveTripleEntry("result", c.categoryTriple.resultSlug),
+              ],
+              count: 1,
+            });
+          }
+        }
+        const approvedArchetypes = Array.from(
+          approvedChainArchetypes.entries(),
+        )
+          .map(([key, v]) => ({ key, ...v }))
+          .sort((a, b) => b.count - a.count);
+
+        // Legacy approvedItems (chip strip) — endpoints of approved
+        // edges that are pain/feature/outcome.
+        const approvedEntityIds = new Set<string>();
+        for (const e of subEdges) {
+          if (!e.approved_at) continue;
+          approvedEntityIds.add(e.source_entity_id);
+          approvedEntityIds.add(e.target_entity_id);
+        }
+        const approvedItems: Array<{
+          id: string;
+          name: string;
+          layer: "pain" | "features" | "outcomes" | "objective";
+        }> = [];
+        for (const e of subEntities) {
+          if (!approvedEntityIds.has(e.id)) continue;
+          const lane = laneOf(e.layer_ontology_id);
+          if (!lane) continue;
+          approvedItems.push({ id: e.id, name: e.name, layer: lane });
+        }
+        approvedItems.sort(
           (a, b) => LAYER_ORDER[a.layer] - LAYER_ORDER[b.layer],
-        ),
-      }));
+        );
+
+        return {
+          id: r.id,
+          title: r.title,
+          description: r.description,
+          rationale: r.auto_detection_rationale,
+          generatedAt: r.room_layers_generated_at,
+          topNegativeOutcome: r.top_negative_outcome,
+          approvedItems,
+          laneBreakdown: {
+            friction: frictionBreakdown.rows,
+            mechanism: mechanismBreakdown.rows,
+            result: resultBreakdown.rows,
+          },
+          laneTotalCounts: {
+            friction: painEntities.length,
+            mechanism: featureEntities.length,
+            result: outcomeEntities.length,
+          },
+          approvedArchetypes,
+          approvedPlayCount: chains.filter(
+            (c) =>
+              c.painFeatureEdge.approved_at !== null &&
+              c.featureOutcomeEdge.approved_at !== null,
+          ).length,
+        };
+      });
     }
   }
 
