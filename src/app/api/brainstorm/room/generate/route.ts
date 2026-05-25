@@ -19,8 +19,14 @@ import {
   runLayeredGeneration,
   linkCorrelations,
   type RoomContext,
+  type RoomCategoryEnum,
 } from "@/lib/objective-canvas/layered-generation";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
+import {
+  generateRoomCategories,
+  normalizeRoomCategories,
+  type RoomCategories,
+} from "@/lib/objective-canvas/generate-categories";
 
 // ── entities table contracts (Phase 6) ────────────────────────────
 // entity_category has a CHECK constraint to one of these values;
@@ -96,7 +102,9 @@ export async function POST(req: NextRequest) {
 
   const { data: sub } = await db
     .from("improvement_goals")
-    .select("id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at")
+    .select(
+      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, room_categories",
+    )
     .eq("id", subObjectiveId)
     .maybeSingle();
   if (!sub || sub.user_id !== auth.user.id || sub.space_id !== spaceId) {
@@ -186,6 +194,62 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── Resolve room_categories (Tier 3) ────────────────────────────
+  // Try the persisted set first. If empty (first room visit), call
+  // the pre-room category generator and persist before continuing.
+  // The generated set becomes the enum constraint for every item
+  // the 3-stage room generator emits.
+  let roomCategories: RoomCategories = normalizeRoomCategories(
+    sub.room_categories,
+  );
+  const hasCategories =
+    roomCategories.friction.length > 0 ||
+    roomCategories.mechanism.length > 0 ||
+    roomCategories.result.length > 0;
+  if (!hasCategories) {
+    try {
+      roomCategories = await generateRoomCategories({
+        coreObjectiveText,
+        subObjectiveTitle: sub.title,
+        subObjectiveDescription: sub.description,
+        clarifyingAnswers,
+      });
+      // Persist immediately so a regenerate / refresh sees the same
+      // set. Soft-fail: if persist fails the room still generates
+      // (categories live in memory for this run only).
+      const persistRes = await db
+        .from("improvement_goals")
+        .update({ room_categories: roomCategories })
+        .eq("id", subObjectiveId);
+      if (persistRes.error) {
+        console.warn(
+          "[room/generate] room_categories persist failed:",
+          persistRes.error.message,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[room/generate] category generation failed (non-fatal):",
+        sanitizeErrorMessage(err),
+      );
+      // Categories remain empty — room generates without sub_category
+      // tagging, items render under "Uncategorized" in the UI.
+    }
+  }
+
+  // Convert to enum form (slug → label) for the stage prompts.
+  const categoriesEnum: RoomCategoryEnum = {
+    friction: Object.fromEntries(
+      roomCategories.friction.map((c) => [c.slug, c.label]),
+    ),
+    mechanism: Object.fromEntries(
+      roomCategories.mechanism.map((c) => [c.slug, c.label]),
+    ),
+    result: Object.fromEntries(
+      roomCategories.result.map((c) => [c.slug, c.label]),
+    ),
+  };
+
   const ctx: RoomContext = {
     spaceId,
     userId: auth.user.id,
@@ -195,6 +259,9 @@ export async function POST(req: NextRequest) {
     coreObjectiveText,
     clarifyingAnswers,
     layersBySlug,
+    categories: hasCategories || Object.keys(categoriesEnum.friction).length > 0
+      ? categoriesEnum
+      : undefined,
   };
 
   // ── Generate (3 LLM calls back to back) ─────────────────────────
@@ -242,27 +309,33 @@ export async function POST(req: NextRequest) {
   const entityRows = [
     // Pain: name is the EFFECT title; description is the
     // negative_outcome (one line); causal_chain carries the root
-    // causes + the LLM's influence rank used for lane ordering.
+    // causes + the LLM's influence rank used for lane ordering +
+    // the sub_category slug (Tier 3) used for chip + grouping +
+    // chain archetype derivation.
     ...pain.map((p) =>
       buildRow("pain", p.name, p.negative_outcome, 0.7, {
         negative_outcome: p.negative_outcome,
         root_causes: p.root_causes,
         influence_rank: p.influence_rank,
+        sub_category: p.sub_category ?? null,
       }),
     ),
     // Outcome: name is the state; description holds the
-    // measured_by signal; causal_chain mirrors it for symmetry.
+    // measured_by signal; causal_chain mirrors it + sub_category.
     ...outcomes.map((o) =>
       buildRow("outcomes", o.name, o.measured_by, 0.7, {
         measured_by: o.measured_by,
+        sub_category: o.sub_category ?? null,
       }),
     ),
     // Feature: name is the feature; description is the
-    // positive_outcome; causal_chain carries first_principles.
+    // positive_outcome; causal_chain carries first_principles +
+    // sub_category.
     ...features.map((f) =>
       buildRow("features", f.name, f.positive_outcome, 0.65, {
         positive_outcome: f.positive_outcome,
         first_principles: f.first_principles,
+        sub_category: f.sub_category ?? null,
       }),
     ),
     // Objective anchor: a single entity so cross-layer edges to
