@@ -67,6 +67,13 @@ const ROOT_KEY = "objective_canvas";
 /**
  * Read the Objective Canvas slice out of `synthesis_data`. Returns a
  * default `clarifying` stage when nothing has been persisted yet.
+ *
+ * `sub_objectives` (and any other blocks added by module augmentation
+ * in sibling files) are passed through as the raw persisted JSON.
+ * Module augmentation extends `ObjectiveCanvasState` with optional
+ * typed fields; the consumer that owns those fields is responsible
+ * for normalizing/validating the raw shape. We don't import those
+ * types here to avoid a circular dependency with sub-objective-state.
  */
 export function readObjectiveCanvasState(
   synthesisData: unknown,
@@ -79,7 +86,17 @@ export function readObjectiveCanvasState(
   const clarifying = isRecord(root.clarifying)
     ? normalizeClarifying(root.clarifying)
     : undefined;
-  return { stage, clarifying };
+
+  // Start with the known fields, then merge in every other key from
+  // the persisted root so module-augmentation fields (sub_objectives,
+  // future blocks) round-trip. Known fields take precedence over
+  // raw passthrough so normalization wins.
+  const passthrough: Record<string, unknown> = {};
+  for (const key of Object.keys(root)) {
+    if (key === "stage" || key === "clarifying") continue;
+    passthrough[key] = root[key];
+  }
+  return { ...passthrough, stage, clarifying } as ObjectiveCanvasState;
 }
 
 /**
