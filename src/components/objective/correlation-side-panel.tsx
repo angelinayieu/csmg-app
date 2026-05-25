@@ -77,6 +77,14 @@ interface Props {
   /** Tier 3 — room sub-category sets, used to resolve each chain's
    *  category triple → archetype display labels. */
   roomCategories?: RoomCategories;
+  /** Annotation Lens hover state — when an edge in this panel has
+   *  a derived_from_annotation matching this index, its chip
+   *  flips to the hovered style. Hovering the chip itself drives
+   *  onHoverAnnotation so the lanes light up the cards on the same
+   *  annotation. Optional — when undefined the panel still renders
+   *  the chips as static badges. */
+  hoveredAnnotationIndex?: number | null;
+  onHoverAnnotation?: (index: number | null) => void;
 }
 
 type ViewMode = "chains" | "edges";
@@ -116,6 +124,8 @@ export function CorrelationSidePanel({
   laneLabels,
   detail,
   roomCategories,
+  hoveredAnnotationIndex,
+  onHoverAnnotation,
 }: Props) {
   const router = useRouter();
   const [retrying, startRetry] = useTransition();
@@ -731,28 +741,107 @@ export function CorrelationSidePanel({
                         </span>
                       </div>
                       {(() => {
-                        const mech =
+                        const fb =
                           e.agent_feedback &&
-                          typeof e.agent_feedback === "object" &&
-                          typeof (e.agent_feedback as Record<string, unknown>)
-                            .mechanism === "string"
-                            ? ((e.agent_feedback as Record<string, unknown>)
-                                .mechanism as string)
+                          typeof e.agent_feedback === "object"
+                            ? (e.agent_feedback as Record<string, unknown>)
+                            : {};
+                        const mech =
+                          typeof fb.mechanism === "string" ? fb.mechanism : null;
+                        // derived_from_annotation: { index, phrase, facet }
+                        // persisted by the route's resolveProvenance().
+                        const dfa =
+                          fb.derived_from_annotation &&
+                          typeof fb.derived_from_annotation === "object"
+                            ? (fb.derived_from_annotation as Record<
+                                string,
+                                unknown
+                              >)
                             : null;
-                        if (!mech) return null;
+                        const annPhrase =
+                          dfa && typeof dfa.phrase === "string"
+                            ? dfa.phrase
+                            : null;
+                        const annIndex =
+                          dfa &&
+                          typeof dfa.index === "number" &&
+                          Number.isFinite(dfa.index)
+                            ? (dfa.index as number)
+                            : null;
+                        const annFacet =
+                          dfa && typeof dfa.facet === "string"
+                            ? (dfa.facet as string)
+                            : null;
+                        if (!mech && !annPhrase) return null;
+                        const annHovered =
+                          annIndex !== null &&
+                          hoveredAnnotationIndex === annIndex;
                         return (
-                          <div className="mt-1.5">
-                            <span
-                              className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.06em]"
-                              style={{
-                                background: "rgba(15,23,42,0.05)",
-                                color: appleVibe.text.secondary,
-                                border: `1px solid ${appleVibe.stroke.hairline}`,
-                              }}
-                              title="Mechanism — the lever this edge pulls"
-                            >
-                              via {mech}
-                            </span>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                            {mech && (
+                              <span
+                                className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.06em]"
+                                style={{
+                                  background: "rgba(15,23,42,0.05)",
+                                  color: appleVibe.text.secondary,
+                                  border: `1px solid ${appleVibe.stroke.hairline}`,
+                                }}
+                                title="Mechanism — the lever this edge pulls"
+                              >
+                                via {mech}
+                              </span>
+                            )}
+                            {annPhrase && annIndex !== null && (
+                              <button
+                                type="button"
+                                onMouseEnter={() =>
+                                  onHoverAnnotation?.(annIndex)
+                                }
+                                onMouseLeave={() => onHoverAnnotation?.(null)}
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  onHoverAnnotation?.(
+                                    annHovered ? null : annIndex,
+                                  );
+                                }}
+                                className="inline-flex max-w-[180px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium transition-all"
+                                style={{
+                                  background: annHovered
+                                    ? "rgba(15,23,42,0.10)"
+                                    : "rgba(15,23,42,0.035)",
+                                  color: appleVibe.text.secondary,
+                                  border: `1px solid ${
+                                    annHovered
+                                      ? "rgba(15,23,42,0.22)"
+                                      : appleVibe.stroke.hairline
+                                  }`,
+                                  cursor: "pointer",
+                                }}
+                                title={`Annotation provenance${
+                                  annFacet ? ` · ${annFacet}` : ""
+                                } · ${annPhrase}`}
+                              >
+                                <span
+                                  className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                                  style={{
+                                    background:
+                                      annFacet === "tension"
+                                        ? "rgba(217,119,6,0.78)"
+                                        : annFacet === "inference"
+                                          ? "rgba(124,58,237,0.78)"
+                                          : annFacet === "fragility"
+                                            ? "rgba(220,38,38,0.78)"
+                                            : annFacet === "analogy"
+                                              ? "rgba(37,99,235,0.78)"
+                                              : annFacet === "dimension"
+                                                ? "rgba(22,163,74,0.78)"
+                                                : "rgba(15,23,42,0.45)",
+                                  }}
+                                  aria-hidden
+                                />
+                                <span className="truncate">↳ {annPhrase}</span>
+                              </button>
+                            )}
                           </div>
                         );
                       })()}

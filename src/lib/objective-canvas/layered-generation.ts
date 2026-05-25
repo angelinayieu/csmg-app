@@ -18,11 +18,29 @@
 // used as the room's header anchor ("Counters: …").
 
 import { llmJSON } from "@/lib/llm";
+import type { ObjectiveAnnotation } from "./generate-annotations";
 
 interface LayerRow {
   id: string;
   slug: string;
   label: string;
+}
+
+/** A single annotation seed surfaced on a generated item. The LLM
+ *  picks 0-3 of these per item via 1-based indices into the
+ *  numbered ANNOTATION LENS block. The route persists the resolved
+ *  records (not just indices) so the UI can render chips without
+ *  re-loading annotations. */
+export interface AnnotationProvenance {
+  /** 1-based index into the lens list — kept so the UI can also
+   *  cross-reference to the parent objective's annotation strip. */
+  index: number;
+  /** Verbatim phrase from the objective the annotation anchored on. */
+  phrase: string;
+  /** Which structural facet drove the seed — used by the chip to
+   *  color/icon the provenance ("fragility → friction", "analogy →
+   *  mechanism", "dimension → outcome"). */
+  facet: "fragility" | "analogy" | "tension" | "dimension" | "inference" | "reading";
 }
 
 export interface RoomCategoryEnum {
@@ -53,6 +71,16 @@ export interface RoomContext {
    *  per item. When absent / empty, generation falls back to
    *  pure first-principles reasoning with no citations. */
   ragBlock?: string;
+  /** Annotation Lens integration — the parent objective's
+   *  annotations (extracted by generateObjectiveAnnotations) become
+   *  the semantic substrate every lane is generated against.
+   *  fragility → friction seeds, analogy → mechanism seeds,
+   *  dimension → outcome seeds. When present, the LLM is asked to
+   *  emit derived_from_annotations[] per item; the route persists
+   *  the resolved provenance into causal_chain so the room UI can
+   *  surface chips on each card. Empty / undefined → fallback to
+   *  legacy pure-research generation. */
+  annotations?: ObjectiveAnnotation[];
 }
 
 // ── Output shapes ──────────────────────────────────────────────────
@@ -75,6 +103,10 @@ export interface PainItem {
    *  when the item is pure first-principles or research is
    *  unavailable. */
   citations?: number[];
+  /** Annotation Lens — resolved provenance entries the LLM tagged
+   *  this item with (index/phrase/facet). Empty when no annotations
+   *  applied. */
+  derived_from_annotations?: AnnotationProvenance[];
 }
 
 export interface FeatureItem {
@@ -87,6 +119,8 @@ export interface FeatureItem {
   sub_category?: string | null;
   /** Commit-2 — 1-based source indices informing this feature. */
   citations?: number[];
+  /** Annotation Lens — resolved provenance entries. */
+  derived_from_annotations?: AnnotationProvenance[];
 }
 
 export interface OutcomeItem {
@@ -97,6 +131,8 @@ export interface OutcomeItem {
   sub_category?: string | null;
   /** Commit-2 — 1-based source indices informing this outcome. */
   citations?: number[];
+  /** Annotation Lens — resolved provenance entries. */
+  derived_from_annotations?: AnnotationProvenance[];
 }
 
 // ── Shared scaffolding ─────────────────────────────────────────────
@@ -124,6 +160,74 @@ function ragSection(ctx: RoomContext): {
   };
 }
 
+/** Shared annotation-provenance rule injected into every stage prompt
+ *  when the ANNOTATION LENS block is present. The LLM must tie each
+ *  generated item back to ≥1 annotation when one applies — and may
+ *  emit [] when nothing in the lens covers the item. Indices are
+ *  1-based into the lens list; the `facet` field tells the UI which
+ *  structural slot of the annotation drove the seed. */
+const ANNOTATION_PROVENANCE_RULE = `ANNOTATION PROVENANCE: For each item, include a derived_from_annotations[] array. Each entry: { index: 1-based index into the ANNOTATION LENS above, facet: which structural slot of that annotation drove this item — one of "fragility" | "analogy" | "tension" | "dimension" | "inference" | "reading" }. Prefer mappings: fragility → friction (pain) items; analogy / mechanism → feature items; dimension / inference → outcome items; tension can seed any lane. Cite 0-3 annotations per item — quality over quantity. NEVER invent indices outside the lens. Empty array [] is acceptable when no annotation directly seeds this item.`;
+
+/** Render the ANNOTATION LENS block + provenance rule for prompt
+ *  prepend. Compact, max ~8 annotations, weight-sorted desc so the
+ *  most load-bearing readings come first. When no annotations are
+ *  available, returns empty strings (generation falls back to
+ *  research + clarifying-only). */
+function annotationLensSection(ctx: RoomContext): {
+  lensBlock: string;
+  provenanceRule: string;
+  hasAnnotations: boolean;
+} {
+  const anns = ctx.annotations ?? [];
+  if (anns.length === 0) {
+    return { lensBlock: "", provenanceRule: "", hasAnnotations: false };
+  }
+  // Sort by weight desc + cap at 8 — keeps token cost bounded while
+  // preserving the structural diversity the cleaner already enforces.
+  const ranked = [...anns]
+    .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
+    .slice(0, 8);
+
+  const lines: string[] = ["ANNOTATION LENS (the parent-objective semantic substrate this room must reason against):"];
+  ranked.forEach((a, i) => {
+    const idx = i + 1;
+    const lane = a.layer_tag ? ` lane:${a.layer_tag}` : "";
+    const w = typeof a.weight === "number" ? a.weight.toFixed(2) : "—";
+    lines.push(`  [${idx}] "${a.phrase}" (weight ${w}${lane})`);
+    if (a.reading) {
+      lines.push(`        reading: ${a.reading}`);
+    }
+    if (a.fragility?.when) {
+      const sign = a.fragility.sign ? ` · early sign: ${a.fragility.sign}` : "";
+      lines.push(`        fragility: when ${a.fragility.when}${sign}`);
+    }
+    const topAnalogy = a.analogies?.[0];
+    if (topAnalogy?.why_same) {
+      const ref = topAnalogy.referent ? `like ${topAnalogy.referent} ` : "";
+      const dom = topAnalogy.domain ? `(${topAnalogy.domain}) ` : "";
+      lines.push(`        analogy: ${ref}${dom}— ${topAnalogy.why_same}`);
+    }
+    if (a.dimensions?.length) {
+      const dims = a.dimensions
+        .slice(0, 3)
+        .map((d) => d.name)
+        .filter(Boolean)
+        .join(" · ");
+      if (dims) lines.push(`        dimensions: ${dims}`);
+    }
+    if (a.tensions?.length) {
+      const t = a.tensions[0];
+      lines.push(`        ${t.kind} with "${t.phrase}": ${t.note}`);
+    }
+  });
+
+  return {
+    lensBlock: `\n\n${lines.join("\n")}\n`,
+    provenanceRule: `\n\n${ANNOTATION_PROVENANCE_RULE}\n`,
+    hasAnnotations: true,
+  };
+}
+
 const TITLE_RULES = `TITLE: noun phrase, ≤6 words. Do NOT start with action verbs (develop/implement/create/design/build/enhance/establish). Title-case OK; no terminal punctuation.`;
 
 function clarifyingBlock(
@@ -145,6 +249,7 @@ interface PainShape {
     influence_rank?: unknown;
     sub_category?: unknown;
     citations?: unknown;
+    derived_from_annotations?: unknown;
   }>;
   top_negative_outcome?: unknown;
   lane_labels?: {
@@ -253,6 +358,7 @@ Return strict JSON.`;
 
   const painCats = categoryBlock(ctx, "friction");
   const rag = ragSection(ctx);
+  const lens = annotationLensSection(ctx);
   const itemProps: Record<string, unknown> = {
     name: { type: "string" },
     negative_outcome: { type: "string" },
@@ -273,12 +379,37 @@ Return strict JSON.`;
     itemProps.citations = { type: "array", items: { type: "number" } };
     itemRequired.push("citations");
   }
+  if (lens.hasAnnotations) {
+    itemProps.derived_from_annotations = {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          index: { type: "number" },
+          facet: {
+            type: "string",
+            enum: [
+              "fragility",
+              "analogy",
+              "tension",
+              "dimension",
+              "inference",
+              "reading",
+            ],
+          },
+        },
+        required: ["index", "facet"],
+      },
+    };
+    itemRequired.push("derived_from_annotations");
+  }
 
   const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}${
     ctx.subObjectiveDescription
       ? `\n\n${ctx.subObjectiveDescription}`
       : ""
-  }\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${painCats.instructions}${rag.ragBlock}${rag.citationRule}
+  }\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${painCats.instructions}${lens.lensBlock}${lens.provenanceRule}${rag.ragBlock}${rag.citationRule}
 
 Generate 3-5 pain points with full causal chains, plus the single TOP_NEGATIVE_OUTCOME for the room.${
     painCats.slugs.length > 0
@@ -287,6 +418,10 @@ Generate 3-5 pain points with full causal chains, plus the single TOP_NEGATIVE_O
   }${
     rag.ragBlock.length > 0
       ? " Each pain must include citations[] — 1-based source indices (use ONLY indices from the RESEARCH CONTEXT list above)."
+      : ""
+  }${
+    lens.hasAnnotations
+      ? " Each pain must include derived_from_annotations[] — prefer fragility / tension facets here, since pains are the surface where the objective's pre-mortem and value-conflicts show up first."
       : ""
   }`;
 
@@ -328,7 +463,7 @@ Generate 3-5 pain points with full causal chains, plus the single TOP_NEGATIVE_O
     maxTokens: 2400,
   });
 
-  const items = cleanPains(raw?.items);
+  const items = cleanPains(raw?.items, ctx);
   const top =
     typeof raw?.top_negative_outcome === "string"
       ? raw.top_negative_outcome.trim().slice(0, 200)
@@ -345,6 +480,7 @@ interface OutcomeShape {
     measured_by?: unknown;
     sub_category?: unknown;
     citations?: unknown;
+    derived_from_annotations?: unknown;
   }>;
 }
 
@@ -378,6 +514,7 @@ Return strict JSON.`;
 
   const outcomeCats = categoryBlock(ctx, "result");
   const ragO = ragSection(ctx);
+  const lensO = annotationLensSection(ctx);
   const outcomeProps: Record<string, unknown> = {
     name: { type: "string" },
     measured_by: { type: "string" },
@@ -391,11 +528,36 @@ Return strict JSON.`;
     outcomeProps.citations = { type: "array", items: { type: "number" } };
     outcomeRequired.push("citations");
   }
+  if (lensO.hasAnnotations) {
+    outcomeProps.derived_from_annotations = {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          index: { type: "number" },
+          facet: {
+            type: "string",
+            enum: [
+              "fragility",
+              "analogy",
+              "tension",
+              "dimension",
+              "inference",
+              "reading",
+            ],
+          },
+        },
+        required: ["index", "facet"],
+      },
+    };
+    outcomeRequired.push("derived_from_annotations");
+  }
 
   const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}
 
 PAIN POINTS (each with its negative_outcome):
-${painPoints.map((p, i) => `  ${i + 1}. ${p.name} → ${p.negative_outcome}`).join("\n")}${outcomeCats.instructions}${ragO.ragBlock}${ragO.citationRule}
+${painPoints.map((p, i) => `  ${i + 1}. ${p.name} → ${p.negative_outcome}`).join("\n")}${outcomeCats.instructions}${lensO.lensBlock}${lensO.provenanceRule}${ragO.ragBlock}${ragO.citationRule}
 
 Generate 3-5 outcomes that, taken together, would dissolve those pains and roll up to the parent objective.${
     outcomeCats.slugs.length > 0
@@ -404,6 +566,10 @@ Generate 3-5 outcomes that, taken together, would dissolve those pains and roll 
   }${
     ragO.ragBlock.length > 0
       ? " Each outcome must include citations[] — 1-based source indices (use ONLY indices from the RESEARCH CONTEXT list above)."
+      : ""
+  }${
+    lensO.hasAnnotations
+      ? " Each outcome must include derived_from_annotations[] — prefer dimension / inference facets here, since outcomes name the factors and chains the annotations identified as load-bearing in the objective."
       : ""
   }`;
 
@@ -432,7 +598,7 @@ Generate 3-5 outcomes that, taken together, would dissolve those pains and roll 
     temperature: 0.5,
     maxTokens: 1800,
   });
-  return cleanOutcomes(raw?.items);
+  return cleanOutcomes(raw?.items, ctx);
 }
 
 // ── Stage C: Features (with first principles + positive outcome) ───
@@ -444,6 +610,7 @@ interface FeatureShape {
     first_principles?: unknown;
     sub_category?: unknown;
     citations?: unknown;
+    derived_from_annotations?: unknown;
   }>;
 }
 
@@ -480,6 +647,7 @@ Return strict JSON.`;
 
   const featureCats = categoryBlock(ctx, "mechanism");
   const ragF = ragSection(ctx);
+  const lensF = annotationLensSection(ctx);
   const featureProps: Record<string, unknown> = {
     name: { type: "string" },
     positive_outcome: { type: "string" },
@@ -498,6 +666,31 @@ Return strict JSON.`;
     featureProps.citations = { type: "array", items: { type: "number" } };
     featureRequired.push("citations");
   }
+  if (lensF.hasAnnotations) {
+    featureProps.derived_from_annotations = {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          index: { type: "number" },
+          facet: {
+            type: "string",
+            enum: [
+              "fragility",
+              "analogy",
+              "tension",
+              "dimension",
+              "inference",
+              "reading",
+            ],
+          },
+        },
+        required: ["index", "facet"],
+      },
+    };
+    featureRequired.push("derived_from_annotations");
+  }
 
   const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}
 
@@ -505,7 +698,7 @@ PAIN POINTS (with negative_outcomes):
 ${painPoints.map((p, i) => `  ${i + 1}. ${p.name} → ${p.negative_outcome}`).join("\n")}
 
 DESIRED OUTCOMES:
-${outcomes.map((o, i) => `  ${i + 1}. ${o.name} (measured by: ${o.measured_by})`).join("\n")}${featureCats.instructions}${ragF.ragBlock}${ragF.citationRule}
+${outcomes.map((o, i) => `  ${i + 1}. ${o.name} (measured by: ${o.measured_by})`).join("\n")}${featureCats.instructions}${lensF.lensBlock}${lensF.provenanceRule}${ragF.ragBlock}${ragF.citationRule}
 
 Generate 3-6 features that bridge the pains to the outcomes. Each feature must plausibly counter ≥1 pain AND produce ≥1 outcome.${
     featureCats.slugs.length > 0
@@ -514,6 +707,10 @@ Generate 3-6 features that bridge the pains to the outcomes. Each feature must p
   }${
     ragF.ragBlock.length > 0
       ? " Each feature must include citations[] — 1-based source indices (use ONLY indices from the RESEARCH CONTEXT list above)."
+      : ""
+  }${
+    lensF.hasAnnotations
+      ? " Each feature must include derived_from_annotations[] — prefer analogy / inference facets here, since features are the LEVERS the annotations' cross-domain mappings and reasoning chains suggest."
       : ""
   }`;
 
@@ -542,10 +739,10 @@ Generate 3-6 features that bridge the pains to the outcomes. Each feature must p
     temperature: 0.55,
     maxTokens: 2200,
   });
-  return cleanFeatures(raw?.items);
+  return cleanFeatures(raw?.items, ctx);
 }
 
-// ── Stage D: Cross-layer correlations (unchanged from v1) ──────────
+// ── Stage D: Cross-layer correlations (with annotation provenance) ──
 
 interface CorrelationShape {
   edges?: Array<{
@@ -556,6 +753,9 @@ interface CorrelationShape {
     polarity?: unknown;
     mechanism?: unknown;
     rationale?: unknown;
+    /** Plural to align with the item schema. 0 or 1 entries; we
+     *  collapse to a single AnnotationProvenance in the cleaner. */
+    derived_from_annotations?: unknown;
   }>;
 }
 
@@ -565,20 +765,29 @@ interface ItemRef {
   layer: "pain" | "outcomes" | "features" | "objective";
 }
 
+/** Correlation result — items + an optional single-annotation
+ *  provenance entry. Edges are atomic (one source → one target)
+ *  so a single annotation is the natural granularity: most often
+ *  a tension (X conflicts with Y) or an inference_chain hop
+ *  (step A transitions to step B). */
+export interface CorrelationResult {
+  sourceId: string;
+  targetId: string;
+  relationship: string;
+  strength: number;
+  polarity: "positive" | "negative" | "ambiguous";
+  rationale: string;
+  mechanism: string;
+  /** Annotation Lens — single resolved provenance entry the LLM
+   *  tagged this edge with, if any. Persisted into
+   *  edge.agent_feedback.derived_from_annotation. */
+  derived_from_annotation?: AnnotationProvenance;
+}
+
 async function generateCorrelations(
   ctx: RoomContext,
   items: ItemRef[],
-): Promise<
-  Array<{
-    sourceId: string;
-    targetId: string;
-    relationship: string;
-    strength: number;
-    polarity: "positive" | "negative" | "ambiguous";
-    rationale: string;
-    mechanism: string;
-  }>
-> {
+): Promise<CorrelationResult[]> {
   if (items.length < 2) return [];
 
   const tagged = items.map((it, i) => ({
@@ -597,6 +806,8 @@ async function generateCorrelations(
     },
     {} as Record<string, number>,
   );
+
+  const lensC = annotationLensSection(ctx);
 
   const system = `You rank cross-layer correlations inside one sub-objective room.
 
@@ -633,14 +844,77 @@ Quality over coverage: drop any edge whose strength would be < 0.3.
 
 Return strict JSON.`;
 
+  // Edge-level annotation provenance — array of 0 or 1 entries so
+  // the schema can stay strict-mode (every field required, no
+  // optional). 0 entries = no annotation justifies the edge; 1
+  // entry = a specific lens reading seeded it. Tensions and
+  // inference hops are the most natural facets here (X conflicts
+  // with Y is already a relationship; an inference hop names a
+  // step → step transition).
+  const EDGE_PROVENANCE_RULE = `EDGE PROVENANCE: For each edge, include derived_from_annotations[] — an array of AT MOST ONE entry. When this edge is rooted in one of the ANNOTATION LENS readings, emit a single { index: 1-based lens index, facet: "tension" | "inference" | "fragility" | "analogy" | "dimension" | "reading" } entry. PREFER tension (the annotation explicitly named conflict / harmony between source and target concepts) or inference (the edge IS a hop in the annotation's reasoning chain). Emit an EMPTY array [] when no annotation justifies the edge — DO NOT invent links.`;
+
   const user = `SUB-OBJECTIVE: ${ctx.subObjectiveTitle}
 
 ITEMS BY TAG:
 ${tagged.map((it) => `  ${it.tag} [${it.layer}] ${it.name}`).join("\n")}
 
-INVENTORY: ${layerCounts.pain ?? 0} pain, ${layerCounts.features ?? 0} features, ${layerCounts.outcomes ?? 0} outcomes, ${layerCounts.objective ?? 0} objective.
+INVENTORY: ${layerCounts.pain ?? 0} pain, ${layerCounts.features ?? 0} features, ${layerCounts.outcomes ?? 0} outcomes, ${layerCounts.objective ?? 0} objective.${lensC.lensBlock}${lensC.hasAnnotations ? `\n\n${EDGE_PROVENANCE_RULE}\n` : ""}
 
-Generate 6-14 cross-layer edges per the quotas in the system instructions. Every outcome should have ≥1 incoming feature edge; if it doesn't, the analysis has a gap.`;
+Generate 6-14 cross-layer edges per the quotas in the system instructions. Every outcome should have ≥1 incoming feature edge; if it doesn't, the analysis has a gap.${
+    lensC.hasAnnotations
+      ? " Each edge must include derived_from_annotations[] — 0 or 1 entries (empty [] when no annotation seeds the edge)."
+      : ""
+  }`;
+
+  // Build the per-edge schema. derived_from_annotations is only
+  // required when the lens has entries — keeps backward compat with
+  // rooms whose parent has no annotations.
+  const edgeProps: Record<string, unknown> = {
+    source: { type: "string" },
+    target: { type: "string" },
+    relationship: { type: "string" },
+    strength: { type: "number" },
+    polarity: {
+      type: "string",
+      enum: ["positive", "negative", "ambiguous"],
+    },
+    mechanism: { type: "string" },
+    rationale: { type: "string" },
+  };
+  const edgeRequired: string[] = [
+    "source",
+    "target",
+    "relationship",
+    "strength",
+    "polarity",
+    "mechanism",
+    "rationale",
+  ];
+  if (lensC.hasAnnotations) {
+    edgeProps.derived_from_annotations = {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          index: { type: "number" },
+          facet: {
+            type: "string",
+            enum: [
+              "fragility",
+              "analogy",
+              "tension",
+              "dimension",
+              "inference",
+              "reading",
+            ],
+          },
+        },
+        required: ["index", "facet"],
+      },
+    };
+    edgeRequired.push("derived_from_annotations");
+  }
 
   const raw = await llmJSON<CorrelationShape>({
     system,
@@ -656,27 +930,8 @@ Generate 6-14 cross-layer edges per the quotas in the system instructions. Every
             items: {
               type: "object",
               additionalProperties: false,
-              properties: {
-                source: { type: "string" },
-                target: { type: "string" },
-                relationship: { type: "string" },
-                strength: { type: "number" },
-                polarity: {
-                  type: "string",
-                  enum: ["positive", "negative", "ambiguous"],
-                },
-                mechanism: { type: "string" },
-                rationale: { type: "string" },
-              },
-              required: [
-                "source",
-                "target",
-                "relationship",
-                "strength",
-                "polarity",
-                "mechanism",
-                "rationale",
-              ],
+              properties: edgeProps,
+              required: edgeRequired,
             },
           },
         },
@@ -686,15 +941,8 @@ Generate 6-14 cross-layer edges per the quotas in the system instructions. Every
     temperature: 0.4,
     maxTokens: 2800,
   });
-  const cleaned: Array<{
-    sourceId: string;
-    targetId: string;
-    relationship: string;
-    strength: number;
-    polarity: "positive" | "negative" | "ambiguous";
-    rationale: string;
-    mechanism: string;
-  }> = [];
+  const lens = lensForResolution(ctx);
+  const cleaned: CorrelationResult[] = [];
   for (const e of raw?.edges ?? []) {
     const srcTag =
       typeof e?.source === "string" ? e.source.trim().toUpperCase() : "";
@@ -723,6 +971,13 @@ Generate 6-14 cross-layer edges per the quotas in the system instructions. Every
       typeof e?.rationale === "string" ? e.rationale.trim() : "";
     const mechanism =
       typeof e?.mechanism === "string" ? e.mechanism.trim().slice(0, 60) : "";
+    // Edge provenance: at most 1 entry. The LLM emits derived_from_annotations[]
+    // even on edges that aren't seeded by an annotation — empty array there.
+    // resolveProvenance() shape-cleans + resolves indices against the lens;
+    // we take the first valid entry as the edge's single provenance.
+    const provList = resolveProvenance(e?.derived_from_annotations, lens);
+    const derivedFrom: AnnotationProvenance | undefined =
+      provList && provList.length > 0 ? provList[0] : undefined;
     cleaned.push({
       sourceId: srcId,
       targetId: tgtId,
@@ -731,6 +986,7 @@ Generate 6-14 cross-layer edges per the quotas in the system instructions. Every
       polarity,
       rationale,
       mechanism,
+      derived_from_annotation: derivedFrom,
     });
   }
   // Don't aggressively cap at 12 anymore — the prompt allows up to 14
@@ -832,8 +1088,87 @@ function cleanCitations(raw: unknown): number[] | undefined {
   return Array.from(out).slice(0, 5);
 }
 
-function cleanPains(raw: unknown): PainItem[] {
+const ANNOTATION_FACETS = new Set([
+  "fragility",
+  "analogy",
+  "tension",
+  "dimension",
+  "inference",
+  "reading",
+]);
+
+/** Sanitize the LLM-emitted derived_from_annotations[]. Each entry
+ *  is { index, facet }. Indices are clamped to the available lens
+ *  list (resolved by the caller against ctx.annotations); facets
+ *  default to "reading" when the LLM emits an unknown string.
+ *  Returns undefined when input wasn't an array (callers omit the
+ *  field for legacy/no-annotation rooms). Caller is responsible
+ *  for resolving 1-based indices into the actual annotation
+ *  records — this cleaner only normalizes shape. */
+function cleanDerivedFromAnnotations(
+  raw: unknown,
+): Array<{ index: number; facet: AnnotationProvenance["facet"] }> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<number>();
+  const out: Array<{ index: number; facet: AnnotationProvenance["facet"] }> = [];
+  for (const v of raw) {
+    if (!v || typeof v !== "object") continue;
+    const r = v as Record<string, unknown>;
+    const rawIndex =
+      typeof r.index === "number" && Number.isFinite(r.index)
+        ? Math.floor(r.index)
+        : NaN;
+    if (!Number.isFinite(rawIndex) || rawIndex < 1) continue;
+    if (seen.has(rawIndex)) continue;
+    seen.add(rawIndex);
+    const facet =
+      typeof r.facet === "string" && ANNOTATION_FACETS.has(r.facet)
+        ? (r.facet as AnnotationProvenance["facet"])
+        : "reading";
+    out.push({ index: rawIndex, facet });
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
+/** Resolve raw {index, facet} pairs against the lens (the weight-sorted
+ *  top-8 annotations the LLM saw) into AnnotationProvenance records
+ *  that carry the verbatim phrase. Out-of-range indices are dropped.
+ *  Pass undefined when no annotations were available — returns
+ *  undefined so the field is cleanly omitted on the item. */
+function resolveProvenance(
+  raw: unknown,
+  lens: ObjectiveAnnotation[],
+): AnnotationProvenance[] | undefined {
+  if (lens.length === 0) return undefined;
+  const cleaned = cleanDerivedFromAnnotations(raw);
+  if (!cleaned) return undefined;
+  const out: AnnotationProvenance[] = [];
+  for (const entry of cleaned) {
+    const ann = lens[entry.index - 1];
+    if (!ann) continue;
+    out.push({
+      index: entry.index,
+      phrase: ann.phrase,
+      facet: entry.facet,
+    });
+  }
+  return out;
+}
+
+/** The lens the prompt actually saw (weight-sorted, capped at 8).
+ *  Cleaners need this to resolve 1-based indices the LLM emitted. */
+function lensForResolution(ctx: RoomContext): ObjectiveAnnotation[] {
+  const anns = ctx.annotations ?? [];
+  if (anns.length === 0) return [];
+  return [...anns]
+    .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
+    .slice(0, 8);
+}
+
+function cleanPains(raw: unknown, ctx: RoomContext): PainItem[] {
   if (!Array.isArray(raw)) return [];
+  const lens = lensForResolution(ctx);
   return raw
     .map((p): PainItem | null => {
       if (!p || typeof p !== "object") return null;
@@ -854,14 +1189,19 @@ function cleanPains(raw: unknown): PainItem[] {
         influence_rank: rank,
         sub_category: cleanSubCategory(r.sub_category),
         citations: cleanCitations(r.citations),
+        derived_from_annotations: resolveProvenance(
+          r.derived_from_annotations,
+          lens,
+        ),
       };
     })
     .filter((p): p is PainItem => p !== null)
     .slice(0, 5);
 }
 
-function cleanFeatures(raw: unknown): FeatureItem[] {
+function cleanFeatures(raw: unknown, ctx: RoomContext): FeatureItem[] {
   if (!Array.isArray(raw)) return [];
+  const lens = lensForResolution(ctx);
   return raw
     .map((p): FeatureItem | null => {
       if (!p || typeof p !== "object") return null;
@@ -877,14 +1217,19 @@ function cleanFeatures(raw: unknown): FeatureItem[] {
         first_principles: principles,
         sub_category: cleanSubCategory(r.sub_category),
         citations: cleanCitations(r.citations),
+        derived_from_annotations: resolveProvenance(
+          r.derived_from_annotations,
+          lens,
+        ),
       };
     })
     .filter((p): p is FeatureItem => p !== null)
     .slice(0, 6);
 }
 
-function cleanOutcomes(raw: unknown): OutcomeItem[] {
+function cleanOutcomes(raw: unknown, ctx: RoomContext): OutcomeItem[] {
   if (!Array.isArray(raw)) return [];
+  const lens = lensForResolution(ctx);
   return raw
     .map((p): OutcomeItem | null => {
       if (!p || typeof p !== "object") return null;
@@ -898,6 +1243,10 @@ function cleanOutcomes(raw: unknown): OutcomeItem[] {
         measured_by: measured.slice(0, 150),
         sub_category: cleanSubCategory(r.sub_category),
         citations: cleanCitations(r.citations),
+        derived_from_annotations: resolveProvenance(
+          r.derived_from_annotations,
+          lens,
+        ),
       };
     })
     .filter((p): p is OutcomeItem => p !== null)

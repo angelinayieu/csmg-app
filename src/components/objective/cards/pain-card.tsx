@@ -133,8 +133,8 @@ export function PainCard({
       className="rounded-2xl px-4 py-3 transition-all"
       style={{
         background: expanded
-          ? "rgba(255,255,255,0.94)"
-          : "rgba(255,255,255,0.65)",
+          ? "rgba(255,255,255,0.98)"
+          : "rgba(255,255,255,0.92)",
         border: `1px solid ${
           linked
             ? PAIN_COLOR
@@ -154,11 +154,12 @@ export function PainCard({
       onMouseEnter={() => onHover?.(item.id)}
       onMouseLeave={() => onHover?.(null)}
     >
-      {/* Header — title + root badge + sub-category chip */}
+      {/* Header — title + Root badge only. Sub-category chip lives
+          on its own row below so the title gets the full card width. */}
       <div className="flex items-start justify-between gap-2">
         <h4
-          className="line-clamp-2 text-[13.5px] font-semibold leading-snug tracking-tight"
-          style={{ color: appleVibe.text.primary, letterSpacing: "-0.005em" }}
+          className="line-clamp-3 text-[15px] font-semibold leading-snug tracking-tight"
+          style={{ color: appleVibe.text.primary, letterSpacing: "-0.01em" }}
         >
           {item.name}
         </h4>
@@ -169,48 +170,55 @@ export function PainCard({
               onSeeAll={onSeeAllSources}
             />
           )}
-          {subCategory && (
+          {isRoot && (
             <span
-              className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+              className="inline-flex items-center gap-0.5 flex-shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em]"
               style={{
-                background: `${subCategory.color}14`,
-                color: subCategory.color,
-                border: `1px solid ${subCategory.color}33`,
+                background: "rgba(245,158,11,0.12)",
+                color: "rgba(146,64,14,0.95)",
+                border: "1px solid rgba(245,158,11,0.25)",
               }}
-              title={`Sub-category · ${subCategory.label}`}
+              title="Most influential pain in this room"
             >
-              {subCategory.label}
+              <Crown className="h-2.5 w-2.5" strokeWidth={2.5} />
+              Root
             </span>
           )}
-        {isRoot && (
-          <span
-            className="inline-flex items-center gap-0.5 flex-shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]"
-            style={{
-              background: "rgba(245,158,11,0.12)",
-              color: "rgba(146,64,14,0.95)",
-              border: "1px solid rgba(245,158,11,0.25)",
-            }}
-            title="Most influential pain in this room"
-          >
-            <Crown className="h-2.5 w-2.5" strokeWidth={2.5} />
-            Root
-          </span>
-        )}
         </div>
       </div>
 
-      {/* Negative outcome — explicit "leads to:" label so the
-          downstream-consequence relationship reads as causation,
-          not a paraphrase of the title. */}
+      {/* Sub-category chip — neutral grey, on its own row. The lane
+          dot already encodes "this is a Pain"; the chip just says
+          "what kind", so it doesn't need its own color. */}
+      {subCategory && (
+        <div className="mt-1.5">
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium"
+            style={{
+              background: appleVibe.surface.chip,
+              color: appleVibe.text.secondary,
+              border: `1px solid ${appleVibe.stroke.hairline}`,
+            }}
+            title={`Sub-category · ${subCategory.label}`}
+          >
+            <span
+              className="h-1 w-1 flex-shrink-0 rounded-full"
+              style={{ background: subCategory.color }}
+              aria-hidden
+            />
+            {subCategory.label}
+          </span>
+        </div>
+      )}
+
+      {/* Negative outcome — lowercase italic "leads to" reads as
+          prose, not a label competing with section eyebrows below. */}
       {item.negative_outcome && (
         <p
-          className="mt-1 line-clamp-2 text-[11.5px] font-light leading-snug"
+          className="mt-2 line-clamp-3 text-[13px] font-light leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
-          <span
-            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: appleVibe.text.tertiary }}
-          >
+          <span className="italic" style={{ color: appleVibe.text.tertiary }}>
             leads to →
           </span>{" "}
           <span className="italic">{item.negative_outcome}</span>
@@ -220,7 +228,7 @@ export function PainCard({
       {/* Meta — only when collapsed; expanded view shows the pills */}
       {!expanded && item.root_causes.length > 0 && (
         <div
-          className="mt-2 flex items-center gap-1 text-[10.5px] font-light"
+          className="mt-2 flex items-center gap-1 text-[11px] font-light"
           style={{ color: appleVibe.text.tertiary }}
         >
           <span>
@@ -266,7 +274,7 @@ export function PainCard({
           {item.root_causes.length > 0 && (
             <div>
               <div
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 Root causes
@@ -285,11 +293,11 @@ export function PainCard({
                         e.stopPropagation();
                         onHoverCause(cause);
                       }}
-                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium transition-all"
+                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-all"
                       style={{
                         background: isShared
                           ? "rgba(245,158,11,0.10)"
-                          : "rgba(15,23,42,0.04)",
+                          : appleVibe.surface.chip,
                         color: isShared
                           ? "rgba(146,64,14,0.95)"
                           : appleVibe.text.secondary,
@@ -303,7 +311,7 @@ export function PainCard({
                       <span>{cause}</span>
                       {isShared && (
                         <span
-                          className="ml-0.5 inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-full px-1 text-[9px] font-bold"
+                          className="ml-0.5 inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-full px-1 text-[9.5px] font-bold"
                           style={{
                             background: "rgba(245,158,11,0.22)",
                             color: "rgba(120,53,15,1)",
@@ -322,7 +330,7 @@ export function PainCard({
           {addressedBy.length > 0 && (
             <div className="mt-3">
               <div
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 Addressed by
@@ -331,7 +339,7 @@ export function PainCard({
                 {addressedBy.slice(0, 4).map((f) => (
                   <li
                     key={f.id}
-                    className="flex items-center justify-between text-[11.5px]"
+                    className="flex items-center justify-between text-[13px]"
                   >
                     <span
                       className="line-clamp-1 font-medium"
@@ -340,7 +348,7 @@ export function PainCard({
                       → {f.name}
                     </span>
                     <span
-                      className="ml-2 flex-shrink-0 font-mono text-[10px]"
+                      className="ml-2 flex-shrink-0 font-mono text-[11px]"
                       style={{ color: appleVibe.text.tertiary }}
                     >
                       {f.pct}%
@@ -351,9 +359,6 @@ export function PainCard({
             </div>
           )}
 
-          {/* Open detail — Layer 2 deep drawer trigger. Lives at the
-              bottom of the expanded card so the quick preview reads
-              first and the user opts into depth. */}
           {onOpenDetail && (
             <button
               type="button"
@@ -361,7 +366,7 @@ export function PainCard({
                 e.stopPropagation();
                 onOpenDetail();
               }}
-              className="mt-3 inline-flex items-center gap-1 text-[10.5px] font-semibold transition-opacity hover:opacity-80"
+              className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold transition-opacity hover:opacity-80"
               style={{ color: PAIN_COLOR }}
             >
               Open detail →

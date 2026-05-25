@@ -696,7 +696,7 @@ export function SubObjectiveRoomView({
         <div>
           {!generatedAt && (
             <p
-              className="text-[12.5px] font-light"
+              className="text-[13px] font-light"
               style={{ color: appleVibe.text.secondary }}
             >
               We&rsquo;ll spin out pain points first, then outcomes, then
@@ -706,7 +706,7 @@ export function SubObjectiveRoomView({
           )}
           {generatedAt && approvedCount > 0 && (
             <p
-              className="mt-1 text-[11.5px] font-light"
+              className="mt-1 text-[13px] font-light"
               style={{ color: appleVibe.text.secondary }}
             >
               {approvedCount} correlation{approvedCount === 1 ? "" : "s"}{" "}
@@ -720,7 +720,7 @@ export function SubObjectiveRoomView({
               type="button"
               onClick={() => generate("regenerate")}
               disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold"
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold"
               style={{
                 background: appleVibe.surface.chip,
                 color: appleVibe.text.secondary,
@@ -736,7 +736,7 @@ export function SubObjectiveRoomView({
               type="button"
               onClick={() => generate("initial")}
               disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-2xl px-4 py-2 text-[12.5px] font-semibold"
+              className="inline-flex items-center gap-1.5 rounded-2xl px-4 py-2 text-[13px] font-semibold"
               style={{
                 background: appleVibe.accent.primary,
                 color: appleVibe.text.onAccent,
@@ -816,10 +816,10 @@ export function SubObjectiveRoomView({
           duplicated the sub-objective title rendered in the page
           header). The "rolls up to" rollup banner on the page
           header carries the parent-objective link instead. */}
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="min-w-0 flex-1">
           <div
-            className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
             // Dim non-linked cards while hovering one — gives the
             // glow ring its companion contrast cue.
             style={{
@@ -1009,6 +1009,8 @@ export function SubObjectiveRoomView({
               ),
             }}
             roomCategories={roomCategories}
+            hoveredAnnotationIndex={hoveredAnnotationIndex}
+            onHoverAnnotation={setHoveredAnnotationIndex}
           />
         )}
       </div>
@@ -1082,7 +1084,7 @@ function Lane({
   void slug;
   return (
     <div
-      className="flex min-h-[260px] flex-col rounded-3xl p-4"
+      className="flex min-h-[260px] flex-col rounded-3xl p-5"
       style={{
         background: appleVibe.surface.card,
         border: `1px solid ${appleVibe.stroke.hairline}`,
@@ -1097,14 +1099,17 @@ function Lane({
             aria-hidden
           />
           <h3
-            className="text-[13px] font-semibold tracking-tight"
-            style={{ color: appleVibe.text.primary }}
+            className="text-[15px] font-semibold tracking-tight"
+            style={{
+              color: appleVibe.text.primary,
+              letterSpacing: "-0.01em",
+            }}
           >
             {label}
           </h3>
         </div>
         <span
-          className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+          className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
           style={{
             background: appleVibe.surface.chip,
             color: appleVibe.text.tertiary,

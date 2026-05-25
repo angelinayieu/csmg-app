@@ -93,8 +93,8 @@ export function OutcomeCard({
       className="rounded-2xl px-4 py-3 transition-all"
       style={{
         background: expanded
-          ? "rgba(255,255,255,0.94)"
-          : "rgba(255,255,255,0.65)",
+          ? "rgba(255,255,255,0.98)"
+          : "rgba(255,255,255,0.92)",
         border: `1px solid ${
           linked
             ? OUTCOME_COLOR
@@ -114,8 +114,8 @@ export function OutcomeCard({
     >
       <div className="flex items-start justify-between gap-2">
         <h4
-          className="text-[13.5px] font-semibold leading-snug tracking-tight"
-          style={{ color: appleVibe.text.primary, letterSpacing: "-0.005em" }}
+          className="line-clamp-3 text-[15px] font-semibold leading-snug tracking-tight"
+          style={{ color: appleVibe.text.primary, letterSpacing: "-0.01em" }}
         >
           {item.name}
         </h4>
@@ -126,43 +126,47 @@ export function OutcomeCard({
               onSeeAll={onSeeAllSources}
             />
           )}
-          {subCategory && (
-            <span
-              className="inline-flex flex-shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
-              style={{
-                background: `${subCategory.color}14`,
-                color: subCategory.color,
-                border: `1px solid ${subCategory.color}33`,
-              }}
-              title={`Sub-category · ${subCategory.label}`}
-            >
-              {subCategory.label}
-            </span>
-          )}
         </div>
       </div>
 
-      {item.measured_by && (
-        <div className="mt-2">
-          <div
-            className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: appleVibe.text.tertiary }}
+      {/* Sub-category chip — neutral grey on its own row. */}
+      {subCategory && (
+        <div className="mt-1.5">
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium"
+            style={{
+              background: appleVibe.surface.chip,
+              color: appleVibe.text.secondary,
+              border: `1px solid ${appleVibe.stroke.hairline}`,
+            }}
+            title={`Sub-category · ${subCategory.label}`}
           >
-            Measured by
-          </div>
-          <p
-            className="mt-0.5 text-[11.5px] font-light leading-snug"
-            style={{ color: appleVibe.text.secondary }}
-          >
-            {item.measured_by}
-          </p>
+            <span
+              className="h-1 w-1 flex-shrink-0 rounded-full"
+              style={{ background: subCategory.color }}
+              aria-hidden
+            />
+            {subCategory.label}
+          </span>
         </div>
+      )}
+
+      {item.measured_by && (
+        <p
+          className="mt-2 text-[13px] font-light leading-snug"
+          style={{ color: appleVibe.text.secondary }}
+        >
+          <span className="italic" style={{ color: appleVibe.text.tertiary }}>
+            measured by →
+          </span>{" "}
+          <span className="italic">{item.measured_by}</span>
+        </p>
       )}
 
       {/* Collapsed meta — counts only when there's something to drill into */}
       {!expanded && hasExpandContent && (
         <div
-          className="mt-2 flex items-center gap-1 text-[10.5px] font-light"
+          className="mt-2 flex items-center gap-1 text-[11px] font-light"
           style={{ color: appleVibe.text.tertiary }}
         >
           {producedBy.length > 0 && (
@@ -218,7 +222,7 @@ export function OutcomeCard({
           {producedBy.length > 0 && (
             <div>
               <div
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 Produced by
@@ -227,7 +231,7 @@ export function OutcomeCard({
                 {producedBy.slice(0, 4).map((f) => (
                   <li
                     key={f.id}
-                    className="flex items-center justify-between text-[11.5px]"
+                    className="flex items-center justify-between text-[13px]"
                   >
                     <span
                       className="line-clamp-1 font-medium"
@@ -236,7 +240,7 @@ export function OutcomeCard({
                       ← {f.name}
                     </span>
                     <span
-                      className="ml-2 flex-shrink-0 font-mono text-[10px]"
+                      className="ml-2 flex-shrink-0 font-mono text-[11px]"
                       style={{ color: appleVibe.text.tertiary }}
                     >
                       {f.pct}%
@@ -250,7 +254,7 @@ export function OutcomeCard({
           {dissolves.length > 0 && (
             <div className="mt-3">
               <div
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 Dissolves pains
@@ -259,7 +263,7 @@ export function OutcomeCard({
                 {dissolves.slice(0, 4).map((p) => (
                   <li
                     key={p.id}
-                    className="flex items-center justify-between text-[11.5px]"
+                    className="flex items-center justify-between text-[13px]"
                   >
                     <span
                       className="line-clamp-1 font-medium"
@@ -268,7 +272,7 @@ export function OutcomeCard({
                       ← {p.name}
                     </span>
                     <span
-                      className="ml-2 flex-shrink-0 font-mono text-[10px]"
+                      className="ml-2 flex-shrink-0 font-mono text-[11px]"
                       style={{ color: appleVibe.text.tertiary }}
                     >
                       {p.pct}%
@@ -282,7 +286,7 @@ export function OutcomeCard({
           {rollsUp && (
             <div className="mt-3">
               <div
-                className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold"
                 style={{
                   background: `${OUTCOME_COLOR}14`,
                   color: OUTCOME_COLOR,
@@ -301,7 +305,7 @@ export function OutcomeCard({
                 e.stopPropagation();
                 onOpenDetail();
               }}
-              className="mt-3 inline-flex items-center gap-1 text-[10.5px] font-semibold transition-opacity hover:opacity-80"
+              className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold transition-opacity hover:opacity-80"
               style={{ color: OUTCOME_COLOR }}
             >
               Open detail →

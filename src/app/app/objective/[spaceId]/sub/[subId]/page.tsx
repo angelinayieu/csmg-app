@@ -251,7 +251,7 @@ export default async function SubObjectiveRoomPage({
       <HomeTabNav />
       <ModePill spaceId={spaceId} mode={pipelineMode} />
 
-      <div className="relative mx-auto w-full max-w-6xl px-6 pb-24 pt-24">
+      <div className="relative mx-auto w-full max-w-[1400px] px-8 pb-24 pt-24">
         <Link
           href={`/app/objective/${spaceId}`}
           className="inline-flex items-center gap-1.5 text-[12px] font-medium"

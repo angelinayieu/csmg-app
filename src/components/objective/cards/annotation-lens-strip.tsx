@@ -85,13 +85,13 @@ export function AnnotationLensStrip({
             style={{ color: appleVibe.text.tertiary }}
           />
           <span
-            className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+            className="text-[11px] font-semibold uppercase tracking-[0.12em]"
             style={{ color: appleVibe.text.tertiary }}
           >
             Annotation Lens
           </span>
           <span
-            className="text-[11px] font-light"
+            className="text-[13px] font-light"
             style={{ color: appleVibe.text.tertiary }}
           >
             · {ranked.length} reading{ranked.length === 1 ? "" : "s"} from the
@@ -99,7 +99,7 @@ export function AnnotationLensStrip({
           </span>
           {orphanCount > 0 && (
             <span
-              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold"
+              className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] font-semibold"
               style={{
                 background: "rgba(245,158,11,0.10)",
                 color: "rgba(146,64,14,0.95)",
@@ -115,7 +115,7 @@ export function AnnotationLensStrip({
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="inline-flex items-center gap-1 text-[10.5px] font-medium"
+          className="inline-flex items-center gap-1 text-[11px] font-medium"
           style={{ color: appleVibe.text.tertiary }}
           aria-label={expanded ? "Collapse lens" : "Expand lens"}
         >
@@ -148,7 +148,7 @@ export function AnnotationLensStrip({
                 onMouseEnter={() => onHoverIndex(idx)}
                 onMouseLeave={() => onHoverIndex(null)}
                 onClick={() => onHoverIndex(isHovered ? null : idx)}
-                className="inline-flex max-w-[260px] items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium transition-all"
+                className="inline-flex max-w-[260px] items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition-all"
                 style={{
                   background: isHovered
                     ? "rgba(15,23,42,0.06)"
@@ -177,7 +177,7 @@ export function AnnotationLensStrip({
                 />
                 <span className="truncate">{a.phrase}</span>
                 <span
-                  className="ml-0.5 inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-full px-1 text-[9px] font-bold"
+                  className="ml-0.5 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full px-1 text-[10px] font-bold"
                   style={{
                     background: isOrphan
                       ? "rgba(245,158,11,0.18)"

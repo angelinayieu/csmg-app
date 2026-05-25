@@ -27,6 +27,7 @@ import {
   normalizeRoomCategories,
   type RoomCategories,
 } from "@/lib/objective-canvas/generate-categories";
+import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import {
   buildRagBlock,
   collectRagSources,
@@ -127,10 +128,17 @@ export async function POST(req: NextRequest) {
     (typeof space.description === "string" && space.description.trim()) ||
     (typeof space.input_text === "string" && space.input_text.trim()) ||
     "";
+  // Parent goal carries the objective text + the persisted annotation
+  // set the canvas generated. Annotations are the semantic substrate
+  // the room generation reasons against (see ANNOTATION LENS in
+  // layered-generation.ts). When there's no parent goal we fall
+  // through to the space-level root goal lookup below so rooms in
+  // legacy spaces still benefit.
+  let parentAnnotationsRaw: unknown = null;
   if (sub.parent_goal_id) {
     const { data: parent } = await db
       .from("improvement_goals")
-      .select("title, description")
+      .select("title, description, annotations")
       .eq("id", sub.parent_goal_id)
       .maybeSingle();
     if (parent?.description) {
@@ -138,7 +146,20 @@ export async function POST(req: NextRequest) {
     } else if (parent?.title) {
       coreObjectiveText = parent.title;
     }
+    parentAnnotationsRaw = parent?.annotations ?? null;
+  } else {
+    // No parent_goal_id — fall back to the root improvement_goal in
+    // this space (the canvas root, parent_goal_id IS NULL). Picks up
+    // annotations for spaces where the sub WAS the root.
+    const { data: rootGoal } = await db
+      .from("improvement_goals")
+      .select("annotations")
+      .eq("space_id", spaceId)
+      .is("parent_goal_id", null)
+      .maybeSingle();
+    parentAnnotationsRaw = rootGoal?.annotations ?? null;
   }
+  const annotations = normalizeAnnotations(parentAnnotationsRaw);
 
   // ── Load layer_ontology rows for this space ─────────────────────
   const { data: layerRows } = await db
@@ -290,6 +311,7 @@ export async function POST(req: NextRequest) {
       ? categoriesEnum
       : undefined,
     ragBlock,
+    annotations: annotations.length > 0 ? annotations : undefined,
   };
 
   // ── Generate (3 LLM calls back to back) ─────────────────────────
@@ -368,7 +390,9 @@ export async function POST(req: NextRequest) {
     // causes + the LLM's influence rank used for lane ordering +
     // the sub_category slug (Tier 3) used for chip + grouping +
     // chain archetype derivation + Commit-2 citations (resolved
-    // to source records so the UI can render previews directly).
+    // to source records so the UI can render previews directly) +
+    // ANNOTATION provenance (resolved {index, phrase, facet} entries
+    // the room view turns into hover-linked chips on the card).
     ...pain.map((p) =>
       buildRow("pain", p.name, p.negative_outcome, 0.7, {
         negative_outcome: p.negative_outcome,
@@ -376,27 +400,30 @@ export async function POST(req: NextRequest) {
         influence_rank: p.influence_rank,
         sub_category: p.sub_category ?? null,
         citations: resolveCitations(p.citations),
+        derived_from_annotations: p.derived_from_annotations ?? [],
       }),
     ),
     // Outcome: name is the state; description holds the
     // measured_by signal; causal_chain mirrors it + sub_category
-    // + citations.
+    // + citations + annotation provenance.
     ...outcomes.map((o) =>
       buildRow("outcomes", o.name, o.measured_by, 0.7, {
         measured_by: o.measured_by,
         sub_category: o.sub_category ?? null,
         citations: resolveCitations(o.citations),
+        derived_from_annotations: o.derived_from_annotations ?? [],
       }),
     ),
     // Feature: name is the feature; description is the
     // positive_outcome; causal_chain carries first_principles +
-    // sub_category + citations.
+    // sub_category + citations + annotation provenance.
     ...features.map((f) =>
       buildRow("features", f.name, f.positive_outcome, 0.65, {
         positive_outcome: f.positive_outcome,
         first_principles: f.first_principles,
         sub_category: f.sub_category ?? null,
         citations: resolveCitations(f.citations),
+        derived_from_annotations: f.derived_from_annotations ?? [],
       }),
     ),
     // Objective anchor: a single entity so cross-layer edges to
@@ -482,26 +509,33 @@ export async function POST(req: NextRequest) {
       // polarity is real but depends on context the LLM couldn't pin down.
       return "conditional";
     };
-    const edgeRows = correlations.map((c) => ({
-      space_id: spaceId,
-      parent_sub_objective_id: subObjectiveId,
-      source_entity_id: c.sourceId,
-      target_entity_id: c.targetId,
-      relationship_type: c.relationship,
-      dimension: "causal",
-      source_tag: "inferred",
-      strength: c.strength,
-      polarity: mapPolarity(c.polarity),
-      confidence: 0.6,
-      conditions: c.rationale.slice(0, 500),
-      // Mechanism (the specific lever name) lives in the jsonb
-      // agent_feedback so the side panel can render it as a small
-      // pill above the rationale — adds interpretive depth without
-      // needing a schema migration.
-      agent_feedback: c.mechanism
-        ? { mechanism: c.mechanism.slice(0, 60) }
-        : {},
-    }));
+    const edgeRows = correlations.map((c) => {
+      // agent_feedback is jsonb — we layer in:
+      //   • mechanism: the specific lever name (LLM-emitted)
+      //   • derived_from_annotation: single resolved provenance entry
+      //     so the side panel can render an annotation chip beside the
+      //     mechanism pill. Persisted as the resolved record (not just
+      //     the index) so the UI doesn't need to re-load annotations.
+      const feedback: Record<string, unknown> = {};
+      if (c.mechanism) feedback.mechanism = c.mechanism.slice(0, 60);
+      if (c.derived_from_annotation) {
+        feedback.derived_from_annotation = c.derived_from_annotation;
+      }
+      return {
+        space_id: spaceId,
+        parent_sub_objective_id: subObjectiveId,
+        source_entity_id: c.sourceId,
+        target_entity_id: c.targetId,
+        relationship_type: c.relationship,
+        dimension: "causal",
+        source_tag: "inferred",
+        strength: c.strength,
+        polarity: mapPolarity(c.polarity),
+        confidence: 0.6,
+        conditions: c.rationale.slice(0, 500),
+        agent_feedback: feedback,
+      };
+    });
     const edgeInsert = await db.from("edges").insert(edgeRows).select("id");
     if (edgeInsert.error) {
       console.warn(

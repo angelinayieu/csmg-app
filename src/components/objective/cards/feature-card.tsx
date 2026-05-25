@@ -99,8 +99,8 @@ export function FeatureCard({
       className="rounded-2xl px-4 py-3 transition-all"
       style={{
         background: expanded
-          ? "rgba(255,255,255,0.94)"
-          : "rgba(255,255,255,0.65)",
+          ? "rgba(255,255,255,0.98)"
+          : "rgba(255,255,255,0.92)",
         border: `1px solid ${
           linked
             ? FEATURE_COLOR
@@ -121,8 +121,8 @@ export function FeatureCard({
     >
       <div className="flex items-start justify-between gap-2">
         <h4
-          className="line-clamp-2 text-[13.5px] font-semibold leading-snug tracking-tight"
-          style={{ color: appleVibe.text.primary, letterSpacing: "-0.005em" }}
+          className="line-clamp-3 text-[15px] font-semibold leading-snug tracking-tight"
+          style={{ color: appleVibe.text.primary, letterSpacing: "-0.01em" }}
         >
           {item.name}
         </h4>
@@ -133,48 +133,53 @@ export function FeatureCard({
               onSeeAll={onSeeAllSources}
             />
           )}
-          {subCategory && (
+          {isKeystone && (
             <span
-              className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+              className="inline-flex items-center gap-0.5 flex-shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em]"
               style={{
-                background: `${subCategory.color}14`,
-                color: subCategory.color,
-                border: `1px solid ${subCategory.color}33`,
+                background: "rgba(37,99,235,0.10)",
+                color: "rgba(30,64,175,0.95)",
+                border: "1px solid rgba(37,99,235,0.22)",
               }}
-              title={`Sub-category · ${subCategory.label}`}
+              title="Counters the most pains in this room"
             >
-              {subCategory.label}
+              <Diamond className="h-2.5 w-2.5" strokeWidth={2.5} />
+              Keystone
             </span>
           )}
-        {isKeystone && (
-          <span
-            className="inline-flex items-center gap-0.5 flex-shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]"
-            style={{
-              background: "rgba(37,99,235,0.10)",
-              color: "rgba(30,64,175,0.95)",
-              border: "1px solid rgba(37,99,235,0.22)",
-            }}
-            title="Counters the most pains in this room"
-          >
-            <Diamond className="h-2.5 w-2.5" strokeWidth={2.5} />
-            Keystone
-          </span>
-        )}
         </div>
       </div>
 
-      {/* Positive outcome — explicit "produces:" label mirrors
-          the pain card's "leads to:" so the chain reads as
-          consequence, not paraphrase. */}
+      {/* Sub-category chip — neutral grey, on its own row. */}
+      {subCategory && (
+        <div className="mt-1.5">
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium"
+            style={{
+              background: appleVibe.surface.chip,
+              color: appleVibe.text.secondary,
+              border: `1px solid ${appleVibe.stroke.hairline}`,
+            }}
+            title={`Sub-category · ${subCategory.label}`}
+          >
+            <span
+              className="h-1 w-1 flex-shrink-0 rounded-full"
+              style={{ background: subCategory.color }}
+              aria-hidden
+            />
+            {subCategory.label}
+          </span>
+        </div>
+      )}
+
+      {/* Positive outcome — lowercase italic "produces" mirrors the
+          pain card's "leads to" so the chain reads as prose. */}
       {item.positive_outcome && (
         <p
-          className="mt-1 line-clamp-2 text-[11.5px] font-light leading-snug"
+          className="mt-2 line-clamp-3 text-[13px] font-light leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
-          <span
-            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: appleVibe.text.tertiary }}
-          >
+          <span className="italic" style={{ color: appleVibe.text.tertiary }}>
             produces →
           </span>{" "}
           <span className="italic">{item.positive_outcome}</span>
@@ -183,7 +188,7 @@ export function FeatureCard({
 
       {!expanded && item.first_principles.length > 0 && (
         <div
-          className="mt-2 flex items-center gap-1 text-[10.5px] font-light"
+          className="mt-2 flex items-center gap-1 text-[11px] font-light"
           style={{ color: appleVibe.text.tertiary }}
         >
           <span>
@@ -227,7 +232,7 @@ export function FeatureCard({
           {item.first_principles.length > 0 && (
             <div>
               <div
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 First principles
@@ -246,11 +251,11 @@ export function FeatureCard({
                         e.stopPropagation();
                         onHoverPrinciple(p);
                       }}
-                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium transition-all"
+                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-all"
                       style={{
                         background: isShared
                           ? "rgba(37,99,235,0.08)"
-                          : "rgba(15,23,42,0.04)",
+                          : appleVibe.surface.chip,
                         color: isShared
                           ? "rgba(30,64,175,0.95)"
                           : appleVibe.text.secondary,
@@ -264,7 +269,7 @@ export function FeatureCard({
                       <span>{p}</span>
                       {isShared && (
                         <span
-                          className="ml-0.5 inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-full px-1 text-[9px] font-bold"
+                          className="ml-0.5 inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-full px-1 text-[9.5px] font-bold"
                           style={{
                             background: "rgba(37,99,235,0.20)",
                             color: "rgba(30,58,138,1)",
@@ -283,7 +288,7 @@ export function FeatureCard({
           {countersPains.length > 0 && (
             <div className="mt-3">
               <div
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 Counters pains
@@ -292,7 +297,7 @@ export function FeatureCard({
                 {countersPains.slice(0, 4).map((p) => (
                   <li
                     key={p.id}
-                    className="flex items-center justify-between text-[11.5px]"
+                    className="flex items-center justify-between text-[13px]"
                   >
                     <span
                       className="line-clamp-1 font-medium"
@@ -301,7 +306,7 @@ export function FeatureCard({
                       ✕ {p.name}
                     </span>
                     <span
-                      className="ml-2 flex-shrink-0 font-mono text-[10px]"
+                      className="ml-2 flex-shrink-0 font-mono text-[11px]"
                       style={{ color: appleVibe.text.tertiary }}
                     >
                       {p.pct}%
@@ -319,7 +324,7 @@ export function FeatureCard({
                 e.stopPropagation();
                 onOpenDetail();
               }}
-              className="mt-3 inline-flex items-center gap-1 text-[10.5px] font-semibold transition-opacity hover:opacity-80"
+              className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold transition-opacity hover:opacity-80"
               style={{ color: FEATURE_COLOR }}
             >
               Open detail →
