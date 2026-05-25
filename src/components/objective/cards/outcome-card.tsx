@@ -11,6 +11,14 @@ import { motion } from "framer-motion";
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import {
+  CitationBadge,
+  type CitationSource,
+} from "./citation-badge";
+import {
+  AnnotationChipRow,
+  type AnnotationChipRowItem,
+} from "./annotation-chip-row";
 
 export interface OutcomeCardItem {
   id: string;
@@ -34,6 +42,19 @@ interface Props {
   rollsUp?: boolean;
   /** Tier 3 — sub-category chip rendered top-right of the card. */
   subCategory?: { label: string; color: string } | null;
+  /** Commit-3 — resolved research sources the LLM cited as
+   *  informing this outcome. */
+  citations?: CitationSource[];
+  /** Optional handler for the popover's "See all sources" link. */
+  onSeeAllSources?: () => void;
+  /** Layer-2 detail drawer trigger. Renders an "Open detail" link
+   *  at the bottom of the expanded card. */
+  onOpenDetail?: () => void;
+  /** Annotation Lens — resolved provenance entries (dimension /
+   *  inference facets dominate the result lane). */
+  derivedFromAnnotations?: AnnotationChipRowItem[];
+  hoveredAnnotationIndex?: number | null;
+  onHoverAnnotation?: (index: number | null) => void;
 }
 
 const OUTCOME_COLOR = appleVibe.stage.outcomes;
@@ -46,10 +67,22 @@ export function OutcomeCard({
   dissolves = [],
   rollsUp = false,
   subCategory,
+  citations,
+  onSeeAllSources,
+  onOpenDetail,
+  derivedFromAnnotations,
+  hoveredAnnotationIndex,
+  onHoverAnnotation,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // Always expandable when there's a detail drawer trigger — even
+  // an outcome with no upstream edges has the depth surface worth
+  // opening (definition, variations, planning).
   const hasExpandContent =
-    producedBy.length > 0 || dissolves.length > 0 || rollsUp;
+    producedBy.length > 0 ||
+    dissolves.length > 0 ||
+    rollsUp ||
+    !!onOpenDetail;
 
   return (
     <motion.li
@@ -86,19 +119,27 @@ export function OutcomeCard({
         >
           {item.name}
         </h4>
-        {subCategory && (
-          <span
-            className="inline-flex flex-shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
-            style={{
-              background: `${subCategory.color}14`,
-              color: subCategory.color,
-              border: `1px solid ${subCategory.color}33`,
-            }}
-            title={`Sub-category · ${subCategory.label}`}
-          >
-            {subCategory.label}
-          </span>
-        )}
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {citations && citations.length > 0 && (
+            <CitationBadge
+              citations={citations}
+              onSeeAll={onSeeAllSources}
+            />
+          )}
+          {subCategory && (
+            <span
+              className="inline-flex flex-shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+              style={{
+                background: `${subCategory.color}14`,
+                color: subCategory.color,
+                border: `1px solid ${subCategory.color}33`,
+              }}
+              title={`Sub-category · ${subCategory.label}`}
+            >
+              {subCategory.label}
+            </span>
+          )}
+        </div>
       </div>
 
       {item.measured_by && (
@@ -153,6 +194,17 @@ export function OutcomeCard({
             style={{ color: appleVibe.text.tertiary }}
           />
         </div>
+      )}
+
+      {/* Annotation Lens chips — outcomes most often derive from
+          dimension / inference facets of the parent annotations. */}
+      {derivedFromAnnotations && derivedFromAnnotations.length > 0 && (
+        <AnnotationChipRow
+          provenance={derivedFromAnnotations}
+          hoveredIndex={hoveredAnnotationIndex ?? null}
+          onHover={onHoverAnnotation ?? (() => {})}
+          laneColor={OUTCOME_COLOR}
+        />
       )}
 
       {expanded && (
@@ -240,6 +292,20 @@ export function OutcomeCard({
                 → rolls up to the room objective
               </div>
             </div>
+          )}
+
+          {onOpenDetail && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenDetail();
+              }}
+              className="mt-3 inline-flex items-center gap-1 text-[10.5px] font-semibold transition-opacity hover:opacity-80"
+              style={{ color: OUTCOME_COLOR }}
+            >
+              Open detail →
+            </button>
           )}
         </motion.div>
       )}

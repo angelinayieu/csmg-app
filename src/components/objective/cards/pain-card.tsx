@@ -18,6 +18,14 @@ import { motion } from "framer-motion";
 import { useState } from "react";
 import { ChevronDown, Crown } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import {
+  CitationBadge,
+  type CitationSource,
+} from "./citation-badge";
+import {
+  AnnotationChipRow,
+  type AnnotationChipRowItem,
+} from "./annotation-chip-row";
 
 export interface PainCardItem {
   id: string;
@@ -59,6 +67,30 @@ interface Props {
    *  Null when this room has no categories or the LLM didn't tag
    *  this pain (renders as "Uncategorized"). */
   subCategory?: { label: string; color: string } | null;
+  /** Commit-3 — resolved research sources the LLM cited as
+   *  informing this pain. Empty / undefined = no badge renders. */
+  citations?: CitationSource[];
+  /** Optional handler for the "See all sources" footer of the
+   *  citation popover. Typically wired to open the room's universal
+   *  research sources sheet. */
+  onSeeAllSources?: () => void;
+  /** Layer-2 detail drawer trigger. When provided, the expanded
+   *  card shows an "Open detail" link at the bottom that opens
+   *  the full <ItemDetailDrawer /> for this entity. */
+  onOpenDetail?: () => void;
+  /** Annotation Lens — resolved provenance entries the LLM tagged
+   *  this pain with at generation time. Each entry renders as a
+   *  small chip below the negative_outcome row; hovering lifts the
+   *  index to the room view so every card derived from the same
+   *  annotation lights up. */
+  derivedFromAnnotations?: AnnotationChipRowItem[];
+  /** Externally-controlled hover state — when the room view (or
+   *  the lens header) is hovering an annotation, the card lights
+   *  up via the parent's `linked` prop. This field is forwarded
+   *  to the chip row so the chip on THIS card also flips to the
+   *  hovered state. */
+  hoveredAnnotationIndex?: number | null;
+  onHoverAnnotation?: (index: number | null) => void;
 }
 
 const PAIN_COLOR = appleVibe.stage.pain;
@@ -74,6 +106,12 @@ export function PainCard({
   onHover,
   indent = 0,
   subCategory,
+  citations,
+  onSeeAllSources,
+  onOpenDetail,
+  derivedFromAnnotations,
+  hoveredAnnotationIndex,
+  onHoverAnnotation,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const hasAnyHighlight = highlightedCauses.size > 0;
@@ -125,6 +163,12 @@ export function PainCard({
           {item.name}
         </h4>
         <div className="flex flex-shrink-0 items-center gap-1">
+          {citations && citations.length > 0 && (
+            <CitationBadge
+              citations={citations}
+              onSeeAll={onSeeAllSources}
+            />
+          )}
           {subCategory && (
             <span
               className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
@@ -195,6 +239,19 @@ export function PainCard({
             style={{ color: appleVibe.text.tertiary }}
           />
         </div>
+      )}
+
+      {/* Annotation Lens chips — shown in both collapsed + expanded
+          state since they're the primary "why this pain exists"
+          surface. The pain lane especially favors fragility facets
+          (the parent objective's pre-mortems). */}
+      {derivedFromAnnotations && derivedFromAnnotations.length > 0 && (
+        <AnnotationChipRow
+          provenance={derivedFromAnnotations}
+          hoveredIndex={hoveredAnnotationIndex ?? null}
+          onHover={onHoverAnnotation ?? (() => {})}
+          laneColor={PAIN_COLOR}
+        />
       )}
 
       {/* Expanded — pills + addresses */}
@@ -292,6 +349,23 @@ export function PainCard({
                 ))}
               </ul>
             </div>
+          )}
+
+          {/* Open detail — Layer 2 deep drawer trigger. Lives at the
+              bottom of the expanded card so the quick preview reads
+              first and the user opts into depth. */}
+          {onOpenDetail && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenDetail();
+              }}
+              className="mt-3 inline-flex items-center gap-1 text-[10.5px] font-semibold transition-opacity hover:opacity-80"
+              style={{ color: PAIN_COLOR }}
+            >
+              Open detail →
+            </button>
           )}
         </motion.div>
       )}

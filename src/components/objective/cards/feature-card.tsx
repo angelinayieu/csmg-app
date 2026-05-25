@@ -14,6 +14,14 @@ import { motion } from "framer-motion";
 import { useState } from "react";
 import { ChevronDown, Diamond } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import {
+  CitationBadge,
+  type CitationSource,
+} from "./citation-badge";
+import {
+  AnnotationChipRow,
+  type AnnotationChipRowItem,
+} from "./annotation-chip-row";
 
 export interface FeatureCardItem {
   id: string;
@@ -37,6 +45,19 @@ interface Props {
   onHover?: (id: string | null) => void;
   /** Tier 3 — sub-category chip rendered top-right of the card. */
   subCategory?: { label: string; color: string } | null;
+  /** Commit-3 — resolved research sources the LLM cited as
+   *  informing this feature. Empty / undefined = no badge. */
+  citations?: CitationSource[];
+  /** Optional handler for the popover's "See all sources" link. */
+  onSeeAllSources?: () => void;
+  /** Layer-2 detail drawer trigger. When provided, the expanded
+   *  card shows an "Open detail" link at the bottom. */
+  onOpenDetail?: () => void;
+  /** Annotation Lens — resolved provenance entries (analogy /
+   *  inference facets dominate the mechanism lane). */
+  derivedFromAnnotations?: AnnotationChipRowItem[];
+  hoveredAnnotationIndex?: number | null;
+  onHoverAnnotation?: (index: number | null) => void;
 }
 
 const FEATURE_COLOR = appleVibe.stage.features;
@@ -51,6 +72,12 @@ export function FeatureCard({
   linked = false,
   onHover,
   subCategory,
+  citations,
+  onSeeAllSources,
+  onOpenDetail,
+  derivedFromAnnotations,
+  hoveredAnnotationIndex,
+  onHoverAnnotation,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const hasAnyHighlight = highlightedPrinciples.size > 0;
@@ -100,6 +127,12 @@ export function FeatureCard({
           {item.name}
         </h4>
         <div className="flex flex-shrink-0 items-center gap-1">
+          {citations && citations.length > 0 && (
+            <CitationBadge
+              citations={citations}
+              onSeeAll={onSeeAllSources}
+            />
+          )}
           {subCategory && (
             <span
               className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
@@ -169,6 +202,18 @@ export function FeatureCard({
             style={{ color: appleVibe.text.tertiary }}
           />
         </div>
+      )}
+
+      {/* Annotation Lens chips — features especially favor analogy
+          and inference facets (the cross-domain levers the parent
+          annotations identified). */}
+      {derivedFromAnnotations && derivedFromAnnotations.length > 0 && (
+        <AnnotationChipRow
+          provenance={derivedFromAnnotations}
+          hoveredIndex={hoveredAnnotationIndex ?? null}
+          onHover={onHoverAnnotation ?? (() => {})}
+          laneColor={FEATURE_COLOR}
+        />
       )}
 
       {expanded && (
@@ -265,6 +310,20 @@ export function FeatureCard({
                 ))}
               </ul>
             </div>
+          )}
+
+          {onOpenDetail && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenDetail();
+              }}
+              className="mt-3 inline-flex items-center gap-1 text-[10.5px] font-semibold transition-opacity hover:opacity-80"
+              style={{ color: FEATURE_COLOR }}
+            >
+              Open detail →
+            </button>
           )}
         </motion.div>
       )}

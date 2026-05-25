@@ -23,6 +23,11 @@ import { CorrelationSidePanel } from "./correlation-side-panel";
 import { PainCard, type PainCardItem } from "./cards/pain-card";
 import { FeatureCard, type FeatureCardItem } from "./cards/feature-card";
 import { OutcomeCard, type OutcomeCardItem } from "./cards/outcome-card";
+import {
+  ItemDetailDrawer,
+  type LinkedChainRef,
+} from "./item-detail-drawer";
+import { ResearchSourcesSheet } from "./research-sources-sheet";
 import { SharedCausesStrip } from "./cards/shared-causes-strip";
 import { PortfolioStrip } from "./cards/portfolio-strip";
 import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
@@ -141,6 +146,12 @@ export function SubObjectiveRoomView({
   // Hover-to-link: which card is currently hovered (or null). Linked
   // ids are derived from this + the edges map.
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
+  // Layer 2 — currently-open item detail drawer entity id. Null
+  // means closed.
+  const [detailEntityId, setDetailEntityId] = useState<string | null>(null);
+  // Sources sheet — opened by CitationBadge's "See all sources"
+  // footer and any future "Open research" affordances.
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   // Annotation Lens hover state — which annotation index (1-based)
   // the user is hovering. When set, every card whose provenance
   // includes this index lights up with a subtle ring; non-matching
@@ -251,6 +262,36 @@ export function SubObjectiveRoomView({
       : null;
   }
 
+  // Read citations[] off causal_chain — populated by Commit 2's
+  // room/generate route. Each citation is a resolved source record
+  // (title, url, snippet, lens) — not just an index — so the
+  // CitationBadge popover renders immediately without extra fetch.
+  function readCitations(
+    cc: Record<string, unknown>,
+  ): Array<{ title: string; url: string; snippet?: string; lens?: string }> {
+    if (!Array.isArray(cc.citations)) return [];
+    const out: Array<{
+      title: string;
+      url: string;
+      snippet?: string;
+      lens?: string;
+    }> = [];
+    for (const v of cc.citations) {
+      if (!v || typeof v !== "object") continue;
+      const r = v as Record<string, unknown>;
+      const url = typeof r.url === "string" ? r.url : "";
+      const title = typeof r.title === "string" ? r.title : url;
+      if (url.length === 0) continue;
+      out.push({
+        title,
+        url,
+        snippet: typeof r.snippet === "string" ? r.snippet : undefined,
+        lens: typeof r.lens === "string" ? r.lens : undefined,
+      });
+    }
+    return out;
+  }
+
   const painItems = useMemo(
     () =>
       lanes
@@ -274,6 +315,7 @@ export function SubObjectiveRoomView({
                 ? cc.influence_rank
                 : 2.5,
             sub_category_slug: readSlug(cc),
+            citations: readCitations(cc),
           };
         })
         .sort((a, b) => b.influence_rank - a.influence_rank),
@@ -299,6 +341,7 @@ export function SubObjectiveRoomView({
                   .slice(0, 4)
               : [],
             sub_category_slug: readSlug(cc),
+            citations: readCitations(cc),
           };
         }),
     [lanes],
@@ -318,6 +361,7 @@ export function SubObjectiveRoomView({
                 ? cc.measured_by
                 : it.description ?? undefined,
             sub_category_slug: readSlug(cc),
+            citations: readCitations(cc),
           };
         }),
     [lanes],
@@ -819,11 +863,14 @@ export function SubObjectiveRoomView({
                         onHover={setHoveredEntityId}
                         indent={indentForRank(p.influence_rank)}
                         subCategory={categoryFor("friction", p.sub_category_slug)}
+                        citations={p.citations}
+                        onSeeAllSources={() => setSourcesOpen(true)}
                         derivedFromAnnotations={
                           provenanceByItemId.get(p.id) ?? []
                         }
                         hoveredAnnotationIndex={hoveredAnnotationIndex}
                         onHoverAnnotation={setHoveredAnnotationIndex}
+                        onOpenDetail={() => setDetailEntityId(p.id)}
                       />
                     </div>
                   );
@@ -868,11 +915,14 @@ export function SubObjectiveRoomView({
                           "mechanism",
                           f.sub_category_slug,
                         )}
+                        citations={f.citations}
+                        onSeeAllSources={() => setSourcesOpen(true)}
                         derivedFromAnnotations={
                           provenanceByItemId.get(f.id) ?? []
                         }
                         hoveredAnnotationIndex={hoveredAnnotationIndex}
                         onHoverAnnotation={setHoveredAnnotationIndex}
+                        onOpenDetail={() => setDetailEntityId(f.id)}
                       />
                     </div>
                   );
@@ -908,11 +958,14 @@ export function SubObjectiveRoomView({
                         dissolves={outcomeDissolvesMap.get(o.id) ?? []}
                         rollsUp={rollsUpSet.has(o.id)}
                         subCategory={categoryFor("result", o.sub_category_slug)}
+                        citations={o.citations}
+                        onSeeAllSources={() => setSourcesOpen(true)}
                         derivedFromAnnotations={
                           provenanceByItemId.get(o.id) ?? []
                         }
                         hoveredAnnotationIndex={hoveredAnnotationIndex}
                         onHoverAnnotation={setHoveredAnnotationIndex}
+                        onOpenDetail={() => setDetailEntityId(o.id)}
                       />
                     </div>
                   );
@@ -960,6 +1013,51 @@ export function SubObjectiveRoomView({
         )}
       </div>
 
+      {/* Research sources sheet — opened by CitationBadge "See all
+          sources" footer on any card. Mounted at room-view root so
+          AnimatePresence in/out transitions render correctly. */}
+      <ResearchSourcesSheet
+        spaceId={spaceId}
+        open={sourcesOpen}
+        onClose={() => setSourcesOpen(false)}
+      />
+
+      {/* Item detail drawer (Layer 2) — slides in when any lane
+          card's "Open detail" link is clicked. Lazy-fetches the
+          LLM expansion + per-item research on first open, cached
+          forever. Linked chains derived from the existing chain
+          graph so the drawer shows the user where this item
+          participates. */}
+      {(() => {
+        if (!detailEntityId) return null;
+        // Resolve the active item: name + layer + linked chains.
+        const entity = entityIndex.get(detailEntityId);
+        if (!entity) return null;
+        const linkedChains: LinkedChainRef[] = allChains
+          .filter(
+            (c) =>
+              c.painId === detailEntityId ||
+              c.featureId === detailEntityId ||
+              c.outcomeId === detailEntityId,
+          )
+          .map((c) => ({
+            label: `${c.painName} → ${c.featureName} → ${c.outcomeName}`,
+            pct: Math.round(c.composite * 100),
+            approved:
+              approvedEdgeIds.has(c.painFeatureEdge.id) &&
+              approvedEdgeIds.has(c.featureOutcomeEdge.id),
+          }))
+          .sort((a, b) => b.pct - a.pct);
+        return (
+          <ItemDetailDrawer
+            entityId={detailEntityId}
+            itemName={entity.name}
+            itemLayer={entity.layer}
+            linkedChains={linkedChains}
+            onClose={() => setDetailEntityId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
