@@ -49,6 +49,7 @@ export function LandingExperience({
   const initialStage: Stage =
     params.get("stage") === "entry" ? "entry" : "portal";
   const [stage, setStage] = useState<Stage>(initialStage);
+  const [stackHovered, setStackHovered] = useState(false);
   const reduce = useReducedMotion();
 
   const showWhiteboard = stage === "entry";
@@ -119,35 +120,56 @@ export function LandingExperience({
               </h1>
             </motion.div>
 
-            {/* Two cards — Create (active) + Explore (placeholder) */}
-            <div className="grid w-full max-w-3xl grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Card stack — two square portals tilted in opposite
+                directions, overlapping in the middle. Hover an
+                individual card to ease its rotation toward 0 and
+                lift; click Create to straighten + zoom + expand
+                into the entry form. */}
+            <div
+              className="relative flex items-center justify-center"
+              style={{ width: 520, height: 320 }}
+              onMouseEnter={() => setStackHovered(true)}
+              onMouseLeave={() => setStackHovered(false)}
+            >
+              {/* Explore — left-tilted, sits behind Create when
+                  Create is active. We push it slightly out of the
+                  way once Create is being pressed so the focal
+                  card has the spotlight. */}
               <motion.div
-                initial={reduce ? false : { opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={reduce ? false : { opacity: 0, x: 10, y: 14 }}
+                animate={{ opacity: 1, x: 0, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.12, ease: "easeOut" }}
+                className="absolute"
+                style={{ left: 40, top: 20, zIndex: stackHovered ? 1 : 2 }}
+              >
+                <PortalCard
+                  variant="secondary"
+                  title="Explore"
+                  subtitle="Browse templates, patterns, and starter canvases."
+                  icon={<Compass className="h-5 w-5" strokeWidth={1.75} />}
+                  badge="Coming soon"
+                  disabled
+                  restRotation={-5}
+                />
+              </motion.div>
+
+              {/* Create — right-tilted, primary. layoutId bridges
+                  to the entry stage. */}
+              <motion.div
+                initial={reduce ? false : { opacity: 0, x: -10, y: 14 }}
+                animate={{ opacity: 1, x: 0, y: 0 }}
                 transition={{ duration: 0.5, delay: 0.05, ease: "easeOut" }}
+                className="absolute"
+                style={{ right: 40, top: 20, zIndex: 3 }}
               >
                 <PortalCard
                   layoutId="portal-card"
                   variant="primary"
                   title="Create"
-                  subtitle="Start a new objective from scratch — we'll refine it with you and unfurl it onto a whiteboard."
+                  subtitle="Start a new objective from scratch."
                   icon={<Plus className="h-5 w-5" strokeWidth={2.25} />}
                   onActivate={() => setStage("entry")}
-                />
-              </motion.div>
-
-              <motion.div
-                initial={reduce ? false : { opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, delay: 0.12, ease: "easeOut" }}
-              >
-                <PortalCard
-                  variant="secondary"
-                  title="Explore"
-                  subtitle="Browse use case templates, patterns, and starter canvases curated for fast starts."
-                  icon={<Compass className="h-5 w-5" strokeWidth={1.75} />}
-                  badge="Coming soon"
-                  disabled
+                  restRotation={5}
                 />
               </motion.div>
             </div>
