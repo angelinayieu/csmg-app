@@ -18,7 +18,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
-import { ArrowRight, Plus, Sparkles } from "lucide-react";
+import { ArrowRight, Plus } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 
 export const dynamic = "force-dynamic";
 
@@ -73,7 +74,7 @@ export default async function ObjectiveCanvasLandingPage() {
               border: "1px solid rgba(15,23,42,0.06)",
             }}
           >
-            <Sparkles className="h-3 w-3" strokeWidth={1.75} />
+            <Sparkle className="h-3 w-3" />
             Objective Canvas
           </div>
           <h1

@@ -8,12 +8,8 @@
 // stage (Phase 4 forks them onto the whiteboard).
 
 import { useEffect, useState, useTransition } from "react";
-import {
-  ArrowRight,
-  Check,
-  RefreshCw,
-  Sparkles,
-} from "lucide-react";
+import { ArrowRight, Check, RefreshCw } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { SubObjectiveBlock, SubObjectiveProposal } from "@/lib/objective-canvas/sub-objective-state";
 
@@ -314,7 +310,7 @@ function ProposalRow({
                   color: "rgba(91,33,182,0.95)",
                 }}
               >
-                <Sparkles className="h-2.5 w-2.5" strokeWidth={2} />
+                <Sparkle className="h-2.5 w-2.5" />
                 Top
               </span>
             )}

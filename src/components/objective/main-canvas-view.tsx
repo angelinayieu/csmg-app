@@ -13,7 +13,8 @@
 // styling matches the rest of the canvas (Apple-vibe).
 
 import Link from "next/link";
-import { ArrowRight, Check, Layers, Sparkles } from "lucide-react";
+import { ArrowRight, Check, Layers } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export interface ApprovedItem {
@@ -78,7 +79,7 @@ function CoreNode({ objective }: { objective: string }) {
           color: "rgba(91,33,182,0.95)",
         }}
       >
-        <Sparkles className="h-3 w-3" strokeWidth={2} />
+        <Sparkle className="h-3 w-3" />
         Core objective
       </div>
 

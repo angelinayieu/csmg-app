@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutGrid, Sparkles } from "lucide-react";
+import { LayoutGrid } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 
 interface TabDef {
   href: string;
@@ -21,7 +22,7 @@ const TABS: TabDef[] = [
   {
     href: "/app",
     label: "Synergy",
-    icon: Sparkles,
+    icon: Sparkle,
     matches: (p) => p === "/app" || p.startsWith("/app?"),
   },
 ];

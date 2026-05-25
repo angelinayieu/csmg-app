@@ -14,7 +14,8 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { RefreshCw, Sparkles } from "lucide-react";
+import { RefreshCw } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { CorrelationSidePanel } from "./correlation-side-panel";
 import type { PipelineMode } from "./mode-pill";
@@ -221,7 +222,7 @@ export function SubObjectiveRoomView({
                 opacity: busy ? 0.7 : 1,
               }}
             >
-              <Sparkles className="h-3.5 w-3.5" strokeWidth={2} />
+              <Sparkle className="h-3.5 w-3.5" />
               <span>{busy ? "Generating…" : "Generate the room"}</span>
             </button>
           )}
