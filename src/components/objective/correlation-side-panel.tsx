@@ -23,7 +23,8 @@ import {
   computeChains,
   type ChainTriple,
 } from "@/lib/objective-canvas/compute-chains";
-import { ChainCard } from "./cards/chain-card";
+import type { RoomCategories } from "@/lib/objective-canvas/generate-categories";
+import { ChainCard, type ChainArchetype } from "./cards/chain-card";
 
 interface EntityRef {
   id: string;
@@ -65,6 +66,9 @@ interface Props {
   laneLabels: LaneLabelMap;
   /** Per-entity detail used by the chain card's expand state. */
   detail: ChainEntityDetail;
+  /** Tier 3 — room sub-category sets, used to resolve each chain's
+   *  category triple → archetype display labels. */
+  roomCategories?: RoomCategories;
 }
 
 type ViewMode = "chains" | "edges";
@@ -103,7 +107,28 @@ export function CorrelationSidePanel({
   onHoverEntity,
   laneLabels,
   detail,
+  roomCategories,
 }: Props) {
+  // Resolve a chain's category triple into {label, color} display
+  // data. Used as the archetype label on each ChainCard.
+  function resolveArchetype(chain: ChainTriple): ChainArchetype {
+    if (!roomCategories) {
+      return { pain: null, feature: null, result: null };
+    }
+    const lookup = (
+      lane: "friction" | "mechanism" | "result",
+      slug: string | null,
+    ) => {
+      if (!slug) return null;
+      const hit = roomCategories[lane].find((c) => c.slug === slug);
+      return hit ? { label: hit.label, color: hit.color } : null;
+    };
+    return {
+      pain: lookup("friction", chain.categoryTriple.painSlug),
+      feature: lookup("mechanism", chain.categoryTriple.featureSlug),
+      result: lookup("result", chain.categoryTriple.resultSlug),
+    };
+  }
   const [viewMode, setViewMode] = useState<ViewMode>("chains");
   const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
   const [threshold, setThreshold] = useState<ThresholdMode>("all");
@@ -466,6 +491,7 @@ export function CorrelationSidePanel({
                     features: laneLabels.features,
                     outcomes: laneLabels.outcomes,
                   }}
+                  archetype={resolveArchetype(c)}
                   painRootCauses={detail.rootCausesById.get(c.painId) ?? []}
                   featureFirstPrinciples={
                     detail.firstPrinciplesById.get(c.featureId) ?? []

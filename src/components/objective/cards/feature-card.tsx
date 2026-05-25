@@ -35,6 +35,8 @@ interface Props {
    *  receiving end of an edge from it. Glows in feature color. */
   linked?: boolean;
   onHover?: (id: string | null) => void;
+  /** Tier 3 — sub-category chip rendered top-right of the card. */
+  subCategory?: { label: string; color: string } | null;
 }
 
 const FEATURE_COLOR = appleVibe.stage.features;
@@ -48,6 +50,7 @@ export function FeatureCard({
   countersPains,
   linked = false,
   onHover,
+  subCategory,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const hasAnyHighlight = highlightedPrinciples.size > 0;
@@ -89,13 +92,27 @@ export function FeatureCard({
       onMouseEnter={() => onHover?.(item.id)}
       onMouseLeave={() => onHover?.(null)}
     >
-      <div className="flex items-baseline justify-between gap-2">
+      <div className="flex items-start justify-between gap-2">
         <h4
           className="line-clamp-2 text-[13.5px] font-semibold leading-snug tracking-tight"
           style={{ color: appleVibe.text.primary, letterSpacing: "-0.005em" }}
         >
           {item.name}
         </h4>
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {subCategory && (
+            <span
+              className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+              style={{
+                background: `${subCategory.color}14`,
+                color: subCategory.color,
+                border: `1px solid ${subCategory.color}33`,
+              }}
+              title={`Sub-category · ${subCategory.label}`}
+            >
+              {subCategory.label}
+            </span>
+          )}
         {isKeystone && (
           <span
             className="inline-flex items-center gap-0.5 flex-shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]"
@@ -110,6 +127,7 @@ export function FeatureCard({
             Keystone
           </span>
         )}
+        </div>
       </div>
 
       {/* Positive outcome — explicit "produces:" label mirrors

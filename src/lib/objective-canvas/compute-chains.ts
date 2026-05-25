@@ -39,12 +39,23 @@ export interface ChainTriple {
    *  in agent_feedback. Falls through to null when neither edge
    *  named one (older data). */
   mechanism: string | null;
+  /** Tier 3 — the category triple this chain bridges. Each entry is
+   *  the SLUG of the source/feature/result item's sub_category (or
+   *  null if that item wasn't categorized). The archetype label is
+   *  derived from this triple. */
+  categoryTriple: {
+    painSlug: string | null;
+    featureSlug: string | null;
+    resultSlug: string | null;
+  };
 }
 
 interface EntityLite {
   id: string;
   name: string;
   layer: "pain" | "features" | "outcomes" | "objective";
+  /** Tier 3 — sub_category slug from causal_chain.sub_category. */
+  subCategorySlug?: string | null;
 }
 
 /**
@@ -123,6 +134,11 @@ export function computeChains(
         featureOutcomeEdge: foEdge,
         composite,
         mechanism,
+        categoryTriple: {
+          painSlug: pain.subCategorySlug ?? null,
+          featureSlug: feature.subCategorySlug ?? null,
+          resultSlug: outcome.subCategorySlug ?? null,
+        },
       });
     }
   }

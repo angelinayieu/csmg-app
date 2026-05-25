@@ -55,6 +55,10 @@ interface Props {
   /** Indent (px) — drives the influence-rank-based hierarchy.
    *  Root pain = 0; downstream = 8/16. */
   indent?: number;
+  /** Tier 3 — sub-category chip rendered top-right of the card.
+   *  Null when this room has no categories or the LLM didn't tag
+   *  this pain (renders as "Uncategorized"). */
+  subCategory?: { label: string; color: string } | null;
 }
 
 const PAIN_COLOR = appleVibe.stage.pain;
@@ -69,6 +73,7 @@ export function PainCard({
   linked = false,
   onHover,
   indent = 0,
+  subCategory,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const hasAnyHighlight = highlightedCauses.size > 0;
@@ -111,14 +116,28 @@ export function PainCard({
       onMouseEnter={() => onHover?.(item.id)}
       onMouseLeave={() => onHover?.(null)}
     >
-      {/* Header — title + root badge */}
-      <div className="flex items-baseline justify-between gap-2">
+      {/* Header — title + root badge + sub-category chip */}
+      <div className="flex items-start justify-between gap-2">
         <h4
           className="line-clamp-2 text-[13.5px] font-semibold leading-snug tracking-tight"
           style={{ color: appleVibe.text.primary, letterSpacing: "-0.005em" }}
         >
           {item.name}
         </h4>
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {subCategory && (
+            <span
+              className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+              style={{
+                background: `${subCategory.color}14`,
+                color: subCategory.color,
+                border: `1px solid ${subCategory.color}33`,
+              }}
+              title={`Sub-category · ${subCategory.label}`}
+            >
+              {subCategory.label}
+            </span>
+          )}
         {isRoot && (
           <span
             className="inline-flex items-center gap-0.5 flex-shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]"
@@ -133,6 +152,7 @@ export function PainCard({
             Root
           </span>
         )}
+        </div>
       </div>
 
       {/* Negative outcome — explicit "leads to:" label so the

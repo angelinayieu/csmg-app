@@ -40,12 +40,24 @@ interface CrosswalkRow {
   firstPrinciple: string;
 }
 
+/** Tier 3 — the category triple resolved to display data. Each
+ *  entry has the human label + the color for the lane. Null when
+ *  that item didn't carry a sub_category. */
+export interface ChainArchetype {
+  pain: { label: string; color: string } | null;
+  feature: { label: string; color: string } | null;
+  result: { label: string; color: string } | null;
+}
+
 interface Props {
   chain: ChainTriple;
   /** Adaptive lane labels — drive the layer chips on each row
    *  ("Frictions / Mechanisms / Results" or whatever this room's
    *  LLM-picked nouns are). */
   laneLabels: ChainCardLaneLabels;
+  /** Tier 3 — resolved category triple for the archetype label.
+   *  Null entries are tolerated; we render only what's present. */
+  archetype: ChainArchetype;
   /** Root causes of the friction. Used in the why-it-works
    *  crosswalk + risk list. */
   painRootCauses: string[];
@@ -70,6 +82,7 @@ interface Props {
 export function ChainCard({
   chain,
   laneLabels,
+  archetype,
   painRootCauses,
   featureFirstPrinciples,
   outcomeMeasuredBy,
@@ -123,6 +136,48 @@ export function ChainCard({
       onMouseEnter={() => onHover(chain.painId)}
       onMouseLeave={() => onHover(null)}
     >
+      {/* ── Archetype label (the cross-category triple) ──
+          The category triple IS the strategic-bet archetype.
+          Renders as 3 colored chips with ×. Quiet but expressive. */}
+      {(archetype.pain || archetype.feature || archetype.result) && (
+        <div className="mb-2 flex items-center gap-1">
+          {archetype.pain && (
+            <CategoryPip
+              label={archetype.pain.label}
+              color={archetype.pain.color}
+            />
+          )}
+          {archetype.pain && archetype.feature && (
+            <span
+              className="text-[9.5px] font-light"
+              style={{ color: appleVibe.text.faint }}
+            >
+              ×
+            </span>
+          )}
+          {archetype.feature && (
+            <CategoryPip
+              label={archetype.feature.label}
+              color={archetype.feature.color}
+            />
+          )}
+          {archetype.feature && archetype.result && (
+            <span
+              className="text-[9.5px] font-light"
+              style={{ color: appleVibe.text.faint }}
+            >
+              ×
+            </span>
+          )}
+          {archetype.result && (
+            <CategoryPip
+              label={archetype.result.label}
+              color={archetype.result.color}
+            />
+          )}
+        </div>
+      )}
+
       {/* ── Compact chain (3 nodes + 2 bridges) ── */}
       <div className="flex flex-col gap-1">
         <ChainNode
@@ -461,6 +516,21 @@ function BridgeRow({
         </span>
       )}
     </div>
+  );
+}
+
+function CategoryPip({ label, color }: { label: string; color: string }) {
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+      style={{
+        background: `${color}14`,
+        color,
+        border: `1px solid ${color}33`,
+      }}
+    >
+      {label}
+    </span>
   );
 }
 

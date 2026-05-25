@@ -51,6 +51,10 @@ interface Sub {
    *  canonical names when present. Shape:
    *  { pain, features, outcomes, objective }. */
   room_lane_labels: Record<string, string> | null;
+  /** Tier 3 — adaptive sub-category sets per lane. Empty `{}`
+   *  when not yet generated; lane card chips + portfolio strip
+   *  hide gracefully in that case. */
+  room_categories: unknown;
 }
 
 export default async function SubObjectiveRoomPage({
@@ -70,7 +74,7 @@ export default async function SubObjectiveRoomPage({
   const { data: sub } = (await db
     .from("improvement_goals")
     .select(
-      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels",
+      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels, room_categories",
     )
     .eq("id", subId)
     .maybeSingle()) as { data: Sub | null };
@@ -329,6 +333,7 @@ export default async function SubObjectiveRoomPage({
             edges={edges}
             generatedAt={sub.room_layers_generated_at}
             pipelineMode={pipelineMode}
+            roomCategoriesRaw={sub.room_categories}
           />
         </div>
       </div>

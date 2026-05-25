@@ -32,6 +32,8 @@ interface Props {
   /** True when this outcome has an edge to the objective anchor —
    *  drives the "rolls up to the room objective" line. */
   rollsUp?: boolean;
+  /** Tier 3 — sub-category chip rendered top-right of the card. */
+  subCategory?: { label: string; color: string } | null;
 }
 
 const OUTCOME_COLOR = appleVibe.stage.outcomes;
@@ -43,6 +45,7 @@ export function OutcomeCard({
   producedBy = [],
   dissolves = [],
   rollsUp = false,
+  subCategory,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const hasExpandContent =
@@ -76,12 +79,27 @@ export function OutcomeCard({
       onMouseEnter={() => onHover?.(item.id)}
       onMouseLeave={() => onHover?.(null)}
     >
-      <h4
-        className="text-[13.5px] font-semibold leading-snug tracking-tight"
-        style={{ color: appleVibe.text.primary, letterSpacing: "-0.005em" }}
-      >
-        {item.name}
-      </h4>
+      <div className="flex items-start justify-between gap-2">
+        <h4
+          className="text-[13.5px] font-semibold leading-snug tracking-tight"
+          style={{ color: appleVibe.text.primary, letterSpacing: "-0.005em" }}
+        >
+          {item.name}
+        </h4>
+        {subCategory && (
+          <span
+            className="inline-flex flex-shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+            style={{
+              background: `${subCategory.color}14`,
+              color: subCategory.color,
+              border: `1px solid ${subCategory.color}33`,
+            }}
+            title={`Sub-category · ${subCategory.label}`}
+          >
+            {subCategory.label}
+          </span>
+        )}
+      </div>
 
       {item.measured_by && (
         <div className="mt-2">
