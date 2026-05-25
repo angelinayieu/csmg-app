@@ -96,14 +96,19 @@ export function ObjectiveCanvasView({
     router.refresh();
   }
 
+  // The objective banner is useful while the user is still
+  // refining (clarifying / picking) — they need a reminder of
+  // what they typed. On "main" the CoreNode IS the visual
+  // representation of the objective, so the banner becomes
+  // redundant duplication. Hide it there.
+  const showBanner =
+    !embedded && (stage === "clarifying" || stage === "picking");
+
   return (
     <div className="relative w-full" style={{ fontFamily: appleVibe.font.stack }}>
-      {/* Objective banner — persistent across stages so the user
-          always remembers what they typed. Hidden when embedded:
-          the host panel typically owns its own context header. */}
-      {!embedded && <ObjectiveBanner objective={objective} />}
+      {showBanner && <ObjectiveBanner objective={objective} />}
 
-      <div className={embedded ? "" : "mt-6"}>
+      <div className={showBanner ? "mt-6" : ""}>
         {stage === "clarifying" && (
           <ClarifyingQuestionsCard
             spaceId={spaceId}
