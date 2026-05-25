@@ -12,7 +12,6 @@
 
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/supabase/server";
-import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { ObjectiveEntryCard } from "@/components/objective/objective-entry-card";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +22,7 @@ export default async function ObjectiveCanvasNewPage() {
 
   return (
     <div
-      className="relative min-h-screen w-full"
+      className="fixed inset-0 z-40 overflow-y-auto"
       style={{ background: "#fafafa" }}
     >
       {/* Subtle off-white grid behind the card — reads like a
@@ -41,8 +40,6 @@ export default async function ObjectiveCanvasNewPage() {
             "radial-gradient(ellipse at center, rgba(0,0,0,0.9), transparent 70%)",
         }}
       />
-
-      <HomeTabNav />
 
       <div className="relative mx-auto flex min-h-screen max-w-5xl items-center justify-center px-6">
         <ObjectiveEntryCard />

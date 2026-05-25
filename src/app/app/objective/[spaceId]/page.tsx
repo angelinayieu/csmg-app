@@ -7,7 +7,6 @@
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { ObjectiveCanvasView } from "@/components/objective/objective-canvas-view";
 import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import type { MainCanvasSub } from "@/components/objective/main-canvas-view";
@@ -177,7 +176,7 @@ export default async function ObjectiveCanvasPage({
 
   return (
     <div
-      className="relative min-h-screen w-full"
+      className="fixed inset-0 z-40 overflow-y-auto"
       style={{ background: "#fafafa" }}
     >
       {/* Soft whiteboard grid backdrop, fading at the edges. */}
@@ -195,7 +194,6 @@ export default async function ObjectiveCanvasPage({
         }}
       />
 
-      <HomeTabNav />
       <ModePill
         spaceId={spaceId}
         mode={
@@ -205,7 +203,7 @@ export default async function ObjectiveCanvasPage({
         }
       />
 
-      <div className="relative mx-auto w-full max-w-5xl px-6 pb-24 pt-24">
+      <div className="relative mx-auto w-full max-w-5xl px-6 pb-24 pt-12">
         <Link
           href="/app/objective"
           className="inline-flex items-center gap-1.5 text-[12px] font-medium"

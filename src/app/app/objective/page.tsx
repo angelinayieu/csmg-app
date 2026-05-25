@@ -17,7 +17,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { ArrowRight, Plus, Sparkles } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -53,10 +52,26 @@ export default async function ObjectiveCanvasLandingPage() {
   }
 
   return (
-    <div className="relative min-h-screen w-full" style={{ background: "#fafafa" }}>
-      <HomeTabNav />
+    <div
+      className="fixed inset-0 z-40 overflow-y-auto"
+      style={{ background: "#fafafa" }}
+    >
+      {/* Soft whiteboard dot grid, fades at edges */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          backgroundImage:
+            "radial-gradient(rgba(15,23,42,0.045) 1px, transparent 1px)",
+          backgroundSize: "24px 24px",
+          maskImage:
+            "radial-gradient(ellipse at center, rgba(0,0,0,0.85), transparent 75%)",
+          WebkitMaskImage:
+            "radial-gradient(ellipse at center, rgba(0,0,0,0.85), transparent 75%)",
+        }}
+      />
 
-      <div className="mx-auto max-w-5xl px-6 pb-24 pt-24">
+      <div className="relative mx-auto max-w-5xl px-6 pb-24 pt-24">
         {/* Hero */}
         <div className="mb-10 text-center">
           <div
