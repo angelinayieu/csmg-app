@@ -22,6 +22,7 @@
 // position or polishing a hover state is a one-file change.
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import {
   SlidersHorizontal,
   GitBranch,
@@ -38,6 +39,7 @@ import { ImmersiveHome } from "@/components/home/immersive-home";
 import { LandingMarketingNav } from "@/components/landing/landing-marketing-nav";
 import { AuthModal } from "@/components/auth/auth-modal";
 import { TEMPLATE_LIST } from "@/lib/use-cases/library";
+import { getAuthUser } from "@/lib/supabase/server";
 
 const features = [
   { icon: SlidersHorizontal, label: "Adjustable\nreasoning depth" },
@@ -75,7 +77,16 @@ const ecosystemNodes = [
   { icon: Cloud, label: "Cloud Backup", x: 50, y: 88 },
 ];
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  // If the visitor already has a valid Supabase session cookie, skip the
+  // marketing surface and drop them straight on /app. Supabase SSR
+  // persists the session in cookies, so this "remembers" them across
+  // browser restarts — no re-login needed until the refresh token expires.
+  const user = await getAuthUser();
+  if (user) {
+    redirect("/app");
+  }
+
   const templates = TEMPLATE_LIST.map((t) => ({
     id: t.id,
     name: t.name,

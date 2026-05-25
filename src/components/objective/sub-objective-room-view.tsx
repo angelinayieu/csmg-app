@@ -755,7 +755,7 @@ export function SubObjectiveRoomView({
       {error && (
         <div
           role="alert"
-          className="mb-4 rounded-xl px-3.5 py-2.5 text-[12.5px]"
+          className="mb-4 rounded-xl px-3.5 py-2.5 text-[13px]"
           style={{
             background: "rgba(220,38,38,0.06)",
             border: "1px solid rgba(220,38,38,0.18)",
@@ -1148,7 +1148,7 @@ function SkeletonItem() {
 function EmptyHint() {
   return (
     <div
-      className="rounded-2xl border border-dashed px-3 py-3 text-center text-[11.5px] font-light"
+      className="rounded-2xl border border-dashed px-3 py-3 text-center text-[12px] font-light"
       style={{
         borderColor: appleVibe.stroke.hairline,
         color: appleVibe.text.tertiary,

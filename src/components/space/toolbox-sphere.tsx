@@ -195,11 +195,11 @@ export function ToolboxSphere({ onOpenComment }: ToolboxSphereProps) {
             }}
             title={`${tool.label} (Shift+${tool.kbd})`}
           >
-            <Icon className="h-[15px] w-[15px] flex-shrink-0 text-white/90" strokeWidth={2} />
-            <span className="text-[12.5px] font-medium text-white/95 whitespace-nowrap">
+            <Icon className="h-[15px] w-[15px] flex-shrink-0 text-gray-700" strokeWidth={1.75} />
+            <span className="text-[12.5px] font-medium text-gray-900 whitespace-nowrap">
               {tool.label}
             </span>
-            <span className="kbd-badge ml-1 flex h-[22px] w-[22px] items-center justify-center rounded-full text-[10.5px] font-semibold text-white/85">
+            <span className="kbd-badge ml-1 flex h-[22px] w-[22px] items-center justify-center rounded-full text-[10.5px] font-semibold">
               {tool.kbd}
             </span>
           </button>
@@ -228,10 +228,10 @@ export function ToolboxSphere({ onOpenComment }: ToolboxSphereProps) {
       >
         <LayoutGrid
           className={cn(
-            "h-[22px] w-[22px] text-white transition-transform duration-300 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]",
-            open && "scale-110 rotate-[8deg]"
+            "h-[20px] w-[20px] text-gray-900 transition-transform duration-300",
+            open && "scale-110 rotate-[6deg]"
           )}
-          strokeWidth={2.4}
+          strokeWidth={1.75}
         />
       </button>
     </div>

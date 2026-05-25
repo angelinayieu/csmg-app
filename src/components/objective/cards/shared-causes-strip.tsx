@@ -27,7 +27,7 @@ export function SharedCausesStrip({
   return (
     <div className="mb-3">
       <div
-        className="mb-1.5 text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+        className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em]"
         style={{ color: appleVibe.text.tertiary }}
       >
         Shared root causes · {shared.length}
@@ -42,7 +42,7 @@ export function SharedCausesStrip({
               onMouseEnter={() => onHover(cause)}
               onMouseLeave={() => onHover(null)}
               onClick={() => onHover(cause)}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all"
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium transition-all"
               style={{
                 background: active
                   ? "rgba(245,158,11,0.18)"
@@ -59,7 +59,7 @@ export function SharedCausesStrip({
             >
               <span>{cause}</span>
               <span
-                className="inline-flex h-[16px] min-w-[16px] items-center justify-center rounded-full px-1 text-[9.5px] font-bold"
+                className="inline-flex h-[16px] min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold"
                 style={{
                   background: "rgba(245,158,11,0.22)",
                   color: "rgba(120,53,15,1)",

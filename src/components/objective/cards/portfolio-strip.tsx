@@ -341,7 +341,7 @@ export function PortfolioStrip({
               {archetypeRows.slice(0, 3).map((row) => (
                 <div
                   key={row.key}
-                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5"
+                  className="inline-flex items-center gap-1.5 rounded-full px-2 py-1"
                   style={{
                     background: appleVibe.surface.chip,
                     border: `1px solid ${appleVibe.stroke.hairline}`,
@@ -354,24 +354,29 @@ export function PortfolioStrip({
                   }
                 >
                   <span
-                    className="font-mono text-[10px] font-semibold"
+                    className="font-mono text-[11px] font-semibold"
                     style={{ color: appleVibe.text.primary }}
                   >
                     {row.count}
                   </span>
-                  <div className="flex items-center gap-0.5">
+                  <div className="flex items-center gap-1">
                     {row.triple.map((t, i) =>
                       t ? (
                         <span
                           key={i}
-                          className="text-[10px] font-medium"
-                          style={{ color: t.color }}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium"
+                          style={{ color: appleVibe.text.secondary }}
                         >
+                          <span
+                            className="h-1 w-1 flex-shrink-0 rounded-full"
+                            style={{ background: t.color }}
+                            aria-hidden
+                          />
                           {t.label}
                           {i < row.triple.length - 1 &&
                             row.triple[i + 1] && (
                               <span
-                                className="mx-0.5"
+                                className="ml-0.5"
                                 style={{ color: appleVibe.text.faint }}
                               >
                                 ×
@@ -385,7 +390,7 @@ export function PortfolioStrip({
               ))}
               {archetypeRows.length > 3 && (
                 <span
-                  className="text-[10.5px] font-light"
+                  className="text-[11px] font-light"
                   style={{ color: appleVibe.text.tertiary }}
                 >
                   +{archetypeRows.length - 3} more
@@ -394,7 +399,7 @@ export function PortfolioStrip({
             </div>
           ) : (
             <span
-              className="text-[11px] font-light"
+              className="text-[12px] font-light"
               style={{ color: appleVibe.text.tertiary }}
             >
               No chains formed yet — approve correlations to populate.
@@ -407,15 +412,10 @@ export function PortfolioStrip({
             <button
               type="button"
               onClick={(e) => {
-                // Don't toggle the strip — gaps chip is its own
-                // affordance. Scroll the side panel into view so
-                // the user can act on the gap (either via the
-                // retry CTA when no chains exist, or by approving
-                // chains that touch the gap categories).
                 e.stopPropagation();
                 onGapsClick?.();
               }}
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors"
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors"
               style={{
                 background: "rgba(217,119,6,0.10)",
                 color: "rgba(146,64,14,0.95)",
@@ -430,7 +430,7 @@ export function PortfolioStrip({
           )}
           {diversity && (
             <span
-              className="text-[10.5px] font-light"
+              className="text-[11px] font-light"
               style={{ color: appleVibe.text.tertiary }}
             >
               <span className="font-mono font-semibold">
@@ -463,7 +463,7 @@ export function PortfolioStrip({
           {/* Lane coverage */}
           <div>
             <div
-              className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+              className="text-[11px] font-semibold uppercase tracking-[0.12em]"
               style={{ color: appleVibe.text.tertiary }}
             >
               Lane coverage
@@ -542,7 +542,7 @@ export function PortfolioStrip({
           {gapWarnings.length > 0 && (
             <div>
               <div
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 Unaddressed dimensions
@@ -551,7 +551,7 @@ export function PortfolioStrip({
                 {gapWarnings.map((g, i) => (
                   <li
                     key={i}
-                    className="flex items-center gap-2 text-[11.5px] font-light"
+                    className="flex items-center gap-2 text-[13px] font-light"
                     style={{ color: appleVibe.text.secondary }}
                   >
                     <AlertTriangle
@@ -559,8 +559,20 @@ export function PortfolioStrip({
                       strokeWidth={2}
                       style={{ color: "rgba(217,119,6,0.95)" }}
                     />
-                    <span style={{ color: g.color, fontWeight: 600 }}>
-                      {g.lane} · {g.label}
+                    <span className="inline-flex items-center gap-1">
+                      <span
+                        className="h-1 w-1 flex-shrink-0 rounded-full"
+                        style={{ background: g.color }}
+                        aria-hidden
+                      />
+                      <span
+                        style={{
+                          color: appleVibe.text.primary,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {g.lane} · {g.label}
+                      </span>
                     </span>
                     <span style={{ color: appleVibe.text.tertiary }}>
                       has items but no chains touch it — consider a
@@ -576,7 +588,7 @@ export function PortfolioStrip({
           {archetypeRows.length > 0 && (
             <div>
               <div
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 All archetypes
@@ -585,21 +597,27 @@ export function PortfolioStrip({
                 {archetypeRows.map((row) => (
                   <li
                     key={row.key}
-                    className="flex items-center justify-between gap-2 text-[11px]"
+                    className="flex items-center justify-between gap-2 text-[13px]"
                   >
-                    <div className="flex min-w-0 flex-1 items-center gap-1">
+                    <div className="flex min-w-0 flex-1 items-center gap-1.5">
                       {row.triple.map((t, i) =>
                         t ? (
-                          <span key={i} className="flex items-center gap-0.5">
+                          <span key={i} className="flex items-center gap-1">
+                            <span
+                              className="h-1 w-1 flex-shrink-0 rounded-full"
+                              style={{ background: t.color }}
+                              aria-hidden
+                            />
                             <span
                               className="font-medium"
-                              style={{ color: t.color }}
+                              style={{ color: appleVibe.text.primary }}
                             >
                               {t.label}
                             </span>
                             {i < row.triple.length - 1 &&
                               row.triple[i + 1] && (
                                 <span
+                                  className="ml-0.5"
                                   style={{ color: appleVibe.text.faint }}
                                 >
                                   ×
@@ -611,7 +629,7 @@ export function PortfolioStrip({
                     </div>
                     <div className="flex flex-shrink-0 items-center gap-2">
                       <span
-                        className="font-mono text-[10px]"
+                        className="font-mono text-[11px]"
                         style={{ color: appleVibe.text.tertiary }}
                       >
                         {row.approved}/{row.count} approved
@@ -658,8 +676,8 @@ function CoverageColumn({
   return (
     <div>
       <div
-        className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
-        style={{ color }}
+        className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em]"
+        style={{ color: appleVibe.text.secondary }}
       >
         <span
           className="h-1.5 w-1.5 rounded-full"
