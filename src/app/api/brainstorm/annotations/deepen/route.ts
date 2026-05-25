@@ -1,27 +1,30 @@
-// ── POST /api/brainstorm/annotations/generate ─────────────────────
+// ── POST /api/brainstorm/annotations/deepen ─────────────────────
 //
-// Lazily generates phrase annotations for the core objective text
-// of an Objective Canvas. Stores them on the core goal's
-// `annotations` jsonb. Cached read returns existing annotations
-// without re-calling the LLM unless mode="regenerate".
+// Runs the 7-probe deepening LLM call on the core objective's
+// current annotations. Persists the result as a new "deepen"
+// version in annotations_versions, sets active = the deepened set,
+// and returns it.
 //
-// Body: { spaceId, mode?: "initial" | "regenerate" }
+// Body: { spaceId }
+//
+// Failure: if current annotations don't exist yet, returns 409 —
+// the user has to /generate the initial v1 first.
 
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
-import { generateObjectiveAnnotations } from "@/lib/objective-canvas/generate-annotations";
+import { generateDeepenedAnnotations } from "@/lib/objective-canvas/generate-deepen";
 import {
   appendVersion,
   makeVersion,
   parseVersions,
 } from "@/lib/objective-canvas/annotation-versions";
+import type { ObjectiveAnnotation } from "@/lib/objective-canvas/generate-annotations";
 
 export const runtime = "nodejs";
-export const maxDuration = 45;
+export const maxDuration = 60;
 
 interface Body {
   spaceId?: string;
-  mode?: "initial" | "regenerate";
 }
 
 export async function POST(req: NextRequest) {
@@ -35,13 +38,10 @@ export async function POST(req: NextRequest) {
   if (!spaceId) {
     return NextResponse.json({ error: "spaceId required" }, { status: 400 });
   }
-  const mode: "initial" | "regenerate" =
-    body?.mode === "regenerate" ? "regenerate" : "initial";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = auth.supabase as any;
 
-  // Find the canvas's core (parent-less) goal in this space.
   const { data: coreRows, error: coreErr } = await db
     .from("improvement_goals")
     .select(
@@ -57,7 +57,8 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
-  const core = Array.isArray(coreRows) && coreRows.length > 0 ? coreRows[0] : null;
+  const core =
+    Array.isArray(coreRows) && coreRows.length > 0 ? coreRows[0] : null;
   if (!core || core.user_id !== auth.user.id) {
     return NextResponse.json(
       { error: "No core objective in this space" },
@@ -65,25 +66,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const existing = Array.isArray(core.annotations) ? core.annotations : [];
-
-  // Cache short-circuit.
-  if (mode === "initial" && existing.length > 0) {
-    return NextResponse.json({ annotations: existing, cached: true });
+  const v1: ObjectiveAnnotation[] = Array.isArray(core.annotations)
+    ? core.annotations
+    : [];
+  if (v1.length === 0) {
+    return NextResponse.json(
+      { error: "Generate initial annotations before deepening." },
+      { status: 409 },
+    );
   }
 
   const objectiveText: string =
     (typeof core.description === "string" && core.description.trim()) ||
     (typeof core.title === "string" && core.title.trim()) ||
     "";
-  if (objectiveText.length < 4) {
-    return NextResponse.json(
-      { error: "Core objective has no text yet." },
-      { status: 400 },
-    );
-  }
 
-  // Load sub-objectives so we can reference them in the notes.
+  // Load sub-objectives so deepen can keep their linkage.
   const { data: subRows } = await db
     .from("improvement_goals")
     .select("id, title, description")
@@ -101,41 +99,43 @@ export async function POST(req: NextRequest) {
   }));
 
   try {
-    const annotations = await generateObjectiveAnnotations({
+    const v2 = await generateDeepenedAnnotations({
       objective: objectiveText,
+      v1,
       subObjectives,
     });
 
-    // Append as a new "initial" version in the history. Persist both
-    // the denormalized active set and the version snapshot so the
-    // Deepen/Compare loop has something to read from.
     const history = parseVersions(core.annotations_versions);
-    const version = makeVersion(annotations, "initial");
+    // Parent = most recent version id (if any). We treat the
+    // denormalized `annotations` as authoritative — but record the
+    // parent_version_ids as the most-recent entry in history.
+    const parent =
+      history.length > 0 ? history[history.length - 1]!.id : null;
+    const version = makeVersion(v2, "deepen", parent ? [parent] : null);
     const nextHistory = appendVersion(history, version);
 
     const writeRes = await db
       .from("improvement_goals")
       .update({
-        annotations,
+        annotations: v2,
         annotations_versions: nextHistory,
       })
       .eq("id", core.id);
     if (writeRes.error) {
       console.warn(
-        "[annotations/generate] persist failed:",
+        "[annotations/deepen] persist failed:",
         writeRes.error.message,
       );
-      // Soft-fail: still return what we computed so the UI can show.
     }
 
     return NextResponse.json({
-      annotations,
-      cached: false,
+      annotations: v2,
       version_id: version.id,
+      parent_version_id: parent,
     });
   } catch (err) {
     return NextResponse.json(
-      { error: `annotations failed: ${sanitizeErrorMessage(err)}` },
+      { error: `deepen failed: ${sanitizeErrorMessage(err)}` },
       { status: 500 },
     );
   }

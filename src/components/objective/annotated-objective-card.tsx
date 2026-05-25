@@ -799,7 +799,7 @@ function AnnotatedMark({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.97 }}
             transition={{ duration: 0.18, ease: "easeOut" }}
-            className="absolute left-1/2 top-full z-30 mt-2 w-[340px] -translate-x-1/2"
+            className="absolute left-1/2 top-full z-30 mt-2 w-[400px] -translate-x-1/2"
             role="tooltip"
           >
             <PopoverCard
@@ -837,7 +837,7 @@ const TAB_ICONS: Record<TabKey, React.ReactNode> = {
 const TAB_LABEL: Record<TabKey, string> = {
   read: "Read",
   layers: "Layers",
-  like: "Like / Unlike",
+  like: "Like",
   how: "How",
   stakes: "Stakes",
   // Renamed from "⚠" so the unicode triangle doesn't render

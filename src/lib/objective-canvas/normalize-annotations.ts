@@ -20,6 +20,7 @@ import type {
   AnnotationChainHop,
   AnnotationDimension,
   AnnotationExtension,
+  AnnotationFragility,
   AnnotationLayerTag,
   AnnotationScope,
   AnnotationTension,
@@ -44,6 +45,22 @@ function asExtensions(v: unknown): AnnotationExtension[] {
     if (!isRecord(raw)) return [];
     return [{ name: asString(raw.name), why: asString(raw.why) }];
   });
+}
+
+/** v5: fragility is { when, why, sign }. Back-compat: old payloads
+ *  stored fragility as a plain string — promote it to { when } only. */
+function asFragility(raw: unknown): AnnotationFragility | null {
+  if (isRecord(raw)) {
+    const when = asString(raw.when);
+    const why = asString(raw.why);
+    const sign = asString(raw.sign);
+    if (when || why || sign) return { when, why, sign };
+    return null;
+  }
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return { when: raw.trim(), why: "", sign: "" };
+  }
+  return null;
 }
 
 function asAnalogy(raw: unknown): AnnotationAnalogy | null {
@@ -137,7 +154,7 @@ export function normalizeAnnotation(raw: unknown): ObjectiveAnnotation | null {
     mechanism: typeof raw.mechanism === "string" ? raw.mechanism : null,
     frame: typeof raw.frame === "string" ? raw.frame : null,
     stakes: typeof raw.stakes === "string" ? raw.stakes : null,
-    fragility: typeof raw.fragility === "string" ? raw.fragility : null,
+    fragility: asFragility(raw.fragility),
     tensions: asTensions(raw.tensions),
     linked_sub_objective_id:
       typeof raw.linked_sub_objective_id === "string"

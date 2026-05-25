@@ -1,15 +1,15 @@
-// ── POST /api/brainstorm/annotations/generate ─────────────────────
+// ── POST /api/brainstorm/annotations/synthesize ─────────────────
 //
-// Lazily generates phrase annotations for the core objective text
-// of an Objective Canvas. Stores them on the core goal's
-// `annotations` jsonb. Cached read returns existing annotations
-// without re-calling the LLM unless mode="regenerate".
+// Arbitrates between two annotation versions, producing a vfinal +
+// arbitration_record (per-phrase justification). Persists as a new
+// "synthesis" version and sets active.
 //
-// Body: { spaceId, mode?: "initial" | "regenerate" }
+// Body: { spaceId, versionAId, versionBId }
+//   Each id must reference an entry in annotations_versions.
 
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
-import { generateObjectiveAnnotations } from "@/lib/objective-canvas/generate-annotations";
+import { generateSynthesizedAnnotations } from "@/lib/objective-canvas/generate-synthesis";
 import {
   appendVersion,
   makeVersion,
@@ -17,11 +17,12 @@ import {
 } from "@/lib/objective-canvas/annotation-versions";
 
 export const runtime = "nodejs";
-export const maxDuration = 45;
+export const maxDuration = 60;
 
 interface Body {
   spaceId?: string;
-  mode?: "initial" | "regenerate";
+  versionAId?: string;
+  versionBId?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -32,16 +33,26 @@ export async function POST(req: NextRequest) {
   if (parseError) return parseError;
 
   const spaceId = typeof body?.spaceId === "string" ? body.spaceId : "";
-  if (!spaceId) {
-    return NextResponse.json({ error: "spaceId required" }, { status: 400 });
+  const versionAId =
+    typeof body?.versionAId === "string" ? body.versionAId : "";
+  const versionBId =
+    typeof body?.versionBId === "string" ? body.versionBId : "";
+  if (!spaceId || !versionAId || !versionBId) {
+    return NextResponse.json(
+      { error: "spaceId + versionAId + versionBId required" },
+      { status: 400 },
+    );
   }
-  const mode: "initial" | "regenerate" =
-    body?.mode === "regenerate" ? "regenerate" : "initial";
+  if (versionAId === versionBId) {
+    return NextResponse.json(
+      { error: "Pass two distinct version ids." },
+      { status: 400 },
+    );
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = auth.supabase as any;
 
-  // Find the canvas's core (parent-less) goal in this space.
   const { data: coreRows, error: coreErr } = await db
     .from("improvement_goals")
     .select(
@@ -57,7 +68,8 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
-  const core = Array.isArray(coreRows) && coreRows.length > 0 ? coreRows[0] : null;
+  const core =
+    Array.isArray(coreRows) && coreRows.length > 0 ? coreRows[0] : null;
   if (!core || core.user_id !== auth.user.id) {
     return NextResponse.json(
       { error: "No core objective in this space" },
@@ -65,25 +77,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const existing = Array.isArray(core.annotations) ? core.annotations : [];
-
-  // Cache short-circuit.
-  if (mode === "initial" && existing.length > 0) {
-    return NextResponse.json({ annotations: existing, cached: true });
+  const history = parseVersions(core.annotations_versions);
+  const v1 = history.find((v) => v.id === versionAId);
+  const v2 = history.find((v) => v.id === versionBId);
+  if (!v1 || !v2) {
+    return NextResponse.json(
+      { error: "Version ids not found in history." },
+      { status: 404 },
+    );
   }
 
   const objectiveText: string =
     (typeof core.description === "string" && core.description.trim()) ||
     (typeof core.title === "string" && core.title.trim()) ||
     "";
-  if (objectiveText.length < 4) {
-    return NextResponse.json(
-      { error: "Core objective has no text yet." },
-      { status: 400 },
-    );
-  }
 
-  // Load sub-objectives so we can reference them in the notes.
   const { data: subRows } = await db
     .from("improvement_goals")
     .select("id, title, description")
@@ -101,41 +109,44 @@ export async function POST(req: NextRequest) {
   }));
 
   try {
-    const annotations = await generateObjectiveAnnotations({
-      objective: objectiveText,
-      subObjectives,
-    });
+    const { annotations: vfinal, arbitration_record } =
+      await generateSynthesizedAnnotations({
+        objective: objectiveText,
+        v1: v1.annotations,
+        v2: v2.annotations,
+        subObjectives,
+      });
 
-    // Append as a new "initial" version in the history. Persist both
-    // the denormalized active set and the version snapshot so the
-    // Deepen/Compare loop has something to read from.
-    const history = parseVersions(core.annotations_versions);
-    const version = makeVersion(annotations, "initial");
+    const version = makeVersion(
+      vfinal,
+      "synthesis",
+      [v1.id, v2.id],
+      arbitration_record,
+    );
     const nextHistory = appendVersion(history, version);
 
     const writeRes = await db
       .from("improvement_goals")
       .update({
-        annotations,
+        annotations: vfinal,
         annotations_versions: nextHistory,
       })
       .eq("id", core.id);
     if (writeRes.error) {
       console.warn(
-        "[annotations/generate] persist failed:",
+        "[annotations/synthesize] persist failed:",
         writeRes.error.message,
       );
-      // Soft-fail: still return what we computed so the UI can show.
     }
 
     return NextResponse.json({
-      annotations,
-      cached: false,
+      annotations: vfinal,
+      arbitration_record,
       version_id: version.id,
     });
   } catch (err) {
     return NextResponse.json(
-      { error: `annotations failed: ${sanitizeErrorMessage(err)}` },
+      { error: `synthesize failed: ${sanitizeErrorMessage(err)}` },
       { status: 500 },
     );
   }

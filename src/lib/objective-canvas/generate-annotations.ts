@@ -52,6 +52,17 @@ export interface AnnotationTension {
   note: string;
 }
 
+/** Structured pre-mortem on the reading. Replaces v4's plain
+ *  `fragility: string`. Forces tripartite specificity:
+ *    when — the specific triggering condition (no hedges)
+ *    why  — the causal chain that turns condition into failure
+ *    sign — the early-warning signal the user could observe */
+export interface AnnotationFragility {
+  when: string;
+  why: string;
+  sign: string;
+}
+
 export interface AnnotationDimension {
   /** Short noun (≤4 words). */
   name: string;
@@ -89,7 +100,8 @@ export interface ObjectiveAnnotation {
   mechanism: string | null;
   frame: string | null;
   stakes: string | null;
-  fragility: string | null;
+  /** v5 — structured pre-mortem. condition + mechanism + early signal. */
+  fragility: AnnotationFragility | null;
   tensions: AnnotationTension[];
 
   // Connections
@@ -260,7 +272,31 @@ export async function generateObjectiveAnnotations(
     const mechanism = stringOrNull(a.mechanism, 160);
     const frame = stringOrNull(a.frame, 100);
     const stakes = stringOrNull(a.stakes, 200);
-    const fragility = stringOrNull(a.fragility, 200);
+
+    // ── Fragility (v5) — accept structured object; fall back to a
+    //    legacy string by promoting it to { when } only. ──
+    let fragility: AnnotationFragility | null = null;
+    if (a.fragility && typeof a.fragility === "object") {
+      const fr = a.fragility as Record<string, unknown>;
+      const when = stringOrNull(fr.when, 200);
+      const why = stringOrNull(fr.why, 260);
+      const sign = stringOrNull(fr.sign, 180);
+      if (when && why && sign) {
+        fragility = { when, why, sign };
+      } else if (when) {
+        // Partially-filled legacy — keep what we have.
+        fragility = {
+          when,
+          why: why ?? "",
+          sign: sign ?? "",
+        };
+      }
+    } else if (typeof a.fragility === "string") {
+      const s = a.fragility.trim();
+      if (s.length > 0) {
+        fragility = { when: s.slice(0, 200), why: "", sign: "" };
+      }
+    }
 
     const tensions: AnnotationTension[] = Array.isArray(a.tensions)
       ? (a.tensions as unknown[])
