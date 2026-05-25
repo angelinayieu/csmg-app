@@ -40,6 +40,19 @@ export interface RankedStrategyEntry {
    *  Hero bar's POSTURE_LABEL/POSTURE_ACCENT maps fall back gracefully
    *  for vocabulary not in their tables. */
   posture: string;
+  /**
+   * E3 — layer-stratified variant marker, flattened from
+   * `recommendation.layer_focus`. `null` for comprehensive variants
+   * (no focused layer). The strategy-hero shape's chip + left-edge
+   * accent stripe read from these three fields; the seeder + the
+   * shape's on-mount hydration both consume this row to populate the
+   * `activeLayerFocus*` props.
+   */
+  layer_focus: {
+    layer_id: string;
+    label: string;
+    color: string;
+  } | null;
 }
 
 interface TwinProposalRow {
@@ -169,6 +182,15 @@ interface TwinProposalResponse {
    *  drawer passes this through when saving an override so the row is
    *  anchored to the right generation. Null on legacy strategies. */
   strategy_generated_at: string | null;
+  /**
+   * Strategy learning loop — the post-approval dashboard contract:
+   * lagging_indicator + leading_indicators + review_cadence +
+   * pivot_criteria + persistence_signals. Surfaced separately on the
+   * response so the canvas-operational-seed-spawner can spawn a
+   * learning-loop-card without re-downloading the entire ~25kb strategy
+   * recommendation. Null when no strategy has run yet.
+   */
+  learning_loop: StrategicRecommendation["learning_loop"] | null;
 }
 
 export async function GET(
@@ -264,6 +286,24 @@ export async function GET(
             typeof rec?.strategic_posture === "string"
               ? rec.strategic_posture
               : "exploratory_discovery",
+          // E3 — flatten the layer_focus marker if the variant was
+          // generated with a single-layer focus. The full LayerFocus
+          // object on the recommendation carries a rationale string;
+          // we drop that here because the hero-bar/seeder only need
+          // the three fields the chip renders from. Drawer + detail
+          // page can read the full object from the raw recommendation.
+          layer_focus:
+            rec?.layer_focus &&
+            typeof rec.layer_focus === "object" &&
+            typeof rec.layer_focus.layer_id === "string" &&
+            typeof rec.layer_focus.label === "string" &&
+            typeof rec.layer_focus.color === "string"
+              ? {
+                  layer_id: rec.layer_focus.layer_id,
+                  label: rec.layer_focus.label,
+                  color: rec.layer_focus.color,
+                }
+              : null,
         };
       });
   } else if (strategy) {
@@ -288,6 +328,9 @@ export async function GET(
           typeof strategy.strategic_posture === "string"
             ? strategy.strategic_posture
             : "exploratory_discovery",
+        // Single-strategy runs are never layer-stratified (stratification
+        // implies multiple variants comparing layer foci).
+        layer_focus: null,
       },
     ];
   }
@@ -450,6 +493,7 @@ export async function GET(
     provenance: strategy?.provenance ?? null,
     user_override: latestOverride,
     strategy_generated_at: strategyGeneratedAt,
+    learning_loop: strategy?.learning_loop ?? null,
   };
   return NextResponse.json(payload);
 }

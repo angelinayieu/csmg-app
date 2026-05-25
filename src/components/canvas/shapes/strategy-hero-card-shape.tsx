@@ -42,17 +42,24 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowUpRight,
+  Bell,
   ChevronDown,
   Crown,
   ExternalLink,
   Layers,
   Loader2,
+  ScrollText,
   ShieldCheck,
   Sparkles,
   Target,
 } from "lucide-react";
 import type { StrategyHeroCardShape } from "./types";
 import { canvasNavigate } from "@/lib/canvas/canvas-bus";
+import { StrategyQualityBadge } from "@/components/strategy/strategy-quality-badge";
+import type {
+  SignalToAction,
+  StrategyEffectivenessCheck,
+} from "@/types/synthesis";
 
 export const STRATEGY_HERO_DEFAULT_W = 680;
 export const STRATEGY_HERO_DEFAULT_H = 280;
@@ -597,6 +604,27 @@ interface StrategySummary {
     layers: StrategyLayersData | null;
     tactics: TacticData[];
   };
+  // ── New surfacing fields ──
+  // Independent judge verdict + signals + axioms. All optional so older
+  // pipeline runs that didn't generate them just render without these
+  // sections (no crashes, no empty boxes).
+  effectiveness_check?: StrategyEffectivenessCheck | null;
+  signal_to_action?: SignalToAction[];
+  expansion_axioms?: ExpansionAxiomData[];
+  /** Map of entity_id (or UUID) → display name. Used by SignalToAction
+   *  and ExpansionAxioms blocks to render labeled chips without paying
+   *  for the full KG payload. */
+  entity_name_map?: Record<string, string>;
+}
+
+interface ExpansionAxiomData {
+  claim: string;
+  visibility: "EXPLICIT" | "IMPLICIT" | "HIDDEN";
+  load_bearing: "critical" | "important" | "moderate";
+  rests_on_components: string[];
+  if_false: string;
+  validation_path: string;
+  parent_entity_id: string;
 }
 
 interface StrategyProvenance {
@@ -700,6 +728,10 @@ function ExpandedDetail({
   const rec = details.recommendation;
   const prov = rec.provenance;
   const tactics = rec.tactics || [];
+  const effectivenessCheck = details.effectiveness_check ?? null;
+  const signalToAction = details.signal_to_action ?? [];
+  const expansionAxioms = details.expansion_axioms ?? [];
+  const entityNameMap = details.entity_name_map ?? {};
 
   return (
     <div
@@ -716,6 +748,19 @@ function ExpandedDetail({
         paddingRight: 4,
       }}
     >
+      {/* Independent quality badge — outside-judge verdict on the strategy.
+          Sits at the top of expanded so the user sees "should I trust
+          this" before reading any of the strategy's own self-reported
+          provenance. Hides cleanly when older pipeline runs lack the
+          check. Wrapped in a div that stops pointer events from
+          propagating to the card body (otherwise hover/expand-flag
+          toggles inside the badge would collapse the card). */}
+      {effectivenessCheck && (
+        <div onPointerDown={(e) => e.stopPropagation()}>
+          <StrategyQualityBadge check={effectivenessCheck} />
+        </div>
+      )}
+
       {/* Reasoning chain */}
       {rec.reasoning_chain && (
         <DetailSection icon={<Sparkles style={{ width: 11, height: 11 }} />} label="Reasoning" accent={accent}>
@@ -743,6 +788,44 @@ function ExpandedDetail({
       {rec.layers && (
         <DetailSection icon={<Layers style={{ width: 11, height: 11 }} />} label="Layers L4 → L1" accent={accent}>
           <LayersBlock layers={rec.layers} accent={accent} />
+        </DetailSection>
+      )}
+
+      {/* Hidden signals → actions — the "why each action exists" trace.
+          Each row carries entity chips that glow the source kg-node
+          shapes on hover. */}
+      {signalToAction.length > 0 && (
+        <DetailSection
+          icon={<Bell style={{ width: 11, height: 11 }} />}
+          label={`Hidden signals → actions (${signalToAction.length})`}
+          accent={accent}
+        >
+          <SignalToActionBlock
+            items={signalToAction}
+            entityNameMap={entityNameMap}
+            onEntityHover={onTacticHover}
+            onEntityLeave={onTacticLeave}
+            onEntityClick={onTacticClick}
+          />
+        </DetailSection>
+      )}
+
+      {/* Expansion axioms — load-bearing assumptions surfaced during
+          whiteboard expand. Grouped by parent entity. Each parent
+          chip glows the source kg-node on hover. */}
+      {expansionAxioms.length > 0 && (
+        <DetailSection
+          icon={<ScrollText style={{ width: 11, height: 11 }} />}
+          label={`Load-bearing assumptions (${expansionAxioms.length})`}
+          accent={accent}
+        >
+          <ExpansionAxiomsBlock
+            items={expansionAxioms}
+            entityNameMap={entityNameMap}
+            onEntityHover={onTacticHover}
+            onEntityLeave={onTacticLeave}
+            onEntityClick={onTacticClick}
+          />
         </DetailSection>
       )}
 
@@ -1185,6 +1268,414 @@ function TacticsBlock({
                 ))}
               </div>
             )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── SignalToActionBlock ──
+//
+// Renders the hidden-signal → linked-action linkage as a stack of
+// compact cards inside the expanded strategy hero. Mirrors the
+// synthesis-view rendering (synthesis-view.tsx:2284-2341) but in a
+// canvas-friendly density. Each row's connected_entities are
+// clickable chips that trigger the canvas-side glow via the same
+// `strategy-hover:entities` / `strategy-click:entity` events the
+// tactics use.
+//
+// Reuses the same onHover/onLeave/onClick signature as TacticsBlock
+// so the parent can pass the same handlers without bespoke wiring.
+// `hoveredIdx` is unused here (signals don't need a selected state)
+// but kept in the signature for symmetry — the parent's hover state
+// is shared across tactics + signals.
+
+function SignalToActionBlock({
+  items,
+  entityNameMap,
+  onEntityHover,
+  onEntityLeave,
+  onEntityClick,
+}: {
+  items: SignalToAction[];
+  entityNameMap: Record<string, string>;
+  onEntityHover: (i: number, entityIds: string[]) => void;
+  onEntityLeave: () => void;
+  onEntityClick: (entityIds: string[]) => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+      {items.map((s, i) => {
+        const sourceLabel =
+          s.source === "hidden_signal"
+            ? "Research"
+            : s.source === "discovered_connection"
+              ? "Inferred edge"
+              : "Domain inference";
+        const entityIds = (s.connected_entities ?? []).filter(Boolean);
+        return (
+          <div
+            key={i}
+            onMouseEnter={() => onEntityHover(i, entityIds)}
+            onMouseLeave={onEntityLeave}
+            onClick={(e) => {
+              e.stopPropagation();
+              onEntityClick(entityIds);
+            }}
+            style={{
+              padding: "8px 10px",
+              borderRadius: 8,
+              cursor: entityIds.length > 0 ? "pointer" : "default",
+              background: "rgba(254, 252, 232, 0.7)",
+              border: "1px solid rgba(245, 158, 11, 0.25)",
+              transition: "background 140ms ease, border 140ms ease",
+            }}
+            title={
+              entityIds.length > 0
+                ? "Hover to glow source entities · click to pan camera"
+                : undefined
+            }
+          >
+            {/* Source tag + entity chips inline */}
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 4,
+                alignItems: "center",
+                marginBottom: 4,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 9,
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  background: "rgba(245, 158, 11, 0.14)",
+                  color: "#92400e",
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  textTransform: "uppercase",
+                }}
+              >
+                {sourceLabel}
+              </span>
+              {entityIds.slice(0, 4).map((eid) => {
+                const name = entityNameMap[eid];
+                return (
+                  <span
+                    key={eid}
+                    style={{
+                      fontSize: 9,
+                      padding: "1px 5px",
+                      borderRadius: 4,
+                      background: "rgba(255,255,255,0.85)",
+                      color: "#475569",
+                      fontWeight: 600,
+                      fontFamily: "monospace",
+                      border: "1px solid rgba(11,13,18,0.08)",
+                    }}
+                    title={name ? `${eid}: ${name}` : eid}
+                  >
+                    {eid}
+                    {name ? `: ${name.slice(0, 16)}${name.length > 16 ? "…" : ""}` : ""}
+                  </span>
+                );
+              })}
+            </div>
+            {/* Signal name */}
+            <div
+              style={{
+                fontSize: 11.5,
+                fontWeight: 600,
+                color: "rgba(11,13,18,0.88)",
+                marginBottom: 3,
+              }}
+            >
+              {s.signal}
+            </div>
+            {/* Why it matters */}
+            {s.why_it_matters && (
+              <div
+                style={{
+                  fontSize: 10.5,
+                  color: "#64748b",
+                  lineHeight: 1.45,
+                  marginBottom: 4,
+                }}
+              >
+                {s.why_it_matters}
+              </div>
+            )}
+            {/* Linked action — green pill */}
+            {s.linked_action && (
+              <div
+                style={{
+                  fontSize: 10,
+                  padding: "3px 7px",
+                  borderRadius: 5,
+                  background: "rgba(16, 185, 129, 0.08)",
+                  color: "#047857",
+                  lineHeight: 1.4,
+                  marginBottom: 3,
+                }}
+              >
+                <span style={{ fontWeight: 700 }}>Action: </span>
+                {s.linked_action}
+              </div>
+            )}
+            {/* If ignored — red pill */}
+            {s.if_ignored && (
+              <div
+                style={{
+                  fontSize: 10,
+                  padding: "3px 7px",
+                  borderRadius: 5,
+                  background: "rgba(239, 68, 68, 0.06)",
+                  color: "#b91c1c",
+                  lineHeight: 1.4,
+                }}
+              >
+                <span style={{ fontWeight: 700 }}>If ignored: </span>
+                {s.if_ignored}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── ExpansionAxiomsBlock ──
+//
+// Renders mini-axioms (load-bearing assumptions surfaced during
+// whiteboard /expand calls) grouped by their parent entity. Mirrors
+// synthesis-view.tsx:1278-1350 in a denser canvas-friendly form.
+//
+// Each parent-entity group is hoverable — hovering glows that parent
+// entity on the canvas via the same `strategy-hover:entities` event
+// the tactics use. Clicking pans the camera. Inside each group, the
+// axioms are sorted by load-bearing (critical first) for scannability.
+//
+// Visibility tag (HIDDEN/IMPLICIT/EXPLICIT) gets a color treatment so
+// the eye lands on HIDDEN red dots first — those are the assumptions
+// the user most needs to be aware of.
+
+const VISIBILITY_META: Record<
+  ExpansionAxiomData["visibility"],
+  { label: string; bg: string; fg: string }
+> = {
+  HIDDEN: { label: "Hidden", bg: "rgba(239,68,68,0.10)", fg: "#b91c1c" },
+  IMPLICIT: { label: "Implicit", bg: "rgba(245,158,11,0.10)", fg: "#92400e" },
+  EXPLICIT: { label: "Explicit", bg: "rgba(100,116,139,0.10)", fg: "#475569" },
+};
+
+function ExpansionAxiomsBlock({
+  items,
+  entityNameMap,
+  onEntityHover,
+  onEntityLeave,
+  onEntityClick,
+}: {
+  items: ExpansionAxiomData[];
+  entityNameMap: Record<string, string>;
+  onEntityHover: (i: number, entityIds: string[]) => void;
+  onEntityLeave: () => void;
+  onEntityClick: (entityIds: string[]) => void;
+}) {
+  // Group by parent_entity_id. Preserve first-seen order so the most
+  // important axioms (already prioritized by the endpoint) appear
+  // first.
+  const groups = new Map<string, ExpansionAxiomData[]>();
+  for (const ax of items) {
+    const key = ax.parent_entity_id || "unattached";
+    const list = groups.get(key) ?? [];
+    list.push(ax);
+    groups.set(key, list);
+  }
+
+  let parentIndex = 0;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+      {Array.from(groups.entries()).map(([parentId, axioms]) => {
+        const parentName = entityNameMap[parentId];
+        const entityIdsForGlow = parentId === "unattached" ? [] : [parentId];
+        const idx = parentIndex++;
+        return (
+          <div
+            key={parentId}
+            onMouseEnter={() =>
+              entityIdsForGlow.length > 0 && onEntityHover(idx, entityIdsForGlow)
+            }
+            onMouseLeave={onEntityLeave}
+            style={{
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: "rgba(239, 246, 255, 0.4)",
+              border: "1px solid rgba(59, 130, 246, 0.18)",
+            }}
+          >
+            {/* Parent entity header — clickable to pan */}
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                if (entityIdsForGlow.length > 0) onEntityClick(entityIdsForGlow);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                marginBottom: 6,
+                paddingBottom: 5,
+                borderBottom: "1px solid rgba(59, 130, 246, 0.12)",
+                cursor: entityIdsForGlow.length > 0 ? "pointer" : "default",
+              }}
+              title={
+                entityIdsForGlow.length > 0
+                  ? "Click to pan camera to this entity"
+                  : undefined
+              }
+            >
+              <span
+                style={{
+                  fontSize: 9.5,
+                  fontFamily: "monospace",
+                  color: "#3730a3",
+                  fontWeight: 700,
+                }}
+              >
+                {parentId === "unattached" ? "—" : parentId}
+              </span>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "rgba(11,13,18,0.84)",
+                  flex: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {parentName ?? (parentId === "unattached" ? "Unattached" : "Unknown entity")}
+              </span>
+              <span
+                style={{
+                  fontSize: 9,
+                  color: "#64748b",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {axioms.length} axiom{axioms.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            {/* Axioms list */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {axioms.map((ax, i) => {
+                const visMeta = VISIBILITY_META[ax.visibility];
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      padding: "5px 7px",
+                      borderRadius: 6,
+                      background: "rgba(255,255,255,0.88)",
+                      border: "1px solid rgba(11,13,18,0.04)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 3,
+                        marginBottom: 3,
+                        alignItems: "center",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 9,
+                          padding: "1px 5px",
+                          borderRadius: 4,
+                          background: visMeta.bg,
+                          color: visMeta.fg,
+                          fontWeight: 700,
+                          letterSpacing: "0.04em",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {visMeta.label}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 9,
+                          padding: "1px 5px",
+                          borderRadius: 4,
+                          background: "rgba(100,116,139,0.10)",
+                          color: "#475569",
+                          fontWeight: 600,
+                          letterSpacing: "0.04em",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {ax.load_bearing}
+                      </span>
+                      {ax.rests_on_components.length > 0 && (
+                        <span
+                          style={{
+                            marginLeft: "auto",
+                            fontSize: 9,
+                            color: "#94a3b8",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                          title={ax.rests_on_components.join(", ")}
+                        >
+                          rests on {ax.rests_on_components.length}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 500,
+                        color: "rgba(11,13,18,0.86)",
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      {ax.claim}
+                    </div>
+                    {ax.if_false && (
+                      <div
+                        style={{
+                          marginTop: 3,
+                          fontSize: 10,
+                          color: "#b91c1c",
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        <span style={{ fontWeight: 700 }}>If false: </span>
+                        {ax.if_false}
+                      </div>
+                    )}
+                    {ax.validation_path && (
+                      <div
+                        style={{
+                          marginTop: 2,
+                          fontSize: 9.5,
+                          fontStyle: "italic",
+                          color: "#64748b",
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        Test: {ax.validation_path}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         );
       })}
