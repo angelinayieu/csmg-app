@@ -2,13 +2,14 @@
 
 // ── Outcome Card (v2) ──
 //
-// Terminal-state representation. Simpler than pain/feature: just
-// the state title + measured_by signal. No expand-collapse — the
-// measured_by line is short enough to show inline.
-//
-// Supports the room's hover-to-link signal so a card lights up
-// when an upstream pain or feature linked to it is hovered.
+// Terminal-state representation. Click to expand and see the
+// upstream features that produce it (plus a rollup hint to the
+// objective). Measured_by signal wraps freely — no clamp — so
+// "8+ min/session" style numbers always render in full.
 
+import { motion } from "framer-motion";
+import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export interface OutcomeCardItem {
@@ -22,47 +23,208 @@ interface Props {
   item: OutcomeCardItem;
   linked?: boolean;
   onHover?: (id: string | null) => void;
+  /** Features that produce this outcome — derived from edges
+   *  (feature → this outcome) sorted by strength descending. */
+  producedBy?: Array<{ id: string; name: string; pct: number }>;
+  /** Pains this outcome dissolves — derived from edges
+   *  (pain → this outcome) sorted by strength descending. */
+  dissolves?: Array<{ id: string; name: string; pct: number }>;
+  /** True when this outcome has an edge to the objective anchor —
+   *  drives the "rolls up to the room objective" line. */
+  rollsUp?: boolean;
 }
 
 const OUTCOME_COLOR = appleVibe.stage.outcomes;
 
-export function OutcomeCard({ item, linked = false, onHover }: Props) {
+export function OutcomeCard({
+  item,
+  linked = false,
+  onHover,
+  producedBy = [],
+  dissolves = [],
+  rollsUp = false,
+}: Props) {
+  const [expanded, setExpanded] = useState(false);
+  const hasExpandContent =
+    producedBy.length > 0 || dissolves.length > 0 || rollsUp;
+
   return (
-    <li
+    <motion.li
+      layout
+      transition={{
+        layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] },
+      }}
       className="rounded-2xl px-4 py-3 transition-all"
       style={{
-        background: "rgba(255,255,255,0.65)",
-        border: `1px solid ${linked ? OUTCOME_COLOR : appleVibe.stroke.hairline}`,
+        background: expanded
+          ? "rgba(255,255,255,0.94)"
+          : "rgba(255,255,255,0.65)",
+        border: `1px solid ${
+          linked
+            ? OUTCOME_COLOR
+            : expanded
+              ? "rgba(15,23,42,0.12)"
+              : appleVibe.stroke.hairline
+        }`,
         borderRadius: appleVibe.radius.md,
         boxShadow: linked
           ? `0 0 0 3px ${OUTCOME_COLOR}1F, 0 8px 22px -12px ${OUTCOME_COLOR}66`
           : undefined,
+        cursor: hasExpandContent ? "pointer" : "default",
       }}
+      onClick={() => hasExpandContent && setExpanded((v) => !v)}
       onMouseEnter={() => onHover?.(item.id)}
       onMouseLeave={() => onHover?.(null)}
     >
       <h4
-        className="line-clamp-2 text-[13.5px] font-semibold leading-snug tracking-tight"
+        className="text-[13.5px] font-semibold leading-snug tracking-tight"
         style={{ color: appleVibe.text.primary, letterSpacing: "-0.005em" }}
       >
         {item.name}
       </h4>
+
       {item.measured_by && (
-        <div className="mt-1.5 flex items-baseline gap-1.5">
-          <span
+        <div className="mt-2">
+          <div
             className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
             style={{ color: appleVibe.text.tertiary }}
           >
             Measured by
-          </span>
-          <span
-            className="line-clamp-1 text-[11.5px] font-light"
+          </div>
+          <p
+            className="mt-0.5 text-[11.5px] font-light leading-snug"
             style={{ color: appleVibe.text.secondary }}
           >
             {item.measured_by}
-          </span>
+          </p>
         </div>
       )}
-    </li>
+
+      {/* Collapsed meta — counts only when there's something to drill into */}
+      {!expanded && hasExpandContent && (
+        <div
+          className="mt-2 flex items-center gap-1 text-[10.5px] font-light"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          {producedBy.length > 0 && (
+            <span>
+              {producedBy.length} produced by
+            </span>
+          )}
+          {dissolves.length > 0 && (
+            <>
+              {producedBy.length > 0 && (
+                <span style={{ color: appleVibe.text.faint }}>·</span>
+              )}
+              <span>
+                dissolves {dissolves.length} pain{dissolves.length === 1 ? "" : "s"}
+              </span>
+            </>
+          )}
+          {rollsUp && (
+            <>
+              {(producedBy.length > 0 || dissolves.length > 0) && (
+                <span style={{ color: appleVibe.text.faint }}>·</span>
+              )}
+              <span>rolls up</span>
+            </>
+          )}
+          <ChevronDown
+            className="ml-auto h-3 w-3"
+            strokeWidth={2}
+            style={{ color: appleVibe.text.tertiary }}
+          />
+        </div>
+      )}
+
+      {expanded && (
+        <motion.div
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.22, ease: "easeOut" }}
+          onClick={(e) => e.stopPropagation()}
+          className="mt-3"
+        >
+          {producedBy.length > 0 && (
+            <div>
+              <div
+                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                Produced by
+              </div>
+              <ul className="mt-1.5 space-y-1">
+                {producedBy.slice(0, 4).map((f) => (
+                  <li
+                    key={f.id}
+                    className="flex items-center justify-between text-[11.5px]"
+                  >
+                    <span
+                      className="line-clamp-1 font-medium"
+                      style={{ color: appleVibe.text.primary }}
+                    >
+                      ← {f.name}
+                    </span>
+                    <span
+                      className="ml-2 flex-shrink-0 font-mono text-[10px]"
+                      style={{ color: appleVibe.text.tertiary }}
+                    >
+                      {f.pct}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {dissolves.length > 0 && (
+            <div className="mt-3">
+              <div
+                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                Dissolves pains
+              </div>
+              <ul className="mt-1.5 space-y-1">
+                {dissolves.slice(0, 4).map((p) => (
+                  <li
+                    key={p.id}
+                    className="flex items-center justify-between text-[11.5px]"
+                  >
+                    <span
+                      className="line-clamp-1 font-medium"
+                      style={{ color: appleVibe.text.primary }}
+                    >
+                      ← {p.name}
+                    </span>
+                    <span
+                      className="ml-2 flex-shrink-0 font-mono text-[10px]"
+                      style={{ color: appleVibe.text.tertiary }}
+                    >
+                      {p.pct}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {rollsUp && (
+            <div className="mt-3">
+              <div
+                className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                style={{
+                  background: `${OUTCOME_COLOR}14`,
+                  color: OUTCOME_COLOR,
+                  border: `1px solid ${OUTCOME_COLOR}33`,
+                }}
+              >
+                → rolls up to the room objective
+              </div>
+            </div>
+          )}
+        </motion.div>
+      )}
+    </motion.li>
   );
 }

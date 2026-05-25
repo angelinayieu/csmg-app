@@ -48,6 +48,10 @@ export interface RoomEdge {
   polarity: string | null;
   conditions: string | null;
   approved_at?: string | null;
+  /** LLM-named mechanism (specific lever) lives under
+   *  agent_feedback.mechanism. Optional — surfaces in the side
+   *  panel as a small pill above the rationale. */
+  agent_feedback?: Record<string, unknown> | null;
 }
 
 export interface RoomLane {
@@ -285,6 +289,79 @@ export function SubObjectiveRoomView({
     }
     for (const v of map.values()) v.sort((a, b) => b.pct - a.pct);
     return map;
+  }, [edges, entityIndex]);
+
+  // Outcome → list of features that produce it (feature → outcome edges).
+  const producedByMap = useMemo(() => {
+    const map = new Map<
+      string,
+      Array<{ id: string; name: string; pct: number }>
+    >();
+    for (const e of edges) {
+      const src = entityIndex.get(e.source_entity_id);
+      const tgt = entityIndex.get(e.target_entity_id);
+      if (!src || !tgt) continue;
+      const out =
+        src.layer === "outcomes" ? src : tgt.layer === "outcomes" ? tgt : null;
+      const feat =
+        src.layer === "features"
+          ? src
+          : tgt.layer === "features"
+            ? tgt
+            : null;
+      if (!out || !feat) continue;
+      const list = map.get(out.id) ?? [];
+      list.push({
+        id: feat.id,
+        name: feat.name,
+        pct: Math.round((e.strength ?? 0) * 100),
+      });
+      map.set(out.id, list);
+    }
+    for (const v of map.values()) v.sort((a, b) => b.pct - a.pct);
+    return map;
+  }, [edges, entityIndex]);
+
+  // Outcome → list of pains it dissolves (pain → outcome edges).
+  const outcomeDissolvesMap = useMemo(() => {
+    const map = new Map<
+      string,
+      Array<{ id: string; name: string; pct: number }>
+    >();
+    for (const e of edges) {
+      const src = entityIndex.get(e.source_entity_id);
+      const tgt = entityIndex.get(e.target_entity_id);
+      if (!src || !tgt) continue;
+      const out =
+        src.layer === "outcomes" ? src : tgt.layer === "outcomes" ? tgt : null;
+      const pain =
+        src.layer === "pain" ? src : tgt.layer === "pain" ? tgt : null;
+      if (!out || !pain) continue;
+      const list = map.get(out.id) ?? [];
+      list.push({
+        id: pain.id,
+        name: pain.name,
+        pct: Math.round((e.strength ?? 0) * 100),
+      });
+      map.set(out.id, list);
+    }
+    for (const v of map.values()) v.sort((a, b) => b.pct - a.pct);
+    return map;
+  }, [edges, entityIndex]);
+
+  // Outcomes that have an edge to the objective anchor → "rolls up".
+  const rollsUpSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) {
+      const src = entityIndex.get(e.source_entity_id);
+      const tgt = entityIndex.get(e.target_entity_id);
+      if (!src || !tgt) continue;
+      if (src.layer === "outcomes" && tgt.layer === "objective")
+        set.add(src.id);
+      else if (tgt.layer === "outcomes" && src.layer === "objective")
+        set.add(tgt.id);
+    }
+    return set;
   }, [edges, entityIndex]);
 
   // Identify the keystone feature (counters most pains).
@@ -597,6 +674,9 @@ export function SubObjectiveRoomView({
                         item={o}
                         linked={isLinked}
                         onHover={setHoveredEntityId}
+                        producedBy={producedByMap.get(o.id) ?? []}
+                        dissolves={outcomeDissolvesMap.get(o.id) ?? []}
+                        rollsUp={rollsUpSet.has(o.id)}
                       />
                     </div>
                   );

@@ -365,9 +365,41 @@ export function CorrelationSidePanel({
                       {tgt.name}
                     </span>
                   </div>
+
+                  {/* Mechanism — the specific lever name the LLM
+                      identified. Shown as a small pill so it reads
+                      as a named THING the user can reason about,
+                      not just narrative prose. */}
+                  {(() => {
+                    const mech =
+                      e.agent_feedback &&
+                      typeof e.agent_feedback === "object" &&
+                      typeof (e.agent_feedback as Record<string, unknown>)
+                        .mechanism === "string"
+                        ? ((e.agent_feedback as Record<string, unknown>)
+                            .mechanism as string)
+                        : null;
+                    if (!mech) return null;
+                    return (
+                      <div className="mt-1.5">
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.06em]"
+                          style={{
+                            background: "rgba(15,23,42,0.05)",
+                            color: appleVibe.text.secondary,
+                            border: `1px solid ${appleVibe.stroke.hairline}`,
+                          }}
+                          title="Mechanism — the specific lever this edge pulls"
+                        >
+                          via {mech}
+                        </span>
+                      </div>
+                    );
+                  })()}
+
                   {e.conditions && (
                     <p
-                      className="mt-1 line-clamp-2 text-[11px] font-light leading-snug"
+                      className="mt-1.5 line-clamp-3 text-[11px] font-light leading-snug"
                       style={{ color: appleVibe.text.secondary }}
                       title={e.conditions}
                     >

@@ -408,6 +408,7 @@ interface CorrelationShape {
     relationship?: unknown;
     strength?: unknown;
     polarity?: unknown;
+    mechanism?: unknown;
     rationale?: unknown;
   }>;
 }
@@ -429,6 +430,7 @@ async function generateCorrelations(
     strength: number;
     polarity: "positive" | "negative" | "ambiguous";
     rationale: string;
+    mechanism: string;
   }>
 > {
   if (items.length < 2) return [];
@@ -439,24 +441,49 @@ async function generateCorrelations(
   }));
   const idByTag = new Map(tagged.map((t) => [t.tag, t.id]));
 
+  // Counts to enforce quotas in the prompt so the LLM doesn't
+  // exclusively produce pain→feature edges and leave the outcome
+  // lane disconnected from the rest.
+  const layerCounts = items.reduce(
+    (acc, it) => {
+      acc[it.layer] = (acc[it.layer] ?? 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+
   const system = `You rank cross-layer correlations inside one sub-objective room.
 
-Items live in four layers (Pain → Features → Outcomes → Objective). Produce edges that connect items across layers — never connect items "because they're in the same room."
+Items live in four layers (Pain → Features → Outcomes → Objective). Produce edges that connect items ACROSS layers — never within the same layer, never "because they're in the same room."
 
-Allowed directions:
-  pain → features         (feature addresses this pain)
-  features → outcomes     (feature produces this outcome)
-  pain → outcomes         (the absence-of-pain itself is the outcome)
-  outcomes → objective    (outcome rolls up to the parent)
-  features → pain         (rare — only if feature notably AGGRAVATES it)
+ALLOWED DIRECTIONS (each is a distinct kind of insight):
+  pain → features         (the feature ADDRESSES this pain)
+  features → outcomes     (the feature PRODUCES this outcome)
+  pain → outcomes         (the absence-of-this-pain IS the outcome)
+  outcomes → objective    (the outcome ROLLS UP to the room objective)
+  features → pain         (rare — only if a feature notably AGGRAVATES a pain)
+
+QUOTAS (required minimums — do NOT skip any layer pair):
+  ≥ 2 pain → features edges
+  ≥ 2 features → outcomes edges      (outcomes that have NO incoming feature edge are a failure of the analysis)
+  ≥ 1 outcome → objective edge        (the room must visibly roll up)
+  ≥ 1 pain → outcome edge             (when an outcome is literally "absence of this pain")
+Total: 6-14 edges across the room. If quotas can't be met because an outcome / objective genuinely has no upstream link, you MUST surface why in the rationale (e.g. "weak — outcome lacks a producing mechanism").
 
 EDGE PROPERTIES:
-- relationship: SHORT lowercase verb phrase (1-3 words).
+- relationship: SHORT lowercase verb phrase (1-3 words). Examples: "addresses", "produces", "rolls up to", "dissolves", "depends on", "aggravates".
 - strength ∈ [0,1]: load-bearing-ness. ≥0.7 critical, 0.4-0.7 supportive, <0.4 weak.
 - polarity: positive | negative | ambiguous.
-- rationale: ONE sentence on the mechanism. No tautologies.
+- mechanism: 2-5 word NOUN PHRASE naming the SPECIFIC LEVER this edge pulls.
+    Examples: "reward feedback loop", "predictive query expansion", "social proof cue",
+    "intrinsic motivation hook", "cognitive load reduction".
+    NOT generic ("user engagement", "personalization improvement") — those are restatements,
+    not levers. The mechanism is the THING THAT MAKES THE EDGE WORK.
+- rationale: ONE or TWO sentences explaining WHY this specific source attacks this specific target
+    via the named mechanism. Reference the user's actual domain. NOT a tautology
+    ("X helps Y because X helps Y" is forbidden).
 
-5-12 strongest edges. Quality > coverage. Drop strength < 0.3.
+Quality over coverage: drop any edge whose strength would be < 0.3.
 
 Return strict JSON.`;
 
@@ -465,7 +492,9 @@ Return strict JSON.`;
 ITEMS BY TAG:
 ${tagged.map((it) => `  ${it.tag} [${it.layer}] ${it.name}`).join("\n")}
 
-Generate 5-12 cross-layer edges using the tags above.`;
+INVENTORY: ${layerCounts.pain ?? 0} pain, ${layerCounts.features ?? 0} features, ${layerCounts.outcomes ?? 0} outcomes, ${layerCounts.objective ?? 0} objective.
+
+Generate 6-14 cross-layer edges per the quotas in the system instructions. Every outcome should have ≥1 incoming feature edge; if it doesn't, the analysis has a gap.`;
 
   const raw = await llmJSON<CorrelationShape>({
     system,
@@ -490,6 +519,7 @@ Generate 5-12 cross-layer edges using the tags above.`;
                   type: "string",
                   enum: ["positive", "negative", "ambiguous"],
                 },
+                mechanism: { type: "string" },
                 rationale: { type: "string" },
               },
               required: [
@@ -498,6 +528,7 @@ Generate 5-12 cross-layer edges using the tags above.`;
                 "relationship",
                 "strength",
                 "polarity",
+                "mechanism",
                 "rationale",
               ],
             },
@@ -507,7 +538,7 @@ Generate 5-12 cross-layer edges using the tags above.`;
       },
     },
     temperature: 0.4,
-    maxTokens: 2200,
+    maxTokens: 2800,
   });
   const cleaned: Array<{
     sourceId: string;
@@ -516,6 +547,7 @@ Generate 5-12 cross-layer edges using the tags above.`;
     strength: number;
     polarity: "positive" | "negative" | "ambiguous";
     rationale: string;
+    mechanism: string;
   }> = [];
   for (const e of raw?.edges ?? []) {
     const srcTag =
@@ -543,6 +575,8 @@ Generate 5-12 cross-layer edges using the tags above.`;
         : "positive";
     const rationale =
       typeof e?.rationale === "string" ? e.rationale.trim() : "";
+    const mechanism =
+      typeof e?.mechanism === "string" ? e.mechanism.trim().slice(0, 60) : "";
     cleaned.push({
       sourceId: srcId,
       targetId: tgtId,
@@ -550,9 +584,12 @@ Generate 5-12 cross-layer edges using the tags above.`;
       strength,
       polarity,
       rationale,
+      mechanism,
     });
   }
-  return cleaned.slice(0, 12);
+  // Don't aggressively cap at 12 anymore — the prompt allows up to 14
+  // to make room for the cross-layer quotas (pain→outcome, outcome→objective).
+  return cleaned.slice(0, 14);
 }
 
 // ── Orchestrator ───────────────────────────────────────────────────

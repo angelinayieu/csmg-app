@@ -203,10 +203,12 @@ export default async function SubObjectiveRoomPage({
   }
 
   // ── Edges scoped to this sub-objective ──
+  // agent_feedback carries the LLM-named mechanism (the specific
+  // lever) for the side panel to surface as deeper insight.
   const { data: edgeRows } = await db
     .from("edges")
     .select(
-      "id, source_entity_id, target_entity_id, relationship_type, strength, polarity, conditions, approved_at",
+      "id, source_entity_id, target_entity_id, relationship_type, strength, polarity, conditions, approved_at, agent_feedback",
     )
     .eq("parent_sub_objective_id", subId);
   const edges: RoomEdge[] = ((edgeRows ?? []) as RoomEdge[]) ?? [];

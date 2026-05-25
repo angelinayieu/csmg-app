@@ -349,6 +349,13 @@ export async function POST(req: NextRequest) {
       polarity: mapPolarity(c.polarity),
       confidence: 0.6,
       conditions: c.rationale.slice(0, 500),
+      // Mechanism (the specific lever name) lives in the jsonb
+      // agent_feedback so the side panel can render it as a small
+      // pill above the rationale — adds interpretive depth without
+      // needing a schema migration.
+      agent_feedback: c.mechanism
+        ? { mechanism: c.mechanism.slice(0, 60) }
+        : {},
     }));
     const edgeInsert = await db.from("edges").insert(edgeRows).select("id");
     if (edgeInsert.error) {
