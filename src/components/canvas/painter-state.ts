@@ -311,6 +311,16 @@ export interface PainterState {
    *  → synthesis). Tracked so cleanup can delete them alongside the
    *  shapes they connect. */
   rowTetherArrowIds: TLShapeId[];
+  // ── Hidden signals (2026-05-19) ────────────────────────────────
+  /** signal_detected.signalId → shape id of the painted HiddenSignal
+   *  shape. Keyed by the deterministic signalId so Pass 2 re-emissions
+   *  upsert the same shape rather than stacking duplicates. Cleared
+   *  on run completion alongside the other run-scoped caches. */
+  hiddenSignalShapesById: Map<string, TLShapeId>;
+  /** Single per-space cluster shape id (aggregates the suppressed
+   *  long tail of lower-priority signals). Null until the first
+   *  signal_cluster event lands; upserted on Pass 2. */
+  hiddenSignalClusterShapeId: TLShapeId | null;
   rootCauseTreeState: {
     nodes: Array<{
       id: string;
@@ -386,5 +396,7 @@ export function makeInitialState(): PainterState {
     stageNodesByChain: new Map(),
     stageArrowsByKey: new Map(),
     rowTetherArrowIds: [],
+    hiddenSignalShapesById: new Map(),
+    hiddenSignalClusterShapeId: null,
   };
 }

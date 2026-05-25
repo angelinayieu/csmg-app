@@ -28,6 +28,16 @@ import { FinalPlanCardShapeUtil } from "./shapes/final-plan-card-shape";
 import { AxiomStoneShapeUtil } from "./shapes/axiom-stone-shape";
 import { ConvergentFanShapeUtil } from "./shapes/convergent-fan-shape";
 import { SignalFlagShapeUtil } from "./shapes/signal-flag-shape";
+// Hidden signal shapes (2026-05-19) — first-class canvas surfaces for
+// structural-analysis findings (cascade vulns, structural holes, hidden
+// mediators, flip-prone loops) that were previously invisible outside
+// the strategy hero card's tactic chips. Painter spawns one per
+// signal_detected event; the cluster shape aggregates the suppressed
+// long tail into one chip in the canvas margin.
+import {
+  HiddenSignalShapeUtil,
+  HiddenSignalClusterShapeUtil,
+} from "./shapes/hidden-signal-shape";
 import { TwinSnapshotShapeUtil } from "./shapes/twin-snapshot-shape";
 import { ObjectiveTreeShapeUtil } from "./shapes/objective-tree-shape";
 import { SourceCardShapeUtil } from "./shapes/source-card-shape";
@@ -59,6 +69,7 @@ import { HypothesisLadderShapeUtil } from "./shapes/hypothesis-ladder-shape";
 import { TrajectoryFanShapeUtil } from "./shapes/trajectory-fan-shape";
 import { ForestPlotShapeUtil } from "./shapes/forest-plot-shape";
 import { EdgeDriftHeatmapShapeUtil } from "./shapes/edge-drift-heatmap-shape";
+import { SeedCardShapeUtil } from "./shapes/seed-card-shape";
 
 export const SHAPE_UTILS = [
   KGNodeShapeUtil,
@@ -111,6 +122,13 @@ export const SHAPE_UTILS = [
   // Phase A1.4b — universal asset catalog: convergent + signal
   ConvergentFanShapeUtil,
   SignalFlagShapeUtil,
+  // Hidden signal shapes (2026-05-19) — surfaces structural findings
+  // (cascade vulnerabilities, structural holes, hidden mediating
+  // variables, flip-prone loops) from extractSignals() as live
+  // canvas shapes anchored near their source entities. The cluster
+  // shape aggregates the suppressed lower-priority tail.
+  HiddenSignalShapeUtil,
+  HiddenSignalClusterShapeUtil,
   // Phase A1.4c — universal asset catalog: twin snapshot
   TwinSnapshotShapeUtil,
   // Phase A1.7 — universal asset catalog: objective tree
@@ -233,4 +251,11 @@ export const SHAPE_UTILS = [
   // and how recently as a rows × cols heatmap. The reflexive room's
   // primary content — closes the audit-loop visualization gap.
   EdgeDriftHeatmapShapeUtil,
+  // Phase C (typed-clarifier) — seed cards spawned on first canvas
+  // mount for quiet modes (brain_probe / brainstorm_speed). One card
+  // per typed MCQ answer in synthesis_data.user_assertions. Each
+  // exposes a "Promote to entity" CTA that materializes the seed as
+  // a real Entity with provenance=user_asserted so downstream expand
+  // calls can pick it up.
+  SeedCardShapeUtil,
 ];

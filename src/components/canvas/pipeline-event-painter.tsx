@@ -68,7 +68,15 @@ import type {
   VariantCarouselShape,
   StageNodeShape,
   TwinSnapshotShape,
+  HiddenSignalShape,
+  HiddenSignalClusterShape,
 } from "./shapes/types";
+import {
+  HIDDEN_SIGNAL_DEFAULT_H,
+  HIDDEN_SIGNAL_DEFAULT_W,
+  HIDDEN_SIGNAL_CLUSTER_W,
+  HIDDEN_SIGNAL_CLUSTER_H,
+} from "./shapes/hidden-signal-shape";
 import {
   ORIGIN_PROMPT_DEFAULT_H,
   ORIGIN_PROMPT_DEFAULT_W,
@@ -2677,6 +2685,19 @@ function paintEvent(
       // renders on a future pass once the shape util is in place.
       trackSignatureDeepened(event, state, hooks.onSignatureProgress);
       return;
+    case "signal_detected":
+      // Hidden signal — structural-analysis finding from
+      // extractSignals() (cascade vulnerability / structural hole /
+      // hidden mediator / flip-prone loop). Painter anchors the
+      // shape near the primary entity ghosts so the user sees the
+      // finding next to the entities it concerns.
+      paintHiddenSignal(editor, event, state);
+      return;
+    case "signal_cluster":
+      // Aggregated chip representing the long tail of suppressed
+      // lower-priority signals. One per space; Pass 2 upserts.
+      paintHiddenSignalCluster(editor, event, state);
+      return;
     case "app_result_ready":
     case "iv_decomposition_ready":
     case "variant_deck_ready":
@@ -4374,4 +4395,230 @@ function tierForImportance(
   if (importance === "important") return "support";
   if (importance === "minor") return "peripheral";
   return GHOST_TIER;
+}
+
+// ── Hidden signal painter (2026-05-19) ──
+//
+// Spawns a HiddenSignalShape near the primary entity ghosts referenced
+// by a signal_detected event. Two responsibilities:
+//   1. Find existing kg-node shapes on canvas whose `props.entityId`
+//      matches one of the signal's primaryEntityIds (display codes or
+//      UUIDs — we tolerate both for compatibility across painter
+//      paths).
+//   2. Compute an anchor position: midpoint of the two primaries when
+//      cardinality is 2, offset-right of the single primary when 1,
+//      centroid for N. Falls back to state.anchor when nothing found
+//      (race during pipeline replay where signals arrive before
+//      entities — unlikely but defensive).
+//
+// Idempotent: deterministic signalId means Pass 2's re-emission UPDATES
+// the existing shape's props in place rather than stacking duplicates.
+
+/** Find kg-node shapes whose `entityId` prop matches any of the given
+ *  entity codes. Tolerates both UUID and display-code formats so the
+ *  lookup works regardless of which painter path created the shape. */
+function findKgNodeShapeIdsByEntityIds(
+  editor: Editor,
+  entityIds: string[],
+): TLShapeId[] {
+  if (entityIds.length === 0) return [];
+  const matches: TLShapeId[] = [];
+  const want = new Set(entityIds);
+  for (const s of editor.getCurrentPageShapes()) {
+    if (s.type !== "kg-node") continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const props = s.props as any;
+    if (want.has(props?.entityId)) {
+      matches.push(s.id);
+    }
+  }
+  return matches;
+}
+
+/** Compute anchor position for a hidden-signal shape given the shapes
+ *  it references. Returns null when no anchor entity is on canvas yet
+ *  — the caller falls back to a default position. */
+function computeSignalAnchor(
+  editor: Editor,
+  entityIds: string[],
+): { x: number; y: number } | null {
+  const shapeIds = findKgNodeShapeIdsByEntityIds(editor, entityIds);
+  if (shapeIds.length === 0) return null;
+
+  let cx = 0;
+  let cy = 0;
+  let count = 0;
+  let bottomY = -Infinity;
+  let rightX = -Infinity;
+  for (const id of shapeIds) {
+    const bounds = editor.getShapePageBounds(id);
+    if (!bounds) continue;
+    cx += bounds.midX;
+    cy += bounds.midY;
+    count++;
+    bottomY = Math.max(bottomY, bounds.maxY);
+    rightX = Math.max(rightX, bounds.maxX);
+  }
+  if (count === 0) return null;
+  cx /= count;
+  cy /= count;
+
+  // For a single anchor entity, place offset to the right of it so the
+  // signal feels attached to that specific node. For multiple, place
+  // at the centroid but offset below so the signal doesn't overlap
+  // any of the anchor entities.
+  if (count === 1) {
+    return {
+      x: rightX + 40,
+      y: cy - HIDDEN_SIGNAL_DEFAULT_H / 2,
+    };
+  }
+  return {
+    x: cx - HIDDEN_SIGNAL_DEFAULT_W / 2,
+    y: bottomY + 30,
+  };
+}
+
+function paintHiddenSignal(
+  editor: Editor,
+  event: Extract<StructuralEvent, { type: "signal_detected" }>,
+  state: PainterState,
+) {
+  // Determine target shape id from deterministic signalId. Using
+  // createShapeId with a stable seed string would be cleaner but
+  // tldraw's createShapeId() expects a string OR randomizes — we
+  // pre-create the id from the event signalId and cache it in state.
+  const existingShapeId = state.hiddenSignalShapesById.get(event.signalId);
+
+  // Upsert path — Pass 2 re-emits the same signalId, update in place.
+  if (existingShapeId) {
+    try {
+      editor.updateShape<HiddenSignalShape>({
+        id: existingShapeId,
+        type: "hidden-signal",
+        props: {
+          signalName: event.name.slice(0, 200),
+          description: event.description.slice(0, 500),
+          trajectoryImpact: event.trajectoryImpact,
+          confidence: event.confidence,
+          severity: event.severity,
+          primaryEntityIds: event.primaryEntityIds,
+          secondaryEntityIds: event.secondaryEntityIds,
+          reasoning: event.reasoning.slice(0, 500),
+          validationAction: (event.validationAction ?? "").slice(0, 300),
+          emittedAt: new Date().toISOString(),
+        },
+      });
+    } catch (err) {
+      console.warn("[pipeline-painter] hidden-signal update failed:", err);
+    }
+    return;
+  }
+
+  // Fresh paint — compute anchor + create. The anchor lookup may fail
+  // if the primary entities aren't on canvas yet (race during replay);
+  // fall back to a sensible default near the canvas anchor so the shape
+  // still appears (better than dropping the event silently).
+  const anchor =
+    computeSignalAnchor(editor, event.primaryEntityIds) ??
+    (state.anchor
+      ? {
+          x: state.anchor.x + 600,
+          y: state.anchor.y + 200,
+        }
+      : { x: 0, y: 0 });
+
+  const shapeId = createShapeId();
+  try {
+    editor.createShape<HiddenSignalShape>({
+      id: shapeId,
+      type: "hidden-signal",
+      x: anchor.x,
+      y: anchor.y,
+      props: {
+        w: HIDDEN_SIGNAL_DEFAULT_W,
+        h: HIDDEN_SIGNAL_DEFAULT_H,
+        signalId: event.signalId,
+        // The painter doesn't carry spaceId at the event-level here; the
+        // shape doesn't need it for the Phase 1 interactions (hover-
+        // glow + camera pan are dispatched via window events). Future
+        // status persistence would add it.
+        spaceId: "",
+        signalType: event.signalType,
+        signalName: event.name.slice(0, 200),
+        description: event.description.slice(0, 500),
+        trajectoryImpact: event.trajectoryImpact,
+        confidence: event.confidence,
+        severity: event.severity,
+        primaryEntityIds: event.primaryEntityIds,
+        secondaryEntityIds: event.secondaryEntityIds,
+        reasoning: event.reasoning.slice(0, 500),
+        validationAction: (event.validationAction ?? "").slice(0, 300),
+        status: "active",
+        emittedAt: new Date().toISOString(),
+        expanded: 0,
+      },
+    });
+    state.hiddenSignalShapesById.set(event.signalId, shapeId);
+  } catch (err) {
+    console.warn("[pipeline-painter] hidden-signal create failed:", err);
+  }
+}
+
+// ── Hidden signal cluster painter ──
+//
+// One chip per space aggregating the suppressed lower-priority signals
+// (assumption-at-risk, temporal-window, etc. + anything that didn't
+// promote to the 12-shape individual cap). Positioned in the canvas
+// margin so it doesn't compete with the per-signal shapes for the
+// user's eye.
+
+function paintHiddenSignalCluster(
+  editor: Editor,
+  event: Extract<StructuralEvent, { type: "signal_cluster" }>,
+  state: PainterState,
+) {
+  // Upsert path: Pass 2 cluster replaces Pass 1's (clusterId is stable
+  // per-space).
+  if (state.hiddenSignalClusterShapeId) {
+    try {
+      editor.updateShape<HiddenSignalClusterShape>({
+        id: state.hiddenSignalClusterShapeId,
+        type: "hidden-signal-cluster",
+        props: {
+          suppressedCount: event.suppressedCount,
+          topTypes: event.topTypes,
+        },
+      });
+    } catch (err) {
+      console.warn("[pipeline-painter] signal-cluster update failed:", err);
+    }
+    return;
+  }
+
+  // Fresh paint — anchor in the canvas margin offset from the painter
+  // anchor. Vertical position below the typical KG-formation bands
+  // so it doesn't compete with the live unfurl.
+  const anchorX = state.anchor ? state.anchor.x + 900 : 800;
+  const anchorY = state.anchor ? state.anchor.y + 200 : 100;
+  const shapeId = createShapeId();
+  try {
+    editor.createShape<HiddenSignalClusterShape>({
+      id: shapeId,
+      type: "hidden-signal-cluster",
+      x: anchorX,
+      y: anchorY,
+      props: {
+        w: HIDDEN_SIGNAL_CLUSTER_W,
+        h: HIDDEN_SIGNAL_CLUSTER_H,
+        clusterId: event.clusterId,
+        spaceId: event.spaceId,
+        suppressedCount: event.suppressedCount,
+        topTypes: event.topTypes,
+      },
+    });
+    state.hiddenSignalClusterShapeId = shapeId;
+  } catch (err) {
+    console.warn("[pipeline-painter] signal-cluster create failed:", err);
+  }
 }

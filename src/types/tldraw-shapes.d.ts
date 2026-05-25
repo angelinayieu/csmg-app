@@ -266,6 +266,44 @@ declare module "@tldraw/tlschema" {
       relatedInternalIds: string[];
       detectedAt: string;
     };
+    // Hidden signal (2026-05-19) — structural-analysis findings from
+    // extractSignals() surfaced as first-class canvas shapes near the
+    // entities they concern. Distinct from signal-flag (radar/external
+    // intel) — these are about the graph's own internal structure.
+    "hidden-signal": {
+      w: number;
+      h: number;
+      signalId: string;
+      spaceId: string;
+      signalType:
+        | "cascade_vulnerability"
+        | "structural_hole"
+        | "hidden_variable"
+        | "flip_prone_loop";
+      signalName: string;
+      description: string;
+      trajectoryImpact: number;
+      confidence: number;
+      severity: "critical" | "moderate" | "low";
+      primaryEntityIds: string[];
+      secondaryEntityIds: string[];
+      reasoning: string;
+      validationAction: string;
+      status: "active" | "dismissed" | "investigating" | "resolved";
+      emittedAt: string;
+      expanded: number;
+    };
+    // Hidden signal cluster — aggregates the long tail of suppressed
+    // lower-priority signals. One per space per run; click expands
+    // a side-panel listing the suppressed signals.
+    "hidden-signal-cluster": {
+      w: number;
+      h: number;
+      clusterId: string;
+      spaceId: string;
+      suppressedCount: number;
+      topTypes: string[];
+    };
     // Phase A1.4a — universal asset catalog: claim chip.
     "claim-chip": {
       w: number;

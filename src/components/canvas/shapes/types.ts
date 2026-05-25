@@ -466,6 +466,79 @@ export type SignalFlagShape = TLBaseShape<
   }
 >;
 
+// ── Hidden signal (2026-05-19) ───────────────────────────────────────
+//
+// Structural-analysis finding from extractSignals() — surfaces what's
+// MISSING from the graph (cascade vulnerabilities, structural holes,
+// hidden mediating variables, flip-prone loops) as a first-class
+// canvas shape anchored near the entities it concerns.
+//
+// Distinct from SignalFlagShape (external radar intel about new
+// entities, authority shifts) — this is about the user's own graph
+// structure. Severity drives accent color + glow intensity; signal
+// type drives the glyph and label. The painter spawns one per
+// signal_detected event; the cluster of suppressed lower-priority
+// signals lands in HiddenSignalClusterShape below.
+export type HiddenSignalShape = TLBaseShape<
+  "hidden-signal",
+  {
+    w: number;
+    h: number;
+    /** Deterministic id from `signal-${type}-${sorted_entity_ids}` so
+     *  Pass 2 re-emissions update the same shape rather than stacking
+     *  duplicates. Mirrors the source SignalDetectedEvent.signalId. */
+    signalId: string;
+    spaceId: string;
+    signalType:
+      | "cascade_vulnerability"
+      | "structural_hole"
+      | "hidden_variable"
+      | "flip_prone_loop";
+    signalName: string;
+    description: string;
+    trajectoryImpact: number;
+    confidence: number;
+    severity: "critical" | "moderate" | "low";
+    /** The entities this signal is primarily about. Painter uses them
+     *  to anchor the shape spatially (midpoint when 2, offset from
+     *  entity when 1). */
+    primaryEntityIds: string[];
+    /** Additional related entities (e.g. cascade downstream) — used
+     *  for hover-glow but NOT for positioning. */
+    secondaryEntityIds: string[];
+    reasoning: string;
+    validationAction: string;
+    status: "active" | "dismissed" | "investigating" | "resolved";
+    emittedAt: string;
+    /** Local expand toggle (0 = collapsed, 1 = expanded). tldraw
+     *  props require primitives; we use a number for boolean parity
+     *  with the existing strategy hero card pattern. */
+    expanded: number;
+  }
+>;
+
+// ── Hidden signal cluster (2026-05-19) ───────────────────────────────
+//
+// Aggregated chip representing the long tail of lower-priority signals
+// that didn't promote to individual HiddenSignalShape. Sits in the
+// canvas margin; click expands a side-panel listing the suppressed
+// signals (Phase 2 work; for now it just shows the count + type
+// breakdown).
+//
+// One per space per run; upsert keyed on clusterId.
+export type HiddenSignalClusterShape = TLBaseShape<
+  "hidden-signal-cluster",
+  {
+    w: number;
+    h: number;
+    clusterId: string;
+    spaceId: string;
+    suppressedCount: number;
+    /** Type breakdown for the chip body ("4 holes · 5 vars · 3 windows"). */
+    topTypes: string[];
+  }
+>;
+
 // ── Claim chip (Phase A1.4a — universal asset catalog) ──────────────
 //
 // Compact card for a Claim row — statement + status + confidence. Left
@@ -1772,6 +1845,8 @@ export type CanvasCustomShape =
   | AxiomStoneShape
   | ConvergentFanShape
   | SignalFlagShape
+  | HiddenSignalShape
+  | HiddenSignalClusterShape
   | TwinSnapshotShape
   | ObjectiveTreeShape
   | SourceCardShape
