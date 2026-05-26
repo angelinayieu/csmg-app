@@ -24,6 +24,10 @@ import {
   buildConstraintsBlock,
   type OperationalConstraints,
 } from "./constraints";
+import {
+  buildUpstreamContextBlock,
+  type UpstreamItem,
+} from "./upstream-context";
 
 /** Domain signatures the LLM picks based on the objective context.
  *  Drives the artifact_type the brief emits — same call, different
@@ -113,6 +117,19 @@ export interface PrototypeBriefContext {
     open_question: string;
     signal_to_watch: string;
   }>;
+  /** Closed read loop — upstream cards in the causal chain (with
+   *  their elected variations + expansion highlights + edge content
+   *  to this item). When the brief is being designed for a feature,
+   *  upstream pains' elections tell the LLM which problem framing
+   *  the experiment should actually validate against. When the
+   *  brief is on an outcome variation, upstream features tell the
+   *  LLM what producing-mechanism the signal should observe.
+   *
+   *  The brief's signal_to_watch should COMPOSE with upstream
+   *  elections, not test the variation in isolation. Soft signal —
+   *  empty/undefined → block silently omitted (typical for pains,
+   *  which have no upstream by graph design). */
+  upstreamContext?: UpstreamItem[];
 }
 
 const DOMAIN_TEMPLATES: Record<DomainKind, string> = {
@@ -240,7 +257,20 @@ Return strict JSON.`;
           .join("\n")}`
       : "";
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1000)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}\n\n${variationContext}${compositionBlock}${siblingBlock}\n\nOPEN QUESTION (the binary target):\n"""\n${ctx.open_question}\n"""\n\nDesign the prototype brief per the system instructions.`;
+  // Closed read loop — upstream chain. When the variation under
+  // test sits in a downstream layer (features/outcomes/objective)
+  // and the user has elected variations on upstream cards, the
+  // brief's signal_to_watch should compose with those elections
+  // instead of testing the variation in isolation. shared
+  // buildUpstreamContextBlock builds the same block /item/expand
+  // uses, with the same UPSTREAM RULE.
+  const upstreamBlock = buildUpstreamContextBlock(ctx.upstreamContext);
+  const upstreamBriefRule =
+    ctx.upstreamContext && ctx.upstreamContext.length > 0
+      ? `\n\nUPSTREAM-BRIEF RULE: When designing signal_to_watch, ensure the observable validates whether this variation COMPOSES with the upstream elections above — not whether it works in isolation. If upstream has elected "tight feedback loops" on the pain, your signal should test whether THIS variation produces a tighter feedback loop (or fails to), not just whether the variation runs. Frame the hypothesis to reference the upstream mechanism by name when present.`
+      : "";
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1000)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}\n\n${variationContext}${upstreamBlock}${upstreamBriefRule}${compositionBlock}${siblingBlock}\n\nOPEN QUESTION (the binary target):\n"""\n${ctx.open_question}\n"""\n\nDesign the prototype brief per the system instructions.`;
 
   const raw = await llmJSON<{
     domain?: unknown;

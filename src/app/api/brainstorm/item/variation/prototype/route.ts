@@ -15,6 +15,7 @@ import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-deta
 import { generatePrototypeBrief } from "@/lib/objective-canvas/generate-prototype-brief";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
+import { loadUpstreamContext } from "@/lib/objective-canvas/upstream-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -159,6 +160,28 @@ export async function POST(req: NextRequest) {
       signal_to_watch: b.signal_to_watch,
     }));
 
+  // Closed read loop — upstream chain context. Same loader the
+  // variation-expansion route uses, just called for this brief's
+  // entity. For a feature/outcome/objective variation, brings the
+  // user's pain/feature/outcome elections + the edge mechanism
+  // connecting upstream → this card so signal_to_watch composes
+  // with them. For a pain variation, returns undefined (pains are
+  // root; nothing feeds them by graph design) and the prompt block
+  // silently omits.
+  //
+  // Layer-gated to match expand's behavior — pain layer never has
+  // upstream context, so skip the query entirely.
+  const upstreamContext =
+    (layer === "features" || layer === "outcomes" || layer === "objective") &&
+    entity.parent_sub_objective_id
+      ? await loadUpstreamContext({
+          db,
+          downstreamEntityId: entity.id,
+          parentSubObjectiveId: entity.parent_sub_objective_id,
+          limit: 4,
+        })
+      : undefined;
+
   // Telemetry-wrapped brief generation. The artifact_id is the
   // deterministic brief id (variation_id + question slug) so the
   // feedback endpoint can find the right log row even when the user
@@ -186,6 +209,9 @@ export async function POST(req: NextRequest) {
           variation_kind: variation.kind ?? null,
           has_composed_design: !!composedDesignForCtx,
           sibling_brief_count: siblingBriefs.length,
+          upstream_item_count: upstreamContext?.length ?? 0,
+          had_upstream_edge_content:
+            (upstreamContext ?? []).some((u) => !!u.edge_mechanism),
         },
       },
       () =>
@@ -199,6 +225,7 @@ export async function POST(req: NextRequest) {
           coreObjectiveText,
           composedDesign: composedDesignForCtx,
           siblingBriefs,
+          upstreamContext,
         }),
     );
   } catch (err) {
