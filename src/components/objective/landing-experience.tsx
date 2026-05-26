@@ -15,8 +15,9 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Compass, LayoutTemplate, Plus } from "lucide-react";
+import { ArrowRight, Beaker, Compass, LayoutTemplate, Plus } from "lucide-react";
 import { PortalCard } from "@/components/objective/portal-card";
 import { ObjectiveEntryCard } from "@/components/objective/objective-entry-card";
 import { WorkspaceLibraryCard } from "@/components/objective/workspace-library-card";
@@ -222,6 +223,37 @@ export function LandingExperience({
                     <WorkspaceLibraryCard key={card.id} card={card} />
                   ))}
                 </div>
+
+                {/* ── Cross-cutting library views ──
+                    Lifts experiments out of individual workspaces
+                    into a single research-notebook surface. Only
+                    renders when the user has ≥1 experiment in flight
+                    so we don't suggest an empty link. */}
+                {library.some((c) => c.totals.experiments_planned > 0) && (
+                  <div
+                    className="mt-6 flex flex-wrap items-center justify-center gap-2"
+                  >
+                    <Link
+                      href="/app/library/experiments"
+                      className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-medium transition-colors"
+                      style={{
+                        background: "rgba(15,23,42,0.04)",
+                        color: appleVibe.text.secondary,
+                        border: `1px solid ${appleVibe.stroke.hairline}`,
+                      }}
+                    >
+                      <Beaker className="h-3 w-3" strokeWidth={2} />
+                      View all experiments
+                      <span style={{ color: appleVibe.text.faint }}>
+                        {library.reduce(
+                          (sum, c) => sum + c.totals.experiments_planned,
+                          0,
+                        )}
+                      </span>
+                      <ArrowRight className="h-2.5 w-2.5" strokeWidth={2.5} />
+                    </Link>
+                  </div>
+                )}
               </motion.div>
             )}
           </motion.div>

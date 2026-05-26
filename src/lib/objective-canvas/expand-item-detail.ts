@@ -142,6 +142,15 @@ export interface ExpandedItemDetail {
     artifact_body: string;
     learning_target: string;
     generated_at: string;
+    /** J — experiment lifecycle. null = newly-generated (not yet
+     *  touched). Set via PATCH /api/brainstorm/item/variation/
+     *  prototype/status. Drives the Experiments Library filter chips. */
+    status?: "planned" | "running" | "concluded" | "abandoned" | null;
+    /** When status="concluded", optional user-captured result text. */
+    result_summary?: string;
+    /** ISO timestamp the status last changed — used for sorting
+     *  "what did I just conclude" etc. */
+    status_updated_at?: string;
   }>;
   /** E — expansion tree (L3+ deep-dive nodes per variation). Stored
    *  as a flat array; parent_node_id + depth + lineage_titles
