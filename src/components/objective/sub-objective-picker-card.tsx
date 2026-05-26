@@ -53,6 +53,10 @@ interface Props {
    *  the lens coverage strip renders + the variant lab can fire
    *  gap_fill intent. */
   annotations?: ObjectiveAnnotationLite[];
+  /** Variant Lab — user's top-preferred intent computed from prior
+   *  decisions. Used as the "Suggested" affordance when no lens
+   *  gap exists. Null for new users → falls back to "creative". */
+  preferredIntent?: SubObjectiveIntent | null;
   /** Called when confirm succeeds. Parent flips into "main" stage. */
   onConfirmed: () => void;
 }
@@ -81,6 +85,7 @@ export function SubObjectivePickerCard({
   spaceId,
   initial,
   annotations = [],
+  preferredIntent = null,
   onConfirmed,
 }: Props) {
   const [block, setBlock] = useState<SubObjectiveBlock | null>(initial);
@@ -365,11 +370,26 @@ export function SubObjectivePickerCard({
         )}
       </div>
 
-      {/* Variant Lab bar — generate more, layered onto existing */}
+      {/* Variant Lab bar — generate more, layered onto existing.
+          Suggested-intent priority:
+            1. gap_fill when there are uncovered lens entries (most
+               specific signal — fill the actual holes)
+            2. the user's revealed preference from prior dispositions
+               (per-user personalization, no extra LLM cost)
+            3. "creative" as a generic divergence fallback */}
       <VariantLabBar
         intentInFlight={variantInFlight}
         suggestedIntent={
-          coverage.uncovered.length > 0 ? "gap_fill" : "creative"
+          coverage.uncovered.length > 0
+            ? "gap_fill"
+            : preferredIntent ?? "creative"
+        }
+        suggestedIntentSource={
+          coverage.uncovered.length > 0
+            ? "lens_gap"
+            : preferredIntent
+              ? "user_preference"
+              : "default"
         }
         onGenerate={(intent) =>
           runAction("propose", { mode: "variant", intent })
@@ -582,14 +602,24 @@ const ALL_INTENTS: SubObjectiveIntent[] = [
   "wildcard",
 ];
 
+type SuggestedIntentSource = "lens_gap" | "user_preference" | "default";
+
+const SUGGESTED_SOURCE_LABEL: Record<SuggestedIntentSource, string> = {
+  lens_gap: "fills your uncovered readings",
+  user_preference: "matches your past picks",
+  default: "good for divergent exploration",
+};
+
 function VariantLabBar({
   intentInFlight,
   suggestedIntent,
+  suggestedIntentSource,
   onGenerate,
   disabled,
 }: {
   intentInFlight: SubObjectiveIntent | null;
   suggestedIntent: SubObjectiveIntent;
+  suggestedIntentSource: SuggestedIntentSource;
   onGenerate: (intent: SubObjectiveIntent) => void;
   disabled: boolean;
 }) {
@@ -639,7 +669,9 @@ function VariantLabBar({
         </button>
       </div>
 
-      {/* Default action — single click, uses the suggested intent */}
+      {/* Default action — single click, uses the suggested intent.
+          Source label explains WHY this intent: lens gap, user pref,
+          or generic default. Builds trust in the suggestion. */}
       {!expanded && (
         <div className="mt-2.5 flex items-center justify-between gap-2">
           <span
@@ -648,7 +680,11 @@ function VariantLabBar({
           >
             Suggested: <span className="font-semibold" style={{ color: appleVibe.text.secondary }}>
               {INTENT_LABEL[suggestedIntent]}
-            </span> — {INTENT_DESCRIPTION[suggestedIntent]}
+            </span>{" "}
+            <span className="italic">
+              ({SUGGESTED_SOURCE_LABEL[suggestedIntentSource]})
+            </span>{" "}
+            — {INTENT_DESCRIPTION[suggestedIntent]}
           </span>
           <button
             type="button"

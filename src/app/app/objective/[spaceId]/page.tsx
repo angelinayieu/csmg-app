@@ -15,6 +15,10 @@ import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-stat
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { normalizeRoomCategories } from "@/lib/objective-canvas/generate-categories";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
+import {
+  getUserIntentPreferences,
+  topPreferredIntent,
+} from "@/lib/objective-canvas/decision-log";
 import type { RoomEdge } from "@/components/objective/sub-objective-room-view";
 import { ArrowLeft } from "lucide-react";
 
@@ -60,6 +64,13 @@ export default async function ObjectiveCanvasPage({
   // each card.
   let initialMainSubs: MainCanvasSub[] = [];
   let initialCoreAnnotations: import("@/components/objective/annotated-objective-card").ObjectiveAnnotation[] = [];
+  // Variant Lab — per-user revealed preference: which intent the user
+  // tends to elect most. When no lens-gap exists, the picker's
+  // "Suggested" affordance reads this instead of defaulting to
+  // "creative". Loaded for the picking stage only — cheap enough to
+  // run unconditionally though, and null for new users.
+  const userPrefs = await getUserIntentPreferences(db, user.id);
+  const initialPreferredIntent = topPreferredIntent(userPrefs);
   if (state.stage === "main" || state.stage === "done") {
     const { data: parentRows } = await db
       .from("improvement_goals")
@@ -420,6 +431,7 @@ export default async function ObjectiveCanvasPage({
             initialSubObjectives={state.sub_objectives ?? null}
             initialMainSubs={initialMainSubs}
             initialCoreAnnotations={initialCoreAnnotations}
+            initialPreferredIntent={initialPreferredIntent}
           />
         </div>
       </div>

@@ -18,6 +18,7 @@ import {
 } from "@/lib/objective-canvas/sub-objective-state";
 import { patchObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import type { SubObjectiveProposal } from "@/lib/objective-canvas/sub-objective-state";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 
@@ -157,6 +158,26 @@ export async function POST(req: NextRequest) {
       { error: "DB error", detail: writeRes.error.message },
       { status: 500 },
     );
+  }
+
+  // ── Telemetry: one "confirm" event per picked proposal, tagged
+  //    with the batch intent the proposal came from. This is the
+  //    strongest signal we have on which intents actually convert
+  //    to commitment (vs just being electable in the UI). ──
+  for (const p of picked) {
+    const sourceBatch = block.batches?.find((b) => b.id === p.batch_id);
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId,
+      proposalId: p.id,
+      action: "confirm",
+      batchIntent: sourceBatch?.intent ?? null,
+      metadata: {
+        batch_id: p.batch_id ?? null,
+        lens_coverage: p.lens_coverage ?? [],
+        confidence: p.confidence,
+      },
+    });
   }
 
   return NextResponse.json({

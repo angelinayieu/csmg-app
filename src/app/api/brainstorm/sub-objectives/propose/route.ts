@@ -37,6 +37,7 @@ import {
   type DeepBundle,
 } from "@/lib/research/research-service";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -266,6 +267,27 @@ export async function POST(req: NextRequest) {
           writeRes.error.message,
         );
       }
+
+      // ── Telemetry: variant-lab generation event. The action is
+      //    'generate_batch'; proposal_id is null since this is a
+      //    batch-level event. batch_intent is the user's chosen
+      //    direction — the primary preference signal. ──
+      void logDecision(db, {
+        userId: auth.user.id,
+        spaceId,
+        proposalId: null,
+        action: "generate_batch",
+        batchIntent: usedIntent,
+        metadata: {
+          batch_id: newBatch.id,
+          generation_number: newBatch.generation_number,
+          temperature,
+          prior_proposal_count: existingProposalsForPrompt?.length ?? 0,
+          uncovered_lens_count: uncoveredLensIndices?.length ?? 0,
+          lens_size: lensSize,
+        },
+      });
+
       return NextResponse.json({
         sub_objectives: nextBlock,
         new_batch_id: newBatch.id,

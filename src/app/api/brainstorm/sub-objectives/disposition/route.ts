@@ -21,6 +21,7 @@ import {
   type SubObjectiveDisposition,
   type SubObjectiveProposal,
 } from "@/lib/objective-canvas/sub-objective-state";
+import { logDecision, type DecisionAction } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 
@@ -80,6 +81,17 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
+  // Find the proposal we're mutating + capture the prior disposition
+  // so we can log the transition (preference-learning signal). Also
+  // grab the proposal's batch lineage to tag the log row with the
+  // intent the batch came from — that's the per-intent election
+  // signal the variant-lab "suggested intent" reads.
+  const targetProposal = block.proposals.find((p) => p.id === proposalId);
+  const priorDisposition: SubObjectiveDisposition =
+    targetProposal?.disposition ?? null;
+  const proposalBatchId = targetProposal?.batch_id;
+  const proposalBatch = block.batches?.find((b) => b.id === proposalBatchId);
+
   function apply(p: SubObjectiveProposal): SubObjectiveProposal {
     return p.id === proposalId ? { ...p, disposition } : p;
   }
@@ -109,6 +121,30 @@ export async function PATCH(req: NextRequest) {
       { status: 500 },
     );
   }
+
+  // ── Telemetry: log the disposition transition ──
+  // Map disposition → action. Setting null = "clear" so we have a
+  // distinct event from "elect" / "reject" / "defer" in the log.
+  const action: DecisionAction =
+    disposition === "elected"
+      ? "elect"
+      : disposition === "rejected"
+        ? "reject"
+        : disposition === "deferred"
+          ? "defer"
+          : "clear";
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId,
+    proposalId,
+    action,
+    batchIntent: proposalBatch?.intent ?? null,
+    metadata: {
+      prior_disposition: priorDisposition,
+      batch_id: proposalBatchId ?? null,
+      lens_coverage: targetProposal?.lens_coverage ?? [],
+    },
+  });
 
   return NextResponse.json({ sub_objectives: nextBlock });
 }

@@ -55,7 +55,10 @@ import type {
   ClarifyingBlock,
   ObjectiveCanvasStage,
 } from "@/lib/objective-canvas/clarifying-state";
-import type { SubObjectiveBlock } from "@/lib/objective-canvas/sub-objective-state";
+import type {
+  SubObjectiveBlock,
+  SubObjectiveIntent,
+} from "@/lib/objective-canvas/sub-objective-state";
 
 interface Props {
   spaceId: string;
@@ -68,6 +71,11 @@ interface Props {
    *  array = not yet generated; the annotated card lazy-fetches on
    *  first paint. */
   initialCoreAnnotations: ObjectiveAnnotation[];
+  /** Variant Lab — user's revealed top-preferred intent (from the
+   *  decision log). Null when the user has no history yet. Passed
+   *  through to the picker as the "Suggested" affordance fallback
+   *  when no lens gap exists. */
+  initialPreferredIntent?: SubObjectiveIntent | null;
   /** Phase 10 integration contract — host wants to drop this into a
    *  panel. See module header. Defaults to false (standalone). */
   embedded?: boolean;
@@ -85,6 +93,7 @@ export function ObjectiveCanvasView({
   initialSubObjectives,
   initialMainSubs,
   initialCoreAnnotations,
+  initialPreferredIntent = null,
   embedded = false,
   // onExit is reserved for the host's chrome; not consumed here.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -157,6 +166,7 @@ export function ObjectiveCanvasView({
             spaceId={spaceId}
             initial={initialSubObjectives}
             annotations={initialCoreAnnotations}
+            preferredIntent={initialPreferredIntent}
             onConfirmed={handlePickerConfirmed}
           />
         )}
