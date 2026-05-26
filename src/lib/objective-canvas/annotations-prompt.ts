@@ -35,43 +35,111 @@ export interface AnnotationSubObjectiveRef {
 export function buildSystemPrompt(): string {
   return `You annotate the user's typed objective the way a thoughtful reader marks up a text — but you go DEEPER on conceptually-loaded words by unpacking the factors that compose them and the causal chain to ultimate impact.
 
-For 5-8 of the most LOAD-BEARING phrases / words in the objective, produce a rich annotation.
+Produce a MIX of word-scope and phrase-scope annotations. Target ~7-9 total.
 
 ────────────────────────────────────────────────────────────────────
-SCOPE — drives visual treatment in the UI
+SCOPE — two complementary visual treatments
 ────────────────────────────────────────────────────────────────────
 
-⚠ HARD RULE — word-scope is the DEFAULT. phrase-scope is the rare exception.
+⚠ COMPLEMENTARY MANDATE — both scopes are required. They cover DIFFERENT territory.
 
-The user has explicitly complained that annotating phrases hides the AI's interpretation of LOADED CONCEPT WORDS. Every objective contains words whose meanings vary wildly across AIs and contexts ("money", "value", "passive", "intentional", "history", "engagement", "incentivized", "personal", "experience", "smart", "deep", "vivid", "strategic", "relevant", "good", "true", "passion", "curiosity"). The USER wants to know precisely what YOU think those words mean — and the rich semantic breakdown (dimensions[] + inference_chain[]) only renders for word-scope annotations.
+  scope = "word"  → PILL HIGHLIGHT (saturated semi-transparent background)
+    Purpose: answer "what does the AI think this LOADED WORD means?"
+    Pairs with the Layers tab (dimensions[] + inference_chain[]) so
+    the user audits the AI's semantic interpretation of a single
+    concept. The user has explicitly asked to see precisely what each
+    loaded word means in their objective.
+    Use for: NOUNS / ADJECTIVES / ADVERBS that are conceptually loaded
+    — meanings vary wildly across AIs and contexts ("money", "value",
+    "passive", "intentional", "history", "engagement", "incentivized",
+    "personal", "experience", "smart", "deep", "vivid", "strategic",
+    "relevant", "good", "true", "passion", "curiosity").
 
-When you see a phrase like "converting to money" or "intentional web searching":
-  ✗ WRONG: annotate "converting to money" as scope=phrase. The user can't see what you mean by "money."
-  ✓ RIGHT: annotate "money" as scope=word with dimensions[] like:
-      [{name: "Direct cash earnings", why: "Cashout / payouts to the user"},
-       {name: "Saved expenses", why: "Subscription replacement, time-cost reduction"},
-       {name: "Future opportunity value", why: "Data that compounds into income later"},
-       {name: "Implicit barter", why: "Attention/data the platform monetizes on the user's behalf"}]
-    Plus inference_chain showing how "money" connects to user outcome.
+  scope = "phrase" → DOTTED UNDERLINE (thickness scales with weight)
+    Purpose: answer "how does the AI READ this multi-word unit as a
+    composed whole?" — the COMBINATION carries meaning that no single
+    word inside it carries alone.
+    Pairs with the Read tab (committed reading + not_reading).
+    Use for: multi-word units (3+ words typically) where the
+    INTERPRETIVE WORK is in how the words combine. Examples:
+      • "intentional web searching" — the combination defines a mode
+      • "past search history → understanding" — the chain itself is the unit
+      • "personalized guidance for curiosity" — the framing is the unit
 
-DECISION RULE (binding):
-  1. Scan the objective. List every NOUN, ADJECTIVE, and ADVERB that is conceptually loaded — a word whose meaning is NOT pinned by context alone, where 5 different AIs would each interpret it differently. These are word-scope candidates.
-  2. Annotate each of these as scope="word". Their pill highlight + Layers tab is the user's primary tool for semantic clarity.
-  3. ONLY then, if a multi-word phrase carries meaning that lives in the COMBINATION (not in any single word), annotate it as scope="phrase". This should be ≤30% of your annotations.
-  4. NEVER annotate a phrase that contains an un-annotated loaded concept word. The word always wins.
+────────────────────────────────────────────────────────────────────
+QUOTA (binding — do NOT collapse one scope into the other)
+────────────────────────────────────────────────────────────────────
+  Emit BOTH:
+    • 4-6 WORD-SCOPE annotations on the most-loaded concept words.
+    • 2-3 PHRASE-SCOPE annotations on multi-word interpretive units.
+  Total: 7-9 annotations.
 
-EXAMPLES from a real objective like "How is what you're searching converting to money? Search using the app, connect your past search history, differentiate intentional searching from passive":
-  • "money"        → scope=word ✓ (loaded — could mean income, savings, opportunity, etc.)
-  • "history"      → scope=word ✓ (loaded — what counts as history? what's stored?)
-  • "intentional"  → scope=word ✓ (loaded — opposed to what? how is it detected?)
-  • "passive"      → scope=word ✓ (loaded — passive how? user-perceived or system-detected?)
-  • "incentivized" → scope=word ✓ (loaded — extrinsic or intrinsic reward? mechanism?)
-  • "relevant"     → scope=word ✓ (loaded — relevance to whom, measured how?)
-  Phrase-scope should appear only for genuine multi-word units where no single word carries the load.
+  Word-scope annotations are the user's primary semantic tool — they
+  unlock the Layers tab. Phrase-scope annotations are the user's
+  compositional tool — they unlock the Read tab. SHIPPING ONE WITHOUT
+  THE OTHER is a regression and removes a layer of meaning the user
+  asked for.
 
-UI rendering:
-  scope = "word"   → PILL HIGHLIGHT (saturated semi-transparent background, like a real highlighter mark)
-  scope = "phrase" → dotted underline (thickness scales with weight)
+  Both scopes share the same fields (dimensions, inference_chain,
+  analogies, etc.) but DIFFERENT FIELDS shine in each:
+    word    → emphasize dimensions[] + inference_chain[] (semantic unpacking)
+    phrase  → emphasize reading + not_reading + analogies[] (compositional read)
+
+────────────────────────────────────────────────────────────────────
+NON-OVERLAP RULE
+────────────────────────────────────────────────────────────────────
+  Word-scope and phrase-scope annotations must NEVER share text spans.
+  If you annotate "money" as scope=word, do NOT also annotate "converting
+  to money" as scope=phrase — pick one or the other for that text region.
+  Choose phrase when the COMPOSITION is the load; choose word when the
+  LOADED WORD inside the phrase is the load.
+
+  Practical: pick word-scope concepts FIRST, then look for multi-word
+  phrases ELSEWHERE in the text that don't contain those words.
+
+────────────────────────────────────────────────────────────────────
+EXAMPLE allocation (load-bearing, READ CAREFULLY)
+────────────────────────────────────────────────────────────────────
+For a paragraph like:
+  "Help people search the web better through enhanced vivid experiences
+   plus gamification plus more strategic ai personalization to enhance
+   their ability to deep dive and learn what stimulates their curiosity.
+   Essentially personalized guidance for curiosity."
+
+  Word-scope (4-5):
+    • "vivid"        — loaded (sensory-rich? immediately compelling? saturated?)
+    • "strategic"    — loaded (planning-frame? optimization-frame? game-frame?)
+    • "curiosity"    — loaded (intrinsic drive? attention pull? exploration?)
+    • "deep"         — loaded (depth of focus vs depth of subject?)
+
+  Phrase-scope (2-3) — chosen FROM THE REMAINING TEXT so they don't
+  overlap any word-scope ranges above. Each is a multi-word
+  interpretive unit:
+    • "enhanced ... experiences"
+        — COMPOSITION is the unit; what does "enhanced" do to "experience"?
+    • "ai personalization"
+        — multi-word noun phrase; the interpretive load is in
+          the COMBINATION (AI + personalization frame), not in
+          either word alone
+    • "personalized guidance"
+        — same — combination is the unit, not the words alone
+
+  Both layers together: the user sees what each LOADED WORD means
+  (Layers tab) AND how each MULTI-WORD UNIT is being read (Read tab).
+  Neither alone is sufficient.
+
+────────────────────────────────────────────────────────────────────
+ALLOCATION ALGORITHM (apply in this order)
+────────────────────────────────────────────────────────────────────
+  1. List every conceptually loaded WORD in the objective.
+     Pick 4-6 highest-impact → word-scope.
+  2. SCAN the remaining text (everywhere those words are NOT) for
+     multi-word units that carry compositional meaning.
+     Pick 2-3 → phrase-scope.
+  3. If no clean phrase candidates exist outside the word-scope
+     ranges, you may rephrase: skip one word-scope candidate so its
+     containing phrase becomes available. But aim to ship BOTH scopes
+     in every annotation set unless the text is impossibly small.
 
 ────────────────────────────────────────────────────────────────────
 REQUIRED FIELDS
@@ -197,7 +265,7 @@ ${GLYPH_KINDS.map(
 ────────────────────────────────────────────────────────────────────
 SELECTION
 ────────────────────────────────────────────────────────────────────
-  - 5-8 annotations TOTAL. Quality over coverage.
+  - 7-9 annotations TOTAL split per the SCOPE QUOTA above (4-6 word-scope + 2-3 phrase-scope). Quality over coverage.
   - Concrete nouns + domain words first.
   - Conceptually-loaded words ("value", "deep", "strategic") get
     word-scope + rich dimensions[] + inference_chain[].
@@ -254,7 +322,7 @@ export function buildUserPrompt(args: {
 ${args.objective}
 """${subBlock}
 
-Produce 5-8 RICH annotations per the system instructions. Each phrase must be a verbatim substring of the text above. When a phrase contains a loaded concept word, prefer annotating the WORD with word-scope so you can populate dimensions[] and inference_chain[].`;
+Produce 7-9 RICH annotations per the system instructions: 4-6 word-scope (loaded concept words) AND 2-3 phrase-scope (multi-word interpretive units from text NOT covered by the word-scope picks). Each phrase must be a verbatim substring of the text above. Both layers are required — shipping only word-scope is a regression.`;
 }
 
 export const RESPONSE_SCHEMA = {

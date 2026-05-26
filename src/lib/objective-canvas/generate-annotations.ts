@@ -349,7 +349,7 @@ export async function generateObjectiveAnnotations(
   }
 
   cleaned.sort((a, b) => a.start_offset - b.start_offset);
-  return cleaned.slice(0, 8);
+  return cleaned.slice(0, 10);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
