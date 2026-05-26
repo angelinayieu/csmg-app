@@ -298,72 +298,95 @@ export function ItemDetailDrawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  // ── Lazy-fetch detail on first open ──
+  // ── Lazy-fetch detail on every open ──
+  //
+  // We ALWAYS hit /expand on entityId change, even when an
+  // `initialExpandedDetail` prop is present. The prop comes from
+  // the parent page's SSR snapshot taken at page mount — the
+  // moment the user mutates anything inside the drawer (elects a
+  // variation, defers/rejects, spawns an expansion node, composes
+  // a design, generates a prototype brief), the prop goes stale
+  // because the parent doesn't router.refresh() on every drawer
+  // action. Re-using the stale prop on re-open is the exact bug
+  // where "information isn't sustained from the last generation."
+  //
+  // The /expand route's cache check (entities.expanded_detail
+  // already populated → single SELECT, no LLM call) makes the
+  // round-trip cheap (~100-200ms). The prop still drives instant
+  // first-paint so the user never sees a skeleton when we have
+  // ANY content to render — the fetch upgrades the paint to fresh
+  // state once it lands. If the fetch fails and we already have
+  // prop-paint, we degrade silently rather than showing an error
+  // overlay over usable (even if slightly stale) content.
   useEffect(() => {
     if (!entityId) return;
 
-    // Always rehydrate from props on entity change so switching
-    // between items works.
-    setExpanded(
+    // Optimistic first-paint from the prop. Authoritative state
+    // arrives below via /expand.
+    const propPaint =
       initialExpandedDetail && hasDefinition(initialExpandedDetail)
         ? initialExpandedDetail
-        : null,
-    );
+        : null;
+    setExpanded(propPaint);
     setResearch(initialDetailResearch ?? null);
     setExpandError(null);
 
-    const needsExpansion =
-      !initialExpandedDetail || !hasDefinition(initialExpandedDetail);
-    const needsResearch =
-      !initialDetailResearch ||
-      !(
-        Array.isArray(initialDetailResearch.sources) &&
-        (initialDetailResearch.sources.length > 0 ||
-          initialDetailResearch.failed === true)
-      );
-
-    if (needsExpansion) {
-      setExpandLoading(true);
-      void fetch("/api/brainstorm/item/expand", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ entityId }),
-      })
-        .then(async (res) => {
-          const json = await res.json();
-          if (!res.ok) {
+    // /expand — always. Skeleton only when we have nothing to
+    // paint yet (cold open of a never-expanded item).
+    if (!propPaint) setExpandLoading(true);
+    void fetch("/api/brainstorm/item/expand", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ entityId }),
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        if (!res.ok) {
+          // Only surface the error when we have no fallback content.
+          // With prop-paint, stale-but-readable beats a hard error.
+          if (!propPaint) {
             setExpandError(json?.error ?? "Could not expand item.");
-            return;
           }
-          setExpanded(json.expanded_detail ?? null);
-          if (Array.isArray(json?.prior_concepts)) {
-            setPriorConcepts(json.prior_concepts);
-          }
-        })
-        .catch((err) => {
+          return;
+        }
+        setExpanded(json.expanded_detail ?? null);
+        if (Array.isArray(json?.prior_concepts)) {
+          setPriorConcepts(json.prior_concepts);
+        }
+      })
+      .catch((err) => {
+        if (!propPaint) {
           setExpandError(
             err instanceof Error ? err.message : "Network error.",
           );
-        })
-        .finally(() => setExpandLoading(false));
-    }
-
-    if (needsResearch) {
-      setResearchLoading(true);
-      void fetch("/api/brainstorm/item/research", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ entityId }),
+        }
       })
-        .then(async (res) => {
-          const json = await res.json();
-          if (res.ok) setResearch(json.detail_research ?? null);
-        })
-        .catch(() => {
-          // Silent — research is optional; the drawer still renders.
-        })
-        .finally(() => setResearchLoading(false));
-    }
+      .finally(() => setExpandLoading(false));
+
+    // /research — same pattern, gentler. Research is item-research
+    // (lit + web), NOT mutated by drawer actions, so the prop is
+    // less likely to be stale. We still re-fetch so retries on
+    // prior failures resolve, and so cold opens populate. The
+    // route is idempotent: cache hit returns the stored bundle.
+    const hasResearchPaint =
+      !!initialDetailResearch &&
+      Array.isArray(initialDetailResearch.sources) &&
+      (initialDetailResearch.sources.length > 0 ||
+        initialDetailResearch.failed === true);
+    if (!hasResearchPaint) setResearchLoading(true);
+    void fetch("/api/brainstorm/item/research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ entityId }),
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        if (res.ok) setResearch(json.detail_research ?? null);
+      })
+      .catch(() => {
+        // Silent — research is optional; the drawer still renders.
+      })
+      .finally(() => setResearchLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityId]);
 
