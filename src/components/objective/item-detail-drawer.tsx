@@ -19,13 +19,14 @@
 // on mobile.
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowUpRight,
   ChevronRight,
   Compass,
   ExternalLink,
+  Highlighter,
   Link2,
   RefreshCw,
   Shield,
@@ -34,6 +35,13 @@ import {
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+
+interface DefinitionHighlight {
+  phrase: string;
+  start_offset: number;
+  end_offset: number;
+  why: string;
+}
 
 // ── Shared types (mirror the API contracts) ──
 
@@ -132,6 +140,18 @@ export function ItemDetailDrawer({
   const [expandLoading, setExpandLoading] = useState(false);
   const [expandError, setExpandError] = useState<string | null>(null);
 
+  // ── Definition highlights (toggle) ──
+  // Local-only cache: client requests once when the user first
+  // toggles highlights on for a given definition. Resetting on
+  // definition regenerate is handled by the regenerateExpansion
+  // path below — it nulls the cache so the next toggle re-fetches.
+  const [highlightsOn, setHighlightsOn] = useState(false);
+  const [highlights, setHighlights] = useState<DefinitionHighlight[] | null>(
+    null,
+  );
+  const [highlightsLoading, setHighlightsLoading] = useState(false);
+  const [highlightsError, setHighlightsError] = useState<string | null>(null);
+
   const [research, setResearch] = useState<ItemResearchBundle | null>(
     initialDetailResearch ?? null,
   );
@@ -218,6 +238,10 @@ export function ItemDetailDrawer({
     if (!entityId) return;
     setExpandLoading(true);
     setExpandError(null);
+    // Definition is about to change → drop any cached highlights so
+    // the next toggle-on re-fetches against the fresh text.
+    setHighlights(null);
+    setHighlightsError(null);
     void fetch("/api/brainstorm/item/expand", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -236,6 +260,59 @@ export function ItemDetailDrawer({
       )
       .finally(() => setExpandLoading(false));
   }
+
+  // ── Highlights toggle ──
+  function toggleHighlights() {
+    const next = !highlightsOn;
+    setHighlightsOn(next);
+    // Lazy fetch on first toggle-on; cached for the lifetime of the
+    // drawer-open session.
+    if (
+      next &&
+      highlights === null &&
+      !highlightsLoading &&
+      expanded?.definition &&
+      expanded.definition.length >= 40
+    ) {
+      setHighlightsLoading(true);
+      setHighlightsError(null);
+      void fetch("/api/brainstorm/item/highlights", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          text: expanded.definition,
+          topic: itemName,
+        }),
+      })
+        .then(async (res) => {
+          const json = await res.json();
+          if (!res.ok) {
+            setHighlightsError(
+              json?.error ?? "Could not generate highlights.",
+            );
+            return;
+          }
+          setHighlights(
+            Array.isArray(json.highlights) ? json.highlights : [],
+          );
+        })
+        .catch((err) =>
+          setHighlightsError(
+            err instanceof Error ? err.message : "Network error.",
+          ),
+        )
+        .finally(() => setHighlightsLoading(false));
+    }
+  }
+
+  // Build segmented text once per (definition, highlights) pair.
+  const definitionSegments = useMemo(() => {
+    const text = expanded?.definition ?? "";
+    if (!text || !highlightsOn || !highlights || highlights.length === 0) {
+      return null;
+    }
+    return buildHighlightSegments(text, highlights);
+  }, [expanded?.definition, highlights, highlightsOn]);
 
   const laneColor = LANE_COLORS[itemLayer];
 
@@ -331,26 +408,63 @@ export function ItemDetailDrawer({
                 title="Definition"
                 action={
                   expanded ? (
-                    <button
-                      type="button"
-                      onClick={regenerateExpansion}
-                      disabled={expandLoading}
-                      className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[9.5px] font-semibold"
-                      style={{
-                        background: appleVibe.surface.chip,
-                        color: appleVibe.text.tertiary,
-                        cursor: expandLoading ? "wait" : "pointer",
-                      }}
-                      title="Regenerate the AI's interpretation"
-                    >
-                      <RefreshCw
-                        className={`h-2.5 w-2.5 ${
-                          expandLoading ? "animate-spin" : ""
-                        }`}
-                        strokeWidth={2}
-                      />
-                      Regenerate
-                    </button>
+                    <div className="flex items-center gap-1">
+                      {/* Highlights toggle — only shows when there's
+                          a definition long enough to be worth
+                          highlighting (>= 40 chars). */}
+                      {expanded.definition &&
+                        expanded.definition.length >= 40 && (
+                          <button
+                            type="button"
+                            onClick={toggleHighlights}
+                            disabled={highlightsLoading}
+                            className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[9.5px] font-semibold transition-colors"
+                            style={{
+                              background: highlightsOn
+                                ? "rgba(217,179,15,0.18)"
+                                : appleVibe.surface.chip,
+                              color: highlightsOn
+                                ? "rgba(132,103,8,0.95)"
+                                : appleVibe.text.tertiary,
+                              cursor: highlightsLoading ? "wait" : "pointer",
+                            }}
+                            aria-pressed={highlightsOn}
+                            title={
+                              highlightsOn
+                                ? "Hide key-part highlights"
+                                : "Highlight the key parts to read"
+                            }
+                          >
+                            <Highlighter
+                              className={`h-2.5 w-2.5 ${
+                                highlightsLoading ? "animate-pulse" : ""
+                              }`}
+                              strokeWidth={2}
+                            />
+                            Highlights {highlightsOn ? "on" : "off"}
+                          </button>
+                        )}
+                      <button
+                        type="button"
+                        onClick={regenerateExpansion}
+                        disabled={expandLoading}
+                        className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[9.5px] font-semibold"
+                        style={{
+                          background: appleVibe.surface.chip,
+                          color: appleVibe.text.tertiary,
+                          cursor: expandLoading ? "wait" : "pointer",
+                        }}
+                        title="Regenerate the AI's interpretation"
+                      >
+                        <RefreshCw
+                          className={`h-2.5 w-2.5 ${
+                            expandLoading ? "animate-spin" : ""
+                          }`}
+                          strokeWidth={2}
+                        />
+                        Regenerate
+                      </button>
+                    </div>
                   ) : null
                 }
               >
@@ -359,12 +473,49 @@ export function ItemDetailDrawer({
                 ) : expandError ? (
                   <ErrorRow message={expandError} />
                 ) : expanded?.definition ? (
-                  <p
-                    className="text-[13px] font-light leading-relaxed"
-                    style={{ color: appleVibe.text.secondary }}
-                  >
-                    {expanded.definition}
-                  </p>
+                  <>
+                    <p
+                      className="text-[13px] font-light leading-relaxed"
+                      style={{ color: appleVibe.text.secondary }}
+                    >
+                      {definitionSegments ? (
+                        definitionSegments.map((seg, i) =>
+                          seg.kind === "mark" ? (
+                            <mark
+                              key={i}
+                              title={seg.why || undefined}
+                              style={{
+                                background: "rgba(254,243,199,0.85)",
+                                color: appleVibe.text.primary,
+                                padding: "1px 2px",
+                                borderRadius: 3,
+                                boxDecorationBreak: "clone",
+                                WebkitBoxDecorationBreak: "clone",
+                              }}
+                            >
+                              {seg.value}
+                            </mark>
+                          ) : (
+                            <span key={i}>{seg.value}</span>
+                          ),
+                        )
+                      ) : (
+                        expanded.definition
+                      )}
+                    </p>
+                    {/* Inline status row for highlights loading / error */}
+                    {highlightsOn && highlightsLoading && (
+                      <p
+                        className="mt-1.5 text-[10.5px] font-light italic"
+                        style={{ color: appleVibe.text.tertiary }}
+                      >
+                        Picking the key parts…
+                      </p>
+                    )}
+                    {highlightsOn && highlightsError && (
+                      <ErrorRow message={highlightsError} />
+                    )}
+                  </>
                 ) : (
                   <p
                     className="text-[12px] font-light italic"
@@ -784,4 +935,39 @@ function ErrorRow({ message }: { message: string }) {
       {message}
     </div>
   );
+}
+
+// ── Highlight segment builder ────────────────────────────────────────
+//
+// Walks the source text + sorted highlight offsets and returns a flat
+// list of segments (plain text | mark). Mirrors the buildSegments
+// pattern in annotated-objective-card but for the simpler highlight
+// shape (no annotation/popover machinery).
+
+type HighlightSegment =
+  | { kind: "text"; value: string }
+  | { kind: "mark"; value: string; why: string };
+
+function buildHighlightSegments(
+  text: string,
+  highlights: DefinitionHighlight[],
+): HighlightSegment[] {
+  if (highlights.length === 0) return [{ kind: "text", value: text }];
+  const out: HighlightSegment[] = [];
+  let cursor = 0;
+  for (const h of highlights) {
+    if (h.start_offset > cursor) {
+      out.push({ kind: "text", value: text.slice(cursor, h.start_offset) });
+    }
+    out.push({
+      kind: "mark",
+      value: text.slice(h.start_offset, h.end_offset),
+      why: h.why,
+    });
+    cursor = h.end_offset;
+  }
+  if (cursor < text.length) {
+    out.push({ kind: "text", value: text.slice(cursor) });
+  }
+  return out;
 }
