@@ -267,17 +267,28 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Generate ──
+  //
+  // Two-tier retry: llmJSON already retries on transient HTTP errors
+  // (429/5xx, 4 attempts). What it can't fix is schema/parse rejections
+  // or token-cap truncations — those re-throw immediately. For those
+  // we retry ONCE here with a reduced-context payload: no annotations,
+  // empty ancestor lineage, truncated parent + core text. Cuts the
+  // prompt by ~40-60% which usually lets the strict-JSON pass.
+  //
+  // If both attempts throw, we surface the second error's detail so
+  // the UI can show "expansion failed — {actual cause}".
   let generated: Awaited<ReturnType<typeof generateExpansionNode>>;
-  try {
-    // Build ancestor lineage so the LLM doesn't redundantly cover
-    // ground from upstream nodes.
-    const lineageTitles = parentNodeId
-      ? (() => {
-          const parent = tree.find((n) => n.id === parentNodeId);
-          return parent ? [...parent.lineage_titles, parent.title] : [];
-        })()
-      : [];
+  // Build ancestor lineage so the LLM doesn't redundantly cover
+  // ground from upstream nodes.
+  const lineageTitles = parentNodeId
+    ? (() => {
+        const parent = tree.find((n) => n.id === parentNodeId);
+        return parent ? [...parent.lineage_titles, parent.title] : [];
+      })()
+    : [];
+  const constraints = readConstraints(space.synthesis_data);
 
+  try {
     generated = await generateExpansionNode({
       catalogEntry: entry,
       parent: {
@@ -289,14 +300,62 @@ export async function POST(req: NextRequest) {
         coreObjectiveText,
         ancestorLineage: lineageTitles,
       },
-      constraints: readConstraints(space.synthesis_data),
+      constraints,
       annotations: annotations.length > 0 ? annotations : undefined,
     });
-  } catch (err) {
-    return NextResponse.json(
-      { error: "expansion failed", detail: sanitizeErrorMessage(err) },
-      { status: 500 },
+  } catch (firstErr) {
+    const firstDetail = sanitizeErrorMessage(firstErr);
+    console.warn(
+      "[item/expansion/spawn] first attempt failed — retrying with reduced context:",
+      firstDetail,
     );
+    try {
+      // Reduced-context retry. Drop the bulk that's most likely to
+      // bloat the prompt past the model's effective limit:
+      //  - no annotations (8-item lens × ~80 chars each = ~640 chars)
+      //  - empty lineage (can grow with depth)
+      //  - first 80 chars of parent description (lose tradeoff suffix)
+      //  - first 200 chars of core objective text
+      const shortDesc =
+        parentDescription.length > 80
+          ? parentDescription.slice(0, 77).trimEnd() + "…"
+          : parentDescription;
+      const shortCore =
+        coreObjectiveText.length > 200
+          ? coreObjectiveText.slice(0, 197).trimEnd() + "…"
+          : coreObjectiveText;
+      generated = await generateExpansionNode({
+        catalogEntry: entry,
+        parent: {
+          title: parentTitle,
+          description: shortDesc,
+          itemLayer: layer,
+          itemName: entity.name,
+          subObjectiveTitle,
+          coreObjectiveText: shortCore,
+          ancestorLineage: [],
+        },
+        constraints,
+        annotations: undefined,
+      });
+    } catch (secondErr) {
+      const secondDetail = sanitizeErrorMessage(secondErr);
+      console.warn(
+        "[item/expansion/spawn] reduced-context retry also failed:",
+        secondDetail,
+      );
+      return NextResponse.json(
+        {
+          error: "expansion failed",
+          // Prefer the second error (with-reduced-context) since that's
+          // the most informative — if the model still rejected after
+          // we cut the prompt in half, the cause is structural, not
+          // bloat. The first error is preserved for log diagnostics.
+          detail: `${secondDetail} (retry-with-reduced-context also failed; first attempt: ${firstDetail.slice(0, 160)})`,
+        },
+        { status: 500 },
+      );
+    }
   }
 
   // ── Build the ExpansionNode rows + persist ──
