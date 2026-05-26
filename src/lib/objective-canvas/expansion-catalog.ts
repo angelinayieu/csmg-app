@@ -639,6 +639,484 @@ const SOFTWARE_OUTCOME_VARIATION_EXPANSION: CatalogEntry = {
   ],
 };
 
+// ── JOURNALING / FEATURES — Variation → 5 practice-shaped children ─
+// Journaling "features" are PRACTICE PATTERNS — prompt templates,
+// rhythm designs, capture formats. They don't ship and they don't
+// have a data model in the software sense. Deepening one means:
+// name the lived-experience mechanism, design the daily prompt,
+// design the cadence, name how it could quietly fail, and name how
+// the user feels it working week-over-week.
+
+const JOURNALING_FEATURE_VARIATION_EXPANSION: CatalogEntry = {
+  domain: "journaling",
+  lane: "features",
+  parent: "variation",
+  framing:
+    "You are deepening a single journaling PRACTICE PATTERN into the surfaces a thoughtful coach would write before recommending it. Journaling practices aren't software — so the children below are about the lived-experience mechanism, the prompt design, the cadence, the failure modes, and the felt-sense signal. Anchored on this specific variation, not journaling in general.",
+  spawns: [
+    {
+      node_type: "journaling.felt_mechanism",
+      label: "Felt mechanism",
+      body_hint:
+        "Why this practice works internally — what shifts in attention / regulation / cognition during it.",
+      body_schema: {
+        required: ["paragraph"],
+        properties: {
+          paragraph: {
+            description:
+              "2-3 sentences. Not what the practice IS — WHY it works as a lived experience. Name the internal lever (e.g., 'narrative distance from the feeling', 'naming-to-tame', 're-consolidation window').",
+            kind: "string",
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.prompt_template",
+      label: "Prompt template",
+      body_hint:
+        "The exact words / structure the user would write under this practice. 3-6 prompts in sequence.",
+      body_schema: {
+        required: ["prompts", "opening_grounding"],
+        properties: {
+          opening_grounding: {
+            description:
+              "1-2 sentence opening line the user reads before writing — sets the felt-sense frame. Specific, not 'take a deep breath'.",
+            kind: "string",
+          },
+          prompts: {
+            description:
+              "3-6 ordered prompts the user answers in writing. Each: prompt (the actual question, in the user's voice) + why_this_prompt (1 sentence on what it surfaces).",
+            kind: "list_of_objects",
+            item_schema: {
+              fields: {
+                prompt:
+                  "The literal question. Second-person, specific. 'What did the feeling in your chest want you to do today?' not 'Reflect on emotions.'",
+                why_this_prompt:
+                  "1 sentence: what this prompt surfaces that the others don't.",
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.rhythm_design",
+      label: "Rhythm",
+      body_hint:
+        "When + how often the user does this. Frequency, duration, trigger, environment.",
+      body_schema: {
+        required: ["frequency", "duration", "trigger", "environment"],
+        properties: {
+          frequency: {
+            description:
+              "How often. 1 line. Specific: 'daily, evenings' or '2x/week + after any conflict'.",
+            kind: "string",
+          },
+          duration: {
+            description:
+              "How long each session. 1 line. Should match the practice's depth — 5min vs 20min vs 'until you feel a shift'.",
+            kind: "string",
+          },
+          trigger: {
+            description:
+              "What cue starts the session. Habit-anchored — 'after dinner', 'when your shoulders are tight'. 1 sentence.",
+            kind: "string",
+          },
+          environment: {
+            description:
+              "Physical context that supports this practice. 1 sentence — paper vs phone, alone vs near someone, quiet vs music.",
+            kind: "string",
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.failure_modes",
+      label: "How it quietly fails",
+      body_hint:
+        "3-4 ways this practice degrades without the user noticing — performative writing, avoidance, rumination spiral, journaling-about-journaling.",
+      body_schema: {
+        required: ["failures"],
+        properties: {
+          failures: {
+            description:
+              "3-4 entries. Each: failure_mode (specific pattern) + tell (how the user would notice it) + reset (1-sentence repair).",
+            kind: "list_of_objects",
+            item_schema: {
+              fields: {
+                failure_mode:
+                  "Concrete degradation pattern. 'Listing gratitude items without feeling them.' Not 'losing motivation'.",
+                tell:
+                  "1 sentence: the inner or behavioral signal that this is happening.",
+                reset:
+                  "1 sentence: how to step out of this without abandoning the practice.",
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.felt_sense_signal",
+      label: "Felt-sense signal",
+      body_hint:
+        "How the user knows the practice is working — the bodily / emotional / behavioral marker that this specific practice produces.",
+      body_schema: {
+        required: ["weekly_signal", "session_signal", "anti_signal"],
+        properties: {
+          session_signal: {
+            description:
+              "The shift the user feels DURING or right after a session when it's working. 1-2 sentences, somatic or experiential.",
+            kind: "string",
+          },
+          weekly_signal: {
+            description:
+              "What's different in the user's week-over-week life when this practice is landing. 1-2 sentences, behavioral.",
+            kind: "string",
+          },
+          anti_signal: {
+            description:
+              "The feeling/behavior that, if it appears, means this practice is BACKFIRING (e.g., rumination intensifies). 1 sentence.",
+            kind: "string",
+          },
+        },
+      },
+    },
+  ],
+};
+
+// ── JOURNALING / PAIN — Variation → 4 diagnostic surfaces ──────────
+// Journaling pains are inner blockers / recurring loops. Deepening
+// one means: trace the cycle that keeps producing it, map the
+// triggers, name what avoidance looks like, identify what already
+// briefly interrupts it.
+
+const JOURNALING_PAIN_VARIATION_EXPANSION: CatalogEntry = {
+  domain: "journaling",
+  lane: "pain",
+  parent: "variation",
+  framing:
+    "You are deepening a single OBSERVABLE SHAPE of an inner blocker into the four diagnostic surfaces a thoughtful therapist would explore before suggesting any practice. These children are about UNDERSTANDING the loop — not fixing it yet. Anchored on this specific manifestation, not the parent pain in general.",
+  spawns: [
+    {
+      node_type: "journaling.recurrence_cycle",
+      label: "Recurrence cycle",
+      body_hint:
+        "The repeating loop — trigger → felt-experience → behavior → consequence → next trigger. 3-5 stages.",
+      body_schema: {
+        required: ["stages", "load_bearing_stage"],
+        properties: {
+          stages: {
+            description:
+              "3-5 stages of the cycle, in order. Each: stage (1 sentence — what happens at this point internally or behaviorally) + why_it_continues (1 sentence on what makes the user flow into the next stage).",
+            kind: "list_of_objects",
+            item_schema: {
+              fields: {
+                stage:
+                  "What happens at this point — specific, felt. 'You re-read the email at 11pm and your chest tightens.' Not 'rumination begins.'",
+                why_it_continues:
+                  "1 sentence: what makes this stage hand off into the next.",
+              },
+            },
+          },
+          load_bearing_stage: {
+            description:
+              "Which stage of the cycle is most load-bearing — the one that, if interrupted, would most weaken the loop. 1 sentence with reasoning.",
+            kind: "string",
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.trigger_pattern",
+      label: "Triggers",
+      body_hint:
+        "3-5 specific situations that activate this blocker, ordered by intensity / frequency.",
+      body_schema: {
+        required: ["triggers"],
+        properties: {
+          triggers: {
+            description:
+              "3-5 entries. Each: trigger (specific situation), frequency (often/sometimes/rare), intensity (low/medium/high), and tell (the somatic or behavioral sign that the trigger fired).",
+            kind: "list_of_objects",
+            item_schema: {
+              fields: {
+                trigger:
+                  "Specific situation. 'Receiving a Slack message after 7pm from your manager.' Not 'work stress.'",
+                frequency: "often | sometimes | rare",
+                intensity: "low | medium | high",
+                tell:
+                  "1 sentence: the felt or observable sign the trigger landed.",
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.avoidance_path",
+      label: "How you avoid feeling it",
+      body_hint:
+        "3-4 ways the user typically deflects from feeling this directly — productive distraction, intellectualizing, scrolling, etc.",
+      body_schema: {
+        required: ["avoidances"],
+        properties: {
+          avoidances: {
+            description:
+              "3-4 entries. Each: avoidance (specific behavior the user reaches for) + short_term_payoff (what it gives them) + long_term_cost (what the user loses by avoiding the felt experience).",
+            kind: "list_of_objects",
+            item_schema: {
+              fields: {
+                avoidance:
+                  "Specific behavior. 'Opening Twitter for 40 minutes.' 'Suddenly reorganizing your desk.' Not 'distraction.'",
+                short_term_payoff:
+                  "1 sentence: what relief or function this provides immediately.",
+                long_term_cost:
+                  "1 sentence: what the user loses by routing around the feeling.",
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.brief_interruptions",
+      label: "What already briefly works",
+      body_hint:
+        "2-4 things the user has noticed temporarily interrupt or soften this blocker — partial existing strengths, not full solutions.",
+      body_schema: {
+        required: ["interruptions"],
+        properties: {
+          interruptions: {
+            description:
+              "2-4 entries. Each: interruption (a specific thing that has shifted the state, even briefly) + why_it_works (a 1-sentence guess at the mechanism) + why_it_doesn't_last (the constraint that limits it).",
+            kind: "list_of_objects",
+            item_schema: {
+              fields: {
+                interruption:
+                  "Specific past micro-move. 'Walking around the block before responding.' Not 'self-care.'",
+                why_it_works:
+                  "1 sentence: best guess at the underlying mechanism.",
+                why_it_doesnt_last:
+                  "1 sentence: the constraint that keeps this from being the durable answer.",
+              },
+            },
+          },
+        },
+      },
+    },
+  ],
+};
+
+// ── JOURNALING / OUTCOMES — Variation → 4 felt-evidence surfaces ───
+// Journaling outcomes are felt-sense / behavioral signals — not
+// metrics. Deepening one means: specify what the felt evidence
+// looks like, name when it would be mistaken, calibrate week-over-
+// week trajectory, name what shows up earlier (mid-day mood, sleep
+// quality, etc.).
+
+const JOURNALING_OUTCOME_VARIATION_EXPANSION: CatalogEntry = {
+  domain: "journaling",
+  lane: "outcomes",
+  parent: "variation",
+  framing:
+    "You are deepening a single FELT EVIDENCE PATTERN for a journaling outcome into the four surfaces a thoughtful coach would write before trusting it. Felt evidence isn't a metric — it's a somatic / behavioral / relational signal. Anchored on this specific evidence variation.",
+  spawns: [
+    {
+      node_type: "journaling.felt_evidence_spec",
+      label: "Felt evidence",
+      body_hint:
+        "Exactly what the user would notice when this outcome is happening — somatic, behavioral, and relational markers.",
+      body_schema: {
+        required: ["somatic", "behavioral", "relational"],
+        properties: {
+          somatic: {
+            description:
+              "What the user feels in their body when this outcome is moving. 1-2 sentences — specific (e.g., 'shoulders unhitch on Friday evenings'), not 'feel calmer'.",
+            kind: "string",
+          },
+          behavioral: {
+            description:
+              "What the user does (or stops doing) when this outcome is moving. 1-2 sentences — specific micro-behaviors.",
+            kind: "string",
+          },
+          relational: {
+            description:
+              "What shifts in how the user shows up with others when this outcome is moving. 1-2 sentences.",
+            kind: "string",
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.false_positive_audit",
+      label: "When the signal lies",
+      body_hint:
+        "3-4 ways the user might feel like the outcome is moving when it isn't — performance, dissociation, temporary relief that masks the underlying state.",
+      body_schema: {
+        required: ["false_positives"],
+        properties: {
+          false_positives: {
+            description:
+              "3-4 entries. Each: scenario (the felt experience that mimics the outcome) + tell (how to know it's not the real thing) + check (1 sentence on how to ground-truth).",
+            kind: "list_of_objects",
+            item_schema: {
+              fields: {
+                scenario:
+                  "Specific felt-state that imitates the outcome. 'Manic productivity that feels like clarity.' Not 'fake feeling.'",
+                tell:
+                  "1 sentence: how to recognize this is the imitation, not the real thing.",
+                check:
+                  "1 sentence: a small grounding move that tests whether the outcome is actually present.",
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.week_to_week_delta",
+      label: "Week-over-week trajectory",
+      body_hint:
+        "What good progress looks like over weeks — baseline this week, what to expect in 2-4 weeks, what 'enough' looks like at 8-12 weeks.",
+      body_schema: {
+        required: ["this_week", "two_to_four_weeks", "eight_to_twelve_weeks"],
+        properties: {
+          this_week: {
+            description:
+              "Realistic baseline for the first week of the practice. 1-2 sentences — name what's likely to feel hard.",
+            kind: "string",
+          },
+          two_to_four_weeks: {
+            description:
+              "What a credible 2-4 week shift looks like. 1-2 sentences — specific, modest, somatic-or-behavioral.",
+            kind: "string",
+          },
+          eight_to_twelve_weeks: {
+            description:
+              "The 'enough to keep going' marker at 8-12 weeks. 1-2 sentences — what would tell the user this practice has actually landed.",
+            kind: "string",
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.leading_indicators",
+      label: "Earlier signals",
+      body_hint:
+        "2-4 earlier markers that predict this outcome — mid-day mood, sleep quality, response latency in conversations, etc.",
+      body_schema: {
+        required: ["indicators"],
+        properties: {
+          indicators: {
+            description:
+              "2-4 entries. Each: indicator (specific earlier marker, somatic or behavioral) + lead_time (when it appears relative to the outcome) + how_to_notice (1 sentence on the practical noticing move).",
+            kind: "list_of_objects",
+            item_schema: {
+              fields: {
+                indicator:
+                  "Specific earlier marker. 'Falling asleep within 15 minutes.' Not 'better sleep.'",
+                lead_time:
+                  "How much earlier this appears. 'About 1-2 weeks before the bigger relational shift.'",
+                how_to_notice:
+                  "1 sentence: the everyday cue the user can attend to without instruments.",
+              },
+            },
+          },
+        },
+      },
+    },
+  ],
+};
+
+// ── JOURNALING — Open Question → smallest experiment / adjacent
+// wisdom / decision rule.
+//
+// Mirrors the software open-question entry's intent (cheapest move
+// before committing), but framed for inner-practice questions. The
+// "adjacent_wisdom" surface replaces software's "adjacent_evidence"
+// because reflective practice draws on lived wisdom + traditions
+// rather than papers + APIs.
+
+const JOURNALING_OPEN_QUESTION_EXPANSION: CatalogEntry = {
+  domain: "journaling",
+  lane: "features",
+  parent: "open_question",
+  framing:
+    "You are deepening a single open question inside a reflective-practice space into the candidate moves the user could try before committing to a full practice change.",
+  spawns: [
+    {
+      node_type: "journaling.smallest_experiment",
+      label: "Smallest experiment",
+      body_hint:
+        "The cheapest in-life test that would let the user feel the answer — usually one week of one small move.",
+      body_schema: {
+        required: ["experiment", "duration", "what_it_resolves"],
+        properties: {
+          experiment: {
+            description:
+              "Concrete in-life move. 1-2 sentences. Specific: 'For one week, write 3 sentences before opening your phone each morning.' Not 'try journaling.'",
+            kind: "string",
+          },
+          duration: {
+            description: "Realistic time horizon. 1 line — usually 1-2 weeks.",
+            kind: "string",
+          },
+          what_it_resolves: {
+            description:
+              "Which axis of the open question this would disambiguate. 1 sentence — somatic, relational, behavioral, etc.",
+            kind: "string",
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.adjacent_wisdom",
+      label: "Adjacent wisdom",
+      body_hint:
+        "Who or what tradition has already explored this — a teacher, lineage, book, or framework — pointers, not deep summaries.",
+      body_schema: {
+        required: ["pointers"],
+        properties: {
+          pointers: {
+            description:
+              "2-4 entries. Each: source (teacher / lineage / book / framework name) + takeaway (1-sentence pointer at what they say about this question).",
+            kind: "list_of_objects",
+            item_schema: {
+              fields: {
+                source:
+                  "Specific source — a person, lineage, or book. Not 'mindfulness research.'",
+                takeaway: "1 sentence: the pointer / framing from that source.",
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      node_type: "journaling.decision_rule",
+      label: "How to decide",
+      body_hint:
+        "The criteria the user should apply when picking a direction without certainty — usually felt-sense + sustainability + values-fit.",
+      body_schema: {
+        required: ["criteria", "default_path"],
+        properties: {
+          criteria: {
+            description:
+              "2-3 lines naming the most-relevant criteria. Specific to inner work: felt-sense, sustainability, values-fit, relational impact.",
+            kind: "string_array",
+          },
+          default_path: {
+            description:
+              "If forced to pick today, which way the user should lean and why. 1-2 sentences — framed gently, with permission to revise.",
+            kind: "string",
+          },
+        },
+      },
+    },
+  ],
+};
+
 // ── Registry index ─────────────────────────────────────────────────
 
 const CATALOG: CatalogEntry[] = [
@@ -648,6 +1126,10 @@ const CATALOG: CatalogEntry[] = [
   SOFTWARE_DATA_MODEL_DETAIL,
   SOFTWARE_OPEN_QUESTION_EXPANSION,
   SOFTWARE_CONFLICT_OPEN_EXPANSION,
+  JOURNALING_FEATURE_VARIATION_EXPANSION,
+  JOURNALING_PAIN_VARIATION_EXPANSION,
+  JOURNALING_OUTCOME_VARIATION_EXPANSION,
+  JOURNALING_OPEN_QUESTION_EXPANSION,
 ];
 
 /** Look up the catalog entry for a (domain, lane, parent) triple.
