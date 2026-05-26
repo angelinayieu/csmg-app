@@ -17,6 +17,7 @@ import { normalizeRoomCategories } from "@/lib/objective-canvas/generate-categor
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
 import {
   getUserIntentPreferences,
+  getGlobalIntentPreferences,
   topPreferredIntent,
 } from "@/lib/objective-canvas/decision-log";
 import {
@@ -24,7 +25,7 @@ import {
   type CrossRoomSignals,
 } from "@/lib/objective-canvas/cross-room-signals";
 import type { RoomEdge } from "@/components/objective/sub-objective-room-view";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, FileText } from "lucide-react";
 import { AnalysisWorkbench } from "@/components/objective/analysis-workbench";
 import { TIER_2_OPERATIONS } from "@/lib/objective-canvas/analyses";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
@@ -81,8 +82,29 @@ export default async function ObjectiveCanvasPage({
   // "Suggested" affordance reads this instead of defaulting to
   // "creative". Loaded for the picking stage only — cheap enough to
   // run unconditionally though, and null for new users.
-  const userPrefs = await getUserIntentPreferences(db, user.id);
-  const initialPreferredIntent = topPreferredIntent(userPrefs);
+  //
+  // When the user has no per-user signal yet, fall back to
+  // population-wide preferences (cross-user flywheel). Brand-new
+  // users still get smart suggestions, sourced from what the
+  // community elected most. Both reads happen in parallel.
+  const [userPrefs, globalPrefs] = await Promise.all([
+    getUserIntentPreferences(db, user.id),
+    getGlobalIntentPreferences(db),
+  ]);
+  const initialPreferredIntent =
+    topPreferredIntent(userPrefs) ?? topPreferredIntent(globalPrefs);
+  // Source attribution lets the UI explain WHY this intent was
+  // suggested. Reads cleanly as "matches your past picks" vs
+  // "popular with similar users."
+  const initialPreferenceSource:
+    | "user"
+    | "global"
+    | "none" =
+    topPreferredIntent(userPrefs) !== null
+      ? "user"
+      : topPreferredIntent(globalPrefs) !== null
+        ? "global"
+        : "none";
   if (state.stage === "main" || state.stage === "done") {
     const { data: parentRows } = await db
       .from("improvement_goals")
@@ -478,6 +500,19 @@ export default async function ObjectiveCanvasPage({
 
         {showWorkbench && (
           <div className="mt-6">
+            <div className="mb-3 flex items-center justify-end">
+              <Link
+                href={`/app/objective/${spaceId}/brief`}
+                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold transition-colors"
+                style={{
+                  background: "rgba(15,23,42,0.92)",
+                  color: "#fff",
+                }}
+              >
+                <FileText className="h-3 w-3" strokeWidth={2} />
+                View Strategy Brief →
+              </Link>
+            </div>
             <AnalysisWorkbench
               spaceId={spaceId}
               initialAnalysis={cachedAnalysis}
@@ -497,6 +532,8 @@ export default async function ObjectiveCanvasPage({
             initialMainSubs={initialMainSubs}
             initialCoreAnnotations={initialCoreAnnotations}
             initialPreferredIntent={initialPreferredIntent}
+            initialPreferenceSource={initialPreferenceSource}
+            initialUserPrefs={userPrefs}
             initialCrossRoomSignals={initialCrossRoomSignals}
           />
         </div>
