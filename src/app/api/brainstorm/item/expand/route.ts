@@ -360,6 +360,62 @@ export async function POST(req: NextRequest) {
     return items.slice(0, 4);
   })();
 
+  // ── Closed read loop: tested briefs ──
+  // On force-regen (cache miss with prior expanded_detail), pull the
+  // concluded prototype briefs from the existing detail so the
+  // regenerated variations respect what the user has already learned.
+  // First-time expansion → `existing` is null → testedBriefs stays
+  // undefined → block silently omitted in the prompt.
+  //
+  // Filters:
+  //   • status === "concluded" — anything other states are still
+  //     in-flight, no learned outcome to reference yet
+  //   • result_summary present + non-empty — the user must have
+  //     actually written down what they learned
+  //   • Variation must still exist in the (prior) variations list —
+  //     orphan briefs (variation was deleted) are dropped
+  // Most-recent first; cap at 4 to bound token cost.
+  type TestedBrief = NonNullable<
+    Parameters<typeof expandItemDetail>[0]["testedBriefs"]
+  >[number];
+  const testedBriefs: TestedBrief[] = (() => {
+    const briefs = existing?.prototype_briefs ?? [];
+    const variations = existing?.variations ?? [];
+    if (briefs.length === 0 || variations.length === 0) return [];
+    const variationNameById = new Map(
+      variations
+        .filter((v): v is { id: string; name: string } & typeof v =>
+          typeof (v as { id?: unknown }).id === "string",
+        )
+        .map((v) => [v.id, v.name] as const),
+    );
+    const out: TestedBrief[] = [];
+    for (const b of briefs) {
+      if (b.status !== "concluded") continue;
+      const result = typeof b.result_summary === "string"
+        ? b.result_summary.trim()
+        : "";
+      if (result.length === 0) continue;
+      const variationName = variationNameById.get(b.variation_id);
+      if (!variationName) continue;
+      out.push({
+        variation_name: variationName,
+        open_question: b.open_question,
+        signal_to_watch: b.signal_to_watch,
+        learning_target: b.learning_target,
+        result_summary: result,
+        status_updated_at: b.status_updated_at,
+      });
+    }
+    // Newest first by status_updated_at, fallback to generated_at.
+    out.sort((a, b) => {
+      const aT = a.status_updated_at ?? "";
+      const bT = b.status_updated_at ?? "";
+      return bT.localeCompare(aT);
+    });
+    return out.slice(0, 4);
+  })();
+
   // ── Run the expansion LLM call ──
   let detail: ExpandedItemDetail;
   try {
@@ -378,6 +434,7 @@ export async function POST(req: NextRequest) {
       distillThemes,
       priorConcepts,
       upstreamContext,
+      testedBriefs: testedBriefs.length > 0 ? testedBriefs : undefined,
     });
   } catch (err) {
     return NextResponse.json(

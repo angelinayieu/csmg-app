@@ -267,6 +267,36 @@ export interface ExpandItemContext {
      *  disposition) on this upstream card. */
     expansion_highlights: string[];
   }>;
+  /** Closed read loop — prototype briefs the user has already
+   *  RUN on THIS item's variations. Filtered upstream to
+   *  status="concluded" with a non-empty result_summary so the
+   *  prompt only sees experiments that actually concluded with
+   *  a learned outcome.
+   *
+   *  The block teaches the LLM: when a variation has been tested
+   *  and the user wrote down what they learned, DON'T re-propose
+   *  the same open_question (the answer exists). DO surface the
+   *  learning as a structural signal — the variation might no
+   *  longer need a "tradeoff" framing if the experiment resolved it.
+   *
+   *  Soft signal — empty array tolerated; legacy items pre-dating
+   *  the lifecycle have none. */
+  testedBriefs?: Array<{
+    /** The variation this brief tested (name, not id — keeps the
+     *  prompt readable; the route resolves variation_id → name). */
+    variation_name: string;
+    /** The original open question the brief was answering. */
+    open_question: string;
+    /** The signal_to_watch the brief committed to. */
+    signal_to_watch: string;
+    /** What the user planned to LEARN. */
+    learning_target: string;
+    /** The user-captured outcome — required, the upstream filter
+     *  drops briefs without one. */
+    result_summary: string;
+    /** ISO of when the user concluded the brief. */
+    status_updated_at?: string;
+  }>;
 }
 
 // ── Per-layer framing — different prompts for different lane types ──
@@ -593,7 +623,31 @@ Return strict JSON.`;
           )}\n  UPSTREAM RULE: When upstream has ELECTED variations or DEEPENED nodes, your output should make sense as a downstream response to those choices. If you'd otherwise generate a variation that ignores upstream elections, either tie it to one OR explicitly justify the divergence in its tradeoff. Don't drift away from the chain — the user is building one coherent bet.`
       : "";
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${upstreamBlock}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
+  // Closed-read-loop block — already-tested briefs. When variations
+  // on THIS item have been prototyped + concluded with a learning,
+  // the LLM sees both the original question AND the user's recorded
+  // outcome. The block instructs the model to:
+  //   • DROP open_questions on those variations that the test answered
+  //   • SURFACE the learning in the variation's tradeoff or description
+  //     (e.g., "Tested in 7-day field trial; held under social proof,
+  //     failed in solo mode — bias toward the social configuration")
+  //   • Prefer NEW open_questions that the conducted experiment did
+  //     NOT resolve
+  // Soft signal; empty array → block omitted.
+  const testedBriefsBlock =
+    ctx.testedBriefs && ctx.testedBriefs.length > 0
+      ? `\n\nALREADY-TESTED VARIATIONS (the user ran these experiments and recorded outcomes — respect what was learned):\n${ctx.testedBriefs
+          .slice(0, 4)
+          .map(
+            (b) =>
+              `  "${b.variation_name}"\n      Q: ${b.open_question.slice(0, 120)}\n      Signal: ${b.signal_to_watch.slice(0, 80)}\n      Outcome: ${b.result_summary.slice(0, 280)}`,
+          )
+          .join(
+            "\n",
+          )}\n  TESTED RULE: For variations above, DROP open_questions the test already answered, SURFACE the learning in the variation's description or tradeoff, and only emit NEW open_questions that the experiment did NOT resolve. Do not propose to re-test the same hypothesis. Treat the user's recorded outcome as ground truth, not as something to second-guess.`
+      : "";
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${upstreamBlock}${testedBriefsBlock}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
 
   // ── Schema (dynamic — adds derived_from_annotations only when
   //    the lens has entries, mirroring the room generator pattern). ──
