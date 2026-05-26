@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 
 interface DefinitionHighlight {
   phrase: string;
@@ -270,12 +271,17 @@ export function ItemDetailDrawer({
   const [priorConcepts, setPriorConcepts] = useState<
     Array<{
       id: string;
+      canonical_code: string;
       display_name: string;
       description: string | null;
       domain_tags: string[];
       space_count: number;
     }>
   >([]);
+  // Click-to-open-drawer state for KG concept inspection. When set,
+  // CanonicalConceptDrawer mounts at the right edge (slides OVER
+  // the item detail drawer). All chip clicks feed this.
+  const [openConceptCode, setOpenConceptCode] = useState<string | null>(null);
 
   // ── ESC to close ──
   useEffect(() => {
@@ -754,7 +760,10 @@ export function ItemDetailDrawer({
                     that verbatim-references one of these gets its
                     own "↻ links to" badge inside the variation card. */}
                 {priorConcepts.length > 0 && (
-                  <DrawerPriorConceptsStrip concepts={priorConcepts} />
+                  <DrawerPriorConceptsStrip
+                    concepts={priorConcepts}
+                    onConceptClick={setOpenConceptCode}
+                  />
                 )}
 
                 {expandLoading && !expanded?.variations?.length ? (
@@ -771,6 +780,7 @@ export function ItemDetailDrawer({
                     variations={expanded.variations}
                     entityId={entityId ?? ""}
                     priorConcepts={priorConcepts}
+                    onConceptClick={setOpenConceptCode}
                     onLocalUpdate={(updated) =>
                       setExpanded((prev) =>
                         prev ? { ...prev, variations: updated } : prev,
@@ -930,6 +940,16 @@ export function ItemDetailDrawer({
             </div>
           </motion.aside>
         </>
+      )}
+      {/* Cross-space KG drawer — opened by clicking any prior-concept
+          chip. Mounted as a sibling of the item drawer so it can
+          render its own slide-in (which will OVERLAY the item
+          drawer; clicking close returns to it). */}
+      {openConceptCode && (
+        <CanonicalConceptDrawer
+          canonicalCode={openConceptCode}
+          onClose={() => setOpenConceptCode(null)}
+        />
       )}
     </AnimatePresence>
   );
@@ -1129,6 +1149,7 @@ function VariationsGroup({
   variations,
   entityId,
   priorConcepts = [],
+  onConceptClick,
   onLocalUpdate,
   onComposedDesignUpdate,
   composedDesign,
@@ -1145,11 +1166,15 @@ function VariationsGroup({
    *  tradeoff. */
   priorConcepts?: Array<{
     id: string;
+    canonical_code: string;
     display_name: string;
     description: string | null;
     domain_tags: string[];
     space_count: number;
   }>;
+  /** Click handler for the per-variation "↻ links to" badges —
+   *  opens CanonicalConceptDrawer at the parent level. */
+  onConceptClick?: (canonicalCode: string) => void;
   onLocalUpdate: (next: ItemVariation[]) => void;
   onComposedDesignUpdate: (cd: ComposedDesign | null) => void;
   composedDesign: ComposedDesign | null;
@@ -1330,6 +1355,7 @@ function VariationsGroup({
                     .map((c) => ({
                       display_name: c.display_name,
                       space_count: c.space_count,
+                      canonical_code: c.canonical_code,
                     }))
                     .sort((a, b) => b.space_count - a.space_count)
                     .slice(0, 3);
@@ -1350,6 +1376,7 @@ function VariationsGroup({
                       expansionTree={expansionTree}
                       onExpansionTreeUpdate={onTreeUpdate}
                       linkedConcepts={linkedConcepts}
+                      onConceptClick={onConceptClick}
                     />
                   );
                 })}
@@ -1391,6 +1418,7 @@ function VariationCard({
   expansionTree,
   onExpansionTreeUpdate,
   linkedConcepts = [],
+  onConceptClick,
 }: {
   variation: ItemVariation;
   rank: number;
@@ -1409,8 +1437,15 @@ function VariationCard({
    *  variation's text verbatim references. Pre-computed by the
    *  parent VariationsGroup against priorConcepts + the variation's
    *  name+description+tradeoff. Each chip carries display_name +
-   *  cross-space evidence so the user feels their KG accumulating. */
-  linkedConcepts?: Array<{ display_name: string; space_count: number }>;
+   *  cross-space evidence + canonical_code so the user feels their
+   *  KG accumulating AND can drill in. */
+  linkedConcepts?: Array<{
+    display_name: string;
+    space_count: number;
+    canonical_code: string;
+  }>;
+  /** Chip click → opens CanonicalConceptDrawer at the parent. */
+  onConceptClick?: (canonicalCode: string) => void;
 }) {
   const elected = v.disposition === "elected";
   const rejected = v.disposition === "rejected";
@@ -1505,28 +1540,57 @@ function VariationCard({
           >
             ↻ links to
           </span>
-          {linkedConcepts.map((c) => (
-            <span
-              key={c.display_name}
-              className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-              style={{
-                background: "rgba(124,58,237,0.08)",
-                color: "rgba(91,33,182,0.95)",
-                border: "1px solid rgba(124,58,237,0.18)",
-              }}
-              title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"}`}
-            >
-              <span className="truncate">{c.display_name}</span>
-              {c.space_count > 1 && (
-                <span
-                  className="font-mono text-[8.5px]"
-                  style={{ color: "rgba(91,33,182,0.75)" }}
-                >
-                  {c.space_count}×
-                </span>
-              )}
-            </span>
-          ))}
+          {linkedConcepts.map((c) =>
+            onConceptClick ? (
+              <button
+                type="button"
+                key={c.display_name}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onConceptClick(c.canonical_code);
+                }}
+                className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-[rgba(124,58,237,0.16)]"
+                style={{
+                  background: "rgba(124,58,237,0.08)",
+                  color: "rgba(91,33,182,0.95)",
+                  border: "1px solid rgba(124,58,237,0.18)",
+                  cursor: "pointer",
+                }}
+                title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"} · click to open cross-space view`}
+              >
+                <span className="truncate">{c.display_name}</span>
+                {c.space_count > 1 && (
+                  <span
+                    className="font-mono text-[8.5px]"
+                    style={{ color: "rgba(91,33,182,0.75)" }}
+                  >
+                    {c.space_count}×
+                  </span>
+                )}
+              </button>
+            ) : (
+              <span
+                key={c.display_name}
+                className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                style={{
+                  background: "rgba(124,58,237,0.08)",
+                  color: "rgba(91,33,182,0.95)",
+                  border: "1px solid rgba(124,58,237,0.18)",
+                }}
+                title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"}`}
+              >
+                <span className="truncate">{c.display_name}</span>
+                {c.space_count > 1 && (
+                  <span
+                    className="font-mono text-[8.5px]"
+                    style={{ color: "rgba(91,33,182,0.75)" }}
+                  >
+                    {c.space_count}×
+                  </span>
+                )}
+              </span>
+            ),
+          )}
         </div>
       )}
 
@@ -2708,14 +2772,18 @@ function BodyField({
 
 function DrawerPriorConceptsStrip({
   concepts,
+  onConceptClick,
 }: {
   concepts: Array<{
     id: string;
+    canonical_code: string;
     display_name: string;
     description: string | null;
     domain_tags: string[];
     space_count: number;
   }>;
+  /** Click → open CanonicalConceptDrawer for cross-space inspection. */
+  onConceptClick: (canonicalCode: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (concepts.length === 0) return null;
@@ -2768,20 +2836,24 @@ function DrawerPriorConceptsStrip({
       {expanded && (
         <div className="mt-2 flex flex-wrap gap-1">
           {concepts.map((c) => (
-            <span
+            <button
+              type="button"
               key={c.id}
-              className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-medium"
+              onClick={(e) => {
+                e.stopPropagation();
+                onConceptClick(c.canonical_code);
+              }}
+              className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-medium transition-colors hover:bg-[rgba(124,58,237,0.10)]"
               style={{
                 background: "rgba(255,255,255,0.92)",
                 color: "rgba(91,33,182,0.95)",
                 border: "1px solid rgba(124,58,237,0.20)",
+                cursor: "pointer",
               }}
               title={
                 c.description
-                  ? `${c.description}${c.domain_tags.length > 0 ? `\n\nTags: ${c.domain_tags.join(", ")}` : ""}`
-                  : c.domain_tags.length > 0
-                    ? `Tags: ${c.domain_tags.join(", ")}`
-                    : undefined
+                  ? `${c.description}${c.domain_tags.length > 0 ? `\n\nTags: ${c.domain_tags.join(", ")}` : ""}\n\nClick to open cross-space view.`
+                  : `Click to open cross-space view${c.domain_tags.length > 0 ? `\nTags: ${c.domain_tags.join(", ")}` : ""}`
               }
             >
               <span className="truncate">{c.display_name}</span>
@@ -2791,7 +2863,7 @@ function DrawerPriorConceptsStrip({
               >
                 {c.space_count}×
               </span>
-            </span>
+            </button>
           ))}
         </div>
       )}

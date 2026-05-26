@@ -24,6 +24,10 @@ import {
   computeCrossRoomSignalsFromData,
   type CrossRoomSignals,
 } from "@/lib/objective-canvas/cross-room-signals";
+import {
+  loadConceptMemoryFeed,
+  type ConceptMemoryEntry,
+} from "@/lib/objective-canvas/concept-memory-feed";
 import type { RoomEdge } from "@/components/objective/sub-objective-room-view";
 import { ArrowLeft, FileText } from "lucide-react";
 import { AnalysisWorkbench } from "@/components/objective/analysis-workbench";
@@ -87,10 +91,16 @@ export default async function ObjectiveCanvasPage({
   // population-wide preferences (cross-user flywheel). Brand-new
   // users still get smart suggestions, sourced from what the
   // community elected most. Both reads happen in parallel.
-  const [userPrefs, globalPrefs] = await Promise.all([
+  const [userPrefs, globalPrefs, conceptMemoryFeed] = await Promise.all([
     getUserIntentPreferences(db, user.id),
     getGlobalIntentPreferences(db),
+    // Ambient KG signal — top concepts the user has been actively
+    // reasoning across, regardless of the current objective. Renders
+    // as a small strip on the main canvas. Empty when the user has
+    // no canonical-linked entities yet.
+    loadConceptMemoryFeed({ db, userId: user.id, limit: 8 }),
   ]);
+  const initialConceptMemory: ConceptMemoryEntry[] = conceptMemoryFeed;
   const initialPreferredIntent =
     topPreferredIntent(userPrefs) ?? topPreferredIntent(globalPrefs);
   // Source attribution lets the UI explain WHY this intent was
@@ -548,6 +558,7 @@ export default async function ObjectiveCanvasPage({
             initialUserPrefs={userPrefs}
             initialCrossRoomSignals={initialCrossRoomSignals}
             initialSubObjectiveThemes={initialSubObjectiveThemes}
+            initialConceptMemory={initialConceptMemory}
           />
         </div>
       </div>

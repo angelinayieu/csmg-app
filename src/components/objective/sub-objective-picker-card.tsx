@@ -42,6 +42,7 @@ import type {
   ClusterAnalysis,
   ProposalCluster,
 } from "@/lib/objective-canvas/cluster-proposals";
+import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 
 interface ObjectiveAnnotationLite {
   phrase: string;
@@ -131,6 +132,11 @@ export function SubObjectivePickerCard({
       space_count: number;
     }>
   >([]);
+  // Click-to-open-drawer state for KG concept inspection. When set,
+  // CanonicalConceptDrawer mounts as a right-edge slide-in. Chips in
+  // both the PriorConceptsStrip + per-proposal "↻ links to" badges
+  // fire this. Null = closed.
+  const [openConceptCode, setOpenConceptCode] = useState<string | null>(null);
 
   // ── Auto-propose on mount if nothing is cached ──
   useEffect(() => {
@@ -369,17 +375,25 @@ export function SubObjectivePickerCard({
    *  is cheap and works well enough for "did the LLM link to this
    *  concept" detection — the prompt rule asks the LLM to use the
    *  display_name verbatim when linking. Returns sorted by space_count
-   *  desc (loudest cross-space evidence first). */
+   *  desc (loudest cross-space evidence first).
+   *
+   *  Includes canonical_code so chip clicks can open
+   *  CanonicalConceptDrawer for cross-space inspection. */
   function linkedConceptsForProposal(p: SubObjectiveProposal) {
     if (priorConcepts.length === 0) return [];
     const haystack = `${p.title} ${p.summary}`.toLowerCase();
-    const matches: Array<{ display_name: string; space_count: number }> = [];
+    const matches: Array<{
+      display_name: string;
+      space_count: number;
+      canonical_code: string;
+    }> = [];
     for (const c of priorConcepts) {
       if (c.display_name.length < 4) continue; // skip noise matches
       if (haystack.includes(c.display_name.toLowerCase())) {
         matches.push({
           display_name: c.display_name,
           space_count: c.space_count,
+          canonical_code: c.canonical_code,
         });
       }
     }
@@ -466,11 +480,13 @@ export function SubObjectivePickerCard({
       {/* Cross-space KG strip — concepts the user has explored across
           OTHER spaces, semantically related to this objective. Renders
           when prior_concepts came back non-empty from /propose.
-          Each chip = "↻ Concept (N spaces)". Click hits the
-          CanonicalConceptDrawer (future wire-up) — for now hover
-          shows description. */}
+          Each chip = "↻ Concept (N spaces)" + click opens
+          CanonicalConceptDrawer for the full cross-space view. */}
       {priorConcepts.length > 0 && (
-        <PriorConceptsStrip concepts={priorConcepts} />
+        <PriorConceptsStrip
+          concepts={priorConcepts}
+          onConceptClick={setOpenConceptCode}
+        />
       )}
 
       {/* Cluster CTA / view toggle ──────────────────────────────────
@@ -511,6 +527,7 @@ export function SubObjectivePickerCard({
             setDisposition={setDisposition}
             disabled={busy}
             linkedConceptsForProposal={linkedConceptsForProposal}
+            onConceptClick={setOpenConceptCode}
           />
         ) : hasBatches ? (
           batches.map((b, batchIdx) => (
@@ -522,6 +539,7 @@ export function SubObjectivePickerCard({
               setDisposition={setDisposition}
               disabled={busy}
               linkedConceptsForProposal={linkedConceptsForProposal}
+              onConceptClick={setOpenConceptCode}
             />
           ))
         ) : (
@@ -536,6 +554,7 @@ export function SubObjectivePickerCard({
                 disabled={busy}
                 lens={lens}
                 linkedConcepts={linkedConceptsForProposal(p)}
+                onConceptClick={setOpenConceptCode}
               />
             ))}
           </ul>
@@ -616,6 +635,16 @@ export function SubObjectivePickerCard({
       </div>
 
       {error && <ErrorRow message={error} />}
+
+      {/* Cross-space KG drawer — opened by clicking any prior-concept
+          chip (in the strip OR on a proposal). Single mount handles
+          all chip clicks across the picker. */}
+      {openConceptCode && (
+        <CanonicalConceptDrawer
+          canonicalCode={openConceptCode}
+          onClose={() => setOpenConceptCode(null)}
+        />
+      )}
     </Shell>
   );
 }
@@ -629,6 +658,7 @@ function BatchSection({
   setDisposition,
   disabled,
   linkedConceptsForProposal,
+  onConceptClick,
 }: {
   batch: SubObjectiveBatch;
   isFirst: boolean;
@@ -640,7 +670,12 @@ function BatchSection({
   disabled: boolean;
   linkedConceptsForProposal?: (
     p: SubObjectiveProposal,
-  ) => Array<{ display_name: string; space_count: number }>;
+  ) => Array<{
+    display_name: string;
+    space_count: number;
+    canonical_code: string;
+  }>;
+  onConceptClick?: (canonicalCode: string) => void;
 }) {
   return (
     <div className={isFirst ? "" : "mt-5 border-t pt-4"} style={{
@@ -673,6 +708,7 @@ function BatchSection({
             linkedConcepts={
               linkedConceptsForProposal ? linkedConceptsForProposal(p) : []
             }
+            onConceptClick={onConceptClick}
           />
         ))}
       </ul>
@@ -959,6 +995,7 @@ function ProposalRow({
   disabled,
   representativeBadge = false,
   linkedConcepts = [],
+  onConceptClick,
 }: {
   proposal: SubObjectiveProposal;
   disposition: SubObjectiveDisposition;
@@ -974,7 +1011,14 @@ function ProposalRow({
    *  verbatim references (computed by the parent picker). Each
    *  renders as a small "↻ Concept (N spaces)" badge so the user
    *  sees their KG accumulating. Empty array → no chips. */
-  linkedConcepts?: Array<{ display_name: string; space_count: number }>;
+  linkedConcepts?: Array<{
+    display_name: string;
+    space_count: number;
+    canonical_code: string;
+  }>;
+  /** Click handler for the KG badges — opens CanonicalConceptDrawer
+   *  with the chip's canonical_code. */
+  onConceptClick?: (canonicalCode: string) => void;
 }) {
   const confidencePct = Math.round(proposal.confidence * 100);
   const confidenceDot =
@@ -1071,28 +1115,57 @@ function ProposalRow({
               >
                 ↻ links to
               </span>
-              {linkedConcepts.map((c) => (
-                <span
-                  key={c.display_name}
-                  className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                  style={{
-                    background: "rgba(124,58,237,0.08)",
-                    color: "rgba(91,33,182,0.95)",
-                    border: "1px solid rgba(124,58,237,0.18)",
-                  }}
-                  title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"}`}
-                >
-                  <span className="truncate">{c.display_name}</span>
-                  {c.space_count > 1 && (
-                    <span
-                      className="font-mono text-[8.5px]"
-                      style={{ color: "rgba(91,33,182,0.75)" }}
-                    >
-                      {c.space_count}×
-                    </span>
-                  )}
-                </span>
-              ))}
+              {linkedConcepts.map((c) =>
+                onConceptClick ? (
+                  <button
+                    type="button"
+                    key={c.display_name}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onConceptClick(c.canonical_code);
+                    }}
+                    className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-[rgba(124,58,237,0.16)]"
+                    style={{
+                      background: "rgba(124,58,237,0.08)",
+                      color: "rgba(91,33,182,0.95)",
+                      border: "1px solid rgba(124,58,237,0.18)",
+                      cursor: "pointer",
+                    }}
+                    title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"} · click to open cross-space view`}
+                  >
+                    <span className="truncate">{c.display_name}</span>
+                    {c.space_count > 1 && (
+                      <span
+                        className="font-mono text-[8.5px]"
+                        style={{ color: "rgba(91,33,182,0.75)" }}
+                      >
+                        {c.space_count}×
+                      </span>
+                    )}
+                  </button>
+                ) : (
+                  <span
+                    key={c.display_name}
+                    className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                    style={{
+                      background: "rgba(124,58,237,0.08)",
+                      color: "rgba(91,33,182,0.95)",
+                      border: "1px solid rgba(124,58,237,0.18)",
+                    }}
+                    title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"}`}
+                  >
+                    <span className="truncate">{c.display_name}</span>
+                    {c.space_count > 1 && (
+                      <span
+                        className="font-mono text-[8.5px]"
+                        style={{ color: "rgba(91,33,182,0.75)" }}
+                      >
+                        {c.space_count}×
+                      </span>
+                    )}
+                  </span>
+                ),
+              )}
             </div>
           )}
 
@@ -1693,6 +1766,7 @@ function ClusterView({
   setDisposition,
   disabled,
   linkedConceptsForProposal,
+  onConceptClick,
 }: {
   clusters: ProposalCluster[];
   proposalsById: Map<string, SubObjectiveProposal>;
@@ -1704,7 +1778,12 @@ function ClusterView({
   disabled: boolean;
   linkedConceptsForProposal?: (
     p: SubObjectiveProposal,
-  ) => Array<{ display_name: string; space_count: number }>;
+  ) => Array<{
+    display_name: string;
+    space_count: number;
+    canonical_code: string;
+  }>;
+  onConceptClick?: (canonicalCode: string) => void;
 }) {
   return (
     <div className="flex flex-col gap-5">
@@ -1772,6 +1851,7 @@ function ClusterView({
                         ? linkedConceptsForProposal(p)
                         : []
                     }
+                    onConceptClick={onConceptClick}
                   />
                 </div>
               ))}
@@ -1798,14 +1878,19 @@ function ClusterView({
 
 function PriorConceptsStrip({
   concepts,
+  onConceptClick,
 }: {
   concepts: Array<{
     id: string;
+    canonical_code: string;
     display_name: string;
     description: string | null;
     domain_tags: string[];
     space_count: number;
   }>;
+  /** Click handler — fires with the chip's canonical_code so the
+   *  parent picker can open CanonicalConceptDrawer. */
+  onConceptClick: (canonicalCode: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (concepts.length === 0) return null;
@@ -1863,20 +1948,21 @@ function PriorConceptsStrip({
       {expanded && (
         <div className="mt-2.5 flex flex-wrap gap-1.5">
           {concepts.map((c) => (
-            <span
+            <button
+              type="button"
               key={c.id}
-              className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium"
+              onClick={() => onConceptClick(c.canonical_code)}
+              className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium transition-colors hover:bg-[rgba(124,58,237,0.10)]"
               style={{
                 background: "rgba(255,255,255,0.92)",
                 color: "rgba(91,33,182,0.95)",
                 border: "1px solid rgba(124,58,237,0.20)",
+                cursor: "pointer",
               }}
               title={
                 c.description
-                  ? `${c.description}${c.domain_tags.length > 0 ? `\n\nTags: ${c.domain_tags.join(", ")}` : ""}`
-                  : c.domain_tags.length > 0
-                    ? `Tags: ${c.domain_tags.join(", ")}`
-                    : undefined
+                  ? `${c.description}${c.domain_tags.length > 0 ? `\n\nTags: ${c.domain_tags.join(", ")}` : ""}\n\nClick to open across-spaces view.`
+                  : `Click to open across-spaces view${c.domain_tags.length > 0 ? `\nTags: ${c.domain_tags.join(", ")}` : ""}`
               }
             >
               <span className="truncate">{c.display_name}</span>
@@ -1886,7 +1972,7 @@ function PriorConceptsStrip({
               >
                 {c.space_count}×
               </span>
-            </span>
+            </button>
           ))}
         </div>
       )}

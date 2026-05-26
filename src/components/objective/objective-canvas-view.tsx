@@ -61,6 +61,7 @@ import type {
 } from "@/lib/objective-canvas/sub-objective-state";
 import type { CrossRoomSignals } from "@/lib/objective-canvas/cross-room-signals";
 import type { IntentPreference } from "@/lib/objective-canvas/decision-log";
+import type { ConceptMemoryEntry } from "@/lib/objective-canvas/concept-memory-feed";
 
 interface Props {
   spaceId: string;
@@ -96,6 +97,11 @@ interface Props {
   initialSubObjectiveThemes?:
     | import("@/lib/objective-canvas/cluster-proposals").ClusterAnalysis
     | null;
+  /** Concept memory feed — top canonical concepts the user has been
+   *  actively reasoning across (regardless of current objective).
+   *  Server-loaded once on page render; surfaces as an ambient strip
+   *  above the sub-objective cards. */
+  initialConceptMemory?: ConceptMemoryEntry[];
   /** Phase 10 integration contract — host wants to drop this into a
    *  panel. See module header. Defaults to false (standalone). */
   embedded?: boolean;
@@ -118,6 +124,7 @@ export function ObjectiveCanvasView({
   initialUserPrefs = [],
   initialCrossRoomSignals = null,
   initialSubObjectiveThemes = null,
+  initialConceptMemory = [],
   embedded = false,
   // onExit is reserved for the host's chrome; not consumed here.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -205,6 +212,7 @@ export function ObjectiveCanvasView({
             preferredIntent={initialPreferredIntent}
             crossRoomSignals={initialCrossRoomSignals}
             initialSubObjectiveThemes={initialSubObjectiveThemes}
+            conceptMemory={initialConceptMemory}
           />
         )}
         {stage === "done" && <DonePlaceholder />}

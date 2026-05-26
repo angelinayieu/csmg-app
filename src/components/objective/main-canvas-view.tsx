@@ -22,9 +22,11 @@ import {
 } from "@/components/objective/annotated-objective-card";
 import { IncrementalCutLab } from "@/components/objective/incremental-cut-lab";
 import { CrossRoomSignalsStrip } from "@/components/objective/cross-room-signals-strip";
+import { ConceptMemoryFeedStrip } from "@/components/objective/concept-memory-feed-strip";
 import type { SubObjectiveIntent } from "@/lib/objective-canvas/sub-objective-state";
 import type { CrossRoomSignals } from "@/lib/objective-canvas/cross-room-signals";
 import type { ClusterAnalysis } from "@/lib/objective-canvas/cluster-proposals";
+import type { ConceptMemoryEntry } from "@/lib/objective-canvas/concept-memory-feed";
 
 export interface ApprovedItem {
   id: string;
@@ -111,6 +113,12 @@ interface Props {
    *  canvas offers a "by theme" view that groups SubCards into
    *  row-per-theme galleries. */
   initialSubObjectiveThemes?: ClusterAnalysis | null;
+  /** Ambient KG memory — top canonical concepts the user has been
+   *  actively reasoning across (recency × cross-space spread).
+   *  Renders as a small chip strip above the cross-room signals so
+   *  the user feels their KG accumulating regardless of the current
+   *  objective. Empty array hides the strip. */
+  conceptMemory?: ConceptMemoryEntry[];
 }
 
 export function MainCanvasView({
@@ -121,6 +129,7 @@ export function MainCanvasView({
   preferredIntent = null,
   crossRoomSignals = null,
   initialSubObjectiveThemes = null,
+  conceptMemory = [],
 }: Props) {
   // Themed view state — same pattern as the picker's cluster view.
   // Default to "grid" so existing users see no change unless they
@@ -196,13 +205,30 @@ export function MainCanvasView({
         subObjectives={subStubs}
       />
 
+      {/* Concept memory feed — ambient KG signal. Top canonical
+          concepts the user has been reasoning across (recency ×
+          cross-space spread). Lives above the cross-room signals so
+          the user feels their KG even when this specific space hasn't
+          accumulated anything yet. Hidden when empty. */}
+      {conceptMemory.length > 0 && (
+        <div className="mx-auto mt-6">
+          <ConceptMemoryFeedStrip concepts={conceptMemory} />
+        </div>
+      )}
+
       {/* Cross-room signals — recurring mechanisms, shared root causes,
           lens convergence. Lives between the core card and the
           sub-cards so the user sees structural patterns BEFORE
           diving into individual rooms. Renders only when ≥2 signals
           actually exist; otherwise hidden. */}
       {crossRoomSignals && (
-        <div className="mx-auto mt-6 w-full max-w-5xl">
+        <div
+          className={
+            conceptMemory.length > 0
+              ? "mx-auto mt-3 w-full max-w-5xl"
+              : "mx-auto mt-6 w-full max-w-5xl"
+          }
+        >
           <CrossRoomSignalsStrip
             spaceId={spaceId}
             signals={crossRoomSignals}
