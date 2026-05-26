@@ -143,6 +143,28 @@ export interface ExpandedItemDetail {
     learning_target: string;
     generated_at: string;
   }>;
+  /** E — expansion tree (L3+ deep-dive nodes per variation). Stored
+   *  as a flat array; parent_node_id + depth + lineage_titles
+   *  reconstruct the tree at render time. See expansion-tree.ts. */
+  expansion_tree?: Array<{
+    id: string;
+    parent_node_id: string | null;
+    depth: number;
+    lineage_titles: string[];
+    attach_point: string;
+    attach_ref: string;
+    node_type: string;
+    title: string;
+    body: Record<string, unknown>;
+    source: "ai_auto" | "user_manual";
+    disposition: "kept" | "parked" | null;
+    derived_from_annotations?: Array<{
+      index: number;
+      phrase: string;
+      facet: string;
+    }>;
+    generated_at: string;
+  }>;
   /** ISO timestamp the LLM produced this. */
   generated_at: string;
 }
