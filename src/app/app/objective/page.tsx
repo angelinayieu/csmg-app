@@ -15,14 +15,12 @@ import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { ObjectiveTopChrome } from "@/components/objective/objective-top-chrome";
 import { LandingExperience } from "@/components/objective/landing-experience";
+import {
+  loadWorkspaceLibrary,
+  type WorkspaceCardData,
+} from "@/lib/objective-canvas/load-workspace-library";
 
 export const dynamic = "force-dynamic";
-
-interface ObjectiveCanvasRow {
-  id: string;
-  name: string | null;
-  updated_at: string;
-}
 
 export default async function ObjectiveCanvasLandingPage() {
   const user = await getAuthUser();
@@ -32,18 +30,18 @@ export default async function ObjectiveCanvasLandingPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  // Recent objective canvases. Soft-fall on missing column.
-  let recent: ObjectiveCanvasRow[] = [];
-  const tagged = await db
-    .from("spaces")
-    .select("id, name, updated_at")
-    .eq("user_id", user.id)
-    .eq("archived", false)
-    .eq("space_kind", "objective_canvas")
-    .order("updated_at", { ascending: false })
-    .limit(8);
-  if (!tagged.error) {
-    recent = (tagged.data ?? []) as ObjectiveCanvasRow[];
+  // Workspace library — rich card data per objective canvas. Soft-
+  // fails to an empty list on any error so a brand-new account still
+  // sees the portal entry.
+  let library: WorkspaceCardData[] = [];
+  try {
+    library = await loadWorkspaceLibrary({
+      db,
+      userId: user.id,
+      limit: 12,
+    });
+  } catch (err) {
+    console.warn("[objective landing] loadWorkspaceLibrary failed:", err);
   }
 
   // Credit balance for the top-right profile chip + synergy display
@@ -74,7 +72,7 @@ export default async function ObjectiveCanvasLandingPage() {
       <HomeTabNav />
 
       <LandingExperience
-        recent={recent}
+        library={library}
         userEmail={user.email ?? ""}
         displayName={displayName}
       />

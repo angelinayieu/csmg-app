@@ -15,25 +15,20 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Compass, LayoutTemplate, Plus } from "lucide-react";
 import { PortalCard } from "@/components/objective/portal-card";
 import { ObjectiveEntryCard } from "@/components/objective/objective-entry-card";
+import { WorkspaceLibraryCard } from "@/components/objective/workspace-library-card";
 import {
   firstName,
   timeGreeting,
 } from "@/lib/objective-canvas/greeting";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
-
-interface RecentCanvas {
-  id: string;
-  name: string | null;
-  updated_at: string;
-}
+import type { WorkspaceCardData } from "@/lib/objective-canvas/load-workspace-library";
 
 interface Props {
-  recent: RecentCanvas[];
+  library: WorkspaceCardData[];
   userEmail: string;
   displayName?: string | null;
 }
@@ -41,7 +36,7 @@ interface Props {
 type Stage = "portal" | "entry";
 
 export function LandingExperience({
-  recent,
+  library,
   userEmail,
   displayName,
 }: Props) {
@@ -193,48 +188,40 @@ export function LandingExperience({
               </motion.div>
             </div>
 
-            {/* Recent — same as before */}
-            {recent.length > 0 && (
+            {/* ── Workspace Library — rich cards replacing the
+                flat recents list. Each card shows domain, stage,
+                totals, active themes, conflict signal, and reveals
+                deliverable shortcuts on hover. The grid maxes out
+                at 12 to keep the landing scannable; deeper history
+                lives in the future cross-cutting views. */}
+            {library.length > 0 && (
               <motion.div
                 initial={reduce ? false : { opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.55, delay: 0.18, ease: "easeOut" }}
-                className="mx-auto mt-14 w-full max-w-3xl"
+                className="mx-auto mt-14 w-full max-w-5xl"
               >
-                <h2
-                  className="mb-3 text-[10.5px] font-semibold uppercase tracking-[0.16em]"
-                  style={{ color: appleVibe.text.tertiary }}
-                >
-                  Recent
-                </h2>
-                <ul className="space-y-2">
-                  {recent.map((c) => (
-                    <li key={c.id}>
-                      <Link
-                        href={`/app/objective/${c.id}`}
-                        className="flex items-center justify-between rounded-2xl px-5 py-3.5 transition-all hover:bg-white"
-                        style={{
-                          border: `1px solid ${appleVibe.stroke.hairline}`,
-                          background: "rgba(255,255,255,0.6)",
-                          borderRadius: appleVibe.radius.lg,
-                        }}
-                      >
-                        <span
-                          className="line-clamp-1 text-[13.5px] font-medium"
-                          style={{ color: appleVibe.text.primary }}
-                        >
-                          {c.name || "Untitled objective"}
-                        </span>
-                        <span
-                          className="ml-3 flex-shrink-0 text-[10.5px] font-light"
-                          style={{ color: appleVibe.text.tertiary }}
-                        >
-                          {relativeTime(c.updated_at)}
-                        </span>
-                      </Link>
-                    </li>
+                <div className="mb-4 flex items-baseline justify-between gap-3">
+                  <h2
+                    className="text-[10.5px] font-semibold uppercase tracking-[0.16em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Library
+                  </h2>
+                  <span
+                    className="text-[10.5px] font-light"
+                    style={{ color: appleVibe.text.faint }}
+                  >
+                    {library.length === 1
+                      ? "1 workspace"
+                      : `${library.length} workspaces`}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  {library.map((card) => (
+                    <WorkspaceLibraryCard key={card.id} card={card} />
                   ))}
-                </ul>
+                </div>
               </motion.div>
             )}
           </motion.div>
@@ -269,14 +256,3 @@ export function LandingExperience({
   );
 }
 
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const m = Math.floor(diff / 60_000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
