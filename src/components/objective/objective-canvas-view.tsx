@@ -60,6 +60,7 @@ import type {
   SubObjectiveIntent,
 } from "@/lib/objective-canvas/sub-objective-state";
 import type { CrossRoomSignals } from "@/lib/objective-canvas/cross-room-signals";
+import type { IntentPreference } from "@/lib/objective-canvas/decision-log";
 
 interface Props {
   spaceId: string;
@@ -77,11 +78,24 @@ interface Props {
    *  through to the picker as the "Suggested" affordance fallback
    *  when no lens gap exists. */
   initialPreferredIntent?: SubObjectiveIntent | null;
+  /** Where the suggested intent came from. Drives the picker's
+   *  source-label so the user understands WHY the suggestion. */
+  initialPreferenceSource?: "user" | "global" | "none";
+  /** Per-intent breakdown for the retrospective panel — lets the
+   *  user see what the system has learned about their pattern. */
+  initialUserPrefs?: IntentPreference[];
   /** Cross-room signals — server-computed from the entities + edges
    *  across the space's rooms. Null when fewer than 2 sub-objectives
    *  exist. The MainCanvasView strip renders nothing when no signals
    *  cross ≥2 rooms. */
   initialCrossRoomSignals?: CrossRoomSignals | null;
+  /** Sub-objective theme analysis — server-hydrated when the user
+   *  has previously run "Detect themes" on the canvas. Drives the
+   *  row-per-theme gallery on MainCanvasView. Type is lazy-imported
+   *  to keep this file's deps small. */
+  initialSubObjectiveThemes?:
+    | import("@/lib/objective-canvas/cluster-proposals").ClusterAnalysis
+    | null;
   /** Phase 10 integration contract — host wants to drop this into a
    *  panel. See module header. Defaults to false (standalone). */
   embedded?: boolean;
@@ -100,7 +114,10 @@ export function ObjectiveCanvasView({
   initialMainSubs,
   initialCoreAnnotations,
   initialPreferredIntent = null,
+  initialPreferenceSource = "none",
+  initialUserPrefs = [],
   initialCrossRoomSignals = null,
+  initialSubObjectiveThemes = null,
   embedded = false,
   // onExit is reserved for the host's chrome; not consumed here.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -174,6 +191,8 @@ export function ObjectiveCanvasView({
             initial={initialSubObjectives}
             annotations={initialCoreAnnotations}
             preferredIntent={initialPreferredIntent}
+            preferenceSource={initialPreferenceSource}
+            userPrefs={initialUserPrefs}
             onConfirmed={handlePickerConfirmed}
           />
         )}
@@ -185,6 +204,7 @@ export function ObjectiveCanvasView({
             subs={initialMainSubs}
             preferredIntent={initialPreferredIntent}
             crossRoomSignals={initialCrossRoomSignals}
+            initialSubObjectiveThemes={initialSubObjectiveThemes}
           />
         )}
         {stage === "done" && <DonePlaceholder />}

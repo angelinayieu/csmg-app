@@ -452,6 +452,18 @@ export default async function ObjectiveCanvasPage({
       | CrossRoomAnalysisState
       | null
       | undefined) ?? null;
+
+  // ── Sub-objective theme analysis (parallel to cross_room_analysis)
+  // Cached on synthesis_data.sub_objective_themes. Drives the
+  // row-per-theme gallery on MainCanvasView. Type imported lazily so
+  // this file doesn't depend on cluster-proposals statically. ──
+  type InitialSubObjectiveThemes =
+    import("@/lib/objective-canvas/cluster-proposals").ClusterAnalysis;
+  const initialSubObjectiveThemes: InitialSubObjectiveThemes | null =
+    (space.synthesis_data?.sub_objective_themes as
+      | InitialSubObjectiveThemes
+      | null
+      | undefined) ?? null;
   const roomTitles: Record<string, string> = {};
   for (const s of initialMainSubs) {
     roomTitles[s.id] = s.title;
@@ -535,6 +547,7 @@ export default async function ObjectiveCanvasPage({
             initialPreferenceSource={initialPreferenceSource}
             initialUserPrefs={userPrefs}
             initialCrossRoomSignals={initialCrossRoomSignals}
+            initialSubObjectiveThemes={initialSubObjectiveThemes}
           />
         </div>
       </div>

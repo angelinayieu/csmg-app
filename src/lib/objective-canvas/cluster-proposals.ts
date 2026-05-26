@@ -94,7 +94,7 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 }
 
 export function computeProposalRedundancy(
-  proposals: SubObjectiveProposal[],
+  proposals: ClusterableItem[],
 ): RedundancyReport {
   const tokenized = proposals.map((p) => ({
     id: p.id,
@@ -197,6 +197,26 @@ export interface ClusterProposalsContext {
   coreObjectiveText: string;
 }
 
+/** Minimal item shape the generic clusterer needs. Lets us reuse the
+ *  same primitive for picker proposals (pre-confirm) AND materialized
+ *  sub-objectives (post-confirm on the main canvas), as well as any
+ *  future surface that wants thematic grouping over a flat id-titled
+ *  collection. */
+export interface ClusterableItem {
+  id: string;
+  title: string;
+  summary: string;
+}
+
+export interface ClusterItemsContext {
+  items: ClusterableItem[];
+  /** Umbrella context for the LLM. For picker proposals this is the
+   *  refined parent objective; for sub-objective theming on the main
+   *  canvas it's the same text but the items are already-confirmed
+   *  sub-objectives. */
+  coreObjectiveText: string;
+}
+
 interface LLMClusterShape {
   clusters?: Array<{
     label?: unknown;
@@ -227,8 +247,8 @@ ANTI-PLATITUDE:
 
 Return strict JSON.`;
 
-function buildUserPrompt(ctx: ClusterProposalsContext): string {
-  const block = ctx.proposals
+function buildUserPrompt(ctx: ClusterItemsContext): string {
+  const block = ctx.items
     .map(
       (p, i) =>
         `  ${i + 1}. [${p.id}] ${p.title}\n      ${p.summary}`,
@@ -239,7 +259,7 @@ function buildUserPrompt(ctx: ClusterProposalsContext): string {
 ${ctx.coreObjectiveText.slice(0, 1500)}
 """
 
-PROPOSALS (${ctx.proposals.length}):
+PROPOSALS (${ctx.items.length}):
 ${block}
 
 Group these into 5-8 themed clusters per the system instructions. Every proposal id must appear in exactly one cluster.`;
@@ -256,10 +276,11 @@ function clusterIdFromMembers(memberIds: string[]): string {
   return `cl_${hash.toString(36)}`;
 }
 
-/** Hash a proposal set so the cache key invalidates when proposals
- *  are added / removed. Order-independent. */
-export function proposalsHash(proposals: SubObjectiveProposal[]): string {
-  const sorted = proposals.map((p) => p.id).sort().join("|");
+/** Hash an item set so the cache key invalidates when items are
+ *  added / removed. Order-independent. Generic over anything with
+ *  an `id` field — covers proposals and sub-objectives. */
+export function itemsHash(items: Array<{ id: string }>): string {
+  const sorted = items.map((p) => p.id).sort().join("|");
   let hash = 0;
   for (let i = 0; i < sorted.length; i++) {
     hash = (hash * 31 + sorted.charCodeAt(i)) >>> 0;
@@ -267,15 +288,26 @@ export function proposalsHash(proposals: SubObjectiveProposal[]): string {
   return `ph_${hash.toString(36)}`;
 }
 
-export async function clusterProposalsLLM(
-  ctx: ClusterProposalsContext,
+/** Back-compat alias — earlier consumers called this `proposalsHash`
+ *  and pass `SubObjectiveProposal[]`. Forwards to `itemsHash` so
+ *  there's one source of truth. */
+export function proposalsHash(proposals: SubObjectiveProposal[]): string {
+  return itemsHash(proposals);
+}
+
+/** Generic clustering primitive — takes `{id, title, summary}[]` and
+ *  groups them into themed clusters. Picker proposals AND main-canvas
+ *  sub-objectives both call this; the wrapper below keeps the legacy
+ *  picker call-signature stable. */
+export async function clusterItems(
+  ctx: ClusterItemsContext,
 ): Promise<ClusterAnalysis> {
-  if (ctx.proposals.length < 4) {
-    // Below 4 proposals there's nothing meaningful to cluster — return
+  if (ctx.items.length < 4) {
+    // Below 4 items there's nothing meaningful to cluster — return
     // each as its own singleton.
     return {
-      proposals_hash: proposalsHash(ctx.proposals),
-      clusters: ctx.proposals.map((p) => ({
+      proposals_hash: itemsHash(ctx.items),
+      clusters: ctx.items.map((p) => ({
         id: clusterIdFromMembers([p.id]),
         label: p.title.slice(0, 40),
         description: p.summary.slice(0, 200),
@@ -288,7 +320,7 @@ export async function clusterProposalsLLM(
     };
   }
 
-  const validIds = new Set(ctx.proposals.map((p) => p.id));
+  const validIds = new Set(ctx.items.map((p) => p.id));
 
   const raw = await llmJSON<LLMClusterShape>({
     system: SYSTEM_PROMPT,
@@ -384,9 +416,9 @@ export async function clusterProposalsLLM(
     });
   }
 
-  // ── Orphan rescue — any proposal the LLM dropped goes into a
+  // ── Orphan rescue — any item the LLM dropped goes into a
   //    catch-all cluster so the UI never loses items. ──
-  const orphanIds = ctx.proposals
+  const orphanIds = ctx.items
     .map((p) => p.id)
     .filter((id) => !seen.has(id));
   if (orphanIds.length > 0) {
@@ -395,7 +427,7 @@ export async function clusterProposalsLLM(
         id: clusterIdFromMembers(orphanIds),
         label: "Unclustered",
         description:
-          "Proposals the clustering pass couldn't fit into a clear theme.",
+          "Items the clustering pass couldn't fit into a clear theme.",
         proposal_ids: orphanIds,
         representative_id: orphanIds[0],
         upstream_of: [],
@@ -419,10 +451,10 @@ export async function clusterProposalsLLM(
 
   // ── Inline Tier-1 redundancy summary — useful as a sanity signal
   //    next to the clustered view ("3 duplicate pairs detected").
-  const redundancy = computeProposalRedundancy(ctx.proposals);
+  const redundancy = computeProposalRedundancy(ctx.items);
 
   return {
-    proposals_hash: proposalsHash(ctx.proposals),
+    proposals_hash: itemsHash(ctx.items),
     clusters,
     redundancy: {
       duplicate_pair_count: redundancy.duplicate_pairs.length,
@@ -430,4 +462,20 @@ export async function clusterProposalsLLM(
     },
     generated_at: new Date().toISOString(),
   };
+}
+
+/** Back-compat wrapper — picker callers pass `proposals` directly.
+ *  Picker UI doesn't need to change; one source of truth is
+ *  `clusterItems` above. */
+export async function clusterProposalsLLM(
+  ctx: ClusterProposalsContext,
+): Promise<ClusterAnalysis> {
+  return clusterItems({
+    items: ctx.proposals.map((p) => ({
+      id: p.id,
+      title: p.title,
+      summary: p.summary,
+    })),
+    coreObjectiveText: ctx.coreObjectiveText,
+  });
 }

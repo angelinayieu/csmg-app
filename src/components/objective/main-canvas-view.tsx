@@ -13,7 +13,8 @@
 // underlines, hover popovers, optional margin-notes mode).
 
 import Link from "next/link";
-import { ArrowRight, Check, Layers } from "lucide-react";
+import { useState } from "react";
+import { ArrowRight, Check, Layers, RefreshCw, Sparkles } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
   AnnotatedObjectiveCard,
@@ -23,6 +24,7 @@ import { IncrementalCutLab } from "@/components/objective/incremental-cut-lab";
 import { CrossRoomSignalsStrip } from "@/components/objective/cross-room-signals-strip";
 import type { SubObjectiveIntent } from "@/lib/objective-canvas/sub-objective-state";
 import type { CrossRoomSignals } from "@/lib/objective-canvas/cross-room-signals";
+import type { ClusterAnalysis } from "@/lib/objective-canvas/cluster-proposals";
 
 export interface ApprovedItem {
   id: string;
@@ -103,6 +105,12 @@ interface Props {
    *  the space's sub-objective rooms. Server-rendered; null when
    *  fewer than 2 rooms exist (no cross-room to compute). */
   crossRoomSignals?: CrossRoomSignals | null;
+  /** Persisted sub-objective theme analysis from
+   *  /api/brainstorm/space/cluster-sub-objectives. Null until the user
+   *  first runs "Detect themes" on the canvas. When present, the
+   *  canvas offers a "by theme" view that groups SubCards into
+   *  row-per-theme galleries. */
+  initialSubObjectiveThemes?: ClusterAnalysis | null;
 }
 
 export function MainCanvasView({
@@ -112,7 +120,68 @@ export function MainCanvasView({
   coreAnnotations,
   preferredIntent = null,
   crossRoomSignals = null,
+  initialSubObjectiveThemes = null,
 }: Props) {
+  // Themed view state — same pattern as the picker's cluster view.
+  // Default to "grid" so existing users see no change unless they
+  // explicitly choose "by theme."
+  const [themeView, setThemeView] = useState<"grid" | "themes">(
+    initialSubObjectiveThemes && initialSubObjectiveThemes.clusters.length > 0
+      ? "themes"
+      : "grid",
+  );
+  const [themes, setThemes] = useState<ClusterAnalysis | null>(
+    initialSubObjectiveThemes,
+  );
+  const [themesBusy, setThemesBusy] = useState(false);
+  const [themesError, setThemesError] = useState<string | null>(null);
+
+  // Staleness — set ids on the cached themes vs the current sub list.
+  // When the user adds a sub-objective via the Incremental Cut Lab
+  // after themes were computed, the new sub won't appear in any
+  // theme until the user re-runs. Surface that as a "stale" badge.
+  const themesStale = (() => {
+    if (!themes || themes.clusters.length === 0) return false;
+    const cachedIds = new Set(
+      themes.clusters.flatMap((c) => c.proposal_ids),
+    );
+    const liveIds = subs.map((s) => s.id);
+    if (cachedIds.size !== liveIds.length) return true;
+    for (const id of liveIds) if (!cachedIds.has(id)) return true;
+    return false;
+  })();
+
+  async function runDetectThemes(force = false) {
+    setThemesError(null);
+    setThemesBusy(true);
+    try {
+      const res = await fetch(
+        "/api/brainstorm/space/cluster-sub-objectives",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            spaceId,
+            mode: force ? "force" : "default",
+          }),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        setThemesError(json?.error ?? "Theme detection failed.");
+        return;
+      }
+      const analysis = json.sub_objective_themes as ClusterAnalysis;
+      setThemes(analysis);
+      if (analysis.clusters.length > 0) setThemeView("themes");
+    } catch (err) {
+      setThemesError(
+        err instanceof Error ? err.message : "Network error.",
+      );
+    } finally {
+      setThemesBusy(false);
+    }
+  }
   // Pass the sub list (id + title only) down so the annotated card
   // can resolve linked_sub_objective_id → title for hover popovers.
   const subStubs = subs.map((s) => ({ id: s.id, title: s.title }));
@@ -141,31 +210,67 @@ export function MainCanvasView({
         </div>
       )}
 
+      {/* Theme control bar — visible when there are enough sub-
+          objectives to make grouping meaningful. Pre-themes: a
+          "Detect themes" CTA. Post-themes: a view toggle + refresh
+          button (stale-aware). Mounts above the grid so the user
+          sees structure before scanning the cards. */}
+      {subs.length >= 4 && (
+        <div className="mx-auto mt-6 max-w-5xl">
+          <ThemeControlBar
+            hasThemes={!!themes && themes.clusters.length > 0}
+            themeCount={themes?.clusters?.length ?? 0}
+            stale={themesStale}
+            view={themeView}
+            onViewChange={setThemeView}
+            onRun={() => runDetectThemes(false)}
+            onRerun={() => runDetectThemes(true)}
+            busy={themesBusy}
+            error={themesError}
+          />
+        </div>
+      )}
+
       {/* Trunk → fork connector */}
       <div
         aria-hidden
-        className={crossRoomSignals ? "mx-auto mt-2 h-8 w-px" : "mx-auto mt-6 h-8 w-px"}
+        className={
+          crossRoomSignals || (themes && themes.clusters.length > 0)
+            ? "mx-auto mt-2 h-8 w-px"
+            : "mx-auto mt-6 h-8 w-px"
+        }
         style={{ background: appleVibe.stroke.medium }}
       />
 
-      {/* Sub-objective cards */}
-      <div
-        className="relative mx-auto mt-2 grid w-full gap-5"
-        style={{
-          gridTemplateColumns:
-            subs.length <= 2
-              ? "repeat(auto-fit, minmax(280px, 1fr))"
-              : "repeat(auto-fit, minmax(260px, 1fr))",
-        }}
-      >
-        {subs.length === 0 ? (
+      {/* Sub-objective cards — either the flat grid (default) or the
+          theme-row gallery (when the user has detected themes and is
+          viewing "by theme"). */}
+      {subs.length === 0 ? (
+        <div className="relative mx-auto mt-2 grid w-full gap-5">
           <EmptyState />
-        ) : (
-          subs.map((sub) => (
+        </div>
+      ) : themeView === "themes" && themes && themes.clusters.length > 0 ? (
+        <ThemedSubGallery
+          themes={themes}
+          subs={subs}
+          spaceId={spaceId}
+          stale={themesStale}
+        />
+      ) : (
+        <div
+          className="relative mx-auto mt-2 grid w-full gap-5"
+          style={{
+            gridTemplateColumns:
+              subs.length <= 2
+                ? "repeat(auto-fit, minmax(280px, 1fr))"
+                : "repeat(auto-fit, minmax(260px, 1fr))",
+          }}
+        >
+          {subs.map((sub) => (
             <SubCard key={sub.id} spaceId={spaceId} sub={sub} />
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Post-confirm variant lab — lets the user add another cut
           after seeing the initial rooms. Single-batch quota; the
@@ -182,7 +287,18 @@ export function MainCanvasView({
 }
 
 
-function SubCard({ spaceId, sub }: { spaceId: string; sub: MainCanvasSub }) {
+function SubCard({
+  spaceId,
+  sub,
+  representative = false,
+}: {
+  spaceId: string;
+  sub: MainCanvasSub;
+  /** Theme gallery — when true, this sub is the LLM-nominated
+   *  strongest member of its cluster. Renders a small "Rep" badge
+   *  so the user can spot the entry-point card in each theme row. */
+  representative?: boolean;
+}) {
   const hasApproved = sub.approvedItems.length > 0;
   const status: "pending" | "generated" | "approved" = hasApproved
     ? "approved"
@@ -235,6 +351,19 @@ function SubCard({ spaceId, sub }: { spaceId: string; sub: MainCanvasSub }) {
           status={status}
           approvedPlayCount={sub.approvedPlayCount}
         />
+        {representative && (
+          <span
+            className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
+            style={{
+              background: "rgba(22,163,74,0.10)",
+              color: "rgba(20,83,45,0.95)",
+              border: "1px solid rgba(22,163,74,0.22)",
+            }}
+            title="LLM-nominated strongest member of this theme"
+          >
+            Rep
+          </span>
+        )}
       </div>
 
       <h3
@@ -609,5 +738,356 @@ function ArchetypeTriple({
         ) : null,
       )}
     </span>
+  );
+}
+
+// ── Theme control bar ──────────────────────────────────────────────
+//
+// Pre-themes: a "Detect themes" CTA explaining the value.
+// Post-themes: a "by grid / by theme" toggle + refresh (loud when
+// the proposal set has changed since the last theming pass).
+
+function ThemeControlBar({
+  hasThemes,
+  themeCount,
+  stale,
+  view,
+  onViewChange,
+  onRun,
+  onRerun,
+  busy,
+  error,
+}: {
+  hasThemes: boolean;
+  themeCount: number;
+  stale: boolean;
+  view: "grid" | "themes";
+  onViewChange: (v: "grid" | "themes") => void;
+  onRun: () => void;
+  onRerun: () => void;
+  busy: boolean;
+  error: string | null;
+}) {
+  return (
+    <div
+      className="rounded-2xl border p-3"
+      style={{
+        background: "rgba(124,58,237,0.025)",
+        borderColor: hasThemes
+          ? "rgba(124,58,237,0.18)"
+          : appleVibe.stroke.hairline,
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      {!hasThemes && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles
+              className="h-3 w-3 flex-shrink-0"
+              strokeWidth={2}
+              style={{ color: "rgba(91,33,182,0.9)" }}
+            />
+            <span
+              className="text-[11px] font-semibold uppercase tracking-[0.14em]"
+              style={{ color: "rgba(91,33,182,0.95)" }}
+            >
+              Detect themes
+            </span>
+            <span
+              className="text-[11.5px] font-light"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              · group your sub-objectives by shared concept so structure becomes visible
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onRun}
+            disabled={busy}
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold"
+            style={{
+              background: busy
+                ? appleVibe.surface.chip
+                : "rgba(124,58,237,0.92)",
+              color: busy ? appleVibe.text.tertiary : "#fff",
+              cursor: busy ? "wait" : "pointer",
+            }}
+          >
+            {busy ? (
+              <>
+                <RefreshCw className="h-3 w-3 animate-spin" strokeWidth={2} />
+                Detecting…
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-3 w-3" strokeWidth={2} />
+                Detect themes
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {hasThemes && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles
+              className="h-3 w-3 flex-shrink-0"
+              strokeWidth={2}
+              style={{ color: "rgba(91,33,182,0.9)" }}
+            />
+            <span
+              className="text-[11px] font-semibold uppercase tracking-[0.14em]"
+              style={{ color: "rgba(91,33,182,0.95)" }}
+            >
+              {themeCount} themes
+            </span>
+            {stale && (
+              <span
+                className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
+                style={{
+                  background: "rgba(217,119,6,0.12)",
+                  color: "rgba(146,64,14,0.95)",
+                }}
+              >
+                stale
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <div
+              className="inline-flex rounded-full p-0.5"
+              style={{ background: "rgba(15,23,42,0.05)" }}
+            >
+              <button
+                type="button"
+                onClick={() => onViewChange("grid")}
+                className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold"
+                style={{
+                  background: view === "grid" ? "#fff" : "transparent",
+                  color:
+                    view === "grid"
+                      ? appleVibe.text.primary
+                      : appleVibe.text.tertiary,
+                  boxShadow:
+                    view === "grid"
+                      ? "0 1px 2px rgba(15,23,42,0.08)"
+                      : undefined,
+                }}
+              >
+                grid
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewChange("themes")}
+                className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold"
+                style={{
+                  background:
+                    view === "themes" ? "#fff" : "transparent",
+                  color:
+                    view === "themes"
+                      ? appleVibe.text.primary
+                      : appleVibe.text.tertiary,
+                  boxShadow:
+                    view === "themes"
+                      ? "0 1px 2px rgba(15,23,42,0.08)"
+                      : undefined,
+                }}
+              >
+                by theme
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={onRerun}
+              disabled={busy}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10.5px] font-semibold"
+              style={{
+                background: stale
+                  ? "rgba(217,119,6,0.15)"
+                  : appleVibe.surface.chip,
+                color: stale
+                  ? "rgba(146,64,14,0.95)"
+                  : appleVibe.text.tertiary,
+                cursor: busy ? "wait" : "pointer",
+              }}
+              title={
+                stale
+                  ? "Re-detect themes — sub-objective set has changed"
+                  : "Re-detect themes"
+              }
+            >
+              <RefreshCw
+                className={
+                  busy ? "h-2.5 w-2.5 animate-spin" : "h-2.5 w-2.5"
+                }
+                strokeWidth={2}
+              />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div
+          role="alert"
+          className="mt-2 rounded-xl px-2.5 py-1.5 text-[11.5px]"
+          style={{
+            background: "rgba(220,38,38,0.06)",
+            border: "1px solid rgba(220,38,38,0.18)",
+            color: "rgba(127,29,29,0.95)",
+          }}
+        >
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Themed sub-objective gallery ───────────────────────────────────
+//
+// Row per theme. Each row carries: theme label + description + count,
+// and a horizontal-scroll strip of SubCards. Keeps SubCard render
+// untouched — just rehouses it inside a themed container.
+//
+// Theme ordering: descending member count (most populous theme top).
+// Within a theme: order from the LLM's cluster.proposal_ids
+// (representative first if present).
+
+function ThemedSubGallery({
+  themes,
+  subs,
+  spaceId,
+  stale,
+}: {
+  themes: ClusterAnalysis;
+  subs: MainCanvasSub[];
+  spaceId: string;
+  stale: boolean;
+}) {
+  const subsById = new Map(subs.map((s) => [s.id, s] as const));
+  const placedIds = new Set<string>();
+
+  // Theme ordering: by member count desc; tie-break on representative
+  // appearing in the live sub set (i.e., real not just-deleted ids).
+  const ordered = [...themes.clusters].sort(
+    (a, b) => b.proposal_ids.length - a.proposal_ids.length,
+  );
+
+  return (
+    <div className="mx-auto mt-2 flex w-full max-w-5xl flex-col gap-6">
+      {ordered.map((cluster) => {
+        // Reorder members: representative first, others in original
+        // cluster order. Drop ids that no longer exist in the live
+        // sub set (deleted sub-objectives) — happens when the user
+        // archives a sub after themes were computed.
+        const memberSubs: MainCanvasSub[] = [];
+        const rep = subsById.get(cluster.representative_id);
+        if (rep) {
+          memberSubs.push(rep);
+          placedIds.add(rep.id);
+        }
+        for (const id of cluster.proposal_ids) {
+          if (id === cluster.representative_id) continue;
+          const s = subsById.get(id);
+          if (!s) continue;
+          memberSubs.push(s);
+          placedIds.add(s.id);
+        }
+        if (memberSubs.length === 0) return null;
+        return (
+          <section key={cluster.id}>
+            <header className="mb-2">
+              <div className="flex items-baseline gap-2">
+                <span
+                  className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+                  style={{ color: "rgba(91,33,182,0.95)" }}
+                >
+                  {cluster.label}
+                </span>
+                <span
+                  className="text-[10.5px] font-light"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  · {memberSubs.length} sub-objective
+                  {memberSubs.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              {cluster.description && (
+                <p
+                  className="mt-0.5 text-[12px] font-light italic leading-snug"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  {cluster.description}
+                </p>
+              )}
+            </header>
+            <div
+              className="flex w-full gap-4 overflow-x-auto pb-2"
+              style={{ scrollbarWidth: "thin" }}
+            >
+              {memberSubs.map((sub) => (
+                <div
+                  key={sub.id}
+                  className="flex-shrink-0"
+                  style={{ width: 280 }}
+                >
+                  <SubCard
+                    spaceId={spaceId}
+                    sub={sub}
+                    representative={sub.id === cluster.representative_id}
+                  />
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+      })}
+
+      {/* Orphan rescue — sub-objectives added after themes were
+          computed don't belong to any cluster yet. Surface them in a
+          dedicated row so they don't disappear. Cleared automatically
+          once themes are re-detected (stale → fresh). */}
+      {stale &&
+        (() => {
+          const orphans = subs.filter((s) => !placedIds.has(s.id));
+          if (orphans.length === 0) return null;
+          return (
+            <section>
+              <header className="mb-2">
+                <div className="flex items-baseline gap-2">
+                  <span
+                    className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+                    style={{ color: "rgba(146,64,14,0.95)" }}
+                  >
+                    Added since last themed
+                  </span>
+                  <span
+                    className="text-[10.5px] font-light"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    · re-detect to place these in a theme
+                  </span>
+                </div>
+              </header>
+              <div
+                className="flex w-full gap-4 overflow-x-auto pb-2"
+                style={{ scrollbarWidth: "thin" }}
+              >
+                {orphans.map((sub) => (
+                  <div
+                    key={sub.id}
+                    className="flex-shrink-0"
+                    style={{ width: 280 }}
+                  >
+                    <SubCard spaceId={spaceId} sub={sub} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })()}
+    </div>
   );
 }
