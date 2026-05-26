@@ -176,6 +176,7 @@ export function ObjectiveCanvasView({
             spaceId={spaceId}
             objective={objective}
             subs={initialMainSubs}
+            preferredIntent={initialPreferredIntent}
           />
         )}
         {stage === "done" && <DonePlaceholder />}

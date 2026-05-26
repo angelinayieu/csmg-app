@@ -19,6 +19,8 @@ import {
   AnnotatedObjectiveCard,
   type ObjectiveAnnotation,
 } from "@/components/objective/annotated-objective-card";
+import { IncrementalCutLab } from "@/components/objective/incremental-cut-lab";
+import type { SubObjectiveIntent } from "@/lib/objective-canvas/sub-objective-state";
 
 export interface ApprovedItem {
   id: string;
@@ -89,6 +91,11 @@ interface Props {
    *  Empty array = not yet generated; the AnnotatedObjectiveCard
    *  will lazy-fetch on mount. */
   coreAnnotations: ObjectiveAnnotation[];
+  /** Variant Lab — the user's revealed top-preferred intent. Passed
+   *  through to the incremental cut lab below so the post-confirm
+   *  affordance starts pre-set to the right direction. Null for new
+   *  users → falls back to "creative" inside the lab. */
+  preferredIntent?: SubObjectiveIntent | null;
 }
 
 export function MainCanvasView({
@@ -96,6 +103,7 @@ export function MainCanvasView({
   objective,
   subs,
   coreAnnotations,
+  preferredIntent = null,
 }: Props) {
   // Pass the sub list (id + title only) down so the annotated card
   // can resolve linked_sub_objective_id → title for hover popovers.
@@ -136,6 +144,17 @@ export function MainCanvasView({
           ))
         )}
       </div>
+
+      {/* Post-confirm variant lab — lets the user add another cut
+          after seeing the initial rooms. Single-batch quota; the
+          lab calls /api/brainstorm/sub-objectives/add which keeps
+          stage at "main" and only materializes ONE goal at a time. */}
+      {subs.length > 0 && (
+        <IncrementalCutLab
+          spaceId={spaceId}
+          preferredIntent={preferredIntent}
+        />
+      )}
     </div>
   );
 }
