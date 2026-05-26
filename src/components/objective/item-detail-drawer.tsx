@@ -43,6 +43,10 @@ import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 import { ThumbsRating } from "@/components/objective/thumbs-rating";
 import type { VariationScoreEnvelope } from "@/lib/objective-canvas/score-variation-effectiveness";
+import {
+  DecisionSurface,
+  DECISION_ANCHORS,
+} from "@/components/objective/decision-surface";
 
 interface DefinitionHighlight {
   phrase: string;
@@ -657,12 +661,45 @@ export function ItemDetailDrawer({
 
             {/* Scrollable body */}
             <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
+              {/* Decision Surface — quiet aggregator of every pending
+                  decision on this item (conflicts, staleness, pending
+                  elections). Sits ABOVE the per-section banners; this
+                  is the TOC, the banners are the inline actions. Renders
+                  nothing when no decisions are pending so the drawer
+                  stays clean for fresh items. */}
+              <DecisionSurface
+                itemStaleness={staleness}
+                compositionStaleness={compositionStaleness}
+                briefStalenessMap={briefStalenessMap}
+                conflictsOpen={expanded?.composed_design?.conflicts_open ?? []}
+                variations={expanded?.variations ?? []}
+                briefs={expanded?.prototype_briefs ?? []}
+                onJumpTo={(anchorId) => {
+                  // Smooth-scroll the target section to the top of the
+                  // drawer body. Section uses scrollMarginTop:12 so it
+                  // doesn't land flush against the upper edge.
+                  const target =
+                    typeof document !== "undefined"
+                      ? document.getElementById(anchorId)
+                      : null;
+                  if (target) {
+                    target.scrollIntoView({
+                      behavior: "smooth",
+                      block: "start",
+                    });
+                  }
+                }}
+              />
+
               {/* Soft-staleness banner — surfaces upstream changes
                   since this card was last expanded. Click "Refresh
                   from upstream" → force-regenerate, which pulls
                   fresh upstream depth into the prompt context.
                   Renders nothing when staleness is null or not
-                  stale, so the drawer stays clean for fresh items. */}
+                  stale, so the drawer stays clean for fresh items.
+                  Kept in place ALONGSIDE the Decision Surface because
+                  the banner owns the ACTION (refresh button); the
+                  surface owns the NAV (one click to jump here). */}
               {staleness?.is_stale && (
                 <UpstreamStalenessBanner
                   staleness={staleness}
@@ -675,6 +712,7 @@ export function ItemDetailDrawer({
               <Section
                 icon={<Sparkle className="h-3 w-3" />}
                 title="Definition"
+                anchorId={DECISION_ANCHORS.definition}
                 action={
                   expanded ? (
                     <div className="flex items-center gap-1">
@@ -897,6 +935,7 @@ export function ItemDetailDrawer({
                   />
                 }
                 title="Variations"
+                anchorId={DECISION_ANCHORS.variations}
                 subtitle={
                   expanded?.variations && expanded.variations.length > 0
                     ? variationsSubtitle(expanded.variations)
@@ -1149,15 +1188,22 @@ function Section({
   subtitle,
   action,
   children,
+  /** Optional id on the <section> element — set when this section
+   *  is a smooth-scroll target from the Decision Surface (or any
+   *  other in-drawer nav). Defaults to undefined so non-targeted
+   *  sections stay tag-clean. scrollMarginTop keeps the header from
+   *  being flush with the drawer top edge after jumping. */
+  anchorId,
 }: {
   icon: React.ReactNode;
   title: string;
   subtitle?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
+  anchorId?: string;
 }) {
   return (
-    <section>
+    <section id={anchorId} style={{ scrollMarginTop: 12 }}>
       <header className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <span style={{ color: appleVibe.text.tertiary }}>{icon}</span>
@@ -1701,23 +1747,45 @@ function VariationCard({
   // rejected fades, deferred stays neutral with a muted dot.
   const border = elected
     ? "rgba(22,163,74,0.45)"
-    : rejected
-      ? appleVibe.stroke.hairline
-      : appleVibe.stroke.hairline;
+    : appleVibe.stroke.hairline;
   const opacity = rejected ? 0.55 : 1;
-  const ring = elected
-    ? "0 0 0 3px rgba(22,163,74,0.12), 0 8px 22px -12px rgba(22,163,74,0.4)"
-    : undefined;
+
+  // Apple-tier nested elevation. Variations live INSIDE a lane-colored
+  // drawer so they read as subordinate — neutral graphite alpha for
+  // hover ring (not a lane color, which would compete). Elected ring
+  // takes precedence as a stronger semantic signal.
+  const restShadow = elected
+    ? "0 0 0 3px rgba(22,163,74,0.12), 0 10px 24px -14px rgba(22,163,74,0.40)"
+    : appleVibe.shadow.chip;
+  const hoverShadow = elected
+    ? "0 0 0 3px rgba(22,163,74,0.20), 0 14px 32px -14px rgba(22,163,74,0.55)"
+    : "0 0 0 1px rgba(15,23,42,0.10), 0 14px 28px -14px rgba(11,18,40,0.22)";
 
   return (
-    <li
-      className="rounded-2xl p-3 transition-all"
+    <motion.li
+      layout
+      initial={false}
+      whileHover={
+        rejected
+          ? undefined
+          : {
+              y: -1,
+              boxShadow: hoverShadow,
+              transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
+            }
+      }
+      whileTap={
+        rejected
+          ? undefined
+          : { y: 0.5, transition: { duration: 0.08 } }
+      }
+      className="p-3"
       style={{
         border: `1px solid ${border}`,
-        background: elected ? "rgba(240,253,244,0.7)" : "rgba(255,255,255,0.7)",
+        background: elected ? "rgba(240,253,244,0.75)" : "rgba(255,255,255,0.85)",
         borderRadius: appleVibe.radius.md,
         opacity,
-        boxShadow: ring,
+        boxShadow: restShadow,
       }}
     >
       <div className="flex items-start justify-between gap-2">
@@ -1909,7 +1977,7 @@ function VariationCard({
           onTreeUpdate={onExpansionTreeUpdate}
         />
       )}
-    </li>
+    </motion.li>
   );
 }
 
@@ -2078,11 +2146,13 @@ function ComposedDesignBlock({
 }) {
   return (
     <div
+      id={DECISION_ANCHORS.composedDesign}
       className="mt-2 rounded-2xl p-3"
       style={{
         background: "rgba(15,23,42,0.025)",
         border: `1px solid ${appleVibe.stroke.hairline}`,
         borderRadius: appleVibe.radius.md,
+        scrollMarginTop: 12,
       }}
     >
       <div className="flex items-center justify-between gap-2">
