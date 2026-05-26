@@ -294,17 +294,59 @@ export async function POST(req: NextRequest) {
     if (!entity.parent_sub_objective_id) return undefined;
     // Find edges where this entity is the TARGET (upstream items
     // point AT this card via correlation edges).
+    //
+    // Phase 3 — select edge content too (relationship + mechanism
+    // from agent_feedback + rationale from conditions) so the
+    // variation generator can extend the named lever the correlation
+    // step identified instead of inventing parallel mechanisms.
     const { data: incomingEdges } = await db
       .from("edges")
-      .select("source_entity_id")
+      .select(
+        "source_entity_id, relationship, strength, conditions, agent_feedback",
+      )
       .eq("parent_sub_objective_id", entity.parent_sub_objective_id)
       .eq("target_entity_id", entity.id);
-    const sourceIds = Array.isArray(incomingEdges)
-      ? (incomingEdges as Array<{ source_entity_id: string }>)
-          .map((e) => e.source_entity_id)
-          .filter((id, i, arr) => arr.indexOf(id) === i) // dedupe
-      : [];
+    const edgeRowsTyped = (Array.isArray(incomingEdges)
+      ? incomingEdges
+      : []) as Array<{
+      source_entity_id: string;
+      relationship: string | null;
+      strength: number | null;
+      conditions: string | null;
+      agent_feedback: Record<string, unknown> | null;
+    }>;
+    const sourceIds = edgeRowsTyped
+      .map((e) => e.source_entity_id)
+      .filter((id, i, arr) => arr.indexOf(id) === i); // dedupe
     if (sourceIds.length === 0) return undefined;
+
+    // Build a source_id → edge content lookup. When the correlation
+    // step emitted a mechanism, it lives under agent_feedback.mechanism;
+    // the rationale lives in `conditions` (clipped to 500 chars at
+    // edge persist time per the room/generate route).
+    const edgeBySourceId = new Map<
+      string,
+      {
+        relationship: string;
+        mechanism: string;
+        rationale: string;
+      }
+    >();
+    for (const e of edgeRowsTyped) {
+      const mechanism =
+        typeof e.agent_feedback === "object" &&
+        e.agent_feedback !== null &&
+        typeof (e.agent_feedback as Record<string, unknown>).mechanism ===
+          "string"
+          ? ((e.agent_feedback as Record<string, unknown>).mechanism as string)
+          : "";
+      const rationale = typeof e.conditions === "string" ? e.conditions : "";
+      edgeBySourceId.set(e.source_entity_id, {
+        relationship: e.relationship ?? "",
+        mechanism,
+        rationale,
+      });
+    }
     // Hydrate the source entities + their expanded_detail + layer.
     const { data: sourceRows } = await db
       .from("entities")
@@ -338,11 +380,18 @@ export async function POST(req: NextRequest) {
     }
     // Build the context, cap at 4 most-relevant (prefer ones with
     // elections — they carry the strongest signal).
+    //
+    // Phase 3 — each upstream item now also carries the edge content
+    // (relationship + mechanism + rationale) connecting it to the
+    // target. Pulled from edgeBySourceId built above.
     type UpstreamItem = {
       name: string;
       layer: LayerSlug;
       elected_variation_names: string[];
       expansion_highlights: string[];
+      edge_relationship?: string;
+      edge_mechanism?: string;
+      edge_rationale?: string;
     };
     const items: UpstreamItem[] = [];
     for (const row of sourceRows as Array<{
@@ -366,11 +415,21 @@ export async function POST(req: NextRequest) {
             .slice(0, 3)
             .map((n) => n.title)
         : [];
+      const edge = edgeBySourceId.get(row.id);
       items.push({
         name: row.name,
         layer: upstreamLayer,
         elected_variation_names: electedNames,
         expansion_highlights: highlights,
+        // Only attach edge content when at least the mechanism exists —
+        // empty strings would just bloat the prompt without signal.
+        ...(edge && edge.mechanism.length > 0
+          ? {
+              edge_relationship: edge.relationship,
+              edge_mechanism: edge.mechanism,
+              edge_rationale: edge.rationale,
+            }
+          : {}),
       });
     }
     // Sort: items with elections first, then with kept expansion
@@ -383,6 +442,72 @@ export async function POST(req: NextRequest) {
       return bSignal - aSignal;
     });
     return items.slice(0, 4);
+  })();
+
+  // ── Phase 3 — Lateral (sibling) context ──
+  // Same-layer items in the SAME room. These don't causally feed
+  // THIS card via edges, but they co-exist in the user's mental
+  // model. When a sibling has elected variations or kept expansion
+  // nodes, the variation generator should compose-with /
+  // differentiate-from / interfere-with that sibling instead of
+  // silently duplicating its design choices.
+  //
+  // Filtered to siblings WITH active signal — siblings that have
+  // never been opened add no value and would just bloat the prompt.
+  // Capped at 3 most-active by the same signal weight as upstream.
+  //
+  // Soft-fail throughout: any query error → empty array → block
+  // omitted.
+  const lateralContext = await (async () => {
+    if (!entity.parent_sub_objective_id) return undefined;
+    if (!entity.layer_ontology_id) return undefined;
+    const { data: laneRows } = await db
+      .from("entities")
+      .select("id, name, expanded_detail")
+      .eq("parent_sub_objective_id", entity.parent_sub_objective_id)
+      .eq("layer_ontology_id", entity.layer_ontology_id)
+      .neq("id", entity.id);
+    if (!Array.isArray(laneRows) || laneRows.length === 0) return undefined;
+    type LateralItem = {
+      name: string;
+      elected_variation_names: string[];
+      expansion_highlights: string[];
+    };
+    const items: LateralItem[] = [];
+    for (const row of laneRows as Array<{
+      id: string;
+      name: string;
+      expanded_detail: ExpandedItemDetail | null;
+    }>) {
+      const ed = row.expanded_detail ?? null;
+      const electedNames: string[] = Array.isArray(ed?.variations)
+        ? ed!.variations
+            .filter((v) => v.disposition === "elected")
+            .map((v) => v.name)
+        : [];
+      const highlights: string[] = Array.isArray(ed?.expansion_tree)
+        ? ed!.expansion_tree
+            .filter((n) => n.disposition === "kept")
+            .slice(0, 3)
+            .map((n) => n.title)
+        : [];
+      // Drop siblings with no active signal — keep the prompt lean.
+      if (electedNames.length === 0 && highlights.length === 0) continue;
+      items.push({
+        name: row.name,
+        elected_variation_names: electedNames,
+        expansion_highlights: highlights,
+      });
+    }
+    if (items.length === 0) return undefined;
+    items.sort((a, b) => {
+      const aSignal =
+        a.elected_variation_names.length * 2 + a.expansion_highlights.length;
+      const bSignal =
+        b.elected_variation_names.length * 2 + b.expansion_highlights.length;
+      return bSignal - aSignal;
+    });
+    return items.slice(0, 3);
   })();
 
   // ── Closed read loop: tested briefs ──
@@ -462,6 +587,9 @@ export async function POST(req: NextRequest) {
           layer,
           had_lens: annotations.length > 0,
           had_upstream: (upstreamContext?.length ?? 0) > 0,
+          had_upstream_edge_content:
+            (upstreamContext ?? []).some((u) => !!u.edge_mechanism),
+          had_lateral: (lateralContext?.length ?? 0) > 0,
           had_constraints: !!readConstraints(space.synthesis_data),
           had_prior_concepts: !!priorConcepts,
         },
@@ -482,6 +610,7 @@ export async function POST(req: NextRequest) {
           distillThemes,
           priorConcepts,
           upstreamContext,
+          lateralContext,
           testedBriefs: testedBriefs.length > 0 ? testedBriefs : undefined,
         }),
     );

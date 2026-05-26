@@ -266,6 +266,38 @@ export interface ExpandItemContext {
     /** Short titles of the top 2-3 expansion-tree nodes (kept
      *  disposition) on this upstream card. */
     expansion_highlights: string[];
+    /** Phase 3 — edge content connecting this upstream item to the
+     *  target item. Surfaces the named mechanism (lever) the
+     *  correlation LLM identified at edge-generation time, plus the
+     *  rationale (which root_cause × first_principle the edge
+     *  bridges). Lets variation generation EXTEND the named
+     *  mechanism instead of inventing a parallel one.
+     *
+     *  Optional — older rooms / partial-data paths may not carry it.
+     *  Empty strings tolerated. */
+    edge_relationship?: string;
+    edge_mechanism?: string;
+    edge_rationale?: string;
+  }>;
+  /** Phase 3 — lateral context: SIBLING items in the same layer
+   *  inside this room. Siblings don't causally feed THIS card via
+   *  edges — they CO-EXIST in the user's mental model. When a
+   *  sibling has elected variations or kept expansion nodes, this
+   *  card's variations should compose-with, differentiate-from, or
+   *  explicitly interfere-with those neighbor choices instead of
+   *  silently duplicating them.
+   *
+   *  Soft signal — empty / undefined tolerated. Caller filters out
+   *  siblings with NO active signal (no elections, no expansions)
+   *  and caps at 3 most-active to bound token cost. */
+  lateralContext?: Array<{
+    /** Sibling card's title. */
+    name: string;
+    /** Sibling's elected variation names (the user's committed
+     *  direction on that card). */
+    elected_variation_names: string[];
+    /** Sibling's top kept expansion-tree node titles. */
+    expansion_highlights: string[];
   }>;
   /** Closed read loop — prototype briefs the user has already
    *  RUN on THIS item's variations. Filtered upstream to
@@ -600,14 +632,29 @@ Return strict JSON.`;
   // depth on Mechanism influences Outcome expansion. Without this
   // block, each card's expansion is siloed (fine at generation; loses
   // coherence as users deepen). The block names the upstream cards +
-  // what's elected + what's been deepened, so generated variations
-  // bias toward addressing the user's specific choices, not the
-  // generic parent. Soft signal — empty array → block omitted.
+  // what's elected + what's been deepened + Phase 3: the edge
+  // CONNECTION (named mechanism + rationale from the correlation LLM)
+  // so generated variations extend the named lever instead of
+  // inventing a parallel one. Soft signal — empty array → block
+  // omitted.
   const upstreamBlock =
     ctx.upstreamContext && ctx.upstreamContext.length > 0
       ? `\n\nUPSTREAM CHAIN (cards that FEED into this one — bias depth to address what's been chosen here, not the generic parent):\n${ctx.upstreamContext
           .slice(0, 4)
           .map((u) => {
+            // Phase 3 — surface the edge content (relationship +
+            // mechanism + rationale) when the correlation step
+            // recorded one. The variation generator now knows HOW
+            // upstream connects, not just THAT it does.
+            const edgeBlurb = u.edge_mechanism
+              ? `\n      connection: ${
+                  u.edge_relationship?.trim() || "links to this card"
+                } via "${u.edge_mechanism.trim()}"${
+                  u.edge_rationale && u.edge_rationale.trim().length > 0
+                    ? ` — ${u.edge_rationale.trim().slice(0, 200)}`
+                    : ""
+                }`
+              : "";
             const elected =
               u.elected_variation_names.length > 0
                 ? `\n      elected: ${u.elected_variation_names.slice(0, 4).join(" | ")}`
@@ -616,11 +663,43 @@ Return strict JSON.`;
               u.expansion_highlights.length > 0
                 ? `\n      deepened into: ${u.expansion_highlights.slice(0, 3).join(" · ")}`
                 : "";
-            return `  ${u.layer} "${u.name}"${elected}${highlights}`;
+            return `  ${u.layer} "${u.name}"${edgeBlurb}${elected}${highlights}`;
           })
           .join(
             "\n",
-          )}\n  UPSTREAM RULE: When upstream has ELECTED variations or DEEPENED nodes, your output should make sense as a downstream response to those choices. If you'd otherwise generate a variation that ignores upstream elections, either tie it to one OR explicitly justify the divergence in its tradeoff. Don't drift away from the chain — the user is building one coherent bet.`
+          )}\n  UPSTREAM RULE: When upstream has ELECTED variations or DEEPENED nodes, your output should make sense as a downstream response to those choices. If you'd otherwise generate a variation that ignores upstream elections, either tie it to one OR explicitly justify the divergence in its tradeoff. EXTEND the named mechanism from "connection:" when present — your variations should be different ways of pulling the SAME lever, not parallel inventions. Don't drift away from the chain — the user is building one coherent bet.`
+      : "";
+
+  // Phase 3 — lateral siblings: co-resident items in the same lane
+  // (e.g. all the FEATURE cards in this room when expanding a
+  // feature) that have user-elected variations or kept expansion
+  // nodes. Without this block, sibling cards generate variations in
+  // isolation and silently duplicate each other's design choices.
+  // The block names sibling cards + their elections + their kept
+  // nodes, so the variation generator has explicit awareness of
+  // what the room's neighboring mechanisms are doing.
+  //
+  // Soft signal — empty array → block omitted. Caller already
+  // filtered out siblings with no active signal (no elections, no
+  // kept nodes); we keep only the top 3 by signal weight.
+  const lateralBlock =
+    ctx.lateralContext && ctx.lateralContext.length > 0
+      ? `\n\nSIBLING ${ctx.layer.toUpperCase()} CARDS (other items in the same lane that the user is actively shaping — your variations should COMPOSE, DIFFERENTIATE, or explicitly INTERFERE, not silently duplicate):\n${ctx.lateralContext
+          .slice(0, 3)
+          .map((s) => {
+            const elected =
+              s.elected_variation_names.length > 0
+                ? `\n      elected: ${s.elected_variation_names.slice(0, 4).join(" | ")}`
+                : "";
+            const highlights =
+              s.expansion_highlights.length > 0
+                ? `\n      deepened into: ${s.expansion_highlights.slice(0, 3).join(" · ")}`
+                : "";
+            return `  "${s.name}"${elected}${highlights}`;
+          })
+          .join(
+            "\n",
+          )}\n  SIBLING RULE: For each variation you emit, ask "does this OVERLAP with a sibling's elected choice?" — if yes, either (a) RE-FRAME this variation to cover ground the sibling does NOT, (b) explicitly COMPOSE with it (your variation depends on or extends the sibling — say so in the description), or (c) raise an INTERFERENCE WARNING in the tradeoff field naming the specific conflict ("this conflicts with sibling X's choice of Y because Z"). Do NOT silently duplicate sibling work — the room is ONE coherent system, not a list of redundant levers.`
       : "";
 
   // Closed-read-loop block — already-tested briefs. When variations
@@ -647,7 +726,7 @@ Return strict JSON.`;
           )}\n  TESTED RULE: For variations above, DROP open_questions the test already answered, SURFACE the learning in the variation's description or tradeoff, and only emit NEW open_questions that the experiment did NOT resolve. Do not propose to re-test the same hypothesis. Treat the user's recorded outcome as ground truth, not as something to second-guess.`
       : "";
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${upstreamBlock}${testedBriefsBlock}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${upstreamBlock}${lateralBlock}${testedBriefsBlock}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
 
   // ── Schema (dynamic — adds derived_from_annotations only when
   //    the lens has entries, mirroring the room generator pattern). ──
