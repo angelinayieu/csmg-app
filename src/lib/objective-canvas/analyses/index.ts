@@ -16,6 +16,7 @@ import { painCoverage } from "./pain-coverage";
 import { duplicateVariations } from "./duplicate-variations";
 import { distillConcepts } from "./distill-concepts";
 import { recommendNextMove } from "./recommend-next-move";
+import { crossRoomContradictions } from "./cross-room-contradictions";
 import type {
   AnalysisFinding,
   AnalysisModule,
@@ -37,6 +38,7 @@ export const TIER_1_ANALYSES: AnalysisModule[] = [
 export const TIER_2_OPERATIONS: AnalysisModule[] = [
   distillConcepts,
   recommendNextMove,
+  crossRoomContradictions,
 ];
 
 /** All modules (Tier 1 + Tier 2) — useful for the workbench's

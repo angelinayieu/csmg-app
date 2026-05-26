@@ -22,6 +22,7 @@ import type {
   AnalysisFinding,
   CrossRoomAnalysisState,
 } from "@/lib/objective-canvas/analyses/types";
+import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -108,9 +109,32 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Telemetry-wrap the operation run. Every Tier-2 / Tier-3 analysis
+  // call routes through here, so this one wrap covers them all —
+  // recommend_next_move, distill_concepts, cross_room_contradictions,
+  // and any future on-demand modules. call_site uses the operation
+  // key directly (1:1 with the analysis module). artifact_kind is
+  // "analysis_finding"; artifact_id is the space-scoped operation
+  // key so feedback lands on the correct (op × space) row.
   let freshFindings: AnalysisFinding[];
   try {
-    freshFindings = await runOperation(operationKey, loaded.state);
+    freshFindings = await instrumentedLLMCall(
+      {
+        db,
+        userId: auth.user.id,
+        spaceId,
+        callSite: `analysis:${operationKey}`,
+        modelHint: "gpt-4o",
+        artifactKind: "analysis_finding",
+        artifactId: `${spaceId}::${operationKey}`,
+        metadata: {
+          room_count: loaded.state.rooms.length,
+          item_count: loaded.state.items.length,
+          force_regen: force,
+        },
+      },
+      () => runOperation(operationKey, loaded.state),
+    );
   } catch (err) {
     return NextResponse.json(
       { error: "operation failed", detail: sanitizeErrorMessage(err) },
