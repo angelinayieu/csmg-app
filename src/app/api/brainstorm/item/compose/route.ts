@@ -1,24 +1,20 @@
-// ── POST /api/brainstorm/item/expand ──────────────────────────────
+// ── POST /api/brainstorm/item/compose ──────────────────────────────
 //
-// Lazy-fetches the item detail drawer's depth surface (definition +
-// variations + planning). Called once when the user first opens the
-// drawer for an entity; cached on entities.expanded_detail thereafter.
+// Synthesizes the elected variations of an item into a single
+// composed design. Idempotent — returns the cached composed_design
+// when source_variation_ids still match the current election set.
 //
 // Body: { entityId, mode?: "default" | "force" }
 //
-// "force" regenerates from scratch (user explicitly asked).
+// Requires ≥2 elected variations. Returns 409 otherwise.
 
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
-import {
-  expandItemDetail,
-  type ExpandedItemDetail,
+import type {
+  ExpandedItemDetail,
+  ComposedDesign,
 } from "@/lib/objective-canvas/expand-item-detail";
-import {
-  buildRagBlock,
-  type SurfaceBundle,
-  type DeepBundle,
-} from "@/lib/research/research-service";
+import { composeVariations } from "@/lib/objective-canvas/compose-variations";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 
 export const runtime = "nodejs";
@@ -48,46 +44,61 @@ export async function POST(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = auth.supabase as any;
 
-  // ── Load entity + ownership check ──
-  const { data: entity, error: entityErr } = await db
+  const { data: entity } = await db
     .from("entities")
     .select(
-      "id, name, layer_ontology_id, parent_sub_objective_id, causal_chain, expanded_detail, space_id",
+      "id, name, space_id, layer_ontology_id, parent_sub_objective_id, expanded_detail",
     )
     .eq("id", entityId)
     .maybeSingle();
-  if (entityErr) {
-    return NextResponse.json(
-      { error: "DB error", detail: entityErr.message },
-      { status: 500 },
-    );
-  }
   if (!entity) {
     return NextResponse.json({ error: "entity not found" }, { status: 404 });
   }
 
-  // Verify the user owns the parent space (RLS-ish via app code).
   const { data: space } = await db
     .from("spaces")
-    .select("id, user_id, description, input_text, surface_research, deep_research")
+    .select("id, user_id, description, input_text")
     .eq("id", entity.space_id)
     .maybeSingle();
   if (!space || space.user_id !== auth.user.id) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
-  // Idempotent short-circuit on cached detail.
-  const existing = entity.expanded_detail as ExpandedItemDetail | null;
-  const hasCached =
-    !!existing &&
-    typeof existing === "object" &&
-    typeof (existing as { definition?: unknown }).definition === "string" &&
-    (existing as { definition: string }).definition.length > 0;
-  if (!force && hasCached) {
-    return NextResponse.json({ expanded_detail: existing, cached: true });
+  const detail = entity.expanded_detail as ExpandedItemDetail | null;
+  if (!detail || !Array.isArray(detail.variations)) {
+    return NextResponse.json(
+      { error: "no expanded_detail — open the drawer first to expand" },
+      { status: 409 },
+    );
   }
 
-  // ── Resolve layer slug from layer_ontology ──
+  const elected = detail.variations.filter((v) => v.disposition === "elected");
+  if (elected.length < 2) {
+    return NextResponse.json(
+      {
+        error: "≥2 elected variations required for composition",
+        elected_count: elected.length,
+      },
+      { status: 409 },
+    );
+  }
+
+  // Idempotent short-circuit: same elected ids → return cached.
+  if (!force && detail.composed_design) {
+    const cachedIds = new Set(detail.composed_design.source_variation_ids);
+    const electedIds = new Set(elected.map((v) => v.id));
+    const sameSet =
+      cachedIds.size === electedIds.size &&
+      [...cachedIds].every((id) => electedIds.has(id));
+    if (sameSet) {
+      return NextResponse.json({
+        composed_design: detail.composed_design,
+        cached: true,
+      });
+    }
+  }
+
+  // Resolve layer + sub-objective + parent objective + annotations.
   let layer: LayerSlug = "features";
   if (entity.layer_ontology_id) {
     const { data: layerRow } = await db
@@ -103,8 +114,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Resolve room (sub-objective) + parent objective + parent
-  //    annotations (P1 — lens reaches variations) ──
   let subObjectiveTitle = "";
   let coreObjectiveText: string =
     (typeof space.description === "string" && space.description.trim()) ||
@@ -132,7 +141,6 @@ export async function POST(req: NextRequest) {
     }
   }
   if (!parentAnnotationsRaw) {
-    // Fall back to the space's root goal annotations when sub IS the root.
     const { data: rootGoal } = await db
       .from("improvement_goals")
       .select("annotations")
@@ -143,71 +151,40 @@ export async function POST(req: NextRequest) {
   }
   const annotations = normalizeAnnotations(parentAnnotationsRaw);
 
-  // ── Load room pain + outcome titles for P2 ranking context ──
-  // Variations score against the room's actual lane content, not
-  // a guess. Only fetched when there's a sub-objective; empty
-  // arrays fall through to default-fallback ranks in the cleaner.
-  const roomPains: string[] = [];
-  const roomOutcomes: string[] = [];
-  if (entity.parent_sub_objective_id) {
-    const { data: laneRows } = await db
-      .from("entities")
-      .select("name, layer_ontology_id, entity_type")
-      .eq("parent_sub_objective_id", entity.parent_sub_objective_id);
-    if (Array.isArray(laneRows)) {
-      for (const r of laneRows as Array<{
-        name: string;
-        entity_type: string;
-      }>) {
-        if (r.entity_type === "pain_point") roomPains.push(r.name);
-        else if (r.entity_type === "outcome") roomOutcomes.push(r.name);
-      }
-    }
-  }
-
-  // ── Build RAG block from space-level research ──
-  const surface = (space.surface_research as SurfaceBundle | null) ?? null;
-  const deep = (space.deep_research as DeepBundle | null) ?? null;
-  const ragBlock = buildRagBlock(surface, deep, {
-    maxSources: 8,
-    maxCharsPerSnippet: 400,
-  });
-
-  // ── Run the expansion LLM call ──
-  let detail: ExpandedItemDetail;
+  let composed: ComposedDesign;
   try {
-    detail = await expandItemDetail({
-      layer,
-      name: entity.name,
-      causalChain: (entity.causal_chain as Record<string, unknown>) ?? {},
+    composed = await composeVariations({
+      itemName: entity.name,
+      itemLayer: layer,
+      electedVariations: elected,
       subObjectiveTitle,
       coreObjectiveText,
-      ragBlock,
       annotations: annotations.length > 0 ? annotations : undefined,
-      roomPains,
-      roomOutcomes,
     });
   } catch (err) {
     return NextResponse.json(
       {
-        error: "expansion failed",
+        error: "composition failed",
         detail: sanitizeErrorMessage(err),
       },
       { status: 500 },
     );
   }
 
-  // ── Persist ──
+  const nextDetail: ExpandedItemDetail = {
+    ...detail,
+    composed_design: composed,
+  };
   const writeRes = await db
     .from("entities")
-    .update({ expanded_detail: detail })
+    .update({ expanded_detail: nextDetail })
     .eq("id", entityId);
   if (writeRes.error) {
     console.warn(
-      "[item/expand] failed to persist expanded_detail:",
+      "[item/compose] failed to persist composed_design:",
       writeRes.error.message,
     );
   }
 
-  return NextResponse.json({ expanded_detail: detail });
+  return NextResponse.json({ composed_design: composed });
 }
