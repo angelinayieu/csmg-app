@@ -336,6 +336,22 @@ PAIN RULES:
 - ${TITLE_RULES}
 - Pain titles name the EFFECT ("Low engagement depth"), not the cause ("Generic results") and not the outcome ("Superficial browsing"). Those go in the root_causes and negative_outcome fields respectively.
 
+SUB-OBJECTIVE SCOPE TEST (mandatory — apply to EVERY pain before emitting it):
+Each pain must be a SPECIFIC manifestation WITHIN this sub-objective's strategic facet — not a generic pain that could appear in any sub-objective.
+
+Self-test: "If I removed this sub-objective's title and framing, would this pain make sense as a pain in a completely DIFFERENT sub-objective?"
+  • YES it's generic → REJECT. You're describing a parent-objective-level pain, not a sub-objective-scoped one. Tighten the framing until the pain only makes sense inside THIS sub-objective.
+  • NO it only manifests inside this sub-objective's scope → KEEP.
+
+❌ EXAMPLE — too generic (parent sub-objective = "Goal-Driven Search Optimization"):
+   "Information overload"        — applies to every search sub-objective
+   "Poor user engagement"        — applies to every product sub-objective
+   "Slow performance"            — applies to anything with software
+✅ EXAMPLE — scoped (parent sub-objective = "Goal-Driven Search Optimization"):
+   "Search results misaligned with stated goals"    — specific to goal-matching
+   "Users abandon search after first non-goal result" — observable inside this scope
+   "Goal updates lag behind result re-ranking"      — concrete to the goal-→-search pipeline
+
 NEGATIVE_OUTCOME RULES (critical — read carefully):
 - Must be the DOWNSTREAM CONSEQUENCE of the pain, not a paraphrase of the title.
 - Self-test: if removing the title's key noun makes the negative_outcome still meaningful and informative, you've done it right. If they read as synonyms, REWRITE.
@@ -508,6 +524,22 @@ OUTCOME RULES:
 - name describes the user-side STATE or BEHAVIOR, not the action and not a feature. "Sustained deep-dive sessions" ✅. "Increase session length" ❌ (action). "Engagement Tracking" ❌ (feature).
 - Avoid feature-style nouns ("Engine", "Dashboard", "Layer", "Interface", "System", "Tool", "Feature", "Mechanism") in outcome titles — they signal you're naming a system part instead of a user state.
 
+SUB-OBJECTIVE SCOPE TEST (mandatory — apply to EVERY outcome before emitting it):
+Each outcome must be a USER STATE that this SPECIFIC sub-objective produces — not a generic win that any sub-objective would deliver.
+
+Self-test: "If I removed this sub-objective's framing, would this outcome make sense as a win in a completely DIFFERENT sub-objective?"
+  • YES it's generic → REJECT. You're naming a parent-objective-level win, not a sub-objective-specific one. Tighten until the outcome could only result from THIS sub-objective's mechanism.
+  • NO it's specifically downstream of THIS sub-objective's work → KEEP.
+
+❌ EXAMPLE — too generic (parent sub-objective = "Goal-Driven Search Optimization"):
+   "Increased user satisfaction"   — applies to any successful product
+   "Higher engagement"             — applies to any feature that works
+   "Better financial outcomes"     — applies to any monetization sub-objective
+✅ EXAMPLE — scoped (parent sub-objective = "Goal-Driven Search Optimization"):
+   "Users find their stated goal in ≤3 results"
+   "Search-to-action rate within goal context climbs 40%+"
+   "Self-reported relevance scores match user-set goal weight"
+
 ${ANTI_PLATITUDE}
 
 Return strict JSON.`;
@@ -635,6 +667,26 @@ FEATURE RULES:
 CRITICAL — FEATURE ≠ OUTCOME:
 - Feature names describe the SYSTEM'S CAPABILITY ("AI-Powered Curiosity Paths"). Outcomes describe USER STATE ("Users complete 5+ topic dives").
 - Your feature title MUST NOT verbatim match or trivially paraphrase any outcome name in the DESIRED OUTCOMES list below. If it does, you've named a user-state and pretended it's a feature — rewrite.
+
+SUB-OBJECTIVE SCOPE TEST (mandatory — apply to EVERY feature before emitting it):
+Each feature must be a mechanism THIS sub-objective specifically requires — not a standalone feature that could be its own sub-objective.
+
+Self-test: "Could this feature title swap in as a SIBLING SUB-OBJECTIVE name on the user's main canvas alongside the parent?"
+  • YES it could be its own sub-objective → REJECT. You are escaping the layer. Drop it OR rewrite as a tighter mechanism inside this sub-objective's scope.
+  • NO it only makes sense AS A LEVER INSIDE this sub-objective → KEEP.
+
+Heuristic: if the feature title doesn't reference (or specialize) the sub-objective's core noun directly or by clear implication, it's probably escaping. "Goal Matching Engine" is a feature INSIDE "Goal-Driven Search Optimization". "Personalized Recommendations Engine" is its OWN sub-objective — not a feature of goal-driven search.
+
+❌ EXAMPLE — escapes the layer (parent sub-objective = "Goal-Driven Search Optimization"):
+   "Personalized Recommendations Engine"  — own sub-objective on canvas
+   "User Feedback Loop System"            — own sub-objective on canvas
+   "Privacy-Value Marketplace"            — clearly sibling territory
+✅ EXAMPLE — scoped feature (parent sub-objective = "Goal-Driven Search Optimization"):
+   "Goal-Matching Ranker"          — specific mechanism inside goal-driven search
+   "Goal-Context Query Rewriter"   — specific mechanism inside goal-driven search
+   "Goal-Drift Re-Sort Trigger"    — specific mechanism inside goal-driven search
+
+3 strong scoped features beat 6 mixed-layer ones. Drop weak escapes rather than padding to a count.
 
 POSITIVE_OUTCOME RULES:
 - positive_outcome is the DOWNSTREAM consequence the feature produces. Like negative_outcome on a pain — it must be more informative than restating the feature title.
