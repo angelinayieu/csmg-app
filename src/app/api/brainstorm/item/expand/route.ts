@@ -148,6 +148,157 @@ export async function POST(req: NextRequest) {
         }))
       : undefined;
 
+  // ── Displayable cross-room findings ──
+  // Returned on BOTH cache-hit and cache-miss so the drawer can render
+  // the "Analysis signals affecting this item" subsection consistently.
+  // Different from the LLM-pass filter further down (which drops
+  // dismissed too): this version surfaces dismissed findings WITH their
+  // disposition, so the user reads what the system has detected AND
+  // what their stance currently does downstream. Drops only `resolved`
+  // (user already closed it) + space-level signals (orphan / next-move /
+  // distill — those don't shape THIS item's regen).
+  type DisplayableFinding = {
+    id: string;
+    kind:
+      | "pain_uncovered"
+      | "pain_cross_addressed"
+      | "contradiction"
+      | "duplicate_variation"
+      | "shared_mechanism"
+      | "annotation_overlap";
+    title: string;
+    summary: string;
+    hint?: string;
+    disposition: "open" | "acknowledged" | "dismissed";
+  };
+  const displayableCrossRoomFindings: DisplayableFinding[] = (() => {
+    const crossRoomAnalysisForDisplay = (space.synthesis_data as Record<
+      string,
+      unknown
+    > | null)?.cross_room_analysis as CrossRoomAnalysisState | undefined;
+    const findings = crossRoomAnalysisForDisplay?.findings ?? [];
+    if (findings.length === 0) return [];
+    const roomId = entity.parent_sub_objective_id ?? null;
+    const itemId = entity.id;
+    const out: DisplayableFinding[] = [];
+    for (const f of findings) {
+      if (f.disposition === "resolved") continue;
+      if (
+        f.analysis_key === "distill_concepts" ||
+        f.analysis_key === "orphan_annotations" ||
+        f.analysis_key === "recommend_next_move"
+      ) {
+        continue;
+      }
+      const itemMatches = f.references.item_ids.includes(itemId);
+      const roomMatches = !!roomId && f.references.room_ids.includes(roomId);
+      if (f.analysis_key === "pain_coverage") {
+        if (!itemMatches) continue;
+      } else if (!itemMatches && !roomMatches) {
+        continue;
+      }
+      const disposition: DisplayableFinding["disposition"] =
+        f.disposition === "acknowledged" || f.disposition === "dismissed"
+          ? f.disposition
+          : "open";
+      const body = (f.body ?? {}) as Record<string, unknown>;
+      if (f.analysis_key === "shared_mechanisms") {
+        const mech = typeof body.mechanism === "string" ? body.mechanism : "";
+        out.push({
+          id: f.id,
+          kind: "shared_mechanism",
+          title: f.title,
+          summary: f.summary,
+          hint: mech ? `lever name: "${mech}"` : undefined,
+          disposition,
+        });
+      } else if (f.analysis_key === "annotation_overlap") {
+        const phrase = typeof body.phrase === "string" ? body.phrase : "";
+        out.push({
+          id: f.id,
+          kind: "annotation_overlap",
+          title: f.title,
+          summary: f.summary,
+          hint: phrase ? `lens phrase: "${phrase}"` : undefined,
+          disposition,
+        });
+      } else if (f.analysis_key === "pain_coverage") {
+        const kindStr = typeof body.kind === "string" ? body.kind : "";
+        if (kindStr === "uncovered") {
+          out.push({
+            id: f.id,
+            kind: "pain_uncovered",
+            title: f.title,
+            summary: f.summary,
+            disposition,
+          });
+        } else if (kindStr === "cross_addressed") {
+          const count =
+            typeof body.addresser_count === "number"
+              ? body.addresser_count
+              : 0;
+          out.push({
+            id: f.id,
+            kind: "pain_cross_addressed",
+            title: f.title,
+            summary: f.summary,
+            hint:
+              count > 0
+                ? `addressed by ${count} feature(s) in OTHER rooms`
+                : undefined,
+            disposition,
+          });
+        }
+      } else if (f.analysis_key === "duplicate_variations") {
+        const vname =
+          typeof body.variation_name === "string" ? body.variation_name : "";
+        const electedCount =
+          typeof body.elected_room_count === "number"
+            ? body.elected_room_count
+            : 0;
+        out.push({
+          id: f.id,
+          kind: "duplicate_variation",
+          title: f.title,
+          summary: f.summary,
+          hint: vname
+            ? electedCount >= 1
+              ? `"${vname}" ELECTED in ${electedCount} other room${electedCount === 1 ? "" : "s"}`
+              : `"${vname}"`
+            : undefined,
+          disposition,
+        });
+      } else if (f.analysis_key === "cross_room_contradictions") {
+        const pair = Array.isArray(body.pair)
+          ? (body.pair as Array<Record<string, unknown>>)
+          : [];
+        const other = pair.find((p) => p?.item_id !== itemId) ?? pair[1];
+        const otherVar =
+          other && typeof other.variation_name === "string"
+            ? other.variation_name
+            : "";
+        const otherRoom =
+          other && typeof other.room_title === "string"
+            ? other.room_title
+            : "";
+        out.push({
+          id: f.id,
+          kind: "contradiction",
+          title: f.title,
+          summary: f.summary,
+          hint:
+            otherVar && otherRoom
+              ? `contradicts "${otherVar}" in "${otherRoom}"`
+              : otherVar
+                ? `contradicts "${otherVar}"`
+                : undefined,
+          disposition,
+        });
+      }
+    }
+    return out;
+  })();
+
   // Idempotent short-circuit on cached detail.
   const existing = entity.expanded_detail as ExpandedItemDetail | null;
   const hasCached =
@@ -231,6 +382,7 @@ export async function POST(req: NextRequest) {
       upstream_staleness: upstreamStaleness,
       composition_staleness: compositionStaleness,
       brief_staleness: briefStaleness,
+      cross_room_findings: displayableCrossRoomFindings,
     });
   }
 
@@ -776,5 +928,6 @@ export async function POST(req: NextRequest) {
     expanded_detail: merged,
     prior_concepts: priorConceptsForResponse,
     upstream_staleness: NO_STALENESS,
+    cross_room_findings: displayableCrossRoomFindings,
   });
 }

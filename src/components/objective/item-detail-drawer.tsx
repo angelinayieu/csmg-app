@@ -33,6 +33,7 @@ import {
   Layers,
   Link2,
   Pause,
+  Radar,
   RefreshCw,
   Shield,
   Sparkles as SparklesLucide,
@@ -53,6 +54,27 @@ interface DefinitionHighlight {
   start_offset: number;
   end_offset: number;
   why: string;
+}
+
+/** Cross-room finding shaped for the drawer's "Analysis signals"
+ *  subsection. Mirrors the route's DisplayableFinding shape — the
+ *  drawer renders these AS THE WORKBENCH SEES THEM, so the user has
+ *  a clear mental model: "these are the structural signals the
+ *  system has detected on this item, and your disposition shapes
+ *  what the next regen does with each." */
+interface DrawerCrossRoomFinding {
+  id: string;
+  kind:
+    | "pain_uncovered"
+    | "pain_cross_addressed"
+    | "contradiction"
+    | "duplicate_variation"
+    | "shared_mechanism"
+    | "annotation_overlap";
+  title: string;
+  summary: string;
+  hint?: string;
+  disposition: "open" | "acknowledged" | "dismissed";
 }
 
 // ── Shared types (mirror the API contracts) ──
@@ -301,6 +323,13 @@ export function ItemDetailDrawer({
     string,
     StaleShape
   > | null>(null);
+  // Cross-room findings for THIS item — populated from /expand
+  // response. Surfaced in the Analysis Signals section so the user
+  // reads what the workbench has detected on this item and what
+  // their disposition does downstream.
+  const [crossRoomFindings, setCrossRoomFindings] = useState<
+    DrawerCrossRoomFinding[]
+  >([]);
 
   // ── Definition highlights (toggle) ──
   // Local-only cache: client requests once when the user first
@@ -424,6 +453,11 @@ export function ItemDetailDrawer({
             ? json.brief_staleness
             : null,
         );
+        setCrossRoomFindings(
+          Array.isArray(json?.cross_room_findings)
+            ? (json.cross_room_findings as DrawerCrossRoomFinding[])
+            : [],
+        );
       })
       .catch((err) => {
         if (!propPaint) {
@@ -512,6 +546,11 @@ export function ItemDetailDrawer({
             typeof json.brief_staleness === "object"
             ? json.brief_staleness
             : null,
+        );
+        setCrossRoomFindings(
+          Array.isArray(json?.cross_room_findings)
+            ? (json.cross_room_findings as DrawerCrossRoomFinding[])
+            : [],
         );
       })
       .catch((err) =>
@@ -918,7 +957,29 @@ export function ItemDetailDrawer({
                 )}
               </Section>
 
-              {/* ── 3. VARIATIONS (P1+P2+P3) ──
+              {/* ── 3. ANALYSIS SIGNALS ──
+                  The cross-room findings the workbench has detected
+                  on this item / room. Surfaces the LLM's accumulated
+                  context so the user reads what the next regen "sees"
+                  — and what their disposition does downstream
+                  (Dismissed → not re-raised; Open / Acknowledged →
+                  will steer the next variation generation or
+                  composition). Empty state when no findings. */}
+              {(crossRoomFindings.length > 0 || expanded) && (
+                <Section
+                  icon={<Radar className="h-3 w-3" strokeWidth={1.75} />}
+                  title="Analysis signals"
+                  subtitle={
+                    crossRoomFindings.length > 0
+                      ? buildFindingsSubtitle(crossRoomFindings)
+                      : undefined
+                  }
+                >
+                  <AnalysisSignalsList findings={crossRoomFindings} />
+                </Section>
+              )}
+
+              {/* ── 4. VARIATIONS (P1+P2+P3) ──
                   Grouped by kind (alternative / additive / principle),
                   sorted by composite rank desc inside each group, each
                   card carrying:
@@ -1365,6 +1426,193 @@ function variationsSubtitle(vs: ItemVariation[]): string {
   const elected = vs.filter((v) => v.disposition === "elected").length;
   if (elected === 0) return `${total} ways`;
   return `${total} ways · ${elected} elected`;
+}
+
+// ── Analysis signals subsection ───────────────────────────────────────
+//
+// Renders the cross_room_findings the route already filtered to THIS
+// item / room. The user sees what the workbench has detected AND what
+// their disposition does downstream — closing the mental-model gap
+// where loop #3/#4/#5 LLM context was previously invisible.
+
+function buildFindingsSubtitle(items: DrawerCrossRoomFinding[]): string {
+  const open = items.filter((f) => f.disposition === "open").length;
+  const ack = items.filter((f) => f.disposition === "acknowledged").length;
+  const dis = items.filter((f) => f.disposition === "dismissed").length;
+  const live = open + ack;
+  if (live === 0 && dis === 0) return "";
+  const parts: string[] = [];
+  if (live > 0) parts.push(`${live} active`);
+  if (dis > 0) parts.push(`${dis} dismissed`);
+  return parts.join(" · ");
+}
+
+/** Order of kinds in the rendered list — most "loud" signals first
+ *  so the user reads structural blockers before consistency hints. */
+const FINDING_KIND_ORDER: Record<
+  DrawerCrossRoomFinding["kind"],
+  number
+> = {
+  pain_uncovered: 0,
+  contradiction: 1,
+  pain_cross_addressed: 2,
+  duplicate_variation: 3,
+  shared_mechanism: 4,
+  annotation_overlap: 5,
+};
+
+const FINDING_KIND_LABEL: Record<DrawerCrossRoomFinding["kind"], string> = {
+  pain_uncovered: "Uncovered pain",
+  contradiction: "Cross-room contradiction",
+  pain_cross_addressed: "Addressed elsewhere",
+  duplicate_variation: "Duplicate variation",
+  shared_mechanism: "Shared mechanism",
+  annotation_overlap: "Annotation overlap",
+};
+
+/** Disposition microcopy — Apple-tier mental model. Each line says
+ *  what the user's stance ACTUALLY does on the next regen. */
+const DISPOSITION_HINT: Record<
+  DrawerCrossRoomFinding["disposition"],
+  string
+> = {
+  open: "Will steer the next regen — surfaces as a counter-variation or conflict_open.",
+  acknowledged:
+    "You've seen this; still actively shaping the next regen same as Open.",
+  dismissed:
+    "You declared this intentional. The next regen will NOT re-raise it as a conflict.",
+};
+
+function AnalysisSignalsList({
+  findings,
+}: {
+  findings: DrawerCrossRoomFinding[];
+}) {
+  if (findings.length === 0) {
+    return (
+      <p
+        className="text-[12px] font-light italic"
+        style={{ color: appleVibe.text.tertiary }}
+      >
+        No cross-room signals yet on this item. Run an analysis from the
+        workbench (Distill, Recommend next move) and any structural
+        patterns it surfaces will appear here.
+      </p>
+    );
+  }
+  const sorted = [...findings].sort(
+    (a, b) => FINDING_KIND_ORDER[a.kind] - FINDING_KIND_ORDER[b.kind],
+  );
+  return (
+    <ul className="flex flex-col gap-2">
+      {sorted.map((f) => (
+        <AnalysisSignalCard key={f.id} finding={f} />
+      ))}
+    </ul>
+  );
+}
+
+function AnalysisSignalCard({
+  finding,
+}: {
+  finding: DrawerCrossRoomFinding;
+}) {
+  // Disposition palette — restrained, semantic. Open uses lane-color
+  // family (system is "looking at this"), acknowledged uses amber
+  // (user-noted, still active), dismissed uses neutral grey (closed,
+  // quiet).
+  const dispositionStyle: Record<
+    DrawerCrossRoomFinding["disposition"],
+    { bg: string; fg: string; border: string }
+  > = {
+    open: {
+      bg: "rgba(15,23,42,0.05)",
+      fg: appleVibe.text.primary,
+      border: appleVibe.stroke.hairline,
+    },
+    acknowledged: {
+      bg: "rgba(217,119,6,0.08)",
+      fg: "rgba(146,64,14,0.92)",
+      border: "rgba(217,119,6,0.18)",
+    },
+    dismissed: {
+      bg: "rgba(15,23,42,0.03)",
+      fg: appleVibe.text.tertiary,
+      border: appleVibe.stroke.hairline,
+    },
+  };
+  const ds = dispositionStyle[finding.disposition];
+  const isDismissed = finding.disposition === "dismissed";
+
+  return (
+    <li>
+      <div
+        className="flex flex-col gap-1.5 p-3"
+        style={{
+          border: `1px solid ${appleVibe.stroke.hairline}`,
+          background: isDismissed ? "rgba(15,23,42,0.02)" : "#ffffff",
+          borderRadius: appleVibe.radius.md,
+          // Dismissed cards visually recede — opacity, not strikethrough.
+          opacity: isDismissed ? 0.7 : 1,
+        }}
+      >
+        {/* Header row: kind label + disposition pill */}
+        <div className="flex items-center justify-between gap-2">
+          <span
+            className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            {FINDING_KIND_LABEL[finding.kind]}
+          </span>
+          <span
+            className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium capitalize"
+            style={{
+              background: ds.bg,
+              color: ds.fg,
+              border: `1px solid ${ds.border}`,
+            }}
+          >
+            {finding.disposition}
+          </span>
+        </div>
+        {/* Title — the workbench finding's headline */}
+        <p
+          className="text-[13px] font-semibold leading-snug"
+          style={{
+            color: isDismissed ? appleVibe.text.secondary : appleVibe.text.primary,
+          }}
+        >
+          {finding.title}
+        </p>
+        {/* Body / hint — the substance the user reads */}
+        {finding.hint && (
+          <p
+            className="text-[11px] font-medium leading-snug"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            {finding.hint}
+          </p>
+        )}
+        <p
+          className="text-[11px] font-light leading-snug"
+          style={{ color: appleVibe.text.secondary }}
+        >
+          {finding.summary}
+        </p>
+        {/* Disposition microcopy — load-bearing affordance:
+            tells the user what their stance DOES downstream. */}
+        <p
+          className="border-t pt-1.5 text-[10px] font-light italic leading-snug"
+          style={{
+            borderColor: appleVibe.stroke.hairline,
+            color: appleVibe.text.tertiary,
+          }}
+        >
+          {DISPOSITION_HINT[finding.disposition]}
+        </p>
+      </div>
+    </li>
+  );
 }
 
 // ── Variations group ──────────────────────────────────────────────────

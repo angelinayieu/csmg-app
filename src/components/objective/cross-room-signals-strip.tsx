@@ -89,7 +89,7 @@ export function CrossRoomSignalsStrip({ spaceId, signals }: Props) {
               Cross-room signals
             </span>
             <span
-              className="text-[11.5px] leading-none"
+              className="text-[11px] leading-none"
               style={{ color: appleVibe.text.tertiary }}
             >
               {totalSignals} signal{totalSignals === 1 ? "" : "s"} appear in ≥2 rooms
@@ -183,7 +183,7 @@ function SignalSection({
           {title}
         </span>
         <span
-          className="text-[10.5px] font-light italic"
+          className="text-[11px] font-light italic"
           style={{ color: appleVibe.text.tertiary }}
         >
           · {description}
@@ -214,7 +214,7 @@ function SignalSection({
                 {s.label}
               </span>
               <span
-                className="font-mono text-[9.5px] font-medium"
+                className="font-mono text-[10px] font-medium"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 {s.sub_objective_ids.length} rooms ·{" "}
