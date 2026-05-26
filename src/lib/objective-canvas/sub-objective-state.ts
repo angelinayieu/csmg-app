@@ -101,6 +101,14 @@ export interface SubObjectiveBlock {
   picked_proposal_ids: string[];
   picked_goal_ids: string[];
   generated_at: string;
+  /** Cluster analysis — Tier-2 LLM grouping of proposals into themed
+   *  clusters. Computed on-demand by /api/brainstorm/sub-objectives/cluster.
+   *  Survives reloads; invalidated when the proposal set changes (the
+   *  proposals_hash inside ClusterAnalysis becomes stale and the
+   *  picker offers to re-run). Untyped here to keep the state module
+   *  decoupled from cluster-proposals.ts — the cluster route + UI
+   *  cast it back to ClusterAnalysis when reading. */
+  cluster_analysis?: unknown;
   /** Short noun phrase (≤3 words) naming what KIND of bucket these
    *  proposals are: "Features" for an app, "Lessons" for a course,
    *  "Bets" for a strategy, etc. LLM-supplied; shown in the picker

@@ -37,6 +37,11 @@ import type {
   SubObjectiveIntent,
   SubObjectiveProposal,
 } from "@/lib/objective-canvas/sub-objective-state";
+import type { IntentPreference } from "@/lib/objective-canvas/decision-log";
+import type {
+  ClusterAnalysis,
+  ProposalCluster,
+} from "@/lib/objective-canvas/cluster-proposals";
 
 interface ObjectiveAnnotationLite {
   phrase: string;
@@ -57,6 +62,14 @@ interface Props {
    *  decisions. Used as the "Suggested" affordance when no lens
    *  gap exists. Null for new users → falls back to "creative". */
   preferredIntent?: SubObjectiveIntent | null;
+  /** Source of the preferred intent — drives the user-facing label
+   *  on the suggestion ("matches your past picks" vs "popular with
+   *  similar users"). */
+  preferenceSource?: "user" | "global" | "none";
+  /** Per-intent breakdown for the retrospective mini-panel. Empty
+   *  array → panel hides. Drives transparency on what the system
+   *  has learned. */
+  userPrefs?: IntentPreference[];
   /** Called when confirm succeeds. Parent flips into "main" stage. */
   onConfirmed: () => void;
 }
@@ -86,6 +99,8 @@ export function SubObjectivePickerCard({
   initial,
   annotations = [],
   preferredIntent = null,
+  preferenceSource = "none",
+  userPrefs = [],
   onConfirmed,
 }: Props) {
   const [block, setBlock] = useState<SubObjectiveBlock | null>(initial);
@@ -94,6 +109,14 @@ export function SubObjectivePickerCard({
   const [loading, setLoading] = useState(initial === null);
   const [variantInFlight, setVariantInFlight] =
     useState<SubObjectiveIntent | null>(null);
+  // Cluster view state — the LLM clustering pass groups proposals
+  // into themes (~5-8 clusters from 15-25 proposals). When loaded,
+  // the picker offers a toggle between the default batch view and
+  // the clustered view so the user can see the deduplicated
+  // conceptual structure.
+  const [viewMode, setViewMode] = useState<"batches" | "clusters">("batches");
+  const [clusterBusy, setClusterBusy] = useState(false);
+  const [clusterError, setClusterError] = useState<string | null>(null);
 
   // ── Auto-propose on mount if nothing is cached ──
   useEffect(() => {
@@ -296,6 +319,63 @@ export function SubObjectivePickerCard({
   const hasBatches = batches.length > 1; // only show dividers when >1
   const totalElected = electedIds.size;
 
+  // Cluster analysis — present when the user has run the Tier-2 LLM
+  // pass at least once. Stale when proposals_hash doesn't match the
+  // current set (user has added a batch since clustering ran).
+  const clusterAnalysis = block.cluster_analysis as
+    | ClusterAnalysis
+    | undefined;
+  const proposalIdsKey = allProposals.map((p) => p.id).sort().join("|");
+  const clusterIsStale =
+    clusterAnalysis &&
+    Array.isArray(clusterAnalysis.clusters) &&
+    clusterAnalysis.clusters.length > 0 &&
+    !clusterAnalysis.clusters
+      .flatMap((c) => c.proposal_ids)
+      .sort()
+      .join("|")
+      .startsWith(proposalIdsKey.slice(0, 50)); // cheap staleness check
+  // Show the cluster CTA when there are enough proposals for
+  // clustering to be useful (5+). Show the cluster VIEW toggle when
+  // analysis exists.
+  const canCluster = allProposals.length >= 5;
+  const hasClusters =
+    !!clusterAnalysis &&
+    Array.isArray(clusterAnalysis.clusters) &&
+    clusterAnalysis.clusters.length > 0;
+
+  async function runCluster(force = false) {
+    setClusterError(null);
+    setClusterBusy(true);
+    try {
+      const res = await fetch("/api/brainstorm/sub-objectives/cluster", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          spaceId,
+          mode: force ? "force" : "default",
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setClusterError(json?.error ?? "Clustering failed.");
+        return;
+      }
+      // Merge the analysis into the local block so the toggle appears
+      // and the cluster view renders without a full page refresh.
+      setBlock((prev) =>
+        prev ? { ...prev, cluster_analysis: json.cluster_analysis } : prev,
+      );
+      setViewMode("clusters");
+    } catch (err) {
+      setClusterError(
+        err instanceof Error ? err.message : "Network error.",
+      );
+    } finally {
+      setClusterBusy(false);
+    }
+  }
+
   return (
     <Shell>
       <div className="flex items-center justify-between">
@@ -340,9 +420,45 @@ export function SubObjectivePickerCard({
         />
       )}
 
-      {/* Proposals — grouped by batch when >1, else flat */}
+      {/* Cluster CTA / view toggle ──────────────────────────────────
+          - When no clustering has been run yet AND there are ≥5
+            proposals, show a "Detect clusters" CTA so the user can
+            collapse redundancy before forking.
+          - When clustering exists, show a small view toggle between
+            "by generation" (default batch view) and "by theme"
+            (cluster view).
+          - When clustering is stale (new batch since last run),
+            offer a refresh inside the toggle. */}
+      {canCluster && (
+        <ClusterControlBar
+          hasClusters={hasClusters}
+          clusterCount={clusterAnalysis?.clusters?.length ?? 0}
+          stale={!!clusterIsStale}
+          viewMode={viewMode}
+          onViewMode={setViewMode}
+          onRun={() => runCluster(false)}
+          onRerun={() => runCluster(true)}
+          busy={clusterBusy}
+          error={clusterError}
+        />
+      )}
+
+      {/* Proposals — three view modes:
+            1. clusters (when hasClusters && viewMode === "clusters")
+            2. batches  (when hasBatches)
+            3. flat     (single batch, legacy) */}
       <div className="mt-5">
-        {hasBatches ? (
+        {viewMode === "clusters" && hasClusters && clusterAnalysis ? (
+          <ClusterView
+            clusters={clusterAnalysis.clusters}
+            proposalsById={
+              new Map(allProposals.map((p) => [p.id, p] as const))
+            }
+            electedIds={electedIds}
+            setDisposition={setDisposition}
+            disabled={busy}
+          />
+        ) : hasBatches ? (
           batches.map((b, batchIdx) => (
             <BatchSection
               key={b.id}
@@ -376,7 +492,10 @@ export function SubObjectivePickerCard({
                specific signal — fill the actual holes)
             2. the user's revealed preference from prior dispositions
                (per-user personalization, no extra LLM cost)
-            3. "creative" as a generic divergence fallback */}
+            3. population-wide preference from the cross-user
+               flywheel (bootstraps new users with the community's
+               discovered patterns)
+            4. "creative" as a generic divergence fallback */}
       <VariantLabBar
         intentInFlight={variantInFlight}
         suggestedIntent={
@@ -387,15 +506,24 @@ export function SubObjectivePickerCard({
         suggestedIntentSource={
           coverage.uncovered.length > 0
             ? "lens_gap"
-            : preferredIntent
+            : preferenceSource === "user"
               ? "user_preference"
-              : "default"
+              : preferenceSource === "global"
+                ? "community_preference"
+                : "default"
         }
         onGenerate={(intent) =>
           runAction("propose", { mode: "variant", intent })
         }
         disabled={busy}
       />
+
+      {/* Retrospective mini-panel — shows the user the per-intent
+          pattern the system has learned. Only renders when there's
+          actually signal (≥1 elect or reject). Transparency for
+          personalization. */}
+      <RetrospectivePanel userPrefs={userPrefs} />
+
 
       <div
         className="mt-5 flex items-center justify-between border-t pt-4"
@@ -602,11 +730,16 @@ const ALL_INTENTS: SubObjectiveIntent[] = [
   "wildcard",
 ];
 
-type SuggestedIntentSource = "lens_gap" | "user_preference" | "default";
+type SuggestedIntentSource =
+  | "lens_gap"
+  | "user_preference"
+  | "community_preference"
+  | "default";
 
 const SUGGESTED_SOURCE_LABEL: Record<SuggestedIntentSource, string> = {
   lens_gap: "fills your uncovered readings",
   user_preference: "matches your past picks",
+  community_preference: "popular with similar users",
   default: "good for divergent exploration",
 };
 
@@ -761,6 +894,7 @@ function ProposalRow({
   isElected,
   onSetDisposition,
   disabled,
+  representativeBadge = false,
 }: {
   proposal: SubObjectiveProposal;
   disposition: SubObjectiveDisposition;
@@ -768,6 +902,10 @@ function ProposalRow({
   onSetDisposition: (d: SubObjectiveDisposition) => void;
   disabled: boolean;
   lens: ObjectiveAnnotationLite[];
+  /** Cluster view — true when this proposal is its cluster's
+   *  representative. Renders a small "Representative" badge so the
+   *  user sees the LLM-nominated strongest member at a glance. */
+  representativeBadge?: boolean;
 }) {
   const confidencePct = Math.round(proposal.confidence * 100);
   const confidenceDot =
@@ -827,6 +965,19 @@ function ProposalRow({
               >
                 <Sparkle className="h-2 w-2" />
                 Top
+              </span>
+            )}
+            {representativeBadge && (
+              <span
+                className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
+                style={{
+                  background: "rgba(22,163,74,0.10)",
+                  color: "rgba(20,83,45,0.95)",
+                  border: "1px solid rgba(22,163,74,0.22)",
+                }}
+                title="LLM-nominated strongest member of this cluster"
+              >
+                Rep
               </span>
             )}
           </div>
@@ -1100,6 +1251,420 @@ function ErrorRow({ message }: { message: string }) {
       }}
     >
       {message}
+    </div>
+  );
+}
+
+// ── Retrospective mini-panel ────────────────────────────────────────
+//
+// Shows the user the per-intent pattern the system has learned from
+// their decisions. Collapsed by default — the user can click to see
+// "I've elected Concrete 4×, rejected Wildcard 3×". Transparency for
+// the personalization that drives the suggested-intent affordance.
+//
+// Hidden entirely when there's no signal at all (new user / no
+// variant lab use yet). Hides "initial" since it's the baseline
+// generation, not a user-chosen intent.
+
+function RetrospectivePanel({
+  userPrefs,
+}: {
+  userPrefs: IntentPreference[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  // Filter to intents the user has touched (rate !== null) AND
+  // exclude "initial" (baseline, not a user choice). Sort by total
+  // touches desc.
+  const touched = userPrefs
+    .filter((p) => p.intent !== "initial" && p.rate !== null)
+    .sort((a, b) => (b.elects + b.rejects) - (a.elects + a.rejects));
+  if (touched.length === 0) return null;
+
+  const totalElects = touched.reduce((sum, p) => sum + p.elects, 0);
+  const totalRejects = touched.reduce((sum, p) => sum + p.rejects, 0);
+
+  return (
+    <div
+      className="mt-3 rounded-2xl border px-3 py-2"
+      style={{
+        background: "rgba(255,255,255,0.5)",
+        borderColor: appleVibe.stroke.hairline,
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between"
+      >
+        <span
+          className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          Your variant lab pattern
+        </span>
+        <span
+          className="text-[10.5px] font-light"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          {totalElects} elected · {totalRejects} rejected{" "}
+          {expanded ? "▴" : "▾"}
+        </span>
+      </button>
+      {expanded && (
+        <ul className="mt-2 flex flex-col gap-1">
+          {touched.map((p) => {
+            const ratePct = p.rate !== null ? Math.round(p.rate * 100) : 0;
+            return (
+              <li
+                key={p.intent}
+                className="flex items-center justify-between gap-2"
+              >
+                <span
+                  className="text-[11px] font-medium"
+                  style={{ color: appleVibe.text.secondary }}
+                >
+                  {INTENT_LABEL[p.intent]}
+                </span>
+                <div
+                  className="flex items-center gap-2 font-mono text-[10px]"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  <span>
+                    {p.elects}✓ {p.rejects}✕
+                  </span>
+                  <span
+                    className="inline-flex h-1 w-12 overflow-hidden rounded-full"
+                    style={{ background: "rgba(15,23,42,0.08)" }}
+                  >
+                    <span
+                      className="h-full"
+                      style={{
+                        width: `${ratePct}%`,
+                        background:
+                          ratePct >= 60
+                            ? "rgba(22,163,74,0.7)"
+                            : ratePct >= 30
+                              ? "rgba(217,119,6,0.7)"
+                              : "rgba(220,38,38,0.7)",
+                      }}
+                    />
+                  </span>
+                  <span className="w-8 text-right">
+                    {ratePct}%
+                  </span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ── Cluster control bar ────────────────────────────────────────────
+//
+// Sits above the proposal list. Two phases:
+//   • Pre-cluster: a single "Detect clusters" CTA explains why
+//   • Post-cluster: a view toggle (by generation / by theme) +
+//     refresh button when clustering is stale
+
+function ClusterControlBar({
+  hasClusters,
+  clusterCount,
+  stale,
+  viewMode,
+  onViewMode,
+  onRun,
+  onRerun,
+  busy,
+  error,
+}: {
+  hasClusters: boolean;
+  clusterCount: number;
+  stale: boolean;
+  viewMode: "batches" | "clusters";
+  onViewMode: (m: "batches" | "clusters") => void;
+  onRun: () => void;
+  onRerun: () => void;
+  busy: boolean;
+  error: string | null;
+}) {
+  return (
+    <div
+      className="mt-4 rounded-2xl border p-3"
+      style={{
+        background: "rgba(124,58,237,0.025)",
+        borderColor: hasClusters
+          ? "rgba(124,58,237,0.18)"
+          : appleVibe.stroke.hairline,
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      {!hasClusters && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles
+              className="h-3 w-3 flex-shrink-0"
+              strokeWidth={2}
+              style={{ color: "rgba(91,33,182,0.9)" }}
+            />
+            <span
+              className="text-[11px] font-semibold uppercase tracking-[0.14em]"
+              style={{ color: "rgba(91,33,182,0.95)" }}
+            >
+              Detect clusters
+            </span>
+            <span
+              className="text-[11.5px] font-light"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              · groups proposals by theme so you can spot redundancy
+              before forking
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onRun}
+            disabled={busy}
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold"
+            style={{
+              background: busy
+                ? appleVibe.surface.chip
+                : "rgba(124,58,237,0.92)",
+              color: busy ? appleVibe.text.tertiary : "#fff",
+              cursor: busy ? "wait" : "pointer",
+            }}
+          >
+            {busy ? (
+              <>
+                <RefreshCw className="h-3 w-3 animate-spin" strokeWidth={2} />
+                Clustering…
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-3 w-3" strokeWidth={2} />
+                Detect clusters
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {hasClusters && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles
+              className="h-3 w-3 flex-shrink-0"
+              strokeWidth={2}
+              style={{ color: "rgba(91,33,182,0.9)" }}
+            />
+            <span
+              className="text-[11px] font-semibold uppercase tracking-[0.14em]"
+              style={{ color: "rgba(91,33,182,0.95)" }}
+            >
+              {clusterCount} clusters
+            </span>
+            {stale && (
+              <span
+                className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
+                style={{
+                  background: "rgba(217,119,6,0.12)",
+                  color: "rgba(146,64,14,0.95)",
+                }}
+              >
+                stale
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {/* View toggle — "by generation" / "by theme" */}
+            <div
+              className="inline-flex rounded-full p-0.5"
+              style={{
+                background: "rgba(15,23,42,0.05)",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => onViewMode("batches")}
+                className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold"
+                style={{
+                  background:
+                    viewMode === "batches"
+                      ? "#fff"
+                      : "transparent",
+                  color:
+                    viewMode === "batches"
+                      ? appleVibe.text.primary
+                      : appleVibe.text.tertiary,
+                  boxShadow:
+                    viewMode === "batches"
+                      ? "0 1px 2px rgba(15,23,42,0.08)"
+                      : undefined,
+                }}
+              >
+                by generation
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewMode("clusters")}
+                className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold"
+                style={{
+                  background:
+                    viewMode === "clusters"
+                      ? "#fff"
+                      : "transparent",
+                  color:
+                    viewMode === "clusters"
+                      ? appleVibe.text.primary
+                      : appleVibe.text.tertiary,
+                  boxShadow:
+                    viewMode === "clusters"
+                      ? "0 1px 2px rgba(15,23,42,0.08)"
+                      : undefined,
+                }}
+              >
+                by theme
+              </button>
+            </div>
+            {/* Refresh — visible always, prominent when stale */}
+            <button
+              type="button"
+              onClick={onRerun}
+              disabled={busy}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10.5px] font-semibold"
+              style={{
+                background: stale
+                  ? "rgba(217,119,6,0.15)"
+                  : appleVibe.surface.chip,
+                color: stale
+                  ? "rgba(146,64,14,0.95)"
+                  : appleVibe.text.tertiary,
+                cursor: busy ? "wait" : "pointer",
+              }}
+              title={stale ? "Re-cluster — proposals changed" : "Re-cluster"}
+            >
+              <RefreshCw
+                className={
+                  busy ? "h-2.5 w-2.5 animate-spin" : "h-2.5 w-2.5"
+                }
+                strokeWidth={2}
+              />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div
+          role="alert"
+          className="mt-2 rounded-xl px-2.5 py-1.5 text-[11.5px]"
+          style={{
+            background: "rgba(220,38,38,0.06)",
+            border: "1px solid rgba(220,38,38,0.18)",
+            color: "rgba(127,29,29,0.95)",
+          }}
+        >
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Cluster view ───────────────────────────────────────────────────
+//
+// Renders proposals grouped by theme. Each cluster header carries
+// its label + description + member count. The cluster's
+// representative proposal renders first with a small badge. All
+// other members render below, slightly indented.
+
+function ClusterView({
+  clusters,
+  proposalsById,
+  electedIds,
+  setDisposition,
+  disabled,
+}: {
+  clusters: ProposalCluster[];
+  proposalsById: Map<string, SubObjectiveProposal>;
+  electedIds: Set<string>;
+  setDisposition: (
+    proposalId: string,
+    d: SubObjectiveDisposition,
+  ) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-5">
+      {clusters.map((c) => {
+        const members = c.proposal_ids
+          .map((id) => proposalsById.get(id))
+          .filter((p): p is SubObjectiveProposal => !!p);
+        if (members.length === 0) return null;
+        // Render representative first; others after.
+        const representative = members.find(
+          (p) => p.id === c.representative_id,
+        );
+        const others = members.filter((p) => p.id !== c.representative_id);
+        const ordered = representative ? [representative, ...others] : members;
+        const electedInCluster = members.filter((p) =>
+          electedIds.has(p.id),
+        ).length;
+        return (
+          <div key={c.id}>
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="flex items-baseline gap-2 min-w-0">
+                <span
+                  className="text-[11px] font-semibold uppercase tracking-[0.14em]"
+                  style={{ color: "rgba(91,33,182,0.95)" }}
+                >
+                  {c.label}
+                </span>
+                <span
+                  className="text-[10.5px] font-light"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  · {members.length} proposal{members.length === 1 ? "" : "s"}
+                  {electedInCluster > 0 && ` · ${electedInCluster} elected`}
+                </span>
+              </div>
+            </div>
+            {c.description && (
+              <p
+                className="mt-0.5 text-[11.5px] font-light italic leading-snug"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                {c.description}
+              </p>
+            )}
+            <ul className="mt-2 flex flex-col gap-2">
+              {ordered.map((p, idx) => (
+                <div
+                  key={p.id}
+                  style={
+                    p.id !== c.representative_id && idx > 0
+                      ? { marginLeft: 12 }
+                      : undefined
+                  }
+                >
+                  <ProposalRow
+                    proposal={p}
+                    disposition={p.disposition ?? null}
+                    isElected={electedIds.has(p.id)}
+                    onSetDisposition={(d) => setDisposition(p.id, d)}
+                    disabled={disabled}
+                    lens={[]}
+                    representativeBadge={p.id === c.representative_id}
+                  />
+                </div>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
     </div>
   );
 }
