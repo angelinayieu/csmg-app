@@ -22,6 +22,7 @@ import {
   type LayerSlug,
 } from "@/lib/objective-canvas/context-helpers";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
+import { computeCompositionStaleness } from "@/lib/objective-canvas/upstream-staleness";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -57,6 +58,12 @@ export async function POST(req: NextRequest) {
   if (!entity) {
     return NextResponse.json({ error: "entity not found" }, { status: 404 });
   }
+  const entityName: string =
+    typeof entity.name === "string" ? entity.name : "this item";
+  const parentSubObjectiveId: string | null =
+    typeof entity.parent_sub_objective_id === "string"
+      ? entity.parent_sub_objective_id
+      : null;
 
   const { data: space } = await db
     .from("spaces")
@@ -87,6 +94,11 @@ export async function POST(req: NextRequest) {
   }
 
   // Idempotent short-circuit: same elected ids → return cached.
+  // On the cache hit, ALSO compute composition_staleness so the
+  // drawer can surface a "Refresh from upstream" banner when the
+  // composition is older than the variations it was built from
+  // (LOCAL) or older than upstream-item changes (UPSTREAM). Same
+  // pattern the expand route uses for expanded_detail staleness.
   if (!force && detail.composed_design) {
     const cachedIds = new Set(detail.composed_design.source_variation_ids);
     const electedIds = new Set(elected.map((v) => v.id));
@@ -94,9 +106,20 @@ export async function POST(req: NextRequest) {
       cachedIds.size === electedIds.size &&
       [...cachedIds].every((id) => electedIds.has(id));
     if (sameSet) {
+      const composition_staleness = parentSubObjectiveId
+        ? await computeCompositionStaleness({
+            db,
+            downstreamEntityId: entity.id,
+            downstreamEntityName: entityName,
+            parentSubObjectiveId,
+            compositionGeneratedAt: detail.composed_design.generated_at,
+            expandedDetailGeneratedAt: detail.generated_at ?? null,
+          })
+        : null;
       return NextResponse.json({
         composed_design: detail.composed_design,
         cached: true,
+        composition_staleness,
       });
     }
   }

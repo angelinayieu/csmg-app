@@ -33,6 +33,8 @@ import {
 } from "@/lib/objective-canvas/context-helpers";
 import {
   computeUpstreamStaleness,
+  computeCompositionStaleness,
+  computeBriefStaleness,
   NO_STALENESS,
   type UpstreamStaleness,
 } from "@/lib/objective-canvas/upstream-staleness";
@@ -171,11 +173,63 @@ export async function POST(req: NextRequest) {
         downstreamGeneratedAt: existing.generated_at,
       });
     }
+
+    // Composition + brief staleness — only computed when the cache
+    // actually carries those artifacts. Lets the drawer surface
+    // staleness banners IMMEDIATELY on open (single round-trip),
+    // without waiting for the user to click Recompose / Design
+    // experiment first. Same 3-query / soft-fail shape so the cost
+    // is bounded even when both artifacts exist.
+    let compositionStaleness: UpstreamStaleness | null = null;
+    let briefStaleness: Record<string, UpstreamStaleness> | null = null;
+    if (
+      entity.parent_sub_objective_id &&
+      typeof existing.generated_at === "string"
+    ) {
+      const cd = existing.composed_design ?? null;
+      if (cd && typeof cd.generated_at === "string") {
+        compositionStaleness = await computeCompositionStaleness({
+          db,
+          downstreamEntityId: entity.id,
+          downstreamEntityName:
+            typeof entity.name === "string" ? entity.name : "this item",
+          parentSubObjectiveId: entity.parent_sub_objective_id,
+          compositionGeneratedAt: cd.generated_at,
+          expandedDetailGeneratedAt: existing.generated_at,
+        });
+      }
+      const briefs = Array.isArray(existing.prototype_briefs)
+        ? existing.prototype_briefs
+        : [];
+      if (briefs.length > 0) {
+        const map: Record<string, UpstreamStaleness> = {};
+        for (const b of briefs) {
+          if (typeof b?.generated_at !== "string") continue;
+          // Keyed by brief id so the client can match per-brief
+          // without us imposing a question-text key (briefs are
+          // uniquely identified by id, not by open_question text).
+          map[b.id] = await computeBriefStaleness({
+            db,
+            downstreamEntityId: entity.id,
+            downstreamEntityName:
+              typeof entity.name === "string" ? entity.name : "this item",
+            parentSubObjectiveId: entity.parent_sub_objective_id,
+            briefGeneratedAt: b.generated_at,
+            expandedDetailGeneratedAt: existing.generated_at,
+            composedDesignGeneratedAt: cd?.generated_at ?? null,
+          });
+        }
+        briefStaleness = map;
+      }
+    }
+
     return NextResponse.json({
       expanded_detail: existing,
       cached: true,
       prior_concepts: priorConceptsForResponse,
       upstream_staleness: upstreamStaleness,
+      composition_staleness: compositionStaleness,
+      brief_staleness: briefStaleness,
     });
   }
 
@@ -270,6 +324,156 @@ export async function POST(req: NextRequest) {
           };
         })
       : undefined;
+
+  // ── Closed read loop: cross-room structural findings ──
+  // Today the workbench detects shared mechanisms / annotation
+  // overlaps / contradictions / duplicate variations / uncovered
+  // pains and ranks them for the strip — but the next time a user
+  // opens THIS item's drawer to (re)generate variations, the LLM
+  // has no idea those patterns exist. Result: variations re-invent
+  // a parallel mechanism the workbench just named "shared", or
+  // duplicate a sibling room's elected pattern, or re-extend a
+  // contradiction the user is already trying to resolve.
+  //
+  // Filter:
+  //   • drop disposition resolved / dismissed — user closed the
+  //     signal, do not re-inject as fresh prompt context
+  //   • drop distill_concepts — already flows via distillThemes
+  //   • drop orphan_annotations + recommend_next_move — space-level /
+  //     meta findings, not item-shaping
+  //   • for pain_coverage, require ITEM match (uncovered-pain alerts
+  //     are noise on a non-pain item's expansion)
+  //   • for everything else, accept item OR room match — room-level
+  //     redundancy still informs this item's variations
+  //
+  // Normalize each surviving finding to the LLM-facing shape — a
+  // uniform { kind, title, summary, hint? } that the generator's
+  // CROSS-ROOM SIGNALS block templates over. The hint pulls the
+  // load-bearing fact out of the heterogeneous finding body (mechanism
+  // text / contradiction partner / duplicate variation name / etc.).
+  type CrossRoomFinding = NonNullable<
+    Parameters<typeof expandItemDetail>[0]["crossRoomFindings"]
+  >[number];
+  const crossRoomFindings: CrossRoomFinding[] = (() => {
+    const findings = crossRoomAnalysis?.findings ?? [];
+    if (findings.length === 0) return [];
+    const roomId = entity.parent_sub_objective_id;
+    const itemId = entity.id;
+    const out: CrossRoomFinding[] = [];
+    for (const f of findings) {
+      if (f.disposition === "resolved" || f.disposition === "dismissed") continue;
+      if (f.analysis_key === "distill_concepts") continue;
+      // Space-level / meta signals — not the right surface to inject
+      // into per-item generation context.
+      if (
+        f.analysis_key === "orphan_annotations" ||
+        f.analysis_key === "recommend_next_move"
+      ) {
+        continue;
+      }
+
+      const itemMatches = f.references.item_ids.includes(itemId);
+      const roomMatches = !!roomId && f.references.room_ids.includes(roomId);
+
+      if (f.analysis_key === "pain_coverage") {
+        if (!itemMatches) continue;
+      } else {
+        if (!itemMatches && !roomMatches) continue;
+      }
+
+      const body = (f.body ?? {}) as Record<string, unknown>;
+      if (f.analysis_key === "shared_mechanisms") {
+        const mech = typeof body.mechanism === "string" ? body.mechanism : "";
+        out.push({
+          kind: "shared_mechanism",
+          title: f.title,
+          summary: f.summary,
+          hint: mech ? `lever name: "${mech}"` : undefined,
+        });
+      } else if (f.analysis_key === "annotation_overlap") {
+        const phrase = typeof body.phrase === "string" ? body.phrase : "";
+        out.push({
+          kind: "annotation_overlap",
+          title: f.title,
+          summary: f.summary,
+          hint: phrase ? `lens phrase: "${phrase}"` : undefined,
+        });
+      } else if (f.analysis_key === "pain_coverage") {
+        const kindStr = typeof body.kind === "string" ? body.kind : "";
+        if (kindStr === "uncovered") {
+          out.push({
+            kind: "pain_uncovered",
+            title: f.title,
+            summary: f.summary,
+            hint: "no feature in any room currently addresses this — your variations should each propose a counter",
+          });
+        } else if (kindStr === "cross_addressed") {
+          const count =
+            typeof body.addresser_count === "number"
+              ? body.addresser_count
+              : 0;
+          out.push({
+            kind: "pain_cross_addressed",
+            title: f.title,
+            summary: f.summary,
+            hint:
+              count > 0
+                ? `addressed by ${count} feature(s) in OTHER rooms — coordinate or differentiate`
+                : undefined,
+          });
+        }
+      } else if (f.analysis_key === "duplicate_variations") {
+        const vname =
+          typeof body.variation_name === "string" ? body.variation_name : "";
+        const elected =
+          typeof body.elected_room_count === "number"
+            ? body.elected_room_count
+            : 0;
+        out.push({
+          kind: "duplicate_variation",
+          title: f.title,
+          summary: f.summary,
+          hint: vname
+            ? elected >= 1
+              ? `duplicate "${vname}" already ELECTED in ${elected} room(s) — propose differentiation`
+              : `duplicate "${vname}" — propose differentiation`
+            : undefined,
+        });
+      } else if (f.analysis_key === "cross_room_contradictions") {
+        // body.pair = [{room_id, room_title, item_id, item_name, ...}, ...]
+        // When THIS entity is one member, surface the OTHER member as
+        // the contradiction partner. When matched via room only (this
+        // entity isn't in the pair), still emit — the room-level
+        // contradiction is context worth carrying.
+        const pair = Array.isArray(body.pair)
+          ? (body.pair as Array<Record<string, unknown>>)
+          : [];
+        const other = pair.find((p) => p?.item_id !== itemId) ?? pair[1];
+        const otherVar =
+          other && typeof other.variation_name === "string"
+            ? other.variation_name
+            : "";
+        const otherRoom =
+          other && typeof other.room_title === "string"
+            ? other.room_title
+            : "";
+        out.push({
+          kind: "contradiction",
+          title: f.title,
+          summary: f.summary,
+          hint:
+            otherVar && otherRoom
+              ? `contradicts "${otherVar}" in "${otherRoom}"`
+              : otherVar
+                ? `contradicts "${otherVar}"`
+                : undefined,
+        });
+      }
+      // (Anything else — silently skip. New analysis_keys land in
+      //  the strip first; opt them into this loop by adding a case.)
+    }
+    return out;
+  })();
 
   // priorConcepts was loaded at the top of the route so cache hits
   // can include them in the response too. Reused as-is here for the
@@ -592,6 +796,12 @@ export async function POST(req: NextRequest) {
           had_lateral: (lateralContext?.length ?? 0) > 0,
           had_constraints: !!readConstraints(space.synthesis_data),
           had_prior_concepts: !!priorConcepts,
+          cross_room_finding_count: crossRoomFindings.length,
+          // Distinct kinds present — useful to see which structural
+          // signals are routinely shaping output across users.
+          cross_room_finding_kinds: Array.from(
+            new Set(crossRoomFindings.map((f) => f.kind)),
+          ),
         },
       },
       () =>
@@ -612,6 +822,8 @@ export async function POST(req: NextRequest) {
           upstreamContext,
           lateralContext,
           testedBriefs: testedBriefs.length > 0 ? testedBriefs : undefined,
+          crossRoomFindings:
+            crossRoomFindings.length > 0 ? crossRoomFindings : undefined,
         }),
     );
   } catch (err) {

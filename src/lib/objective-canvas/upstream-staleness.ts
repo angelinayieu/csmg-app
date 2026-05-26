@@ -25,11 +25,25 @@
 
 export interface UpstreamChange {
   /** Upstream entity name (for the banner: "X just elected new
-   *  variations" reads better than a uuid). */
+   *  variations" reads better than a uuid). For local-staleness
+   *  rows, this is the LOCAL item's name. */
   source_name: string;
-  /** Which signal triggered the staleness: 'expand' (re-expanded),
-   *  'spawn' (new expansion node), 'disposition' (election change). */
-  kind: "expand" | "spawn" | "disposition";
+  /** Which signal triggered the staleness:
+   *    'expand'           — upstream item re-expanded
+   *    'spawn'            — upstream item added an expansion node
+   *    'disposition'      — upstream election changed (elect/reject/...)
+   *    'local_variations' — variations on THIS item were re-expanded
+   *                         since this artifact was generated
+   *                         (used by composition / brief staleness)
+   *    'local_composition' — composed_design on THIS item was
+   *                          regenerated since this brief was made
+   *                          (only used by brief staleness) */
+  kind:
+    | "expand"
+    | "spawn"
+    | "disposition"
+    | "local_variations"
+    | "local_composition";
   /** When the change happened (ISO). */
   changed_at: string;
 }
@@ -224,6 +238,173 @@ export async function computeUpstreamStaleness(
     // drawer renders normally.
     console.warn(
       "[upstream-staleness] computation failed (returning not-stale):",
+      err instanceof Error ? err.message : String(err),
+    );
+    return NO_STALENESS;
+  }
+}
+
+// ── Composition staleness ──────────────────────────────────────────
+//
+// A composed_design is stale when:
+//   (LOCAL)     the item's expanded_detail.generated_at is newer
+//               than composed_design.generated_at — i.e., the
+//               variations the composition synthesizes were
+//               re-expanded after the composition was generated.
+//   (UPSTREAM)  any of the three upstream signals fires against
+//               composed_design.generated_at (same logic as
+//               computeUpstreamStaleness, just with a different
+//               reference timestamp).
+//
+// Returns the same UpstreamStaleness shape so the drawer can reuse
+// the existing banner component (only the kindVerb mapping needs to
+// know about the new local_* kinds).
+
+export interface CompositionStalenessArgs {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any;
+  /** The item the composition lives on. */
+  downstreamEntityId: string;
+  /** This item's name — used for local-change source_name. */
+  downstreamEntityName: string;
+  /** The item's sub-objective for the edges query. */
+  parentSubObjectiveId: string;
+  /** When the composed_design was generated. */
+  compositionGeneratedAt: string;
+  /** When the parent expanded_detail was last generated. Optional;
+   *  when present and newer than compositionGeneratedAt, emits a
+   *  LOCAL "variations_regenerated" change. */
+  expandedDetailGeneratedAt?: string | null;
+}
+
+export async function computeCompositionStaleness(
+  args: CompositionStalenessArgs,
+): Promise<UpstreamStaleness> {
+  try {
+    const upstream = await computeUpstreamStaleness({
+      db: args.db,
+      downstreamEntityId: args.downstreamEntityId,
+      parentSubObjectiveId: args.parentSubObjectiveId,
+      downstreamGeneratedAt: args.compositionGeneratedAt,
+    });
+
+    // Add the LOCAL "variations re-expanded after composition" signal.
+    const localChanges: UpstreamChange[] = [];
+    if (args.expandedDetailGeneratedAt) {
+      const compTs = new Date(args.compositionGeneratedAt).getTime();
+      const expTs = new Date(args.expandedDetailGeneratedAt).getTime();
+      if (
+        Number.isFinite(compTs) &&
+        Number.isFinite(expTs) &&
+        expTs > compTs
+      ) {
+        localChanges.push({
+          source_name: args.downstreamEntityName,
+          kind: "local_variations",
+          changed_at: args.expandedDetailGeneratedAt,
+        });
+      }
+    }
+
+    if (!upstream.is_stale && localChanges.length === 0) {
+      return NO_STALENESS;
+    }
+
+    const merged: UpstreamChange[] = [...localChanges, ...upstream.changes];
+    merged.sort(
+      (a, b) =>
+        new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime(),
+    );
+    return {
+      is_stale: true,
+      last_upstream_change_at: merged[0].changed_at,
+      changes: merged.slice(0, 3),
+    };
+  } catch (err) {
+    console.warn(
+      "[composition-staleness] computation failed (returning not-stale):",
+      err instanceof Error ? err.message : String(err),
+    );
+    return NO_STALENESS;
+  }
+}
+
+// ── Brief staleness ───────────────────────────────────────────────
+//
+// A prototype brief is stale when:
+//   (LOCAL)    the item's expanded_detail.generated_at is newer than
+//              brief.generated_at — variations re-expanded since.
+//   (LOCAL)    composed_design.generated_at is newer than
+//              brief.generated_at — composition regenerated since
+//              (the brief reads composed_design.conflicts_open and
+//               that signal is now stale).
+//   (UPSTREAM) any of the three upstream signals fires against
+//              brief.generated_at.
+
+export interface BriefStalenessArgs {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any;
+  downstreamEntityId: string;
+  downstreamEntityName: string;
+  parentSubObjectiveId: string;
+  briefGeneratedAt: string;
+  expandedDetailGeneratedAt?: string | null;
+  composedDesignGeneratedAt?: string | null;
+}
+
+export async function computeBriefStaleness(
+  args: BriefStalenessArgs,
+): Promise<UpstreamStaleness> {
+  try {
+    const upstream = await computeUpstreamStaleness({
+      db: args.db,
+      downstreamEntityId: args.downstreamEntityId,
+      parentSubObjectiveId: args.parentSubObjectiveId,
+      downstreamGeneratedAt: args.briefGeneratedAt,
+    });
+
+    const briefTs = new Date(args.briefGeneratedAt).getTime();
+    if (!Number.isFinite(briefTs)) return upstream;
+
+    const localChanges: UpstreamChange[] = [];
+    if (args.expandedDetailGeneratedAt) {
+      const expTs = new Date(args.expandedDetailGeneratedAt).getTime();
+      if (Number.isFinite(expTs) && expTs > briefTs) {
+        localChanges.push({
+          source_name: args.downstreamEntityName,
+          kind: "local_variations",
+          changed_at: args.expandedDetailGeneratedAt,
+        });
+      }
+    }
+    if (args.composedDesignGeneratedAt) {
+      const cdTs = new Date(args.composedDesignGeneratedAt).getTime();
+      if (Number.isFinite(cdTs) && cdTs > briefTs) {
+        localChanges.push({
+          source_name: args.downstreamEntityName,
+          kind: "local_composition",
+          changed_at: args.composedDesignGeneratedAt,
+        });
+      }
+    }
+
+    if (!upstream.is_stale && localChanges.length === 0) {
+      return NO_STALENESS;
+    }
+
+    const merged: UpstreamChange[] = [...localChanges, ...upstream.changes];
+    merged.sort(
+      (a, b) =>
+        new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime(),
+    );
+    return {
+      is_stale: true,
+      last_upstream_change_at: merged[0].changed_at,
+      changes: merged.slice(0, 3),
+    };
+  } catch (err) {
+    console.warn(
+      "[brief-staleness] computation failed (returning not-stale):",
       err instanceof Error ? err.message : String(err),
     );
     return NO_STALENESS;

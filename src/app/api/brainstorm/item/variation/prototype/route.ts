@@ -16,6 +16,7 @@ import { generatePrototypeBrief } from "@/lib/objective-canvas/generate-prototyp
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import { loadUpstreamContext } from "@/lib/objective-canvas/upstream-context";
+import { computeBriefStaleness } from "@/lib/objective-canvas/upstream-staleness";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -90,6 +91,9 @@ export async function POST(req: NextRequest) {
   }
 
   // Idempotent short-circuit: same (variation_id, openQuestion) already cached.
+  // On cache-hit, also compute brief_staleness so the drawer can
+  // surface a refresh affordance when the brief is older than the
+  // variations / composition / upstream it was generated from.
   const existingBriefs = detail.prototype_briefs ?? [];
   const existingBrief = existingBriefs.find(
     (b) =>
@@ -97,7 +101,28 @@ export async function POST(req: NextRequest) {
       b.open_question === openQuestion,
   );
   if (!force && existingBrief) {
-    return NextResponse.json({ brief: existingBrief, cached: true });
+    const parentSubObjectiveId: string | null =
+      typeof entity.parent_sub_objective_id === "string"
+        ? entity.parent_sub_objective_id
+        : null;
+    const brief_staleness = parentSubObjectiveId
+      ? await computeBriefStaleness({
+          db,
+          downstreamEntityId: entity.id,
+          downstreamEntityName:
+            typeof entity.name === "string" ? entity.name : "this item",
+          parentSubObjectiveId,
+          briefGeneratedAt: existingBrief.generated_at,
+          expandedDetailGeneratedAt: detail.generated_at ?? null,
+          composedDesignGeneratedAt:
+            detail.composed_design?.generated_at ?? null,
+        })
+      : null;
+    return NextResponse.json({
+      brief: existingBrief,
+      cached: true,
+      brief_staleness,
+    });
   }
 
   // Resolve layer + sub-objective + parent objective.

@@ -42,6 +42,7 @@ import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 import { ThumbsRating } from "@/components/objective/thumbs-rating";
+import type { VariationScoreEnvelope } from "@/lib/objective-canvas/score-variation-effectiveness";
 
 interface DefinitionHighlight {
   phrase: string;
@@ -262,10 +263,40 @@ export function ItemDetailDrawer({
     last_upstream_change_at: string | null;
     changes: Array<{
       source_name: string;
-      kind: "expand" | "spawn" | "disposition";
+      kind:
+        | "expand"
+        | "spawn"
+        | "disposition"
+        | "local_variations"
+        | "local_composition";
       changed_at: string;
     }>;
   } | null>(null);
+  // Composition + brief staleness — sourced from the same expand
+  // response so the drawer can surface "Recompose" / "Regenerate
+  // brief" banners on open WITHOUT requiring a subsequent compose/
+  // prototype fetch. Subsequent force-regenerates clear these
+  // (since the regen returns no staleness alongside the fresh data).
+  type StaleShape = {
+    is_stale: boolean;
+    last_upstream_change_at: string | null;
+    changes: Array<{
+      source_name: string;
+      kind:
+        | "expand"
+        | "spawn"
+        | "disposition"
+        | "local_variations"
+        | "local_composition";
+      changed_at: string;
+    }>;
+  };
+  const [compositionStaleness, setCompositionStaleness] =
+    useState<StaleShape | null>(null);
+  const [briefStalenessMap, setBriefStalenessMap] = useState<Record<
+    string,
+    StaleShape
+  > | null>(null);
 
   // ── Definition highlights (toggle) ──
   // Local-only cache: client requests once when the user first
@@ -377,6 +408,18 @@ export function ItemDetailDrawer({
             ? json.upstream_staleness
             : null,
         );
+        setCompositionStaleness(
+          json?.composition_staleness &&
+            typeof json.composition_staleness === "object"
+            ? json.composition_staleness
+            : null,
+        );
+        setBriefStalenessMap(
+          json?.brief_staleness &&
+            typeof json.brief_staleness === "object"
+            ? json.brief_staleness
+            : null,
+        );
       })
       .catch((err) => {
         if (!propPaint) {
@@ -444,6 +487,26 @@ export function ItemDetailDrawer({
         setStaleness(
           json?.upstream_staleness && typeof json.upstream_staleness === "object"
             ? json.upstream_staleness
+            : null,
+        );
+        // Force-regen also resets composition + brief staleness —
+        // the regenerated variations are the fresh baseline, so
+        // existing composed_design and briefs are NOW stale relative
+        // to them (the server returns the staleness payload that
+        // reflects this for cache-hit shape, but force-regen reads
+        // straight from the cache logic ABOVE the cache-hit branch).
+        // Clearing here is safe because the next compose/brief load
+        // will re-fetch the staleness when needed.
+        setCompositionStaleness(
+          json?.composition_staleness &&
+            typeof json.composition_staleness === "object"
+            ? json.composition_staleness
+            : null,
+        );
+        setBriefStalenessMap(
+          json?.brief_staleness &&
+            typeof json.brief_staleness === "object"
+            ? json.brief_staleness
             : null,
         );
       })
@@ -852,6 +915,22 @@ export function ItemDetailDrawer({
                   />
                 )}
 
+                {/* Phase 4b — Mechanism effectiveness scoring.
+                    Only renders for feature cards with at least one
+                    variation. Self-contained: own state, own fetch,
+                    own UI. Score lives in component state until
+                    user closes the drawer (no persistence yet — that's
+                    Phase 4c). */}
+                {itemLayer === "features" &&
+                  expanded?.variations &&
+                  expanded.variations.length > 0 &&
+                  entityId && (
+                    <VariationScoringPanel
+                      entityId={entityId}
+                      variations={expanded.variations}
+                    />
+                  )}
+
                 {expandLoading && !expanded?.variations?.length ? (
                   <SkeletonLines lines={3} />
                 ) : !expanded?.variations || expanded.variations.length === 0 ? (
@@ -896,6 +975,22 @@ export function ItemDetailDrawer({
                       setExpanded((prev) =>
                         prev ? { ...prev, expansion_tree: nextTree } : prev,
                       )
+                    }
+                    compositionStaleness={compositionStaleness}
+                    onCompositionStalenessChange={setCompositionStaleness}
+                    briefStalenessMap={briefStalenessMap}
+                    onBriefStalenessChange={(briefId, next) =>
+                      setBriefStalenessMap((prev) => {
+                        const out: Record<string, StaleShape> = {
+                          ...(prev ?? {}),
+                        };
+                        if (next === null) {
+                          delete out[briefId];
+                        } else {
+                          out[briefId] = next;
+                        }
+                        return out;
+                      })
                     }
                   />
                 )}
@@ -1232,6 +1327,21 @@ function variationsSubtitle(vs: ItemVariation[]): string {
 // principle), each group sorted by composite rank desc. Handles all
 // disposition mutations + composition fire-on-elect.
 
+type StalenessShape = {
+  is_stale: boolean;
+  last_upstream_change_at: string | null;
+  changes: Array<{
+    source_name: string;
+    kind:
+      | "expand"
+      | "spawn"
+      | "disposition"
+      | "local_variations"
+      | "local_composition";
+    changed_at: string;
+  }>;
+};
+
 function VariationsGroup({
   variations,
   entityId,
@@ -1244,6 +1354,10 @@ function VariationsGroup({
   onBriefGenerated,
   expansionTree,
   onTreeUpdate,
+  compositionStaleness,
+  onCompositionStalenessChange,
+  briefStalenessMap,
+  onBriefStalenessChange,
 }: {
   variations: ItemVariation[];
   entityId: string;
@@ -1269,6 +1383,18 @@ function VariationsGroup({
   onBriefGenerated: (brief: PrototypeBrief) => void;
   expansionTree: ExpansionNodeLocal[];
   onTreeUpdate: (next: ExpansionNodeLocal[]) => void;
+  /** Composition + brief staleness — source of truth lives in the
+   *  outer drawer (populated by the /expand response), passed here
+   *  so the section renders banners on open without re-fetching.
+   *  The setters let fireCompose / generateBrief overwrite the
+   *  stored values after a force-regen returns no staleness. */
+  compositionStaleness: StalenessShape | null;
+  onCompositionStalenessChange: (next: StalenessShape | null) => void;
+  briefStalenessMap: Record<string, StalenessShape> | null;
+  onBriefStalenessChange: (
+    briefId: string,
+    next: StalenessShape | null,
+  ) => void;
 }) {
   // Optimistic disposition update — flips state immediately so the
   // UI feels instant, fires the PATCH in the background.
@@ -1367,6 +1493,18 @@ function VariationsGroup({
         if (json?.composed_design) {
           onComposedDesignUpdate(json.composed_design as ComposedDesign);
         }
+        // Capture composition staleness when the server returned it
+        // (only on cache-hits — fresh compositions are never stale).
+        // Clear stale state on force-regen so the banner doesn't
+        // linger after a refresh.
+        if (
+          json?.composition_staleness &&
+          typeof json.composition_staleness === "object"
+        ) {
+          onCompositionStalenessChange(json.composition_staleness);
+        } else {
+          onCompositionStalenessChange(null);
+        }
       } catch (err) {
         setComposeError(
           err instanceof Error ? err.message : "Network error.",
@@ -1375,7 +1513,12 @@ function VariationsGroup({
         setComposing(false);
       }
     },
-    [entityId, electedCount, onComposedDesignUpdate],
+    [
+      entityId,
+      electedCount,
+      onComposedDesignUpdate,
+      onCompositionStalenessChange,
+    ],
   );
 
   // Auto-fire compose when crossing into ≥2 elections AND no cache
@@ -1464,6 +1607,8 @@ function VariationsGroup({
                       onExpansionTreeUpdate={onTreeUpdate}
                       linkedConcepts={linkedConcepts}
                       onConceptClick={onConceptClick}
+                      briefStalenessMap={briefStalenessMap}
+                      onBriefStalenessChange={onBriefStalenessChange}
                     />
                   );
                 })}
@@ -1482,6 +1627,7 @@ function VariationsGroup({
           electedCount={electedCount}
           canCompose={canCompose}
           onRegenerate={() => fireCompose(true)}
+          compositionStaleness={compositionStaleness}
         />
       )}
     </div>
@@ -1506,6 +1652,8 @@ function VariationCard({
   onExpansionTreeUpdate,
   linkedConcepts = [],
   onConceptClick,
+  briefStalenessMap,
+  onBriefStalenessChange,
 }: {
   variation: ItemVariation;
   rank: number;
@@ -1533,6 +1681,13 @@ function VariationCard({
   }>;
   /** Chip click → opens CanonicalConceptDrawer at the parent. */
   onConceptClick?: (canonicalCode: string) => void;
+  /** Brief staleness map + setter, threaded straight through to
+   *  OpenQuestionsList. The card doesn't read it directly. */
+  briefStalenessMap: Record<string, StalenessShape> | null;
+  onBriefStalenessChange: (
+    briefId: string,
+    next: StalenessShape | null,
+  ) => void;
 }) {
   const elected = v.disposition === "elected";
   const rejected = v.disposition === "rejected";
@@ -1690,6 +1845,8 @@ function VariationCard({
           entityId={entityId ?? ""}
           briefs={briefs}
           onBriefGenerated={onBriefGenerated}
+          briefStalenessMap={briefStalenessMap}
+          onBriefStalenessChange={onBriefStalenessChange}
         />
       )}
 
@@ -1893,6 +2050,7 @@ function ComposedDesignBlock({
   electedCount,
   canCompose,
   onRegenerate,
+  compositionStaleness,
 }: {
   composedDesign: ComposedDesign | null;
   composing: boolean;
@@ -1900,6 +2058,23 @@ function ComposedDesignBlock({
   electedCount: number;
   canCompose: boolean;
   onRegenerate: () => void;
+  /** Staleness payload from the compose route on cache-hits.
+   *  When is_stale, renders the banner above the composed_design
+   *  body with a "Recompose" affordance. */
+  compositionStaleness: {
+    is_stale: boolean;
+    last_upstream_change_at: string | null;
+    changes: Array<{
+      source_name: string;
+      kind:
+        | "expand"
+        | "spawn"
+        | "disposition"
+        | "local_variations"
+        | "local_composition";
+      changed_at: string;
+    }>;
+  } | null;
 }) {
   return (
     <div
@@ -1965,6 +2140,27 @@ function ComposedDesignBlock({
           {composeError}
         </p>
       )}
+
+      {/* Composition staleness banner — appears when the server's
+          cache-hit response noted that the composed_design is older
+          than the variations it was synthesized from (LOCAL signal)
+          or older than upstream-room changes (UPSTREAM signals).
+          The Recompose button force-regenerates the composition with
+          current variation bodies + upstream chain. */}
+      {composedDesign &&
+        compositionStaleness?.is_stale &&
+        !composing && (
+          <div className="mt-2.5">
+            <UpstreamStalenessBanner
+              staleness={compositionStaleness}
+              onRefresh={onRegenerate}
+              busy={composing}
+              headerLabel="Composition is stale"
+              refreshLabel="Recompose"
+              trailingNote="The current composed design doesn’t reflect these."
+            />
+          </div>
+        )}
 
       {composedDesign && (
         <div className="mt-2 flex flex-col gap-2.5">
@@ -2077,11 +2273,23 @@ function OpenQuestionsList({
   entityId,
   briefs,
   onBriefGenerated,
+  briefStalenessMap,
+  onBriefStalenessChange,
 }: {
   variation: ItemVariation;
   entityId: string;
   briefs: PrototypeBrief[];
   onBriefGenerated: (brief: PrototypeBrief) => void;
+  /** Brief staleness map — keyed by brief.id. Source of truth lives
+   *  on the outer drawer (sourced from /expand); each row reads its
+   *  own entry to render a per-brief banner. Force-regen + fresh
+   *  generation flow through onBriefStalenessChange to clear / set
+   *  the map without bypassing the outer state. */
+  briefStalenessMap: Record<string, StalenessShape> | null;
+  onBriefStalenessChange: (
+    briefId: string,
+    next: StalenessShape | null,
+  ) => void;
 }) {
   const variationId = variation.id ?? "";
   const questions = variation.open_questions ?? [];
@@ -2132,6 +2340,19 @@ function OpenQuestionsList({
       }
       if (json?.brief) {
         onBriefGenerated(json.brief as PrototypeBrief);
+        // Capture brief staleness when the server returned it (cache-hit).
+        // On force-regen the server returns no staleness → clear the
+        // banner via setter(null). Keyed by the BRIEF id so the
+        // staleness lives with the artifact even after a re-render
+        // changes the row's React key.
+        const briefId = (json.brief as PrototypeBrief).id;
+        if (briefId) {
+          const incoming =
+            json?.brief_staleness && typeof json.brief_staleness === "object"
+              ? (json.brief_staleness as StalenessShape)
+              : null;
+          onBriefStalenessChange(briefId, incoming);
+        }
       }
     } catch (err) {
       setErrorByQuestion((prev) => ({
@@ -2217,6 +2438,7 @@ function OpenQuestionsList({
                     brief={brief}
                     busy={loading}
                     onRegenerate={() => generateBrief(q, true)}
+                    staleness={briefStalenessMap?.[brief.id] ?? null}
                   />
                 </div>
               )}
@@ -2239,10 +2461,16 @@ function PrototypeBriefBlock({
   brief,
   busy,
   onRegenerate,
+  staleness,
 }: {
   brief: PrototypeBrief;
   busy: boolean;
   onRegenerate: () => void;
+  /** Per-brief staleness emitted by /expand (drawer-open) or the
+   *  prototype route (post-fetch cache-hit). When is_stale, renders
+   *  the amber banner above the experiment body with a "Regenerate
+   *  brief" affordance. Null when fresh or never-computed. */
+  staleness: StalenessShape | null;
 }) {
   return (
     <div
@@ -2288,6 +2516,24 @@ function PrototypeBriefBlock({
           {busy ? "…" : "Regenerate"}
         </button>
       </div>
+
+      {/* Brief staleness banner — appears when the server's expand
+          or prototype cache-hit response noted that this brief is
+          older than the variations / composed_design / upstream it
+          was generated from. The Regenerate-brief button force-
+          regenerates with current dependencies. */}
+      {staleness?.is_stale && !busy && (
+        <div className="mt-2">
+          <UpstreamStalenessBanner
+            staleness={staleness}
+            onRefresh={onRegenerate}
+            busy={busy}
+            headerLabel="Brief is stale"
+            refreshLabel="Regenerate brief"
+            trailingNote="The current experiment design doesn’t reflect these."
+          />
+        </div>
+      )}
 
       {/* Hypothesis loud */}
       <p
@@ -2979,18 +3225,36 @@ function UpstreamStalenessBanner({
   staleness,
   onRefresh,
   busy,
+  /** Header label — defaults to "Upstream changed" for expand
+   *  staleness. Compose uses "Composition is stale"; brief uses
+   *  "Brief is stale". */
+  headerLabel = "Upstream changed",
+  /** Button text — defaults to "Refresh from upstream". Compose
+   *  uses "Recompose"; brief uses "Regenerate brief". */
+  refreshLabel = "Refresh from upstream",
+  /** Trailing sentence — overrides the default "Your last
+   *  expansion of this card doesn't reflect these." */
+  trailingNote = "Your last expansion of this card doesn’t reflect these.",
 }: {
   staleness: {
     is_stale: boolean;
     last_upstream_change_at: string | null;
     changes: Array<{
       source_name: string;
-      kind: "expand" | "spawn" | "disposition";
+      kind:
+        | "expand"
+        | "spawn"
+        | "disposition"
+        | "local_variations"
+        | "local_composition";
       changed_at: string;
     }>;
   };
   onRefresh: () => void;
   busy: boolean;
+  headerLabel?: string;
+  refreshLabel?: string;
+  trailingNote?: string;
 }) {
   const lastAt = staleness.last_upstream_change_at;
   const relative = lastAt ? formatRelativeShort(lastAt) : null;
@@ -3014,7 +3278,7 @@ function UpstreamStalenessBanner({
           className="text-[11.5px] font-semibold uppercase tracking-[0.08em]"
           style={{ color: "rgba(120,53,15,0.95)" }}
         >
-          Upstream changed
+          {headerLabel}
           {relative ? (
             <span
               className="ml-1.5 font-normal lowercase tracking-normal"
@@ -3038,7 +3302,7 @@ function UpstreamStalenessBanner({
           {staleness.changes.length > 2
             ? ` + ${staleness.changes.length - 2} more`
             : ""}
-          . Your last expansion of this card doesn&rsquo;t reflect these.
+          . {trailingNote}
         </p>
       </div>
       <button
@@ -3056,13 +3320,20 @@ function UpstreamStalenessBanner({
           opacity: busy ? 0.7 : 1,
         }}
       >
-        {busy ? "Refreshing…" : "Refresh from upstream"}
+        {busy ? "Refreshing…" : refreshLabel}
       </button>
     </div>
   );
 }
 
-function kindVerb(kind: "expand" | "spawn" | "disposition"): string {
+function kindVerb(
+  kind:
+    | "expand"
+    | "spawn"
+    | "disposition"
+    | "local_variations"
+    | "local_composition",
+): string {
   switch (kind) {
     case "expand":
       return "was re-expanded";
@@ -3070,6 +3341,10 @@ function kindVerb(kind: "expand" | "spawn" | "disposition"): string {
       return "added a new deepening node";
     case "disposition":
       return "changed an election";
+    case "local_variations":
+      return "regenerated its variations";
+    case "local_composition":
+      return "regenerated its composed design";
   }
 }
 
@@ -3087,4 +3362,239 @@ function formatRelativeShort(iso: string): string {
   if (deltaHr < 24) return `${deltaHr} hr ago`;
   const deltaDay = Math.floor(deltaHr / 24);
   return `${deltaDay} d ago`;
+}
+
+// ── Phase 4b — Variation Scoring Panel ────────────────────────────
+//
+// Self-contained UI for the mechanism-effectiveness scorer wired
+// behind /api/brainstorm/item/variation/score. Renders nothing
+// until the user clicks "Score variations" so the ~1-3s Monte Carlo
+// cost is opt-in. After scoring, surfaces:
+//
+//   • A small banner with the structural ceiling (shared by all
+//     siblings) + placebo verdict (specificity check) + target pain
+//     the scorer chose
+//   • A flat list of (variation name, score bar) for ranking
+//
+// Score lives in component state only — closes with the drawer.
+// Phase 4c will persist into expanded_detail.variations[].effectiveness_score
+// so scores survive re-opens. For now this is a working preview.
+
+function VariationScoringPanel({
+  entityId,
+  variations,
+}: {
+  entityId: string;
+  variations: ItemVariation[];
+}) {
+  const [envelope, setEnvelope] = useState<VariationScoreEnvelope | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function runScoring() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/brainstorm/item/variation/score", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entityId }),
+      });
+      const json = (await res.json()) as
+        | VariationScoreEnvelope
+        | { error?: string; detail?: string };
+      if (!res.ok) {
+        const e = json as { error?: string; detail?: string };
+        const detail =
+          typeof e.detail === "string" && e.detail.trim().length > 0
+            ? ` — ${e.detail.trim()}`
+            : "";
+        setError(`${e.error ?? "Scoring failed."}${detail}`);
+        return;
+      }
+      setEnvelope(json as VariationScoreEnvelope);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Look up score by variation id for inline rendering.
+  const scoreById = useMemo(() => {
+    const m = new Map<string, number>();
+    if (envelope?.variation_scores) {
+      for (const s of envelope.variation_scores) {
+        m.set(s.variation_id, s.effectiveness_score);
+      }
+    }
+    return m;
+  }, [envelope]);
+
+  // The envelope's "status" field surfaces friendly diagnostics
+  // when scoring couldn't run — render those as the result-area
+  // body instead of a fake score.
+  const statusBanner =
+    envelope && envelope.status !== "ok"
+      ? `${diagnosticTitle(envelope.status)}${
+          envelope.status_detail ? ` — ${envelope.status_detail}` : ""
+        }`
+      : null;
+
+  return (
+    <div className="mt-3 rounded-lg border border-violet-100 bg-violet-50/30 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <SparklesLucide className="h-3 w-3 text-violet-700" strokeWidth={2} />
+          <span className="text-[10.5px] font-semibold uppercase tracking-[0.10em] text-violet-700">
+            Mechanism effectiveness
+          </span>
+          <span
+            className="text-[10.5px] font-light italic"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            · structural lift × specificity × addresses_pain
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={runScoring}
+          disabled={busy}
+          className="inline-flex items-center gap-1 rounded-full bg-violet-600 px-2.5 py-1 text-[10.5px] font-semibold text-white shadow-sm transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {busy ? "Scoring…" : envelope ? "Re-score" : "Score variations"}
+        </button>
+      </div>
+
+      {error && (
+        <p className="mt-2 text-[11px] text-red-700">{error}</p>
+      )}
+
+      {envelope && !error && (
+        <div className="mt-2.5 space-y-2">
+          {/* Diagnostic banner — fires when scoring couldn't run. */}
+          {statusBanner && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5">
+              <p className="text-[11px] text-amber-900">{statusBanner}</p>
+            </div>
+          )}
+
+          {/* Result banner — fires only when status === "ok". */}
+          {envelope.status === "ok" && (
+            <div className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span>
+                    <span
+                      className="font-medium"
+                      style={{ color: appleVibe.text.secondary }}
+                    >
+                      Target pain:
+                    </span>{" "}
+                    <span className="font-medium text-gray-900">
+                      {envelope.target_entity_name ?? "?"}
+                    </span>
+                  </span>
+                  <span>
+                    <span
+                      className="font-medium"
+                      style={{ color: appleVibe.text.secondary }}
+                    >
+                      Structural lift:
+                    </span>{" "}
+                    <span className="font-mono font-medium text-gray-900">
+                      {envelope.lift_pct !== null
+                        ? `${(envelope.lift_pct * 100).toFixed(0)}%`
+                        : "—"}
+                    </span>
+                  </span>
+                  <span>
+                    <span
+                      className="font-medium"
+                      style={{ color: appleVibe.text.secondary }}
+                    >
+                      Placebo:
+                    </span>{" "}
+                    <span
+                      className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                      style={{
+                        background:
+                          envelope.placebo_verdict === "pass"
+                            ? "#dcfce7"
+                            : envelope.placebo_verdict === "fail"
+                            ? "#fee2e2"
+                            : "#f1f5f9",
+                        color:
+                          envelope.placebo_verdict === "pass"
+                            ? "#166534"
+                            : envelope.placebo_verdict === "fail"
+                            ? "#991b1b"
+                            : "#475569",
+                      }}
+                    >
+                      {envelope.placebo_verdict ?? "—"}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Per-variation flat list — sorted by score desc. */}
+          {envelope.status === "ok" && scoreById.size > 0 && (
+            <div className="space-y-1">
+              {[...variations]
+                .map((v) => ({ v, score: scoreById.get(v.id) ?? 0 }))
+                .sort((a, b) => b.score - a.score)
+                .map(({ v, score }) => (
+                  <div
+                    key={v.id}
+                    className="flex items-center gap-2 rounded px-1.5 py-1 text-[11px]"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-gray-800">
+                      {v.name}
+                    </span>
+                    <div className="flex w-24 flex-shrink-0 items-center gap-1.5">
+                      <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-violet-100">
+                        <div
+                          className="absolute inset-y-0 left-0 rounded-full bg-violet-600"
+                          style={{
+                            width: `${Math.max(2, Math.min(100, score * 100))}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="w-7 flex-shrink-0 text-right font-mono text-[10px] font-semibold text-violet-900">
+                        {(score * 100).toFixed(0)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Friendly title for each non-OK scoring status. */
+function diagnosticTitle(
+  status: VariationScoreEnvelope["status"],
+): string {
+  switch (status) {
+    case "no_target":
+      return "No target pain — generate correlations first";
+    case "no_variations":
+      return "No variations to score";
+    case "lever_unreachable":
+      return "Lever isn't connected to a pain within the simulation depth";
+    case "sim_failed":
+      return "Simulation failed";
+    case "not_feature":
+      return "Scoring only applies to feature cards";
+    case "no_expanded":
+      return "Item not expanded yet";
+    default:
+      return "Scoring unavailable";
+  }
 }
