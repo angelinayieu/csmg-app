@@ -30,7 +30,13 @@ import {
 } from "@/lib/objective-canvas/cluster-proposals";
 
 export const runtime = "nodejs";
-export const maxDuration = 45;
+// Bumped from 45 → 60 so the LLM clustering call has more headroom
+// when the user has many sub-objectives. Long-running LLM calls were
+// one suspected cause of the "Unexpected token 'A', 'An error o'…"
+// JSON-parse error on the client — Next.js default error pages are
+// HTML, so any unhandled exception OR runtime timeout in this route
+// surfaces as garbled JSON downstream.
+export const maxDuration = 60;
 
 interface Body {
   spaceId?: string;
@@ -38,6 +44,30 @@ interface Body {
 }
 
 export async function POST(req: NextRequest) {
+  // Defensive outer try/catch — ANY uncaught throw between here and
+  // the success return would otherwise propagate to Next.js's default
+  // HTML error page, which the client tries to JSON-parse and chokes
+  // on. Wrapping the entire handler guarantees the client always
+  // receives valid JSON, even for DB connection drops, auth library
+  // exceptions, or anything else we didn't anticipate.
+  try {
+    return await handlePost(req);
+  } catch (err) {
+    console.error(
+      "[cluster-sub-objectives] unhandled error:",
+      err instanceof Error ? `${err.message}\n${err.stack}` : err,
+    );
+    return NextResponse.json(
+      {
+        error: "unhandled server error",
+        detail: sanitizeErrorMessage(err),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+async function handlePost(req: NextRequest): Promise<NextResponse> {
   const auth = await safeAuth();
   if (auth.error) return auth.error;
 
@@ -54,11 +84,17 @@ export async function POST(req: NextRequest) {
   const db = auth.supabase as any;
 
   // ── Ownership check + space load ──
-  const { data: space } = await db
+  const { data: space, error: spaceErr } = await db
     .from("spaces")
     .select("id, user_id, description, input_text, synthesis_data")
     .eq("id", spaceId)
     .maybeSingle();
+  if (spaceErr) {
+    return NextResponse.json(
+      { error: "DB error loading space", detail: spaceErr.message },
+      { status: 500 },
+    );
+  }
   if (!space || space.user_id !== auth.user.id) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
@@ -67,13 +103,19 @@ export async function POST(req: NextRequest) {
   // We look up the root goal first, then its children — same pattern
   // as MainCanvasView's loader. We need title + description for the
   // generic clusterer (description maps to summary).
-  const { data: rootRows } = await db
+  const { data: rootRows, error: rootErr } = await db
     .from("improvement_goals")
     .select("id, title, description")
     .eq("space_id", spaceId)
     .is("parent_goal_id", null)
     .order("created_at", { ascending: false })
     .limit(1);
+  if (rootErr) {
+    return NextResponse.json(
+      { error: "DB error loading root goal", detail: rootErr.message },
+      { status: 500 },
+    );
+  }
   const root =
     Array.isArray(rootRows) && rootRows.length > 0 ? rootRows[0] : null;
   if (!root) {
@@ -83,12 +125,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { data: childRows } = await db
+  const { data: childRows, error: childErr } = await db
     .from("improvement_goals")
     .select("id, title, description")
     .eq("space_id", spaceId)
     .eq("parent_goal_id", root.id)
     .order("created_at", { ascending: true });
+  if (childErr) {
+    return NextResponse.json(
+      { error: "DB error loading sub-objectives", detail: childErr.message },
+      { status: 500 },
+    );
+  }
   const subs = ((childRows ?? []) as Array<{
     id: string;
     title: string;

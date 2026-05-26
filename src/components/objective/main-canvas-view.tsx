@@ -175,7 +175,20 @@ export function MainCanvasView({
           }),
         },
       );
-      const json = await res.json();
+      // Parse defensively. If the server returned HTML (Next.js error
+      // page, upstream proxy timeout, etc.), res.json() throws with
+      // "Unexpected token …". Catch + show a meaningful message.
+      let json: { error?: string; sub_objective_themes?: ClusterAnalysis } = {};
+      try {
+        json = await res.json();
+      } catch {
+        setThemesError(
+          res.status === 504 || res.status === 408
+            ? "Theme detection timed out. Try again — large sub-objective sets can take a while."
+            : `Server returned an unexpected response (status ${res.status}). Try again, and check the server logs if it persists.`,
+        );
+        return;
+      }
       if (!res.ok) {
         setThemesError(json?.error ?? "Theme detection failed.");
         return;
@@ -799,57 +812,72 @@ function ThemeControlBar({
 }) {
   return (
     <div
-      className="rounded-2xl border p-3"
+      className="border"
       style={{
-        background: "rgba(124,58,237,0.025)",
-        borderColor: hasThemes
-          ? "rgba(124,58,237,0.18)"
-          : appleVibe.stroke.hairline,
-        borderRadius: appleVibe.radius.md,
+        background: "#ffffff",
+        borderColor: appleVibe.stroke.hairline,
+        borderRadius: appleVibe.radius.lg,
+        boxShadow: appleVibe.shadow.chip,
+        fontFamily: appleVibe.font.stack,
       }}
     >
       {!hasThemes && (
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Sparkles
-              className="h-3 w-3 flex-shrink-0"
-              strokeWidth={2}
-              style={{ color: "rgba(91,33,182,0.9)" }}
-            />
+        <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <div className="flex items-center gap-3">
             <span
-              className="text-[11px] font-semibold uppercase tracking-[0.14em]"
-              style={{ color: "rgba(91,33,182,0.95)" }}
+              className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full"
+              style={{
+                background:
+                  "linear-gradient(180deg, rgba(124,58,237,0.14) 0%, rgba(124,58,237,0.06) 100%)",
+                border: `1px solid rgba(124,58,237,0.18)`,
+              }}
+              aria-hidden
             >
-              Detect themes
+              <Sparkles
+                className="h-3.5 w-3.5"
+                strokeWidth={1.8}
+                style={{ color: "rgba(91,33,182,0.95)" }}
+              />
             </span>
-            <span
-              className="text-[11.5px] font-light"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              · group your sub-objectives by shared concept so structure becomes visible
-            </span>
+            <div className="flex flex-col gap-0.5">
+              <span
+                className="text-[13px] font-semibold leading-none tracking-[-0.005em]"
+                style={{ color: appleVibe.text.primary }}
+              >
+                Detect themes
+              </span>
+              <span
+                className="text-[11.5px] leading-snug"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                Group your sub-objectives by shared concept so structure becomes visible
+              </span>
+            </div>
           </div>
           <button
             type="button"
             onClick={onRun}
             disabled={busy}
-            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold"
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] font-semibold transition-all disabled:cursor-wait"
             style={{
               background: busy
-                ? appleVibe.surface.chip
-                : "rgba(124,58,237,0.92)",
-              color: busy ? appleVibe.text.tertiary : "#fff",
-              cursor: busy ? "wait" : "pointer",
+                ? "rgba(124,58,237,0.10)"
+                : "linear-gradient(180deg, rgba(139,92,246,1) 0%, rgba(124,58,237,1) 100%)",
+              color: busy ? "rgba(91,33,182,0.85)" : "#fff",
+              boxShadow: busy
+                ? "none"
+                : "0 1px 0 rgba(255,255,255,0.22) inset, 0 6px 16px -6px rgba(124,58,237,0.55)",
+              letterSpacing: "-0.005em",
             }}
           >
             {busy ? (
               <>
-                <RefreshCw className="h-3 w-3 animate-spin" strokeWidth={2} />
+                <RefreshCw className="h-3 w-3 animate-spin" strokeWidth={2.2} />
                 Detecting…
               </>
             ) : (
               <>
-                <Sparkles className="h-3 w-3" strokeWidth={2} />
+                <Sparkles className="h-3 w-3" strokeWidth={2.2} />
                 Detect themes
               </>
             )}
@@ -858,30 +886,42 @@ function ThemeControlBar({
       )}
 
       {hasThemes && (
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Sparkles
-              className="h-3 w-3 flex-shrink-0"
-              strokeWidth={2}
-              style={{ color: "rgba(91,33,182,0.9)" }}
-            />
+        <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <div className="flex items-center gap-3">
             <span
-              className="text-[11px] font-semibold uppercase tracking-[0.14em]"
-              style={{ color: "rgba(91,33,182,0.95)" }}
+              className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full"
+              style={{
+                background:
+                  "linear-gradient(180deg, rgba(124,58,237,0.14) 0%, rgba(124,58,237,0.06) 100%)",
+                border: `1px solid rgba(124,58,237,0.18)`,
+              }}
+              aria-hidden
             >
-              {themeCount} themes
+              <Sparkles
+                className="h-3.5 w-3.5"
+                strokeWidth={1.8}
+                style={{ color: "rgba(91,33,182,0.95)" }}
+              />
             </span>
-            {stale && (
+            <div className="flex items-center gap-2">
               <span
-                className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
-                style={{
-                  background: "rgba(217,119,6,0.12)",
-                  color: "rgba(146,64,14,0.95)",
-                }}
+                className="text-[13px] font-semibold leading-none tracking-[-0.005em]"
+                style={{ color: appleVibe.text.primary }}
               >
-                stale
+                {themeCount} {themeCount === 1 ? "theme" : "themes"}
               </span>
-            )}
+              {stale && (
+                <span
+                  className="rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em]"
+                  style={{
+                    background: "rgba(217,119,6,0.12)",
+                    color: "rgba(146,64,14,0.95)",
+                  }}
+                >
+                  stale
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <div
@@ -960,7 +1000,7 @@ function ThemeControlBar({
       {error && (
         <div
           role="alert"
-          className="mt-2 rounded-xl px-2.5 py-1.5 text-[11.5px]"
+          className="mx-4 mb-3 -mt-1 rounded-xl px-2.5 py-1.5 text-[11.5px]"
           style={{
             background: "rgba(220,38,38,0.06)",
             border: "1px solid rgba(220,38,38,0.18)",
