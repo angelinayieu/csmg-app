@@ -228,31 +228,64 @@ export interface ExpandItemContext {
 const LAYER_FRAMING: Record<ExpandItemContext["layer"], string> = {
   pain: `This is a PAIN POINT — an observable EFFECT the user wants to
 counter. Your job: explain what this pain ACTUALLY IS in the user's
-domain (beyond the title), enumerate ways the same pain manifests
-across different products/situations (variations), and surface the
-assumptions / dependencies / risks of treating this as a real
-problem (planning).`,
+domain (definition), enumerate the ways this same pain MANIFESTS
+behaviorally / observationally in different contexts (variations —
+manifestations, NOT solutions), and surface the assumptions /
+dependencies / risks of treating this as a real problem (planning).
+
+VARIATION TYPE FOR PAINS: each variation is a different OBSERVABLE
+SHAPE the same pain takes in the wild. "Users bounce after 2 results"
+is a variation. "Better filtering" is NOT a variation — it's a
+solution to the pain, which belongs in the FEATURE lane as its own
+item.`,
 
   features: `This is a FEATURE — a concrete mechanism / lever the
 system provides. Your job: explain what this feature ACTUALLY IS as
-a working mechanism (definition), enumerate 3-5 distinct
-implementation patterns it could take (variations), and surface the
-assumptions, prerequisites, and failure modes that would determine
-whether this feature actually fires the intended downstream effect
-(planning).`,
+a working mechanism (definition), enumerate 3-5 INTERNAL
+implementation patterns of HOW THIS SPECIFIC FEATURE is built
+(variations — implementation strategies, NOT sibling features), and
+surface the assumptions, prerequisites, and failure modes that would
+determine whether this feature actually fires the intended
+downstream effect (planning).
+
+VARIATION TYPE FOR FEATURES: each variation is a different INTERNAL
+MECHANISM for delivering THIS feature. If the parent feature is
+"Goal Matching", variations are "goal matching via stated goals" vs
+"goal matching via behavioral inference" vs "goal matching via
+collaborative filtering" — all SPECIALIZATIONS of the same feature.
+"User Feedback Loop" is NOT a variation of "Goal Matching" — it's a
+different feature entirely and belongs as its own room item or
+sub-objective.`,
 
   outcomes: `This is an OUTCOME — a desired observable state. Your
 job: explain what this outcome ACTUALLY LOOKS LIKE in the user's
-world (definition), enumerate 3-5 measurement / sensing patterns
-that would each capture it differently (variations), and surface
-the assumptions + risks + dependencies that would affect whether
-this outcome is the RIGHT one to track (planning).`,
+world (definition), enumerate 3-5 SENSING / MEASUREMENT PATTERNS
+that would each detect this exact outcome differently (variations —
+measurement strategies, NOT features that produce the outcome), and
+surface the assumptions + risks + dependencies that would affect
+whether this outcome is the RIGHT one to track (planning).
+
+VARIATION TYPE FOR OUTCOMES: each variation is a different SIGNAL
+the system reads to confirm THIS outcome happened. If the parent
+outcome is "Reduced Information Overload", variations are
+"self-reported overwhelm score 4/5", "bounce rate after first 3
+results", "repeat-query rate within session" — all SIGNALS that
+detect the same outcome via different proxies. "Contextual Filtering"
+is NOT a variation of "Reduced Information Overload" — it's a
+FEATURE that produces the outcome, and belongs as its own room item
+or sub-objective.`,
 
   objective: `This is an OBJECTIVE — the umbrella target. Your job:
 explain what this objective MEANS in the user's domain (definition),
-enumerate 3-5 valid framings / ways the objective could be
-interpreted (variations), and surface the assumptions + dependencies
-+ risks of choosing this particular framing (planning).`,
+enumerate 3-5 valid INTERPRETATIONS / framings of WHAT IT MEANS for
+this objective to be achieved (variations — readings of the same
+target, NOT sub-goals), and surface the assumptions + dependencies
++ risks of choosing this particular framing (planning).
+
+VARIATION TYPE FOR OBJECTIVES: each variation is a different LENS on
+what success for this objective even looks like. "Sub-goal A" or
+"Sub-goal B" are NOT variations — those are decomposition children
+and belong in the sub-objective list, not here.`,
 };
 
 /** P1 — render the parent-objective annotations as a numbered
@@ -376,6 +409,28 @@ OUTPUT THREE THINGS:
      • open_questions   — 2-3 unresolved questions whose answers would change whether this variation is the right call. Be SPECIFIC — "does this work for X-style users?" not "is this good?". These become the user's prototype lab triggers. Each ≤ 100 chars.
 
    The variations should span the DESIGN SPACE — different patterns, not different intensities of the same pattern. ❌ BAD: "Light gamification" / "Medium gamification" / "Heavy gamification". ✅ GOOD: "Streak-based" / "Social leaderboard" / "Mastery progression" / "Narrative quests".
+
+   DERIVATION TEST (mandatory — apply to EVERY variation before emitting it):
+   A variation must be a SPECIALIZATION of this specific item, not an adjacent / sibling concept that just happens to connect to it.
+
+   Self-test for each candidate variation:
+     "If I removed this item's title and read the variation aloud, could it stand on its own as a SEPARATE item / feature / outcome / sub-objective in the user's strategy?"
+       • YES it could stand alone → REJECT. You are generating a sibling concept, not a variation. It belongs as its own room item OR sub-objective, NOT here.
+       • NO it only makes sense as a way THIS specific item manifests / is implemented / is measured / is interpreted → KEEP.
+
+   The variation's name or description should structurally reference or specialize this item. Patterns that work: "{item} via X", "X-based {item}", "{item} measured by X", "{item} when X". Patterns that fail the test: a stand-alone feature/outcome name that has its own independent meaning.
+
+   ❌ EXAMPLE — wrong layer (parent = outcome "Reduced Information Overload"):
+        "Contextual Filtering"            — this is a feature, not a measurement of the outcome
+        "Goal-Based Search Prioritization" — same, a feature
+        "User Feedback Loop"              — same, a feature
+   ✅ EXAMPLE — correct layer (parent = outcome "Reduced Information Overload"):
+        "Self-reported overwhelm score 4/5"  — measurement signal
+        "Bounce rate after first 3 results"  — behavioral signal
+        "Repeat-query rate within session"   — frustration signal
+        "Time-to-first-meaningful-click"     — engagement signal
+
+   If you find yourself wanting to propose a sibling concept (it failed the test), drop the variation entirely — do NOT pad the list with weaker specializations to hit a count. 3 strong specializations beat 5 mixed-layer variations every time.
 
    PRODUCTION CONSTRAINTS (the LLM internalizes these — they are NOT user-facing scores):
      - Every variation must be well-grounded in the parent objective context. Generic platitudes get rewritten or dropped.
