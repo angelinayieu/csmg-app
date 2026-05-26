@@ -84,13 +84,41 @@ export function OutcomeCard({
     rollsUp ||
     !!onOpenDetail;
 
+  // Apple-tier ambient elevation + hover lift. Linked = lane halo;
+  // hover always intensifies. Non-interactive cards (no expand content)
+  // skip the hover treatment so they don't promise something they
+  // can't deliver.
+  const restShadow = linked
+    ? `0 0 0 3px ${OUTCOME_COLOR}1F, 0 12px 28px -14px ${OUTCOME_COLOR}66`
+    : expanded
+      ? appleVibe.shadow.cardHover
+      : appleVibe.shadow.card;
+  const hoverShadow = linked
+    ? `0 0 0 3px ${OUTCOME_COLOR}33, 0 16px 36px -14px ${OUTCOME_COLOR}80`
+    : `0 0 0 1px ${OUTCOME_COLOR}1F, 0 14px 32px -16px rgba(11,18,40,0.24)`;
+
   return (
     <motion.li
       layout
+      initial={false}
+      whileHover={
+        hasExpandContent
+          ? {
+              y: -1,
+              boxShadow: hoverShadow,
+              transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
+            }
+          : undefined
+      }
+      whileTap={
+        hasExpandContent
+          ? { y: 0.5, transition: { duration: 0.08 } }
+          : undefined
+      }
       transition={{
         layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] },
       }}
-      className="rounded-2xl px-4 py-3 transition-all"
+      className="rounded-2xl px-4 py-3"
       style={{
         background: expanded
           ? "rgba(255,255,255,0.98)"
@@ -103,9 +131,7 @@ export function OutcomeCard({
               : appleVibe.stroke.hairline
         }`,
         borderRadius: appleVibe.radius.md,
-        boxShadow: linked
-          ? `0 0 0 3px ${OUTCOME_COLOR}1F, 0 8px 22px -12px ${OUTCOME_COLOR}66`
-          : undefined,
+        boxShadow: restShadow,
         cursor: hasExpandContent ? "pointer" : "default",
       }}
       onClick={() => hasExpandContent && setExpanded((v) => !v)}

@@ -3441,16 +3441,49 @@ function VariationScoringPanel({
         }`
       : null;
 
+  // Stage color for the feature lane — the panel scores feature
+  // variations, so we visually anchor in the features stage color
+  // (blue) rather than introducing a foreign accent. Matches the
+  // rest of the canvas language: each surface reads as belonging
+  // to its lane.
+  const FEATURES = appleVibe.stage.features;
+
   return (
-    <div className="mt-3 rounded-lg border border-violet-100 bg-violet-50/30 px-3 py-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <SparklesLucide className="h-3 w-3 text-violet-700" strokeWidth={2} />
-          <span className="text-[10.5px] font-semibold uppercase tracking-[0.10em] text-violet-700">
+    <div
+      className="mt-3 overflow-hidden transition-shadow duration-300 ease-out"
+      style={{
+        background: appleVibe.surface.cardElevated,
+        border: `1px solid ${appleVibe.stroke.soft}`,
+        borderRadius: appleVibe.radius.lg,
+        boxShadow: appleVibe.shadow.chip,
+        fontFamily: appleVibe.font.stack,
+      }}
+    >
+      {/* Header strip — restrained chrome, lane-color accent only on
+          the leading sparkle so the eye finds the row without it
+          shouting. */}
+      <div
+        className="flex items-center justify-between gap-2 px-3.5 py-2.5"
+        style={{
+          borderBottom: envelope
+            ? `1px solid ${appleVibe.stroke.hairline}`
+            : "none",
+        }}
+      >
+        <div className="flex min-w-0 items-center gap-1.5">
+          <SparklesLucide
+            className="h-3 w-3 flex-shrink-0"
+            strokeWidth={2}
+            style={{ color: FEATURES }}
+          />
+          <span
+            className="text-[10.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.secondary }}
+          >
             Mechanism effectiveness
           </span>
           <span
-            className="text-[10.5px] font-light italic"
+            className="hidden truncate text-[10.5px] font-light italic sm:inline"
             style={{ color: appleVibe.text.tertiary }}
           >
             · structural lift × specificity × addresses_pain
@@ -3460,126 +3493,213 @@ function VariationScoringPanel({
           type="button"
           onClick={runScoring}
           disabled={busy}
-          className="inline-flex items-center gap-1 rounded-full bg-violet-600 px-2.5 py-1 text-[10.5px] font-semibold text-white shadow-sm transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex flex-shrink-0 items-center gap-1.5 transition-all duration-150 ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
+          style={{
+            background: appleVibe.accent.primary,
+            color: appleVibe.text.onAccent,
+            borderRadius: appleVibe.radius.pill,
+            padding: "5px 12px",
+            fontSize: "10.5px",
+            fontWeight: 600,
+            letterSpacing: "0.02em",
+            boxShadow: appleVibe.shadow.chip,
+          }}
         >
           {busy ? "Scoring…" : envelope ? "Re-score" : "Score variations"}
         </button>
       </div>
 
       {error && (
-        <p className="mt-2 text-[11px] text-red-700">{error}</p>
+        <div
+          className="px-3.5 py-2"
+          style={{
+            background: "rgba(220,38,38,0.04)",
+            borderTop: `1px solid ${appleVibe.stroke.hairline}`,
+          }}
+        >
+          <p
+            className="text-[11px] leading-snug"
+            style={{ color: "rgba(127,29,29,0.95)" }}
+          >
+            {error}
+          </p>
+        </div>
       )}
 
       {envelope && !error && (
-        <div className="mt-2.5 space-y-2">
-          {/* Diagnostic banner — fires when scoring couldn't run. */}
+        <div className="space-y-2 px-3.5 py-3">
+          {/* Diagnostic banner — soft amber surface, no harsh borders. */}
           {statusBanner && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5">
-              <p className="text-[11px] text-amber-900">{statusBanner}</p>
+            <div
+              className="px-3 py-2"
+              style={{
+                background: "rgba(245,158,11,0.06)",
+                border: "1px solid rgba(245,158,11,0.20)",
+                borderRadius: appleVibe.radius.sm,
+              }}
+            >
+              <p
+                className="text-[11.5px] leading-snug"
+                style={{ color: "rgba(120,53,15,0.92)" }}
+              >
+                {statusBanner}
+              </p>
             </div>
           )}
 
-          {/* Result banner — fires only when status === "ok". */}
+          {/* Result banner — chrome-on-chrome, faint lane-color tint
+              so the eye reads it as "the feature lane's verdict." */}
           {envelope.status === "ok" && (
-            <div className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2">
-              <div className="flex items-center justify-between gap-2 text-[11px]">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <span>
-                    <span
-                      className="font-medium"
-                      style={{ color: appleVibe.text.secondary }}
-                    >
-                      Target pain:
-                    </span>{" "}
-                    <span className="font-medium text-gray-900">
-                      {envelope.target_entity_name ?? "?"}
-                    </span>
+            <div
+              className="px-3 py-2"
+              style={{
+                background: `linear-gradient(135deg, ${FEATURES}08 0%, transparent 60%)`,
+                border: `1px solid ${appleVibe.stroke.hairline}`,
+                borderRadius: appleVibe.radius.sm,
+              }}
+            >
+              <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11px]">
+                <span className="inline-flex items-center gap-1">
+                  <span
+                    className="text-[9.5px] font-semibold uppercase tracking-[0.10em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    target
                   </span>
-                  <span>
-                    <span
-                      className="font-medium"
-                      style={{ color: appleVibe.text.secondary }}
-                    >
-                      Structural lift:
-                    </span>{" "}
-                    <span className="font-mono font-medium text-gray-900">
-                      {envelope.lift_pct !== null
-                        ? `${(envelope.lift_pct * 100).toFixed(0)}%`
-                        : "—"}
-                    </span>
+                  <span
+                    className="font-medium"
+                    style={{ color: appleVibe.text.primary }}
+                  >
+                    {envelope.target_entity_name ?? "?"}
                   </span>
-                  <span>
-                    <span
-                      className="font-medium"
-                      style={{ color: appleVibe.text.secondary }}
-                    >
-                      Placebo:
-                    </span>{" "}
-                    <span
-                      className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-                      style={{
-                        background:
-                          envelope.placebo_verdict === "pass"
-                            ? "#dcfce7"
-                            : envelope.placebo_verdict === "fail"
-                            ? "#fee2e2"
-                            : "#f1f5f9",
-                        color:
-                          envelope.placebo_verdict === "pass"
-                            ? "#166534"
-                            : envelope.placebo_verdict === "fail"
-                            ? "#991b1b"
-                            : "#475569",
-                      }}
-                    >
-                      {envelope.placebo_verdict ?? "—"}
-                    </span>
+                </span>
+                <span
+                  className="inline-block h-3 w-px"
+                  style={{ background: appleVibe.stroke.hairline }}
+                />
+                <span className="inline-flex items-center gap-1">
+                  <span
+                    className="text-[9.5px] font-semibold uppercase tracking-[0.10em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    lift
                   </span>
-                </div>
+                  <span
+                    className="font-mono font-semibold tabular-nums"
+                    style={{ color: appleVibe.text.primary }}
+                  >
+                    {envelope.lift_pct !== null
+                      ? `${(envelope.lift_pct * 100).toFixed(0)}%`
+                      : "—"}
+                  </span>
+                </span>
+                <span
+                  className="inline-block h-3 w-px"
+                  style={{ background: appleVibe.stroke.hairline }}
+                />
+                <span className="inline-flex items-center gap-1">
+                  <span
+                    className="text-[9.5px] font-semibold uppercase tracking-[0.10em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    placebo
+                  </span>
+                  <PlaceboChip verdict={envelope.placebo_verdict} />
+                </span>
               </div>
             </div>
           )}
 
-          {/* Per-variation flat list — sorted by score desc. */}
+          {/* Per-variation flat list — sorted by score desc. Bars use
+              the features lane color so they read as belonging to
+              the mechanism lane. */}
           {envelope.status === "ok" && scoreById.size > 0 && (
-            <div className="space-y-1">
+            <ul className="space-y-1">
               {[...variations]
                 .map((v) => ({
                   v,
-                  // Drawer-local ItemVariation.id is optional (legacy),
-                  // but variations coming from /expand always carry one.
-                  // Coerce defensively so the type narrows.
                   score: v.id ? scoreById.get(v.id) ?? 0 : 0,
                 }))
                 .sort((a, b) => b.score - a.score)
-                .map(({ v, score }) => (
-                  <div
+                .map(({ v, score }, i) => (
+                  <li
                     key={v.id}
-                    className="flex items-center gap-2 rounded px-1.5 py-1 text-[11px]"
+                    className="flex items-center gap-2.5 px-2 py-1.5 transition-colors duration-150 ease-out hover:bg-[rgba(15,23,42,0.025)]"
+                    style={{ borderRadius: appleVibe.radius.sm }}
                   >
-                    <span className="min-w-0 flex-1 truncate text-gray-800">
+                    <span
+                      className="w-3.5 flex-shrink-0 font-mono text-[10px] font-semibold tabular-nums"
+                      style={{ color: appleVibe.text.tertiary }}
+                    >
+                      #{i + 1}
+                    </span>
+                    <span
+                      className="min-w-0 flex-1 truncate text-[12px] font-medium"
+                      style={{ color: appleVibe.text.primary }}
+                    >
                       {v.name}
                     </span>
-                    <div className="flex w-24 flex-shrink-0 items-center gap-1.5">
-                      <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-violet-100">
+                    <div className="flex w-28 flex-shrink-0 items-center gap-2">
+                      <div
+                        className="relative h-[5px] flex-1 overflow-hidden"
+                        style={{
+                          background: `${FEATURES}1F`,
+                          borderRadius: appleVibe.radius.pill,
+                        }}
+                      >
                         <div
-                          className="absolute inset-y-0 left-0 rounded-full bg-violet-600"
+                          className="absolute inset-y-0 left-0 transition-[width] duration-500 ease-out"
                           style={{
-                            width: `${Math.max(2, Math.min(100, score * 100))}%`,
+                            width: `${Math.max(3, Math.min(100, score * 100))}%`,
+                            background: `linear-gradient(90deg, ${FEATURES}D9 0%, ${FEATURES} 100%)`,
+                            borderRadius: appleVibe.radius.pill,
+                            boxShadow: `0 0 8px -1px ${FEATURES}55`,
                           }}
                         />
                       </div>
-                      <span className="w-7 flex-shrink-0 text-right font-mono text-[10px] font-semibold text-violet-900">
+                      <span
+                        className="w-7 flex-shrink-0 text-right font-mono text-[10.5px] font-semibold tabular-nums"
+                        style={{ color: appleVibe.text.primary }}
+                      >
                         {(score * 100).toFixed(0)}
                       </span>
                     </div>
-                  </div>
+                  </li>
                 ))}
-            </div>
+            </ul>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/** Placebo verdict chip — semantic color (green/red/slate) but
+ *  rendered with appleVibe-style alpha overlays so it doesn't read
+ *  as a foreign UI library color. */
+function PlaceboChip({
+  verdict,
+}: {
+  verdict: "pass" | "fail" | "skip" | null;
+}) {
+  const tone =
+    verdict === "pass"
+      ? { bg: "rgba(22,163,74,0.10)", fg: "rgba(20,83,45,0.95)" }
+      : verdict === "fail"
+      ? { bg: "rgba(220,38,38,0.10)", fg: "rgba(127,29,29,0.95)" }
+      : { bg: "rgba(15,23,42,0.06)", fg: "rgba(15,23,42,0.62)" };
+  return (
+    <span
+      className="inline-flex items-center text-[9.5px] font-bold uppercase tracking-[0.10em]"
+      style={{
+        background: tone.bg,
+        color: tone.fg,
+        padding: "2px 7px",
+        borderRadius: appleVibe.radius.pill,
+      }}
+    >
+      {verdict ?? "—"}
+    </span>
   );
 }
 

@@ -90,13 +90,31 @@ export function FeatureCard({
     (p) => (sharedCounts[p] ?? 0) >= 2,
   ).length;
 
+  // Apple-tier ambient elevation + hover lift. Linked state takes
+  // over with a lane-color halo; hover always intensifies.
+  const restShadow = linked
+    ? `0 0 0 3px ${FEATURE_COLOR}1F, 0 12px 28px -14px ${FEATURE_COLOR}66`
+    : expanded
+      ? appleVibe.shadow.cardHover
+      : appleVibe.shadow.card;
+  const hoverShadow = linked
+    ? `0 0 0 3px ${FEATURE_COLOR}33, 0 16px 36px -14px ${FEATURE_COLOR}80`
+    : `0 0 0 1px ${FEATURE_COLOR}1F, 0 14px 32px -16px rgba(11,18,40,0.24)`;
+
   return (
     <motion.li
       layout
+      initial={false}
+      whileHover={{
+        y: -1,
+        boxShadow: hoverShadow,
+        transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
+      }}
+      whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
       transition={{
         layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] },
       }}
-      className="rounded-2xl px-4 py-3 transition-all"
+      className="rounded-2xl px-4 py-3"
       style={{
         background: expanded
           ? "rgba(255,255,255,0.98)"
@@ -111,9 +129,7 @@ export function FeatureCard({
         borderRadius: appleVibe.radius.md,
         opacity: dim ? 0.45 : 1,
         cursor: "pointer",
-        boxShadow: linked
-          ? `0 0 0 3px ${FEATURE_COLOR}1F, 0 8px 22px -12px ${FEATURE_COLOR}66`
-          : undefined,
+        boxShadow: restShadow,
       }}
       onClick={() => setExpanded((v) => !v)}
       onMouseEnter={() => onHover?.(item.id)}
