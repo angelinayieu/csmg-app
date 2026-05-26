@@ -46,6 +46,41 @@ export interface ComposeContext {
    *  composed design must be reachable for the user's time / budget
    *  / team. Otherwise we hand them a fantasy. */
   constraints?: OperationalConstraints | null;
+  /** Closed read loop — Analysis Workbench findings that touch THIS
+   *  item / room. The disposition is LOAD-BEARING here: when the
+   *  user has DISMISSED a duplicate_variation finding involving
+   *  these elected variations, the composition must NOT re-raise it
+   *  as a conflict_open (the user already declared the duplicate
+   *  intentional). When OPEN or ACKNOWLEDGED, the composition
+   *  should either reconcile the signal via integration_points →
+   *  conflicts_resolved, or surface it as conflicts_open.
+   *
+   *  Caller filters out `resolved` (user closed it), `distill_concepts`
+   *  (theme-level, not composition-shaping), `orphan_annotations` +
+   *  `recommend_next_move` (space-level / meta), and keeps only
+   *  findings whose references touch this entity or its room.
+   *
+   *  Soft signal — empty / undefined tolerated. */
+  crossRoomFindings?: Array<{
+    kind:
+      | "pain_uncovered"
+      | "pain_cross_addressed"
+      | "contradiction"
+      | "duplicate_variation"
+      | "shared_mechanism"
+      | "annotation_overlap";
+    /** The finding's headline — short, ≤ 80 chars. */
+    title: string;
+    /** One-sentence summary the LLM ingests. */
+    summary: string;
+    /** Optional surgical hint pulled from the finding body. */
+    hint?: string;
+    /** User's stance — drives whether this becomes a conflict_open
+     *  (open / acknowledged) or stays a quiet contextual signal
+     *  (dismissed). `resolved` is filtered upstream and never
+     *  reaches the generator. */
+    disposition: "open" | "acknowledged" | "dismissed";
+  }>;
 }
 
 const LAYER_FRAMING: Record<ComposeContext["itemLayer"], string> = {
@@ -96,6 +131,37 @@ export async function composeVariations(
           .join("\n")}`
       : "";
 
+  // Cross-room findings block — disposition-aware. Sort by kind so
+  // structural conflicts (contradictions, uncovered pains) appear
+  // before consistency hints. Cap at 6 to bound prompt cost.
+  const KIND_ORDER: Record<
+    NonNullable<ComposeContext["crossRoomFindings"]>[number]["kind"],
+    number
+  > = {
+    pain_uncovered: 0,
+    contradiction: 1,
+    pain_cross_addressed: 2,
+    duplicate_variation: 3,
+    shared_mechanism: 4,
+    annotation_overlap: 5,
+  };
+  const findings = ctx.crossRoomFindings ?? [];
+  const findingsBlock =
+    findings.length > 0
+      ? `\n\nCROSS-ROOM FINDINGS (the analysis workbench's diagnostic signals on this item / room — DISPOSITION IS LOAD-BEARING for composition):\n${[
+          ...findings,
+        ]
+          .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind])
+          .slice(0, 6)
+          .map((f) => {
+            const hint = f.hint ? ` — ${f.hint.slice(0, 140)}` : "";
+            return `  [${f.kind} · ${f.disposition}] ${f.title.slice(0, 100)}\n      ${f.summary.slice(0, 220)}${hint}`;
+          })
+          .join(
+            "\n",
+          )}\n  CROSS-ROOM RULE for composition:\n    • DISMISSED findings (any kind): the user already declared their stance — this duplicate / contradiction / overlap is INTENTIONAL. Do NOT re-raise as conflicts_open. Quietly proceed; mention in the description ONLY if it strengthens the unified read.\n    • OPEN or ACKNOWLEDGED findings: either reconcile via integration_points (then list under conflicts_resolved) OR escalate to conflicts_open if the composition genuinely cannot resolve it. Pretending to resolve a real contradiction silently ships a broken design.\n    • A "contradiction" finding touching this item's elected variations is the strongest signal — the composition must address it explicitly.`
+      : "";
+
   const system = `You synthesize multiple elected variations of a strategy-room item into a SINGLE coherent design.
 
 ${framing}
@@ -118,7 +184,7 @@ Return strict JSON.`;
 
   const constraintsBlock = buildConstraintsBlock(ctx.constraints ?? null);
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${lensBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${lensBlock}${findingsBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
 
   const raw = await llmJSON<{
     description?: unknown;

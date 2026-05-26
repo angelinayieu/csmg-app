@@ -48,6 +48,7 @@ import {
   type ExpansionNode,
 } from "@/lib/objective-canvas/expansion-tree";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
+import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -288,6 +289,63 @@ export async function POST(req: NextRequest) {
     : [];
   const constraints = readConstraints(space.synthesis_data);
 
+  // ── Closed read loop: existing tree summary + distill themes ──
+  // ancestorLineage already tells the LLM "you came from here". This
+  // adds "you have siblings + cousins on this same item that the
+  // user kept — don't redundantly cover their ground". Excludes the
+  // direct ancestor chain (already represented in ancestorLineage) so
+  // we don't double-render the same nodes.
+  const ancestorIdsToExclude = new Set<string>();
+  if (parentNodeId) {
+    ancestorIdsToExclude.add(parentNodeId);
+    // Walk ancestor chain by parent_node_id pointers; stop at L3 root.
+    let cursor: ExpansionNode | undefined = tree.find(
+      (n) => n.id === parentNodeId,
+    );
+    while (cursor?.parent_node_id) {
+      ancestorIdsToExclude.add(cursor.parent_node_id);
+      cursor = tree.find((n) => n.id === cursor!.parent_node_id);
+    }
+  }
+  const existingTreeSummary = tree
+    .filter(
+      (n) =>
+        n.disposition === "kept" && !ancestorIdsToExclude.has(n.id),
+    )
+    .map((n) => ({
+      title: n.title,
+      depth: n.depth,
+      attach_point: n.attach_point,
+    }));
+
+  // Distilled themes — same shape as /item/expand. Reads the cached
+  // cross_room_analysis findings and filters to distill_concepts.
+  // Soft-fail to undefined when the analysis hasn't been run yet.
+  const crossRoomAnalysis = (space.synthesis_data as Record<
+    string,
+    unknown
+  > | null)?.cross_room_analysis as CrossRoomAnalysisState | undefined;
+  const distillFindings =
+    crossRoomAnalysis?.findings?.filter(
+      (f) => f.analysis_key === "distill_concepts",
+    ) ?? [];
+  const distillThemes =
+    distillFindings.length > 0
+      ? distillFindings.map((f) => {
+          const body = f.body as Record<string, unknown>;
+          return {
+            name:
+              typeof body?.name === "string"
+                ? body.name
+                : f.title,
+            description:
+              typeof body?.description === "string"
+                ? body.description
+                : f.summary,
+          };
+        })
+      : undefined;
+
   try {
     generated = await generateExpansionNode({
       catalogEntry: entry,
@@ -302,6 +360,9 @@ export async function POST(req: NextRequest) {
       },
       constraints,
       annotations: annotations.length > 0 ? annotations : undefined,
+      existingTreeSummary:
+        existingTreeSummary.length > 0 ? existingTreeSummary : undefined,
+      distillThemes,
     });
   } catch (firstErr) {
     const firstDetail = sanitizeErrorMessage(firstErr);
@@ -337,6 +398,11 @@ export async function POST(req: NextRequest) {
         },
         constraints,
         annotations: undefined,
+        // Drop the closed-loop signals on the reduced-context retry —
+        // same rationale as dropping lineage + annotations: cut prompt
+        // size to give strict-JSON the best chance to land.
+        existingTreeSummary: undefined,
+        distillThemes: undefined,
       });
     } catch (secondErr) {
       const secondDetail = sanitizeErrorMessage(secondErr);

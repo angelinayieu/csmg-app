@@ -23,6 +23,7 @@ import {
 } from "@/lib/objective-canvas/context-helpers";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import { computeCompositionStaleness } from "@/lib/objective-canvas/upstream-staleness";
+import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -136,6 +137,162 @@ export async function POST(req: NextRequest) {
     annotations,
   } = await resolveParentObjectiveContext(db, entity, space);
 
+  // ── Closed read loop: cross-room findings + dispositions ──
+  // Without this, the composition is blind to the Analysis Workbench's
+  // structural signals. With it: when the workbench has flagged a
+  // contradiction touching this item's elected variations, the
+  // composition must address it (resolve via integration_points OR
+  // escalate to conflicts_open). When the user has DISMISSED a
+  // duplicate_variation involving these variations, the composition
+  // must NOT re-raise it — the user already declared the duplicate
+  // intentional.
+  //
+  // Filter mirrors /item/expand's filter, with one critical difference:
+  // we KEEP `dismissed` findings (their disposition is the load-bearing
+  // signal that "user chose this") — only `resolved` (user closed)
+  // gets dropped.
+  const crossRoomAnalysis = (space.synthesis_data as Record<
+    string,
+    unknown
+  > | null)?.cross_room_analysis as CrossRoomAnalysisState | undefined;
+  type CrossRoomFinding = NonNullable<
+    Parameters<typeof composeVariations>[0]["crossRoomFindings"]
+  >[number];
+  const crossRoomFindings: CrossRoomFinding[] = (() => {
+    const allFindings = crossRoomAnalysis?.findings ?? [];
+    if (allFindings.length === 0) return [];
+    const itemId = entity.id;
+    const roomId = parentSubObjectiveId;
+    const out: CrossRoomFinding[] = [];
+    for (const f of allFindings) {
+      if (f.disposition === "resolved") continue;
+      if (f.analysis_key === "distill_concepts") continue;
+      if (
+        f.analysis_key === "orphan_annotations" ||
+        f.analysis_key === "recommend_next_move"
+      ) {
+        continue;
+      }
+
+      const itemMatches = f.references.item_ids.includes(itemId);
+      const roomMatches = !!roomId && f.references.room_ids.includes(roomId);
+
+      if (f.analysis_key === "pain_coverage") {
+        if (!itemMatches) continue;
+      } else {
+        if (!itemMatches && !roomMatches) continue;
+      }
+
+      // Normalize finding disposition to the 3-state enum the generator
+      // reads. Default to "open" for anything unexpected.
+      const disposition: CrossRoomFinding["disposition"] =
+        f.disposition === "acknowledged" || f.disposition === "dismissed"
+          ? f.disposition
+          : "open";
+
+      const body = (f.body ?? {}) as Record<string, unknown>;
+      if (f.analysis_key === "shared_mechanisms") {
+        const mech = typeof body.mechanism === "string" ? body.mechanism : "";
+        out.push({
+          kind: "shared_mechanism",
+          title: f.title,
+          summary: f.summary,
+          hint: mech ? `lever name: "${mech}"` : undefined,
+          disposition,
+        });
+      } else if (f.analysis_key === "annotation_overlap") {
+        const phrase = typeof body.phrase === "string" ? body.phrase : "";
+        out.push({
+          kind: "annotation_overlap",
+          title: f.title,
+          summary: f.summary,
+          hint: phrase ? `lens phrase: "${phrase}"` : undefined,
+          disposition,
+        });
+      } else if (f.analysis_key === "pain_coverage") {
+        const kindStr = typeof body.kind === "string" ? body.kind : "";
+        if (kindStr === "uncovered") {
+          out.push({
+            kind: "pain_uncovered",
+            title: f.title,
+            summary: f.summary,
+            hint: "no feature in any room currently addresses this — the composition shouldn't perpetuate the gap",
+            disposition,
+          });
+        } else if (kindStr === "cross_addressed") {
+          const count =
+            typeof body.addresser_count === "number"
+              ? body.addresser_count
+              : 0;
+          out.push({
+            kind: "pain_cross_addressed",
+            title: f.title,
+            summary: f.summary,
+            hint:
+              count > 0
+                ? `addressed by ${count} feature(s) in OTHER rooms — coordinate or differentiate`
+                : undefined,
+            disposition,
+          });
+        }
+      } else if (f.analysis_key === "duplicate_variations") {
+        const vname =
+          typeof body.variation_name === "string" ? body.variation_name : "";
+        const electedCount =
+          typeof body.elected_room_count === "number"
+            ? body.elected_room_count
+            : 0;
+        // Strongest signal for composition — if one of the elected
+        // variations IS the duplicate, mark explicitly.
+        const isElectedHere = elected.some(
+          (v) => v.name.toLowerCase().trim() === vname.toLowerCase().trim(),
+        );
+        const baseHint = vname
+          ? `duplicate "${vname}"${
+              electedCount >= 1
+                ? ` (ELECTED in ${electedCount} other room${electedCount === 1 ? "" : "s"})`
+                : ""
+            }`
+          : undefined;
+        out.push({
+          kind: "duplicate_variation",
+          title: f.title,
+          summary: f.summary,
+          hint: isElectedHere
+            ? `${baseHint ?? "duplicate"} — composing this elected variation here too`
+            : baseHint,
+          disposition,
+        });
+      } else if (f.analysis_key === "cross_room_contradictions") {
+        const pair = Array.isArray(body.pair)
+          ? (body.pair as Array<Record<string, unknown>>)
+          : [];
+        const other = pair.find((p) => p?.item_id !== itemId) ?? pair[1];
+        const otherVar =
+          other && typeof other.variation_name === "string"
+            ? other.variation_name
+            : "";
+        const otherRoom =
+          other && typeof other.room_title === "string"
+            ? other.room_title
+            : "";
+        out.push({
+          kind: "contradiction",
+          title: f.title,
+          summary: f.summary,
+          hint:
+            otherVar && otherRoom
+              ? `contradicts "${otherVar}" in "${otherRoom}"`
+              : otherVar
+                ? `contradicts "${otherVar}"`
+                : undefined,
+          disposition,
+        });
+      }
+    }
+    return out;
+  })();
+
   // Telemetry-wrapped composition call. artifact_kind 'composed_design'
   // + entity.id lets the feedback endpoint find the most-recent compose
   // log row when the user thumbs-rates the composition banner.
@@ -155,6 +312,15 @@ export async function POST(req: NextRequest) {
           elected_count: elected.length,
           had_lens: annotations.length > 0,
           had_constraints: !!readConstraints(space.synthesis_data),
+          cross_room_finding_count: crossRoomFindings.length,
+          cross_room_finding_kinds: Array.from(
+            new Set(crossRoomFindings.map((f) => f.kind)),
+          ),
+          // Useful to see whether dismissed findings are commonly
+          // entering composition (= user is actively curating signal).
+          dismissed_finding_count: crossRoomFindings.filter(
+            (f) => f.disposition === "dismissed",
+          ).length,
         },
       },
       () =>
@@ -166,6 +332,8 @@ export async function POST(req: NextRequest) {
           coreObjectiveText,
           annotations: annotations.length > 0 ? annotations : undefined,
           constraints: readConstraints(space.synthesis_data),
+          crossRoomFindings:
+            crossRoomFindings.length > 0 ? crossRoomFindings : undefined,
         }),
     );
   } catch (err) {

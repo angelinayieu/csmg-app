@@ -49,6 +49,34 @@ export interface GenerateExpansionNodeContext {
   parent: ParentContext;
   constraints?: OperationalConstraints | null;
   annotations?: ObjectiveAnnotation[];
+  /** Closed read loop — top-signal nodes already KEPT on THIS item's
+   *  expansion tree, beyond the direct ancestor lineage. The ancestor
+   *  block tells the LLM "you came from here"; this block tells the
+   *  LLM "you have siblings + cousins on the same card — don't
+   *  redundantly cover their ground."
+   *
+   *  Caller filters `detail.expansion_tree[]` to
+   *  `disposition === "kept"`, drops direct ancestors (already in
+   *  `parent.ancestorLineage`), and caps to ~6 by depth × recency.
+   *  Empty array → block omitted; cold-start cards never inject this.
+   *
+   *  Soft signal — empty / undefined tolerated. */
+  existingTreeSummary?: Array<{
+    /** Node title — short, ≤ 80 chars. */
+    title: string;
+    /** Depth: 3 = L3, 4 = L4, etc. */
+    depth: number;
+    /** Attach point so the LLM knows what slot this deepened
+     *  (variation / open_question / conflict_open / etc.). */
+    attach_point: string;
+  }>;
+  /** Closed read loop — distill themes (cross-room recurring patterns)
+   *  the Analysis Workbench has surfaced. Bias new nodes toward
+   *  respecting these threads instead of cutting across them.
+   *
+   *  Same shape as the field in `ExpandItemContext.distillThemes`.
+   *  Empty array → no block injected. */
+  distillThemes?: Array<{ name: string; description: string }>;
 }
 
 /** Output: one child PER spec in the catalog entry's spawns list.
@@ -105,6 +133,40 @@ export async function generateExpansionNode(
       ? `\n\nANCESTOR PATH (do not re-cover ground already in these):\n  ${parent.ancestorLineage.join(" › ")}`
       : "";
 
+  // Existing-deepenings block — top siblings + cousins on this item.
+  // Sort by depth ASC (L3 first, then L4, …) so the LLM sees the
+  // broadest deepenings first. Cap at 6 to bound token cost.
+  const siblings = ctx.existingTreeSummary ?? [];
+  const existingDeepeningsBlock =
+    siblings.length > 0
+      ? `\n\nEXISTING DEEPENINGS ON THIS ITEM (already explored on sibling / cousin slots — don't redundantly cover the same ground):\n${[
+          ...siblings,
+        ]
+          .sort((a, b) => a.depth - b.depth)
+          .slice(0, 6)
+          .map(
+            (n) =>
+              `  [L${n.depth} · ${n.attach_point}] ${n.title.slice(0, 80)}`,
+          )
+          .join(
+            "\n",
+          )}\n  SIBLING RULE: When a child you'd otherwise emit overlaps with one above, EITHER (a) re-frame it to cover ground these don't, OR (b) explicitly compose with them (your child depends on or extends the existing node — say so in the body). Do not silently duplicate.`
+      : "";
+
+  // Distilled themes block — cross-room recurring patterns the user
+  // keeps electing toward. Bias new children to respect (not violate)
+  // these threads.
+  const themes = ctx.distillThemes ?? [];
+  const distillThemesBlock =
+    themes.length > 0
+      ? `\n\nDISTILLED THEMES (recurring across this user's rooms — children should RESPECT these, not cut across them):\n${themes
+          .slice(0, 4)
+          .map((t) => `  • "${t.name}" — ${t.description.slice(0, 160)}`)
+          .join(
+            "\n",
+          )}\n  When a candidate child contradicts an established theme, either drop it or name the tension explicitly in the child's body so the user sees what they'd be giving up.`
+      : "";
+
   const system = `You expand a single parent surface into the structured children defined below. Each child is a focused depth artifact — generate the body for each, anchored on THIS parent (not generic best-practice).
 
 FRAMING: ${catalogEntry.framing}
@@ -122,7 +184,7 @@ ${childrenSpecBlock}
 
 Return strict JSON.`;
 
-  const user = `PARENT (${parent.itemLayer}): ${parent.itemName}\nSUB-OBJECTIVE: ${parent.subObjectiveTitle}\nCORE OBJECTIVE: ${parent.coreObjectiveText.slice(0, 600)}\n\nPARENT SURFACE TO EXPAND:\n  title: ${parent.title}\n  description: ${parent.description}${ancestorBlock}${constraintsBlock}${lensBlock}\n\nGenerate the children per the system instructions.`;
+  const user = `PARENT (${parent.itemLayer}): ${parent.itemName}\nSUB-OBJECTIVE: ${parent.subObjectiveTitle}\nCORE OBJECTIVE: ${parent.coreObjectiveText.slice(0, 600)}\n\nPARENT SURFACE TO EXPAND:\n  title: ${parent.title}\n  description: ${parent.description}${ancestorBlock}${existingDeepeningsBlock}${distillThemesBlock}${constraintsBlock}${lensBlock}\n\nGenerate the children per the system instructions.`;
 
   // ── Schema — strict mode, every spec child must appear. ──
   const childItem = {

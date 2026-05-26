@@ -31,6 +31,7 @@ import {
   resolveEntityLayer,
   type LayerSlug,
 } from "@/lib/objective-canvas/context-helpers";
+import { loadUpstreamContext } from "@/lib/objective-canvas/upstream-context";
 import {
   computeUpstreamStaleness,
   computeCompositionStaleness,
@@ -481,172 +482,24 @@ export async function POST(req: NextRequest) {
   // short-circuit.
 
   // ── Lazy upstream-read — load the cards that FEED this one ──
-  // For a feature card, upstream = pains the feature addresses (edges
-  // where target=this_feature, source.layer=pain). For an outcome
-  // card, upstream = features that produce it (edges where target=
-  // this_outcome, source.layer=feature) plus pains whose absence IS
-  // the outcome (same target, source.layer=pain).
+  // Layer-gated: features/outcomes/objective have canonical upstream
+  // (pains → features → outcomes → objective). Pains are graph roots
+  // with no incoming edges by design, so we skip the query for them.
   //
-  // Pain + objective layers have no canonical upstream in this
-  // model — pains are the root of the chain, objective is the
-  // umbrella. Skip the fetch for them.
-  //
-  // Soft-fail throughout: if any query errors or returns nothing,
-  // upstreamContext is undefined and the prompt block is omitted.
-  const upstreamContext = await (async () => {
-    if (layer !== "features" && layer !== "outcomes") return undefined;
-    if (!entity.parent_sub_objective_id) return undefined;
-    // Find edges where this entity is the TARGET (upstream items
-    // point AT this card via correlation edges).
-    //
-    // Phase 3 — select edge content too (relationship + mechanism
-    // from agent_feedback + rationale from conditions) so the
-    // variation generator can extend the named lever the correlation
-    // step identified instead of inventing parallel mechanisms.
-    const { data: incomingEdges } = await db
-      .from("edges")
-      .select(
-        "source_entity_id, relationship, strength, conditions, agent_feedback",
-      )
-      .eq("parent_sub_objective_id", entity.parent_sub_objective_id)
-      .eq("target_entity_id", entity.id);
-    const edgeRowsTyped = (Array.isArray(incomingEdges)
-      ? incomingEdges
-      : []) as Array<{
-      source_entity_id: string;
-      relationship: string | null;
-      strength: number | null;
-      conditions: string | null;
-      agent_feedback: Record<string, unknown> | null;
-    }>;
-    const sourceIds = edgeRowsTyped
-      .map((e) => e.source_entity_id)
-      .filter((id, i, arr) => arr.indexOf(id) === i); // dedupe
-    if (sourceIds.length === 0) return undefined;
-
-    // Build a source_id → edge content lookup. When the correlation
-    // step emitted a mechanism, it lives under agent_feedback.mechanism;
-    // the rationale lives in `conditions` (clipped to 500 chars at
-    // edge persist time per the room/generate route).
-    const edgeBySourceId = new Map<
-      string,
-      {
-        relationship: string;
-        mechanism: string;
-        rationale: string;
-      }
-    >();
-    for (const e of edgeRowsTyped) {
-      const mechanism =
-        typeof e.agent_feedback === "object" &&
-        e.agent_feedback !== null &&
-        typeof (e.agent_feedback as Record<string, unknown>).mechanism ===
-          "string"
-          ? ((e.agent_feedback as Record<string, unknown>).mechanism as string)
-          : "";
-      const rationale = typeof e.conditions === "string" ? e.conditions : "";
-      edgeBySourceId.set(e.source_entity_id, {
-        relationship: e.relationship ?? "",
-        mechanism,
-        rationale,
-      });
-    }
-    // Hydrate the source entities + their expanded_detail + layer.
-    const { data: sourceRows } = await db
-      .from("entities")
-      .select("id, name, layer_ontology_id, expanded_detail")
-      .in("id", sourceIds);
-    if (!Array.isArray(sourceRows) || sourceRows.length === 0) return undefined;
-    // Resolve layer slugs in one query for efficiency.
-    const layerIds = (
-      sourceRows as Array<{ layer_ontology_id: string | null }>
-    )
-      .map((r) => r.layer_ontology_id)
-      .filter((id): id is string => typeof id === "string");
-    const slugByLayerId = new Map<string, LayerSlug>();
-    if (layerIds.length > 0) {
-      const { data: layerRows } = await db
-        .from("layer_ontology")
-        .select("id, slug")
-        .in("id", layerIds);
-      if (Array.isArray(layerRows)) {
-        for (const r of layerRows as Array<{ id: string; slug: string }>) {
-          if (
-            r.slug === "pain" ||
-            r.slug === "features" ||
-            r.slug === "outcomes" ||
-            r.slug === "objective"
-          ) {
-            slugByLayerId.set(r.id, r.slug as LayerSlug);
-          }
-        }
-      }
-    }
-    // Build the context, cap at 4 most-relevant (prefer ones with
-    // elections — they carry the strongest signal).
-    //
-    // Phase 3 — each upstream item now also carries the edge content
-    // (relationship + mechanism + rationale) connecting it to the
-    // target. Pulled from edgeBySourceId built above.
-    type UpstreamItem = {
-      name: string;
-      layer: LayerSlug;
-      elected_variation_names: string[];
-      expansion_highlights: string[];
-      edge_relationship?: string;
-      edge_mechanism?: string;
-      edge_rationale?: string;
-    };
-    const items: UpstreamItem[] = [];
-    for (const row of sourceRows as Array<{
-      id: string;
-      name: string;
-      layer_ontology_id: string | null;
-      expanded_detail: ExpandedItemDetail | null;
-    }>) {
-      const upstreamLayer = row.layer_ontology_id
-        ? slugByLayerId.get(row.layer_ontology_id) ?? "features"
-        : "features";
-      const ed = row.expanded_detail ?? null;
-      const electedNames: string[] = Array.isArray(ed?.variations)
-        ? ed!.variations
-            .filter((v) => v.disposition === "elected")
-            .map((v) => v.name)
-        : [];
-      const highlights: string[] = Array.isArray(ed?.expansion_tree)
-        ? ed!.expansion_tree
-            .filter((n) => n.disposition === "kept")
-            .slice(0, 3)
-            .map((n) => n.title)
-        : [];
-      const edge = edgeBySourceId.get(row.id);
-      items.push({
-        name: row.name,
-        layer: upstreamLayer,
-        elected_variation_names: electedNames,
-        expansion_highlights: highlights,
-        // Only attach edge content when at least the mechanism exists —
-        // empty strings would just bloat the prompt without signal.
-        ...(edge && edge.mechanism.length > 0
-          ? {
-              edge_relationship: edge.relationship,
-              edge_mechanism: edge.mechanism,
-              edge_rationale: edge.rationale,
-            }
-          : {}),
-      });
-    }
-    // Sort: items with elections first, then with kept expansion
-    // nodes, then everything else. Cap at 4 to bound token cost.
-    items.sort((a, b) => {
-      const aSignal =
-        a.elected_variation_names.length * 2 + a.expansion_highlights.length;
-      const bSignal =
-        b.elected_variation_names.length * 2 + b.expansion_highlights.length;
-      return bSignal - aSignal;
-    });
-    return items.slice(0, 4);
-  })();
+  // Shared helper does the edge walk + entity hydration + layer
+  // resolution + signal ranking. Returns undefined when no incoming
+  // edges exist or every query soft-fails — the prompt block stays
+  // omitted on undefined.
+  const upstreamContext =
+    (layer === "features" || layer === "outcomes" || layer === "objective") &&
+    entity.parent_sub_objective_id
+      ? await loadUpstreamContext({
+          db,
+          downstreamEntityId: entity.id,
+          parentSubObjectiveId: entity.parent_sub_objective_id,
+          limit: 4,
+        })
+      : undefined;
 
   // ── Phase 3 — Lateral (sibling) context ──
   // Same-layer items in the SAME room. These don't causally feed
