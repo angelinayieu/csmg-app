@@ -5,10 +5,16 @@ import { llmJSON } from "@/lib/llm";
 import {
   buildSystemPrompt,
   buildUserPrompt,
-  RESPONSE_SCHEMA,
+  buildResponseSchema,
+  temperatureForIntent,
 } from "./decompose-prompt";
 import type { ClarifyingBlock } from "./clarifying-state";
-import { normalizeProposals, type SubObjectiveProposal } from "./sub-objective-state";
+import {
+  normalizeProposals,
+  type SubObjectiveProposal,
+  type SubObjectiveIntent,
+} from "./sub-objective-state";
+import type { ObjectiveAnnotation } from "./generate-annotations";
 
 interface LlmShape {
   category?: unknown;
@@ -18,6 +24,7 @@ interface LlmShape {
     rationale?: unknown;
     confidence?: unknown;
     recommended?: unknown;
+    lens_coverage?: unknown;
   }>;
 }
 
@@ -28,6 +35,18 @@ export interface GenerateSubObjectivesOptions {
    *  research-service.buildRagBlock(). When present, prepended to
    *  the user prompt so the LLM grounds proposals in real sources. */
   ragBlock?: string;
+  /** Variant Lab — intent that steers this generation pass. Default
+   *  "initial" preserves legacy behavior. */
+  intent?: SubObjectiveIntent;
+  /** Variant Lab — proposals from prior batches. Drives the
+   *  ANTI-DUPLICATE block in the user prompt. */
+  existingProposals?: SubObjectiveProposal[];
+  /** Variant Lab — parent objective annotation lens. When provided,
+   *  each new proposal emits lens_coverage[] back. */
+  annotations?: ObjectiveAnnotation[];
+  /** Variant Lab — 1-based annotation indices uncovered by current
+   *  elected proposals. Used by the gap_fill intent prompt. */
+  uncoveredLensIndices?: number[];
 }
 
 export interface GeneratedSubObjectives {
@@ -36,6 +55,11 @@ export interface GeneratedSubObjectives {
    *  the picker as "5 {category} proposed". Empty string when the
    *  model didn't supply or the value is too long to surface cleanly. */
   category: string;
+  /** Echo-back so caller knows the temperature the LLM saw — used
+   *  by the variant lab batch metadata. */
+  temperature: number;
+  /** Echo-back of the intent used. */
+  intent: SubObjectiveIntent;
 }
 
 const VERB_PREFIX_PATTERN =
@@ -53,27 +77,47 @@ function stripVerbPrefix(title: string): string {
 export async function generateSubObjectiveProposals(
   opts: GenerateSubObjectivesOptions,
 ): Promise<GeneratedSubObjectives> {
+  const intent: SubObjectiveIntent = opts.intent ?? "initial";
+  const temperature = temperatureForIntent(intent);
+  const hasLens = (opts.annotations?.length ?? 0) > 0;
+
+  // Weight-sort + cap at 8, matching the room generator's lens
+  // projection. Indices the LLM emits in lens_coverage[] resolve
+  // against this same ordering.
+  const lens = hasLens
+    ? [...(opts.annotations ?? [])]
+        .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
+        .slice(0, 8)
+    : undefined;
+
   const raw = await llmJSON<LlmShape>({
-    system: buildSystemPrompt(),
+    system: buildSystemPrompt(intent),
     user: buildUserPrompt({
       objective: opts.objective,
       clarifying: opts.clarifying,
       ragBlock: opts.ragBlock,
+      intent,
+      existingProposals: opts.existingProposals,
+      lens,
+      uncoveredLensIndices: opts.uncoveredLensIndices,
     }),
-    responseSchema: RESPONSE_SCHEMA,
-    temperature: 0.55,
+    responseSchema: buildResponseSchema(hasLens),
+    temperature,
     maxTokens: 2400,
   });
 
   const items = Array.isArray(raw?.proposals) ? raw.proposals : [];
   // LLM doesn't generate ids — assign client-side.
   // Also enforce the noun-phrase rule client-side as a safety net
-  // even though the prompt forbids verb prefixes.
+  // even though the prompt forbids verb prefixes. Forward
+  // lens_coverage through so the normalizer can validate it against
+  // the lens size (capped at 5 entries per proposal there).
   const idAssigned = items.map((p) => ({
     ...p,
     id: randomUUID(),
     title:
       typeof p?.title === "string" ? stripVerbPrefix(p.title) : p?.title,
+    lens_coverage: p?.lens_coverage,
   }));
   const proposals = normalizeProposals(idAssigned);
 
@@ -82,5 +126,5 @@ export async function generateSubObjectiveProposals(
     typeof raw?.category === "string" ? raw.category.trim() : "";
   category = category.replace(/[.!?,]+$/g, "").slice(0, 24).trim();
 
-  return { proposals, category };
+  return { proposals, category, temperature, intent };
 }

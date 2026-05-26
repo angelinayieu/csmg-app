@@ -6,6 +6,11 @@
 // self-assessed plausibility, 0–1.
 
 import type { ClarifyingBlock } from "./clarifying-state";
+import type { ObjectiveAnnotation } from "./generate-annotations";
+import type {
+  SubObjectiveIntent,
+  SubObjectiveProposal,
+} from "./sub-objective-state";
 
 export interface BuildDecomposeArgs {
   objective: string;
@@ -15,9 +20,75 @@ export interface BuildDecomposeArgs {
    *  the decomposition is grounded in real sources. Empty string =
    *  no research yet (decomposition falls back to LLM-only). */
   ragBlock?: string;
+  /** Variant Lab — intent steering this generation. Defaults to
+   *  "initial" for the first pass; subsequent regens carry a steering
+   *  intent that changes the system prompt + temperature. */
+  intent?: SubObjectiveIntent;
+  /** Variant Lab — proposals from prior batches. When present, an
+   *  ANTI-DUPLICATE block is injected: the LLM must NOT trivially
+   *  paraphrase the existing set. */
+  existingProposals?: SubObjectiveProposal[];
+  /** Variant Lab — parent objective annotation lens (top-8 weight-
+   *  sorted). When present, lens block is included + each new
+   *  proposal must emit lens_coverage[] back. */
+  lens?: ObjectiveAnnotation[];
+  /** Variant Lab — 1-based annotation indices NOT YET covered by
+   *  any elected proposal. Powers the gap_fill intent: prompt
+   *  highlights these as targets the new batch should attack. */
+  uncoveredLensIndices?: number[];
 }
 
-export function buildSystemPrompt(): string {
+/** Intent-specific mixins appended to the base system prompt. Each
+ *  is a complete instruction block that pushes the LLM toward a
+ *  distinct generation behavior. */
+const INTENT_MIXINS: Record<SubObjectiveIntent, string> = {
+  initial: ``,
+  creative: `
+
+INTENT — CREATIVE (override the default decomposition style):
+Pick a DISTANT-DOMAIN analogy from the parent objective and decompose AS IF the user were working in that other domain. Then translate the proposals back to the user's domain. Self-test: each title should be one the user would NOT have generated themselves — surprising but defensibly load-bearing. Avoid contrived weirdness — every proposal must still pass the load-bearing test.`,
+  concrete: `
+
+INTENT — CONCRETE (override the default decomposition style):
+Be ruthlessly implementation-anchored. Each proposal must name a SPECIFIC artifact the user would ship within 2 weeks of starting it (a UI screen, a database table, a measurable metric, a specific document). Reject any proposal that's abstract enough to mean different things to different people.`,
+  contrarian: `
+
+INTENT — CONTRARIAN (override the default decomposition style):
+Read the EXISTING PROPOSALS below. Identify the SHARED ASSUMPTION underlying them (what they all take for granted about how the user should approach the parent objective). INVERT that assumption. Generate proposals that would only make sense if the inverted assumption holds. Name the inverted assumption explicitly in each proposal's rationale.`,
+  gap_fill: `
+
+INTENT — GAP FILL (override the default decomposition style):
+The user already has proposals covering most facets of the parent. Below you'll see UNCOVERED LENS ENTRIES — readings from the parent objective that NO existing proposal addresses. Your job: generate proposals that SPECIFICALLY attack the uncovered entries. Each proposal's rationale must reference which lens entry it covers (by phrase).`,
+  ambitious: `
+
+INTENT — AMBITIOUS (override the default decomposition style):
+Extend the time horizon. Propose sub-objectives that would only be worth pursuing if the user committed 6+ months. Each proposal must name the long-horizon payoff explicitly in its rationale — what's the compounding return that justifies the longer timeline?`,
+  wildcard: `
+
+INTENT — WILDCARD (override the default decomposition style):
+Generate ONE proposal you'd normally reject as too weird. Then justify why it might be the right cut anyway — what assumption it violates productively, what evidence would tell us if it works. Be honest in the rationale: "this is unusual because…". The other 3-4 proposals should follow the default style as a stabilizing baseline.`,
+};
+
+const INTENT_TEMPERATURE: Record<SubObjectiveIntent, number> = {
+  initial: 0.55,
+  creative: 0.75,
+  concrete: 0.35,
+  contrarian: 0.55,
+  gap_fill: 0.5,
+  ambitious: 0.55,
+  wildcard: 0.85,
+};
+
+export function temperatureForIntent(intent: SubObjectiveIntent): number {
+  return INTENT_TEMPERATURE[intent] ?? 0.55;
+}
+
+export function buildSystemPrompt(intent: SubObjectiveIntent = "initial"): string {
+  const mixin = INTENT_MIXINS[intent] ?? "";
+  return baseSystemPrompt() + mixin;
+}
+
+function baseSystemPrompt(): string {
   return `You are a strategy decomposer.
 
 The user has refined an objective through a short clarifying-question pass. Your job is to do two things:
@@ -63,7 +134,14 @@ Return strict JSON.`;
 }
 
 export function buildUserPrompt(args: BuildDecomposeArgs): string {
-  const { objective, clarifying, ragBlock } = args;
+  const {
+    objective,
+    clarifying,
+    ragBlock,
+    existingProposals,
+    lens,
+    uncoveredLensIndices,
+  } = args;
 
   const clarifyingBlock =
     clarifying && clarifying.questions.length > 0
@@ -84,40 +162,119 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
   const researchBlock =
     ragBlock && ragBlock.length > 0 ? `\n\n${ragBlock}\n` : "";
 
+  // Variant Lab — ANTI-DUPLICATE block. The single biggest diversity
+  // lever isn't temperature — it's telling the LLM "don't repeat
+  // these specifically." Every regen pass sees the prior set.
+  const existingBlock =
+    existingProposals && existingProposals.length > 0
+      ? `\n\nEXISTING PROPOSALS (do NOT duplicate or trivially paraphrase — your new proposals must attack DIFFERENT facets):\n${existingProposals
+          .map((p, i) => `  ${i + 1}. ${p.title} — ${p.summary}`)
+          .join("\n")}\n\nSelf-test: if a new title could swap in for an existing title without changing meaning, REWRITE.`
+      : "";
+
+  // Variant Lab — ANNOTATION LENS. Same lens shape as the room
+  // generator; renders the top-weighted readings of the parent
+  // objective so each new proposal can be lens-aware + emit
+  // lens_coverage[] back.
+  const lensBlock =
+    lens && lens.length > 0
+      ? `\n\nANNOTATION LENS (the parent objective's load-bearing semantic readings — weight-sorted, 1-based):\n${lens
+          .map((a, i) => {
+            const lines = [`  [${i + 1}] "${a.phrase}"`];
+            if (a.reading) lines.push(`        reading: ${a.reading}`);
+            if (a.fragility?.when)
+              lines.push(`        fragility: when ${a.fragility.when}`);
+            if (a.tensions?.length) {
+              const t = a.tensions[0];
+              lines.push(`        ${t.kind}: ${t.note}`);
+            }
+            return lines.join("\n");
+          })
+          .join("\n")}`
+      : "";
+
+  const lensCoverageRule =
+    lens && lens.length > 0
+      ? `\n\nFor each new proposal, emit lens_coverage[] — the 1-based lens indices this proposal directly derives from (0-3 entries; empty array when the proposal is lens-independent).`
+      : "";
+
+  // Variant Lab — UNCOVERED LENS ENTRIES block for gap_fill intent.
+  // Only included when uncoveredLensIndices is non-empty AND lens is
+  // available; the system prompt's INTENT — GAP FILL mixin tells the
+  // model to target these specifically.
+  const uncoveredBlock =
+    lens &&
+    lens.length > 0 &&
+    uncoveredLensIndices &&
+    uncoveredLensIndices.length > 0
+      ? `\n\nUNCOVERED LENS ENTRIES (no existing proposal addresses these — target them):\n${uncoveredLensIndices
+          .map((idx) => {
+            const a = lens[idx - 1];
+            return a ? `  [${idx}] "${a.phrase}" — ${a.reading || "(no reading)"}` : null;
+          })
+          .filter((s): s is string => s !== null)
+          .join("\n")}`
+      : "";
+
   return `REFINED OBJECTIVE:
 """
 ${objective.slice(0, 4000)}
-"""${clarifyingBlock}${researchBlock}
+"""${clarifyingBlock}${researchBlock}${lensBlock}${existingBlock}${uncoveredBlock}${lensCoverageRule}
 
 Propose 4–5 sub-objectives per the system instructions. Mark exactly 3 as recommended=true (the ones most load-bearing for delivering the parent).`;
 }
 
-export const RESPONSE_SCHEMA = {
-  name: "objective_decompose",
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      // The picker UI shows this above the proposals as
-      // "5 {category} proposed" so the user knows what kind of
-      // bucket they're picking from (Features / Lessons / Bets / …).
-      category: { type: "string" },
-      proposals: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            title: { type: "string" },
-            summary: { type: "string" },
-            rationale: { type: "string" },
-            confidence: { type: "number" },
-            recommended: { type: "boolean" },
+/** Schema is built dynamically — when a lens is in play, every
+ *  proposal must include lens_coverage[]. Keeps strict-mode happy
+ *  (every field in `required`). */
+export function buildResponseSchema(hasLens: boolean) {
+  const proposalProps: Record<string, unknown> = {
+    title: { type: "string" },
+    summary: { type: "string" },
+    rationale: { type: "string" },
+    confidence: { type: "number" },
+    recommended: { type: "boolean" },
+  };
+  const proposalRequired: string[] = [
+    "title",
+    "summary",
+    "rationale",
+    "confidence",
+    "recommended",
+  ];
+  if (hasLens) {
+    proposalProps.lens_coverage = {
+      type: "array",
+      items: { type: "number" },
+    };
+    proposalRequired.push("lens_coverage");
+  }
+
+  return {
+    name: "objective_decompose",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        // The picker UI shows this above the proposals as
+        // "5 {category} proposed" so the user knows what kind of
+        // bucket they're picking from (Features / Lessons / Bets / …).
+        category: { type: "string" },
+        proposals: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: proposalProps,
+            required: proposalRequired,
           },
-          required: ["title", "summary", "rationale", "confidence", "recommended"],
         },
       },
+      required: ["category", "proposals"],
     },
-    required: ["category", "proposals"],
-  },
-} as const;
+  } as const;
+}
+
+/** Back-compat — legacy callers that imported the constant. New
+ *  callers should use buildResponseSchema(hasLens) instead. */
+export const RESPONSE_SCHEMA = buildResponseSchema(false);

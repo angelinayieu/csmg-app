@@ -156,6 +156,7 @@ export function ObjectiveCanvasView({
           <SubObjectivePickerCard
             spaceId={spaceId}
             initial={initialSubObjectives}
+            annotations={initialCoreAnnotations}
             onConfirmed={handlePickerConfirmed}
           />
         )}

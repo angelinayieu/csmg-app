@@ -6,40 +6,89 @@
 // Recommended top-3 are pre-checked. User can toggle picks, ask for
 // a regeneration, then Confirm to advance the canvas into "main"
 // stage (Phase 4 forks them onto the whiteboard).
+//
+// Variant Lab additions:
+//   • Lens coverage strip at top — surfaces which parent-objective
+//     readings are covered by elected proposals (orphans flagged)
+//   • Per-proposal disposition (elect/defer/reject) replaces the
+//     binary checkbox. "Picked" = "elected".
+//   • Batch dividers when multiple generation passes have run
+//   • Variant Lab bar below proposals — primary "Generate 3 variants"
+//     button + expandable intent palette
 
-import { useEffect, useState, useTransition } from "react";
-import { ArrowRight, Check, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import {
+  AlertCircle,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Pause,
+  RefreshCw,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
-import type { SubObjectiveBlock, SubObjectiveProposal } from "@/lib/objective-canvas/sub-objective-state";
+import type {
+  SubObjectiveBatch,
+  SubObjectiveBlock,
+  SubObjectiveDisposition,
+  SubObjectiveIntent,
+  SubObjectiveProposal,
+} from "@/lib/objective-canvas/sub-objective-state";
+
+interface ObjectiveAnnotationLite {
+  phrase: string;
+  reading?: string;
+  weight?: number;
+  layer_tag?: string | null;
+}
 
 interface Props {
   spaceId: string;
   /** Server-rendered initial block (if proposals already exist). */
   initial: SubObjectiveBlock | null;
+  /** Parent objective annotations (Variant Lab lens). When non-empty
+   *  the lens coverage strip renders + the variant lab can fire
+   *  gap_fill intent. */
+  annotations?: ObjectiveAnnotationLite[];
   /** Called when confirm succeeds. Parent flips into "main" stage. */
   onConfirmed: () => void;
 }
 
+const INTENT_LABEL: Record<SubObjectiveIntent, string> = {
+  initial: "Initial",
+  creative: "Creative",
+  concrete: "Concrete",
+  contrarian: "Contrarian",
+  gap_fill: "Fill gaps",
+  ambitious: "Ambitious",
+  wildcard: "Wildcard",
+};
+
+const INTENT_DESCRIPTION: Record<SubObjectiveIntent, string> = {
+  initial: "Default decomposition.",
+  creative: "Distant-domain analogies; surprising cuts.",
+  concrete: "Implementation-anchored, ship-in-2-weeks.",
+  contrarian: "Inverts a shared assumption of the existing set.",
+  gap_fill: "Targets lens readings nothing else covers.",
+  ambitious: "6+ month horizon, compounding payoff.",
+  wildcard: "One deliberately-weird cut + reasoned justification.",
+};
+
 export function SubObjectivePickerCard({
   spaceId,
   initial,
+  annotations = [],
   onConfirmed,
 }: Props) {
   const [block, setBlock] = useState<SubObjectiveBlock | null>(initial);
-  const [picked, setPicked] = useState<Set<string>>(() => {
-    if (!initial) return new Set();
-    if (initial.picked_proposal_ids.length > 0) {
-      return new Set(initial.picked_proposal_ids);
-    }
-    // Pre-check the recommended trio
-    return new Set(
-      initial.proposals.filter((p) => p.recommended).map((p) => p.id),
-    );
-  });
   const [error, setError] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
   const [loading, setLoading] = useState(initial === null);
+  const [variantInFlight, setVariantInFlight] =
+    useState<SubObjectiveIntent | null>(null);
 
   // ── Auto-propose on mount if nothing is cached ──
   useEffect(() => {
@@ -48,11 +97,71 @@ export function SubObjectivePickerCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Top-8 weight-sorted lens — matches the prompt projection so
+  // lens_coverage indices line up with the chips we render.
+  const lens = useMemo(() => {
+    return [...annotations]
+      .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
+      .slice(0, 8);
+  }, [annotations]);
+
+  /** All proposals across batches, in batch order. Derived from
+   *  block.proposals (which the backend already flattens). Memoized
+   *  so its identity is stable for the downstream useMemo deps. */
+  const allProposals = useMemo(
+    () => block?.proposals ?? [],
+    [block],
+  );
+
+  /** Disposition-driven election state. "picked" = "elected".
+   *  Falls back to recommended trio when no dispositions exist yet
+   *  (first render / legacy block). */
+  const electedIds = useMemo(() => {
+    if (!block) return new Set<string>();
+    const explicit = allProposals
+      .filter((p) => p.disposition === "elected")
+      .map((p) => p.id);
+    if (explicit.length > 0) return new Set(explicit);
+    // Back-compat: legacy block with picked_proposal_ids
+    if (block.picked_proposal_ids.length > 0) {
+      return new Set(block.picked_proposal_ids);
+    }
+    // First render: pre-elect recommended trio
+    return new Set(
+      allProposals.filter((p) => p.recommended).map((p) => p.id),
+    );
+  }, [block, allProposals]);
+
+  /** Lens coverage = which lens indices (1..lensSize) are touched
+   *  by any ELECTED proposal. Powers the coverage strip + suggests
+   *  gap_fill when there are uncovered entries. */
+  const coverage = useMemo(() => {
+    const covered = new Set<number>();
+    for (const p of allProposals) {
+      if (!electedIds.has(p.id)) continue;
+      if (!Array.isArray(p.lens_coverage)) continue;
+      for (const idx of p.lens_coverage) {
+        if (idx >= 1 && idx <= lens.length) covered.add(idx);
+      }
+    }
+    const uncovered: number[] = [];
+    for (let i = 1; i <= lens.length; i++) {
+      if (!covered.has(i)) uncovered.push(i);
+    }
+    return { covered, uncovered };
+  }, [allProposals, electedIds, lens]);
+
   async function runAction(
     kind: "propose" | "confirm",
-    payload?: { mode?: "initial" | "regenerate" },
+    payload?: {
+      mode?: "initial" | "regenerate" | "variant";
+      intent?: SubObjectiveIntent;
+    },
   ) {
     setError(null);
+    if (payload?.mode === "variant" && payload.intent) {
+      setVariantInFlight(payload.intent);
+    }
     startTransition(async () => {
       try {
         if (kind === "propose") {
@@ -63,33 +172,28 @@ export function SubObjectivePickerCard({
             body: JSON.stringify({
               spaceId,
               mode: payload?.mode ?? "initial",
+              intent: payload?.intent,
             }),
           });
           const json = await res.json();
           if (!res.ok) {
             setError(json?.error ?? "Could not propose sub-objectives.");
             setLoading(false);
+            setVariantInFlight(null);
             return;
           }
           const nextBlock = json.sub_objectives as SubObjectiveBlock;
           setBlock(nextBlock);
-          // Reset picks to the new recommended trio on regenerate.
-          setPicked(
-            new Set(
-              nextBlock.proposals
-                .filter((p) => p.recommended)
-                .map((p) => p.id),
-            ),
-          );
           setLoading(false);
+          setVariantInFlight(null);
         } else if (kind === "confirm") {
-          if (!block || picked.size === 0) return;
+          if (!block || electedIds.size === 0) return;
           const res = await fetch("/api/brainstorm/sub-objectives/confirm", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               spaceId,
-              pickedProposalIds: Array.from(picked),
+              pickedProposalIds: Array.from(electedIds),
             }),
           });
           const json = await res.json();
@@ -104,17 +208,52 @@ export function SubObjectivePickerCard({
           err instanceof Error ? err.message : "Network error. Try again.",
         );
         setLoading(false);
+        setVariantInFlight(null);
       }
     });
   }
 
-  function togglePick(id: string) {
-    setPicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  /** Optimistic disposition update — local mutation immediately,
+   *  PATCH in the background. Reverts on failure. */
+  async function setDisposition(
+    proposalId: string,
+    disposition: SubObjectiveDisposition,
+  ) {
+    if (!block) return;
+    const prev = block;
+    const apply = (p: SubObjectiveProposal) =>
+      p.id === proposalId ? { ...p, disposition } : p;
+    const optimistic: SubObjectiveBlock = {
+      ...block,
+      proposals: block.proposals.map(apply),
+      batches: block.batches?.map((b) => ({
+        ...b,
+        proposals: b.proposals.map(apply),
+      })),
+    };
+    setBlock(optimistic);
+    try {
+      const res = await fetch(
+        "/api/brainstorm/sub-objectives/disposition",
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ spaceId, proposalId, disposition }),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json?.error ?? "Could not save disposition.");
+        setBlock(prev);
+        return;
+      }
+      if (json?.sub_objectives) {
+        setBlock(json.sub_objectives as SubObjectiveBlock);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error.");
+      setBlock(prev);
+    }
   }
 
   // ── Render ──
@@ -126,7 +265,7 @@ export function SubObjectivePickerCard({
     );
   }
 
-  if (!block || block.proposals.length === 0) {
+  if (!block || allProposals.length === 0) {
     return (
       <Shell>
         <Eyebrow>Sub-objectives</Eyebrow>
@@ -147,13 +286,17 @@ export function SubObjectivePickerCard({
     );
   }
 
-  const recommendedCount = block.proposals.filter((p) => p.recommended).length;
+  const recommendedCount = allProposals.filter((p) => p.recommended).length;
+  const batches: SubObjectiveBatch[] = block.batches ?? [];
+  const hasBatches = batches.length > 1; // only show dividers when >1
+  const totalElected = electedIds.size;
 
   return (
     <Shell>
       <div className="flex items-center justify-between">
         <Eyebrow>
-          {block.proposals.length} {block.category || "proposed"}
+          {allProposals.length} {block.category || "proposed"}
+          {hasBatches && ` · ${batches.length} generations`}
         </Eyebrow>
         <button
           type="button"
@@ -165,9 +308,10 @@ export function SubObjectivePickerCard({
             color: appleVibe.text.secondary,
             cursor: busy ? "wait" : "pointer",
           }}
+          title="Wipe everything and regenerate from scratch"
         >
           <RefreshCw className="h-3 w-3" strokeWidth={2} />
-          Regenerate
+          Reset
         </button>
       </div>
 
@@ -181,17 +325,57 @@ export function SubObjectivePickerCard({
         Outcomes → Objective layered analysis.
       </p>
 
-      <ul className="mt-5 flex flex-col gap-2">
-        {block.proposals.map((p) => (
-          <ProposalRow
-            key={p.id}
-            proposal={p}
-            picked={picked.has(p.id)}
-            onToggle={() => togglePick(p.id)}
-            disabled={busy}
-          />
-        ))}
-      </ul>
+      {/* Lens coverage strip — only when annotations exist */}
+      {lens.length > 0 && (
+        <LensCoverageStrip
+          lens={lens}
+          covered={coverage.covered}
+          uncovered={coverage.uncovered}
+          electedCount={totalElected}
+        />
+      )}
+
+      {/* Proposals — grouped by batch when >1, else flat */}
+      <div className="mt-5">
+        {hasBatches ? (
+          batches.map((b, batchIdx) => (
+            <BatchSection
+              key={b.id}
+              batch={b}
+              isFirst={batchIdx === 0}
+              electedIds={electedIds}
+              setDisposition={setDisposition}
+              disabled={busy}
+            />
+          ))
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {allProposals.map((p) => (
+              <ProposalRow
+                key={p.id}
+                proposal={p}
+                disposition={p.disposition ?? null}
+                isElected={electedIds.has(p.id)}
+                onSetDisposition={(d) => setDisposition(p.id, d)}
+                disabled={busy}
+                lens={lens}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Variant Lab bar — generate more, layered onto existing */}
+      <VariantLabBar
+        intentInFlight={variantInFlight}
+        suggestedIntent={
+          coverage.uncovered.length > 0 ? "gap_fill" : "creative"
+        }
+        onGenerate={(intent) =>
+          runAction("propose", { mode: "variant", intent })
+        }
+        disabled={busy}
+      />
 
       <div
         className="mt-5 flex items-center justify-between border-t pt-4"
@@ -201,25 +385,25 @@ export function SubObjectivePickerCard({
           className="text-[11px] font-light"
           style={{ color: appleVibe.text.tertiary }}
         >
-          {picked.size} of {block.proposals.length} picked
+          {totalElected} of {allProposals.length} elected
         </span>
         <button
           type="button"
           onClick={() => runAction("confirm")}
-          disabled={busy || picked.size === 0}
+          disabled={busy || totalElected === 0}
           className="inline-flex items-center gap-1.5 rounded-2xl px-4 py-2 text-[13px] font-semibold"
           style={{
             background:
-              picked.size > 0 && !busy
+              totalElected > 0 && !busy
                 ? appleVibe.accent.primary
                 : appleVibe.surface.chip,
             color:
-              picked.size > 0 && !busy
+              totalElected > 0 && !busy
                 ? appleVibe.text.onAccent
                 : appleVibe.text.tertiary,
             borderRadius: appleVibe.radius.md,
             cursor:
-              picked.size > 0 && !busy ? "pointer" : "not-allowed",
+              totalElected > 0 && !busy ? "pointer" : "not-allowed",
           }}
         >
           <span>{busy ? "Working…" : "Fork onto canvas"}</span>
@@ -232,63 +416,363 @@ export function SubObjectivePickerCard({
   );
 }
 
-// ── Row ────────────────────────────────────────────────────────────
+// ── Batch section divider + rows ────────────────────────────────────
+
+function BatchSection({
+  batch,
+  isFirst,
+  electedIds,
+  setDisposition,
+  disabled,
+}: {
+  batch: SubObjectiveBatch;
+  isFirst: boolean;
+  electedIds: Set<string>;
+  setDisposition: (
+    proposalId: string,
+    d: SubObjectiveDisposition,
+  ) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className={isFirst ? "" : "mt-5 border-t pt-4"} style={{
+      borderColor: isFirst ? undefined : appleVibe.stroke.hairline,
+    }}>
+      <div className="mb-2 flex items-baseline gap-2">
+        <span
+          className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          Generation {batch.generation_number} · {INTENT_LABEL[batch.intent]}
+        </span>
+        <span
+          className="text-[10.5px] font-light italic"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          {INTENT_DESCRIPTION[batch.intent]}
+        </span>
+      </div>
+      <ul className="flex flex-col gap-2">
+        {batch.proposals.map((p) => (
+          <ProposalRow
+            key={p.id}
+            proposal={p}
+            disposition={p.disposition ?? null}
+            isElected={electedIds.has(p.id)}
+            onSetDisposition={(d) => setDisposition(p.id, d)}
+            disabled={disabled}
+            lens={[]} /* lens chips render once at the strip, not per-row */
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ── Lens coverage strip ─────────────────────────────────────────────
+
+function LensCoverageStrip({
+  lens,
+  covered,
+  uncovered,
+  electedCount,
+}: {
+  lens: ObjectiveAnnotationLite[];
+  covered: Set<number>;
+  uncovered: number[];
+  electedCount: number;
+}) {
+  const pct = lens.length > 0 ? Math.round((covered.size / lens.length) * 100) : 0;
+  return (
+    <div
+      className="mt-4 rounded-2xl border px-3 py-2.5"
+      style={{
+        background: "rgba(255,255,255,0.7)",
+        borderColor: appleVibe.stroke.hairline,
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Sparkles
+            className="h-3 w-3 flex-shrink-0"
+            strokeWidth={2}
+            style={{ color: appleVibe.text.tertiary }}
+          />
+          <span
+            className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Lens coverage
+          </span>
+          <span
+            className="text-[11px] font-light"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            · {covered.size}/{lens.length} readings covered by {electedCount}{" "}
+            elected proposal{electedCount === 1 ? "" : "s"}
+          </span>
+        </div>
+        <span
+          className="font-mono text-[10px] font-semibold"
+          style={{ color: pct >= 75 ? "rgba(22,163,74,0.85)" : pct >= 40 ? "rgba(217,119,6,0.85)" : "rgba(220,38,38,0.85)" }}
+        >
+          {pct}%
+        </span>
+      </div>
+      {/* Progress bar */}
+      <div
+        className="mt-2 h-1 w-full overflow-hidden rounded-full"
+        style={{ background: "rgba(15,23,42,0.06)" }}
+      >
+        <div
+          className="h-full rounded-full transition-all"
+          style={{
+            width: `${pct}%`,
+            background:
+              pct >= 75
+                ? "rgba(22,163,74,0.7)"
+                : pct >= 40
+                  ? "rgba(217,119,6,0.7)"
+                  : "rgba(220,38,38,0.7)",
+          }}
+        />
+      </div>
+      {uncovered.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <span
+            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: "rgba(146,64,14,0.95)" }}
+          >
+            uncovered
+          </span>
+          {uncovered.slice(0, 5).map((idx) => {
+            const a = lens[idx - 1];
+            if (!a) return null;
+            return (
+              <span
+                key={idx}
+                className="inline-flex max-w-[180px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                style={{
+                  background: "rgba(245,158,11,0.10)",
+                  color: "rgba(146,64,14,0.95)",
+                  border: "1px solid rgba(245,158,11,0.22)",
+                }}
+                title={a.reading || a.phrase}
+              >
+                <AlertCircle className="h-2.5 w-2.5" strokeWidth={2.5} />
+                <span className="truncate">{a.phrase}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Variant Lab bar ─────────────────────────────────────────────────
+
+const ALL_INTENTS: SubObjectiveIntent[] = [
+  "creative",
+  "concrete",
+  "contrarian",
+  "gap_fill",
+  "ambitious",
+  "wildcard",
+];
+
+function VariantLabBar({
+  intentInFlight,
+  suggestedIntent,
+  onGenerate,
+  disabled,
+}: {
+  intentInFlight: SubObjectiveIntent | null;
+  suggestedIntent: SubObjectiveIntent;
+  onGenerate: (intent: SubObjectiveIntent) => void;
+  disabled: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const busy = intentInFlight !== null;
+
+  return (
+    <div
+      className="mt-5 rounded-2xl border p-3"
+      style={{
+        background: "rgba(15,23,42,0.02)",
+        borderColor: appleVibe.stroke.hairline,
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Sparkle className="h-3 w-3" />
+          <span
+            className="text-[11px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            Generate better
+          </span>
+          <span
+            className="text-[11px] font-light italic"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            · keep existing, layer on more
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="inline-flex items-center gap-1 text-[10.5px] font-medium"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          {expanded ? (
+            <>
+              hide intents <ChevronUp className="h-3 w-3" strokeWidth={2} />
+            </>
+          ) : (
+            <>
+              pick intent <ChevronDown className="h-3 w-3" strokeWidth={2} />
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Default action — single click, uses the suggested intent */}
+      {!expanded && (
+        <div className="mt-2.5 flex items-center justify-between gap-2">
+          <span
+            className="text-[11.5px] font-light"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Suggested: <span className="font-semibold" style={{ color: appleVibe.text.secondary }}>
+              {INTENT_LABEL[suggestedIntent]}
+            </span> — {INTENT_DESCRIPTION[suggestedIntent]}
+          </span>
+          <button
+            type="button"
+            onClick={() => onGenerate(suggestedIntent)}
+            disabled={disabled || busy}
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold"
+            style={{
+              background:
+                disabled || busy
+                  ? appleVibe.surface.chip
+                  : appleVibe.accent.primary,
+              color:
+                disabled || busy
+                  ? appleVibe.text.tertiary
+                  : appleVibe.text.onAccent,
+              cursor: disabled || busy ? "wait" : "pointer",
+            }}
+          >
+            {busy ? "Generating…" : `Generate ${INTENT_LABEL[suggestedIntent]}`}
+          </button>
+        </div>
+      )}
+
+      {/* Advanced — pick a specific intent */}
+      {expanded && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {ALL_INTENTS.map((intent) => {
+            const inFlight = intentInFlight === intent;
+            return (
+              <button
+                key={intent}
+                type="button"
+                onClick={() => onGenerate(intent)}
+                disabled={disabled || busy}
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all"
+                style={{
+                  background: inFlight
+                    ? "rgba(15,23,42,0.10)"
+                    : "rgba(255,255,255,0.85)",
+                  color: appleVibe.text.secondary,
+                  border: `1px solid ${
+                    intent === suggestedIntent
+                      ? "rgba(124,58,237,0.35)"
+                      : appleVibe.stroke.hairline
+                  }`,
+                  cursor: disabled || busy ? "wait" : "pointer",
+                  opacity: disabled || busy ? 0.6 : 1,
+                }}
+                title={INTENT_DESCRIPTION[intent]}
+              >
+                {INTENT_LABEL[intent]}
+                {intent === suggestedIntent && (
+                  <span
+                    className="ml-0.5 text-[9px] font-semibold"
+                    style={{ color: "rgba(91,33,182,0.95)" }}
+                  >
+                    ★
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Row with disposition controls ───────────────────────────────────
 
 function ProposalRow({
   proposal,
-  picked,
-  onToggle,
+  disposition,
+  isElected,
+  onSetDisposition,
   disabled,
 }: {
   proposal: SubObjectiveProposal;
-  picked: boolean;
-  onToggle: () => void;
+  disposition: SubObjectiveDisposition;
+  isElected: boolean;
+  onSetDisposition: (d: SubObjectiveDisposition) => void;
   disabled: boolean;
+  lens: ObjectiveAnnotationLite[];
 }) {
   const confidencePct = Math.round(proposal.confidence * 100);
   const confidenceDot =
     confidencePct >= 75 ? "#16A34A" : confidencePct >= 50 ? "#D97706" : "#DC2626";
+  const rejected = disposition === "rejected";
+  const deferred = disposition === "deferred";
+
   return (
     <li>
-      <button
-        type="button"
-        onClick={onToggle}
-        disabled={disabled}
-        aria-pressed={picked}
+      <div
         className="flex w-full items-start gap-3 rounded-2xl p-3.5 text-left transition-all"
         style={{
-          background: picked
-            ? "rgba(15,23,42,0.025)"
-            : "rgba(255,255,255,0.55)",
+          background: isElected
+            ? "rgba(240,253,244,0.7)"
+            : rejected
+              ? "rgba(255,255,255,0.45)"
+              : "rgba(255,255,255,0.7)",
           border: `1px solid ${
-            picked ? "rgba(15,23,42,0.18)" : appleVibe.stroke.hairline
+            isElected
+              ? "rgba(22,163,74,0.35)"
+              : rejected
+                ? appleVibe.stroke.hairline
+                : appleVibe.stroke.hairline
           }`,
           borderRadius: appleVibe.radius.md,
-          cursor: disabled ? "wait" : "pointer",
+          opacity: rejected ? 0.55 : 1,
+          boxShadow: isElected
+            ? "0 0 0 3px rgba(22,163,74,0.10)"
+            : undefined,
         }}
       >
-        {/* Compact checkbox — circle, slightly smaller */}
-        <div
-          className="mt-0.5 flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full"
-          style={{
-            background: picked ? appleVibe.accent.primary : "transparent",
-            border: `1px solid ${
-              picked ? appleVibe.accent.primary : appleVibe.stroke.medium
-            }`,
-          }}
-          aria-hidden
-        >
-          {picked && (
-            <Check
-              className="h-2.5 w-2.5"
-              strokeWidth={3.5}
-              style={{ color: appleVibe.text.onAccent }}
-            />
-          )}
-        </div>
+        <DispositionControls
+          disposition={disposition}
+          disabled={disabled}
+          onElect={() => onSetDisposition("elected")}
+          onDefer={() => onSetDisposition("deferred")}
+          onReject={() => onSetDisposition("rejected")}
+          onClear={() => onSetDisposition(null)}
+        />
 
         <div className="min-w-0 flex-1">
-          {/* Title + recommended chip — no numbering, single line */}
           <div className="flex items-baseline gap-1.5">
             <h3
               className="text-[14px] font-semibold leading-snug tracking-tight"
@@ -303,6 +787,7 @@ function ProposalRow({
                   background: "rgba(124,58,237,0.08)",
                   color: "rgba(91,33,182,0.95)",
                 }}
+                title="LLM-picked as load-bearing in its batch"
               >
                 <Sparkle className="h-2 w-2" />
                 Top
@@ -319,8 +804,8 @@ function ProposalRow({
             </p>
           )}
 
-          {/* Single compact meta line: confidence dot · pct · rationale */}
-          <div className="mt-2 flex items-center gap-1.5">
+          {/* Meta row: confidence + lens coverage chips */}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <span
               className="block h-1.5 w-1.5 flex-shrink-0 rounded-full"
               style={{ background: confidenceDot }}
@@ -332,6 +817,23 @@ function ProposalRow({
             >
               {confidencePct}%
             </span>
+            {proposal.lens_coverage && proposal.lens_coverage.length > 0 && (
+              <>
+                <span
+                  className="text-[10px]"
+                  style={{ color: appleVibe.text.faint }}
+                >
+                  ·
+                </span>
+                <span
+                  className="text-[10px] font-medium"
+                  style={{ color: appleVibe.text.tertiary }}
+                  title={`Covers lens entries: ${proposal.lens_coverage.join(", ")}`}
+                >
+                  covers {proposal.lens_coverage.length} lens
+                </span>
+              </>
+            )}
             {proposal.rationale && (
               <>
                 <span
@@ -350,9 +852,104 @@ function ProposalRow({
               </>
             )}
           </div>
+
+          {deferred && (
+            <div
+              className="mt-2 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium"
+              style={{
+                background: "rgba(217,119,6,0.10)",
+                color: "rgba(146,64,14,0.95)",
+                border: "1px solid rgba(217,119,6,0.22)",
+              }}
+            >
+              <Pause className="h-2.5 w-2.5" strokeWidth={2} />
+              Deferred
+            </div>
+          )}
         </div>
-      </button>
+      </div>
     </li>
+  );
+}
+
+function DispositionControls({
+  disposition,
+  disabled,
+  onElect,
+  onDefer,
+  onReject,
+  onClear,
+}: {
+  disposition: SubObjectiveDisposition;
+  disabled: boolean;
+  onElect: () => void;
+  onDefer: () => void;
+  onReject: () => void;
+  onClear: () => void;
+}) {
+  const elected = disposition === "elected";
+  const rejected = disposition === "rejected";
+  const deferred = disposition === "deferred";
+
+  function btn(
+    onClick: () => void,
+    active: boolean,
+    activeBg: string,
+    activeColor: string,
+    Icon: typeof Check,
+    title: string,
+  ) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (active) onClear();
+          else onClick();
+        }}
+        disabled={disabled}
+        title={title}
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full transition-all"
+        style={{
+          background: active ? activeBg : "rgba(15,23,42,0.04)",
+          color: active ? activeColor : appleVibe.text.tertiary,
+          border: `1px solid ${active ? activeColor : appleVibe.stroke.hairline}`,
+          cursor: disabled ? "wait" : "pointer",
+          opacity: disabled ? 0.6 : 1,
+        }}
+      >
+        <Icon className="h-2.5 w-2.5" strokeWidth={2.5} />
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-0.5 flex flex-shrink-0 flex-col gap-1">
+      {btn(
+        onElect,
+        elected,
+        "rgba(22,163,74,0.18)",
+        "rgba(20,83,45,0.95)",
+        Check,
+        elected ? "Elected — click to clear" : "Elect (include in fork)",
+      )}
+      {btn(
+        onDefer,
+        deferred,
+        "rgba(217,119,6,0.18)",
+        "rgba(146,64,14,0.95)",
+        Pause,
+        deferred ? "Deferred — click to clear" : "Defer for later",
+      )}
+      {btn(
+        onReject,
+        rejected,
+        "rgba(220,38,38,0.18)",
+        "rgba(127,29,29,0.95)",
+        X,
+        rejected ? "Rejected — click to clear" : "Reject",
+      )}
+    </div>
   );
 }
 
