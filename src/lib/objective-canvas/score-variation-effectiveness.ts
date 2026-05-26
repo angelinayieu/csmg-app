@@ -146,38 +146,25 @@ async function findTargetPain(
   // generator). For our purposes, the feature is at one end and the
   // pain is at the other — we accept either edge direction and use
   // the pain as the target.
-  const queries: Promise<{
-    data:
-      | Array<{
-          id: string;
-          source_entity_id: string;
-          target_entity_id: string;
-          strength: number | null;
-        }>
-      | null;
-  }>[] = [];
-
-  // Outgoing: feature → ? (could be a pain on "aggravates" / "blocks"
-  // edges, or could be an outcome on "produces").
-  queries.push(
-    db
-      .from("edges")
-      .select("id, source_entity_id, target_entity_id, strength")
-      .eq("space_id", spaceId)
-      .eq("source_entity_id", featureEntityId)
-      .then((r) => ({ data: r.data })),
-  );
-  // Incoming: ? → feature (most often pain "addresses" via reverse
-  // direction in the room model — pain is source, feature is target).
-  queries.push(
-    db
-      .from("edges")
-      .select("id, source_entity_id, target_entity_id, strength")
-      .eq("space_id", spaceId)
-      .eq("target_entity_id", featureEntityId)
-      .then((r) => ({ data: r.data })),
-  );
-  const [outRes, inRes] = await Promise.all(queries);
+  //
+  // Supabase's query builder returns PostgrestBuilder (PromiseLike,
+  // not Promise), so we await directly rather than packing into a
+  // Promise.all of mixed PromiseLikes — that path doesn't typecheck
+  // against the Promise[] parameter.
+  const [outRes, inRes] = await Promise.all([
+    (async () =>
+      db
+        .from("edges")
+        .select("id, source_entity_id, target_entity_id, strength")
+        .eq("space_id", spaceId)
+        .eq("source_entity_id", featureEntityId))(),
+    (async () =>
+      db
+        .from("edges")
+        .select("id, source_entity_id, target_entity_id, strength")
+        .eq("space_id", spaceId)
+        .eq("target_entity_id", featureEntityId))(),
+  ]);
 
   const candidatePairs: Array<{ otherId: string; strength: number }> = [];
   for (const e of outRes.data ?? []) {

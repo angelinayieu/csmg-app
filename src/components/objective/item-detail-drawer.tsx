@@ -3544,7 +3544,13 @@ function VariationScoringPanel({
           {envelope.status === "ok" && scoreById.size > 0 && (
             <div className="space-y-1">
               {[...variations]
-                .map((v) => ({ v, score: scoreById.get(v.id) ?? 0 }))
+                .map((v) => ({
+                  v,
+                  // Drawer-local ItemVariation.id is optional (legacy),
+                  // but variations coming from /expand always carry one.
+                  // Coerce defensively so the type narrows.
+                  score: v.id ? scoreById.get(v.id) ?? 0 : 0,
+                }))
                 .sort((a, b) => b.score - a.score)
                 .map(({ v, score }) => (
                   <div
