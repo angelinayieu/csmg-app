@@ -21,6 +21,11 @@ import {
 } from "@/lib/research/research-service";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
+import {
+  getUserVariationKindPreferences,
+  variationKindSignalIsLive,
+} from "@/lib/objective-canvas/decision-log";
+import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -176,6 +181,54 @@ export async function POST(req: NextRequest) {
     maxCharsPerSnippet: 400,
   });
 
+  // ── Polish-4: cross-system signals fed back into generation ──
+  // Two soft signals, both gracefully absent when no data:
+  //   1. Variation-kind preferences (decision_log, ≥10 events req'd)
+  //   2. Distilled themes (Distill analysis cache, ≥1 finding)
+  // Loaded in parallel; both soft-fail to undefined so generation
+  // continues without them in cold-start states.
+  const variationKindPrefsRaw =
+    await getUserVariationKindPreferences(db, auth.user.id);
+  const variationKindPreferences = variationKindSignalIsLive(
+    variationKindPrefsRaw,
+    10,
+  )
+    ? variationKindPrefsRaw.map((p) => ({
+        kind: p.kind,
+        elects: p.elects,
+        rejects: p.rejects,
+        rate: p.rate,
+      }))
+    : undefined;
+
+  // Distilled themes are persisted on space.synthesis_data
+  // .cross_room_analysis.findings (written by the analysis run
+  // route). We filter to distill_concepts findings only. When the
+  // analysis hasn't been run (or has been but produced nothing),
+  // distillThemes is undefined and no block is injected.
+  const crossRoomAnalysis = (space.synthesis_data as Record<string, unknown> | null)
+    ?.cross_room_analysis as CrossRoomAnalysisState | undefined;
+  const distillFindings =
+    crossRoomAnalysis?.findings?.filter(
+      (f) => f.analysis_key === "distill_concepts",
+    ) ?? [];
+  const distillThemes =
+    distillFindings.length > 0
+      ? distillFindings.map((f) => {
+          const body = f.body as Record<string, unknown>;
+          return {
+            name:
+              typeof body?.name === "string"
+                ? body.name
+                : f.title,
+            description:
+              typeof body?.description === "string"
+                ? body.description
+                : f.summary,
+          };
+        })
+      : undefined;
+
   // ── Run the expansion LLM call ──
   let detail: ExpandedItemDetail;
   try {
@@ -190,6 +243,8 @@ export async function POST(req: NextRequest) {
       roomPains,
       roomOutcomes,
       constraints: readConstraints(space.synthesis_data),
+      variationKindPreferences,
+      distillThemes,
     });
   } catch (err) {
     return NextResponse.json(

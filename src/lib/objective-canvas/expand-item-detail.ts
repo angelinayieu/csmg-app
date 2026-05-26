@@ -201,6 +201,26 @@ export interface ExpandItemContext {
    *  toward patterns that fit their time / budget / team / risk
    *  profile. Without this, "optimize" is meaningless. */
   constraints?: OperationalConstraints | null;
+  /** Polish-4 — user's revealed per-kind election pattern from the
+   *  decision log. Soft signal: bias borderline kind choices toward
+   *  what the user historically elects, but NEVER sacrifice an
+   *  objectively-right variation to please the pattern. Caller is
+   *  responsible for cold-start gating (only pass when total events
+   *  ≥10 — see variationKindSignalIsLive in decision-log.ts).
+   *  Shape mirrors VariationKindPreference[] (kept structural here
+   *  to dodge a circular dep). */
+  variationKindPreferences?: Array<{
+    kind: "alternative" | "additive" | "principle";
+    elects: number;
+    rejects: number;
+    rate: number | null;
+  }>;
+  /** Polish-4 — themes the Distill analysis has surfaced across the
+   *  user's rooms ("transparency", "compounding feedback", etc.).
+   *  These are SECOND-ORDER signals: the system noticed its own
+   *  pattern. Bias new variations toward respecting the themes the
+   *  user keeps electing toward. Empty array → no block injected. */
+  distillThemes?: Array<{ name: string; description: string }>;
 }
 
 // ── Per-layer framing — different prompts for different lane types ──
@@ -384,7 +404,41 @@ Return strict JSON.`;
 
   const constraintsBlock = buildConstraintsBlock(ctx.constraints ?? null);
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
+  // Polish-4: per-kind user preference signal. Soft bias only — never
+  // override objective generation criteria. Cold-start gate is the
+  // CALLER's job (see variationKindSignalIsLive); if we got prefs at
+  // all, treat them as actionable.
+  const kindPrefBlock =
+    ctx.variationKindPreferences && ctx.variationKindPreferences.length > 0
+      ? `\n\nUSER VARIATION-KIND PATTERN (revealed from prior item-detail decisions — SECONDARY signal):\n${ctx.variationKindPreferences
+          .filter((p) => p.rate !== null)
+          .slice(0, 3)
+          .map(
+            (p) =>
+              `  • ${p.kind} — elects ${Math.round((p.rate ?? 0) * 100)}% of the time (${p.elects}✓ ${p.rejects}✕)`,
+          )
+          .join(
+            "\n",
+          )}\n  This is a TIEBREAKER. Generate the right kind distribution for the design space FIRST; bias the borderline calls toward patterns the user has elected before. Never sacrifice an "alternative" worth surfacing to please the pattern. Never produce a "principle" variation just because the user elects them — only when one is structurally present.`
+      : "";
+
+  // Polish-4: Distill themes — the system's own pattern detector
+  // surfacing what threads through the user's rooms. These are
+  // SECOND-ORDER signals (decision_log captures atomic events;
+  // Distill names the pattern they form). Bias new variations to
+  // RESPECT these themes — don't propose variations that violate
+  // them.
+  const themesBlock =
+    ctx.distillThemes && ctx.distillThemes.length > 0
+      ? `\n\nDISTILLED THEMES (recurring across this user's rooms — variations should RESPECT these, not violate them):\n${ctx.distillThemes
+          .slice(0, 4)
+          .map((t) => `  • "${t.name}" — ${t.description.slice(0, 160)}`)
+          .join(
+            "\n",
+          )}\n  When a candidate variation contradicts an established theme, either drop it or surface the contradiction explicitly in its tradeoff so the user sees what they'd be giving up.`
+      : "";
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
 
   // ── Schema (dynamic — adds derived_from_annotations only when
   //    the lens has entries, mirroring the room generator pattern). ──
