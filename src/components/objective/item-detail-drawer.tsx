@@ -2293,9 +2293,20 @@ function ExpansionPanel({
       });
       const json = await res.json();
       if (!res.ok) {
-        // 409 "no catalog entry" is expected for some attach points —
-        // surface it lightly without alarming the user.
-        const msg = typeof json?.error === "string" ? json.error : "Spawn failed.";
+        // 409 "no_catalog_entry" is expected when the (domain, lane,
+        // parent) triple has no defined deepen path. Show the human
+        // detail string instead of the typed error slug. The 500-tier
+        // "expansion failed" path still surfaces tersely.
+        const isNoCatalog =
+          json?.error === "no_catalog_entry" ||
+          json?.error === "no catalog entry for this depth surface";
+        const msg = isNoCatalog
+          ? typeof json?.detail === "string"
+            ? `Deepen not available for this card type yet — ${json.detail}`
+            : "Deepen not available for this card type yet."
+          : typeof json?.error === "string"
+            ? json.error
+            : "Spawn failed.";
         setError(msg);
         return;
       }

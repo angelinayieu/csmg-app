@@ -230,13 +230,22 @@ export async function POST(req: NextRequest) {
       catalogParentKey = parentNode.node_type;
     }
   }
-  const entry = lookupCatalogEntry(domain, catalogParentKey);
+  // Lane-aware lookup: (domain, parent, lane) triple. The lane key
+  // ensures pain variations get pain-shaped children rather than
+  // feature-shaped ones (the original bug).
+  const entry = lookupCatalogEntry(domain, catalogParentKey, layer);
   if (!entry) {
+    // Graceful-degradation 409 — distinct from a 500 LLM failure.
+    // The UI can offer a generic-fallback "spawn an outline" path
+    // instead of showing the user a red error.
     return NextResponse.json(
       {
-        error: "no catalog entry for this depth surface",
+        error: "no_catalog_entry",
+        detail: `No deepen path defined for ${layer}/${catalogParentKey} in ${domain}.`,
         domain,
+        lane: layer,
         parent_key: catalogParentKey,
+        fallback_available: true,
       },
       { status: 409 },
     );
