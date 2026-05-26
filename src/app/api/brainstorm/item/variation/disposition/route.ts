@@ -16,6 +16,10 @@ import type {
   ItemVariation,
   VariationDisposition,
 } from "@/lib/objective-canvas/expand-item-detail";
+import {
+  logDecision,
+  type DecisionAction,
+} from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 
@@ -58,7 +62,7 @@ export async function PATCH(req: NextRequest) {
 
   const { data: entity } = await db
     .from("entities")
-    .select("id, space_id, expanded_detail")
+    .select("id, space_id, parent_sub_objective_id, expanded_detail")
     .eq("id", entityId)
     .maybeSingle();
   if (!entity) {
@@ -81,6 +85,12 @@ export async function PATCH(req: NextRequest) {
       { status: 409 },
     );
   }
+
+  // Find the target variation BEFORE mutation so we can log its
+  // prior disposition + capture metadata for the decision log.
+  const targetVariation = existing.variations.find((v) => v.id === variationId);
+  const priorDisposition: VariationDisposition =
+    targetVariation?.disposition ?? null;
 
   // Apply the disposition + detect election-set change so we can
   // invalidate the composed_design cache when the user toggles.
@@ -113,6 +123,46 @@ export async function PATCH(req: NextRequest) {
       { status: 500 },
     );
   }
+
+  // ── Polish-3: log the item-level variation disposition to the
+  //    decision_log. Same telemetry surface as sub-objective
+  //    dispositions, distinguished by metadata.entity_type so future
+  //    analyses can filter (or aggregate) item-level vs.
+  //    sub-objective-level signal. Required-by-schema fields:
+  //      action — mapped from disposition
+  //      proposal_id — the variation id (the canonical "thing
+  //        being dispositioned"; sub_objective_decisions doesn't
+  //        constrain its semantic to sub-obj proposal ids)
+  //      batch_intent — null at item-variation level (variations
+  //        carry `kind`, not `intent`; we surface kind in metadata
+  //        instead) ──
+  const action: DecisionAction =
+    disposition === "elected"
+      ? "elect"
+      : disposition === "rejected"
+        ? "reject"
+        : disposition === "deferred"
+          ? "defer"
+          : "clear";
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId: entity.space_id,
+    proposalId: variationId,
+    action,
+    // Variations live in `kind` not `intent` so the batch_intent
+    // enum doesn't apply; null keeps the column honest. Filter by
+    // metadata.entity_type when querying.
+    batchIntent: null,
+    metadata: {
+      entity_type: "variation",
+      entity_id: entityId,
+      parent_sub_objective_id: entity.parent_sub_objective_id ?? null,
+      variation_kind: targetVariation?.kind ?? null,
+      variation_name: targetVariation?.name ?? null,
+      prior_disposition: priorDisposition,
+      composed_design_invalidated: electionSetChanged,
+    },
+  });
 
   return NextResponse.json({
     variations: updatedVariations,

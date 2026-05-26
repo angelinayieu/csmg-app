@@ -13,6 +13,7 @@ import type {
   ComposedDesign,
 } from "../expand-item-detail";
 import type { OperationalConstraints } from "../constraints";
+import type { IntentPreference } from "../decision-log";
 
 /** Buckets a finding belongs to — drives the workbench's facet tabs. */
 export type AnalysisCategory =
@@ -123,6 +124,11 @@ export interface CrossRoomState {
   rooms: RoomSnapshot[];
   items: ItemSnapshot[];
   edges: EdgeSnapshot[];
+  /** Per-user decision-log signal — election-rate-per-intent across
+   *  the user's history. Optional: only populated when the caller
+   *  passes a userId to loadCrossRoomState. Analyses that read it
+   *  should tolerate undefined for back-compat with older callers. */
+  user_intent_preferences?: IntentPreference[];
 }
 
 // ── Analysis module shape ─────────────────────────────────────────
@@ -153,4 +159,5 @@ export type {
   ItemVariation,
   ComposedDesign,
   OperationalConstraints,
+  IntentPreference,
 };

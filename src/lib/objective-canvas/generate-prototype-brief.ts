@@ -94,6 +94,25 @@ export interface PrototypeBriefContext {
   /** Domain grounding. */
   subObjectiveTitle: string;
   coreObjectiveText: string;
+  /** Polish-2 — composition state on the parent item. When the
+   *  variation is part of a composed design with open conflicts, the
+   *  brief surfaces those so the experiment can be framed to ALSO
+   *  inform the conflict resolution. Optional — null when no
+   *  composition exists (variation is being tested in isolation). */
+  composedDesign?: {
+    description: string;
+    conflicts_open: string[];
+    conflicts_resolved: string[];
+  } | null;
+  /** Polish-2 — sibling prototype briefs on the same item. When the
+   *  user has other briefs in flight, the LLM knows the experiment
+   *  load + can scope this one to NOT duplicate signals already
+   *  being captured elsewhere. */
+  siblingBriefs?: Array<{
+    variation_id: string;
+    open_question: string;
+    signal_to_watch: string;
+  }>;
 }
 
 const DOMAIN_TEMPLATES: Record<DomainKind, string> = {
@@ -191,7 +210,37 @@ The user must be able to execute this brief without further LLM help. If they ne
 
 Return strict JSON.`;
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1000)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}\n\n${variationContext}\n\nOPEN QUESTION (the binary target):\n"""\n${ctx.open_question}\n"""\n\nDesign the prototype brief per the system instructions.`;
+  // Polish-2: composition state on the parent item. When the
+  // variation is part of a composed design with open conflicts, the
+  // brief should be FRAMED to also inform conflict resolution where
+  // possible. We pass the composition description + open conflicts;
+  // resolved ones aren't needed (the LLM doesn't need to re-solve
+  // them).
+  const compositionBlock = ctx.composedDesign
+    ? `\n\nPARENT COMPOSITION (this variation is part of a composed design across multiple elected variations):\n  Description: ${ctx.composedDesign.description.slice(0, 280)}${
+        ctx.composedDesign.conflicts_open.length > 0
+          ? `\n  Open conflicts the design can't resolve:\n${ctx.composedDesign.conflicts_open
+              .slice(0, 3)
+              .map((c) => `    • ${c.slice(0, 180)}`)
+              .join("\n")}\n  WHEN POSSIBLE, frame signal_to_watch to ALSO inform one of these open conflicts — the user gets two updates for one experiment.`
+          : ""
+      }`
+    : "";
+
+  // Polish-2: sibling briefs. Don't duplicate signal already being
+  // captured by another experiment on this item.
+  const siblingBlock =
+    ctx.siblingBriefs && ctx.siblingBriefs.length > 0
+      ? `\n\nSIBLING BRIEFS ALREADY IN FLIGHT ON THIS ITEM (avoid duplicating their signal_to_watch):\n${ctx.siblingBriefs
+          .slice(0, 3)
+          .map(
+            (s) =>
+              `  • Q: "${s.open_question.slice(0, 80)}" → watching: ${s.signal_to_watch.slice(0, 80)}`,
+          )
+          .join("\n")}`
+      : "";
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1000)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}\n\n${variationContext}${compositionBlock}${siblingBlock}\n\nOPEN QUESTION (the binary target):\n"""\n${ctx.open_question}\n"""\n\nDesign the prototype brief per the system instructions.`;
 
   const raw = await llmJSON<{
     domain?: unknown;

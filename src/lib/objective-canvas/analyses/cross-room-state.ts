@@ -16,6 +16,7 @@
 
 import { normalizeAnnotations } from "../normalize-annotations";
 import { readConstraints } from "../constraints";
+import { getUserIntentPreferences } from "../decision-log";
 import { stateHash } from "./state-hash";
 import type {
   CrossRoomState,
@@ -32,6 +33,13 @@ export interface LoadCrossRoomStateArgs {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any;
   spaceId: string;
+  /** Optional — when provided, loadCrossRoomState ALSO fetches the
+   *  user's decision-log intent preferences and includes them on the
+   *  returned state. Analyses can then bias toward the user's
+   *  revealed pattern (e.g., "user elects gap_fill 60% of the time
+   *  → prioritize uncovered lens entries"). Back-compat: omit to
+   *  skip the extra query. */
+  userId?: string;
 }
 
 export interface LoadResult {
@@ -50,7 +58,7 @@ const LAYER_SLUGS = ["pain", "features", "outcomes", "objective"] as const;
 export async function loadCrossRoomState(
   args: LoadCrossRoomStateArgs,
 ): Promise<LoadResult> {
-  const { db, spaceId } = args;
+  const { db, spaceId, userId } = args;
 
   // ── Space row ──
   const { data: space } = await db
@@ -104,6 +112,15 @@ export async function loadCrossRoomState(
   }));
   const roomIds = rooms.map((r) => r.id);
 
+  // ── User decision-log preferences (optional) ──
+  // When userId is provided, load the per-user election-rate per
+  // intent so analyses can bias by the user's revealed pattern.
+  // Single small query (cap 200) — fire it in parallel with the
+  // entity/edge loads below where possible.
+  const userPrefsPromise = userId
+    ? getUserIntentPreferences(db, userId)
+    : Promise.resolve(undefined);
+
   if (roomIds.length === 0) {
     // No rooms generated yet — empty state, no analyses to run.
     return {
@@ -115,6 +132,7 @@ export async function loadCrossRoomState(
         rooms: [],
         items: [],
         edges: [],
+        user_intent_preferences: await userPrefsPromise,
       },
       state_hash: stateHash({
         roomIds: [],
@@ -258,6 +276,7 @@ export async function loadCrossRoomState(
       rooms,
       items,
       edges,
+      user_intent_preferences: await userPrefsPromise,
     },
     state_hash: hash,
     synthesisData: space.synthesis_data,

@@ -52,7 +52,11 @@ export const recommendNextMove: AnalysisModule = {
     // ── Build the state summary the LLM reads ──
     // Rooms with their composed designs + elected variations + any
     // open conflicts surface so the recommendation can target them.
+    // We also count items with prototype briefs so the recommendation
+    // doesn't propose "prototype X" when X already has one in flight.
     const roomBlocks: string[] = [];
+    let totalPrototypesInFlight = 0;
+    const itemsWithOpenQuestionsNoPrototype: string[] = [];
     for (const room of state.rooms) {
       const items = state.items.filter((i) => i.room_id === room.id);
       const electedCount = items.reduce(
@@ -69,9 +73,33 @@ export const recommendNextMove: AnalysisModule = {
           openConflicts.push(...cd.conflicts_open);
         }
       }
+      // Count prototype briefs across the room's items so the
+      // recommendation knows what's already under test.
+      let roomPrototypeCount = 0;
+      for (const it of items) {
+        const briefs = it.expanded_detail?.prototype_briefs ?? [];
+        roomPrototypeCount += briefs.length;
+        // Open questions on elected variations that DON'T yet have a
+        // prototype = highest-value targets for new briefs.
+        const variations = it.expanded_detail?.variations ?? [];
+        for (const v of variations) {
+          if (v.disposition !== "elected") continue;
+          const variationBriefs = briefs.filter(
+            (b) => b.variation_id === v.id,
+          );
+          if (variationBriefs.length === 0 && Array.isArray(v.open_questions)) {
+            for (const q of v.open_questions.slice(0, 1)) {
+              itemsWithOpenQuestionsNoPrototype.push(
+                `${room.id}:${it.name} · "${q.slice(0, 60)}"`,
+              );
+            }
+          }
+        }
+      }
+      totalPrototypesInFlight += roomPrototypeCount;
       const block: string[] = [
         `  ${room.id} · ${room.title}`,
-        `    items: ${items.length} · elected: ${electedCount} · composed: ${composedItems.length}`,
+        `    items: ${items.length} · elected: ${electedCount} · composed: ${composedItems.length} · prototypes: ${roomPrototypeCount}`,
       ];
       if (room.top_negative_outcome) {
         block.push(`    counters: ${room.top_negative_outcome.slice(0, 140)}`);
@@ -84,10 +112,60 @@ export const recommendNextMove: AnalysisModule = {
       roomBlocks.push(block.join("\n"));
     }
 
-    // Future: thread the cached cross-room findings (shared
-    // mechanisms, gaps, etc.) into this context so the
-    // recommendation can target the system's already-flagged issues.
-    // For now the model reasons over rooms + composed designs alone.
+    // ── Orphan annotations — readings nothing in any room derives from ──
+    // Same logic as the orphan-annotations Tier 1 analysis but
+    // inlined so the recommendation can surface them as gap-fill
+    // candidates without depending on a cached scan.
+    const coveredIndices = new Set<number>();
+    for (const it of state.items) {
+      for (const idx of it.derived_from_annotation_indices) {
+        coveredIndices.add(idx);
+      }
+    }
+    const orphanAnnotations: Array<{ idx: number; phrase: string }> = [];
+    state.parent_annotations.slice(0, 8).forEach((a, i) => {
+      const lensIdx = i + 1;
+      if (!coveredIndices.has(lensIdx)) {
+        orphanAnnotations.push({ idx: lensIdx, phrase: a.phrase });
+      }
+    });
+
+    // ── User intent preferences (decision-log signal) ──
+    // When the user has revealed a clear pattern, surface their top
+    // 1-2 intents to the LLM. This biases recommendations toward
+    // moves they're likely to follow through on (per-user
+    // personalization) without overriding objective criteria.
+    const prefs = state.user_intent_preferences ?? [];
+    const topUserIntents = prefs
+      .filter((p) => p.intent !== "initial" && p.rate !== null)
+      .slice(0, 2);
+    const userPatternBlock =
+      topUserIntents.length > 0
+        ? `\n\nUSER PATTERN (revealed from prior variant-lab decisions — bias toward what they actually follow through on):\n${topUserIntents
+            .map(
+              (p) =>
+                `  • ${p.intent} — elects ${Math.round((p.rate ?? 0) * 100)}% of the time (${p.elects}✓ ${p.rejects}✕)`,
+            )
+            .join("\n")}`
+        : "";
+
+    const orphanBlock =
+      orphanAnnotations.length > 0
+        ? `\n\nORPHAN ANNOTATIONS (parent-objective readings with NO derived items across any room — strong gap-fill candidates):\n${orphanAnnotations
+            .slice(0, 5)
+            .map((o) => `  • [${o.idx}] "${o.phrase}"`)
+            .join("\n")}`
+        : "";
+
+    const prototypeBlock =
+      itemsWithOpenQuestionsNoPrototype.length > 0
+        ? `\n\nOPEN QUESTIONS ON ELECTED VARIATIONS (no prototype yet — direct test candidates):\n${itemsWithOpenQuestionsNoPrototype
+            .slice(0, 5)
+            .map((q) => `  • ${q}`)
+            .join("\n")}`
+        : totalPrototypesInFlight > 0
+          ? `\n\nNote: ${totalPrototypesInFlight} prototype brief${totalPrototypesInFlight === 1 ? "" : "s"} already exist across rooms. Don't propose "prototype X" if X is in this set; pivot to NEW open questions or upstream design moves.`
+          : "";
 
     const constraintsBlock = buildConstraintsBlock(state.constraints);
 
@@ -117,7 +195,7 @@ ANTI-PLATITUDE: "iterate on the design" or "talk to users" are banned. Be specif
 
 Return strict JSON.`;
 
-    const user = `PARENT OBJECTIVE:\n"""\n${state.core_objective_text.slice(0, 800)}\n"""\n\nROOMS (${state.rooms.length}):\n${roomBlocks.join("\n\n")}${constraintsBlock}\n\nRecommend the single next move per the system instructions.`;
+    const user = `PARENT OBJECTIVE:\n"""\n${state.core_objective_text.slice(0, 800)}\n"""\n\nROOMS (${state.rooms.length}):\n${roomBlocks.join("\n\n")}${orphanBlock}${prototypeBlock}${userPatternBlock}${constraintsBlock}\n\nRecommend the single next move per the system instructions. When orphan annotations exist, gap-fill moves earn priority. When open questions exist without prototypes on elected variations, a prototype is often the right next move. The user-pattern signal is a TIEBREAKER — don't let it override objective criteria, just bias when two moves are roughly equal.`;
 
     const raw = await llmJSON<RawRecommendation>({
       system,

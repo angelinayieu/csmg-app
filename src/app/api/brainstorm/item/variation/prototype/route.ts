@@ -139,6 +139,25 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Polish-2 — pass the parent composition + sibling briefs into the
+  // generator so the experiment can either fold a composition
+  // conflict into its signal_to_watch, or avoid duplicating signal
+  // another brief is already capturing.
+  const composedDesignForCtx = detail.composed_design
+    ? {
+        description: detail.composed_design.description,
+        conflicts_open: detail.composed_design.conflicts_open ?? [],
+        conflicts_resolved: detail.composed_design.conflicts_resolved ?? [],
+      }
+    : null;
+  const siblingBriefs = existingBriefs
+    .filter((b) => b.id !== existingBrief?.id) // exclude the one we're regenerating
+    .map((b) => ({
+      variation_id: b.variation_id,
+      open_question: b.open_question,
+      signal_to_watch: b.signal_to_watch,
+    }));
+
   let brief;
   try {
     brief = await generatePrototypeBrief({
@@ -149,6 +168,8 @@ export async function POST(req: NextRequest) {
       constraints: readConstraints(space.synthesis_data),
       subObjectiveTitle,
       coreObjectiveText,
+      composedDesign: composedDesignForCtx,
+      siblingBriefs,
     });
   } catch (err) {
     return NextResponse.json(

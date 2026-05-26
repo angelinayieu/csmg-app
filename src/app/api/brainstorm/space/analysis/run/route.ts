@@ -78,7 +78,9 @@ export async function POST(req: NextRequest) {
 
   let loaded;
   try {
-    loaded = await loadCrossRoomState({ db, spaceId });
+    // userId enables preference-aware analyses (recommend-next-move
+    // reads user_intent_preferences to weight by revealed pattern).
+    loaded = await loadCrossRoomState({ db, spaceId, userId: auth.user.id });
   } catch (err) {
     return NextResponse.json(
       { error: "load failed", detail: sanitizeErrorMessage(err) },
