@@ -51,56 +51,72 @@ export function CrossRoomSignalsStrip({ spaceId, signals }: Props) {
 
   return (
     <div
-      className="mb-4 rounded-2xl border p-3"
+      className="mb-4 overflow-hidden border"
       style={{
-        background: "rgba(255,255,255,0.6)",
+        background: "#ffffff",
         borderColor: appleVibe.stroke.hairline,
-        borderRadius: appleVibe.radius.md,
+        borderRadius: appleVibe.radius.lg,
+        boxShadow: appleVibe.shadow.chip,
         fontFamily: appleVibe.font.stack,
       }}
     >
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between gap-2"
+        className="group flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[rgba(15,23,42,0.015)]"
       >
-        <div className="flex items-center gap-2">
-          <Sparkles
-            className="h-3 w-3 flex-shrink-0"
-            strokeWidth={2}
-            style={{ color: appleVibe.text.tertiary }}
-          />
+        <div className="flex items-center gap-3">
           <span
-            className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: appleVibe.text.tertiary }}
+            className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full"
+            style={{
+              background:
+                "linear-gradient(180deg, rgba(15,23,42,0.06) 0%, rgba(15,23,42,0.025) 100%)",
+              border: `1px solid ${appleVibe.stroke.hairline}`,
+            }}
+            aria-hidden
           >
-            Cross-room signals
+            <Sparkles
+              className="h-3.5 w-3.5"
+              strokeWidth={1.8}
+              style={{ color: appleVibe.text.secondary }}
+            />
           </span>
-          <span
-            className="text-[11px] font-light"
-            style={{ color: appleVibe.text.tertiary }}
-          >
-            · {totalSignals} signal{totalSignals === 1 ? "" : "s"} appear in ≥2 rooms
-          </span>
+          <div className="flex flex-col gap-0.5">
+            <span
+              className="text-[13px] font-semibold leading-none tracking-[-0.005em]"
+              style={{ color: appleVibe.text.primary }}
+            >
+              Cross-room signals
+            </span>
+            <span
+              className="text-[11.5px] leading-none"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              {totalSignals} signal{totalSignals === 1 ? "" : "s"} appear in ≥2 rooms
+            </span>
+          </div>
         </div>
-        <div
-          className="inline-flex items-center gap-1 text-[10.5px] font-medium"
-          style={{ color: appleVibe.text.tertiary }}
+        <span
+          className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors group-hover:bg-[rgba(15,23,42,0.06)]"
+          style={{
+            background: appleVibe.surface.chip,
+            color: appleVibe.text.secondary,
+          }}
         >
           {expanded ? (
             <>
-              hide <ChevronUp className="h-3 w-3" strokeWidth={2} />
+              Hide <ChevronUp className="h-3 w-3" strokeWidth={2} />
             </>
           ) : (
             <>
-              show <ChevronDown className="h-3 w-3" strokeWidth={2} />
+              Show <ChevronDown className="h-3 w-3" strokeWidth={2} />
             </>
           )}
-        </div>
+        </span>
       </button>
 
       {expanded && (
-        <div className="mt-3 flex flex-col gap-3">
+        <div className="flex flex-col gap-3 border-t px-4 pb-4 pt-3" style={{ borderColor: appleVibe.stroke.hairline }}>
           {signals.lens_convergence.length > 0 && (
             <SignalSection
               spaceId={spaceId}
