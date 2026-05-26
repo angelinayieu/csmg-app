@@ -19,8 +19,15 @@ import {
   getUserIntentPreferences,
   topPreferredIntent,
 } from "@/lib/objective-canvas/decision-log";
+import {
+  computeCrossRoomSignalsFromData,
+  type CrossRoomSignals,
+} from "@/lib/objective-canvas/cross-room-signals";
 import type { RoomEdge } from "@/components/objective/sub-objective-room-view";
 import { ArrowLeft } from "lucide-react";
+import { AnalysisWorkbench } from "@/components/objective/analysis-workbench";
+import { TIER_2_OPERATIONS } from "@/lib/objective-canvas/analyses";
+import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +71,11 @@ export default async function ObjectiveCanvasPage({
   // each card.
   let initialMainSubs: MainCanvasSub[] = [];
   let initialCoreAnnotations: import("@/components/objective/annotated-objective-card").ObjectiveAnnotation[] = [];
+  // Cross-room signals — computed from the entities + edges already
+  // loaded below. Null when <2 sub-objectives exist (nothing to
+  // cross-reference); empty signals when there are rooms but no
+  // overlap detected.
+  let initialCrossRoomSignals: CrossRoomSignals | null = null;
   // Variant Lab — per-user revealed preference: which intent the user
   // tends to elect most. When no lens-gap exists, the picker's
   // "Suggested" affordance reads this instead of defaulting to
@@ -170,6 +182,24 @@ export default async function ObjectiveCanvasPage({
         ]);
         allEntities = ((entRes.data ?? []) as EntityRow[]);
         allEdges = ((edgeRes.data ?? []) as EdgeRow[]);
+
+        // ── Cross-room signals — reuse the data we already loaded.
+        // Computed only when ≥2 sub-objectives exist (the helper
+        // returns empty arrays otherwise; we leave null so the UI
+        // strip doesn't render anything misleading). ──
+        if (subs.length >= 2) {
+          initialCrossRoomSignals = computeCrossRoomSignalsFromData({
+            subs: subs.map((s) => ({ id: s.id, title: s.title })),
+            entities: allEntities.map((e) => ({
+              parent_sub_objective_id: e.parent_sub_objective_id,
+              causal_chain: e.causal_chain,
+            })),
+            edges: allEdges.map((e) => ({
+              parent_sub_objective_id: e.parent_sub_objective_id,
+              agent_feedback: e.agent_feedback,
+            })),
+          });
+        }
       }
 
       // Index entities by id (for chain compute) and group by sub.
@@ -391,6 +421,30 @@ export default async function ObjectiveCanvasPage({
     }
   }
 
+  // ── Analysis Workbench inputs ──
+  // Read the cached cross_room_analysis state if any (lives under
+  // synthesis_data.cross_room_analysis). Workbench will silently
+  // re-scan on mount if no cache OR if state_hash drifted.
+  const cachedAnalysis: CrossRoomAnalysisState | null =
+    (space.synthesis_data?.cross_room_analysis as
+      | CrossRoomAnalysisState
+      | null
+      | undefined) ?? null;
+  const roomTitles: Record<string, string> = {};
+  for (const s of initialMainSubs) {
+    roomTitles[s.id] = s.title;
+  }
+  // Workbench only matters once rooms exist — gate on main/done
+  // stage AND ≥1 sub-objective.
+  const showWorkbench =
+    (state.stage === "main" || state.stage === "done") &&
+    initialMainSubs.length > 0;
+  const operationsCatalog = TIER_2_OPERATIONS.map((m) => ({
+    key: m.key,
+    label: m.label,
+    description: m.description,
+  }));
+
   return (
     <div
       className="fixed inset-0 z-40 overflow-y-auto"
@@ -422,6 +476,17 @@ export default async function ObjectiveCanvasPage({
           Back
         </Link>
 
+        {showWorkbench && (
+          <div className="mt-6">
+            <AnalysisWorkbench
+              spaceId={spaceId}
+              initialAnalysis={cachedAnalysis}
+              roomTitles={roomTitles}
+              operations={operationsCatalog}
+            />
+          </div>
+        )}
+
         <div className="mt-6">
           <ObjectiveCanvasView
             spaceId={spaceId}
@@ -432,6 +497,7 @@ export default async function ObjectiveCanvasPage({
             initialMainSubs={initialMainSubs}
             initialCoreAnnotations={initialCoreAnnotations}
             initialPreferredIntent={initialPreferredIntent}
+            initialCrossRoomSignals={initialCrossRoomSignals}
           />
         </div>
       </div>

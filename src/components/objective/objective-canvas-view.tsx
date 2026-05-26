@@ -59,6 +59,7 @@ import type {
   SubObjectiveBlock,
   SubObjectiveIntent,
 } from "@/lib/objective-canvas/sub-objective-state";
+import type { CrossRoomSignals } from "@/lib/objective-canvas/cross-room-signals";
 
 interface Props {
   spaceId: string;
@@ -76,6 +77,11 @@ interface Props {
    *  through to the picker as the "Suggested" affordance fallback
    *  when no lens gap exists. */
   initialPreferredIntent?: SubObjectiveIntent | null;
+  /** Cross-room signals — server-computed from the entities + edges
+   *  across the space's rooms. Null when fewer than 2 sub-objectives
+   *  exist. The MainCanvasView strip renders nothing when no signals
+   *  cross ≥2 rooms. */
+  initialCrossRoomSignals?: CrossRoomSignals | null;
   /** Phase 10 integration contract — host wants to drop this into a
    *  panel. See module header. Defaults to false (standalone). */
   embedded?: boolean;
@@ -94,6 +100,7 @@ export function ObjectiveCanvasView({
   initialMainSubs,
   initialCoreAnnotations,
   initialPreferredIntent = null,
+  initialCrossRoomSignals = null,
   embedded = false,
   // onExit is reserved for the host's chrome; not consumed here.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -177,6 +184,7 @@ export function ObjectiveCanvasView({
             objective={objective}
             subs={initialMainSubs}
             preferredIntent={initialPreferredIntent}
+            crossRoomSignals={initialCrossRoomSignals}
           />
         )}
         {stage === "done" && <DonePlaceholder />}

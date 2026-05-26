@@ -20,7 +20,9 @@ import {
   type ObjectiveAnnotation,
 } from "@/components/objective/annotated-objective-card";
 import { IncrementalCutLab } from "@/components/objective/incremental-cut-lab";
+import { CrossRoomSignalsStrip } from "@/components/objective/cross-room-signals-strip";
 import type { SubObjectiveIntent } from "@/lib/objective-canvas/sub-objective-state";
+import type { CrossRoomSignals } from "@/lib/objective-canvas/cross-room-signals";
 
 export interface ApprovedItem {
   id: string;
@@ -96,6 +98,11 @@ interface Props {
    *  affordance starts pre-set to the right direction. Null for new
    *  users → falls back to "creative" inside the lab. */
   preferredIntent?: SubObjectiveIntent | null;
+  /** Cross-room signals — recurring mechanisms / shared root causes
+   *  / lens convergence detected by walking entities + edges across
+   *  the space's sub-objective rooms. Server-rendered; null when
+   *  fewer than 2 rooms exist (no cross-room to compute). */
+  crossRoomSignals?: CrossRoomSignals | null;
 }
 
 export function MainCanvasView({
@@ -104,6 +111,7 @@ export function MainCanvasView({
   subs,
   coreAnnotations,
   preferredIntent = null,
+  crossRoomSignals = null,
 }: Props) {
   // Pass the sub list (id + title only) down so the annotated card
   // can resolve linked_sub_objective_id → title for hover popovers.
@@ -119,10 +127,24 @@ export function MainCanvasView({
         subObjectives={subStubs}
       />
 
+      {/* Cross-room signals — recurring mechanisms, shared root causes,
+          lens convergence. Lives between the core card and the
+          sub-cards so the user sees structural patterns BEFORE
+          diving into individual rooms. Renders only when ≥2 signals
+          actually exist; otherwise hidden. */}
+      {crossRoomSignals && (
+        <div className="mx-auto mt-6 w-full max-w-5xl">
+          <CrossRoomSignalsStrip
+            spaceId={spaceId}
+            signals={crossRoomSignals}
+          />
+        </div>
+      )}
+
       {/* Trunk → fork connector */}
       <div
         aria-hidden
-        className="mx-auto mt-6 h-8 w-px"
+        className={crossRoomSignals ? "mx-auto mt-2 h-8 w-px" : "mx-auto mt-6 h-8 w-px"}
         style={{ background: appleVibe.stroke.medium }}
       />
 
