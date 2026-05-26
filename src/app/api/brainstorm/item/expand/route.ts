@@ -624,10 +624,72 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── Persist ──
+  // ── Persist (merge — preserve user-owned artifacts) ──
+  // The detail returned from expandItemDetail contains LLM-owned
+  // fields (definition, variations, planning, generated_at). Naively
+  // writing it would wipe USER-OWNED fields the user has accumulated
+  // via separate routes:
+  //
+  //   • prototype_briefs  — generated via /item/variation/prototype,
+  //                          carry irreplaceable user-written
+  //                          result_summary on concluded briefs
+  //   • expansion_tree    — user-spawned L3+ deep-dive nodes with
+  //                          kept/parked disposition (user-elected work)
+  //   • variation dispositions — user's elect/defer/reject choices on
+  //                          variations. The LLM emits new variations
+  //                          with disposition=null; we re-anchor by
+  //                          NAME so elections survive when the same
+  //                          named variation comes back.
+  //
+  // composed_design is INTENTIONALLY wiped — it references
+  // source_variation_ids that may no longer match (the new variation
+  // set may differ) and election state gets re-anchored below. User
+  // can re-compose if they re-elect.
+  //
+  // Variation id is now slug-based (variationId(name) → "v_<slug>"),
+  // so identical names across regen produce identical ids → briefs
+  // and expansion_tree anchored via variation_id keep their links
+  // when the LLM returns the same concept. References on RENAMED
+  // variations become orphans; UI will surface or hide them.
+  const oldVariationsByName = new Map(
+    (existing?.variations ?? [])
+      .filter((v): v is { id?: string; name: string; disposition?: unknown } & typeof v =>
+        typeof v.name === "string",
+      )
+      .map((v) => [v.name.trim().toLowerCase(), v] as const),
+  );
+  const variationsWithReanchoredElections = detail.variations.map((v) => {
+    const prior = oldVariationsByName.get(v.name.trim().toLowerCase());
+    // Only re-anchor non-null dispositions — preserves the user's
+    // intentional elections without manufacturing them.
+    if (prior?.disposition && prior.disposition !== null) {
+      return { ...v, disposition: prior.disposition };
+    }
+    return v;
+  });
+
+  const merged: ExpandedItemDetail = {
+    ...detail,
+    variations: variationsWithReanchoredElections,
+    // Preserve user-owned bags when present; otherwise inherit
+    // whatever the LLM returned (which is typically undefined).
+    prototype_briefs:
+      existing?.prototype_briefs && existing.prototype_briefs.length > 0
+        ? existing.prototype_briefs
+        : detail.prototype_briefs,
+    expansion_tree:
+      existing?.expansion_tree && existing.expansion_tree.length > 0
+        ? existing.expansion_tree
+        : detail.expansion_tree,
+    // Intentional wipe: composed_design depends on the elected
+    // variation set, which changes on regen. User re-composes from
+    // their re-anchored elections.
+    composed_design: null,
+  };
+
   const writeRes = await db
     .from("entities")
-    .update({ expanded_detail: detail })
+    .update({ expanded_detail: merged })
     .eq("id", entityId);
   if (writeRes.error) {
     console.warn(
@@ -641,8 +703,12 @@ export async function POST(req: NextRequest) {
   // NO_STALENESS so the client payload shape stays consistent
   // across cache-hit + fresh paths and the drawer doesn't have to
   // branch on presence of the field.
+  //
+  // Return MERGED (not raw `detail`) so the client sees re-anchored
+  // elections + preserved briefs / expansion_tree alongside the fresh
+  // definition / variations / planning.
   return NextResponse.json({
-    expanded_detail: detail,
+    expanded_detail: merged,
     prior_concepts: priorConceptsForResponse,
     upstream_staleness: NO_STALENESS,
   });
