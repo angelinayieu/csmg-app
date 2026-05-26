@@ -35,7 +35,22 @@ export const orphanAnnotations: AnalysisModule = {
       .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
       .slice(0, 8);
 
-    // Indices actually referenced by ANY item.
+    // Phase-2 stability — match on PHRASE, not index. Indices are
+    // generation-time positional slots that can shift when
+    // annotations are regenerated (deepen/synthesize re-weights the
+    // lens). Phrases are persisted alongside indices for exactly
+    // this reason. We still emit annotation_index in the body for
+    // display continuity, but coverage detection uses phrase
+    // equality.
+    const usedPhrases = new Set<string>();
+    for (const item of state.items) {
+      for (const phrase of item.derived_from_annotation_phrases) {
+        usedPhrases.add(phrase); // already lowercased + trimmed
+      }
+    }
+    // Indices retained as a fallback for items persisted BEFORE the
+    // phrase field was added — keeps coverage accurate during the
+    // migration window when some items have phrases and some don't.
     const usedIndices = new Set<number>();
     for (const item of state.items) {
       for (const idx of item.derived_from_annotation_indices) {
@@ -48,7 +63,11 @@ export const orphanAnnotations: AnalysisModule = {
 
     ranked.forEach((ann, i) => {
       const idx = i + 1;
-      if (usedIndices.has(idx)) return;
+      const phraseKey = ann.phrase.trim().toLowerCase();
+      // An annotation is COVERED if any item's phrases include it
+      // OR (legacy fallback) any item's indices match.
+      if (usedPhrases.has(phraseKey)) return;
+      if (usedPhrases.size === 0 && usedIndices.has(idx)) return;
       const weight = ann.weight ?? 0.5;
       // High-weight orphans are louder. Weight ≥ 0.7 = high severity.
       const severity =

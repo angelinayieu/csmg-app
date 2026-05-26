@@ -15,8 +15,12 @@ import type {
   ComposedDesign,
 } from "@/lib/objective-canvas/expand-item-detail";
 import { composeVariations } from "@/lib/objective-canvas/compose-variations";
-import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
+import {
+  resolveParentObjectiveContext,
+  resolveEntityLayer,
+  type LayerSlug,
+} from "@/lib/objective-canvas/context-helpers";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -25,9 +29,6 @@ interface Body {
   entityId?: string;
   mode?: "default" | "force";
 }
-
-const LAYER_SLUGS = ["pain", "features", "outcomes", "objective"] as const;
-type LayerSlug = (typeof LAYER_SLUGS)[number];
 
 export async function POST(req: NextRequest) {
   const auth = await safeAuth();
@@ -99,58 +100,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Resolve layer + sub-objective + parent objective + annotations.
-  let layer: LayerSlug = "features";
-  if (entity.layer_ontology_id) {
-    const { data: layerRow } = await db
-      .from("layer_ontology")
-      .select("slug")
-      .eq("id", entity.layer_ontology_id)
-      .maybeSingle();
-    if (layerRow && typeof layerRow.slug === "string") {
-      const slug = layerRow.slug as string;
-      if ((LAYER_SLUGS as readonly string[]).includes(slug)) {
-        layer = slug as LayerSlug;
-      }
-    }
-  }
-
-  let subObjectiveTitle = "";
-  let coreObjectiveText: string =
-    (typeof space.description === "string" && space.description.trim()) ||
-    (typeof space.input_text === "string" && space.input_text.trim()) ||
-    "";
-  let parentAnnotationsRaw: unknown = null;
-  if (entity.parent_sub_objective_id) {
-    const { data: sub } = await db
-      .from("improvement_goals")
-      .select("title, parent_goal_id")
-      .eq("id", entity.parent_sub_objective_id)
-      .maybeSingle();
-    if (sub) {
-      subObjectiveTitle = typeof sub.title === "string" ? sub.title : "";
-      if (sub.parent_goal_id) {
-        const { data: parent } = await db
-          .from("improvement_goals")
-          .select("title, description, annotations")
-          .eq("id", sub.parent_goal_id)
-          .maybeSingle();
-        if (parent?.description) coreObjectiveText = parent.description;
-        else if (parent?.title) coreObjectiveText = parent.title;
-        parentAnnotationsRaw = parent?.annotations ?? null;
-      }
-    }
-  }
-  if (!parentAnnotationsRaw) {
-    const { data: rootGoal } = await db
-      .from("improvement_goals")
-      .select("annotations")
-      .eq("space_id", entity.space_id)
-      .is("parent_goal_id", null)
-      .maybeSingle();
-    parentAnnotationsRaw = rootGoal?.annotations ?? null;
-  }
-  const annotations = normalizeAnnotations(parentAnnotationsRaw);
+  // Phase-1 helpers — was ~50 lines of inline layer + parent + annotations
+  // resolution; now two helper calls. Same behavior, same query count.
+  const layer: LayerSlug = await resolveEntityLayer(
+    db,
+    entity.layer_ontology_id,
+  );
+  const {
+    subObjectiveTitle,
+    coreObjectiveText,
+    annotations,
+  } = await resolveParentObjectiveContext(db, entity, space);
 
   let composed: ComposedDesign;
   try {

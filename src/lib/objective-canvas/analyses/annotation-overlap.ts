@@ -30,43 +30,81 @@ export const annotationOverlap: AnalysisModule = {
     if (state.rooms.length < 2) return [];
     if (state.items.length === 0) return [];
 
-    // index (1-based) → { room_ids, item_ids }
-    const byIndex = new Map<
-      number,
+    // Phase-2 stability — group by PHRASE (lowercase trimmed), not
+    // index. Indices reference positional slots in the weight-sorted
+    // lens AT GENERATION TIME; if annotations regenerate and weights
+    // shift, indices point at different annotations. Phrases are
+    // stable across regenerations. Items persist both; we match on
+    // phrases here and look up display data by phrase at the end.
+    const byPhrase = new Map<
+      string, // lowercased phrase
       { room_ids: Set<string>; item_ids: Set<string> }
     >();
-
     for (const item of state.items) {
-      for (const idx of item.derived_from_annotation_indices) {
-        const g = byIndex.get(idx) ?? {
+      for (const phrase of item.derived_from_annotation_phrases) {
+        const g = byPhrase.get(phrase) ?? {
           room_ids: new Set<string>(),
           item_ids: new Set<string>(),
         };
         g.room_ids.add(item.room_id);
         g.item_ids.add(item.id);
-        byIndex.set(idx, g);
+        byPhrase.set(phrase, g);
+      }
+    }
+
+    // Legacy fallback — when NO items carry phrases yet (data from
+    // before the Phase-2 stability fix shipped), fall through to
+    // index matching so existing rooms don't silently produce zero
+    // findings. Drops out cleanly as items get regenerated with
+    // phrase data attached.
+    if (byPhrase.size === 0) {
+      const byIndex = new Map<
+        number,
+        { room_ids: Set<string>; item_ids: Set<string> }
+      >();
+      for (const item of state.items) {
+        for (const idx of item.derived_from_annotation_indices) {
+          const g = byIndex.get(idx) ?? {
+            room_ids: new Set<string>(),
+            item_ids: new Set<string>(),
+          };
+          g.room_ids.add(item.room_id);
+          g.item_ids.add(item.id);
+          byIndex.set(idx, g);
+        }
+      }
+      const ranked = [...state.parent_annotations]
+        .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
+        .slice(0, 8);
+      for (const [idx, g] of byIndex.entries()) {
+        const ann = ranked[idx - 1];
+        if (ann) {
+          byPhrase.set(ann.phrase.trim().toLowerCase(), g);
+        }
       }
     }
 
     const findings: AnalysisFinding[] = [];
     const now = new Date().toISOString();
-    // The lens the items reference is weight-sorted top-8 in the
-    // generator. Match here so the index → annotation lookup aligns.
-    const ranked = [...state.parent_annotations]
-      .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
-      .slice(0, 8);
+    // Build a phrase → annotation lookup for display data (reading,
+    // weight, etc.). Case-insensitive match on lowercased phrase key.
+    const annByPhrase = new Map<string, (typeof state.parent_annotations)[number]>();
+    for (const ann of state.parent_annotations) {
+      annByPhrase.set(ann.phrase.trim().toLowerCase(), ann);
+    }
 
-    for (const [idx, g] of byIndex.entries()) {
+    for (const [phraseKey, g] of byPhrase.entries()) {
       if (g.room_ids.size < 2) continue;
-      const ann = ranked[idx - 1];
-      if (!ann) continue;
+      const ann = annByPhrase.get(phraseKey);
+      if (!ann) continue; // phrase doesn't match any current annotation
       const roomCount = g.room_ids.size;
-      const severity =
-        roomCount >= 3 ? "high" : "medium";
+      const severity = roomCount >= 3 ? "high" : "medium";
       const phrase = ann.phrase;
       const reading = ann.reading;
       findings.push({
-        id: `${KEY}__${idx}`,
+        // Stable id — phrase-based, so re-emits across runs dedupe
+        // even when the annotation's index moves around.
+        id: `${KEY}__${phraseKey.replace(/[^a-z0-9]/g, "-").slice(0, 40)}`,
         analysis_key: KEY,
         category: "structure",
         severity,
@@ -74,7 +112,6 @@ export const annotationOverlap: AnalysisModule = {
         title: `"${phrase}" seeds ${roomCount} rooms`,
         summary: `${reading ? reading.slice(0, 120) : "Load-bearing reading"} — drives items in ${roomCount} rooms.`,
         body: {
-          annotation_index: idx,
           phrase,
           reading,
           room_count: roomCount,

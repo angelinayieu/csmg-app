@@ -187,17 +187,24 @@ export async function loadCrossRoomState(
           .map((v) => v.id)
       : [];
 
-    // Derive annotation indices from causal_chain.derived_from_annotations.
+    // Derive annotation indices + phrases from
+    // causal_chain.derived_from_annotations. The persisted shape is
+    // [{index, phrase, facet}]; we extract both. Phrases are the
+    // RELIABLE matching key — indices can shift if annotations
+    // get regenerated (see Phase-2 stability note in types.ts).
     const dfa = (e.causal_chain as Record<string, unknown> | null)?.derived_from_annotations;
-    const derivedFromAnnotationIndices: number[] = Array.isArray(dfa)
-      ? (dfa as Array<{ index?: unknown }>)
-          .map((d) =>
-            typeof d?.index === "number" && Number.isFinite(d.index)
-              ? Math.floor(d.index)
-              : NaN,
-          )
-          .filter((n) => Number.isFinite(n) && n >= 1)
-      : [];
+    const derivedFromAnnotationIndices: number[] = [];
+    const derivedFromAnnotationPhrases: string[] = [];
+    if (Array.isArray(dfa)) {
+      for (const entry of dfa as Array<{ index?: unknown; phrase?: unknown }>) {
+        if (typeof entry?.index === "number" && Number.isFinite(entry.index) && entry.index >= 1) {
+          derivedFromAnnotationIndices.push(Math.floor(entry.index));
+        }
+        if (typeof entry?.phrase === "string" && entry.phrase.trim().length > 0) {
+          derivedFromAnnotationPhrases.push(entry.phrase.trim().toLowerCase());
+        }
+      }
+    }
 
     return {
       id: e.id,
@@ -208,6 +215,7 @@ export async function loadCrossRoomState(
       expanded_detail: e.expanded_detail,
       elected_variation_ids: electedVariationIds,
       derived_from_annotation_indices: derivedFromAnnotationIndices,
+      derived_from_annotation_phrases: derivedFromAnnotationPhrases,
     };
   });
 

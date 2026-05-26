@@ -89,8 +89,21 @@ export interface ItemSnapshot {
   expanded_detail: ExpandedItemDetail | null;
   /** Convenience: ids of variations the user elected. */
   elected_variation_ids: string[];
-  /** Convenience: 1-based lens indices this item derives from. */
+  /** Convenience: 1-based lens indices this item derives from.
+   *  WARNING: indices are FRAGILE — they reference positional slots
+   *  in the weight-sorted lens at GENERATION time. If annotations
+   *  are regenerated (deepen / synthesize), the weight order can
+   *  shift and these indices will point at different annotations.
+   *  Prefer derived_from_annotation_phrases for cross-system
+   *  matching (coverage, orphan detection, etc); keep indices only
+   *  for display continuity. */
   derived_from_annotation_indices: number[];
+  /** Phase-2 stability fix — the actual phrase strings the LLM
+   *  cited, persisted alongside indices on every item. Robust to
+   *  lens reordering. ALL coverage / orphan / overlap analyses
+   *  SHOULD match on this, not on indices. Lowercase + trimmed
+   *  for case-insensitive matching at compute time. */
+  derived_from_annotation_phrases: string[];
 }
 
 export interface EdgeSnapshot {
