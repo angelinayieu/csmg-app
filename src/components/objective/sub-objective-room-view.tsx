@@ -1056,6 +1056,7 @@ export function SubObjectiveRoomView({
             itemName={entity.name}
             itemLayer={entity.layer}
             linkedChains={linkedChains}
+            spaceId={spaceId}
             onClose={() => setDetailEntityId(null)}
           />
         );

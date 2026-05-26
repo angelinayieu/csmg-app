@@ -643,6 +643,7 @@ export function SubObjectivePickerCard({
         <CanonicalConceptDrawer
           canonicalCode={openConceptCode}
           onClose={() => setOpenConceptCode(null)}
+          currentSpaceId={spaceId}
         />
       )}
     </Shell>

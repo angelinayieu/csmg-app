@@ -208,6 +208,10 @@ interface Props {
    *  parent room view). Empty array = item has no incoming or
    *  outgoing edges yet. */
   linkedChains: LinkedChainRef[];
+  /** The current space's id — threaded into CanonicalConceptDrawer
+   *  so the "+ Branch into current space" affordance can fire. When
+   *  undefined, the branch button stays hidden (drawer-as-read-only). */
+  spaceId?: string;
   onClose: () => void;
 }
 
@@ -232,6 +236,7 @@ export function ItemDetailDrawer({
   initialExpandedDetail,
   initialDetailResearch,
   linkedChains,
+  spaceId,
   onClose,
 }: Props) {
   const reduce = useReducedMotion();
@@ -949,6 +954,7 @@ export function ItemDetailDrawer({
         <CanonicalConceptDrawer
           canonicalCode={openConceptCode}
           onClose={() => setOpenConceptCode(null)}
+          currentSpaceId={spaceId}
         />
       )}
     </AnimatePresence>

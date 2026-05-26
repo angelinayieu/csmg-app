@@ -212,7 +212,10 @@ export function MainCanvasView({
           accumulated anything yet. Hidden when empty. */}
       {conceptMemory.length > 0 && (
         <div className="mx-auto mt-6">
-          <ConceptMemoryFeedStrip concepts={conceptMemory} />
+          <ConceptMemoryFeedStrip
+            concepts={conceptMemory}
+            currentSpaceId={spaceId}
+          />
         </div>
       )}
 

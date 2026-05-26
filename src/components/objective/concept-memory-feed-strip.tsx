@@ -28,6 +28,9 @@ interface ConceptMemoryEntry {
 
 interface Props {
   concepts: ConceptMemoryEntry[];
+  /** The current space's id — threaded into the canonical drawer
+   *  so a chip click can lead to "+ Branch into current space". */
+  currentSpaceId?: string;
 }
 
 /** Pretty-print "N days ago" / "today" / "yesterday" for the
@@ -46,7 +49,7 @@ function relativeAge(iso: string | null): string {
   return `${Math.floor(days / 30)}mo ago`;
 }
 
-export function ConceptMemoryFeedStrip({ concepts }: Props) {
+export function ConceptMemoryFeedStrip({ concepts, currentSpaceId }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [openCode, setOpenCode] = useState<string | null>(null);
 
@@ -148,6 +151,7 @@ export function ConceptMemoryFeedStrip({ concepts }: Props) {
         <CanonicalConceptDrawer
           canonicalCode={openCode}
           onClose={() => setOpenCode(null)}
+          currentSpaceId={currentSpaceId}
         />
       )}
     </>

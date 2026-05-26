@@ -50,7 +50,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = auth.supabase as any;
 
   // ── Space ownership ──

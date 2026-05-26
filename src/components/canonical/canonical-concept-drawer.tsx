@@ -15,11 +15,19 @@
 // Loading + error states are inline. Click outside or × closes.
 
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowRight, GitBranch, X } from "lucide-react";
 
 interface CanonicalConceptDrawerProps {
   canonicalCode: string;
   onClose: () => void;
+  /** When provided, renders a "+ Branch into current space" button
+   *  in the drawer footer. Clicking it fires
+   *  /api/brainstorm/sub-objectives/branch-from-concept which seeds
+   *  a new sub-objective in the given space from this concept's
+   *  cross-space history. When undefined, the button is hidden
+   *  (drawer-as-read-only view). */
+  currentSpaceId?: string;
 }
 
 interface ConceptResponse {
@@ -52,10 +60,56 @@ interface ConceptResponse {
 export function CanonicalConceptDrawer({
   canonicalCode,
   onClose,
+  currentSpaceId,
 }: CanonicalConceptDrawerProps) {
+  const router = useRouter();
   const [data, setData] = useState<ConceptResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Branch state — the user clicked "+ Branch into current space".
+  const [branching, setBranching] = useState(false);
+  const [branchError, setBranchError] = useState<string | null>(null);
+  // Success state — when set, render a brief confirmation before
+  // auto-closing + refreshing the page so the new card appears.
+  const [branchedTo, setBranchedTo] = useState<string | null>(null);
+
+  async function handleBranch() {
+    if (!currentSpaceId || !data) return;
+    setBranchError(null);
+    setBranching(true);
+    try {
+      const res = await fetch(
+        "/api/brainstorm/sub-objectives/branch-from-concept",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            spaceId: currentSpaceId,
+            canonicalCode: data.concept.canonical_code,
+          }),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        setBranchError(json?.error ?? "Could not branch the concept.");
+        return;
+      }
+      const title =
+        typeof json?.proposal?.title === "string"
+          ? json.proposal.title
+          : data.concept.display_name;
+      setBranchedTo(title);
+      // Brief confirmation, then close + refresh.
+      setTimeout(() => {
+        router.refresh();
+        onClose();
+      }, 1200);
+    } catch (err) {
+      setBranchError(err instanceof Error ? err.message : "Network error.");
+    } finally {
+      setBranching(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -261,6 +315,56 @@ export function CanonicalConceptDrawer({
                   </ul>
                 )}
               </section>
+
+              {/* Branch into current space — only when the host
+                  passed currentSpaceId AND we have a loaded concept.
+                  This is the "use the cross-space KG as a building
+                  block" affordance. */}
+              {currentSpaceId && (
+                <section className="rounded-xl border border-violet-200 bg-gradient-to-br from-violet-50 to-white px-3.5 py-3">
+                  <div className="mb-2 flex items-center gap-1.5">
+                    <GitBranch className="h-3 w-3 text-violet-700" />
+                    <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-violet-700">
+                      Branch into current space
+                    </h3>
+                  </div>
+                  {branchedTo ? (
+                    <div className="flex items-center gap-2 rounded-md bg-emerald-50 px-2.5 py-2 text-[12px] text-emerald-800">
+                      <span className="text-[14px] leading-none">✓</span>
+                      <span className="min-w-0 flex-1 truncate">
+                        Added: <span className="font-medium">{branchedTo}</span>
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="mb-2 text-[11.5px] leading-snug text-violet-900/80">
+                        Seed a new sub-objective from this concept&apos;s
+                        cross-space history, adapted to your current
+                        objective.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleBranch}
+                        disabled={branching}
+                        className="group flex w-full items-center justify-between rounded-md bg-violet-600 px-3 py-1.5 text-[12px] font-medium text-white shadow-sm transition-all hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <GitBranch className="h-3 w-3" />
+                          {branching ? "Branching…" : "Branch concept here"}
+                        </span>
+                        {!branching && (
+                          <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                        )}
+                      </button>
+                      {branchError && (
+                        <p className="mt-1.5 text-[11px] text-red-600">
+                          {branchError}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </section>
+              )}
 
               {/* Status footer */}
               <footer className="border-t border-gray-100 pt-3 text-[10.5px] text-gray-400">
