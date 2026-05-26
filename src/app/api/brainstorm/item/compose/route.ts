@@ -21,6 +21,7 @@ import {
   resolveEntityLayer,
   type LayerSlug,
 } from "@/lib/objective-canvas/context-helpers";
+import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -112,17 +113,38 @@ export async function POST(req: NextRequest) {
     annotations,
   } = await resolveParentObjectiveContext(db, entity, space);
 
+  // Telemetry-wrapped composition call. artifact_kind 'composed_design'
+  // + entity.id lets the feedback endpoint find the most-recent compose
+  // log row when the user thumbs-rates the composition banner.
   let composed: ComposedDesign;
   try {
-    composed = await composeVariations({
-      itemName: entity.name,
-      itemLayer: layer,
-      electedVariations: elected,
-      subObjectiveTitle,
-      coreObjectiveText,
-      annotations: annotations.length > 0 ? annotations : undefined,
-      constraints: readConstraints(space.synthesis_data),
-    });
+    composed = await instrumentedLLMCall(
+      {
+        db,
+        userId: auth.user.id,
+        spaceId: entity.space_id,
+        callSite: "compose_variations",
+        modelHint: "gpt-4o",
+        artifactKind: "composed_design",
+        artifactId: entity.id,
+        metadata: {
+          itemLayer: layer,
+          elected_count: elected.length,
+          had_lens: annotations.length > 0,
+          had_constraints: !!readConstraints(space.synthesis_data),
+        },
+      },
+      () =>
+        composeVariations({
+          itemName: entity.name,
+          itemLayer: layer,
+          electedVariations: elected,
+          subObjectiveTitle,
+          coreObjectiveText,
+          annotations: annotations.length > 0 ? annotations : undefined,
+          constraints: readConstraints(space.synthesis_data),
+        }),
+    );
   } catch (err) {
     return NextResponse.json(
       {

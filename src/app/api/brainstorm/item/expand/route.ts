@@ -36,6 +36,7 @@ import {
   NO_STALENESS,
   type UpstreamStaleness,
 } from "@/lib/objective-canvas/upstream-staleness";
+import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -440,26 +441,50 @@ export async function POST(req: NextRequest) {
     return out.slice(0, 4);
   })();
 
-  // ── Run the expansion LLM call ──
+  // ── Run the expansion LLM call (telemetry-wrapped) ──
+  // instrumentedLLMCall measures latency, captures status + error
+  // message, and fire-and-forget inserts into llm_call_log so quality
+  // measurement has a row for every drawer expansion. artifact_kind
+  // 'expanded_detail' + entity.id lets the feedback endpoint locate
+  // this log row when the user thumbs-rates the variation card.
   let detail: ExpandedItemDetail;
   try {
-    detail = await expandItemDetail({
-      layer,
-      name: entity.name,
-      causalChain: (entity.causal_chain as Record<string, unknown>) ?? {},
-      subObjectiveTitle,
-      coreObjectiveText,
-      ragBlock,
-      annotations: annotations.length > 0 ? annotations : undefined,
-      roomPains,
-      roomOutcomes,
-      constraints: readConstraints(space.synthesis_data),
-      variationKindPreferences,
-      distillThemes,
-      priorConcepts,
-      upstreamContext,
-      testedBriefs: testedBriefs.length > 0 ? testedBriefs : undefined,
-    });
+    detail = await instrumentedLLMCall(
+      {
+        db,
+        userId: auth.user.id,
+        spaceId: entity.space_id,
+        callSite: "expand_item_detail",
+        modelHint: "gpt-4o",
+        artifactKind: "expanded_detail",
+        artifactId: entity.id,
+        metadata: {
+          layer,
+          had_lens: annotations.length > 0,
+          had_upstream: (upstreamContext?.length ?? 0) > 0,
+          had_constraints: !!readConstraints(space.synthesis_data),
+          had_prior_concepts: !!priorConcepts,
+        },
+      },
+      () =>
+        expandItemDetail({
+          layer,
+          name: entity.name,
+          causalChain: (entity.causal_chain as Record<string, unknown>) ?? {},
+          subObjectiveTitle,
+          coreObjectiveText,
+          ragBlock,
+          annotations: annotations.length > 0 ? annotations : undefined,
+          roomPains,
+          roomOutcomes,
+          constraints: readConstraints(space.synthesis_data),
+          variationKindPreferences,
+          distillThemes,
+          priorConcepts,
+          upstreamContext,
+          testedBriefs: testedBriefs.length > 0 ? testedBriefs : undefined,
+        }),
+    );
   } catch (err) {
     return NextResponse.json(
       {

@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
 import { generatePrototypeBrief } from "@/lib/objective-canvas/generate-prototype-brief";
+import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 
 export const runtime = "nodejs";
@@ -158,19 +159,48 @@ export async function POST(req: NextRequest) {
       signal_to_watch: b.signal_to_watch,
     }));
 
+  // Telemetry-wrapped brief generation. The artifact_id is the
+  // deterministic brief id (variation_id + question slug) so the
+  // feedback endpoint can find the right log row even when the user
+  // regenerates multiple times.
   let brief;
   try {
-    brief = await generatePrototypeBrief({
-      variation,
-      open_question: openQuestion,
-      itemName: entity.name,
-      itemLayer: layer,
-      constraints: readConstraints(space.synthesis_data),
-      subObjectiveTitle,
-      coreObjectiveText,
-      composedDesign: composedDesignForCtx,
-      siblingBriefs,
-    });
+    brief = await instrumentedLLMCall(
+      {
+        db,
+        userId: auth.user.id,
+        spaceId: entity.space_id,
+        callSite: "generate_prototype_brief",
+        modelHint: "gpt-4o",
+        artifactKind: "prototype_brief",
+        // We don't have the brief id yet (it's deterministic from
+        // variation + question, computed inside the generator), so
+        // we use the variation id + a stable question slug as a
+        // close-enough handle for the feedback endpoint.
+        artifactId: `${variation.id}::${openQuestion
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .slice(0, 30)}`,
+        metadata: {
+          itemLayer: layer,
+          variation_kind: variation.kind ?? null,
+          has_composed_design: !!composedDesignForCtx,
+          sibling_brief_count: siblingBriefs.length,
+        },
+      },
+      () =>
+        generatePrototypeBrief({
+          variation,
+          open_question: openQuestion,
+          itemName: entity.name,
+          itemLayer: layer,
+          constraints: readConstraints(space.synthesis_data),
+          subObjectiveTitle,
+          coreObjectiveText,
+          composedDesign: composedDesignForCtx,
+          siblingBriefs,
+        }),
+    );
   } catch (err) {
     return NextResponse.json(
       {

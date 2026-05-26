@@ -41,6 +41,7 @@ import {
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
+import { ThumbsRating } from "@/components/objective/thumbs-rating";
 
 interface DefinitionHighlight {
   phrase: string;
@@ -614,6 +615,18 @@ export function ItemDetailDrawer({
                 action={
                   expanded ? (
                     <div className="flex items-center gap-1">
+                      {/* Thumbs rating — quality feedback on this
+                          item's LLM-generated expansion. Routes to
+                          PATCH /api/llm/feedback which targets the
+                          most-recent llm_call_log row for this
+                          (expanded_detail, entityId) tuple. */}
+                      {entityId && (
+                        <ThumbsRating
+                          artifactKind="expanded_detail"
+                          artifactId={entityId}
+                          size="sm"
+                        />
+                      )}
                       {/* Highlights toggle — only shows when there's
                           a definition long enough to be worth
                           highlighting (>= 40 chars). */}
