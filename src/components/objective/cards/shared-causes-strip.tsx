@@ -7,6 +7,7 @@
 // how many pains share it. Hover/click a pill → parent highlights
 // the matching pains (drives lane dimming).
 
+import { motion } from "framer-motion";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 interface Props {
@@ -36,13 +37,15 @@ export function SharedCausesStrip({
         {shared.map(({ cause, count }) => {
           const active = highlighted.has(cause);
           return (
-            <button
+            <motion.button
               key={cause}
               type="button"
               onMouseEnter={() => onHover(cause)}
               onMouseLeave={() => onHover(null)}
               onClick={() => onHover(cause)}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium transition-all"
+              whileHover={{ y: -1, transition: { duration: 0.15 } }}
+              whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium transition-[background,border-color,box-shadow] duration-200 ease-out"
               style={{
                 background: active
                   ? "rgba(245,158,11,0.18)"
@@ -55,11 +58,14 @@ export function SharedCausesStrip({
                     ? "rgba(245,158,11,0.45)"
                     : "rgba(245,158,11,0.18)"
                 }`,
+                boxShadow: active
+                  ? "0 6px 14px -8px rgba(245,158,11,0.40)"
+                  : "none",
               }}
             >
               <span>{cause}</span>
               <span
-                className="inline-flex h-[16px] min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold"
+                className="inline-flex h-[16px] min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums"
                 style={{
                   background: "rgba(245,158,11,0.22)",
                   color: "rgba(120,53,15,1)",
@@ -67,7 +73,7 @@ export function SharedCausesStrip({
               >
                 {count}
               </span>
-            </button>
+            </motion.button>
           );
         })}
       </div>

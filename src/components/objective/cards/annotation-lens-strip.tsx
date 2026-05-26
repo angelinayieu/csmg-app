@@ -19,6 +19,7 @@
 // inspect the highlight.
 
 import { useState } from "react";
+import { motion } from "framer-motion";
 import { ChevronDown, ChevronUp, Sparkles, AlertCircle } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ObjectiveAnnotation } from "@/components/objective/annotated-objective-card";
@@ -70,11 +71,13 @@ export function AnnotationLensStrip({
 
   return (
     <div
-      className="mb-3 rounded-2xl border px-3 py-2.5"
+      className="mb-3 border px-3 py-2.5"
       style={{
-        background: "rgba(255,255,255,0.7)",
-        borderColor: appleVibe.stroke.hairline,
+        background: appleVibe.surface.cardElevated,
+        borderColor: appleVibe.stroke.soft,
         borderRadius: appleVibe.radius.md,
+        boxShadow: appleVibe.shadow.chip,
+        fontFamily: appleVibe.font.stack,
       }}
     >
       <div className="flex items-center justify-between gap-3">
@@ -142,13 +145,15 @@ export function AnnotationLensStrip({
             const dimByOtherHover = someHovered && !isHovered;
             const dotColor = dotColorFor(a.layer_tag);
             return (
-              <button
+              <motion.button
                 key={`${idx}-${a.phrase}`}
                 type="button"
                 onMouseEnter={() => onHoverIndex(idx)}
                 onMouseLeave={() => onHoverIndex(null)}
                 onClick={() => onHoverIndex(isHovered ? null : idx)}
-                className="inline-flex max-w-[260px] items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition-all"
+                whileHover={{ y: -1, transition: { duration: 0.15, ease: [0.22, 1, 0.36, 1] } }}
+                whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
+                className="inline-flex max-w-[260px] items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition-[background,border-color,box-shadow] duration-200 ease-out"
                 style={{
                   background: isHovered
                     ? "rgba(15,23,42,0.06)"
@@ -167,6 +172,9 @@ export function AnnotationLensStrip({
                     : appleVibe.text.secondary,
                   opacity: dimByOtherHover ? 0.4 : 1,
                   cursor: "pointer",
+                  boxShadow: isHovered
+                    ? "0 4px 12px -6px rgba(11,18,40,0.18)"
+                    : "none",
                 }}
                 title={a.reading || a.phrase}
               >
@@ -177,7 +185,7 @@ export function AnnotationLensStrip({
                 />
                 <span className="truncate">{a.phrase}</span>
                 <span
-                  className="ml-0.5 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full px-1 text-[10px] font-bold"
+                  className="ml-0.5 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums"
                   style={{
                     background: isOrphan
                       ? "rgba(245,158,11,0.18)"
@@ -189,7 +197,7 @@ export function AnnotationLensStrip({
                 >
                   {coverage}
                 </span>
-              </button>
+              </motion.button>
             );
           })}
         </div>

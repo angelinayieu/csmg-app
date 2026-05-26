@@ -1085,18 +1085,31 @@ function Lane({
   void slug;
   return (
     <div
-      className="flex min-h-[260px] flex-col rounded-3xl p-5"
+      className="flex min-h-[260px] flex-col p-5 transition-shadow duration-300 ease-out"
       style={{
         background: appleVibe.surface.card,
         border: `1px solid ${appleVibe.stroke.hairline}`,
         borderRadius: appleVibe.radius.xl,
+        // Apple-tier ambient elevation on the lane shell itself.
+        // Cards inside already have their own shadows — this adds a
+        // softer outer halo so the lane reads as one cohesive layer
+        // rather than a flat grid column. The lane-color tint is
+        // ultra-subtle (3% alpha) so it whispers "this is the X lane"
+        // without competing with the cards inside.
+        boxShadow: `${appleVibe.shadow.card}, 0 0 0 1px ${color}0F`,
+        fontFamily: appleVibe.font.stack,
       }}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span
             className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
-            style={{ background: color }}
+            style={{
+              background: color,
+              // Lane-color dot gets a small glow so it reads as a
+              // status pip, not a decoration.
+              boxShadow: `0 0 0 3px ${color}1A`,
+            }}
             aria-hidden
           />
           <h3
@@ -1104,13 +1117,14 @@ function Lane({
             style={{
               color: appleVibe.text.primary,
               letterSpacing: "-0.01em",
+              fontFamily: appleVibe.font.display,
             }}
           >
             {label}
           </h3>
         </div>
         <span
-          className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
+          className="rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums"
           style={{
             background: appleVibe.surface.chip,
             color: appleVibe.text.tertiary,
@@ -1135,12 +1149,16 @@ function Lane({
 }
 
 function SkeletonItem() {
+  // Subtle pulse keeps the skeleton from feeling dead. matches the
+  // ambient card shadow at rest so the transition from loading →
+  // real card doesn't visually jump.
   return (
     <div
-      className="h-14 rounded-2xl"
+      className="h-14 animate-pulse"
       style={{
         background: appleVibe.surface.chip,
         borderRadius: appleVibe.radius.md,
+        boxShadow: appleVibe.shadow.chip,
       }}
     />
   );
@@ -1149,14 +1167,15 @@ function SkeletonItem() {
 function EmptyHint() {
   return (
     <div
-      className="rounded-2xl border border-dashed px-3 py-3 text-center text-[12px] font-light"
+      className="border border-dashed px-3 py-3 text-center text-[11.5px] font-light italic"
       style={{
         borderColor: appleVibe.stroke.hairline,
-        color: appleVibe.text.tertiary,
+        color: appleVibe.text.faint,
         borderRadius: appleVibe.radius.md,
+        background: "rgba(15,23,42,0.015)",
       }}
     >
-      empty
+      Nothing here yet
     </div>
   );
 }

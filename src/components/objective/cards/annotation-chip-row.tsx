@@ -12,6 +12,7 @@
 // chip lives on always renders the linked state because the parent
 // also matches its own provenance via lensLinkedIds.
 
+import { motion } from "framer-motion";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 type Facet =
@@ -78,7 +79,7 @@ export function AnnotationChipRow({
         const dot = FACET_COLOR[p.facet];
         const isHovered = hoveredIndex === p.index;
         return (
-          <button
+          <motion.button
             key={`${p.index}-${p.facet}`}
             type="button"
             onMouseEnter={() => onHover(p.index)}
@@ -87,7 +88,9 @@ export function AnnotationChipRow({
               e.stopPropagation();
               onHover(isHovered ? null : p.index);
             }}
-            className="inline-flex max-w-[140px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium transition-all"
+            whileHover={{ y: -0.5, transition: { duration: 0.12 } }}
+            whileTap={{ y: 0.5, transition: { duration: 0.06 } }}
+            className="inline-flex max-w-[140px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium transition-[background,border-color,box-shadow] duration-150 ease-out"
             style={{
               background: isHovered
                 ? "rgba(15,23,42,0.08)"
@@ -98,6 +101,9 @@ export function AnnotationChipRow({
                   : appleVibe.stroke.hairline
               }`,
               color: appleVibe.text.secondary,
+              boxShadow: isHovered
+                ? "0 2px 6px -2px rgba(11,18,40,0.12)"
+                : "none",
             }}
             title={`${FACET_LABEL[p.facet]} · ${p.phrase}`}
           >
@@ -107,7 +113,7 @@ export function AnnotationChipRow({
               aria-hidden
             />
             <span className="truncate">{p.phrase}</span>
-          </button>
+          </motion.button>
         );
       })}
     </div>

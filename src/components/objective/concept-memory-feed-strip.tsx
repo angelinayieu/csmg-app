@@ -11,9 +11,15 @@
 // inspection. Collapsed by default so it's quiet ambient signal.
 
 import { useState } from "react";
+import { motion } from "framer-motion";
 import { ChevronDown, ChevronUp, Sparkles } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
+
+// Objective lane color = #7C3AED. The concept memory strip is the
+// cross-space KG signal that rolls up to the objective layer, so it
+// visually anchors there (faint tint, no shouting).
+const OBJECTIVE = appleVibe.stage.objective;
 
 interface ConceptMemoryEntry {
   id: string;
@@ -58,11 +64,12 @@ export function ConceptMemoryFeedStrip({ concepts, currentSpaceId }: Props) {
   return (
     <>
       <div
-        className="mx-auto w-full max-w-5xl rounded-2xl border px-3 py-2.5"
+        className="mx-auto w-full max-w-5xl border px-3 py-2.5 transition-shadow duration-200 ease-out"
         style={{
-          background: "rgba(124,58,237,0.025)",
-          borderColor: "rgba(124,58,237,0.18)",
+          background: `linear-gradient(135deg, ${OBJECTIVE}06 0%, ${appleVibe.surface.cardElevated} 60%)`,
+          borderColor: `${OBJECTIVE}1F`,
           borderRadius: appleVibe.radius.md,
+          boxShadow: appleVibe.shadow.chip,
           fontFamily: appleVibe.font.stack,
         }}
       >
@@ -75,11 +82,11 @@ export function ConceptMemoryFeedStrip({ concepts, currentSpaceId }: Props) {
             <Sparkles
               className="h-3 w-3 flex-shrink-0"
               strokeWidth={2}
-              style={{ color: "rgba(91,33,182,0.9)" }}
+              style={{ color: OBJECTIVE }}
             />
             <span
               className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
-              style={{ color: "rgba(91,33,182,0.95)" }}
+              style={{ color: OBJECTIVE }}
             >
               Concept memory
             </span>
@@ -109,15 +116,20 @@ export function ConceptMemoryFeedStrip({ concepts, currentSpaceId }: Props) {
         {expanded && (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             {concepts.map((c) => (
-              <button
+              <motion.button
                 type="button"
                 key={c.id}
                 onClick={() => setOpenCode(c.canonical_code)}
-                className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium transition-colors hover:bg-[rgba(124,58,237,0.10)]"
+                whileHover={{
+                  y: -1,
+                  transition: { duration: 0.15, ease: [0.22, 1, 0.36, 1] },
+                }}
+                whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
+                className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium transition-[background,border-color,box-shadow] duration-200 ease-out"
                 style={{
-                  background: "rgba(255,255,255,0.92)",
-                  color: "rgba(91,33,182,0.95)",
-                  border: "1px solid rgba(124,58,237,0.20)",
+                  background: appleVibe.surface.cardElevated,
+                  color: OBJECTIVE,
+                  border: `1px solid ${OBJECTIVE}26`,
                   cursor: "pointer",
                 }}
                 title={
@@ -136,12 +148,12 @@ export function ConceptMemoryFeedStrip({ concepts, currentSpaceId }: Props) {
               >
                 <span className="truncate">{c.display_name}</span>
                 <span
-                  className="font-mono text-[9.5px]"
-                  style={{ color: "rgba(91,33,182,0.65)" }}
+                  className="font-mono text-[9.5px] tabular-nums"
+                  style={{ color: `${OBJECTIVE}A6` }}
                 >
                   {c.space_count}×
                 </span>
-              </button>
+              </motion.button>
             ))}
           </div>
         )}
