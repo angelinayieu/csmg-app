@@ -27,6 +27,8 @@ import type { SubObjectiveIntent } from "@/lib/objective-canvas/sub-objective-st
 import type { CrossRoomSignals } from "@/lib/objective-canvas/cross-room-signals";
 import type { ClusterAnalysis } from "@/lib/objective-canvas/cluster-proposals";
 import type { ConceptMemoryEntry } from "@/lib/objective-canvas/concept-memory-feed";
+import type { RoomDecisionSummary } from "@/lib/objective-canvas/canvas-decisions";
+import { CanvasDecisionSurface } from "@/components/objective/canvas-decision-surface";
 
 export interface ApprovedItem {
   id: string;
@@ -119,6 +121,10 @@ interface Props {
    *  the user feels their KG accumulating regardless of the current
    *  objective. Empty array hides the strip. */
   conceptMemory?: ConceptMemoryEntry[];
+  /** Per-room "what needs your attention" summaries. Empty array
+   *  hides the surface. Server-aggregated in page.tsx via
+   *  computeRoomDecisionSummaries — no client-side fetches. */
+  roomDecisions?: RoomDecisionSummary[];
 }
 
 export function MainCanvasView({
@@ -130,6 +136,7 @@ export function MainCanvasView({
   crossRoomSignals = null,
   initialSubObjectiveThemes = null,
   conceptMemory = [],
+  roomDecisions = [],
 }: Props) {
   // Themed view state — same pattern as the picker's cluster view.
   // Default to "grid" so existing users see no change unless they
@@ -232,6 +239,27 @@ export function MainCanvasView({
         </div>
       )}
 
+      {/* Canvas Decision Surface — "what needs your attention" per
+          room, aggregated across all rooms in the space. Sits ABOVE
+          the cross-room signals strip because actions outrank
+          patterns: the user should see what needs DOING before
+          browsing what's HAPPENING. Renders nothing when no room
+          has pending decisions, so calm canvases stay calm. */}
+      {roomDecisions.length > 0 && (
+        <div
+          className={
+            conceptMemory.length > 0
+              ? "mx-auto mt-3 w-full max-w-5xl"
+              : "mx-auto mt-6 w-full max-w-5xl"
+          }
+        >
+          <CanvasDecisionSurface
+            spaceId={spaceId}
+            summaries={roomDecisions}
+          />
+        </div>
+      )}
+
       {/* Cross-room signals — recurring mechanisms, shared root causes,
           lens convergence. Lives between the core card and the
           sub-cards so the user sees structural patterns BEFORE
@@ -240,9 +268,13 @@ export function MainCanvasView({
       {crossRoomSignals && (
         <div
           className={
-            conceptMemory.length > 0
+            // Tighter top spacing when the Decision Surface above
+            // already established the "between core + rooms" zone.
+            roomDecisions.length > 0
               ? "mx-auto mt-3 w-full max-w-5xl"
-              : "mx-auto mt-6 w-full max-w-5xl"
+              : conceptMemory.length > 0
+                ? "mx-auto mt-3 w-full max-w-5xl"
+                : "mx-auto mt-6 w-full max-w-5xl"
           }
         >
           <CrossRoomSignalsStrip
@@ -277,7 +309,13 @@ export function MainCanvasView({
       <div
         aria-hidden
         className={
-          crossRoomSignals || (themes && themes.clusters.length > 0)
+          // Tight top when ANY surface (decisions / signals / themes)
+          // already established the "between core + rooms" zone.
+          // Otherwise widen so the trunk reads as the connector
+          // between core and rooms across empty space.
+          roomDecisions.length > 0 ||
+          crossRoomSignals ||
+          (themes && themes.clusters.length > 0)
             ? "mx-auto mt-2 h-8 w-px"
             : "mx-auto mt-6 h-8 w-px"
         }

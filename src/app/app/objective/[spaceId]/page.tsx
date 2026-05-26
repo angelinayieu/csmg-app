@@ -33,6 +33,10 @@ import { ArrowLeft, FileText } from "lucide-react";
 import { AnalysisWorkbench } from "@/components/objective/analysis-workbench";
 import { TIER_2_OPERATIONS } from "@/lib/objective-canvas/analyses";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
+import {
+  computeRoomDecisionSummaries,
+  type RoomDecisionSummary,
+} from "@/lib/objective-canvas/canvas-decisions";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +85,15 @@ export default async function ObjectiveCanvasPage({
   // cross-reference); empty signals when there are rooms but no
   // overlap detected.
   let initialCrossRoomSignals: CrossRoomSignals | null = null;
+  // Slim projection of entities → fed to the canvas Decision Surface
+  // aggregator after cachedAnalysis is read. Populated INSIDE the
+  // stage=main branch (when entities are loaded) and stays [] for
+  // earlier stages, so the surface naturally renders nothing during
+  // clarifying/picking.
+  let collectedEntitiesForDecisions: Array<{
+    parent_sub_objective_id: string | null;
+    expanded_detail: unknown;
+  }> = [];
   // Variant Lab — per-user revealed preference: which intent the user
   // tends to elect most. When no lens-gap exists, the picker's
   // "Suggested" affordance reads this instead of defaulting to
@@ -170,14 +183,20 @@ export default async function ObjectiveCanvasPage({
 
       // ── All entities scoped to these subs ──
       // Pulled in one shot so we can compute (a) full lane-by-
-      // sub_category breakdowns for the card-level tree view and
-      // (b) the legacy approvedItems chip strip in one pass.
+      // sub_category breakdowns for the card-level tree view,
+      // (b) the legacy approvedItems chip strip in one pass, and
+      // (c) the per-room decision summaries surfaced on the canvas
+      // Decision Surface (counts of conflicts / pending elections).
+      // expanded_detail is a jsonb blob that can be ~5-20KB per
+      // entity; loading it here keeps the canvas Decision Surface
+      // wire-cost zero (versus an extra round-trip per render).
       type EntityRow = {
         id: string;
         name: string;
         layer_ontology_id: string | null;
         parent_sub_objective_id: string | null;
         causal_chain: Record<string, unknown> | null;
+        expanded_detail: unknown;
       };
       let allEntities: EntityRow[] = [];
       // ── All edges scoped to these subs (with mechanism in
@@ -202,7 +221,7 @@ export default async function ObjectiveCanvasPage({
           db
             .from("entities")
             .select(
-              "id, name, layer_ontology_id, parent_sub_objective_id, causal_chain",
+              "id, name, layer_ontology_id, parent_sub_objective_id, causal_chain, expanded_detail",
             )
             .in("parent_sub_objective_id", subIds),
           db
@@ -214,6 +233,15 @@ export default async function ObjectiveCanvasPage({
         ]);
         allEntities = ((entRes.data ?? []) as EntityRow[]);
         allEdges = ((edgeRes.data ?? []) as EdgeRow[]);
+
+        // Slim projection for the canvas Decision Surface aggregator —
+        // strips fields the aggregator doesn't read (id, name, layer)
+        // so we don't keep the full expanded_detail blobs alive any
+        // longer than this function needs them.
+        collectedEntitiesForDecisions = allEntities.map((e) => ({
+          parent_sub_objective_id: e.parent_sub_objective_id,
+          expanded_detail: e.expanded_detail,
+        }));
 
         // ── Cross-room signals — reuse the data we already loaded.
         // Computed only when ≥2 sub-objectives exist (the helper
@@ -463,6 +491,23 @@ export default async function ObjectiveCanvasPage({
       | null
       | undefined) ?? null;
 
+  // ── Canvas Decision Surface ──
+  // Server-side aggregation of "what needs your attention per room"
+  // — counts conflicts_open + pending strong elections + cross-room
+  // friction findings against each sub-objective. Pure compute over
+  // the entities array we already loaded + the cached analysis
+  // findings. Returns an empty array (and the surface renders null)
+  // when no room has pending decisions, so calm canvases stay calm.
+  const initialRoomDecisions: RoomDecisionSummary[] = (() => {
+    if (!(state.stage === "main" || state.stage === "done")) return [];
+    if (initialMainSubs.length === 0) return [];
+    return computeRoomDecisionSummaries({
+      subs: initialMainSubs.map((s) => ({ id: s.id, title: s.title })),
+      entities: collectedEntitiesForDecisions,
+      crossRoomAnalysis: cachedAnalysis,
+    });
+  })();
+
   // ── Sub-objective theme analysis (parallel to cross_room_analysis)
   // Cached on synthesis_data.sub_objective_themes. Drives the
   // row-per-theme gallery on MainCanvasView. Type imported lazily so
@@ -559,6 +604,7 @@ export default async function ObjectiveCanvasPage({
             initialCrossRoomSignals={initialCrossRoomSignals}
             initialSubObjectiveThemes={initialSubObjectiveThemes}
             initialConceptMemory={initialConceptMemory}
+            initialRoomDecisions={initialRoomDecisions}
           />
         </div>
       </div>

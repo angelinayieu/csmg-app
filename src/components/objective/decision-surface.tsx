@@ -155,18 +155,24 @@ export function DecisionSurface({
         fontFamily: appleVibe.font.stack,
       }}
     >
-      <div className="mb-1.5 flex items-baseline gap-1.5">
+      <div className="mb-1.5 flex items-center gap-2">
         <span
           className="text-[10px] font-semibold uppercase tracking-[0.14em]"
           style={{ color: appleVibe.text.tertiary }}
         >
-          Needs your attention
+          Decisions
         </span>
+        {/* Count pill — small graphite badge that reads as a counter,
+            not a separator. More authoritative than "· N" plain text
+            because the eye treats it as a unit. */}
         <span
-          className="text-[10.5px] font-light"
-          style={{ color: appleVibe.text.faint }}
+          className="inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full px-1 text-[9.5px] font-semibold tabular-nums"
+          style={{
+            background: "rgba(15,23,42,0.075)",
+            color: appleVibe.text.secondary,
+          }}
         >
-          · {rows.length}
+          {rows.length}
         </span>
       </div>
       <ul className="flex flex-col gap-0.5">
@@ -176,17 +182,10 @@ export function DecisionSurface({
               type="button"
               onClick={() => onJumpTo(row.anchorId)}
               aria-label={row.ariaLabel ?? row.label}
-              className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors"
-              style={{ background: "transparent" }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(15,23,42,0.045)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-              }}
+              className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-[rgba(15,23,42,0.045)] focus-visible:bg-[rgba(15,23,42,0.045)] focus-visible:ring-1 focus-visible:ring-[rgba(15,23,42,0.18)]"
             >
               <span
-                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                className="h-2 w-2 flex-shrink-0 rounded-full"
                 style={{ background: CATEGORY_DOT_COLOR[row.category] }}
                 aria-hidden
               />
@@ -198,7 +197,7 @@ export function DecisionSurface({
               </span>
               {row.detail ? (
                 <span
-                  className="hidden truncate text-[10.5px] font-light sm:inline"
+                  className="truncate text-[10.5px] font-light"
                   style={{ color: appleVibe.text.tertiary, maxWidth: "40%" }}
                 >
                   {row.detail}

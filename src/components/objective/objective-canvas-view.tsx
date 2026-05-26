@@ -102,6 +102,11 @@ interface Props {
    *  Server-loaded once on page render; surfaces as an ambient strip
    *  above the sub-objective cards. */
   initialConceptMemory?: ConceptMemoryEntry[];
+  /** Canvas Decision Surface — per-room aggregates of pending
+   *  decisions (conflicts, friction findings, pending strong
+   *  elections). Server-computed in page.tsx; empty array means
+   *  the surface renders nothing. */
+  initialRoomDecisions?: import("@/lib/objective-canvas/canvas-decisions").RoomDecisionSummary[];
   /** Phase 10 integration contract — host wants to drop this into a
    *  panel. See module header. Defaults to false (standalone). */
   embedded?: boolean;
@@ -125,6 +130,7 @@ export function ObjectiveCanvasView({
   initialCrossRoomSignals = null,
   initialSubObjectiveThemes = null,
   initialConceptMemory = [],
+  initialRoomDecisions = [],
   embedded = false,
   // onExit is reserved for the host's chrome; not consumed here.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -213,6 +219,7 @@ export function ObjectiveCanvasView({
             crossRoomSignals={initialCrossRoomSignals}
             initialSubObjectiveThemes={initialSubObjectiveThemes}
             conceptMemory={initialConceptMemory}
+            roomDecisions={initialRoomDecisions}
           />
         )}
         {stage === "done" && <DonePlaceholder />}
