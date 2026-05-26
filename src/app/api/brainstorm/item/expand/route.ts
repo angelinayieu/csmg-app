@@ -19,7 +19,6 @@ import {
   type SurfaceBundle,
   type DeepBundle,
 } from "@/lib/research/research-service";
-import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import {
   getUserVariationKindPreferences,
@@ -27,6 +26,11 @@ import {
 } from "@/lib/objective-canvas/decision-log";
 import { loadRelevantCanonicalConcepts } from "@/lib/objective-canvas/canonical-concept-lookup";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
+import {
+  resolveParentObjectiveContext,
+  resolveEntityLayer,
+  type LayerSlug,
+} from "@/lib/objective-canvas/context-helpers";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -35,9 +39,6 @@ interface Body {
   entityId?: string;
   mode?: "default" | "force";
 }
-
-const LAYER_SLUGS = ["pain", "features", "outcomes", "objective"] as const;
-type LayerSlug = (typeof LAYER_SLUGS)[number];
 
 export async function POST(req: NextRequest) {
   const auth = await safeAuth();
@@ -85,6 +86,57 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
+  // ── Cross-space KG read — load BEFORE the cache-hit short-circuit
+  // so cache hits return prior_concepts too, enabling the drawer to
+  // render the strip + per-variation link badges consistently on
+  // every drawer open (not just fresh generations).
+  //
+  // Query text uses entity.name + causal_chain outcome text. We
+  // intentionally skip subObjectiveTitle here (resolved later) — the
+  // marginal precision gain isn't worth duplicating the sub-objective
+  // lookup. Soft-fail throughout. ──
+  const itemQueryText = [
+    entity.name,
+    typeof entity.causal_chain === "object" && entity.causal_chain
+      ? (() => {
+          const cc = entity.causal_chain as Record<string, unknown>;
+          if (typeof cc.negative_outcome === "string") return cc.negative_outcome;
+          if (typeof cc.positive_outcome === "string") return cc.positive_outcome;
+          if (typeof cc.measured_by === "string") return cc.measured_by;
+          return "";
+        })()
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const priorConceptsRaw = await loadRelevantCanonicalConcepts({
+    db,
+    userId: auth.user.id,
+    queryText: itemQueryText,
+    excludeSpaceId: entity.space_id,
+    limit: 6,
+  });
+  // Response shape — stripped of internal fields the drawer doesn't
+  // need (similarity scores, canonical_code).
+  const priorConceptsForResponse = priorConceptsRaw.map((c) => ({
+    id: c.id,
+    display_name: c.display_name,
+    description: c.description,
+    domain_tags: c.domain_tags,
+    space_count: c.space_count,
+  }));
+  // Generator-shape — used later when expandItemDetail fires (only on
+  // cache miss). Same data, slimmer (no id).
+  const priorConcepts =
+    priorConceptsRaw.length > 0
+      ? priorConceptsRaw.map((c) => ({
+          display_name: c.display_name,
+          description: c.description,
+          domain_tags: c.domain_tags,
+          space_count: c.space_count,
+        }))
+      : undefined;
+
   // Idempotent short-circuit on cached detail.
   const existing = entity.expanded_detail as ExpandedItemDetail | null;
   const hasCached =
@@ -93,64 +145,26 @@ export async function POST(req: NextRequest) {
     typeof (existing as { definition?: unknown }).definition === "string" &&
     (existing as { definition: string }).definition.length > 0;
   if (!force && hasCached) {
-    return NextResponse.json({ expanded_detail: existing, cached: true });
+    return NextResponse.json({
+      expanded_detail: existing,
+      cached: true,
+      prior_concepts: priorConceptsForResponse,
+    });
   }
 
-  // ── Resolve layer slug from layer_ontology ──
-  let layer: LayerSlug = "features";
-  if (entity.layer_ontology_id) {
-    const { data: layerRow } = await db
-      .from("layer_ontology")
-      .select("slug")
-      .eq("id", entity.layer_ontology_id)
-      .maybeSingle();
-    if (layerRow && typeof layerRow.slug === "string") {
-      const slug = layerRow.slug as string;
-      if ((LAYER_SLUGS as readonly string[]).includes(slug)) {
-        layer = slug as LayerSlug;
-      }
-    }
-  }
-
-  // ── Resolve room (sub-objective) + parent objective + parent
-  //    annotations (P1 — lens reaches variations) ──
-  let subObjectiveTitle = "";
-  let coreObjectiveText: string =
-    (typeof space.description === "string" && space.description.trim()) ||
-    (typeof space.input_text === "string" && space.input_text.trim()) ||
-    "";
-  let parentAnnotationsRaw: unknown = null;
-  if (entity.parent_sub_objective_id) {
-    const { data: sub } = await db
-      .from("improvement_goals")
-      .select("title, parent_goal_id")
-      .eq("id", entity.parent_sub_objective_id)
-      .maybeSingle();
-    if (sub) {
-      subObjectiveTitle = typeof sub.title === "string" ? sub.title : "";
-      if (sub.parent_goal_id) {
-        const { data: parent } = await db
-          .from("improvement_goals")
-          .select("title, description, annotations")
-          .eq("id", sub.parent_goal_id)
-          .maybeSingle();
-        if (parent?.description) coreObjectiveText = parent.description;
-        else if (parent?.title) coreObjectiveText = parent.title;
-        parentAnnotationsRaw = parent?.annotations ?? null;
-      }
-    }
-  }
-  if (!parentAnnotationsRaw) {
-    // Fall back to the space's root goal annotations when sub IS the root.
-    const { data: rootGoal } = await db
-      .from("improvement_goals")
-      .select("annotations")
-      .eq("space_id", entity.space_id)
-      .is("parent_goal_id", null)
-      .maybeSingle();
-    parentAnnotationsRaw = rootGoal?.annotations ?? null;
-  }
-  const annotations = normalizeAnnotations(parentAnnotationsRaw);
+  // ── Phase-1 helpers: layer + parent-objective context in two calls
+  //    that used to be ~50 lines of inline code (resolved layer slug
+  //    + sub-objective title walk + parent goal description fallback +
+  //    annotation fetch with root-goal recovery). Same behavior. ──
+  const layer: LayerSlug = await resolveEntityLayer(
+    db,
+    entity.layer_ontology_id,
+  );
+  const {
+    subObjectiveTitle,
+    coreObjectiveText,
+    annotations,
+  } = await resolveParentObjectiveContext(db, entity, space);
 
   // ── Load room pain + outcome titles for P2 ranking context ──
   // Variations score against the room's actual lane content, not
@@ -230,44 +244,10 @@ export async function POST(req: NextRequest) {
         })
       : undefined;
 
-  // ── Cross-space KG read — canonical concepts from PRIOR spaces
-  //    semantically related to THIS item. Query text is item-scoped
-  //    (name + sub-objective title + a chunk of description) so the
-  //    HNSW match targets concepts relevant to the specific lane
-  //    item, not the broader parent objective. ──
-  const itemQueryText = [
-    entity.name,
-    subObjectiveTitle,
-    // description first 200 chars — usually carries the negative/
-    // positive_outcome which is the most discriminative text on the row.
-    typeof entity.causal_chain === "object" && entity.causal_chain
-      ? (() => {
-          const cc = entity.causal_chain as Record<string, unknown>;
-          if (typeof cc.negative_outcome === "string") return cc.negative_outcome;
-          if (typeof cc.positive_outcome === "string") return cc.positive_outcome;
-          if (typeof cc.measured_by === "string") return cc.measured_by;
-          return "";
-        })()
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const priorConceptsRaw = await loadRelevantCanonicalConcepts({
-    db,
-    userId: auth.user.id,
-    queryText: itemQueryText,
-    excludeSpaceId: entity.space_id,
-    limit: 6, // smaller than decompose — item-level prompt is denser
-  });
-  const priorConcepts =
-    priorConceptsRaw.length > 0
-      ? priorConceptsRaw.map((c) => ({
-          display_name: c.display_name,
-          description: c.description,
-          domain_tags: c.domain_tags,
-          space_count: c.space_count,
-        }))
-      : undefined;
+  // priorConcepts was loaded at the top of the route so cache hits
+  // can include them in the response too. Reused as-is here for the
+  // generator context — the variable was declared above the cache
+  // short-circuit.
 
   // ── Run the expansion LLM call ──
   let detail: ExpandedItemDetail;
@@ -309,5 +289,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ expanded_detail: detail });
+  return NextResponse.json({
+    expanded_detail: detail,
+    prior_concepts: priorConceptsForResponse,
+  });
 }

@@ -24,7 +24,9 @@ import {
   AlertCircle,
   ArrowUpRight,
   Check,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Compass,
   ExternalLink,
   Highlighter,
@@ -260,6 +262,21 @@ export function ItemDetailDrawer({
   );
   const [researchLoading, setResearchLoading] = useState(false);
 
+  // ── Cross-space KG — canonical concepts from prior spaces that
+  // /expand surfaces alongside the expansion. Captured on every
+  // fetch (cache hit + fresh generation). Powers a small strip
+  // above Variations + per-variation "↻ links to" badges so the
+  // user sees the KG accumulating, not fragmenting. ──
+  const [priorConcepts, setPriorConcepts] = useState<
+    Array<{
+      id: string;
+      display_name: string;
+      description: string | null;
+      domain_tags: string[];
+      space_count: number;
+    }>
+  >([]);
+
   // ── ESC to close ──
   useEffect(() => {
     if (!open) return;
@@ -308,6 +325,9 @@ export function ItemDetailDrawer({
             return;
           }
           setExpanded(json.expanded_detail ?? null);
+          if (Array.isArray(json?.prior_concepts)) {
+            setPriorConcepts(json.prior_concepts);
+          }
         })
         .catch((err) => {
           setExpandError(
@@ -357,6 +377,9 @@ export function ItemDetailDrawer({
           return;
         }
         setExpanded(json.expanded_detail ?? null);
+        if (Array.isArray(json?.prior_concepts)) {
+          setPriorConcepts(json.prior_concepts);
+        }
       })
       .catch((err) =>
         setExpandError(err instanceof Error ? err.message : "Network error."),
@@ -725,6 +748,15 @@ export function ItemDetailDrawer({
                     : undefined
                 }
               >
+                {/* Cross-space KG strip — surfaces canonical concepts
+                    from the user's prior spaces that the system used
+                    to ground variation generation. Each variation
+                    that verbatim-references one of these gets its
+                    own "↻ links to" badge inside the variation card. */}
+                {priorConcepts.length > 0 && (
+                  <DrawerPriorConceptsStrip concepts={priorConcepts} />
+                )}
+
                 {expandLoading && !expanded?.variations?.length ? (
                   <SkeletonLines lines={3} />
                 ) : !expanded?.variations || expanded.variations.length === 0 ? (
@@ -738,6 +770,7 @@ export function ItemDetailDrawer({
                   <VariationsGroup
                     variations={expanded.variations}
                     entityId={entityId ?? ""}
+                    priorConcepts={priorConcepts}
                     onLocalUpdate={(updated) =>
                       setExpanded((prev) =>
                         prev ? { ...prev, variations: updated } : prev,
@@ -1095,6 +1128,7 @@ function variationsSubtitle(vs: ItemVariation[]): string {
 function VariationsGroup({
   variations,
   entityId,
+  priorConcepts = [],
   onLocalUpdate,
   onComposedDesignUpdate,
   composedDesign,
@@ -1105,6 +1139,17 @@ function VariationsGroup({
 }: {
   variations: ItemVariation[];
   entityId: string;
+  /** Cross-space KG concepts surfaced by the expand route — used to
+   *  compute per-variation "↻ links to" badges via verbatim
+   *  display_name substring match against name + description +
+   *  tradeoff. */
+  priorConcepts?: Array<{
+    id: string;
+    display_name: string;
+    description: string | null;
+    domain_tags: string[];
+    space_count: number;
+  }>;
   onLocalUpdate: (next: ItemVariation[]) => void;
   onComposedDesignUpdate: (cd: ComposedDesign | null) => void;
   composedDesign: ComposedDesign | null;
@@ -1269,24 +1314,45 @@ function VariationsGroup({
                 </span>
               </div>
               <ul className="flex flex-col gap-2">
-                {items.map((v, idx) => (
-                  <VariationCard
-                    key={v.id ?? `${kind}-${idx}`}
-                    variation={v}
-                    rank={idx + 1}
-                    total={items.length}
-                    busy={busyId === v.id}
-                    onElect={() => updateDisposition(v.id ?? "", "elected")}
-                    onReject={() => updateDisposition(v.id ?? "", "rejected")}
-                    onDefer={() => updateDisposition(v.id ?? "", "deferred")}
-                    onClear={() => updateDisposition(v.id ?? "", null)}
-                    entityId={entityId}
-                    briefs={briefs}
-                    onBriefGenerated={onBriefGenerated}
-                    expansionTree={expansionTree}
-                    onExpansionTreeUpdate={onTreeUpdate}
-                  />
-                ))}
+                {items.map((v, idx) => {
+                  // Per-variation KG link badges — verbatim
+                  // substring match between this variation's text
+                  // (name + description + tradeoff) and each prior
+                  // concept's display_name. Caps at 3 chips to keep
+                  // the card dense.
+                  const haystack = `${v.name} ${v.description} ${v.tradeoff}`
+                    .toLowerCase();
+                  const linkedConcepts = priorConcepts
+                    .filter((c) => {
+                      if (c.display_name.length < 4) return false;
+                      return haystack.includes(c.display_name.toLowerCase());
+                    })
+                    .map((c) => ({
+                      display_name: c.display_name,
+                      space_count: c.space_count,
+                    }))
+                    .sort((a, b) => b.space_count - a.space_count)
+                    .slice(0, 3);
+                  return (
+                    <VariationCard
+                      key={v.id ?? `${kind}-${idx}`}
+                      variation={v}
+                      rank={idx + 1}
+                      total={items.length}
+                      busy={busyId === v.id}
+                      onElect={() => updateDisposition(v.id ?? "", "elected")}
+                      onReject={() => updateDisposition(v.id ?? "", "rejected")}
+                      onDefer={() => updateDisposition(v.id ?? "", "deferred")}
+                      onClear={() => updateDisposition(v.id ?? "", null)}
+                      entityId={entityId}
+                      briefs={briefs}
+                      onBriefGenerated={onBriefGenerated}
+                      expansionTree={expansionTree}
+                      onExpansionTreeUpdate={onTreeUpdate}
+                      linkedConcepts={linkedConcepts}
+                    />
+                  );
+                })}
               </ul>
             </div>
           );
@@ -1324,6 +1390,7 @@ function VariationCard({
   onBriefGenerated,
   expansionTree,
   onExpansionTreeUpdate,
+  linkedConcepts = [],
 }: {
   variation: ItemVariation;
   rank: number;
@@ -1338,6 +1405,12 @@ function VariationCard({
   onBriefGenerated: (brief: PrototypeBrief) => void;
   expansionTree: ExpansionNodeLocal[];
   onExpansionTreeUpdate: (next: ExpansionNodeLocal[]) => void;
+  /** Cross-space KG link badges — canonical concepts this
+   *  variation's text verbatim references. Pre-computed by the
+   *  parent VariationsGroup against priorConcepts + the variation's
+   *  name+description+tradeoff. Each chip carries display_name +
+   *  cross-space evidence so the user feels their KG accumulating. */
+  linkedConcepts?: Array<{ display_name: string; space_count: number }>;
 }) {
   const elected = v.disposition === "elected";
   const rejected = v.disposition === "rejected";
@@ -1420,6 +1493,41 @@ function VariationCard({
           </span>{" "}
           <span className="italic">{v.tradeoff}</span>
         </p>
+      )}
+
+      {/* Cross-space KG badges — canonical concepts this variation's
+          text verbatim references. Pre-computed by the parent. */}
+      {linkedConcepts.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          <span
+            className="text-[9px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: "rgba(91,33,182,0.95)" }}
+          >
+            ↻ links to
+          </span>
+          {linkedConcepts.map((c) => (
+            <span
+              key={c.display_name}
+              className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+              style={{
+                background: "rgba(124,58,237,0.08)",
+                color: "rgba(91,33,182,0.95)",
+                border: "1px solid rgba(124,58,237,0.18)",
+              }}
+              title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"}`}
+            >
+              <span className="truncate">{c.display_name}</span>
+              {c.space_count > 1 && (
+                <span
+                  className="font-mono text-[8.5px]"
+                  style={{ color: "rgba(91,33,182,0.75)" }}
+                >
+                  {c.space_count}×
+                </span>
+              )}
+            </span>
+          ))}
+        </div>
       )}
 
       {/* B — Open questions. The primary trigger for the prototype
@@ -2576,4 +2684,106 @@ function BodyField({
     );
   }
   return null;
+}
+
+// ── Drawer prior-concepts strip ───────────────────────────────────
+//
+// Sits above the variations list, surfacing canonical concepts from
+// the user's prior spaces that the system used to ground variation
+// generation for this item. Collapsed by default; expand to see all
+// concepts as chips with `display_name (N×)` evidence. Mirrors the
+// picker's PriorConceptsStrip but scoped to the item-level KG read
+// (smaller K, item-scoped query in the route).
+
+function DrawerPriorConceptsStrip({
+  concepts,
+}: {
+  concepts: Array<{
+    id: string;
+    display_name: string;
+    description: string | null;
+    domain_tags: string[];
+    space_count: number;
+  }>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (concepts.length === 0) return null;
+
+  return (
+    <div
+      className="mb-3 rounded-2xl border p-2.5"
+      style={{
+        background: "rgba(124,58,237,0.025)",
+        borderColor: "rgba(124,58,237,0.18)",
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between"
+      >
+        <div className="flex items-center gap-2">
+          <SparklesLucide
+            className="h-3 w-3 flex-shrink-0"
+            strokeWidth={2}
+            style={{ color: "rgba(91,33,182,0.9)" }}
+          />
+          <span
+            className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+            style={{ color: "rgba(91,33,182,0.95)" }}
+          >
+            {concepts.length} prior concept{concepts.length === 1 ? "" : "s"}
+          </span>
+          <span
+            className="text-[11px] font-light italic"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            · grounded variations against your cross-space KG
+          </span>
+        </div>
+        <span
+          className="inline-flex items-center gap-0.5 text-[10px] font-medium"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          {expanded ? (
+            <ChevronUp className="h-3 w-3" strokeWidth={2} />
+          ) : (
+            <ChevronDown className="h-3 w-3" strokeWidth={2} />
+          )}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {concepts.map((c) => (
+            <span
+              key={c.id}
+              className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-medium"
+              style={{
+                background: "rgba(255,255,255,0.92)",
+                color: "rgba(91,33,182,0.95)",
+                border: "1px solid rgba(124,58,237,0.20)",
+              }}
+              title={
+                c.description
+                  ? `${c.description}${c.domain_tags.length > 0 ? `\n\nTags: ${c.domain_tags.join(", ")}` : ""}`
+                  : c.domain_tags.length > 0
+                    ? `Tags: ${c.domain_tags.join(", ")}`
+                    : undefined
+              }
+            >
+              <span className="truncate">{c.display_name}</span>
+              <span
+                className="font-mono text-[9px]"
+                style={{ color: "rgba(91,33,182,0.65)" }}
+              >
+                {c.space_count}×
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
