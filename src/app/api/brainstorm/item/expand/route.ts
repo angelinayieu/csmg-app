@@ -116,10 +116,12 @@ export async function POST(req: NextRequest) {
     excludeSpaceId: entity.space_id,
     limit: 6,
   });
-  // Response shape — stripped of internal fields the drawer doesn't
-  // need (similarity scores, canonical_code).
+  // Response shape — strips internal similarity scores but keeps
+  // canonical_code so chip clicks can open CanonicalConceptDrawer
+  // ({canonicalCode}) for cross-space deep-inspection.
   const priorConceptsForResponse = priorConceptsRaw.map((c) => ({
     id: c.id,
+    canonical_code: c.canonical_code,
     display_name: c.display_name,
     description: c.description,
     domain_tags: c.domain_tags,
@@ -249,6 +251,115 @@ export async function POST(req: NextRequest) {
   // generator context — the variable was declared above the cache
   // short-circuit.
 
+  // ── Lazy upstream-read — load the cards that FEED this one ──
+  // For a feature card, upstream = pains the feature addresses (edges
+  // where target=this_feature, source.layer=pain). For an outcome
+  // card, upstream = features that produce it (edges where target=
+  // this_outcome, source.layer=feature) plus pains whose absence IS
+  // the outcome (same target, source.layer=pain).
+  //
+  // Pain + objective layers have no canonical upstream in this
+  // model — pains are the root of the chain, objective is the
+  // umbrella. Skip the fetch for them.
+  //
+  // Soft-fail throughout: if any query errors or returns nothing,
+  // upstreamContext is undefined and the prompt block is omitted.
+  const upstreamContext = await (async () => {
+    if (layer !== "features" && layer !== "outcomes") return undefined;
+    if (!entity.parent_sub_objective_id) return undefined;
+    // Find edges where this entity is the TARGET (upstream items
+    // point AT this card via correlation edges).
+    const { data: incomingEdges } = await db
+      .from("edges")
+      .select("source_entity_id")
+      .eq("parent_sub_objective_id", entity.parent_sub_objective_id)
+      .eq("target_entity_id", entity.id);
+    const sourceIds = Array.isArray(incomingEdges)
+      ? (incomingEdges as Array<{ source_entity_id: string }>)
+          .map((e) => e.source_entity_id)
+          .filter((id, i, arr) => arr.indexOf(id) === i) // dedupe
+      : [];
+    if (sourceIds.length === 0) return undefined;
+    // Hydrate the source entities + their expanded_detail + layer.
+    const { data: sourceRows } = await db
+      .from("entities")
+      .select("id, name, layer_ontology_id, expanded_detail")
+      .in("id", sourceIds);
+    if (!Array.isArray(sourceRows) || sourceRows.length === 0) return undefined;
+    // Resolve layer slugs in one query for efficiency.
+    const layerIds = (
+      sourceRows as Array<{ layer_ontology_id: string | null }>
+    )
+      .map((r) => r.layer_ontology_id)
+      .filter((id): id is string => typeof id === "string");
+    const slugByLayerId = new Map<string, LayerSlug>();
+    if (layerIds.length > 0) {
+      const { data: layerRows } = await db
+        .from("layer_ontology")
+        .select("id, slug")
+        .in("id", layerIds);
+      if (Array.isArray(layerRows)) {
+        for (const r of layerRows as Array<{ id: string; slug: string }>) {
+          if (
+            r.slug === "pain" ||
+            r.slug === "features" ||
+            r.slug === "outcomes" ||
+            r.slug === "objective"
+          ) {
+            slugByLayerId.set(r.id, r.slug as LayerSlug);
+          }
+        }
+      }
+    }
+    // Build the context, cap at 4 most-relevant (prefer ones with
+    // elections — they carry the strongest signal).
+    type UpstreamItem = {
+      name: string;
+      layer: LayerSlug;
+      elected_variation_names: string[];
+      expansion_highlights: string[];
+    };
+    const items: UpstreamItem[] = [];
+    for (const row of sourceRows as Array<{
+      id: string;
+      name: string;
+      layer_ontology_id: string | null;
+      expanded_detail: ExpandedItemDetail | null;
+    }>) {
+      const upstreamLayer = row.layer_ontology_id
+        ? slugByLayerId.get(row.layer_ontology_id) ?? "features"
+        : "features";
+      const ed = row.expanded_detail ?? null;
+      const electedNames: string[] = Array.isArray(ed?.variations)
+        ? ed!.variations
+            .filter((v) => v.disposition === "elected")
+            .map((v) => v.name)
+        : [];
+      const highlights: string[] = Array.isArray(ed?.expansion_tree)
+        ? ed!.expansion_tree
+            .filter((n) => n.disposition === "kept")
+            .slice(0, 3)
+            .map((n) => n.title)
+        : [];
+      items.push({
+        name: row.name,
+        layer: upstreamLayer,
+        elected_variation_names: electedNames,
+        expansion_highlights: highlights,
+      });
+    }
+    // Sort: items with elections first, then with kept expansion
+    // nodes, then everything else. Cap at 4 to bound token cost.
+    items.sort((a, b) => {
+      const aSignal =
+        a.elected_variation_names.length * 2 + a.expansion_highlights.length;
+      const bSignal =
+        b.elected_variation_names.length * 2 + b.expansion_highlights.length;
+      return bSignal - aSignal;
+    });
+    return items.slice(0, 4);
+  })();
+
   // ── Run the expansion LLM call ──
   let detail: ExpandedItemDetail;
   try {
@@ -266,6 +377,7 @@ export async function POST(req: NextRequest) {
       variationKindPreferences,
       distillThemes,
       priorConcepts,
+      upstreamContext,
     });
   } catch (err) {
     return NextResponse.json(

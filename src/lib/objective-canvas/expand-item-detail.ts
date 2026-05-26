@@ -241,6 +241,32 @@ export interface ExpandItemContext {
     domain_tags: string[];
     space_count: number;
   }>;
+  /** Lazy upstream-read — the cards UPSTREAM of this one in the
+   *  causal chain, with their election + depth state. For a feature
+   *  card, upstream = pains that this feature addresses. For an
+   *  outcome card, upstream = features that produce it (plus any
+   *  pains whose absence IS the outcome).
+   *
+   *  This is the propagation answer: when a user has elected
+   *  variations / spawned expansion nodes upstream, downstream
+   *  expansion should consume those choices as context so the
+   *  generated variations bias toward addressing what's been
+   *  specifically chosen, not the generic parent.
+   *
+   *  Soft signal — empty array tolerated. Caller passes at most
+   *  3-4 upstream items to keep token cost bounded. */
+  upstreamContext?: Array<{
+    /** The upstream card's title. */
+    name: string;
+    /** Which lane the upstream item lives in. */
+    layer: "pain" | "features" | "outcomes" | "objective";
+    /** Names of variations the user has elected on this upstream
+     *  card. Empty array → user hasn't committed to a direction yet. */
+    elected_variation_names: string[];
+    /** Short titles of the top 2-3 expansion-tree nodes (kept
+     *  disposition) on this upstream card. */
+    expansion_highlights: string[];
+  }>;
 }
 
 // ── Per-layer framing — different prompts for different lane types ──
@@ -540,7 +566,34 @@ Return strict JSON.`;
           )}\n  PRIOR-CONCEPTS RULE: If a variation naturally maps onto one of these concepts, REFERENCE the display_name verbatim in your variation name so the post-insert matcher can link it across your KG. If you're DELIBERATELY proposing a divergent take, NAME THE DIVERGENCE in the tradeoff field. Don't reinvent concepts you've already named — that fragments your KG.`
       : "";
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
+  // Lazy upstream-read — depth on Pain influences Mechanism expansion;
+  // depth on Mechanism influences Outcome expansion. Without this
+  // block, each card's expansion is siloed (fine at generation; loses
+  // coherence as users deepen). The block names the upstream cards +
+  // what's elected + what's been deepened, so generated variations
+  // bias toward addressing the user's specific choices, not the
+  // generic parent. Soft signal — empty array → block omitted.
+  const upstreamBlock =
+    ctx.upstreamContext && ctx.upstreamContext.length > 0
+      ? `\n\nUPSTREAM CHAIN (cards that FEED into this one — bias depth to address what's been chosen here, not the generic parent):\n${ctx.upstreamContext
+          .slice(0, 4)
+          .map((u) => {
+            const elected =
+              u.elected_variation_names.length > 0
+                ? `\n      elected: ${u.elected_variation_names.slice(0, 4).join(" | ")}`
+                : `\n      elected: (nothing committed yet)`;
+            const highlights =
+              u.expansion_highlights.length > 0
+                ? `\n      deepened into: ${u.expansion_highlights.slice(0, 3).join(" · ")}`
+                : "";
+            return `  ${u.layer} "${u.name}"${elected}${highlights}`;
+          })
+          .join(
+            "\n",
+          )}\n  UPSTREAM RULE: When upstream has ELECTED variations or DEEPENED nodes, your output should make sense as a downstream response to those choices. If you'd otherwise generate a variation that ignores upstream elections, either tie it to one OR explicitly justify the divergence in its tradeoff. Don't drift away from the chain — the user is building one coherent bet.`
+      : "";
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${upstreamBlock}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
 
   // ── Schema (dynamic — adds derived_from_annotations only when
   //    the lens has entries, mirroring the room generator pattern). ──
