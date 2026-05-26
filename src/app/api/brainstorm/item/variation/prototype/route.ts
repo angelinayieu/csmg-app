@@ -1,28 +1,27 @@
-// ── POST /api/brainstorm/item/compose ──────────────────────────────
+// ── POST /api/brainstorm/item/variation/prototype ─────────────────
 //
-// Synthesizes the elected variations of an item into a single
-// composed design. Idempotent — returns the cached composed_design
-// when source_variation_ids still match the current election set.
+// Generates a prototype brief for the (variation × open_question)
+// pair under the user's operational constraints. Each open_question
+// gets ONE brief — composing them loses the binary-outcome property.
 //
-// Body: { entityId, mode?: "default" | "force" }
+// Body: { entityId, variationId, openQuestion, mode?: "default" | "force" }
 //
-// Requires ≥2 elected variations. Returns 409 otherwise.
+// Cached on entities.expanded_detail.prototype_briefs[] keyed by id
+// (deterministic from variation_id + question slug).
 
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
-import type {
-  ExpandedItemDetail,
-  ComposedDesign,
-} from "@/lib/objective-canvas/expand-item-detail";
-import { composeVariations } from "@/lib/objective-canvas/compose-variations";
-import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
+import { generatePrototypeBrief } from "@/lib/objective-canvas/generate-prototype-brief";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 
 export const runtime = "nodejs";
-export const maxDuration = 45;
+export const maxDuration = 60;
 
 interface Body {
   entityId?: string;
+  variationId?: string;
+  openQuestion?: string;
   mode?: "default" | "force";
 }
 
@@ -37,8 +36,15 @@ export async function POST(req: NextRequest) {
   if (parseError) return parseError;
 
   const entityId = typeof body?.entityId === "string" ? body.entityId : "";
-  if (!entityId) {
-    return NextResponse.json({ error: "entityId required" }, { status: 400 });
+  const variationId =
+    typeof body?.variationId === "string" ? body.variationId : "";
+  const openQuestion =
+    typeof body?.openQuestion === "string" ? body.openQuestion.trim() : "";
+  if (!entityId || !variationId || !openQuestion) {
+    return NextResponse.json(
+      { error: "entityId, variationId, and openQuestion are required" },
+      { status: 400 },
+    );
   }
   const force = body?.mode === "force";
 
@@ -73,33 +79,26 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const elected = detail.variations.filter((v) => v.disposition === "elected");
-  if (elected.length < 2) {
+  const variation = detail.variations.find((v) => v.id === variationId);
+  if (!variation) {
     return NextResponse.json(
-      {
-        error: "≥2 elected variations required for composition",
-        elected_count: elected.length,
-      },
-      { status: 409 },
+      { error: "variation not found in this entity's detail" },
+      { status: 404 },
     );
   }
 
-  // Idempotent short-circuit: same elected ids → return cached.
-  if (!force && detail.composed_design) {
-    const cachedIds = new Set(detail.composed_design.source_variation_ids);
-    const electedIds = new Set(elected.map((v) => v.id));
-    const sameSet =
-      cachedIds.size === electedIds.size &&
-      [...cachedIds].every((id) => electedIds.has(id));
-    if (sameSet) {
-      return NextResponse.json({
-        composed_design: detail.composed_design,
-        cached: true,
-      });
-    }
+  // Idempotent short-circuit: same (variation_id, openQuestion) already cached.
+  const existingBriefs = detail.prototype_briefs ?? [];
+  const existingBrief = existingBriefs.find(
+    (b) =>
+      b.variation_id === variationId &&
+      b.open_question === openQuestion,
+  );
+  if (!force && existingBrief) {
+    return NextResponse.json({ brief: existingBrief, cached: true });
   }
 
-  // Resolve layer + sub-objective + parent objective + annotations.
+  // Resolve layer + sub-objective + parent objective.
   let layer: LayerSlug = "features";
   if (entity.layer_ontology_id) {
     const { data: layerRow } = await db
@@ -120,7 +119,6 @@ export async function POST(req: NextRequest) {
     (typeof space.description === "string" && space.description.trim()) ||
     (typeof space.input_text === "string" && space.input_text.trim()) ||
     "";
-  let parentAnnotationsRaw: unknown = null;
   if (entity.parent_sub_objective_id) {
     const { data: sub } = await db
       .from("improvement_goals")
@@ -132,50 +130,44 @@ export async function POST(req: NextRequest) {
       if (sub.parent_goal_id) {
         const { data: parent } = await db
           .from("improvement_goals")
-          .select("title, description, annotations")
+          .select("title, description")
           .eq("id", sub.parent_goal_id)
           .maybeSingle();
         if (parent?.description) coreObjectiveText = parent.description;
         else if (parent?.title) coreObjectiveText = parent.title;
-        parentAnnotationsRaw = parent?.annotations ?? null;
       }
     }
   }
-  if (!parentAnnotationsRaw) {
-    const { data: rootGoal } = await db
-      .from("improvement_goals")
-      .select("annotations")
-      .eq("space_id", entity.space_id)
-      .is("parent_goal_id", null)
-      .maybeSingle();
-    parentAnnotationsRaw = rootGoal?.annotations ?? null;
-  }
-  const annotations = normalizeAnnotations(parentAnnotationsRaw);
 
-  let composed: ComposedDesign;
+  let brief;
   try {
-    composed = await composeVariations({
+    brief = await generatePrototypeBrief({
+      variation,
+      open_question: openQuestion,
       itemName: entity.name,
       itemLayer: layer,
-      electedVariations: elected,
+      constraints: readConstraints(space.synthesis_data),
       subObjectiveTitle,
       coreObjectiveText,
-      annotations: annotations.length > 0 ? annotations : undefined,
-      constraints: readConstraints(space.synthesis_data),
     });
   } catch (err) {
     return NextResponse.json(
       {
-        error: "composition failed",
+        error: "brief generation failed",
         detail: sanitizeErrorMessage(err),
       },
       { status: 500 },
     );
   }
 
+  // Bag-style persistence: dedupe by id (deterministic from
+  // variation_id + question slug), replace if force regenerated.
+  const nextBriefs = existingBriefs.filter((b) => b.id !== brief.id);
+  nextBriefs.push(brief);
+
   const nextDetail: ExpandedItemDetail = {
     ...detail,
-    composed_design: composed,
+    prototype_briefs: nextBriefs,
   };
   const writeRes = await db
     .from("entities")
@@ -183,10 +175,10 @@ export async function POST(req: NextRequest) {
     .eq("id", entityId);
   if (writeRes.error) {
     console.warn(
-      "[item/compose] failed to persist composed_design:",
+      "[item/variation/prototype] persist failed (non-fatal):",
       writeRes.error.message,
     );
   }
 
-  return NextResponse.json({ composed_design: composed });
+  return NextResponse.json({ brief });
 }

@@ -25,6 +25,10 @@
 import { llmJSON } from "@/lib/llm";
 import type { ObjectiveAnnotation } from "./generate-annotations";
 import type { AnnotationProvenance } from "./layered-generation";
+import {
+  buildConstraintsBlock,
+  type OperationalConstraints,
+} from "./constraints";
 
 /** P2 (revised) — single user-facing impact axis. The user
  *  pushed back on multi-axis scoring: alignment / evidence /
@@ -120,6 +124,25 @@ export interface ExpandedItemDetail {
   /** P3 — composed design across elected variations (≥2 elections
    *  within the same kind). Null when nothing is elected or only one. */
   composed_design?: ComposedDesign | null;
+  /** D — prototype briefs the user has generated for variation /
+   *  open-question pairs. Keyed by brief id (variation_id + question
+   *  slug). Bag-style storage so multiple briefs per variation are
+   *  fine. Type imported lazily by route + UI so we don't create a
+   *  circular dep with generate-prototype-brief.ts. */
+  prototype_briefs?: Array<{
+    id: string;
+    variation_id: string;
+    open_question: string;
+    domain: string;
+    hypothesis: string;
+    signal_to_watch: string;
+    kill_criteria: string;
+    build_estimate: string;
+    artifact_type: string;
+    artifact_body: string;
+    learning_target: string;
+    generated_at: string;
+  }>;
   /** ISO timestamp the LLM produced this. */
   generated_at: string;
 }
@@ -151,6 +174,11 @@ export interface ExpandItemContext {
    *  isn't guessing at room scope. Empty arrays are tolerated. */
   roomPains?: string[];
   roomOutcomes?: string[];
+  /** C — operational constraints. When provided, the LLM filters
+   *  out variations the user literally cannot execute and biases
+   *  toward patterns that fit their time / budget / team / risk
+   *  profile. Without this, "optimize" is meaningless. */
+  constraints?: OperationalConstraints | null;
 }
 
 // ── Per-layer framing — different prompts for different lane types ──
@@ -332,7 +360,9 @@ ANNOTATION PROVENANCE: For each variation, include derived_from_annotations[] �
 
 Return strict JSON.`;
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${lens.block}${ragBlockOut}\n\nExpand this item per the system instructions.`;
+  const constraintsBlock = buildConstraintsBlock(ctx.constraints ?? null);
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
 
   // ── Schema (dynamic — adds derived_from_annotations only when
   //    the lens has entries, mirroring the room generator pattern). ──

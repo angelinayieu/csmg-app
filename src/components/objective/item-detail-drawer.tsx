@@ -116,11 +116,27 @@ interface ComposedDesign {
   generated_at: string;
 }
 
+interface PrototypeBrief {
+  id: string;
+  variation_id: string;
+  open_question: string;
+  domain: string;
+  hypothesis: string;
+  signal_to_watch: string;
+  kill_criteria: string;
+  build_estimate: string;
+  artifact_type: string;
+  artifact_body: string;
+  learning_target: string;
+  generated_at: string;
+}
+
 interface ExpandedItemDetail {
   definition?: string;
   variations?: ItemVariation[];
   planning?: ItemPlanning;
   composed_design?: ComposedDesign | null;
+  prototype_briefs?: PrototypeBrief[];
   generated_at?: string;
 }
 
@@ -713,6 +729,19 @@ export function ItemDetailDrawer({
                       )
                     }
                     composedDesign={expanded.composed_design ?? null}
+                    briefs={expanded.prototype_briefs ?? []}
+                    onBriefGenerated={(brief) =>
+                      setExpanded((prev) => {
+                        if (!prev) return prev;
+                        const others = (prev.prototype_briefs ?? []).filter(
+                          (b) => b.id !== brief.id,
+                        );
+                        return {
+                          ...prev,
+                          prototype_briefs: [...others, brief],
+                        };
+                      })
+                    }
                   />
                 )}
               </Section>
@@ -1043,12 +1072,16 @@ function VariationsGroup({
   onLocalUpdate,
   onComposedDesignUpdate,
   composedDesign,
+  briefs,
+  onBriefGenerated,
 }: {
   variations: ItemVariation[];
   entityId: string;
   onLocalUpdate: (next: ItemVariation[]) => void;
   onComposedDesignUpdate: (cd: ComposedDesign | null) => void;
   composedDesign: ComposedDesign | null;
+  briefs: PrototypeBrief[];
+  onBriefGenerated: (brief: PrototypeBrief) => void;
 }) {
   // Optimistic disposition update — flips state immediately so the
   // UI feels instant, fires the PATCH in the background.
@@ -1217,6 +1250,9 @@ function VariationsGroup({
                     onReject={() => updateDisposition(v.id ?? "", "rejected")}
                     onDefer={() => updateDisposition(v.id ?? "", "deferred")}
                     onClear={() => updateDisposition(v.id ?? "", null)}
+                    entityId={entityId}
+                    briefs={briefs}
+                    onBriefGenerated={onBriefGenerated}
                   />
                 ))}
               </ul>
@@ -1251,6 +1287,9 @@ function VariationCard({
   onReject,
   onDefer,
   onClear,
+  entityId,
+  briefs,
+  onBriefGenerated,
 }: {
   variation: ItemVariation;
   rank: number;
@@ -1260,6 +1299,9 @@ function VariationCard({
   onReject: () => void;
   onDefer: () => void;
   onClear: () => void;
+  entityId: string;
+  briefs: PrototypeBrief[];
+  onBriefGenerated: (brief: PrototypeBrief) => void;
 }) {
   const elected = v.disposition === "elected";
   const rejected = v.disposition === "rejected";
@@ -1348,25 +1390,12 @@ function VariationCard({
           lab (L3): each becomes one constraint × variation ×
           open-question triple that yields a surgical experiment. */}
       {v.open_questions && v.open_questions.length > 0 && (
-        <div className="mt-2.5">
-          <div
-            className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: appleVibe.text.tertiary }}
-          >
-            Open questions
-          </div>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4">
-            {v.open_questions.map((q, i) => (
-              <li
-                key={i}
-                className="text-[11px] font-light leading-snug"
-                style={{ color: appleVibe.text.secondary }}
-              >
-                {q}
-              </li>
-            ))}
-          </ul>
-        </div>
+        <OpenQuestionsList
+          variation={v}
+          entityId={entityId ?? ""}
+          briefs={briefs}
+          onBriefGenerated={onBriefGenerated}
+        />
       )}
 
       {/* Annotation lens chips. */}
@@ -1720,6 +1749,319 @@ function ComposedDesignBlock({
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Open questions list — each question is a prototype-lab trigger ──
+//
+// Per the constraint × variation × open-question formula: every
+// open_question can compose with the variation + user constraints
+// into one surgical experiment brief. Each question shows a "Design
+// experiment" button that fires the /prototype route and renders
+// the resulting brief inline beneath it.
+
+function OpenQuestionsList({
+  variation,
+  entityId,
+  briefs,
+  onBriefGenerated,
+}: {
+  variation: ItemVariation;
+  entityId: string;
+  briefs: PrototypeBrief[];
+  onBriefGenerated: (brief: PrototypeBrief) => void;
+}) {
+  const variationId = variation.id ?? "";
+  const questions = variation.open_questions ?? [];
+
+  // Per-question loading + error state. Keyed by question text so
+  // rapid clicks don't cross-pollinate states.
+  const [loadingQuestion, setLoadingQuestion] = useState<string | null>(null);
+  const [errorByQuestion, setErrorByQuestion] = useState<
+    Record<string, string>
+  >({});
+
+  // Brief lookup — find the cached brief for this variation+question.
+  function briefFor(q: string): PrototypeBrief | undefined {
+    return briefs.find(
+      (b) => b.variation_id === variationId && b.open_question === q,
+    );
+  }
+
+  async function generateBrief(q: string, force = false) {
+    if (!entityId || !variationId) return;
+    setLoadingQuestion(q);
+    setErrorByQuestion((prev) => {
+      const next = { ...prev };
+      delete next[q];
+      return next;
+    });
+    try {
+      const res = await fetch(
+        "/api/brainstorm/item/variation/prototype",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            entityId,
+            variationId,
+            openQuestion: q,
+            mode: force ? "force" : "default",
+          }),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        setErrorByQuestion((prev) => ({
+          ...prev,
+          [q]: json?.error ?? "Failed to design experiment.",
+        }));
+        return;
+      }
+      if (json?.brief) {
+        onBriefGenerated(json.brief as PrototypeBrief);
+      }
+    } catch (err) {
+      setErrorByQuestion((prev) => ({
+        ...prev,
+        [q]: err instanceof Error ? err.message : "Network error.",
+      }));
+    } finally {
+      setLoadingQuestion(null);
+    }
+  }
+
+  return (
+    <div className="mt-2.5">
+      <div
+        className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+        style={{ color: appleVibe.text.tertiary }}
+      >
+        Open questions
+      </div>
+      <ul className="mt-1 flex flex-col gap-2">
+        {questions.map((q, i) => {
+          const brief = briefFor(q);
+          const loading = loadingQuestion === q;
+          const error = errorByQuestion[q];
+          return (
+            <li
+              key={i}
+              className="flex flex-col gap-1.5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start gap-1.5">
+                <span
+                  className="flex-shrink-0 text-[12px] leading-snug"
+                  style={{ color: appleVibe.text.tertiary }}
+                  aria-hidden
+                >
+                  •
+                </span>
+                <div className="flex flex-1 flex-wrap items-start gap-1.5">
+                  <span
+                    className="flex-1 text-[11.5px] font-light leading-snug"
+                    style={{ color: appleVibe.text.secondary }}
+                  >
+                    {q}
+                  </span>
+                  {!brief && (
+                    <button
+                      type="button"
+                      onClick={() => generateBrief(q)}
+                      disabled={loading}
+                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-all"
+                      style={{
+                        background: loading
+                          ? appleVibe.surface.chip
+                          : appleVibe.accent.primary,
+                        color: loading
+                          ? appleVibe.text.tertiary
+                          : appleVibe.text.onAccent,
+                        cursor: loading ? "wait" : "pointer",
+                        opacity: loading ? 0.7 : 1,
+                      }}
+                    >
+                      <SparklesLucide
+                        className="h-2.5 w-2.5"
+                        strokeWidth={2}
+                      />
+                      {loading ? "Designing…" : "Design experiment"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {error && (
+                <p
+                  className="ml-3 text-[10.5px] font-light"
+                  style={{ color: "rgba(127,29,29,0.95)" }}
+                >
+                  {error}
+                </p>
+              )}
+              {brief && (
+                <div className="ml-3">
+                  <PrototypeBriefBlock
+                    brief={brief}
+                    busy={loading}
+                    onRegenerate={() => generateBrief(q, true)}
+                  />
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// ── Prototype brief block ─────────────────────────────────────────────
+//
+// Renders the constraint × variation × open-question experiment as
+// a structured card. Hypothesis loud at top, signal + kill criteria
+// as the operational pair, then the actual artifact body — what the
+// user produces THIS WEEK. No theory, all "do this now."
+
+function PrototypeBriefBlock({
+  brief,
+  busy,
+  onRegenerate,
+}: {
+  brief: PrototypeBrief;
+  busy: boolean;
+  onRegenerate: () => void;
+}) {
+  return (
+    <div
+      className="rounded-2xl p-3"
+      style={{
+        background: "rgba(37,99,235,0.04)",
+        border: "1px solid rgba(37,99,235,0.18)",
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <SparklesLucide
+            className="h-3 w-3 flex-shrink-0"
+            strokeWidth={2}
+            style={{ color: "rgba(37,99,235,0.85)" }}
+          />
+          <span
+            className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: "rgba(30,64,175,0.95)" }}
+          >
+            Experiment
+          </span>
+          <span
+            className="text-[10.5px] font-medium"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            · {brief.artifact_type}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onRegenerate}
+          disabled={busy}
+          className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+          style={{
+            background: "transparent",
+            color: appleVibe.text.tertiary,
+            cursor: busy ? "wait" : "pointer",
+          }}
+        >
+          <RefreshCw className="h-2.5 w-2.5" strokeWidth={2} />
+          {busy ? "…" : "Regenerate"}
+        </button>
+      </div>
+
+      {/* Hypothesis loud */}
+      <p
+        className="mt-2 text-[12px] font-medium leading-snug"
+        style={{ color: appleVibe.text.primary }}
+      >
+        {brief.hypothesis}
+      </p>
+
+      {/* Signal + kill — the operational pair */}
+      <div className="mt-2 flex flex-col gap-1.5 text-[11px] leading-snug">
+        <div>
+          <span
+            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Signal to watch
+          </span>{" "}
+          <span style={{ color: appleVibe.text.secondary }}>
+            {brief.signal_to_watch}
+          </span>
+        </div>
+        <div>
+          <span
+            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Kill criteria
+          </span>{" "}
+          <span style={{ color: appleVibe.text.secondary }}>
+            {brief.kill_criteria}
+          </span>
+        </div>
+        <div>
+          <span
+            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Build estimate
+          </span>{" "}
+          <span style={{ color: appleVibe.text.secondary }}>
+            {brief.build_estimate}
+          </span>
+        </div>
+      </div>
+
+      {/* The actual artifact — what to do this week */}
+      {brief.artifact_body && (
+        <div
+          className="mt-2.5 rounded-xl p-2.5"
+          style={{
+            background: "rgba(255,255,255,0.7)",
+            border: `1px solid ${appleVibe.stroke.hairline}`,
+          }}
+        >
+          <div
+            className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            What you produce this week
+          </div>
+          <p
+            className="mt-1 whitespace-pre-wrap text-[11.5px] font-light leading-snug"
+            style={{ color: appleVibe.text.primary }}
+          >
+            {brief.artifact_body}
+          </p>
+        </div>
+      )}
+
+      {/* Learning target — the binary update */}
+      {brief.learning_target && (
+        <p
+          className="mt-2 text-[10.5px] font-light italic leading-snug"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          <span
+            className="font-semibold uppercase tracking-[0.12em] not-italic"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            You&rsquo;ll know:
+          </span>{" "}
+          {brief.learning_target}
+        </p>
       )}
     </div>
   );

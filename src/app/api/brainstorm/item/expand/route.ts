@@ -20,6 +20,7 @@ import {
   type DeepBundle,
 } from "@/lib/research/research-service";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import { readConstraints } from "@/lib/objective-canvas/constraints";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -69,7 +70,9 @@ export async function POST(req: NextRequest) {
   // Verify the user owns the parent space (RLS-ish via app code).
   const { data: space } = await db
     .from("spaces")
-    .select("id, user_id, description, input_text, surface_research, deep_research")
+    .select(
+      "id, user_id, description, input_text, surface_research, deep_research, synthesis_data",
+    )
     .eq("id", entity.space_id)
     .maybeSingle();
   if (!space || space.user_id !== auth.user.id) {
@@ -186,6 +189,7 @@ export async function POST(req: NextRequest) {
       annotations: annotations.length > 0 ? annotations : undefined,
       roomPains,
       roomOutcomes,
+      constraints: readConstraints(space.synthesis_data),
     });
   } catch (err) {
     return NextResponse.json(

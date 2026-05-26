@@ -25,6 +25,10 @@ import type {
   ItemVariation,
 } from "./expand-item-detail";
 import type { ObjectiveAnnotation } from "./generate-annotations";
+import {
+  buildConstraintsBlock,
+  type OperationalConstraints,
+} from "./constraints";
 
 export interface ComposeContext {
   /** Item title + layer for framing. */
@@ -38,6 +42,10 @@ export interface ComposeContext {
   /** Parent objective annotations — keep composition aligned with
    *  the same lens the original variations were derived from. */
   annotations?: ObjectiveAnnotation[];
+  /** C — operational constraints. Composition respects them: the
+   *  composed design must be reachable for the user's time / budget
+   *  / team. Otherwise we hand them a fantasy. */
+  constraints?: OperationalConstraints | null;
 }
 
 const LAYER_FRAMING: Record<ComposeContext["itemLayer"], string> = {
@@ -108,7 +116,9 @@ ANTI-PLATITUDE: every output must reference the actual variation names + tradeof
 
 Return strict JSON.`;
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${lensBlock}\n\nCompose these per the system instructions.`;
+  const constraintsBlock = buildConstraintsBlock(ctx.constraints ?? null);
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${lensBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
 
   const raw = await llmJSON<{
     description?: unknown;
