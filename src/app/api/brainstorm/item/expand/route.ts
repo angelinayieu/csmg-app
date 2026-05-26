@@ -31,6 +31,11 @@ import {
   resolveEntityLayer,
   type LayerSlug,
 } from "@/lib/objective-canvas/context-helpers";
+import {
+  computeUpstreamStaleness,
+  NO_STALENESS,
+  type UpstreamStaleness,
+} from "@/lib/objective-canvas/upstream-staleness";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -147,10 +152,29 @@ export async function POST(req: NextRequest) {
     typeof (existing as { definition?: unknown }).definition === "string" &&
     (existing as { definition: string }).definition.length > 0;
   if (!force && hasCached) {
+    // Soft-staleness — even when we hit the cache, run the upstream
+    // staleness check so the drawer can surface a "refresh from
+    // upstream" affordance when upstream has mutated since this
+    // detail was generated. Cheap: ≤3 small queries, all soft-fail
+    // to NO_STALENESS. Skipped when downstream has no
+    // parent_sub_objective_id (orphan / root entity).
+    let upstreamStaleness: UpstreamStaleness = NO_STALENESS;
+    if (
+      entity.parent_sub_objective_id &&
+      typeof existing.generated_at === "string"
+    ) {
+      upstreamStaleness = await computeUpstreamStaleness({
+        db,
+        downstreamEntityId: entity.id,
+        parentSubObjectiveId: entity.parent_sub_objective_id,
+        downstreamGeneratedAt: existing.generated_at,
+      });
+    }
     return NextResponse.json({
       expanded_detail: existing,
       cached: true,
       prior_concepts: priorConceptsForResponse,
+      upstream_staleness: upstreamStaleness,
     });
   }
 
@@ -458,8 +482,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Fresh-generation response — by construction NOT stale (we just
+  // pulled fresh upstream context via upstreamContext above). Include
+  // NO_STALENESS so the client payload shape stays consistent
+  // across cache-hit + fresh paths and the drawer doesn't have to
+  // branch on presence of the field.
   return NextResponse.json({
     expanded_detail: detail,
     prior_concepts: priorConceptsForResponse,
+    upstream_staleness: NO_STALENESS,
   });
 }

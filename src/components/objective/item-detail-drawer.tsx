@@ -250,6 +250,21 @@ export function ItemDetailDrawer({
   );
   const [expandLoading, setExpandLoading] = useState(false);
   const [expandError, setExpandError] = useState<string | null>(null);
+  // Soft-staleness banner — populated from the /expand response's
+  // upstream_staleness payload. When is_stale=true, renders an
+  // affordance suggesting "refresh from upstream" so the user can
+  // pull fresh upstream depth into this card's expansion. Cleared
+  // on regenerate (force) since the fresh generation IS by
+  // definition upstream-aware.
+  const [staleness, setStaleness] = useState<{
+    is_stale: boolean;
+    last_upstream_change_at: string | null;
+    changes: Array<{
+      source_name: string;
+      kind: "expand" | "spawn" | "disposition";
+      changed_at: string;
+    }>;
+  } | null>(null);
 
   // ── Definition highlights (toggle) ──
   // Local-only cache: client requests once when the user first
@@ -353,6 +368,14 @@ export function ItemDetailDrawer({
         if (Array.isArray(json?.prior_concepts)) {
           setPriorConcepts(json.prior_concepts);
         }
+        // Soft-staleness — surface upstream changes since this
+        // detail was generated. Null-tolerant so older route
+        // versions (pre-staleness) don't crash this branch.
+        setStaleness(
+          json?.upstream_staleness && typeof json.upstream_staleness === "object"
+            ? json.upstream_staleness
+            : null,
+        );
       })
       .catch((err) => {
         if (!propPaint) {
@@ -414,6 +437,14 @@ export function ItemDetailDrawer({
         if (Array.isArray(json?.prior_concepts)) {
           setPriorConcepts(json.prior_concepts);
         }
+        // Force-regen returns NO_STALENESS from the server (the
+        // fresh generation IS by definition upstream-aware), so
+        // setting it here clears the banner cleanly.
+        setStaleness(
+          json?.upstream_staleness && typeof json.upstream_staleness === "object"
+            ? json.upstream_staleness
+            : null,
+        );
       })
       .catch((err) =>
         setExpandError(err instanceof Error ? err.message : "Network error."),
@@ -562,6 +593,20 @@ export function ItemDetailDrawer({
 
             {/* Scrollable body */}
             <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
+              {/* Soft-staleness banner — surfaces upstream changes
+                  since this card was last expanded. Click "Refresh
+                  from upstream" → force-regenerate, which pulls
+                  fresh upstream depth into the prompt context.
+                  Renders nothing when staleness is null or not
+                  stale, so the drawer stays clean for fresh items. */}
+              {staleness?.is_stale && (
+                <UpstreamStalenessBanner
+                  staleness={staleness}
+                  onRefresh={regenerateExpansion}
+                  busy={expandLoading}
+                />
+              )}
+
               {/* ── 1. DEFINITION ── */}
               <Section
                 icon={<Sparkle className="h-3 w-3" />}
@@ -2907,4 +2952,126 @@ function DrawerPriorConceptsStrip({
       )}
     </div>
   );
+}
+
+// ── Upstream staleness banner ──────────────────────────────────────
+//
+// Renders when /api/brainstorm/item/expand returns
+// upstream_staleness.is_stale=true. Tells the user that cards FEEDING
+// this one have mutated since this card's expanded_detail was
+// generated, and offers a one-click refresh that calls expand with
+// mode:"force" to pull fresh upstream depth.
+
+function UpstreamStalenessBanner({
+  staleness,
+  onRefresh,
+  busy,
+}: {
+  staleness: {
+    is_stale: boolean;
+    last_upstream_change_at: string | null;
+    changes: Array<{
+      source_name: string;
+      kind: "expand" | "spawn" | "disposition";
+      changed_at: string;
+    }>;
+  };
+  onRefresh: () => void;
+  busy: boolean;
+}) {
+  const lastAt = staleness.last_upstream_change_at;
+  const relative = lastAt ? formatRelativeShort(lastAt) : null;
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-3 rounded-2xl px-3.5 py-3"
+      style={{
+        background: "rgba(217,119,6,0.06)",
+        border: "1px solid rgba(217,119,6,0.22)",
+        color: "rgba(120,53,15,0.95)",
+      }}
+    >
+      <RefreshCw
+        className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+        strokeWidth={2}
+        style={{ color: "rgba(146,64,14,0.85)" }}
+      />
+      <div className="min-w-0 flex-1">
+        <div
+          className="text-[11.5px] font-semibold uppercase tracking-[0.08em]"
+          style={{ color: "rgba(120,53,15,0.95)" }}
+        >
+          Upstream changed
+          {relative ? (
+            <span
+              className="ml-1.5 font-normal lowercase tracking-normal"
+              style={{ color: "rgba(146,64,14,0.7)" }}
+            >
+              · {relative}
+            </span>
+          ) : null}
+        </div>
+        <p
+          className="mt-1 text-[12px] leading-snug"
+          style={{ color: "rgba(120,53,15,0.85)" }}
+        >
+          {staleness.changes.slice(0, 2).map((c, i) => (
+            <span key={`${c.source_name}-${c.kind}-${i}`}>
+              {i > 0 ? " · " : ""}
+              <span style={{ fontWeight: 600 }}>{c.source_name}</span>{" "}
+              {kindVerb(c.kind)}
+            </span>
+          ))}
+          {staleness.changes.length > 2
+            ? ` + ${staleness.changes.length - 2} more`
+            : ""}
+          . Your last expansion of this card doesn&rsquo;t reflect these.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={busy}
+        className="inline-flex flex-shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors"
+        style={{
+          background: busy
+            ? "rgba(217,119,6,0.10)"
+            : "rgba(217,119,6,0.18)",
+          color: "rgba(120,53,15,0.95)",
+          border: "1px solid rgba(217,119,6,0.35)",
+          cursor: busy ? "wait" : "pointer",
+          opacity: busy ? 0.7 : 1,
+        }}
+      >
+        {busy ? "Refreshing…" : "Refresh from upstream"}
+      </button>
+    </div>
+  );
+}
+
+function kindVerb(kind: "expand" | "spawn" | "disposition"): string {
+  switch (kind) {
+    case "expand":
+      return "was re-expanded";
+    case "spawn":
+      return "added a new deepening node";
+    case "disposition":
+      return "changed an election";
+  }
+}
+
+/** Compact relative time for the staleness banner header. Returns
+ *  short forms like "just now", "5 min ago", "2 hr ago", "3 d ago".
+ *  Stays format-agnostic — accepts any ISO string. */
+function formatRelativeShort(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const deltaSec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (deltaSec < 60) return "just now";
+  const deltaMin = Math.floor(deltaSec / 60);
+  if (deltaMin < 60) return `${deltaMin} min ago`;
+  const deltaHr = Math.floor(deltaMin / 60);
+  if (deltaHr < 24) return `${deltaHr} hr ago`;
+  const deltaDay = Math.floor(deltaHr / 24);
+  return `${deltaDay} d ago`;
 }
