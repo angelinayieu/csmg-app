@@ -16,8 +16,8 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Compass, Plus } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Compass, LayoutTemplate, Plus } from "lucide-react";
 import { PortalCard } from "@/components/objective/portal-card";
 import { ObjectiveEntryCard } from "@/components/objective/objective-entry-card";
 import {
@@ -45,6 +45,7 @@ export function LandingExperience({
   userEmail,
   displayName,
 }: Props) {
+  const router = useRouter();
   const params = useSearchParams();
   const initialStage: Stage =
     params.get("stage") === "entry" ? "entry" : "portal";
@@ -120,25 +121,46 @@ export function LandingExperience({
               </h1>
             </motion.div>
 
-            {/* Card stack — two square portals tilted in opposite
-                directions, overlapping in the middle. Hover an
-                individual card to ease its rotation toward 0 and
-                lift; click Create to straighten + zoom + expand
-                into the entry form. */}
+            {/* Card stack — three square portals fanned out, Create
+                centered on top. Side cards tilt outward and sit
+                slightly behind; hover an individual card to ease its
+                rotation toward 0 and lift. Click Create to straighten
+                + zoom + expand into the entry form. Click Templates
+                to route to /app/use-cases. */}
             <div
               className="relative flex items-center justify-center"
-              style={{ width: 520, height: 320 }}
+              style={{ width: 720, height: 320 }}
               onMouseEnter={() => setStackHovered(true)}
               onMouseLeave={() => setStackHovered(false)}
             >
-              {/* Create — left-tilted, primary, on top. layoutId
-                  bridges to the entry stage. */}
+              {/* Templates — leftmost, tilted left, behind Create.
+                  Clickable: routes to the use-cases / template library. */}
               <motion.div
-                initial={reduce ? false : { opacity: 0, x: 10, y: 14 }}
+                initial={reduce ? false : { opacity: 0, x: -16, y: 14 }}
                 animate={{ opacity: 1, x: 0, y: 0 }}
                 transition={{ duration: 0.5, delay: 0.05, ease: "easeOut" }}
                 className="absolute"
-                style={{ left: 40, top: 20, zIndex: 3 }}
+                style={{ left: 0, top: 20, zIndex: stackHovered ? 1 : 2 }}
+              >
+                <PortalCard
+                  variant="secondary"
+                  title="Templates"
+                  subtitle="Browse templates, patterns, and starter canvases."
+                  icon={<LayoutTemplate className="h-5 w-5" strokeWidth={1.75} />}
+                  onActivate={() => router.push("/app/use-cases")}
+                  restRotation={-8}
+                />
+              </motion.div>
+
+              {/* Create — center, primary, on top. layoutId bridges
+                  to the entry stage. Sits flat (no tilt) so it reads
+                  as the focal action of the trio. */}
+              <motion.div
+                initial={reduce ? false : { opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.1, ease: "easeOut" }}
+                className="absolute"
+                style={{ left: 220, top: 20, zIndex: 3 }}
               >
                 <PortalCard
                   layoutId="portal-card"
@@ -147,28 +169,26 @@ export function LandingExperience({
                   subtitle="Start a new objective from scratch."
                   icon={<Plus className="h-5 w-5" strokeWidth={2.25} />}
                   onActivate={() => setStage("entry")}
-                  restRotation={-5}
+                  restRotation={0}
                 />
               </motion.div>
 
-              {/* Explore — right-tilted, behind Create. We push it
-                  slightly out of the way when the stack is hovered
-                  so the focal card has the spotlight. */}
+              {/* Explore — rightmost, tilted right, behind Create. */}
               <motion.div
-                initial={reduce ? false : { opacity: 0, x: -10, y: 14 }}
+                initial={reduce ? false : { opacity: 0, x: 16, y: 14 }}
                 animate={{ opacity: 1, x: 0, y: 0 }}
-                transition={{ duration: 0.5, delay: 0.12, ease: "easeOut" }}
+                transition={{ duration: 0.5, delay: 0.15, ease: "easeOut" }}
                 className="absolute"
-                style={{ right: 40, top: 20, zIndex: stackHovered ? 1 : 2 }}
+                style={{ right: 0, top: 20, zIndex: stackHovered ? 1 : 2 }}
               >
                 <PortalCard
                   variant="secondary"
                   title="Explore"
-                  subtitle="Browse templates, patterns, and starter canvases."
+                  subtitle="Grow your ideas with world-class specialists & deep knowledge."
                   icon={<Compass className="h-5 w-5" strokeWidth={1.75} />}
                   badge="Coming soon"
                   disabled
-                  restRotation={5}
+                  restRotation={8}
                 />
               </motion.div>
             </div>
