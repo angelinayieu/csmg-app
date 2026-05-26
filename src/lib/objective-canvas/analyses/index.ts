@@ -15,6 +15,7 @@ import { orphanAnnotations } from "./orphan-annotations";
 import { painCoverage } from "./pain-coverage";
 import { duplicateVariations } from "./duplicate-variations";
 import { distillConcepts } from "./distill-concepts";
+import { recommendNextMove } from "./recommend-next-move";
 import type {
   AnalysisFinding,
   AnalysisModule,
@@ -33,7 +34,10 @@ export const TIER_1_ANALYSES: AnalysisModule[] = [
 /** Tier 2 — on-demand operations the user fires from the workbench.
  *  Each click runs one operation; result findings are merged into
  *  the cached scan output, preserving disposition state. */
-export const TIER_2_OPERATIONS: AnalysisModule[] = [distillConcepts];
+export const TIER_2_OPERATIONS: AnalysisModule[] = [
+  distillConcepts,
+  recommendNextMove,
+];
 
 /** All modules (Tier 1 + Tier 2) — useful for the workbench's
  *  operation catalog rendering. */

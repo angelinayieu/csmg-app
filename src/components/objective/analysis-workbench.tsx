@@ -15,9 +15,12 @@
 // silently on first open + lazy-refreshes on user click.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
+  ArrowRight,
   ChevronDown,
   ChevronUp,
+  Compass,
   RefreshCw,
   Sparkles,
   X,
@@ -525,14 +528,81 @@ function FindingCard({
   onResolve: () => void;
   onDismiss: () => void;
 }) {
+  const router = useRouter();
   const color = CATEGORY_COLOR[finding.category];
   const ack = finding.disposition === "acknowledged";
   const resolved = finding.disposition === "resolved";
   const opacity = ack ? 0.65 : 1;
+  const isRecommend = finding.analysis_key === "recommend_next_move";
+  const isTheme = finding.analysis_key === "distill_concepts";
   const ringDecor =
     finding.severity === "critical" || finding.severity === "high"
       ? `0 0 0 2px ${color}1F`
       : undefined;
+
+  // Sub-branch state — when the user clicks "Distill into sub-objective"
+  // on a theme finding. Optimistic: navigate as soon as the route
+  // returns the new id.
+  const [branching, setBranching] = useState(false);
+  const [branchError, setBranchError] = useState<string | null>(null);
+  const spawnedSubId =
+    typeof finding.body?.spawned_sub_objective_id === "string"
+      ? (finding.body.spawned_sub_objective_id as string)
+      : null;
+
+  async function distillIntoSubObjective() {
+    if (branching) return;
+    setBranching(true);
+    setBranchError(null);
+    try {
+      // Compose a clean description: the theme's body.description +
+      // the why_it_recurs line if present. Falls back to summary.
+      const themeDescription =
+        typeof finding.body?.description === "string"
+          ? (finding.body.description as string)
+          : finding.summary;
+      const whyItRecurs =
+        typeof finding.body?.why_it_recurs === "string"
+          ? (finding.body.why_it_recurs as string)
+          : "";
+      const description = whyItRecurs
+        ? `${themeDescription}\n\nWhy this recurs across rooms: ${whyItRecurs}`
+        : themeDescription;
+      const title =
+        typeof finding.body?.name === "string"
+          ? (finding.body.name as string)
+          : finding.title;
+      const res = await fetch(
+        "/api/brainstorm/space/analysis/sub-branch/sub-objective",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            spaceId,
+            findingId: finding.id,
+            title,
+            description,
+          }),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        setBranchError(json?.error ?? "Sub-branch failed.");
+        return;
+      }
+      const newId =
+        typeof json?.subObjectiveId === "string" ? json.subObjectiveId : "";
+      if (newId) {
+        router.push(`/app/objective/${spaceId}/sub/${newId}`);
+      }
+    } catch (err) {
+      setBranchError(
+        err instanceof Error ? err.message : "Network error.",
+      );
+    } finally {
+      setBranching(false);
+    }
+  }
 
   return (
     <li
@@ -611,7 +681,7 @@ function FindingCard({
           )}
 
           {/* Theme evidence — surface inline */}
-          {finding.analysis_key === "distill_concepts" &&
+          {isTheme &&
             Array.isArray(finding.body.evidence) && (
               <ul className="mt-1.5 list-disc space-y-0.5 pl-4">
                 {(finding.body.evidence as string[]).slice(0, 3).map((e, i) => (
@@ -625,6 +695,103 @@ function FindingCard({
                 ))}
               </ul>
             )}
+
+          {/* Recommend-next-move detail — next_steps + effort + learn */}
+          {isRecommend && (
+            <div className="mt-2 flex flex-col gap-1.5">
+              {Array.isArray(finding.body?.next_steps) &&
+                (finding.body.next_steps as string[]).length > 0 && (
+                  <div>
+                    <div
+                      className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+                      style={{ color: appleVibe.text.tertiary }}
+                    >
+                      Next steps
+                    </div>
+                    <ol className="mt-0.5 list-decimal space-y-0.5 pl-4">
+                      {(finding.body.next_steps as string[]).map((s, i) => (
+                        <li
+                          key={i}
+                          className="text-[11px] font-light leading-snug"
+                          style={{ color: appleVibe.text.primary }}
+                        >
+                          {s}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              <div className="flex flex-wrap gap-3 text-[10.5px]">
+                {typeof finding.body?.estimated_effort === "string" &&
+                  (finding.body.estimated_effort as string).length > 0 && (
+                    <span style={{ color: appleVibe.text.tertiary }}>
+                      <span className="font-semibold uppercase tracking-[0.1em]">
+                        Effort:
+                      </span>{" "}
+                      {finding.body.estimated_effort as string}
+                    </span>
+                  )}
+                {typeof finding.body?.what_youll_learn === "string" &&
+                  (finding.body.what_youll_learn as string).length > 0 && (
+                    <span
+                      className="italic"
+                      style={{ color: appleVibe.text.tertiary }}
+                    >
+                      You&rsquo;ll know:{" "}
+                      {finding.body.what_youll_learn as string}
+                    </span>
+                  )}
+              </div>
+            </div>
+          )}
+
+          {/* Sub-branch affordance — only on theme findings.
+              When already spawned, show the link instead of the button. */}
+          {isTheme && (
+            <div className="mt-2">
+              {spawnedSubId ? (
+                <a
+                  href={`/app/objective/${spaceId}/sub/${spawnedSubId}`}
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold"
+                  style={{
+                    background: "rgba(22,163,74,0.10)",
+                    color: "rgba(20,83,45,0.95)",
+                    border: "1px solid rgba(22,163,74,0.25)",
+                  }}
+                >
+                  <ArrowRight className="h-2.5 w-2.5" strokeWidth={2.5} />
+                  Open spawned room
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={distillIntoSubObjective}
+                  disabled={branching}
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold"
+                  style={{
+                    background: branching
+                      ? appleVibe.surface.chip
+                      : "rgba(124,58,237,0.10)",
+                    color: "rgba(76,29,149,0.95)",
+                    border: "1px solid rgba(124,58,237,0.25)",
+                    cursor: branching ? "wait" : "pointer",
+                    opacity: branching ? 0.7 : 1,
+                  }}
+                >
+                  <Compass className="h-2.5 w-2.5" strokeWidth={2.5} />
+                  {branching ? "Spawning…" : "Distill into sub-objective"}
+                </button>
+              )}
+              {branchError && (
+                <p
+                  className="mt-1 text-[10.5px] font-light"
+                  style={{ color: "rgba(127,29,29,0.95)" }}
+                >
+                  {branchError}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Disposition buttons */}
