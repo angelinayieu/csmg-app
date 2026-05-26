@@ -25,6 +25,7 @@ import {
   getUserVariationKindPreferences,
   variationKindSignalIsLive,
 } from "@/lib/objective-canvas/decision-log";
+import { loadRelevantCanonicalConcepts } from "@/lib/objective-canvas/canonical-concept-lookup";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 
 export const runtime = "nodejs";
@@ -229,6 +230,45 @@ export async function POST(req: NextRequest) {
         })
       : undefined;
 
+  // ── Cross-space KG read — canonical concepts from PRIOR spaces
+  //    semantically related to THIS item. Query text is item-scoped
+  //    (name + sub-objective title + a chunk of description) so the
+  //    HNSW match targets concepts relevant to the specific lane
+  //    item, not the broader parent objective. ──
+  const itemQueryText = [
+    entity.name,
+    subObjectiveTitle,
+    // description first 200 chars — usually carries the negative/
+    // positive_outcome which is the most discriminative text on the row.
+    typeof entity.causal_chain === "object" && entity.causal_chain
+      ? (() => {
+          const cc = entity.causal_chain as Record<string, unknown>;
+          if (typeof cc.negative_outcome === "string") return cc.negative_outcome;
+          if (typeof cc.positive_outcome === "string") return cc.positive_outcome;
+          if (typeof cc.measured_by === "string") return cc.measured_by;
+          return "";
+        })()
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const priorConceptsRaw = await loadRelevantCanonicalConcepts({
+    db,
+    userId: auth.user.id,
+    queryText: itemQueryText,
+    excludeSpaceId: entity.space_id,
+    limit: 6, // smaller than decompose — item-level prompt is denser
+  });
+  const priorConcepts =
+    priorConceptsRaw.length > 0
+      ? priorConceptsRaw.map((c) => ({
+          display_name: c.display_name,
+          description: c.description,
+          domain_tags: c.domain_tags,
+          space_count: c.space_count,
+        }))
+      : undefined;
+
   // ── Run the expansion LLM call ──
   let detail: ExpandedItemDetail;
   try {
@@ -245,6 +285,7 @@ export async function POST(req: NextRequest) {
       constraints: readConstraints(space.synthesis_data),
       variationKindPreferences,
       distillThemes,
+      priorConcepts,
     });
   } catch (err) {
     return NextResponse.json(

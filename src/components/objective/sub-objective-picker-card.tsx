@@ -117,6 +117,20 @@ export function SubObjectivePickerCard({
   const [viewMode, setViewMode] = useState<"batches" | "clusters">("batches");
   const [clusterBusy, setClusterBusy] = useState(false);
   const [clusterError, setClusterError] = useState<string | null>(null);
+  // Cross-space KG — canonical concepts the user has explored across
+  // other spaces, semantically related to this objective. Returned by
+  // /propose alongside sub_objectives. Powers the per-proposal "links
+  // to" badges + the top-level "Concepts reused" strip.
+  const [priorConcepts, setPriorConcepts] = useState<
+    Array<{
+      id: string;
+      canonical_code: string;
+      display_name: string;
+      description: string | null;
+      domain_tags: string[];
+      space_count: number;
+    }>
+  >([]);
 
   // ── Auto-propose on mount if nothing is cached ──
   useEffect(() => {
@@ -212,6 +226,12 @@ export function SubObjectivePickerCard({
           }
           const nextBlock = json.sub_objectives as SubObjectiveBlock;
           setBlock(nextBlock);
+          // Capture cross-space prior concepts (returned on every
+          // /propose response — initial cache hit, regenerate, and
+          // variant batch). Empty array when no prior KG signal.
+          if (Array.isArray(json?.prior_concepts)) {
+            setPriorConcepts(json.prior_concepts);
+          }
           setLoading(false);
           setVariantInFlight(null);
         } else if (kind === "confirm") {
@@ -344,6 +364,29 @@ export function SubObjectivePickerCard({
     Array.isArray(clusterAnalysis.clusters) &&
     clusterAnalysis.clusters.length > 0;
 
+  /** Find canonical concepts whose display_name appears verbatim in
+   *  a proposal's title + summary. Case-insensitive substring match
+   *  is cheap and works well enough for "did the LLM link to this
+   *  concept" detection — the prompt rule asks the LLM to use the
+   *  display_name verbatim when linking. Returns sorted by space_count
+   *  desc (loudest cross-space evidence first). */
+  function linkedConceptsForProposal(p: SubObjectiveProposal) {
+    if (priorConcepts.length === 0) return [];
+    const haystack = `${p.title} ${p.summary}`.toLowerCase();
+    const matches: Array<{ display_name: string; space_count: number }> = [];
+    for (const c of priorConcepts) {
+      if (c.display_name.length < 4) continue; // skip noise matches
+      if (haystack.includes(c.display_name.toLowerCase())) {
+        matches.push({
+          display_name: c.display_name,
+          space_count: c.space_count,
+        });
+      }
+    }
+    matches.sort((a, b) => b.space_count - a.space_count);
+    return matches.slice(0, 3); // cap per-row to keep dense
+  }
+
   async function runCluster(force = false) {
     setClusterError(null);
     setClusterBusy(true);
@@ -420,6 +463,16 @@ export function SubObjectivePickerCard({
         />
       )}
 
+      {/* Cross-space KG strip — concepts the user has explored across
+          OTHER spaces, semantically related to this objective. Renders
+          when prior_concepts came back non-empty from /propose.
+          Each chip = "↻ Concept (N spaces)". Click hits the
+          CanonicalConceptDrawer (future wire-up) — for now hover
+          shows description. */}
+      {priorConcepts.length > 0 && (
+        <PriorConceptsStrip concepts={priorConcepts} />
+      )}
+
       {/* Cluster CTA / view toggle ──────────────────────────────────
           - When no clustering has been run yet AND there are ≥5
             proposals, show a "Detect clusters" CTA so the user can
@@ -457,6 +510,7 @@ export function SubObjectivePickerCard({
             electedIds={electedIds}
             setDisposition={setDisposition}
             disabled={busy}
+            linkedConceptsForProposal={linkedConceptsForProposal}
           />
         ) : hasBatches ? (
           batches.map((b, batchIdx) => (
@@ -467,6 +521,7 @@ export function SubObjectivePickerCard({
               electedIds={electedIds}
               setDisposition={setDisposition}
               disabled={busy}
+              linkedConceptsForProposal={linkedConceptsForProposal}
             />
           ))
         ) : (
@@ -480,6 +535,7 @@ export function SubObjectivePickerCard({
                 onSetDisposition={(d) => setDisposition(p.id, d)}
                 disabled={busy}
                 lens={lens}
+                linkedConcepts={linkedConceptsForProposal(p)}
               />
             ))}
           </ul>
@@ -572,6 +628,7 @@ function BatchSection({
   electedIds,
   setDisposition,
   disabled,
+  linkedConceptsForProposal,
 }: {
   batch: SubObjectiveBatch;
   isFirst: boolean;
@@ -581,6 +638,9 @@ function BatchSection({
     d: SubObjectiveDisposition,
   ) => void;
   disabled: boolean;
+  linkedConceptsForProposal?: (
+    p: SubObjectiveProposal,
+  ) => Array<{ display_name: string; space_count: number }>;
 }) {
   return (
     <div className={isFirst ? "" : "mt-5 border-t pt-4"} style={{
@@ -610,6 +670,9 @@ function BatchSection({
             onSetDisposition={(d) => setDisposition(p.id, d)}
             disabled={disabled}
             lens={[]} /* lens chips render once at the strip, not per-row */
+            linkedConcepts={
+              linkedConceptsForProposal ? linkedConceptsForProposal(p) : []
+            }
           />
         ))}
       </ul>
@@ -895,6 +958,7 @@ function ProposalRow({
   onSetDisposition,
   disabled,
   representativeBadge = false,
+  linkedConcepts = [],
 }: {
   proposal: SubObjectiveProposal;
   disposition: SubObjectiveDisposition;
@@ -906,6 +970,11 @@ function ProposalRow({
    *  representative. Renders a small "Representative" badge so the
    *  user sees the LLM-nominated strongest member at a glance. */
   representativeBadge?: boolean;
+  /** Cross-space KG — canonical concepts this proposal's text
+   *  verbatim references (computed by the parent picker). Each
+   *  renders as a small "↻ Concept (N spaces)" badge so the user
+   *  sees their KG accumulating. Empty array → no chips. */
+  linkedConcepts?: Array<{ display_name: string; space_count: number }>;
 }) {
   const confidencePct = Math.round(proposal.confidence * 100);
   const confidenceDot =
@@ -989,6 +1058,42 @@ function ProposalRow({
             >
               {proposal.summary}
             </p>
+          )}
+
+          {/* Cross-space KG badges — canonical concepts this proposal
+              verbatim references. Each chip = "↻ Concept (N spaces)"
+              so the user sees their KG accumulating, not fragmenting. */}
+          {linkedConcepts.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <span
+                className="text-[9px] font-semibold uppercase tracking-[0.12em]"
+                style={{ color: "rgba(91,33,182,0.95)" }}
+              >
+                ↻ links to
+              </span>
+              {linkedConcepts.map((c) => (
+                <span
+                  key={c.display_name}
+                  className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                  style={{
+                    background: "rgba(124,58,237,0.08)",
+                    color: "rgba(91,33,182,0.95)",
+                    border: "1px solid rgba(124,58,237,0.18)",
+                  }}
+                  title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"}`}
+                >
+                  <span className="truncate">{c.display_name}</span>
+                  {c.space_count > 1 && (
+                    <span
+                      className="font-mono text-[8.5px]"
+                      style={{ color: "rgba(91,33,182,0.75)" }}
+                    >
+                      {c.space_count}×
+                    </span>
+                  )}
+                </span>
+              ))}
+            </div>
           )}
 
           {/* Meta row: confidence + lens coverage chips */}
@@ -1587,6 +1692,7 @@ function ClusterView({
   electedIds,
   setDisposition,
   disabled,
+  linkedConceptsForProposal,
 }: {
   clusters: ProposalCluster[];
   proposalsById: Map<string, SubObjectiveProposal>;
@@ -1596,6 +1702,9 @@ function ClusterView({
     d: SubObjectiveDisposition,
   ) => void;
   disabled: boolean;
+  linkedConceptsForProposal?: (
+    p: SubObjectiveProposal,
+  ) => Array<{ display_name: string; space_count: number }>;
 }) {
   return (
     <div className="flex flex-col gap-5">
@@ -1658,6 +1767,11 @@ function ClusterView({
                     disabled={disabled}
                     lens={[]}
                     representativeBadge={p.id === c.representative_id}
+                    linkedConcepts={
+                      linkedConceptsForProposal
+                        ? linkedConceptsForProposal(p)
+                        : []
+                    }
                   />
                 </div>
               ))}
@@ -1665,6 +1779,117 @@ function ClusterView({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── Cross-space KG strip ────────────────────────────────────────────
+//
+// Shows the canonical concepts from the user's PRIOR spaces that the
+// system surfaced as semantically related to the current objective.
+// Two purposes:
+//   1. Transparency — the user sees the KG read is happening, even
+//      when no proposal verbatim-references a concept yet.
+//   2. Affordance — chips serve as a reference list for the user to
+//      look at while picking. Future: clicking opens the
+//      CanonicalConceptDrawer for deeper inspection.
+//
+// Collapsed by default. Each chip = display_name + space_count badge.
+
+function PriorConceptsStrip({
+  concepts,
+}: {
+  concepts: Array<{
+    id: string;
+    display_name: string;
+    description: string | null;
+    domain_tags: string[];
+    space_count: number;
+  }>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (concepts.length === 0) return null;
+
+  return (
+    <div
+      className="mt-4 rounded-2xl border p-3"
+      style={{
+        background: "rgba(124,58,237,0.025)",
+        borderColor: "rgba(124,58,237,0.18)",
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between"
+      >
+        <div className="flex items-center gap-2">
+          <Sparkles
+            className="h-3 w-3 flex-shrink-0"
+            strokeWidth={2}
+            style={{ color: "rgba(91,33,182,0.9)" }}
+          />
+          <span
+            className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+            style={{ color: "rgba(91,33,182,0.95)" }}
+          >
+            {concepts.length} concept{concepts.length === 1 ? "" : "s"} from
+            your prior spaces
+          </span>
+          <span
+            className="text-[11.5px] font-light italic"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            · proposals can link or diverge from these
+          </span>
+        </div>
+        <span
+          className="inline-flex items-center gap-1 text-[10.5px] font-medium"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          {expanded ? (
+            <>
+              hide <ChevronUp className="h-3 w-3" strokeWidth={2} />
+            </>
+          ) : (
+            <>
+              show <ChevronDown className="h-3 w-3" strokeWidth={2} />
+            </>
+          )}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          {concepts.map((c) => (
+            <span
+              key={c.id}
+              className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium"
+              style={{
+                background: "rgba(255,255,255,0.92)",
+                color: "rgba(91,33,182,0.95)",
+                border: "1px solid rgba(124,58,237,0.20)",
+              }}
+              title={
+                c.description
+                  ? `${c.description}${c.domain_tags.length > 0 ? `\n\nTags: ${c.domain_tags.join(", ")}` : ""}`
+                  : c.domain_tags.length > 0
+                    ? `Tags: ${c.domain_tags.join(", ")}`
+                    : undefined
+              }
+            >
+              <span className="truncate">{c.display_name}</span>
+              <span
+                className="font-mono text-[9.5px]"
+                style={{ color: "rgba(91,33,182,0.65)" }}
+              >
+                {c.space_count}×
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -230,6 +230,17 @@ export interface ExpandItemContext {
    *  pattern. Bias new variations toward respecting the themes the
    *  user keeps electing toward. Empty array → no block injected. */
   distillThemes?: Array<{ name: string; description: string }>;
+  /** Cross-space KG — canonical concepts (from prior spaces) that
+   *  are semantically related to this item. When non-empty, the
+   *  generator gets a "link or diverge" block so variations reuse
+   *  concepts the user has already named instead of fragmenting
+   *  the KG with parallel framings. */
+  priorConcepts?: Array<{
+    display_name: string;
+    description: string | null;
+    domain_tags: string[];
+    space_count: number;
+  }>;
 }
 
 // ── Per-layer framing — different prompts for different lane types ──
@@ -502,7 +513,34 @@ Return strict JSON.`;
           )}\n  When a candidate variation contradicts an established theme, either drop it or surface the contradiction explicitly in its tradeoff so the user sees what they'd be giving up.`
       : "";
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
+  // Cross-space KG — canonical concepts the user has explored across
+  // other spaces that are semantically related to this item. Same
+  // "link or diverge" pattern the decompose prompt uses, but scoped
+  // to the item (so the model sees concepts relevant to THIS feature
+  // / pain / outcome, not the whole objective). Empty array → block
+  // omitted (cold-start / no prior KG signal).
+  const priorConceptsBlock =
+    ctx.priorConcepts && ctx.priorConcepts.length > 0
+      ? `\n\nCONCEPTS YOU'VE ALREADY EXPLORED ACROSS YOUR SPACES (your cross-space knowledge graph — link or diverge):\n${ctx.priorConcepts
+          .slice(0, 6)
+          .map((c, i) => {
+            const tags =
+              c.domain_tags.length > 0
+                ? ` [${c.domain_tags.slice(0, 3).join(", ")}]`
+                : "";
+            const spaces =
+              c.space_count > 1 ? ` · used in ${c.space_count} of your spaces` : "";
+            const desc = c.description
+              ? `\n      ${c.description.slice(0, 160)}`
+              : "";
+            return `  [${i + 1}] ${c.display_name}${tags}${spaces}${desc}`;
+          })
+          .join(
+            "\n",
+          )}\n  PRIOR-CONCEPTS RULE: If a variation naturally maps onto one of these concepts, REFERENCE the display_name verbatim in your variation name so the post-insert matcher can link it across your KG. If you're DELIBERATELY proposing a divergent take, NAME THE DIVERGENCE in the tradeoff field. Don't reinvent concepts you've already named — that fragments your KG.`
+      : "";
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
 
   // ── Schema (dynamic — adds derived_from_annotations only when
   //    the lens has entries, mirroring the room generator pattern). ──

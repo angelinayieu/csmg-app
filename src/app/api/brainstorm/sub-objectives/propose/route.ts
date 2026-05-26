@@ -121,13 +121,44 @@ export async function POST(req: NextRequest) {
   const state = readObjectiveCanvasState(space.synthesis_data);
   const existingBlock = state.sub_objectives;
 
+  // ── Cross-space KG read — canonical concepts the user has already
+  // explored that are semantically related to this objective. Loaded
+  // ONCE per request so both the LLM prompt AND the response payload
+  // can include them. ~300ms (one embed + 3 small queries) — cheap
+  // enough to run on cache hits too so the picker badges render on
+  // every load, not just fresh generations.
+  //
+  // Soft-fail by design — empty array on any failure, prompt + UI
+  // both gracefully degrade.
+  const priorConcepts = await loadRelevantCanonicalConcepts({
+    db,
+    userId: auth.user.id,
+    queryText: objective,
+    excludeSpaceId: spaceId,
+    limit: 8,
+  });
+  // Strip cross-space evidence for the response payload — the picker
+  // only needs display_name + description + space_count for badge
+  // rendering. Full record stays in scope for the LLM prompt.
+  const priorConceptsForResponse = priorConcepts.map((c) => ({
+    id: c.id,
+    canonical_code: c.canonical_code,
+    display_name: c.display_name,
+    description: c.description,
+    domain_tags: c.domain_tags,
+    space_count: c.space_count,
+  }));
+
   // ── Mode: initial / cache short-circuit ──
   if (
     mode === "initial" &&
     existingBlock &&
     existingBlock.proposals.length > 0
   ) {
-    return NextResponse.json({ sub_objectives: existingBlock });
+    return NextResponse.json({
+      sub_objectives: existingBlock,
+      prior_concepts: priorConceptsForResponse,
+    });
   }
 
   // ── Variant mode requires an existing block to layer onto ──
@@ -172,24 +203,9 @@ export async function POST(req: NextRequest) {
   const annotations = normalizeAnnotations(parentAnnotationsRaw);
   const lensSize = Math.min(annotations.length, 8);
 
-  // ── Cross-space KG read — canonical concepts the user has already
-  // explored that are semantically related to this objective. Powers
-  // the "link or diverge" block in the decompose prompt so generation
-  // grounds in prior thinking instead of re-deriving concepts.
-  //
-  // excludeSpaceId is the CURRENT space so we don't surface the
-  // space's own entities as "prior thinking" (they aren't prior, they
-  // ARE the current decomposition's substrate).
-  //
-  // Soft-fail by design — empty array on any failure, prompt falls
-  // through to lens-only behavior. ──
-  const priorConcepts = await loadRelevantCanonicalConcepts({
-    db,
-    userId: auth.user.id,
-    queryText: objective,
-    excludeSpaceId: spaceId,
-    limit: 8,
-  });
+  // priorConcepts was loaded at the top of the route (so cache-hit
+  // returns can include them too). Reused as-is here for the LLM
+  // prompt context.
 
   // ── Variant mode: build anti-duplicate + uncovered context ──
   let existingProposalsForPrompt:
@@ -312,6 +328,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         sub_objectives: nextBlock,
         new_batch_id: newBatch.id,
+        prior_concepts: priorConceptsForResponse,
       });
     }
 
@@ -351,7 +368,10 @@ export async function POST(req: NextRequest) {
       // Soft-fail: still return the proposals so user can keep going.
     }
 
-    return NextResponse.json({ sub_objectives: block });
+    return NextResponse.json({
+      sub_objectives: block,
+      prior_concepts: priorConceptsForResponse,
+    });
   } catch (err) {
     return NextResponse.json(
       { error: `propose failed: ${sanitizeErrorMessage(err)}` },
