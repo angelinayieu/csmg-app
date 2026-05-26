@@ -154,14 +154,22 @@ export async function POST(req: NextRequest) {
 
   // ── Load existing entities — these are the nodes correlations
   //    will link. If empty, correlations can't form. ──
+  //
+  // Phase-2: select causal_chain too so we can hand the body content
+  // (negative_outcome, root_causes, positive_outcome, first_principles,
+  // measured_by) to linkCorrelations. The same content the original
+  // room/generate route passes inline post-generation — here it comes
+  // from the persisted jsonb instead. Lets the retry path also produce
+  // content-grounded edges instead of name-only fallbacks.
   const { data: entityRows } = await db
     .from("entities")
-    .select("id, name, layer_ontology_id")
+    .select("id, name, layer_ontology_id, causal_chain")
     .eq("parent_sub_objective_id", subObjectiveId);
   const entities = ((entityRows ?? []) as Array<{
     id: string;
     name: string;
     layer_ontology_id: string | null;
+    causal_chain: Record<string, unknown> | null;
   }>);
   if (entities.length < 2) {
     return NextResponse.json(
@@ -172,15 +180,54 @@ export async function POST(req: NextRequest) {
       { status: 409 },
     );
   }
+  /** Pull a string field from a causal_chain jsonb defensively. */
+  function ccStr(
+    cc: Record<string, unknown> | null,
+    key: string,
+  ): string | undefined {
+    const v = cc?.[key];
+    return typeof v === "string" && v.trim().length > 0 ? v : undefined;
+  }
+  /** Pull a string[] field from a causal_chain jsonb defensively. */
+  function ccStrArr(
+    cc: Record<string, unknown> | null,
+    key: string,
+  ): string[] | undefined {
+    const v = cc?.[key];
+    if (!Array.isArray(v)) return undefined;
+    const out = v.filter((x): x is string => typeof x === "string" && x.length > 0);
+    return out.length > 0 ? out : undefined;
+  }
   const itemRefs = entities
-    .map((e) => ({
-      id: e.id,
-      name: e.name,
-      layer: (e.layer_ontology_id
+    .map((e) => {
+      const layer = (e.layer_ontology_id
         ? slugByLayerId.get(e.layer_ontology_id)
-        : null) as LayerSlug | undefined,
-    }))
-    .filter((it): it is { id: string; name: string; layer: LayerSlug } => !!it.layer);
+        : null) as LayerSlug | undefined;
+      if (!layer) return null;
+      const base = { id: e.id, name: e.name, layer };
+      if (layer === "pain") {
+        return {
+          ...base,
+          negative_outcome: ccStr(e.causal_chain, "negative_outcome"),
+          root_causes: ccStrArr(e.causal_chain, "root_causes"),
+        };
+      }
+      if (layer === "outcomes") {
+        return {
+          ...base,
+          measured_by: ccStr(e.causal_chain, "measured_by"),
+        };
+      }
+      if (layer === "features") {
+        return {
+          ...base,
+          positive_outcome: ccStr(e.causal_chain, "positive_outcome"),
+          first_principles: ccStrArr(e.causal_chain, "first_principles"),
+        };
+      }
+      return base; // objective anchor — name-only
+    })
+    .filter((it): it is NonNullable<typeof it> => !!it);
 
   // ── Build the room context (mirrors room/generate/route.ts) ─────
   const state = readObjectiveCanvasState(space.synthesis_data);

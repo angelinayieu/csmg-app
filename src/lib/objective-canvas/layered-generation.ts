@@ -811,10 +811,34 @@ interface CorrelationShape {
   }>;
 }
 
+/** Item handed to the correlation pass.
+ *
+ *  Phase-2 content-aware edges: alongside id/name/layer the LLM now
+ *  sees the BODY of each item — the actual semantic content from the
+ *  generator's causal_chain output. This is what lets edges be
+ *  grounded in real content overlaps (which root_cause × which
+ *  first_principle) instead of label-matching guesses.
+ *
+ *  Body fields are optional — the correlation pass degrades to the
+ *  legacy name-only mode when bodies aren't provided (older callers,
+ *  partial-data paths, the side-panel "Generate correlations" retry
+ *  button which only has ids). When bodies ARE provided, the tagged
+ *  block expands to a structured per-item card the LLM can reason
+ *  over directly. */
 interface ItemRef {
   id: string;
   name: string;
   layer: "pain" | "outcomes" | "features" | "objective";
+  /** Pain body — the negative outcome the pain produces. */
+  negative_outcome?: string;
+  /** Pain body — the underlying causes (3-5 typical). */
+  root_causes?: string[];
+  /** Feature body — the positive outcome the feature produces. */
+  positive_outcome?: string;
+  /** Feature body — the load-bearing principles (3-5 typical). */
+  first_principles?: string[];
+  /** Outcome body — the signal that confirms this outcome. */
+  measured_by?: string;
 }
 
 /** Correlation result — items + an optional single-annotation
@@ -861,6 +885,35 @@ async function generateCorrelations(
 
   const lensC = annotationLensSection(ctx);
 
+  // Phase-2 — does this room have body content? If so, the prompt
+  // upgrades from name-only label matching to content-aware grounding.
+  // The hasBodies flag also controls how the user prompt formats each
+  // item (structured block with negative_outcome/root_causes/etc. vs.
+  // single-line tagged label).
+  const hasBodies = tagged.some(
+    (it) =>
+      (typeof it.negative_outcome === "string" && it.negative_outcome.length > 0) ||
+      (Array.isArray(it.root_causes) && it.root_causes.length > 0) ||
+      (typeof it.positive_outcome === "string" && it.positive_outcome.length > 0) ||
+      (Array.isArray(it.first_principles) && it.first_principles.length > 0) ||
+      (typeof it.measured_by === "string" && it.measured_by.length > 0),
+  );
+
+  const groundingRule = hasBodies
+    ? `
+CONTENT-AWARE GROUNDING (this is the most important rule):
+Every item carries its BODY — pains carry { negative_outcome, root_causes }; features carry { positive_outcome, first_principles }; outcomes carry { measured_by }. Do NOT pick edges by label-matching the names. Pick edges by naming a SPECIFIC OVERLAP between bodies:
+  • pain → features  : which feature's first_principle attacks which of the pain's root_causes? Name BOTH in the rationale.
+  • features → outcomes : which feature's first_principle produces the signal the outcome is measured_by? Name both.
+  • pain → outcomes : which root_cause's removal IS the measured_by signal? Name both.
+  • outcomes → objective : which measured_by aggregates into the parent objective?
+
+If you cannot name a specific content overlap, the edge does not exist — do not emit it. "X and Y share a domain" is NOT a grounding; only specific phrase-to-phrase overlap counts.
+
+The mechanism field becomes the NAMED LEVER that bridges the two phrases. The rationale must reference the specific phrases on both ends.
+`
+    : "";
+
   const system = `You rank cross-layer correlations inside one sub-objective room.
 
 Items live in four layers (Pain → Features → Outcomes → Objective). Produce edges that connect items ACROSS layers — never within the same layer, never "because they're in the same room."
@@ -878,19 +931,34 @@ QUOTAS (required minimums — do NOT skip any layer pair):
   ≥ 1 outcome → objective edge        (the room must visibly roll up)
   ≥ 1 pain → outcome edge             (when an outcome is literally "absence of this pain")
 Total: 6-14 edges across the room. If quotas can't be met because an outcome / objective genuinely has no upstream link, you MUST surface why in the rationale (e.g. "weak — outcome lacks a producing mechanism").
-
+${groundingRule}
 EDGE PROPERTIES:
 - relationship: SHORT lowercase verb phrase (1-3 words). Examples: "addresses", "produces", "rolls up to", "dissolves", "depends on", "aggravates".
-- strength ∈ [0,1]: load-bearing-ness. ≥0.7 critical, 0.4-0.7 supportive, <0.4 weak.
+- strength ∈ [0,1]: load-bearing-ness. ≥0.7 critical, 0.4-0.7 supportive, <0.4 weak.${
+    hasBodies
+      ? `
+    Strength is now grounded in content overlap — count and quality of the specific phrase-to-phrase overlaps between source and target bodies. A feature whose first_principles each map to a different root_cause of the pain is a strong (0.8+) edge. A feature that touches one weak peripheral aspect is a 0.3-0.4 edge.`
+      : ""
+  }
 - polarity: positive | negative | ambiguous.
 - mechanism: 2-5 word NOUN PHRASE naming the SPECIFIC LEVER this edge pulls.
     Examples: "reward feedback loop", "predictive query expansion", "social proof cue",
     "intrinsic motivation hook", "cognitive load reduction".
     NOT generic ("user engagement", "personalization improvement") — those are restatements,
-    not levers. The mechanism is the THING THAT MAKES THE EDGE WORK.
+    not levers. The mechanism is the THING THAT MAKES THE EDGE WORK.${
+      hasBodies
+        ? `
+    With body content available, the mechanism MUST be the bridge between named phrases — e.g. if pain.root_causes contains "overwhelmed by choices" and feature.first_principles contains "session memory", the mechanism might be "decision residue caching" (the thing the session memory implements that resolves the overwhelm).`
+        : ""
+    }
 - rationale: ONE or TWO sentences explaining WHY this specific source attacks this specific target
     via the named mechanism. Reference the user's actual domain. NOT a tautology
-    ("X helps Y because X helps Y" is forbidden).
+    ("X helps Y because X helps Y" is forbidden).${
+      hasBodies
+        ? `
+    With body content, rationale MUST quote or paraphrase the specific source-side phrase (root_cause or first_principle) and the specific target-side phrase (first_principle or measured_by) that the mechanism bridges.`
+        : ""
+    }
 
 Quality over coverage: drop any edge whose strength would be < 0.3.
 
@@ -905,14 +973,59 @@ Return strict JSON.`;
   // step → step transition).
   const EDGE_PROVENANCE_RULE = `EDGE PROVENANCE: For each edge, include derived_from_annotations[] — an array of AT MOST ONE entry. When this edge is rooted in one of the ANNOTATION LENS readings, emit a single { index: 1-based lens index, facet: "tension" | "inference" | "fragility" | "analogy" | "dimension" | "reading" } entry. PREFER tension (the annotation explicitly named conflict / harmony between source and target concepts) or inference (the edge IS a hop in the annotation's reasoning chain). Emit an EMPTY array [] when no annotation justifies the edge — DO NOT invent links.`;
 
+  /** Render a single item — structured block when bodies are
+   *  present, single-line tag when they aren't. Trims long fields
+   *  to keep the prompt compact (~50 words per item ceiling). */
+  function renderItem(it: typeof tagged[number]): string {
+    const head = `  ${it.tag} [${it.layer.toUpperCase()}] "${it.name.trim()}"`;
+    if (!hasBodies) return head;
+    const lines: string[] = [head];
+    if (it.layer === "pain") {
+      if (it.negative_outcome) {
+        lines.push(`    negative_outcome: ${it.negative_outcome.trim().slice(0, 180)}`);
+      }
+      if (Array.isArray(it.root_causes) && it.root_causes.length > 0) {
+        const causes = it.root_causes
+          .filter((c): c is string => typeof c === "string" && c.length > 0)
+          .slice(0, 5)
+          .map((c) => c.trim().slice(0, 80));
+        if (causes.length > 0) {
+          lines.push(`    root_causes: ${causes.join(" · ")}`);
+        }
+      }
+    } else if (it.layer === "features") {
+      if (it.positive_outcome) {
+        lines.push(`    positive_outcome: ${it.positive_outcome.trim().slice(0, 180)}`);
+      }
+      if (Array.isArray(it.first_principles) && it.first_principles.length > 0) {
+        const principles = it.first_principles
+          .filter((c): c is string => typeof c === "string" && c.length > 0)
+          .slice(0, 5)
+          .map((c) => c.trim().slice(0, 80));
+        if (principles.length > 0) {
+          lines.push(`    first_principles: ${principles.join(" · ")}`);
+        }
+      }
+    } else if (it.layer === "outcomes") {
+      if (it.measured_by) {
+        lines.push(`    measured_by: ${it.measured_by.trim().slice(0, 180)}`);
+      }
+    }
+    return lines.join("\n");
+  }
+
   const user = `SUB-OBJECTIVE: ${ctx.subObjectiveTitle}
 
-ITEMS BY TAG:
-${tagged.map((it) => `  ${it.tag} [${it.layer}] ${it.name}`).join("\n")}
+ITEMS${hasBodies ? " (with bodies)" : " BY TAG"}:
+${tagged.map(renderItem).join(hasBodies ? "\n\n" : "\n")}
 
 INVENTORY: ${layerCounts.pain ?? 0} pain, ${layerCounts.features ?? 0} features, ${layerCounts.outcomes ?? 0} outcomes, ${layerCounts.objective ?? 0} objective.${lensC.lensBlock}${lensC.hasAnnotations ? `\n\n${EDGE_PROVENANCE_RULE}\n` : ""}
 
 Generate 6-14 cross-layer edges per the quotas in the system instructions. Every outcome should have ≥1 incoming feature edge; if it doesn't, the analysis has a gap.${
+    hasBodies
+      ? " Ground each edge in a specific content overlap per the system instructions — name the source-side phrase and the target-side phrase that the mechanism bridges."
+      : ""
+  }${
     lensC.hasAnnotations
       ? " Each edge must include derived_from_annotations[] — 0 or 1 entries (empty [] when no annotation seeds the edge)."
       : ""

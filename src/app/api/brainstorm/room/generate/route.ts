@@ -462,15 +462,53 @@ export async function POST(req: NextRequest) {
   const slugByLayerId = new Map(
     Array.from(layersBySlug.entries()).map(([slug, row]) => [row.id, slug]),
   );
-  const itemRefs = inserted.map((e) => ({
-    id: e.id,
-    name: e.name,
-    layer: (slugByLayerId.get(e.layer_ontology_id) ?? "features") as
+
+  // Phase-2 content-aware correlations: build per-layer name→body
+  // lookups so the inserted ids (which we only know post-insert) can
+  // be joined to the original generated bodies (negative_outcome,
+  // root_causes, positive_outcome, first_principles, measured_by).
+  // Joining on (layer, name) is safe — the generator emits unique
+  // names within layer, and the inserted rows preserve them verbatim.
+  const painByName = new Map(pain.map((p) => [p.name, p]));
+  const outcomeByName = new Map(outcomes.map((o) => [o.name, o]));
+  const featureByName = new Map(features.map((f) => [f.name, f]));
+
+  const itemRefs = inserted.map((e) => {
+    const layer = (slugByLayerId.get(e.layer_ontology_id) ?? "features") as
       | "pain"
       | "outcomes"
       | "features"
-      | "objective",
-  }));
+      | "objective";
+    const base = { id: e.id, name: e.name, layer };
+    // Attach body content per layer so the correlation LLM can ground
+    // edges in actual semantic overlaps instead of label matching.
+    if (layer === "pain") {
+      const p = painByName.get(e.name);
+      if (p) {
+        return {
+          ...base,
+          negative_outcome: p.negative_outcome,
+          root_causes: p.root_causes,
+        };
+      }
+    } else if (layer === "outcomes") {
+      const o = outcomeByName.get(e.name);
+      if (o) {
+        return { ...base, measured_by: o.measured_by };
+      }
+    } else if (layer === "features") {
+      const f = featureByName.get(e.name);
+      if (f) {
+        return {
+          ...base,
+          positive_outcome: f.positive_outcome,
+          first_principles: f.first_principles,
+        };
+      }
+    }
+    // Objective + any unmatched fallthrough: name-only legacy mode.
+    return base;
+  });
 
   // ── Generate cross-layer correlations ───────────────────────────
   // Soft-fail kept so partial generation lands (entities still
