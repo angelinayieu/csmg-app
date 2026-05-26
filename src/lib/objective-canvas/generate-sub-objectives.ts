@@ -15,6 +15,7 @@ import {
   type SubObjectiveIntent,
 } from "./sub-objective-state";
 import type { ObjectiveAnnotation } from "./generate-annotations";
+import type { RelevantCanonicalConcept } from "./canonical-concept-lookup";
 
 interface LlmShape {
   category?: unknown;
@@ -47,6 +48,11 @@ export interface GenerateSubObjectivesOptions {
   /** Variant Lab — 1-based annotation indices uncovered by current
    *  elected proposals. Used by the gap_fill intent prompt. */
   uncoveredLensIndices?: number[];
+  /** Cross-space KG — canonical concepts the user has already
+   *  explored across other spaces, ranked by relevance to this
+   *  objective. Drives the "link or diverge" block in the prompt.
+   *  Empty / undefined → omitted (legacy single-space behavior). */
+  priorConcepts?: RelevantCanonicalConcept[];
 }
 
 export interface GeneratedSubObjectives {
@@ -100,6 +106,7 @@ export async function generateSubObjectiveProposals(
       existingProposals: opts.existingProposals,
       lens,
       uncoveredLensIndices: opts.uncoveredLensIndices,
+      priorConcepts: opts.priorConcepts,
     }),
     responseSchema: buildResponseSchema(hasLens),
     temperature,

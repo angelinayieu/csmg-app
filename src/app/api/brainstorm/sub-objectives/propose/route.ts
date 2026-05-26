@@ -38,6 +38,7 @@ import {
 } from "@/lib/research/research-service";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { loadRelevantCanonicalConcepts } from "@/lib/objective-canvas/canonical-concept-lookup";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -171,6 +172,25 @@ export async function POST(req: NextRequest) {
   const annotations = normalizeAnnotations(parentAnnotationsRaw);
   const lensSize = Math.min(annotations.length, 8);
 
+  // ── Cross-space KG read — canonical concepts the user has already
+  // explored that are semantically related to this objective. Powers
+  // the "link or diverge" block in the decompose prompt so generation
+  // grounds in prior thinking instead of re-deriving concepts.
+  //
+  // excludeSpaceId is the CURRENT space so we don't surface the
+  // space's own entities as "prior thinking" (they aren't prior, they
+  // ARE the current decomposition's substrate).
+  //
+  // Soft-fail by design — empty array on any failure, prompt falls
+  // through to lens-only behavior. ──
+  const priorConcepts = await loadRelevantCanonicalConcepts({
+    db,
+    userId: auth.user.id,
+    queryText: objective,
+    excludeSpaceId: spaceId,
+    limit: 8,
+  });
+
   // ── Variant mode: build anti-duplicate + uncovered context ──
   let existingProposalsForPrompt:
     | ReturnType<typeof allBlockProposals>
@@ -202,6 +222,7 @@ export async function POST(req: NextRequest) {
       existingProposals: existingProposalsForPrompt,
       annotations: annotations.length > 0 ? annotations : undefined,
       uncoveredLensIndices,
+      priorConcepts: priorConcepts.length > 0 ? priorConcepts : undefined,
     });
 
     if (mode === "variant" && existingBlock) {

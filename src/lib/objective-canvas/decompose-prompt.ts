@@ -11,6 +11,11 @@ import type {
   SubObjectiveIntent,
   SubObjectiveProposal,
 } from "./sub-objective-state";
+import {
+  buildPriorConceptsBlock,
+  PRIOR_CONCEPTS_RULE,
+  type RelevantCanonicalConcept,
+} from "./canonical-concept-lookup";
 
 export interface BuildDecomposeArgs {
   objective: string;
@@ -36,6 +41,12 @@ export interface BuildDecomposeArgs {
    *  any elected proposal. Powers the gap_fill intent: prompt
    *  highlights these as targets the new batch should attack. */
   uncoveredLensIndices?: number[];
+  /** Cross-space KG — canonical concepts the user has already
+   *  explored across other spaces, ranked by relevance to this
+   *  objective. Injected as a "link or diverge" block. Empty
+   *  array → block is omitted, generation falls through to
+   *  intra-space-only context (legacy behavior). */
+  priorConcepts?: RelevantCanonicalConcept[];
 }
 
 /** Intent-specific mixins appended to the base system prompt. Each
@@ -141,6 +152,7 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
     existingProposals,
     lens,
     uncoveredLensIndices,
+    priorConcepts,
   } = args;
 
   const clarifyingBlock =
@@ -216,10 +228,22 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
           .join("\n")}`
       : "";
 
+  // Cross-space KG — prior canonical concepts the user has explored
+  // semantically related to this objective. Build the block + the
+  // companion "link or diverge" rule, both empty when none found.
+  const priorConceptsBlock =
+    priorConcepts && priorConcepts.length > 0
+      ? buildPriorConceptsBlock(priorConcepts)
+      : "";
+  const priorConceptsRule =
+    priorConcepts && priorConcepts.length > 0
+      ? `\n\n${PRIOR_CONCEPTS_RULE}\n`
+      : "";
+
   return `REFINED OBJECTIVE:
 """
 ${objective.slice(0, 4000)}
-"""${clarifyingBlock}${researchBlock}${lensBlock}${existingBlock}${uncoveredBlock}${lensCoverageRule}
+"""${clarifyingBlock}${researchBlock}${lensBlock}${priorConceptsBlock}${existingBlock}${uncoveredBlock}${lensCoverageRule}${priorConceptsRule}
 
 Propose 4–5 sub-objectives per the system instructions. Mark exactly 3 as recommended=true (the ones most load-bearing for delivering the parent).`;
 }
