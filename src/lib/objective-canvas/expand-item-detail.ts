@@ -329,6 +329,46 @@ export interface ExpandItemContext {
     /** ISO of when the user concluded the brief. */
     status_updated_at?: string;
   }>;
+  /** Closed read loop — structural findings the Analysis Workbench
+   *  has already surfaced that touch THIS item or its room. The
+   *  caller filters CrossRoomAnalysisState.findings to:
+   *    • drop resolved / dismissed (user closed the signal)
+   *    • drop distill_concepts (already flows via distillThemes)
+   *    • keep findings whose references match this entity or its
+   *      parent_sub_objective_id (or which are space-wide signals
+   *      explicitly opted in)
+   *  …then maps each finding to one entry below. The kind enum
+   *  drives ordering + framing in the prompt block.
+   *
+   *  Why this matters: without it, the analysis workbench detects
+   *  a duplicate variation across rooms / a contradiction / an
+   *  uncovered pain — and then the next time the user opens the
+   *  drawer to regenerate variations, the LLM has no idea the
+   *  pattern exists. With it, variations either fold the signal
+   *  in (extend the shared mechanism, differentiate from the
+   *  duplicate, resolve the contradiction) or surface the friction
+   *  in the variation's tradeoff so the user reads where the
+   *  open decision lives.
+   *
+   *  Soft signal — empty / undefined tolerated. */
+  crossRoomFindings?: Array<{
+    /** Drives sort order + prompt framing. */
+    kind:
+      | "pain_uncovered"
+      | "pain_cross_addressed"
+      | "contradiction"
+      | "duplicate_variation"
+      | "shared_mechanism"
+      | "annotation_overlap";
+    /** The finding's headline — short, ≤ 80 chars. */
+    title: string;
+    /** One-sentence summary the LLM ingests. */
+    summary: string;
+    /** Optional surgical hint pulled from the finding body — e.g.
+     *  the mechanism's verbatim name, the contradicting variation's
+     *  partner room, the addressing room titles. Empty allowed. */
+    hint?: string;
+  }>;
 }
 
 // ── Per-layer framing — different prompts for different lane types ──
@@ -726,7 +766,43 @@ Return strict JSON.`;
           )}\n  TESTED RULE: For variations above, DROP open_questions the test already answered, SURFACE the learning in the variation's description or tradeoff, and only emit NEW open_questions that the experiment did NOT resolve. Do not propose to re-test the same hypothesis. Treat the user's recorded outcome as ground truth, not as something to second-guess.`
       : "";
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${upstreamBlock}${lateralBlock}${testedBriefsBlock}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
+  // Closed-read-loop block — cross-room structural findings the
+  // Analysis Workbench has already detected that touch THIS item /
+  // room. Caller filtered to live (non-resolved, non-dismissed) +
+  // relevant; we only render. Sort by kind so the loudest signals
+  // (uncovered pain → contradiction → duplicate → consistency hints)
+  // appear first regardless of the order findings arrived in.
+  //
+  // PROMPT ECONOMICS — cap at 6 (after sort) to keep the block lean.
+  // High-signal findings are sparse by construction (analyses already
+  // filtered for ≥2-room overlap / elections), so 6 is plenty in
+  // practice and rarely binds.
+  const KIND_ORDER: Record<
+    NonNullable<ExpandItemContext["crossRoomFindings"]>[number]["kind"],
+    number
+  > = {
+    pain_uncovered: 0,
+    contradiction: 1,
+    pain_cross_addressed: 2,
+    duplicate_variation: 3,
+    shared_mechanism: 4,
+    annotation_overlap: 5,
+  };
+  const crossRoomFindingsBlock =
+    ctx.crossRoomFindings && ctx.crossRoomFindings.length > 0
+      ? `\n\nCROSS-ROOM STRUCTURAL SIGNALS (patterns the analysis workbench has already detected that involve THIS item or its room — fold these into your output, do not regenerate blind):\n${[...ctx.crossRoomFindings]
+          .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind])
+          .slice(0, 6)
+          .map((f) => {
+            const hint = f.hint ? ` — ${f.hint.slice(0, 140)}` : "";
+            return `  [${f.kind}] ${f.title.slice(0, 100)}\n      ${f.summary.slice(0, 220)}${hint}`;
+          })
+          .join(
+            "\n",
+          )}\n  CROSS-ROOM RULE: When a finding above directly touches THIS item, EITHER (a) propose variations that FOLD the structural signal in (extend the shared mechanism by name; differentiate from the duplicate variation; resolve / sidestep the contradiction; emit a counter-variation for the uncovered pain), OR (b) name the friction explicitly in the variation's TRADEOFF so the user reads where the open decision lives. Do NOT silently propose a variation that re-introduces a duplicate, re-extends a contradiction, or ignores an uncovered pain — those are exactly the signals the analysis workbench surfaced so they wouldn't recur.`
+      : "";
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${upstreamBlock}${lateralBlock}${testedBriefsBlock}${crossRoomFindingsBlock}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
 
   // ── Schema (dynamic — adds derived_from_annotations only when
   //    the lens has entries, mirroring the room generator pattern). ──
