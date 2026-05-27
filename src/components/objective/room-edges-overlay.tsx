@@ -50,6 +50,12 @@ interface ResolvedWire {
    *  Tells the user at a glance "this connection has user sign-off"
    *  vs. "this is the LLM's draft until you confirm." */
   dashArray: string | undefined;
+  /** Phase 8b — true when source + target are in the same lane.
+   *  Detected via relationship_type ∈ { composes_with,
+   *  interferes_with }. Drives different bezier geometry (vertical
+   *  S-curve so the wire stays within the lane column) + different
+   *  stroke style (dotted, not dashed). */
+  isLateral: boolean;
   edge: RoomEdge;
 }
 
@@ -94,6 +100,41 @@ function bezierPath(
   const cx1 = src.x + dx * 0.35;
   const cx2 = tgt.x - dx * 0.35;
   return `M ${src.x} ${src.y} C ${cx1} ${src.y}, ${cx2} ${tgt.y}, ${tgt.x} ${tgt.y}`;
+}
+
+/** Phase 8b — bezier for LATERAL wires (within the same lane).
+ *  Source + target are stacked vertically in the same column, so a
+ *  horizontal-pull bezier would collapse onto the column line. We
+ *  instead bow the curve OUTWARD (right side of the card column)
+ *  by ~28px so the wire is visible without overlapping the cards.
+ *  Direction alternates by edge id hash so multiple lateral wires
+ *  in the same lane don't all stack on top of each other. */
+function lateralBezierPath(
+  src: { x: number; y: number },
+  tgt: { x: number; y: number },
+  edgeId: string,
+): string {
+  const dy = tgt.y - src.y;
+  // Hash the edge id to decide which side of the column the curve
+  // bows toward (deterministic — no flicker between renders).
+  const hash = edgeId.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  const bowSide = hash % 2 === 0 ? 1 : -1;
+  const bow = 28 * bowSide;
+  const cx1 = src.x + bow;
+  const cy1 = src.y + dy * 0.3;
+  const cx2 = tgt.x + bow;
+  const cy2 = tgt.y - dy * 0.3;
+  return `M ${src.x} ${src.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${tgt.x} ${tgt.y}`;
+}
+
+/** Phase 8b — color for LATERAL wires. composes_with reads as
+ *  collaborative (lane-features blue at low alpha); interferes_with
+ *  reads as friction (amber at low alpha). Distinct from the
+ *  polarity-driven cross-layer palette. */
+function lateralColorFor(relationship: string): string {
+  if (relationship === "interferes_with") return "rgba(217,119,6,0.55)";
+  // composes_with default
+  return "rgba(37,99,235,0.50)";
 }
 
 /** Read the rect of every card in the container by data-entity-id
@@ -181,6 +222,13 @@ export function RoomEdgesOverlay({
       // not yarn.
       const thickness = Math.max(1.1, Math.min(2.6, 1.1 + strength * 1.5));
       const approved = !!e.approved_at;
+      // Phase 8b — detect lateral (within-layer) edges by their
+      // relationship_type. Cross-layer edges use the polarity-driven
+      // colorFor palette; lateral edges get their own composes/conflicts
+      // palette + different stroke style + bezier geometry.
+      const isLateral =
+        e.relationship_type === "composes_with" ||
+        e.relationship_type === "interferes_with";
       ws.push({
         id: e.id,
         sourceId: e.source_entity_id,
@@ -188,10 +236,18 @@ export function RoomEdgesOverlay({
         src,
         tgt,
         thickness,
-        color: colorFor(e.polarity),
-        // Approved = solid; draft = subtle dash so the user sees
-        // "this is a proposal you can confirm."
-        dashArray: approved ? undefined : "4 3",
+        color: isLateral
+          ? lateralColorFor(e.relationship_type)
+          : colorFor(e.polarity),
+        // Cross-layer: solid when approved, dashed "4 3" when draft.
+        // Lateral: dotted "2 3" always — these are relational signals,
+        // not bets the user can approve like causal chains.
+        dashArray: isLateral
+          ? "2 3"
+          : approved
+            ? undefined
+            : "4 3",
+        isLateral,
         edge: e,
       });
     }
@@ -253,10 +309,16 @@ export function RoomEdgesOverlay({
         //                          screaming. Glow filter adds depth
         //                          rather than relying on brightness.
         const opacity = involvesHover ? 0.78 : someHovered ? 0.04 : 0.14;
+        // Phase 8b — lateral wires use a vertical-bow bezier that
+        // stays within the lane column instead of the horizontal-pull
+        // bezier that drifts across columns.
+        const pathD = w.isLateral
+          ? lateralBezierPath(w.src, w.tgt, w.id)
+          : bezierPath(w.src, w.tgt);
         return (
           <g key={w.id}>
             <path
-              d={bezierPath(w.src, w.tgt)}
+              d={pathD}
               stroke={w.color}
               strokeWidth={involvesHover ? w.thickness + 0.4 : w.thickness}
               strokeDasharray={w.dashArray}

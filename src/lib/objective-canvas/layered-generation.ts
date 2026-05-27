@@ -1246,6 +1246,192 @@ export async function linkCorrelations(
   return generateCorrelations(ctx, items);
 }
 
+// ── Phase 8b — Within-Layer Links ─────────────────────────────────
+//
+// Companion to generateCorrelations. The cross-layer pass connects
+// pain → feature → outcome — the chain spine. This second pass
+// connects features ↔ features WITHIN the mechanism lane to surface
+// COMPOSITION (one feature builds on another) or CONFLICT (two
+// features would step on each other if both elected).
+//
+// Why a separate pass:
+//   • Different prompt shape — focus on internal first_principles
+//     overlap + implementation collision, not on causal direction
+//   • Different schema — relationship_type takes only two values
+//     (composes_with / interferes_with)
+//   • Different cardinality — typical room emits 0-3 within-layer
+//     edges; we don't need quota gates
+//
+// Surfaces in the UI as:
+//   • Small chips on each Category Card ("composes with X" / "conflicts with X")
+//   • Lateral wires in the SVG overlay (dashed, lane-tinted)
+//   • Input to the R&D refine prompt (Phase 5b) so candidates
+//     respect sibling elections
+
+export interface WithinLayerLink {
+  sourceId: string;
+  targetId: string;
+  /** Two values only — composition (build-on) or conflict (collision).
+   *  Other kinds (e.g. "depends_on") collapse to composes_with for now. */
+  kind: "composes_with" | "interferes_with";
+  /** 0-1 — how load-bearing the relationship is. <0.3 dropped. */
+  strength: number;
+  /** 1 sentence why — quoting the first_principle overlap or the
+   *  specific conflict. */
+  rationale: string;
+}
+
+interface WithinLayerShape {
+  links?: Array<{
+    source?: unknown;
+    target?: unknown;
+    kind?: unknown;
+    strength?: unknown;
+    rationale?: unknown;
+  }>;
+}
+
+async function generateWithinLayerLinks(
+  ctx: RoomContext,
+  features: ItemRef[],
+): Promise<WithinLayerLink[]> {
+  // Within-layer makes sense only for FEATURES in this MVP — pain
+  // manifestations and outcome facets aren't IVs you compose or
+  // conflict. We could extend later.
+  const mechFeatures = features.filter((it) => it.layer === "features");
+  if (mechFeatures.length < 2) return [];
+
+  const tagged = mechFeatures.map((it, i) => ({
+    ...it,
+    tag: `M${i + 1}`,
+  }));
+  const idByTag = new Map(tagged.map((t) => [t.tag, t.id]));
+
+  const system = `You evaluate WITHIN-LAYER relationships between mechanisms (features) in a sub-objective room. The cross-layer pass already connected each mechanism to a pain it addresses and an outcome it produces. Your job now is sibling-to-sibling:
+
+COMPOSES_WITH — one mechanism BUILDS ON or EXTENDS another. Their first_principles compose (M1's output is M2's input, OR they share a load-bearing principle, OR they're complementary phases of the same intervention).
+
+INTERFERES_WITH — two mechanisms CONFLICT. Their first_principles contradict (electing both would require contradictory implementations, OR they compete for the same scarce resource, OR they target the same root_cause in incompatible ways).
+
+OUTPUT RULES:
+- Quality over quantity. If no clear relationship exists, emit nothing. Most pairs have neither.
+- Each entry: source tag (e.g. M1), target tag (e.g. M3), kind, strength 0-1, rationale (1 sentence quoting the SPECIFIC first_principle that drives the composition or conflict).
+- Strength: ≥0.7 means "electing both as-is requires explicit coordination." 0.4-0.7 "worth flagging." <0.3 drop.
+- Pairs are SYMMETRIC for composes_with (order doesn't matter) but emit only ONE entry per pair. Use tag-alphabetical order (M1→M3, not M3→M1).
+- Rationale MUST cite a specific first_principle phrase from one of the mechanisms — not a generic restatement.
+
+Return strict JSON.`;
+
+  const itemBlock = tagged
+    .map((it) => {
+      const principles = Array.isArray(it.first_principles)
+        ? it.first_principles
+            .filter((s): s is string => typeof s === "string" && s.length > 0)
+            .slice(0, 5)
+            .join(" · ")
+        : "";
+      const positive = it.positive_outcome ?? "";
+      return `  ${it.tag} "${it.name.trim()}"
+    positive_outcome: ${positive.slice(0, 180)}
+    first_principles: ${principles}`;
+    })
+    .join("\n\n");
+
+  const user = `SUB-OBJECTIVE: ${ctx.subObjectiveTitle}
+
+MECHANISMS (sibling features in this room):
+
+${itemBlock}
+
+Identify composition or conflict pairs among these mechanisms per the system instructions. Emit only pairs where the first_principles cite a specific overlap or collision — generic "they could work together" pairs MUST be dropped.`;
+
+  const raw = await llmJSON<WithinLayerShape>({
+    system,
+    user,
+    responseSchema: {
+      name: "within_layer_links",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          links: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                source: { type: "string" },
+                target: { type: "string" },
+                kind: {
+                  type: "string",
+                  enum: ["composes_with", "interferes_with"],
+                },
+                strength: { type: "number" },
+                rationale: { type: "string" },
+              },
+              required: [
+                "source",
+                "target",
+                "kind",
+                "strength",
+                "rationale",
+              ],
+            },
+          },
+        },
+        required: ["links"],
+      },
+    },
+    temperature: 0.3,
+    maxTokens: 1200,
+  });
+
+  const out: WithinLayerLink[] = [];
+  const seenPairs = new Set<string>();
+  for (const e of raw?.links ?? []) {
+    const srcTag =
+      typeof e?.source === "string" ? e.source.trim().toUpperCase() : "";
+    const tgtTag =
+      typeof e?.target === "string" ? e.target.trim().toUpperCase() : "";
+    const srcId = idByTag.get(srcTag);
+    const tgtId = idByTag.get(tgtTag);
+    if (!srcId || !tgtId || srcId === tgtId) continue;
+    // Dedupe symmetric pairs — composes_with is undirected, the LLM
+    // sometimes emits both M1→M3 and M3→M1.
+    const pairKey = [srcId, tgtId].sort().join("|");
+    if (seenPairs.has(pairKey)) continue;
+    seenPairs.add(pairKey);
+    const kind =
+      e?.kind === "interferes_with"
+        ? "interferes_with"
+        : "composes_with";
+    const strength =
+      typeof e?.strength === "number" && Number.isFinite(e.strength)
+        ? Math.max(0, Math.min(1, e.strength))
+        : 0.5;
+    if (strength < 0.3) continue;
+    const rationale =
+      typeof e?.rationale === "string" ? e.rationale.trim().slice(0, 240) : "";
+    if (rationale.length === 0) continue;
+    out.push({
+      sourceId: srcId,
+      targetId: tgtId,
+      kind,
+      strength,
+      rationale,
+    });
+  }
+  // Cap at 6 — within-layer should be sparse; more than that is noise.
+  return out.slice(0, 6);
+}
+
+export async function linkWithinLayer(
+  ctx: RoomContext,
+  items: ItemRef[],
+): Promise<WithinLayerLink[]> {
+  return generateWithinLayerLinks(ctx, items);
+}
+
 // ── Cleaners (with verb-prefix safety net) ─────────────────────────
 
 const VERB_PREFIX_PATTERN =

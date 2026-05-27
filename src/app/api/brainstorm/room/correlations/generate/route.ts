@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import {
   linkCorrelations,
+  linkWithinLayer,
   type RoomContext,
   type RoomCategoryEnum,
 } from "@/lib/objective-canvas/layered-generation";
@@ -329,7 +330,50 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
-  const edgeCount = (edgeInsert.data ?? []).length;
+  let edgeCount = (edgeInsert.data ?? []).length;
+
+  // ── Phase 8b — Within-layer links retry path ──
+  // Same logic as room/generate. Soft-fail so the cross-layer retry
+  // still succeeds even if the within-layer pass throws.
+  try {
+    const withinLayerLinks = await linkWithinLayer(ctx, itemRefs);
+    if (withinLayerLinks.length > 0) {
+      const lateralRows = withinLayerLinks.map((l) => ({
+        space_id: spaceId,
+        parent_sub_objective_id: subObjectiveId,
+        source_entity_id: l.sourceId,
+        target_entity_id: l.targetId,
+        relationship_type: l.kind,
+        dimension: "structural",
+        source_tag: "inferred",
+        strength: l.strength,
+        polarity:
+          l.kind === "composes_with"
+            ? ("positive" as const)
+            : ("negative" as const),
+        confidence: 0.6,
+        conditions: l.rationale.slice(0, 500),
+        agent_feedback: { mechanism: l.kind },
+      }));
+      const lateralInsert = await db
+        .from("edges")
+        .insert(lateralRows)
+        .select("id");
+      if (lateralInsert.error) {
+        console.warn(
+          "[room/correlations] within-layer edge insert failed:",
+          lateralInsert.error.message,
+        );
+      } else {
+        edgeCount += (lateralInsert.data ?? []).length;
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[room/correlations] within-layer link generation failed (non-fatal):",
+      sanitizeErrorMessage(err),
+    );
+  }
 
   return NextResponse.json({
     summary: { edge_count: edgeCount, chain_count: 0 /* derived client-side */ },

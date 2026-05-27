@@ -40,6 +40,7 @@ import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
 import { ConstraintsStrip } from "./cards/constraints-strip";
 import { CategoryCardsView } from "./category-cards-view";
 import { AutopilotRunner } from "./autopilot-runner";
+import { LabNotebookPanel } from "./lab-notebook-panel";
 import { RoomEdgesOverlay } from "./room-edges-overlay";
 import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
@@ -179,6 +180,11 @@ export function SubObjectiveRoomView({
   const [roomView, setRoomView] = useState<"categories" | "variables">(
     "categories",
   );
+  // Phase 9 — Lab Notebook panel open state. The notebook reads the
+  // sub_objective_decisions feed for this room and renders the
+  // decision timeline (elections / experiments / approvals /
+  // compositions). Closed by default; opens via a top-chrome button.
+  const [notebookOpen, setNotebookOpen] = useState(false);
   // Phase 7c — autopilot refresh signal. Bumped after each
   // chain that autopilot processes so the corresponding CategoryCard
   // re-fetches its expanded_detail and the new candidates show up
@@ -890,8 +896,50 @@ export function SubObjectiveRoomView({
           }
           onAllComplete={() => setAutopilotRefreshKey((k) => k + 1)}
         />
+        {/* Phase 9 — Lab Notebook button. Sits between Autopilot
+            and the view toggle so the cluster reads as
+            "automation · history · view." */}
+        <button
+          type="button"
+          onClick={() => setNotebookOpen(true)}
+          className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(15,23,42,0.04)]"
+          style={{
+            background: "transparent",
+            color: appleVibe.text.secondary,
+            border: `1px solid ${appleVibe.stroke.medium}`,
+            borderRadius: appleVibe.radius.pill,
+            padding: "5px 11px",
+            fontSize: "10.5px",
+            fontWeight: 600,
+            letterSpacing: "0.02em",
+            fontFamily: appleVibe.font.stack,
+          }}
+          title="Open Lab Notebook — decision history for this room"
+          aria-label="Open Lab Notebook"
+        >
+          <Sparkle className="h-3 w-3" />
+          Notebook
+        </button>
         <ViewToggleInline value={roomView} onChange={setRoomView} />
       </div>
+
+      {/* Phase 9 — Lab Notebook side panel. Opens via the Notebook
+          button above. onNavigate routes variation-scoped events
+          to the detail drawer; entity-only events focus the chain
+          in the Category View (defer to Category View's own
+          internal arrow-key navigation since we don't have a
+          direct chain → sidebar index handle here). */}
+      <LabNotebookPanel
+        open={notebookOpen}
+        onClose={() => setNotebookOpen(false)}
+        subObjectiveId={subObjectiveId}
+        onNavigate={(target) => {
+          if (target.entityId) {
+            setDetailEntityId(target.entityId);
+          }
+          setNotebookOpen(false);
+        }}
+      />
 
       {/* Three-column layout — Objective lane removed (it just
           duplicated the sub-objective title rendered in the page
@@ -915,6 +963,7 @@ export function SubObjectiveRoomView({
           spaceId={spaceId}
           subObjectiveId={subObjectiveId}
           roomCategories={roomCategories}
+          edges={edges}
           onApprovalChange={handleApprovalChange}
           onOpenItemDetail={setDetailEntityId}
           refreshSignal={autopilotRefreshKey}

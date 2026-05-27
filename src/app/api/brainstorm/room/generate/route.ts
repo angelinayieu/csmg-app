@@ -18,6 +18,7 @@ import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers
 import {
   runLayeredGeneration,
   linkCorrelations,
+  linkWithinLayer,
   type RoomContext,
   type RoomCategoryEnum,
 } from "@/lib/objective-canvas/layered-generation";
@@ -587,6 +588,58 @@ export async function POST(req: NextRequest) {
     } else {
       edgeCount = (edgeInsert.data ?? []).length;
     }
+  }
+
+  // ── Phase 8b — Within-layer links (sibling mechanism relationships) ──
+  // Sparse second pass — emits composes_with / interferes_with pairs
+  // among features only. Soft-fail throughout; missing within-layer
+  // edges don't block room finalization.
+  try {
+    const withinLayerLinks = await linkWithinLayer(ctx, itemRefs);
+    if (withinLayerLinks.length > 0) {
+      const lateralRows = withinLayerLinks.map((l) => ({
+        space_id: spaceId,
+        parent_sub_objective_id: subObjectiveId,
+        source_entity_id: l.sourceId,
+        target_entity_id: l.targetId,
+        relationship_type: l.kind, // "composes_with" | "interferes_with"
+        // "structural" distinguishes lateral relationships from the
+        // "causal" cross-layer edges. The wire overlay reads
+        // relationship_type directly to render lateral wires with
+        // different geometry/style, but persisting dimension keeps
+        // analytics queries clean ("show me all structural lateral
+        // signals").
+        dimension: "structural",
+        source_tag: "inferred",
+        strength: l.strength,
+        // composes_with → positive (build-on), interferes_with → negative
+        // (collision). Maps cleanly into the existing polarity enum.
+        polarity:
+          l.kind === "composes_with"
+            ? ("positive" as const)
+            : ("negative" as const),
+        confidence: 0.6,
+        conditions: l.rationale.slice(0, 500),
+        agent_feedback: { mechanism: l.kind },
+      }));
+      const lateralInsert = await db
+        .from("edges")
+        .insert(lateralRows)
+        .select("id");
+      if (lateralInsert.error) {
+        console.warn(
+          "[room/generate] within-layer edge insert failed:",
+          lateralInsert.error.message,
+        );
+      } else {
+        edgeCount += (lateralInsert.data ?? []).length;
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[room/generate] within-layer link generation failed (non-fatal):",
+      sanitizeErrorMessage(err),
+    );
   }
 
   // ── Mark generation complete + persist room header anchor +

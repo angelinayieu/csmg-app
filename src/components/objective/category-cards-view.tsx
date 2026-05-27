@@ -30,6 +30,28 @@ import type { OutcomeCardItem } from "./cards/outcome-card";
 import type { RoomCategories } from "@/lib/objective-canvas/generate-categories";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
+/** Phase 8b — lateral relationship surfaced on a Category Card.
+ *  Each entry says "this card's mechanism composes_with /
+ *  interferes_with another mechanism in another chain in the same
+ *  room." Pre-computed by CategoryCardsView from the edge list +
+ *  chain triplets, passed per-card so each card just renders chips. */
+export interface LateralLink {
+  otherFeatureId: string;
+  otherFeatureName: string;
+  /** The chain that hosts the other feature — clicking the chip
+   *  could navigate to that chain (future work). */
+  otherChainId: string;
+  kind: "composes_with" | "interferes_with";
+  rationale: string;
+}
+
+interface RoomEdgeLite {
+  source_entity_id: string;
+  target_entity_id: string;
+  relationship_type: string;
+  conditions: string | null;
+}
+
 interface Props {
   chains: ChainTriple[];
   painById: Map<string, PainCardItem>;
@@ -39,12 +61,57 @@ interface Props {
   spaceId: string;
   subObjectiveId: string;
   roomCategories: RoomCategories;
+  /** Phase 8b — all room edges (cross-layer + within-layer).
+   *  Used to compute per-card lateral relationships without
+   *  re-querying. Optional for backward compatibility (older
+   *  mount sites). */
+  edges?: RoomEdgeLite[];
   onApprovalChange: (edgeId: string, approved: boolean) => void;
   onOpenItemDetail: (entityId: string) => void;
   /** Phase 7c — autopilot refresh trigger. When bumped, every
    *  CategoryCard re-fetches its feature's expanded_detail so the
    *  lineups pick up new candidates / scores that autopilot wrote. */
   refreshSignal?: number;
+}
+
+/** Phase 8b — given a chain + all room edges + all chains, find
+ *  the lateral relationships this chain's mechanism has with
+ *  OTHER chains' mechanisms. Within-layer edges have
+ *  relationship_type ∈ { composes_with, interferes_with }.
+ *
+ *  Returns at most ~4 entries per card; more is visual noise. */
+function computeLateralLinksFor(
+  chain: ChainTriple,
+  allEdges: RoomEdgeLite[],
+  allChains: ChainTriple[],
+): LateralLink[] {
+  const out: LateralLink[] = [];
+  for (const e of allEdges) {
+    if (
+      e.relationship_type !== "composes_with" &&
+      e.relationship_type !== "interferes_with"
+    )
+      continue;
+    let otherId: string | null = null;
+    if (e.source_entity_id === chain.featureId) {
+      otherId = e.target_entity_id;
+    } else if (e.target_entity_id === chain.featureId) {
+      otherId = e.source_entity_id;
+    } else {
+      continue;
+    }
+    const otherChain = allChains.find((c) => c.featureId === otherId);
+    if (!otherChain) continue;
+    out.push({
+      otherFeatureId: otherId,
+      otherFeatureName: otherChain.featureName,
+      otherChainId: otherChain.id,
+      kind: e.relationship_type as "composes_with" | "interferes_with",
+      rationale: typeof e.conditions === "string" ? e.conditions : "",
+    });
+    if (out.length >= 4) break;
+  }
+  return out;
 }
 
 /** Resolve a chain's category triple into a human-readable label.
@@ -88,6 +155,7 @@ export function CategoryCardsView({
   spaceId,
   subObjectiveId,
   roomCategories,
+  edges = [],
   onApprovalChange,
   onOpenItemDetail,
   refreshSignal,
@@ -244,6 +312,12 @@ export function CategoryCardsView({
               onOpenPainDetail={() => onOpenItemDetail(activeChain.painId)}
               onOpenOutcomeDetail={() => onOpenItemDetail(activeChain.outcomeId)}
               refreshSignal={refreshSignal}
+              lateralLinks={computeLateralLinksFor(
+                activeChain,
+                edges,
+                chains,
+              )}
+              onOpenItem={onOpenItemDetail}
             />
           </motion.div>
         </AnimatePresence>

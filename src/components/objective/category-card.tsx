@@ -108,6 +108,25 @@ interface Props {
    *  user interaction. Optional — undefined means "no external
    *  refresh." */
   refreshSignal?: number;
+  /** Phase 8b — within-layer relationships with other chains'
+   *  mechanisms. Pre-computed by CategoryCardsView from the room's
+   *  edge list. Each entry is a sibling mechanism that this card's
+   *  feature either composes_with (build-on / extends) or
+   *  interferes_with (conflicts / collides). Renders as chips
+   *  below the "tested via" bridge. Optional — empty array hides
+   *  the row entirely. */
+  lateralLinks?: Array<{
+    otherFeatureId: string;
+    otherFeatureName: string;
+    otherChainId: string;
+    kind: "composes_with" | "interferes_with";
+    rationale: string;
+  }>;
+  /** Phase 8b — open another entity's drawer (not necessarily this
+   *  card's). Used by lateral chips to jump to the related
+   *  mechanism's detail. Optional — when undefined, lateral chips
+   *  fall through to opening THIS card's feature instead. */
+  onOpenItem?: (entityId: string) => void;
 }
 
 // Lane colors — referenced so the Category Card can paint its
@@ -133,6 +152,8 @@ export function CategoryCard({
   onOpenPainDetail,
   onOpenOutcomeDetail,
   refreshSignal,
+  lateralLinks = [],
+  onOpenItem,
 }: Props) {
   // ── Lazy load the feature's expanded_detail for the lineup ──
   // The lineup needs the feature's variations[] + effectiveness
@@ -546,6 +567,28 @@ export function CategoryCard({
           />
         </div>
       </button>
+
+      {/* Phase 8b — within-layer relationship chips. Surface
+          composes_with / interferes_with links to OTHER chains'
+          mechanisms so the user sees at a glance that this
+          experiment doesn't live in isolation. Chips are subtle
+          (no bold colors) and click through to the related
+          feature's drawer. */}
+      {lateralLinks.length > 0 && (
+        <div className="mx-5 mb-3 flex flex-wrap items-center gap-1.5">
+          {lateralLinks.map((l) => (
+            <LateralChip
+              key={`${l.kind}-${l.otherFeatureId}`}
+              link={l}
+              onClick={() =>
+                onOpenItem
+                  ? onOpenItem(l.otherFeatureId)
+                  : onOpenFeatureDetail()
+              }
+            />
+          ))}
+        </div>
+      )}
 
       {/* Phase 8c — Feature first_principles band.
           Mirrors pain.root_causes treatment. Only renders when the
@@ -1372,5 +1415,57 @@ function LineupRow({
         </div>
       )}
     </li>
+  );
+}
+
+// ── Phase 8b — Lateral relationship chip ─────────────────────────
+//
+// Renders a single composes_with / interferes_with link to another
+// chain's mechanism. composes_with reads as collaborative (features
+// blue at low alpha); interferes_with reads as friction (amber).
+// Hover lifts subtly + reveals the LLM's rationale via title attr.
+
+function LateralChip({
+  link,
+  onClick,
+}: {
+  link: {
+    otherFeatureId: string;
+    otherFeatureName: string;
+    kind: "composes_with" | "interferes_with";
+    rationale: string;
+  };
+  onClick: () => void;
+}) {
+  const isComposes = link.kind === "composes_with";
+  const accent = isComposes ? FEATURE_COLOR : "rgba(217,119,6,1)";
+  const label = isComposes ? "composes with" : "conflicts with";
+  return (
+    <motion.button
+      type="button"
+      onClick={onClick}
+      whileHover={{ y: -1, transition: { duration: 0.15 } }}
+      whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 transition-[background,border-color,box-shadow] duration-150 ease-out"
+      style={{
+        background: `${accent}10`,
+        border: `1px dashed ${accent}40`,
+        color: appleVibe.text.secondary,
+      }}
+      title={link.rationale || `${label} ${link.otherFeatureName}`}
+    >
+      <span
+        className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+        style={{ color: accent }}
+      >
+        {label}
+      </span>
+      <span
+        className="text-[11px] font-medium truncate max-w-[160px]"
+        style={{ color: appleVibe.text.primary }}
+      >
+        {link.otherFeatureName}
+      </span>
+    </motion.button>
   );
 }
