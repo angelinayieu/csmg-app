@@ -64,32 +64,35 @@ interface Props {
   hoveredEntityId: string | null;
 }
 
-/** Hue per polarity, anchored in lane-color semantics:
- *   positive  = green (outcomes lane — reduces friction, produces gain)
- *   negative  = red    (pain lane — aggravates, deepens friction)
- *   conditional / neutral / null = graphite (no strong directional
- *     bet — keep it visually quiet) */
+/** Hue per polarity, anchored in lane-color semantics but DAMPED.
+ *  Apple-tier rule: wires whisper, they don't shout. Default alpha
+ *  channel kept low (0.55 not 0.78) so even in their loudest paint
+ *  they read as restrained ink. Saturation across all colors is
+ *  pulled toward graphite to keep the canvas readable.
+ *
+ *   positive  = green (outcomes lane — produces gain)
+ *   negative  = red    (pain lane — aggravates)
+ *   conditional / neutral / null = graphite (visually quiet) */
 function colorFor(polarity: string | null | undefined): string {
   const p = (polarity ?? "").toLowerCase();
-  if (p === "positive") return "rgba(22,163,74,0.78)"; // outcomes-green-ish
-  if (p === "negative") return "rgba(220,38,38,0.78)"; // pain-red-ish
-  if (p === "conditional") return "rgba(217,119,6,0.78)"; // amber — context-gated
-  return "rgba(15,23,42,0.55)"; // graphite default
+  if (p === "positive") return "rgba(22,163,74,0.55)";
+  if (p === "negative") return "rgba(220,38,38,0.55)";
+  if (p === "conditional") return "rgba(217,119,6,0.55)";
+  return "rgba(15,23,42,0.40)";
 }
 
-/** Cubic bezier "S" curve between two points. Control points
- *  pushed horizontally toward the midpoint × 1.3 so the wire
- *  arcs cleanly between adjacent lanes without crossing through
- *  other lane cards. Vertically aligned at the same height so the
- *  curve doesn't wobble unnecessarily. */
+/** Cubic bezier between two points with TIGHTER control points
+ *  (dx × 0.35 not 0.5) so the curve doesn't sweep wide enough to
+ *  drift over other lane cards. The geometry tucks closer to a
+ *  direct line, which is what an Apple wire visualization wants —
+ *  not a swooping arc that draws attention to itself. */
 function bezierPath(
   src: { x: number; y: number },
   tgt: { x: number; y: number },
 ): string {
   const dx = tgt.x - src.x;
-  // Horizontal pull — stronger for left-to-right canvas flow.
-  const cx1 = src.x + dx * 0.5;
-  const cx2 = tgt.x - dx * 0.5;
+  const cx1 = src.x + dx * 0.35;
+  const cx2 = tgt.x - dx * 0.35;
   return `M ${src.x} ${src.y} C ${cx1} ${src.y}, ${cx2} ${tgt.y}, ${tgt.x} ${tgt.y}`;
 }
 
@@ -173,7 +176,10 @@ export function RoomEdgesOverlay({
         typeof e.strength === "number" && Number.isFinite(e.strength)
           ? Math.max(0, Math.min(1, e.strength))
           : 0.4;
-      const thickness = Math.max(1.5, Math.min(4, strength * 4));
+      // Tighter thickness range (1.1–2.6 not 1.5–4) so wires never
+      // overpower card chrome. The default at rest now reads as ink,
+      // not yarn.
+      const thickness = Math.max(1.1, Math.min(2.6, 1.1 + strength * 1.5));
       const approved = !!e.approved_at;
       ws.push({
         id: e.id,
@@ -238,26 +244,56 @@ export function RoomEdgesOverlay({
           hoveredEntityId !== null &&
           (w.sourceId === hoveredEntityId || w.targetId === hoveredEntityId);
         const someHovered = hoveredEntityId !== null;
-        // Dim wires that don't touch the hovered card so the focused
-        // path reads cleanly. Boosts perceived contrast without
-        // changing the wire's actual color.
-        const opacity = involvesHover ? 1 : someHovered ? 0.18 : 0.42;
+        // Apple-tier opacity discipline:
+        //   resting        0.14   barely there — present as a hint,
+        //                          not as a fact demanding attention
+        //   not-involved   0.04   when something IS hovered, drop
+        //                          uninvolved wires to near-invisible
+        //   involved       0.78   loud enough to read clearly but not
+        //                          screaming. Glow filter adds depth
+        //                          rather than relying on brightness.
+        const opacity = involvesHover ? 0.78 : someHovered ? 0.04 : 0.14;
         return (
-          <path
-            key={w.id}
-            d={bezierPath(w.src, w.tgt)}
-            stroke={w.color}
-            strokeWidth={involvesHover ? w.thickness + 0.6 : w.thickness}
-            strokeDasharray={w.dashArray}
-            strokeLinecap="round"
-            fill="none"
-            opacity={opacity}
-            filter={involvesHover ? "url(#wire-glow)" : undefined}
-            style={{
-              transition:
-                "opacity 180ms ease-out, stroke-width 180ms ease-out",
-            }}
-          />
+          <g key={w.id}>
+            <path
+              d={bezierPath(w.src, w.tgt)}
+              stroke={w.color}
+              strokeWidth={involvesHover ? w.thickness + 0.4 : w.thickness}
+              strokeDasharray={w.dashArray}
+              strokeLinecap="round"
+              fill="none"
+              opacity={opacity}
+              filter={involvesHover ? "url(#wire-glow)" : undefined}
+              style={{
+                transition:
+                  "opacity 220ms ease-out, stroke-width 220ms ease-out",
+              }}
+            />
+            {/* Endpoint dots — small filled circles at the wire's
+                source + target points so the wire reads as
+                INTENTIONAL (it terminates somewhere) rather than
+                "a line that fades into a card." Only show when the
+                wire is in the focused state — adds visual anchoring
+                without clutter at rest. */}
+            {involvesHover && (
+              <>
+                <circle
+                  cx={w.src.x}
+                  cy={w.src.y}
+                  r={2.5}
+                  fill={w.color}
+                  opacity={0.9}
+                />
+                <circle
+                  cx={w.tgt.x}
+                  cy={w.tgt.y}
+                  r={2.5}
+                  fill={w.color}
+                  opacity={0.9}
+                />
+              </>
+            )}
+          </g>
         );
       })}
     </svg>
