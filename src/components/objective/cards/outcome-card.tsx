@@ -23,8 +23,12 @@ import {
 export interface OutcomeCardItem {
   id: string;
   name: string;
-  /** Concrete signal — "8+ min/session", "85% return next day" */
+  /** Concrete headline signal — "8+ min/session", "85% return next day". */
   measured_by?: string;
+  /** Phase 8 — 2-4 observable indicators / criteria that prove the
+   *  outcome happened. Mirrors PainItem.root_causes. When missing,
+   *  callers fall through to [measured_by]. */
+  indicators?: string[];
 }
 
 interface Props {

@@ -394,6 +394,15 @@ export function SubObjectiveRoomView({
         .find((l) => l.slug === "outcomes")!
         .items.map((it) => {
           const cc = (it.causal_chain ?? {}) as Record<string, unknown>;
+          // Phase 8 — observable criteria mirroring pain.root_causes.
+          // Backward-compat fallback: when indicators[] missing,
+          // synthesize from measured_by so legacy rooms still render
+          // (Category Card's outcome panel handles the fallback too).
+          const indicatorsRaw = Array.isArray(cc.indicators)
+            ? (cc.indicators as unknown[]).filter(
+                (s): s is string => typeof s === "string" && s.length > 0,
+              )
+            : [];
           return {
             id: it.id,
             name: it.name,
@@ -401,6 +410,7 @@ export function SubObjectiveRoomView({
               typeof cc.measured_by === "string"
                 ? cc.measured_by
                 : it.description ?? undefined,
+            indicators: indicatorsRaw,
             sub_category_slug: readSlug(cc),
             citations: readCitations(cc),
           };

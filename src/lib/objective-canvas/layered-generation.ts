@@ -125,8 +125,21 @@ export interface FeatureItem {
 
 export interface OutcomeItem {
   name: string;
-  /** A concrete proxy / signal that says "yes this happened". */
+  /** A concrete proxy / signal that says "yes this happened".
+   *  Single-line legacy field kept for backward compat — items
+   *  generated before Phase 8 only carry this. New items carry
+   *  the richer indicators[] (below) AND measured_by (synthesizes
+   *  the indicators into one sentence). */
   measured_by: string;
+  /** Phase 8 — 2-4 concrete indicators / criteria that prove the
+   *  outcome happened. Mirrors PainItem.root_causes structure
+   *  (3-5 root causes) so the Category Card's PROBLEM | OUTCOME
+   *  juxtaposition reads symmetrically. Each entry is a short
+   *  noun phrase (≤8 words) describing one observable signal.
+   *
+   *  Backward-compat: when missing, callers fall through to
+   *  [measured_by]. */
+  indicators: string[];
   /** Tier 3 — sub-category slug picked from RoomCategories.result. */
   sub_category?: string | null;
   /** Commit-2 — 1-based source indices informing this outcome. */
@@ -494,6 +507,8 @@ interface OutcomeShape {
   items?: Array<{
     name?: unknown;
     measured_by?: unknown;
+    /** Phase 8 — 2-4 observable indicators. */
+    indicators?: unknown;
     sub_category?: unknown;
     citations?: unknown;
     derived_from_annotations?: unknown;
@@ -516,7 +531,19 @@ CRITICAL — OUTCOME ≠ FEATURE:
 - ✅ Outcomes start with the user: "Users return next day at 70%+", "Self-reported flow during sessions", "Time-to-first-aha drops below 90 seconds".
 - Self-test: read your outcome aloud. If it sounds like something an engineer would build, it's a feature — rewrite as the user's experienced state.
 
-For each outcome include MEASURED_BY: a concrete proxy/signal that says "yes this happened" (e.g. "8+ min/session", "85% return next day", "self-reported flow 4/5"). One short line.
+For each outcome include MEASURED_BY: ONE short proxy/signal that says "yes this happened" (e.g. "8+ min/session", "85% return next day", "self-reported flow 4/5"). One short line — this is the headline signal.
+
+Phase 8 — Each outcome ALSO carries INDICATORS: 2-4 concrete observable criteria that PROVE the outcome happened. Where measured_by is the headline, indicators[] are the load-bearing criteria a reader would check to verify. Mirrors how each pain carries root_causes (the underlying components of the effect).
+
+INDICATOR RULES:
+- 2-4 entries, each a short noun phrase (≤8 words).
+- Each indicator is OBSERVABLE — something a tracking dashboard or user report could verify. NOT meta ("user is happy"); concrete ("session length crosses 8 minutes 3× per week").
+- Orthogonal — don't list the same signal twice in slightly different words.
+- Together they SHOULD bracket measured_by: if all indicators hold, measured_by is true.
+
+Example for outcome "Sustained deep-dive sessions":
+  measured_by: "8+ min average session length"
+  indicators: ["sessions ≥ 8 min", "≥3 deep-dive sessions/week", "≥60% sessions exit on a saved artifact", "<25% bounces before second hop"]
 
 OUTCOME RULES:
 - 3-5 outcomes, ordered by how directly they signal sub-objective success.
@@ -550,8 +577,11 @@ Return strict JSON.`;
   const outcomeProps: Record<string, unknown> = {
     name: { type: "string" },
     measured_by: { type: "string" },
+    // Phase 8 — 2-4 observable indicators mirroring pain.root_causes
+    // so the Category Card right half can render symmetrically.
+    indicators: { type: "array", items: { type: "string" } },
   };
-  const outcomeRequired: string[] = ["name", "measured_by"];
+  const outcomeRequired: string[] = ["name", "measured_by", "indicators"];
   if (outcomeCats.slugs.length > 0) {
     outcomeProps.sub_category = { type: "string", enum: outcomeCats.slugs };
     outcomeRequired.push("sub_category");
@@ -925,12 +955,33 @@ ALLOWED DIRECTIONS (each is a distinct kind of insight):
   outcomes → objective    (the outcome ROLLS UP to the room objective)
   features → pain         (rare — only if a feature notably AGGRAVATES a pain)
 
-QUOTAS (required minimums — do NOT skip any layer pair):
-  ≥ 2 pain → features edges
-  ≥ 2 features → outcomes edges      (outcomes that have NO incoming feature edge are a failure of the analysis)
-  ≥ 1 outcome → objective edge        (the room must visibly roll up)
-  ≥ 1 pain → outcome edge             (when an outcome is literally "absence of this pain")
-Total: 6-14 edges across the room. If quotas can't be met because an outcome / objective genuinely has no upstream link, you MUST surface why in the rationale (e.g. "weak — outcome lacks a producing mechanism").
+QUOTAS — Phase 8 FULL-COVERAGE requirement (do NOT under-emit):
+  EVERY feature MUST have ≥ 1 incoming pain → feature edge.
+    No "dangling" features. If a feature has no pain it credibly
+    addresses, the feature shouldn't exist in this room — surface
+    that by emitting a weak edge (strength ≥ 0.3) labeled
+    "weak — feature lacks a credible target pain."
+  EVERY feature MUST have ≥ 1 outgoing feature → outcome edge.
+    Same rule. A feature that produces no outcome is a feature
+    that does nothing.
+  ≥ 1 outcome → objective edge       (the room must visibly roll up)
+  ≥ 1 pain → outcome edge            (when an outcome is literally "absence of this pain")
+
+The above guarantees: every feature anchors at least one chain
+(pain → feature → outcome triplet). Chains are the actionable unit
+the user sees in the Category View — leaving features dangling means
+those features won't appear in any experiment frame.
+
+Total edges: target N_features × 2 + 2 (roll-up + pain→outcome) at
+minimum; up to N_features × 3 if multiple pains/outcomes connect to
+the same feature. Don't artificially cap. Quality > coverage on any
+SINGLE edge (drop strength<0.3), but cover EVERY feature on both
+sides.
+
+If a feature genuinely can't be bridged on one side, emit the
+strongest weak edge available AND mark its rationale "weak — feature
+lacks a credible {source|target}" so the user can see the gap rather
+than the feature silently disappearing from the experiment view.
 ${groundingRule}
 EDGE PROPERTIES:
 - relationship: SHORT lowercase verb phrase (1-3 words). Examples: "addresses", "produces", "rolls up to", "dissolves", "depends on", "aggravates".
@@ -1021,7 +1072,7 @@ ${tagged.map(renderItem).join(hasBodies ? "\n\n" : "\n")}
 
 INVENTORY: ${layerCounts.pain ?? 0} pain, ${layerCounts.features ?? 0} features, ${layerCounts.outcomes ?? 0} outcomes, ${layerCounts.objective ?? 0} objective.${lensC.lensBlock}${lensC.hasAnnotations ? `\n\n${EDGE_PROVENANCE_RULE}\n` : ""}
 
-Generate 6-14 cross-layer edges per the quotas in the system instructions. Every outcome should have ≥1 incoming feature edge; if it doesn't, the analysis has a gap.${
+Phase 8 FULL-COVERAGE: every one of the ${layerCounts.features ?? 0} feature(s) MUST have ≥1 incoming pain edge AND ≥1 outgoing outcome edge. This is required so EVERY feature anchors at least one (pain → feature → outcome) chain in the user's Category View. Total edges should be ≥ 2 × (features count) + 2 (roll-up + pain→outcome) at minimum. Don't under-emit — leaving features dangling drops them from the experiment view entirely.${
     hasBodies
       ? " Ground each edge in a specific content overlap per the system instructions — name the source-side phrase and the target-side phrase that the mechanism bridges."
       : ""
@@ -1104,7 +1155,11 @@ Generate 6-14 cross-layer edges per the quotas in the system instructions. Every
       },
     },
     temperature: 0.4,
-    maxTokens: 2800,
+    // Phase 8 — bumped from 2800 to cover the new full-coverage
+    // quota. Each edge ~180 tokens (relationship + strength +
+    // mechanism + rationale + provenance). 20 edges × 180 = 3600
+    // tokens — leave headroom at 4200.
+    maxTokens: 4200,
   });
   const lens = lensForResolution(ctx);
   const cleaned: CorrelationResult[] = [];
@@ -1154,9 +1209,13 @@ Generate 6-14 cross-layer edges per the quotas in the system instructions. Every
       derived_from_annotation: derivedFrom,
     });
   }
-  // Don't aggressively cap at 12 anymore — the prompt allows up to 14
-  // to make room for the cross-layer quotas (pain→outcome, outcome→objective).
-  return cleaned.slice(0, 14);
+  // Phase 8 full-coverage — cap grows with feature count so every
+  // feature can be bridged on both sides. Floor at 14 (legacy);
+  // ceiling at 2 × features + 4 to leave headroom for cross-lane
+  // quotas (pain→outcome, outcome→objective) + a small slack.
+  const featureCount = layerCounts.features ?? 0;
+  const maxEdges = Math.max(14, featureCount * 2 + 4);
+  return cleaned.slice(0, maxEdges);
 }
 
 // ── Orchestrator ───────────────────────────────────────────────────
@@ -1403,9 +1462,27 @@ function cleanOutcomes(raw: unknown, ctx: RoomContext): OutcomeItem[] {
       if (name.length === 0) return null;
       const measured =
         typeof r.measured_by === "string" ? r.measured_by.trim() : "";
+      // Phase 8 — clean indicators[]. Drop empties, cap at 4,
+      // trim each to 100 chars. Backward-compat: when LLM
+      // didn't emit indicators (older prompt) or returned empty,
+      // synthesize a single-entry array from measured_by so the
+      // UI can render consistently.
+      const indicatorsRaw = Array.isArray(r.indicators)
+        ? (r.indicators as unknown[])
+            .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+            .map((s) => s.trim().slice(0, 100))
+            .slice(0, 4)
+        : [];
+      const indicators =
+        indicatorsRaw.length > 0
+          ? indicatorsRaw
+          : measured.length > 0
+            ? [measured]
+            : [];
       return {
         name: stripVerbPrefix(name).slice(0, 200),
         measured_by: measured.slice(0, 150),
+        indicators,
         sub_category: cleanSubCategory(r.sub_category),
         citations: cleanCitations(r.citations),
         derived_from_annotations: resolveProvenance(

@@ -405,10 +405,14 @@ export async function POST(req: NextRequest) {
     ),
     // Outcome: name is the state; description holds the
     // measured_by signal; causal_chain mirrors it + sub_category
-    // + citations + annotation provenance.
+    // + citations + annotation provenance + Phase 8 indicators[].
     ...outcomes.map((o) =>
       buildRow("outcomes", o.name, o.measured_by, 0.7, {
         measured_by: o.measured_by,
+        // Phase 8 — observable criteria mirroring pain.root_causes
+        // so the Category Card's OUTCOME panel renders symmetrically
+        // with the PROBLEM panel.
+        indicators: Array.isArray(o.indicators) ? o.indicators : [],
         sub_category: o.sub_category ?? null,
         citations: resolveCitations(o.citations),
         derived_from_annotations: o.derived_from_annotations ?? [],
