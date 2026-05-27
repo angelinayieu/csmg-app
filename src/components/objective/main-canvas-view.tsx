@@ -31,6 +31,7 @@ import type { ConceptMemoryEntry } from "@/lib/objective-canvas/concept-memory-f
 import type { RoomDecisionSummary } from "@/lib/objective-canvas/canvas-decisions";
 import { CanvasDecisionSurface } from "@/components/objective/canvas-decision-surface";
 import { HCDToggle } from "@/components/objective/hcd-toggle";
+import { DeliverablesStrip } from "@/components/objective/deliverables-strip";
 import { CanvasAutopilotRunner } from "@/components/objective/canvas-autopilot-runner";
 // Phase 11.0b — LabNotebookPanel is mounted at the layout level
 // (app/objective/[spaceId]/layout.tsx) as a persistent right rail.
@@ -277,6 +278,19 @@ export function MainCanvasView({
             concepts={conceptMemory}
             currentSpaceId={spaceId}
           />
+        </div>
+      )}
+
+      {/* Deliverables strip — the "ready to ship" layer. Lists every
+          elected variation across the space with status dots for the
+          three artifacts (doc / mockup / prompt), per-row Generate-all
+          + Open buttons, and master Generate-everything-pending +
+          Download-bundle buttons. Auto-gen is GATED on the AI having
+          already scored + ranked each variation, so it only fires when
+          the upstream optimization is done. */}
+      {subs.length > 0 && (
+        <div className="mx-auto mt-3 w-full max-w-5xl">
+          <DeliverablesStrip spaceId={spaceId} />
         </div>
       )}
 

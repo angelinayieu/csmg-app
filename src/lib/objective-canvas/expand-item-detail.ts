@@ -93,8 +93,8 @@ export interface ItemVariation {
   effectiveness_score?: number;
   /** Phase 11.1 — which evaluation tier produced effectiveness_score.
    *  Surfaces alongside the number everywhere via <MethodBadge /> so
-   *  the user always sees what method ran. Five tiers per lock-in
-   *  M10: heuristic / rubric / evidence / simulation / tested.
+   *  the user always sees what method ran. Six tiers post-Phase-11.3:
+   *  heuristic / rubric / evidence / simulation / tested / ensemble.
    *  Undefined for variations scored before Phase 11.1 (treat as
    *  "simulation" — that was the only path that existed). */
   evaluation_method?:
@@ -102,7 +102,8 @@ export interface ItemVariation {
     | "rubric"
     | "evidence"
     | "simulation"
-    | "tested";
+    | "tested"
+    | "ensemble";
   /** Phase 11.1 — when evaluation_method = "rubric", carries the
    *  per-criterion grades (plausibility / addresses_pain /
    *  constraint_fit / novelty / risk) + their one-sentence reasons.
@@ -147,6 +148,45 @@ export interface ItemVariation {
      *  the outcome we care about. Surfaces a "shaky proxy" red flag
      *  when low. LLM-graded once per scoring run. */
     confidence: number;
+    // ── Phase 11.3 — ensemble tier additions ──
+    /** Per-lens grades from the 5-lens ensemble scorer (Phase 11.3).
+     *  Present only when evaluation_method === "ensemble". Variance
+     *  across lens scores IS the confidence signal — when 5 lenses
+     *  with disagreement-by-design epistemologies converge, the proxy
+     *  is well-formed; when they diverge, it's shaky. */
+    lens_scores?: Array<{
+      lens:
+        | "systems_analyst"
+        | "skeptic"
+        | "operator"
+        | "engineer"
+        | "historian";
+      score: number;
+      confidence: number;
+      reason: string;
+    }>;
+    /** Phase 11.3 — stddev of lens scores. 0 means all 5 lenses agreed
+     *  on how much this variation moves this indicator; >0.2 means
+     *  meaningful disagreement → discount confidence. */
+    disagreement_score?: number;
+    /** Phase 11.3 — stddev of lens confidences. >0.2 means the lenses
+     *  themselves disagree on whether the proxy is valid — load-
+     *  bearing signal that the indicator's selection is contestable. */
+    disagreement_confidence?: number;
+    /** Phase 11.3 — count of lenses (out of 5) whose confidence ≥0.5
+     *  for this proxy. Renders as "5/5 ✓" or "2/5 ⚠️" in the UI. */
+    lens_agreement_count?: number;
+    /** Phase 11.3 — Prentice mediation classification:
+     *   "necessary"    — proxy sits in the causal chain (intervention
+     *                    MUST move it to move the outcome)
+     *   "indirect"     — correlated with the outcome but bypassable
+     *   "questionable" — might invert under intervention (Goodhart) */
+    mediation_check?: "necessary" | "indirect" | "questionable";
+    /** Phase 11.3 — Goodhart gameability risk:
+     *   "low"    — proxy is hard to game (e.g., qualitative outcomes)
+     *   "medium" — game-able with sustained effort
+     *   "high"   — pure-volume / vanity / trivially Goodharted */
+    goodhart_risk?: "low" | "medium" | "high";
   }>;
   /** Phase 5b — provenance flag distinguishing R&D-engine-proposed
    *  candidates from human-generated or originally-LLM-generated
@@ -215,6 +255,15 @@ export interface ItemVariation {
     iterations: number;
   };
 }
+
+// ── ExpandedItemDetail extension — Gate B (auto-gen readiness) ───
+//
+// The auto-generate-deliverables flow needs to confirm "this item has
+// been expanded by the AI" before firing the three artifact routes.
+// expand-item-detail.ts stamps generated_at on every successful gen;
+// adding the field to the interface here makes the contract explicit
+// + lets the deliverables aggregator filter on it without unsafe
+// casts.
 
 export interface ItemPlanning {
   /** 2-3 load-bearing assumptions this item relies on. */
@@ -329,7 +378,8 @@ export interface ExpandedItemDetail {
       | "rubric"
       | "evidence"
       | "simulation"
-      | "tested";
+      | "tested"
+      | "ensemble";
     /** The pain entity that was used as the target for MC propagation.
      *  Only meaningful when evaluation_method = "simulation". */
     target_entity_id: string | null;
@@ -360,9 +410,41 @@ export interface ExpandedItemDetail {
     /** ISO of when this envelope was computed. Drives the "scored
      *  Xm ago" hint in the panel. */
     scored_at: string;
+    /** Phase 11.3 — Goodhart-antidote counter-indicators proposed by
+     *  the ensemble scorer. One per outcome that carried indicators.
+     *  UI renders as "Counter: [X]" chip below the indicator strip
+     *  so the user is reminded to track an opposing proxy alongside
+     *  each primary one (yang/yin pairing per balanced-scorecard
+     *  literature). Empty array when ensemble didn't run or no
+     *  indicators were present. */
+    counter_indicators?: Array<{
+      outcome_id: string;
+      outcome_name: string;
+      counter_indicator: string;
+      rationale: string;
+    }>;
+    /** Phase 11.3 — REML τ²-pooled per-indicator confidence across all
+     *  variations the ensemble graded. Surfaces heterogeneity: high
+     *  τ² means the same proxy is graded inconsistently across
+     *  variations → flag in UI. Empty array when ensemble didn't run. */
+    indicator_pool?: Array<{
+      indicator_text: string;
+      outcome_id: string;
+      outcome_name: string;
+      pooled_confidence: number;
+      pooled_ci_lower: number;
+      pooled_ci_upper: number;
+      tau_squared: number;
+      n_variations: number;
+    }>;
   };
-  /** ISO timestamp the LLM produced this. */
-  generated_at: string;
+  /** Auto-gen Gate B — ISO timestamp stamped on every successful
+   *  expandItemDetail() call. Optional because legacy rows pre-
+   *  Phase-11 may lack it; new rows always carry it. The
+   *  deliverables aggregator reads this to confirm "the AI has
+   *  expanded this item" before treating any of its variations
+   *  as auto-gen ready. */
+  generated_at?: string;
 }
 
 export interface ExpandItemContext {

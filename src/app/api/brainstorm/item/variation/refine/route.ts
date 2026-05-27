@@ -429,9 +429,16 @@ export async function POST(req: NextRequest) {
       s.effectiveness_score,
     ]),
   );
+  // Auto-gen gate D — every scored variation MUST declare its
+  // evaluation_method tier so the deliverables strip can confirm "the
+  // AI ranked this." scoreVariationsForFeature internally runs the
+  // simulation path; we stamp the tier explicitly here so candidates
+  // born from refine match the field contract of those born from a
+  // direct /score call.
   const candidatesWithScore = candidatesWithCompliance.map((c) => ({
     ...c,
     effectiveness_score: finalScoreById.get(c.id),
+    evaluation_method: "simulation" as const,
   }));
 
   const finalDetail: ExpandedItemDetail = {
