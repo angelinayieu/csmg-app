@@ -130,6 +130,11 @@ interface ItemVariation {
   derived_from_annotations?: VariationProvenance[];
   /** P3 — user election state, persisted on entity. */
   disposition?: VariationDisposition;
+  /** Phase 4c — persisted mechanism effectiveness score (0..1).
+   *  Written by /api/brainstorm/item/variation/score; read on
+   *  drawer re-open so prior scoring runs survive close+reopen
+   *  without re-spending MC budget. */
+  effectiveness_score?: number;
 }
 
 interface ItemPlanning {
@@ -188,6 +193,29 @@ interface ExpandedItemDetail {
   composed_design?: ComposedDesign | null;
   prototype_briefs?: PrototypeBrief[];
   expansion_tree?: ExpansionNodeLocal[];
+  /** Phase 4c — persisted envelope-level signals from the last
+   *  /api/brainstorm/item/variation/score run. Mirrors the lib
+   *  type's effectiveness_envelope shape. Lets the drawer
+   *  reconstruct the prior scoring banner on re-open. */
+  effectiveness_envelope?: {
+    target_entity_id: string | null;
+    target_entity_name: string | null;
+    target_edge_strength: number | null;
+    lift_pct: number | null;
+    lift_band: { p10: number; p50: number; p90: number } | null;
+    placebo_verdict: "pass" | "fail" | "skip" | null;
+    placebo_ratio: number | null;
+    status:
+      | "ok"
+      | "no_target"
+      | "no_variations"
+      | "lever_unreachable"
+      | "sim_failed"
+      | "not_feature"
+      | "no_expanded";
+    status_detail: string | null;
+    scored_at: string;
+  };
   generated_at?: string;
 }
 
@@ -1027,7 +1055,13 @@ export function ItemDetailDrawer({
                   entityId && (
                     <VariationScoringPanel
                       entityId={entityId}
+                      itemName={itemName}
                       variations={expanded.variations}
+                      initialEnvelope={reconstructEnvelopeFromExpanded(
+                        expanded,
+                        entityId,
+                        itemName,
+                      )}
                     />
                   )}
 
@@ -3700,12 +3734,32 @@ function formatRelativeShort(iso: string): string {
 
 function VariationScoringPanel({
   entityId,
+  itemName,
   variations,
+  initialEnvelope = null,
 }: {
   entityId: string;
+  itemName: string;
   variations: ItemVariation[];
+  /** Phase 4c — reconstructed envelope from persisted state on the
+   *  entity's expanded_detail. When present, the panel boots up in
+   *  "scored" mode so the user sees the prior run immediately
+   *  without re-spending the ~1-3s MC budget. */
+  initialEnvelope?: VariationScoreEnvelope | null;
 }) {
-  const [envelope, setEnvelope] = useState<VariationScoreEnvelope | null>(null);
+  const [envelope, setEnvelope] = useState<VariationScoreEnvelope | null>(
+    initialEnvelope,
+  );
+  const [scoredAtIso, setScoredAtIso] = useState<string | null>(
+    // Initial scored_at sourced from the persisted envelope's
+    // optional carry-on field (passed in by parent via
+    // buildEnvelopeFromExpanded). Set fresh on each successful
+    // re-scoring run below.
+    typeof (initialEnvelope as VariationScoreEnvelope & { scored_at?: string } | null)
+      ?.scored_at === "string"
+      ? (initialEnvelope as VariationScoreEnvelope & { scored_at: string }).scored_at
+      : null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -3731,6 +3785,7 @@ function VariationScoringPanel({
         return;
       }
       setEnvelope(json as VariationScoreEnvelope);
+      setScoredAtIso(new Date().toISOString());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error.");
     } finally {
@@ -3806,10 +3861,23 @@ function VariationScoringPanel({
           >
             · structural lift × specificity × addresses_pain
           </span>
+          {scoredAtIso && (
+            <span
+              className="hidden text-[10px] font-light sm:inline"
+              style={{ color: appleVibe.text.faint }}
+              title={`Scored at ${new Date(scoredAtIso).toLocaleString()}`}
+            >
+              · scored {formatRelativeShort(scoredAtIso)}
+            </span>
+          )}
         </div>
         <button
           type="button"
-          onClick={runScoring}
+          onClick={() => {
+            void runScoring();
+            void itemName; // referenced in tooltip below — silence unused lint
+          }}
+          title={`Re-run mechanism scoring against the room's mechanism graph for "${itemName}"`}
           disabled={busy}
           className="inline-flex flex-shrink-0 items-center gap-1.5 transition-all duration-150 ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
           style={{
@@ -4041,4 +4109,78 @@ function diagnosticTitle(
     default:
       return "Scoring unavailable";
   }
+}
+
+/** Phase 4c — reconstruct the VariationScoreEnvelope from the
+ *  persisted expanded_detail.effectiveness_envelope + per-variation
+ *  effectiveness_score fields written by /api/brainstorm/item/variation/score.
+ *
+ *  Returns null when the entity has never been scored. The shared
+ *  signals (target / lift / placebo / status) live on the envelope
+ *  field; per-variation scores live on each variation row. We splice
+ *  them back together so the panel can render its prior run on
+ *  drawer re-open without re-spending the MC budget.
+ *
+ *  Note: structural_signal + specificity_multiplier are NOT persisted
+ *  per-row (they're shared across siblings of the same feature).
+ *  We reconstruct them defensively from the envelope's lift_pct +
+ *  placebo_verdict so the per-row VariationScore type stays whole,
+ *  but the per-row fields aren't surfaced in the UI anyway — only
+ *  the final effectiveness_score drives the bar. */
+function reconstructEnvelopeFromExpanded(
+  expanded: ExpandedItemDetail | null,
+  entityId: string,
+  itemName: string,
+): VariationScoreEnvelope | null {
+  if (!expanded?.effectiveness_envelope) return null;
+  const env = expanded.effectiveness_envelope;
+  // Reconstruct shared structural+specificity for the per-row shape.
+  const structuralSignal =
+    typeof env.lift_pct === "number"
+      ? Math.min(1, Math.abs(env.lift_pct))
+      : 0;
+  const specificity =
+    env.placebo_verdict === "pass"
+      ? 1.0
+      : env.placebo_verdict === "fail"
+        ? 0.2
+        : 0.5;
+  const variationScores = (expanded.variations ?? [])
+    .filter(
+      (v): v is ItemVariation & { id: string; effectiveness_score: number } =>
+        typeof v.id === "string" &&
+        typeof v.effectiveness_score === "number",
+    )
+    .map((v) => ({
+      variation_id: v.id,
+      variation_name: v.name,
+      addresses_pain:
+        typeof v.addresses_pain === "number" ? v.addresses_pain : 0.5,
+      effectiveness_score: v.effectiveness_score,
+      structural_signal: structuralSignal,
+      specificity_multiplier: specificity,
+    }));
+  // Carry the scored_at timestamp through so the panel can render
+  // "scored Xm ago" — VariationScoreEnvelope doesn't have a field
+  // for it, so we attach as an extra property the panel knows about.
+  return {
+    lever_entity_id: entityId,
+    lever_entity_name: itemName,
+    target_entity_id: env.target_entity_id,
+    target_entity_name: env.target_entity_name,
+    target_edge_strength: env.target_edge_strength,
+    variation_scores: variationScores,
+    lift_pct: env.lift_pct,
+    lift_band: env.lift_band,
+    placebo_verdict: env.placebo_verdict,
+    placebo_ratio: env.placebo_ratio,
+    status: env.status,
+    status_detail: env.status_detail,
+    // Stash scored_at on the envelope object — the panel reads it
+    // off via an `as` cast (see initialEnvelope handling in
+    // VariationScoringPanel). Not on the canonical type because the
+    // canonical envelope is the API response shape, which doesn't
+    // round-trip a persisted timestamp.
+    ...({ scored_at: env.scored_at } as Record<string, unknown>),
+  } as VariationScoreEnvelope;
 }

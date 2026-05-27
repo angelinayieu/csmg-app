@@ -83,6 +83,14 @@ export interface ItemVariation {
   /** P3 — user election state. Persisted in expanded_detail so it
    *  survives reloads. Null until the user touches it. */
   disposition?: VariationDisposition;
+  /** Phase 4c — mechanism effectiveness score (0..1) from
+   *  /api/brainstorm/item/variation/score. Composed as
+   *  structural_signal × specificity × addresses_pain. Persisted
+   *  so re-opening the drawer surfaces the prior scoring run
+   *  without re-spending the MC budget. Stale when sibling
+   *  elections change the room's mechanism graph — user can
+   *  re-score from the panel header. */
+  effectiveness_score?: number;
 }
 
 export interface ItemPlanning {
@@ -174,6 +182,46 @@ export interface ExpandedItemDetail {
     }>;
     generated_at: string;
   }>;
+  /** Phase 4c — envelope-level data from the last scoring run.
+   *  Variations carry their per-row effectiveness_score; the
+   *  envelope carries the shared structural signals (which pain
+   *  this feature was scored AGAINST + the raw MC lift + the
+   *  placebo verdict) so the drawer can render the result banner
+   *  on every re-open without re-spending the ~1-3s MC budget.
+   *
+   *  Reset to undefined when:
+   *    • The feature is force-regenerated (definition changes →
+   *      previous score is stale by construction)
+   *    • The user manually re-scores (panel writes a fresh envelope)
+   *
+   *  Soft signal — undefined means "never scored." */
+  effectiveness_envelope?: {
+    /** The pain entity that was used as the target for MC propagation. */
+    target_entity_id: string | null;
+    target_entity_name: string | null;
+    target_edge_strength: number | null;
+    /** Signed lift % returned by simulate-variant-lift. */
+    lift_pct: number | null;
+    lift_band: { p10: number; p50: number; p90: number } | null;
+    /** Specificity verdict from placebo refutation. */
+    placebo_verdict: "pass" | "fail" | "skip" | null;
+    placebo_ratio: number | null;
+    /** Envelope-level diagnostic status from the scoring run.
+     *  "ok" when scores are valid; other values explain why the
+     *  panel can't show effective scores. */
+    status:
+      | "ok"
+      | "no_target"
+      | "no_variations"
+      | "lever_unreachable"
+      | "sim_failed"
+      | "not_feature"
+      | "no_expanded";
+    status_detail: string | null;
+    /** ISO of when this envelope was computed. Drives the "scored
+     *  Xm ago" hint in the panel. */
+    scored_at: string;
+  };
   /** ISO timestamp the LLM produced this. */
   generated_at: string;
 }
