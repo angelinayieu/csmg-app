@@ -153,6 +153,23 @@ interface LineupVariation {
     evidence_supports?: number;
     evidence_refutes?: number;
     evidence_contextual?: number;
+    /** Phase 11.7 — empirical overlay from concluded prototype briefs.
+     *  When present, the chip surface flips to 🧪 tier — reality
+     *  outranks theory. Aggregates lift + rigor + sample size
+     *  across multiple concluded briefs touching this indicator. */
+    empirical_overlay?: {
+      observed_lift_pct: number | null;
+      observed_direction:
+        | "increased"
+        | "decreased"
+        | "no_change"
+        | "inconsistent";
+      methodology_rigor: number;
+      sample_size_total: number | null;
+      n_briefs: number;
+      extraction_rationale: string;
+      extracted_at: string;
+    };
   }>;
 }
 
@@ -1970,6 +1987,33 @@ function IndicatorBreakdown({
                     `MC lift band: p10 ${(ind.lift_band.p10 * 100).toFixed(1)}% · p50 ${(ind.lift_band.p50 * 100).toFixed(1)}% · p90 ${(ind.lift_band.p90 * 100).toFixed(1)}%`,
                   );
                 }
+                // Phase 11.7 — empirical overlay. When present, this
+                // is the load-bearing tier and gets the headline chip
+                // styling (🧪 + lift % + rigor bar). Theoretical
+                // scores (ensemble/MC/evidence) shrink to secondary
+                // signals beside it.
+                const hasEmpirical = !!ind.empirical_overlay;
+                const emp = ind.empirical_overlay;
+                if (emp) {
+                  const directionGlyph =
+                    emp.observed_direction === "increased"
+                      ? "↑"
+                      : emp.observed_direction === "decreased"
+                        ? "↓"
+                        : emp.observed_direction === "inconsistent"
+                          ? "≠"
+                          : "→";
+                  const empSummary =
+                    emp.observed_lift_pct !== null
+                      ? `${directionGlyph} ${emp.observed_lift_pct >= 0 ? "+" : ""}${(emp.observed_lift_pct * 100).toFixed(1)}% observed`
+                      : `${directionGlyph} ${emp.observed_direction}`;
+                  tooltipParts.push(
+                    `🧪 TESTED — ${empSummary} · rigor ${emp.methodology_rigor.toFixed(2)}${emp.sample_size_total ? ` · N=${emp.sample_size_total}` : ""} · ${emp.n_briefs} brief${emp.n_briefs === 1 ? "" : "s"}`,
+                  );
+                  if (emp.extraction_rationale) {
+                    tooltipParts.push(emp.extraction_rationale);
+                  }
+                }
                 // Phase 11.6 — evidence chip + tooltip. Citations
                 // count + supports/refutes split renders inline; top
                 // 3 citation arguments + evidence_strength get
@@ -2000,26 +2044,87 @@ function IndicatorBreakdown({
                     );
                   }
                 }
+                // Phase 11.7 — when empirical data lands, the chip
+                // visually flips: bg becomes a warm earned-rigor tint
+                // (outcomes-green with low alpha) + an inline 🧪
+                // headline. Refuting empirical evidence (direction =
+                // decreased/inconsistent) tints pain-red regardless.
+                const empNegative =
+                  emp &&
+                  (emp.observed_direction === "decreased" ||
+                    emp.observed_direction === "inconsistent" ||
+                    (emp.observed_lift_pct !== null &&
+                      emp.observed_lift_pct < 0));
+                const chipBg = hasEmpirical
+                  ? empNegative
+                    ? `${appleVibe.stage.pain}1A`
+                    : `${OUTCOME_COLOR}1A`
+                  : shaky
+                    ? `${appleVibe.stage.pain}10`
+                    : appleVibe.surface.chip;
+                const chipBorder = hasEmpirical
+                  ? empNegative
+                    ? `1.5px solid ${appleVibe.stage.pain}60`
+                    : `1.5px solid ${OUTCOME_COLOR}60`
+                  : shaky
+                    ? `1px solid ${appleVibe.stage.pain}40`
+                    : `1px solid ${appleVibe.stroke.hairline}`;
                 return (
                   <span
                     key={`${ind.indicator_text}-${i}`}
                     title={tooltipParts.join(" | ")}
                     className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-medium"
                     style={{
-                      background: shaky
-                        ? `${appleVibe.stage.pain}10`
-                        : appleVibe.surface.chip,
+                      background: chipBg,
                       color: tier,
-                      border: shaky
-                        ? `1px solid ${appleVibe.stage.pain}40`
-                        : `1px solid ${appleVibe.stroke.hairline}`,
+                      border: chipBorder,
                       fontVariantNumeric: "tabular-nums",
                     }}
                   >
+                    {hasEmpirical && <span aria-hidden>🧪</span>}
                     <span>{truncated}</span>
                     <span style={{ fontWeight: 600 }}>
                       {ind.score.toFixed(2)}
                     </span>
+                    {/* Phase 11.7 — empirical headline. Renders BEFORE
+                        theoretical chips so it dominates the read.
+                        When lift_pct is null, shows just direction +
+                        rigor bar. */}
+                    {emp && (
+                      <span
+                        style={{
+                          color: empNegative
+                            ? appleVibe.stage.pain
+                            : OUTCOME_COLOR,
+                          fontWeight: 700,
+                          marginLeft: "2px",
+                        }}
+                      >
+                        ·{" "}
+                        {emp.observed_lift_pct !== null
+                          ? `${emp.observed_lift_pct >= 0 ? "+" : ""}${(emp.observed_lift_pct * 100).toFixed(0)}%`
+                          : emp.observed_direction === "increased"
+                            ? "↑"
+                            : emp.observed_direction === "decreased"
+                              ? "↓"
+                              : emp.observed_direction === "inconsistent"
+                                ? "≠"
+                                : "→"}
+                        <span
+                          style={{
+                            color: appleVibe.text.tertiary,
+                            fontWeight: 500,
+                            marginLeft: "2px",
+                          }}
+                        >
+                          (rigor {emp.methodology_rigor.toFixed(1)}
+                          {emp.sample_size_total
+                            ? ` · N=${emp.sample_size_total}`
+                            : ""}
+                          )
+                        </span>
+                      </span>
+                    )}
                     {ind.lens_scores && (
                       <span
                         style={{

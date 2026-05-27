@@ -240,6 +240,43 @@ export interface ItemVariation {
     evidence_supports?: number;
     evidence_refutes?: number;
     evidence_contextual?: number;
+    // ── Phase 11.7 — Tested tier (empirical override) ──
+    /** Phase 11.7 — when one or more of the variation's prototype
+     *  briefs concluded with a result_summary, the empirical
+     *  extractor produces a structured overlay PER indicator. When
+     *  present, evaluation_method on this row effectively becomes
+     *  "tested" and the chip surface shows the empirical numbers
+     *  as the headline (theoretical scores remain available in
+     *  hover tooltip + drawer audit trail). Reality outranks theory.
+     *
+     *  Aggregated when multiple concluded briefs touch the same
+     *  indicator: lifts averaged weighted by methodology_rigor;
+     *  rigor itself maxed (one rigorous test outweighs N anecdotes). */
+    empirical_overlay?: {
+      /** Signed % change observed. Null when no concluded brief
+       *  reported a quantitative number for this indicator (only
+       *  qualitative direction extracted). */
+      observed_lift_pct: number | null;
+      /** Direction always present even when lift_pct null. */
+      observed_direction:
+        | "increased"
+        | "decreased"
+        | "no_change"
+        | "inconsistent";
+      /** 0..1 — aggregate methodological rigor across concluded
+       *  briefs touching this indicator. */
+      methodology_rigor: number;
+      /** Sum of sample_size_estimate across briefs. Null when none
+       *  carried numeric N. */
+      sample_size_total: number | null;
+      /** How many concluded briefs contributed. */
+      n_briefs: number;
+      /** LLM's combined rationale — the best rationale text from
+       *  the most rigorous contributing brief. */
+      extraction_rationale: string;
+      /** ISO of most recent empirical extraction touching this row. */
+      extracted_at: string;
+    };
   }>;
   /** Phase 5b — provenance flag distinguishing R&D-engine-proposed
    *  candidates from human-generated or originally-LLM-generated
