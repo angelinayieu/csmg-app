@@ -42,6 +42,10 @@ import {
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { VariationDeliverablesModal } from "./variation-deliverables-modal";
+import {
+  AutoElectModal,
+  type MechanismDecision,
+} from "./auto-elect-modal";
 
 interface ReadyRow {
   entity_id: string;
@@ -91,6 +95,17 @@ export function DeliverablesStrip({ spaceId }: Props) {
   // Modal state — keyed on entity_id + variation_id so the modal can
   // open any row's deliverables.
   const [modalOpenFor, setModalOpenFor] = useState<ReadyRow | null>(null);
+  // Auto-elect modal state. The strip opens it when the user clicks
+  // "🪄 Auto-elect + generate" and the preview returns ambiguous
+  // decisions. If the preview returns zero ambiguous, the strip
+  // skips the modal and applies confident elections directly.
+  const [autoElectOpen, setAutoElectOpen] = useState(false);
+  const [autoElectPreview, setAutoElectPreview] = useState<{
+    confident: MechanismDecision[];
+    ambiguous: MechanismDecision[];
+    skipped: MechanismDecision[];
+  } | null>(null);
+  const [autoElectBusy, setAutoElectBusy] = useState(false);
 
   // ── Load rows on mount ──
   const fetchRows = useCallback(async () => {
@@ -223,6 +238,124 @@ export function DeliverablesStrip({ spaceId }: Props) {
     await fetchRows();
   }, [masterBusy, summary.pending, generateForRow, fetchRows]);
 
+  // ── Master "🪄 Auto-elect + generate" ──
+  // Two-stage flow:
+  //   1. GET /auto-elect/preview — server returns plan
+  //   2a. If zero ambiguous → apply directly + chain to generate-pending
+  //   2b. If ambiguous → open modal, user resolves, then apply+generate
+  const startAutoElect = useCallback(async () => {
+    if (autoElectBusy) return;
+    setAutoElectBusy(true);
+    try {
+      const res = await fetch(
+        `/api/brainstorm/space/${spaceId}/auto-elect/preview`,
+      );
+      if (!res.ok) {
+        setAutoElectBusy(false);
+        return;
+      }
+      const plan = (await res.json()) as {
+        confident: MechanismDecision[];
+        ambiguous: MechanismDecision[];
+        skipped: MechanismDecision[];
+      };
+      setAutoElectPreview(plan);
+      if (plan.ambiguous.length === 0 && plan.confident.length === 0) {
+        // Nothing to do — show modal anyway so the user gets the
+        // "everything already elected" reassurance.
+        setAutoElectOpen(true);
+        setAutoElectBusy(false);
+        return;
+      }
+      if (plan.ambiguous.length === 0) {
+        // Pure confident path — skip the modal, apply + chain into
+        // generate-pending directly.
+        await applyAutoElectAndGenerate(
+          plan.confident.map((d) => ({
+            entity_id: d.entity_id,
+            variation_ids: d.elections,
+          })),
+        );
+      } else {
+        setAutoElectOpen(true);
+      }
+    } catch {
+      // Soft-fail.
+    } finally {
+      setAutoElectBusy(false);
+    }
+    // applyAutoElectAndGenerate defined below — captured by closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoElectBusy, spaceId]);
+
+  // Apply elections + chain into "Generate pending." Called from
+  // either the pure-confident path or the modal's onApply.
+  const applyAutoElectAndGenerate = useCallback(
+    async (
+      payload: Array<{ entity_id: string; variation_ids: string[] }>,
+    ) => {
+      if (payload.length === 0) return;
+      // 1. Apply elections.
+      await fetch(
+        `/api/brainstorm/space/${spaceId}/auto-elect/apply`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ elections: payload }),
+        },
+      );
+      // 2. Refresh the ready rows — the strip's source of truth.
+      await fetchRows();
+      // 3. Chain into generate-pending. We re-read the just-fetched
+      // rows to pick up the freshly-elected ones; use setRows via
+      // the latest closure.
+      // Pull fresh rows once more in case fetchRows races.
+      try {
+        const res = await fetch(
+          `/api/brainstorm/space/${spaceId}/deliverables/ready`,
+        );
+        if (res.ok) {
+          const j = (await res.json()) as { rows: ReadyRow[] };
+          const freshRows = j.rows ?? [];
+          setRows(freshRows);
+          // Find pending across all just-elected rows.
+          const pending = freshRows.filter(
+            (r) =>
+              r.ready &&
+              (!r.has_description_doc ||
+                !r.has_mockup_fullscreen ||
+                !r.has_export_prompt),
+          );
+          if (pending.length === 0) return;
+          // Run the generation loop inline — mirrors generateAllPending
+          // but uses the fresh row list (no stale closure).
+          setMasterBusy(true);
+          setMasterProgress({ done: 0, total: pending.length });
+          let idx = 0;
+          let done = 0;
+          const next = async () => {
+            const my = idx++;
+            if (my >= pending.length) return;
+            await generateForRow(pending[my]);
+            done++;
+            setMasterProgress({ done, total: pending.length });
+            await next();
+          };
+          const workers = Array.from(
+            { length: Math.min(CONCURRENCY, pending.length) },
+            () => next(),
+          );
+          await Promise.all(workers);
+          setMasterBusy(false);
+          setMasterProgress(null);
+        }
+      } finally {
+        await fetchRows();
+      }
+    },
+    [spaceId, fetchRows, generateForRow],
+  );
+
   // ── Master "Download bundle" ──
   const downloadBundle = useCallback(async () => {
     if (downloadBusy) return;
@@ -303,6 +436,51 @@ export function DeliverablesStrip({ spaceId }: Props) {
           )}
         </button>
         <div className="flex flex-shrink-0 items-center gap-1.5">
+          {/* 🪄 Auto-elect + generate — only shows when there's
+              something to auto-process. Hidden once everything is
+              fully shipped so the toolbar reads as calm. */}
+          {(summary.pending.length > 0 || summary.blocked.length > 0) && (
+            <motion.button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void startAutoElect();
+              }}
+              disabled={autoElectBusy || masterBusy}
+              whileHover={
+                autoElectBusy || masterBusy
+                  ? undefined
+                  : { y: -1, transition: { duration: 0.15 } }
+              }
+              whileTap={
+                autoElectBusy || masterBusy
+                  ? undefined
+                  : { y: 0.5, transition: { duration: 0.08 } }
+              }
+              className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(124,58,237,0.10)] disabled:cursor-not-allowed disabled:opacity-60"
+              style={{
+                background: appleVibe.surface.card,
+                color: appleVibe.accent.primary,
+                border: `1px solid ${appleVibe.accent.primary}50`,
+                borderRadius: appleVibe.radius.pill,
+                padding: "4px 11px",
+                fontSize: "10.5px",
+                fontWeight: 600,
+                letterSpacing: "0.02em",
+                boxShadow: appleVibe.shadow.chip,
+                fontFamily: appleVibe.font.stack,
+              }}
+              title="Auto-elect the top-scored variation per mechanism (the AI asks you when it's a close call), then generate all deliverables in one go."
+            >
+              {autoElectBusy ? (
+                <Loader2 className="h-3 w-3 animate-spin" strokeWidth={2.4} />
+              ) : (
+                <Sparkles className="h-3 w-3" strokeWidth={2.4} />
+              )}
+              {autoElectBusy ? "Planning…" : "Auto-elect + generate"}
+            </motion.button>
+          )}
+
           {/* Generate everything pending */}
           {summary.pending.length > 0 && (
             <motion.button
@@ -422,6 +600,28 @@ export function DeliverablesStrip({ spaceId }: Props) {
           entityId={modalOpenFor.entity_id}
           variationId={modalOpenFor.variation_id}
           variationName={modalOpenFor.variation_name}
+        />
+      )}
+
+      {/* Auto-elect ambiguity modal — opens when the AI's preview
+          flagged calls that need user judgment. Confident elections
+          + user-resolved ambiguous ones are bundled into one apply
+          payload, then the pipeline chains into generate-pending. */}
+      {autoElectPreview && (
+        <AutoElectModal
+          open={autoElectOpen}
+          onClose={() => {
+            setAutoElectOpen(false);
+            setAutoElectPreview(null);
+          }}
+          confident={autoElectPreview.confident}
+          ambiguous={autoElectPreview.ambiguous}
+          skipped={autoElectPreview.skipped}
+          onApply={async (payload) => {
+            await applyAutoElectAndGenerate(payload);
+            setAutoElectOpen(false);
+            setAutoElectPreview(null);
+          }}
         />
       )}
     </div>
