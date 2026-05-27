@@ -17,6 +17,7 @@ import { duplicateVariations } from "./duplicate-variations";
 import { distillConcepts } from "./distill-concepts";
 import { recommendNextMove } from "./recommend-next-move";
 import { crossRoomContradictions } from "./cross-room-contradictions";
+import { layerCoverage } from "./layer-coverage";
 import type {
   AnalysisFinding,
   AnalysisModule,
@@ -30,6 +31,10 @@ export const TIER_1_ANALYSES: AnalysisModule[] = [
   orphanAnnotations,
   painCoverage,
   duplicateVariations,
+  // Phase 11.A.10 — gracefully degrades to [] when state.layers is
+  // undefined (pre-11.A spaces) or when no rooms carry layer_ordinals
+  // (existing spaces before the proposer extension lands).
+  layerCoverage,
 ];
 
 /** Tier 2 — on-demand operations the user fires from the workbench.

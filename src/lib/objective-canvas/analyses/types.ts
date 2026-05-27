@@ -14,6 +14,7 @@ import type {
 } from "../expand-item-detail";
 import type { OperationalConstraints } from "../constraints";
 import type { IntentPreference } from "../decision-log";
+import type { ObjectiveStack } from "../layer-model";
 
 /** Buckets a finding belongs to — drives the workbench's facet tabs. */
 export type AnalysisCategory =
@@ -142,6 +143,12 @@ export interface CrossRoomState {
    *  passes a userId to loadCrossRoomState. Analyses that read it
    *  should tolerate undefined for back-compat with older callers. */
   user_intent_preferences?: IntentPreference[];
+  /** Phase 11.A — the space's ObjectiveStack when generated. Drives
+   *  the layer_coverage analysis + lets other analyses reason about
+   *  cross-layer movement. Undefined for pre-11.A spaces and for any
+   *  space where the user hasn't generated layers yet. Analyses that
+   *  use this MUST tolerate undefined. */
+  layers?: ObjectiveStack;
 }
 
 // ── Analysis module shape ─────────────────────────────────────────

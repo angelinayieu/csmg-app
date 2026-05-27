@@ -133,11 +133,13 @@ export async function loadCrossRoomState(
         items: [],
         edges: [],
         user_intent_preferences: await userPrefsPromise,
+        layers: readObjectiveStack(space.synthesis_data),
       },
       state_hash: stateHash({
         roomIds: [],
         itemIds: [],
         electedVariationIds: [],
+        expansionNodeIds: [],
       }),
       synthesisData: space.synthesis_data,
     };
@@ -267,12 +269,24 @@ export async function loadCrossRoomState(
   });
 
   // ── State hash for cache invalidation ──
+  // M1 — also fold KEPT expansion-tree node ids into the hash so that
+  // adding / removing / re-parking deep work invalidates cached
+  // polish + cached analysis. Parked nodes excluded — same as if
+  // never spawned.
   const allElectedIds: string[] = [];
-  for (const it of items) allElectedIds.push(...it.elected_variation_ids);
+  const allExpansionIds: string[] = [];
+  for (const it of items) {
+    allElectedIds.push(...it.elected_variation_ids);
+    const tree = it.expanded_detail?.expansion_tree ?? [];
+    for (const n of tree) {
+      if (n.disposition !== "parked") allExpansionIds.push(n.id);
+    }
+  }
   const hash = stateHash({
     roomIds: roomIds.slice().sort(),
     itemIds: items.map((i) => i.id).sort(),
     electedVariationIds: allElectedIds.sort(),
+    expansionNodeIds: allExpansionIds.sort(),
   });
 
   return {
@@ -285,8 +299,27 @@ export async function loadCrossRoomState(
       items,
       edges,
       user_intent_preferences: await userPrefsPromise,
+      layers: readObjectiveStack(space.synthesis_data),
     },
     state_hash: hash,
     synthesisData: space.synthesis_data,
   };
+}
+
+/** Phase 11.A — pull the ObjectiveStack out of synthesis_data when
+ *  present. Pre-11.A spaces return undefined cleanly so analyses
+ *  that depend on layers (layer_coverage) can short-circuit. */
+function readObjectiveStack(
+  synthesisData: unknown,
+): import("../layer-model").ObjectiveStack | undefined {
+  if (!synthesisData || typeof synthesisData !== "object") return undefined;
+  const oc = (synthesisData as { objective_canvas?: unknown })
+    .objective_canvas;
+  if (!oc || typeof oc !== "object") return undefined;
+  const layers = (oc as { layers?: unknown }).layers;
+  if (!layers || typeof layers !== "object") return undefined;
+  // Light shape check — `layers.layers` is the array.
+  const stack = layers as { layers?: unknown };
+  if (!Array.isArray(stack.layers)) return undefined;
+  return layers as import("../layer-model").ObjectiveStack;
 }

@@ -22,6 +22,8 @@ import {
   parseVersions,
 } from "@/lib/objective-canvas/annotation-versions";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { decomposeIntoLayers } from "@/lib/objective-canvas/decompose-into-layers";
+import type { ObjectiveStack } from "@/lib/objective-canvas/layer-model";
 
 export const runtime = "nodejs";
 
@@ -134,6 +136,23 @@ export async function POST(req: NextRequest) {
   // confirm, the regenerate path picks up the now-present subs.
   void generateInitialAnnotationsForSpace(db, spaceId, auth.user.id);
 
+  // Phase 11.A.7 — kick off layer decomposition (fire-and-forget).
+  // The user advances to the picker page immediately; the
+  // ObjectiveStack lands in ~5-15s and becomes visible the next time
+  // the picker page reads /api/brainstorm/space/[id]/layers. Per the
+  // sequencing rationale: layers should be available BEFORE the user
+  // picks sub-objectives, so they can see structural coverage as
+  // they pick. Idempotent — skips when synthesis_data.objective_canvas.layers
+  // already exists with content (matches the cache semantics on
+  // /layers/generate?mode=initial).
+  void generateInitialLayersForSpace(
+    db,
+    spaceId,
+    auth.user.id,
+    objective,
+    clarifyingAnswers,
+  );
+
   return NextResponse.json({ stage: "picking" });
 }
 
@@ -206,6 +225,106 @@ async function generateInitialAnnotationsForSpace(
   } catch (err) {
     console.warn(
       "[clarify/complete] background annotation gen failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+/** Phase 11.A.7 — Generate the ObjectiveStack for a space +
+ *  persist it to synthesis_data.objective_canvas.layers. Mirror of
+ *  generateInitialAnnotationsForSpace above: fire-and-forget from
+ *  the clarify/complete handler, soft-fail throughout, idempotent.
+ *
+ *  Same contract as the /layers/generate?mode=initial endpoint —
+ *  short-circuits when a stack already exists for this space (any
+ *  content; we don't validate state_hash here to avoid an extra
+ *  round-trip + the user can always regenerate manually).
+ *
+ *  Why inlined rather than calling the endpoint via fetch: server-
+ *  to-self fetch is awkward in Next.js + the LLM call + persist is
+ *  ~25 lines, not worth the indirection. Mirrors the
+ *  generateInitialAnnotationsForSpace pattern above. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function generateInitialLayersForSpace(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  spaceId: string,
+  userId: string,
+  objectiveText: string,
+  clarifyingAnswers: Array<{ question: string; answer: string }>,
+): Promise<void> {
+  try {
+    if (objectiveText.length < 8) return;
+
+    // Idempotent: skip when a stack already exists. The user can
+    // regenerate via the /layers/generate?mode=regenerate endpoint
+    // when they want a fresh decomposition.
+    const { data: space } = await db
+      .from("spaces")
+      .select("user_id, synthesis_data")
+      .eq("id", spaceId)
+      .maybeSingle();
+    if (!space || space.user_id !== userId) return;
+    const existingStack: ObjectiveStack | undefined = (
+      space.synthesis_data as { objective_canvas?: { layers?: ObjectiveStack } } | null
+    )?.objective_canvas?.layers;
+    if (existingStack && Array.isArray(existingStack.layers) && existingStack.layers.length > 0) {
+      return;
+    }
+
+    // Generate. decomposeIntoLayers soft-fails to a generic fallback
+    // stack so the picker is never empty even when the LLM hiccups.
+    const stack = await decomposeIntoLayers({
+      objectiveText,
+      clarifyingAnswers,
+    });
+
+    // Persist into synthesis_data.objective_canvas.layers.
+    const synthesisData = (space.synthesis_data as Record<string, unknown>) ?? {};
+    const objectiveCanvas =
+      (synthesisData.objective_canvas as Record<string, unknown>) ?? {};
+    const nextSynth = {
+      ...synthesisData,
+      objective_canvas: {
+        ...objectiveCanvas,
+        layers: stack,
+      },
+    };
+    const writeRes = await db
+      .from("spaces")
+      .update({ synthesis_data: nextSynth })
+      .eq("id", spaceId);
+    if (writeRes.error) {
+      console.warn(
+        "[clarify/complete] initial layer persist failed:",
+        writeRes.error.message,
+      );
+      return;
+    }
+
+    // Log the event so the notebook reflects the layer decomposition
+    // moment. metadata mirrors what /layers/generate logs.
+    const variableCount = stack.layers.reduce(
+      (sum, l) => sum + l.variables.length,
+      0,
+    );
+    void logDecision(db, {
+      userId,
+      spaceId,
+      subObjectiveId: null,
+      action: "layers_generated",
+      metadata: {
+        domain_template: stack.domain_template,
+        layer_count: stack.layers.length,
+        variable_count: variableCount,
+        influence_count: stack.influences.length,
+        state_hash: stack.state_hash,
+        triggered_by: "clarify_complete",
+      },
+    });
+  } catch (err) {
+    console.warn(
+      "[clarify/complete] background layer gen failed:",
       err instanceof Error ? err.message : String(err),
     );
   }
