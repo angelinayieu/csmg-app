@@ -40,8 +40,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
-  ArrowDown,
-  ArrowUp,
   Check,
   ChevronDown,
   ChevronUp,
@@ -63,6 +61,11 @@ interface LineupVariation {
   id: string;
   name: string;
   description?: string;
+  /** Op C — thumbnail-format HTML mockup (480×320 single-screen).
+   *  When present and the variation is elected, the LineupRow renders
+   *  an inline iframe preview below the expanded section. Persisted
+   *  by /api/brainstorm/item/variation/mockup at format=thumbnail. */
+  mockup_thumbnail_html?: string;
   /** Phase 8b — surfaced in the expanded lineup row alongside
    *  description. Lets the user see "what gives, what gives up"
    *  per candidate without opening the drawer. */
@@ -225,6 +228,10 @@ export function CategoryCard({
         evaluation_method: v.evaluation_method,
         disposition: v.disposition,
         provenance: v.provenance,
+        // Op C — thread the cached thumbnail mockup HTML so the
+        // LineupRow can render it inline without a server round trip
+        // when the user expands an elected variation.
+        mockup_thumbnail_html: v.mockup_thumbnail_html,
       })),
       envelope: eds.effectiveness_envelope
         ? {
@@ -469,23 +476,25 @@ export function CategoryCard({
         fontFamily: appleVibe.font.stack,
       }}
     >
-      {/* Header — category label + composite + approved chip */}
+      {/* Header — eyebrow + title on the left, hero composite metric +
+          approved pill on the right. The composite is the visual anchor:
+          SF Display numeric, no chip, no shouting. */}
       <header
-        className="flex items-center justify-between gap-3 px-5 py-3"
+        className="flex items-center justify-between gap-4 px-6 py-4"
         style={{ borderBottom: `1px solid ${appleVibe.stroke.hairline}` }}
       >
         <div className="min-w-0 flex-1">
           <div
-            className="text-[10px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: appleVibe.text.tertiary }}
+            className="text-[9.5px] font-medium uppercase tracking-[0.18em]"
+            style={{ color: appleVibe.text.faint }}
           >
             Experiment frame
           </div>
           <h3
-            className="mt-0.5 truncate text-[15px] font-semibold tracking-tight"
+            className="mt-1 truncate text-[16px] font-semibold leading-tight"
             style={{
               color: appleVibe.text.primary,
-              letterSpacing: "-0.01em",
+              letterSpacing: "-0.018em",
               fontFamily: appleVibe.font.display,
             }}
             title={categoryLabel}
@@ -493,93 +502,123 @@ export function CategoryCard({
             {categoryLabel}
           </h3>
         </div>
-        <div className="flex flex-shrink-0 items-center gap-2">
-          <span
-            className="rounded-full px-2 py-0.5 text-[10.5px] font-semibold tabular-nums"
-            style={{
-              background: appleVibe.surface.chip,
-              color: appleVibe.text.secondary,
-            }}
-            title="Chain composite — min of the two hop strengths"
-          >
-            {compositePct}% composite
-          </span>
+        <div className="flex flex-shrink-0 items-center gap-3">
           {approved && (
             <span
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.10em]"
+              className="inline-flex items-center gap-1 rounded-full px-2 py-[3px] text-[10px] font-medium tracking-tight"
               style={{
-                background: `${OUTCOME_COLOR}15`,
+                background: `${OUTCOME_COLOR}12`,
                 color: OUTCOME_COLOR,
-                border: `1px solid ${OUTCOME_COLOR}33`,
               }}
+              title="Approved — promoted to the main canvas"
             >
               <Check className="h-2.5 w-2.5" strokeWidth={2.5} />
-              approved
+              Approved
             </span>
           )}
+          <div
+            className="text-right leading-none"
+            title="Chain composite — min of the two hop strengths"
+          >
+            <div
+              className="tabular-nums"
+              style={{
+                color: appleVibe.text.primary,
+                fontFamily: appleVibe.font.display,
+                fontSize: 22,
+                fontWeight: 600,
+                letterSpacing: "-0.025em",
+              }}
+            >
+              {compositePct}
+              <span
+                style={{
+                  color: appleVibe.text.tertiary,
+                  fontSize: 14,
+                  fontWeight: 500,
+                  marginLeft: 1,
+                }}
+              >
+                %
+              </span>
+            </div>
+            <div
+              className="mt-1 text-[8.5px] font-medium uppercase tracking-[0.2em]"
+              style={{ color: appleVibe.text.faint }}
+            >
+              Composite
+            </div>
+          </div>
         </div>
       </header>
 
-      {/* Problem ↔ Outcome juxtaposition */}
-      <div className="grid grid-cols-1 gap-3 px-5 pt-4 md:grid-cols-2">
-        <ProblemHalf
-          pain={pain}
-          painName={chain.painName}
-          onClick={onOpenPainDetail}
+      {/* Problem ↔ Outcome juxtaposition — two zones inside one card,
+          separated by a single vertical hairline. No nested cards,
+          no colored borders. Each zone carries its lane identity via
+          a 2px colored left edge + a small colored dot. */}
+      <div className="flex flex-col px-6 pt-5 md:flex-row md:items-stretch">
+        <div className="min-w-0 flex-1 pb-5 md:pb-0 md:pr-6">
+          <ProblemHalf
+            pain={pain}
+            painName={chain.painName}
+            onClick={onOpenPainDetail}
+          />
+        </div>
+        <div
+          className="hidden md:block"
+          style={{
+            width: 1,
+            background: appleVibe.stroke.hairline,
+          }}
+          aria-hidden
         />
-        <OutcomeHalf
-          outcome={outcome}
-          outcomeName={chain.outcomeName}
-          onClick={onOpenOutcomeDetail}
-        />
+        <div className="min-w-0 flex-1 md:pl-6">
+          <OutcomeHalf
+            outcome={outcome}
+            outcomeName={chain.outcomeName}
+            onClick={onOpenOutcomeDetail}
+          />
+        </div>
       </div>
 
-      {/* Bridge label — feature name + mechanism phrase */}
+      {/* Bridge — feature name + mechanism phrase. Single left-aligned
+          line, no hr-sandwich, no pill wrapper. A small filled dot in
+          the feature lane color is the only visual anchor. */}
       <button
         type="button"
         onClick={onOpenFeatureDetail}
-        className="group mx-5 my-3 block w-[calc(100%-2.5rem)] text-left transition-colors duration-150 ease-out"
+        className="group mx-6 mt-5 mb-1 flex w-[calc(100%-3rem)] items-baseline gap-2 text-left"
         title="Open mechanism detail"
       >
-        <div className="flex items-center gap-2">
-          <div
-            className="h-px flex-1"
-            style={{ background: appleVibe.stroke.hairline }}
-          />
+        <span
+          className="inline-block h-1.5 w-1.5 flex-shrink-0 translate-y-[-1px] rounded-full"
+          style={{ background: FEATURE_COLOR }}
+          aria-hidden
+        />
+        <span
+          className="text-[10.5px] font-medium tracking-tight"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          Tested via
+        </span>
+        <span
+          className="min-w-0 truncate text-[12.5px] font-medium transition-opacity duration-150 group-hover:opacity-70"
+          style={{
+            color: appleVibe.text.primary,
+            letterSpacing: "-0.01em",
+          }}
+        >
+          {chain.featureName}
+        </span>
+        {chain.mechanism && (
           <span
-            className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1"
-            style={{
-              background: `${FEATURE_COLOR}10`,
-              border: `1px solid ${FEATURE_COLOR}26`,
-            }}
+            className="min-w-0 truncate text-[11.5px] font-light italic"
+            style={{ color: appleVibe.text.tertiary }}
+            title="The named lever this chain pulls"
           >
-            <span
-              className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
-              style={{ color: FEATURE_COLOR }}
-            >
-              tested via
-            </span>
-            <span
-              className="text-[11.5px] font-medium"
-              style={{ color: appleVibe.text.primary }}
-            >
-              {chain.featureName}
-            </span>
-            {chain.mechanism && (
-              <span
-                className="text-[10.5px] font-light italic"
-                style={{ color: appleVibe.text.tertiary }}
-                title="The named lever this chain pulls"
-              >
-                · &ldquo;{chain.mechanism}&rdquo;
-              </span>
-            )}
+            · &ldquo;{chain.mechanism}&rdquo;
           </span>
-          <div
-            className="h-px flex-1"
-            style={{ background: appleVibe.stroke.hairline }}
-          />
-        </div>
+        )}
       </button>
 
       {/* Phase 8b — within-layer relationship chips. Surface
@@ -589,7 +628,7 @@ export function CategoryCard({
           (no bold colors) and click through to the related
           feature's drawer. */}
       {lateralLinks.length > 0 && (
-        <div className="mx-5 mb-3 flex flex-wrap items-center gap-1.5">
+        <div className="mx-6 mt-4 flex flex-wrap items-center gap-1.5">
           {lateralLinks.map((l) => (
             <LateralChip
               key={`${l.kind}-${l.otherFeatureId}`}
@@ -604,40 +643,29 @@ export function CategoryCard({
         </div>
       )}
 
-      {/* Phase 8c — Feature first_principles band.
-          Mirrors pain.root_causes treatment. Only renders when the
-          feature carries principles in its causal_chain. Faint
-          lane-color background so it visually belongs to the
-          mechanism band (between the bridge pill above + the
-          lineup below). */}
+      {/* Phase 8c — Feature first_principles. Replaces the colored band
+          with a quiet hairline-anchored zone: hairline above, sentence-
+          case label, clean text rows (no bullet dots). Visually belongs
+          to the mechanism band without color-shouting. */}
       {feature && feature.first_principles && feature.first_principles.length > 0 && (
         <div
-          className="mx-5 mb-4 px-3 py-2"
-          style={{
-            background: `${FEATURE_COLOR}08`,
-            border: `1px solid ${FEATURE_COLOR}1A`,
-            borderRadius: appleVibe.radius.sm,
-          }}
+          className="mx-6 mt-4 mb-4 pt-3"
+          style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
         >
           <div
-            className="mb-1 text-[9.5px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: FEATURE_COLOR }}
+            className="mb-1.5 text-[9.5px] font-medium tracking-tight"
+            style={{ color: appleVibe.text.faint }}
           >
-            First principles · why this works
+            Why this works
           </div>
-          <ul className="space-y-0.5">
+          <ul className="space-y-1">
             {feature.first_principles.slice(0, 5).map((p, i) => (
               <li
                 key={`${i}-${p}`}
-                className="flex items-start gap-1.5 text-[11.5px] leading-snug"
+                className="text-[11.5px] leading-snug"
                 style={{ color: appleVibe.text.secondary }}
               >
-                <span
-                  className="mt-1 inline-block h-1 w-1 flex-shrink-0 rounded-full"
-                  style={{ background: FEATURE_COLOR }}
-                  aria-hidden
-                />
-                <span>{p}</span>
+                {p}
               </li>
             ))}
           </ul>
@@ -645,9 +673,10 @@ export function CategoryCard({
       )}
 
       {/* Mechanism Lineup */}
-      <div className="px-5 pb-4">
+      <div className="px-6 pb-5 pt-1">
         <MechanismLineup
           variations={sortedVariations}
+          featureId={chain.featureId}
           loading={detailLoading}
           envelope={detail?.envelope}
           hasScores={hasScores}
@@ -664,7 +693,7 @@ export function CategoryCard({
 
       {/* Footer — approve bet action */}
       <footer
-        className="flex items-center justify-between gap-3 px-5 py-2.5"
+        className="flex items-center justify-between gap-3 px-6 py-3"
         style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
       >
         <span
@@ -717,56 +746,49 @@ function ProblemHalf({
     <motion.button
       type="button"
       onClick={onClick}
-      whileHover={{
-        y: -1,
-        transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
-      }}
-      whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
-      className="text-left transition-shadow duration-200 ease-out"
-      style={{
-        background: appleVibe.surface.cardElevated,
-        border: `1px solid ${PAIN_COLOR}22`,
-        borderRadius: appleVibe.radius.md,
-        padding: "12px 14px",
-        boxShadow: appleVibe.shadow.chip,
-      }}
+      whileHover={{ opacity: 0.78, transition: { duration: 0.15 } }}
+      whileTap={{ scale: 0.998, transition: { duration: 0.08 } }}
+      className="block w-full text-left"
     >
       <div className="flex items-center gap-1.5">
-        <ArrowDown
-          className="h-3 w-3 flex-shrink-0"
-          strokeWidth={2.5}
-          style={{ color: PAIN_COLOR }}
+        <span
+          className="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full"
+          style={{ background: PAIN_COLOR }}
+          aria-hidden
         />
         <span
-          className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-          style={{ color: PAIN_COLOR }}
+          className="text-[10.5px] font-medium tracking-tight"
+          style={{ color: appleVibe.text.tertiary }}
         >
-          Problem · minimize
+          Problem
         </span>
       </div>
       <h4
-        className="mt-1 text-[13.5px] font-semibold leading-tight tracking-tight line-clamp-2"
+        className="mt-2 text-[14px] font-semibold leading-snug line-clamp-2"
         style={{
           color: appleVibe.text.primary,
-          letterSpacing: "-0.01em",
+          letterSpacing: "-0.018em",
+          fontFamily: appleVibe.font.display,
         }}
       >
         {pain?.name ?? painName}
       </h4>
       {pain?.negative_outcome && (
         <p
-          className="mt-1 text-[11.5px] leading-snug line-clamp-2"
+          className="mt-1.5 text-[11.5px] leading-snug line-clamp-2"
           style={{ color: appleVibe.text.secondary }}
         >
-          <span className="italic">leads to</span> →{" "}
           {pain.negative_outcome}
         </p>
       )}
       {Array.isArray(pain?.root_causes) && pain.root_causes.length > 0 && (
-        <div className="mt-2">
+        <div
+          className="mt-3 pt-2.5"
+          style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
+        >
           <div
-            className="text-[9px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: appleVibe.text.tertiary }}
+            className="text-[9.5px] font-medium tracking-tight"
+            style={{ color: appleVibe.text.faint }}
           >
             Root causes
           </div>
@@ -774,15 +796,10 @@ function ProblemHalf({
             {pain.root_causes.slice(0, 3).map((c, i) => (
               <li
                 key={i}
-                className="flex items-start gap-1.5 text-[11px]"
+                className="text-[11.5px] leading-snug"
                 style={{ color: appleVibe.text.secondary }}
               >
-                <span
-                  className="mt-1 h-1 w-1 flex-shrink-0 rounded-full"
-                  style={{ background: PAIN_COLOR, opacity: 0.5 }}
-                  aria-hidden
-                />
-                <span className="leading-snug">{c}</span>
+                {c}
               </li>
             ))}
           </ul>
@@ -807,56 +824,44 @@ function OutcomeHalf({
     <motion.button
       type="button"
       onClick={onClick}
-      whileHover={{
-        y: -1,
-        transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] },
-      }}
-      whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
-      className="text-left transition-shadow duration-200 ease-out"
-      style={{
-        background: appleVibe.surface.cardElevated,
-        border: `1px solid ${OUTCOME_COLOR}22`,
-        borderRadius: appleVibe.radius.md,
-        padding: "12px 14px",
-        boxShadow: appleVibe.shadow.chip,
-      }}
+      whileHover={{ opacity: 0.78, transition: { duration: 0.15 } }}
+      whileTap={{ scale: 0.998, transition: { duration: 0.08 } }}
+      className="block w-full text-left"
     >
       <div className="flex items-center gap-1.5">
-        <ArrowUp
-          className="h-3 w-3 flex-shrink-0"
-          strokeWidth={2.5}
-          style={{ color: OUTCOME_COLOR }}
+        <span
+          className="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full"
+          style={{ background: OUTCOME_COLOR }}
+          aria-hidden
         />
         <span
-          className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-          style={{ color: OUTCOME_COLOR }}
+          className="text-[10.5px] font-medium tracking-tight"
+          style={{ color: appleVibe.text.tertiary }}
         >
-          Outcome · maximize
+          Outcome
         </span>
       </div>
       <h4
-        className="mt-1 text-[13.5px] font-semibold leading-tight tracking-tight line-clamp-2"
+        className="mt-2 text-[14px] font-semibold leading-snug line-clamp-2"
         style={{
           color: appleVibe.text.primary,
-          letterSpacing: "-0.01em",
+          letterSpacing: "-0.018em",
+          fontFamily: appleVibe.font.display,
         }}
       >
         {outcome?.name ?? outcomeName}
       </h4>
       {outcome?.measured_by && (
         <p
-          className="mt-1 text-[11.5px] leading-snug line-clamp-2"
+          className="mt-1.5 text-[11.5px] leading-snug line-clamp-2"
           style={{ color: appleVibe.text.secondary }}
         >
-          <span className="italic">measured by</span> →{" "}
           {outcome.measured_by}
         </p>
       )}
-      {/* Phase 8d — INDICATORS list. Renders observable criteria
-          mirroring pain.root_causes treatment. Falls back to
-          [measured_by] when indicators are missing (legacy rooms).
-          Cap at 4 entries so the panel doesn't outgrow the
-          PROBLEM half visually. */}
+      {/* Phase 8d — INDICATORS list. Falls back to [measured_by] when
+          indicators are missing (legacy rooms). Cap at 4 entries so
+          this column stays balanced with the Problem column. */}
       {(() => {
         const list =
           outcome?.indicators && outcome.indicators.length > 0
@@ -866,26 +871,24 @@ function OutcomeHalf({
               : [];
         if (list.length === 0) return null;
         return (
-          <div className="mt-2">
+          <div
+            className="mt-3 pt-2.5"
+            style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
+          >
             <div
-              className="mb-1 text-[9px] font-semibold uppercase tracking-[0.12em]"
-              style={{ color: OUTCOME_COLOR }}
+              className="text-[9.5px] font-medium tracking-tight"
+              style={{ color: appleVibe.text.faint }}
             >
               Indicators
             </div>
-            <ul className="space-y-0.5">
+            <ul className="mt-1 space-y-0.5">
               {list.slice(0, 4).map((ind, i) => (
                 <li
                   key={`${i}-${ind}`}
-                  className="flex items-start gap-1.5 text-[11.5px] leading-snug"
+                  className="text-[11.5px] leading-snug"
                   style={{ color: appleVibe.text.secondary }}
                 >
-                  <span
-                    className="mt-1 inline-block h-1 w-1 flex-shrink-0 rounded-full"
-                    style={{ background: OUTCOME_COLOR }}
-                    aria-hidden
-                  />
-                  <span>{ind}</span>
+                  {ind}
                 </li>
               ))}
             </ul>
@@ -900,6 +903,7 @@ function OutcomeHalf({
 
 function MechanismLineup({
   variations,
+  featureId,
   loading,
   envelope,
   hasScores,
@@ -913,6 +917,9 @@ function MechanismLineup({
   onOpenFeatureDetail,
 }: {
   variations: LineupVariation[];
+  /** Op C — passed down to LineupRow so it can fire the mockup route
+   *  for elected variations. */
+  featureId: string;
   loading: boolean;
   envelope?: { lift_pct: number | null; placebo_verdict: "pass" | "fail" | "skip" | null; target_entity_name: string | null };
   /** Phase 7b — has the lineup ever been scored? Drives Score vs
@@ -1001,35 +1008,40 @@ function MechanismLineup({
           buttons. The Apple-tier choice is to keep the buttons in
           the header so the lineup row is just signal (no buttons
           per row except elect/reject which are tiny). */}
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <div
-            className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+            className="text-[10.5px] font-medium tracking-tight"
             style={{ color: appleVibe.text.tertiary }}
           >
-            Mechanism lineup · {variations.length} candidate
-            {variations.length === 1 ? "" : "s"}
+            Mechanism lineup
           </div>
-          {/* Phase 8b — "ranked" chip matching the reference. Visible
-              only when at least one variation carries a score so the
-              user knows the order is data-backed, not arbitrary. */}
+          <span
+            className="text-[10.5px] font-light tabular-nums"
+            style={{ color: appleVibe.text.faint }}
+          >
+            {variations.length}
+          </span>
+          {/* Phase 8b — "ranked" chip. Visible only when at least one
+              variation carries a score so the user knows the order is
+              data-backed, not arbitrary. */}
           {hasScores && (
             <span
-              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.10em]"
+              className="inline-flex translate-y-[-0.5px] items-center gap-0.5 rounded-full px-1.5 py-[2px] text-[9.5px] font-medium tracking-tight"
               style={{
-                background: `${OUTCOME_COLOR}14`,
+                background: `${OUTCOME_COLOR}10`,
                 color: OUTCOME_COLOR,
               }}
               title="Sorted by effectiveness score descending"
             >
               <Check className="h-2 w-2" strokeWidth={2.5} />
-              ranked
+              Ranked
             </span>
           )}
           {envelope?.lift_pct !== undefined && envelope.lift_pct !== null && (
             <span
               className="truncate text-[10px] font-light"
-              style={{ color: appleVibe.text.tertiary }}
+              style={{ color: appleVibe.text.faint }}
               title="Structural lift from the last scoring run"
             >
               · lift {(envelope.lift_pct * 100).toFixed(0)}% · placebo{" "}
@@ -1047,21 +1059,17 @@ function MechanismLineup({
             type="button"
             onClick={onScore}
             disabled={scoringBusy || refiningBusy}
-            whileHover={{
-              y: -1,
-              transition: { duration: 0.15, ease: [0.22, 1, 0.36, 1] },
-            }}
+            whileHover={{ y: -0.5, transition: { duration: 0.15 } }}
             whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
-            className="inline-flex items-center gap-1 transition-[background,color] duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1 transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50"
             style={{
-              background: "transparent",
+              background: appleVibe.surface.chip,
               color: appleVibe.text.secondary,
-              border: `1px solid ${appleVibe.stroke.medium}`,
               borderRadius: appleVibe.radius.pill,
-              padding: "3px 9px",
-              fontSize: "10px",
-              fontWeight: 600,
-              letterSpacing: "0.02em",
+              padding: "4px 10px",
+              fontSize: "10.5px",
+              fontWeight: 500,
+              letterSpacing: "-0.005em",
             }}
             title={
               hasScores
@@ -1149,6 +1157,7 @@ function MechanismLineup({
             key={v.id}
             rank={i + 1}
             variation={v}
+            featureId={featureId}
             onElect={onElect}
             onReject={onReject}
           />
@@ -1169,11 +1178,16 @@ function MechanismLineup({
 function LineupRow({
   rank,
   variation: v,
+  featureId,
   onElect,
   onReject,
 }: {
   rank: number;
   variation: LineupVariation;
+  /** Op C — entity id for firing the mockup route on elected
+   *  variations. The LineupRow can render the inline mockup inside
+   *  its expanded section without bubbling state up. */
+  featureId: string;
   /** Phase 7b — inline disposition handlers. The id arg lets the
    *  parent route to /variation/disposition without the row needing
    *  to know about the entity. */
@@ -1433,9 +1447,208 @@ function LineupRow({
               </span>
             </div>
           )}
+          {/* Op C — inline thumbnail mockup for elected variations.
+              Surfaces the interface design WHERE the user expanded
+              the mechanism, instead of behind the drawer's
+              Deliverables modal. */}
+          {isElected && v.id && (
+            <InlineMockupPreview
+              entityId={featureId}
+              variationId={v.id}
+              initialHtml={v.mockup_thumbnail_html}
+            />
+          )}
         </div>
       )}
     </li>
+  );
+}
+
+// ── Inline mockup preview (Op C) ───────────────────────────────────
+//
+// Renders a 480×320 thumbnail mockup of an elected variation directly
+// inside the expanded variation row on the CategoryCard. Self-fetches
+// from /api/brainstorm/item/variation/mockup at format=thumbnail when
+// no cached value is present.
+//
+// Three states:
+//   - no cached mockup → "Generate inline mockup" button
+//   - generating       → loader pill
+//   - rendered         → sandboxed iframe + small "Open fullscreen"
+//                         link (a future enhancement could route to
+//                         the Deliverables modal; for now it just
+//                         hints at where the full version lives)
+//
+// Visual: top-tier — Apple-vibe pill button with Layout icon, soft
+// hairline border on the iframe, gradient-fade label badge above.
+
+function InlineMockupPreview({
+  entityId,
+  variationId,
+  initialHtml,
+}: {
+  entityId: string;
+  variationId: string;
+  initialHtml?: string;
+}) {
+  const [html, setHtml] = useState<string>(initialHtml ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchMockup = useCallback(
+    async (force = false) => {
+      if (busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          "/api/brainstorm/item/variation/mockup",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              entityId,
+              variationId,
+              format: "thumbnail",
+              mode: force ? "force" : "default",
+            }),
+          },
+        );
+        const j = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          mockup_html?: string;
+        };
+        if (!res.ok) {
+          setError(j.error ?? "Mockup generation failed.");
+          return;
+        }
+        if (typeof j.mockup_html === "string") setHtml(j.mockup_html);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Network error.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, entityId, variationId],
+  );
+
+  // No cached html + user hasn't clicked → button only.
+  if (!html && !busy && !error) {
+    return (
+      <div className="mt-1.5">
+        <motion.button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void fetchMockup(false);
+          }}
+          whileHover={{ y: -1, transition: { duration: 0.15 } }}
+          whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
+          className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(124,58,237,0.08)]"
+          style={{
+            background: appleVibe.surface.card,
+            color: appleVibe.accent.primary,
+            border: `1px solid ${appleVibe.accent.primary}40`,
+            borderRadius: appleVibe.radius.pill,
+            padding: "4px 10px",
+            fontSize: "10.5px",
+            fontWeight: 600,
+            letterSpacing: "0.02em",
+            boxShadow: appleVibe.shadow.chip,
+            fontFamily: appleVibe.font.stack,
+          }}
+          title="Generate a 480×320 HTML mockup of this variation's interface — shows inline below"
+        >
+          <Sparkles
+            className="h-3 w-3"
+            strokeWidth={2.2}
+            style={{ color: appleVibe.accent.primary }}
+          />
+          Generate inline mockup
+        </motion.button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1.5 flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span
+          className="text-[9px] font-semibold uppercase tracking-[0.12em]"
+          style={{ color: appleVibe.accent.primary }}
+        >
+          Interface mockup
+        </span>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void fetchMockup(true);
+          }}
+          disabled={busy}
+          className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium transition-opacity disabled:opacity-50"
+          style={{
+            color: appleVibe.text.tertiary,
+            background: "transparent",
+          }}
+          title="Regenerate"
+        >
+          {busy ? (
+            <Loader2
+              className="h-2.5 w-2.5 animate-spin"
+              strokeWidth={2.4}
+            />
+          ) : (
+            <RefreshCw className="h-2.5 w-2.5" strokeWidth={2.4} />
+          )}
+          {busy ? "Generating…" : "Regenerate"}
+        </button>
+      </div>
+      {error && (
+        <p
+          className="text-[10.5px] font-light"
+          style={{ color: "rgba(127,29,29,0.95)" }}
+        >
+          {error}
+        </p>
+      )}
+      {html ? (
+        <iframe
+          title="Variation interface mockup"
+          srcDoc={html}
+          sandbox=""
+          className="w-full"
+          style={{
+            background: "#ffffff",
+            border: `1px solid ${appleVibe.stroke.hairline}`,
+            borderRadius: appleVibe.radius.md,
+            height: "320px",
+            boxShadow: appleVibe.shadow.chip,
+          }}
+        />
+      ) : busy ? (
+        <div
+          className="flex items-center justify-center gap-2"
+          style={{
+            background: appleVibe.surface.cardElevated,
+            border: `1px dashed ${appleVibe.stroke.medium}`,
+            borderRadius: appleVibe.radius.md,
+            height: "320px",
+          }}
+        >
+          <Loader2
+            className="h-4 w-4 animate-spin"
+            style={{ color: appleVibe.text.tertiary }}
+          />
+          <span
+            className="text-[11.5px] font-light italic"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Generating mockup — usually 10-20 seconds.
+          </span>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

@@ -51,11 +51,24 @@ export interface GenerateMockupArgs {
    *  LLM stays anchored. */
   roomTitle?: string | null;
   constraints?: OperationalConstraints | null;
+  /** Op C — output format. "fullscreen" (default) = full HTML doc
+   *  for the modal's iframe. "thumbnail" = 480×320 single-screen
+   *  version meant for inline display below an expanded variation
+   *  row on the CategoryCard. The two formats are persisted in
+   *  separate fields so the user can flip between them without
+   *  re-spending an LLM call. */
+  format?: "fullscreen" | "thumbnail";
 }
 
 export async function generateVariationMockup(
   args: GenerateMockupArgs,
 ): Promise<MockupResult> {
+  const format = args.format ?? "fullscreen";
+  const formatBlock =
+    format === "thumbnail"
+      ? `\n\nTHUMBNAIL FORMAT — additional constraints:\n- Set <body style="width: 480px; height: 320px; margin: 0; padding: 16px; overflow: hidden;"> so the iframe fits the inline preview without scrollbars.\n- Show ONE moment: the single screen that best characterizes what this mechanism does for the user. Not a navigation hub, not a multi-section layout.\n- Big primary affordance + 1-2 lines of supporting context + minimal chrome.\n- Typography: 14-16px body, 18-22px primary heading, 12px metadata. Generous line height (1.5+).\n- Color: 1 accent color used sparingly (one primary button, maybe one badge). Everything else greyscale.\n- The user will see this as a small preview embedded in their workspace — make it READ at small size, not be busy.`
+      : "";
+
   const sys = `You design static HTML interface mockups. Output ONE complete HTML document that renders in a sandboxed iframe.
 
 CONSTRAINTS — VIOLATIONS WILL BE STRIPPED AT INGEST:
@@ -67,9 +80,9 @@ CONSTRAINTS — VIOLATIONS WILL BE STRIPPED AT INGEST:
 
 DESIGN BIAS:
 - Apple-tier visual restraint: lots of whitespace, soft shadows, hairline borders, rounded corners (12-20px), muted palette, generous line height (1.5+).
-- 1200px max content width, centered.
+- ${format === "thumbnail" ? "480×320 viewport — see THUMBNAIL FORMAT below" : "1200px max content width, centered."}
 - Show CONCRETE sample content matching the variation's domain. Avoid lorem ipsum.
-- Mockup is one screen / one moment — primary affordance + supporting context. Not a full app.
+- Mockup is one screen / one moment — primary affordance + supporting context. Not a full app.${formatBlock}
 
 OUTPUT JSON:
 {

@@ -149,6 +149,28 @@ interface ItemVariation {
   /** Phase 13 — cached exportable AI prompt for the variation. */
   export_prompt?: string;
   export_prompt_generated_at?: string;
+  /** Op A — cached PR/FAQ description doc. */
+  description_doc?: string;
+  description_doc_generated_at?: string;
+  /** Op B — round-trip prompt optimization history when present. */
+  export_prompt_history?: {
+    prompt_v1: string;
+    preview_v1: {
+      output: string;
+      judge_score: number;
+      judge_verdict: "ship" | "revise";
+      judge_critique: string;
+    };
+    prompt_v2?: string;
+    preview_v2?: {
+      output: string;
+      judge_score: number;
+      judge_verdict: "ship" | "revise";
+      judge_critique: string;
+    };
+    final_prompt: string;
+    iterations: number;
+  };
 }
 
 interface ItemPlanning {
@@ -2379,6 +2401,8 @@ function VariationDeliverablesLauncher({
           variationName={variation.name}
           initialMockupHtml={variation.mockup_html}
           initialExportPrompt={variation.export_prompt}
+          initialDescriptionDoc={variation.description_doc}
+          initialExportPromptHistory={variation.export_prompt_history}
         />
       )}
     </>

@@ -11,17 +11,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
-import { generateVariationExportPrompt } from "@/lib/objective-canvas/generate-export-prompt";
+import {
+  generateVariationExportPrompt,
+  runExportPromptRoundTrip,
+} from "@/lib/objective-canvas/generate-export-prompt";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 
 export const runtime = "nodejs";
-export const maxDuration = 45;
+export const maxDuration = 90;
 
 interface Body {
   entityId?: string;
   variationId?: string;
   framing?: "implementation" | "design" | "research";
   mode?: "default" | "force";
+  /** Op B — when true, run the round-trip optimizer (generate → test
+   *  → judge → conditional revise → re-test → re-judge). Costs +3 LLM
+   *  calls worst case; latency ~30-40s. Off by default — the route
+   *  stays cheap unless the user opts in. */
+  optimize?: boolean;
 }
 
 export async function POST(req: NextRequest) {
@@ -35,6 +43,7 @@ export async function POST(req: NextRequest) {
   const variationId =
     typeof body?.variationId === "string" ? body.variationId : "";
   const force = body?.mode === "force";
+  const optimize = body?.optimize === true;
   const framing = body?.framing ?? "implementation";
   if (!entityId || !variationId) {
     return NextResponse.json(
@@ -78,12 +87,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Cache hit short-circuit. When the caller asks for optimize=true
+  // but we only have the legacy single-shot prompt cached, treat
+  // that as a miss so we rebuild with the full pipeline.
   if (!force && typeof variation.export_prompt === "string" && variation.export_prompt.length > 0) {
-    return NextResponse.json({
-      cached: true,
-      export_prompt: variation.export_prompt,
-      export_prompt_generated_at: variation.export_prompt_generated_at ?? null,
-    });
+    if (!optimize || variation.export_prompt_history) {
+      return NextResponse.json({
+        cached: true,
+        export_prompt: variation.export_prompt,
+        export_prompt_generated_at: variation.export_prompt_generated_at ?? null,
+        export_prompt_history: variation.export_prompt_history ?? null,
+      });
+    }
   }
 
   // Resolve objective text + room title + pain (best-effort).
@@ -111,17 +126,29 @@ export async function POST(req: NextRequest) {
     // Soft-fail.
   }
 
-  let result;
+  const genArgs = {
+    variation,
+    entityName: typeof entity.name === "string" ? entity.name : "(unknown)",
+    objectiveText,
+    roomTitle,
+    painText,
+    constraints: readConstraints(space.synthesis_data),
+    framing,
+  };
+
+  // Op B — two paths:
+  //   optimize=false → single-shot generator (legacy + cheap default)
+  //   optimize=true  → full round-trip: gen → test → judge → revise?
+  let finalPrompt: string;
+  let history: import("@/lib/objective-canvas/generate-export-prompt").RoundTripResult | undefined;
   try {
-    result = await generateVariationExportPrompt({
-      variation,
-      entityName: typeof entity.name === "string" ? entity.name : "(unknown)",
-      objectiveText,
-      roomTitle,
-      painText,
-      constraints: readConstraints(space.synthesis_data),
-      framing,
-    });
+    if (optimize) {
+      history = await runExportPromptRoundTrip(genArgs);
+      finalPrompt = history.final_prompt;
+    } else {
+      const single = await generateVariationExportPrompt(genArgs);
+      finalPrompt = single.prompt;
+    }
   } catch (err) {
     return NextResponse.json(
       {
@@ -137,8 +164,9 @@ export async function POST(req: NextRequest) {
     v.id === variationId
       ? {
           ...v,
-          export_prompt: result.prompt,
+          export_prompt: finalPrompt,
           export_prompt_generated_at: generatedAt,
+          ...(history ? { export_prompt_history: history } : {}),
         }
       : v,
   );
@@ -158,7 +186,8 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({
-    export_prompt: result.prompt,
+    export_prompt: finalPrompt,
     export_prompt_generated_at: generatedAt,
+    export_prompt_history: history ?? null,
   });
 }

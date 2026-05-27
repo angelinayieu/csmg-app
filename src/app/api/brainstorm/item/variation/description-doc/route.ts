@@ -1,35 +1,25 @@
-// ── POST /api/brainstorm/item/variation/mockup ────────────────────
+// ── POST /api/brainstorm/item/variation/description-doc ───────────
 //
-// Phase 12 — generate a static HTML mockup of a variation's
-// interface. Persists on
-// entities.expanded_detail.variations[i].mockup_html, idempotent
-// (cache hit returns the existing mockup; mode=force regenerates).
+// Op A — generate a PR/FAQ-style description doc for a variation.
+// Idempotent (cache hit returns existing; mode=force regenerates).
+// Refine flag enables a critic+rewrite pass (+1 LLM call).
 //
-// Body: { entityId, variationId, mode?: "default" | "force" }
-//
-// Returns: { mockup_html, mockup_generated_at, title }
-//
-// Security: the LLM output goes through sanitizeHtml() to strip
-// <script> tags, event handlers, and dangerous tags. The client
-// renders it in an iframe with sandbox="" so even residual hostile
-// content can't execute. Belt + suspenders.
+// Body: { entityId, variationId, refine?: boolean, mode?: "default"|"force" }
 
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
-import { generateVariationMockup } from "@/lib/objective-canvas/generate-mockup";
+import { generateVariationDescriptionDoc } from "@/lib/objective-canvas/generate-description-doc";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 
 export const runtime = "nodejs";
-export const maxDuration = 45;
+export const maxDuration = 60;
 
 interface Body {
   entityId?: string;
   variationId?: string;
+  refine?: boolean;
   mode?: "default" | "force";
-  /** Op C — output format. Fullscreen for the modal, thumbnail for
-   *  inline preview on the CategoryCard's expanded variation row. */
-  format?: "fullscreen" | "thumbnail";
 }
 
 export async function POST(req: NextRequest) {
@@ -42,9 +32,8 @@ export async function POST(req: NextRequest) {
   const entityId = typeof body?.entityId === "string" ? body.entityId : "";
   const variationId =
     typeof body?.variationId === "string" ? body.variationId : "";
+  const refine = body?.refine === true;
   const force = body?.mode === "force";
-  const format: "fullscreen" | "thumbnail" =
-    body?.format === "thumbnail" ? "thumbnail" : "fullscreen";
   if (!entityId || !variationId) {
     return NextResponse.json(
       { error: "entityId + variationId required" },
@@ -55,12 +44,9 @@ export async function POST(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = auth.supabase as any;
 
-  // Load entity + ownership.
   const { data: entity } = await db
     .from("entities")
-    .select(
-      "id, name, space_id, parent_sub_objective_id, causal_chain, expanded_detail",
-    )
+    .select("id, name, space_id, parent_sub_objective_id, expanded_detail")
     .eq("id", entityId)
     .maybeSingle();
   if (!entity) {
@@ -68,7 +54,7 @@ export async function POST(req: NextRequest) {
   }
   const { data: space } = await db
     .from("spaces")
-    .select("id, user_id, synthesis_data")
+    .select("id, user_id, description, input_text, synthesis_data")
     .eq("id", entity.space_id)
     .maybeSingle();
   if (!space || space.user_id !== auth.user.id) {
@@ -90,38 +76,25 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Cache hit — skip the LLM unless forced. The fullscreen and
-  // thumbnail formats live in separate fields so they don't shadow
-  // each other; reading the right field per requested format.
-  if (!force) {
-    if (
-      format === "fullscreen" &&
-      typeof variation.mockup_html === "string" &&
-      variation.mockup_html.length > 0
-    ) {
-      return NextResponse.json({
-        cached: true,
-        format,
-        mockup_html: variation.mockup_html,
-        mockup_generated_at: variation.mockup_generated_at ?? null,
-      });
-    }
-    if (
-      format === "thumbnail" &&
-      typeof variation.mockup_thumbnail_html === "string" &&
-      variation.mockup_thumbnail_html.length > 0
-    ) {
-      return NextResponse.json({
-        cached: true,
-        format,
-        mockup_html: variation.mockup_thumbnail_html,
-        mockup_generated_at: variation.mockup_thumbnail_generated_at ?? null,
-      });
-    }
+  // Cache hit short-circuit.
+  if (!force && typeof variation.description_doc === "string" && variation.description_doc.length > 0) {
+    return NextResponse.json({
+      cached: true,
+      description_doc: variation.description_doc,
+      description_doc_generated_at: variation.description_doc_generated_at ?? null,
+    });
   }
 
-  // Optional context: room title + first pain text. Cheap lookups
-  // wrapped in try/catch so a missing parent doesn't kill the gen.
+  // Resolve objective text + sibling elections for composition framing.
+  const objectiveText: string =
+    (typeof space.description === "string" && space.description.trim()) ||
+    (typeof space.input_text === "string" && space.input_text.trim()) ||
+    "(no objective text)";
+  const siblingElections = detail.variations
+    .filter((v) => v.id !== variationId && v.disposition === "elected")
+    .slice(0, 4)
+    .map((v) => ({ name: v.name, description: v.description }));
+
   let roomTitle: string | null = null;
   let painText: string | null = null;
   try {
@@ -133,52 +106,43 @@ export async function POST(req: NextRequest) {
         .maybeSingle();
       if (sub) {
         roomTitle = typeof sub.title === "string" ? sub.title : null;
-        painText = typeof sub.top_negative_outcome === "string"
-          ? sub.top_negative_outcome
-          : null;
+        painText = typeof sub.top_negative_outcome === "string" ? sub.top_negative_outcome : null;
       }
     }
   } catch {
-    // Soft-fail — context lookups are best-effort.
+    // Soft-fail.
   }
 
-  let mockup;
+  let result;
   try {
-    mockup = await generateVariationMockup({
+    result = await generateVariationDescriptionDoc({
       variation,
       entityName: typeof entity.name === "string" ? entity.name : "(unknown)",
-      painText,
+      objectiveText,
       roomTitle,
+      painText,
       constraints: readConstraints(space.synthesis_data),
-      format,
+      siblingElections: siblingElections.length > 0 ? siblingElections : undefined,
+      refine,
     });
   } catch (err) {
     return NextResponse.json(
       {
-        error: "mockup generation failed",
+        error: "description-doc generation failed",
         detail: sanitizeErrorMessage(err),
       },
       { status: 500 },
     );
   }
 
-  // Persist into the matching field for the requested format. The
-  // two formats live in separate fields so generating one doesn't
-  // invalidate the other — user can switch tabs without re-spending.
   const generatedAt = new Date().toISOString();
   const nextVariations = detail.variations.map((v) =>
     v.id === variationId
-      ? format === "thumbnail"
-        ? {
-            ...v,
-            mockup_thumbnail_html: mockup.html,
-            mockup_thumbnail_generated_at: generatedAt,
-          }
-        : {
-            ...v,
-            mockup_html: mockup.html,
-            mockup_generated_at: generatedAt,
-          }
+      ? {
+          ...v,
+          description_doc: result.doc,
+          description_doc_generated_at: generatedAt,
+        }
       : v,
   );
   const nextDetail: ExpandedItemDetail = {
@@ -197,8 +161,7 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({
-    mockup_html: mockup.html,
-    mockup_generated_at: generatedAt,
-    title: mockup.title,
+    description_doc: result.doc,
+    description_doc_generated_at: generatedAt,
   });
 }
