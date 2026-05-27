@@ -52,8 +52,21 @@ interface Props {
    *  drives exit). The host owns the open state. */
   open: boolean;
   onClose: () => void;
-  /** The sub-objective whose decisions the notebook reads. */
-  subObjectiveId: string;
+  /** Phase 10b — which feed to read:
+   *   "room"  → GET /sub-objectives/[id]/decisions (Phase 9 path).
+   *             `subObjectiveId` required.
+   *   "space" → GET /space/[spaceId]/decisions (Phase 10b path).
+   *             `spaceId` required. Surfaces ALL events for the
+   *             space: pre-room (stage/clarifying/picking),
+   *             cross-room (workbench/themes/concepts), AND each
+   *             room's per-item work — tagged with room title so
+   *             the user can scan the whole canvas history.
+   *  Defaults to "room" for backward compat. */
+  mode?: "room" | "space";
+  /** The sub-objective whose decisions the notebook reads (mode="room"). */
+  subObjectiveId?: string;
+  /** The space whose decisions the notebook reads (mode="space"). */
+  spaceId?: string;
   /** Click-handler fired when the user clicks a row. Host routes
    *  to the relevant Category Card / drawer. Optional — when
    *  omitted, rows render but don't navigate. */
@@ -63,6 +76,9 @@ interface Props {
 export interface NotebookNavigateTarget {
   entityId?: string | null;
   variationId?: string | null;
+  /** Phase 10b — set when clicking a row from the space-scoped view;
+   *  host can navigate to the matching room before opening the drawer. */
+  subObjectiveId?: string | null;
 }
 
 const FILTERS: ReadonlyArray<{
@@ -101,7 +117,9 @@ const FILTERS: ReadonlyArray<{
 export function LabNotebookPanel({
   open,
   onClose,
+  mode = "room",
   subObjectiveId,
+  spaceId,
   onNavigate,
 }: Props) {
   const reduce = useReducedMotion();
@@ -112,8 +130,24 @@ export function LabNotebookPanel({
   const [error, setError] = useState<string | null>(null);
   const [filterIdx, setFilterIdx] = useState(0);
 
+  // Phase 10b — switch feed URL based on mode. Room mode uses the
+  // existing Phase 9 endpoint (filters by sub_objective_id). Space
+  // mode uses the new 10b endpoint that returns ALL space events —
+  // both per-room rows (sub_objective_id set) and space-level rows
+  // (sub_objective_id null: stage/clarifying/findings/themes).
+  const feedUrl =
+    mode === "space" && spaceId
+      ? `/api/brainstorm/space/${spaceId}/decisions`
+      : subObjectiveId
+        ? `/api/brainstorm/sub-objectives/${subObjectiveId}/decisions`
+        : null;
+
   const fetchPage = useCallback(
     async (opts: { cursor?: string | null; reset?: boolean }) => {
+      if (!feedUrl) {
+        setError("Missing notebook target.");
+        return;
+      }
       const filter = FILTERS[filterIdx];
       const qs = new URLSearchParams();
       if (opts.cursor) qs.set("cursor", opts.cursor);
@@ -121,9 +155,7 @@ export function LabNotebookPanel({
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(
-          `/api/brainstorm/sub-objectives/${subObjectiveId}/decisions?${qs.toString()}`,
-        );
+        const res = await fetch(`${feedUrl}?${qs.toString()}`);
         if (!res.ok) {
           const j = (await res.json().catch(() => ({}))) as {
             error?: string;
@@ -143,7 +175,7 @@ export function LabNotebookPanel({
         setLoading(false);
       }
     },
-    [subObjectiveId, filterIdx],
+    [feedUrl, filterIdx],
   );
 
   // Load on open + when filter changes.
@@ -214,7 +246,7 @@ export function LabNotebookPanel({
                   className="text-[10px] font-semibold uppercase tracking-[0.14em]"
                   style={{ color: appleVibe.text.tertiary }}
                 >
-                  Lab Notebook
+                  {mode === "space" ? "Canvas Notebook · All rooms" : "Lab Notebook"}
                 </div>
                 <h2
                   className="mt-1 truncate text-[18px] font-semibold leading-tight tracking-tight"
@@ -324,6 +356,10 @@ export function LabNotebookPanel({
                           onNavigate?.({
                             entityId: ev.subject.entity_id ?? null,
                             variationId: ev.subject.variation_id ?? null,
+                            // Phase 10b — forward room context so the
+                            // host (main canvas) can route to the
+                            // right room before opening the drawer.
+                            subObjectiveId: ev.subject.sub_objective_id ?? null,
                           })
                         }
                       />
@@ -438,6 +474,9 @@ function NotebookRow({
   event: NotebookEvent;
   onClick?: () => void;
 }) {
+  // Phase 10b — visualFor is action-driven; the row click handler
+  // now forwards sub_objective_id too so the host can route to the
+  // right room from the all-rooms feed.
   const visual = visualFor(ev.action);
   const Icon = visual.icon;
   const subject = formatSubject(ev);
@@ -818,6 +857,12 @@ function formatSubject(ev: NotebookEvent): string | null {
   }
   if (ev.subject.chain_label) {
     parts.push(ev.subject.chain_label);
+  }
+  // Phase 10b — show room context when populated. The space-scoped
+  // GET enriches this; the per-room GET leaves it null. Branchless
+  // append keeps the format consistent across both panels.
+  if (ev.subject.sub_objective_title) {
+    parts.push(`Room: ${ev.subject.sub_objective_title}`);
   }
   return parts.length > 0 ? parts.join(" — ") : null;
 }

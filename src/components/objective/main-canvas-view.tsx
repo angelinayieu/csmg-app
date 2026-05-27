@@ -13,8 +13,16 @@
 // underlines, hover popovers, optional margin-notes mode).
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ArrowRight, Check, Layers, RefreshCw, Sparkles } from "lucide-react";
+import {
+  ArrowRight,
+  BookOpen,
+  Check,
+  Layers,
+  RefreshCw,
+  Sparkles,
+} from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
   AnnotatedObjectiveCard,
@@ -29,6 +37,7 @@ import type { ClusterAnalysis } from "@/lib/objective-canvas/cluster-proposals";
 import type { ConceptMemoryEntry } from "@/lib/objective-canvas/concept-memory-feed";
 import type { RoomDecisionSummary } from "@/lib/objective-canvas/canvas-decisions";
 import { CanvasDecisionSurface } from "@/components/objective/canvas-decision-surface";
+import { LabNotebookPanel } from "@/components/objective/lab-notebook-panel";
 
 export interface ApprovedItem {
   id: string;
@@ -146,6 +155,13 @@ export function MainCanvasView({
       ? "themes"
       : "grid",
   );
+  // Phase 10b — canvas notebook (all-rooms view). Mirrors the per-room
+  // notebook UI but feeds from the space-scoped GET so the user can
+  // see pre-room work (stage transitions, picking, clarifying), cross-
+  // room work (workbench dispositions, theme distillations), and a
+  // running interleaved view of every room's events in one timeline.
+  const [notebookOpen, setNotebookOpen] = useState(false);
+  const router = useRouter();
   const [themes, setThemes] = useState<ClusterAnalysis | null>(
     initialSubObjectiveThemes,
   );
@@ -217,6 +233,38 @@ export function MainCanvasView({
 
   return (
     <div className="relative mx-auto w-full max-w-5xl">
+      {/* Phase 10b — canvas-level notebook trigger. Floats top-right so
+          it's always reachable without competing with the centerpiece.
+          Mirrors the room view's notebook button visually so the user
+          recognizes the affordance across surfaces. */}
+      <div className="absolute right-2 top-2 z-10">
+        <button
+          type="button"
+          onClick={() => setNotebookOpen(true)}
+          className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(15,23,42,0.04)]"
+          style={{
+            background: appleVibe.surface.card,
+            color: appleVibe.text.secondary,
+            border: `1px solid ${appleVibe.stroke.medium}`,
+            borderRadius: appleVibe.radius.pill,
+            padding: "5px 11px",
+            fontSize: "10.5px",
+            fontWeight: 600,
+            letterSpacing: "0.02em",
+            boxShadow: appleVibe.shadow.chip,
+            fontFamily: appleVibe.font.stack,
+          }}
+          title="Canvas Notebook — every event across every room"
+        >
+          <BookOpen
+            className="h-3 w-3"
+            strokeWidth={2}
+            style={{ color: appleVibe.accent.primary }}
+          />
+          Notebook
+        </button>
+      </div>
+
       {/* Annotated core objective — the centerpiece */}
       <AnnotatedObjectiveCard
         spaceId={spaceId}
@@ -362,6 +410,27 @@ export function MainCanvasView({
           preferredIntent={preferredIntent}
         />
       )}
+
+      {/* Phase 10b — space-scoped Lab Notebook. Same panel component
+          as the room view; mode="space" swaps the feed URL to the
+          new GET /api/brainstorm/space/[spaceId]/decisions. onNavigate
+          routes to the right sub-objective room when a per-room event
+          is clicked, so the canvas notebook acts as a jump menu into
+          deeper work. */}
+      <LabNotebookPanel
+        open={notebookOpen}
+        onClose={() => setNotebookOpen(false)}
+        mode="space"
+        spaceId={spaceId}
+        onNavigate={(target) => {
+          if (target.subObjectiveId) {
+            router.push(
+              `/app/objective/${spaceId}/sub/${target.subObjectiveId}`,
+            );
+            setNotebookOpen(false);
+          }
+        }}
+      />
     </div>
   );
 }
