@@ -39,6 +39,15 @@ export interface NotebookEventMeta {
   placebo_verdict?: "pass" | "fail" | "skip" | null;
   top_score?: number;
   effectiveness_score?: number;
+  /** Phase 11.1 — which evaluation tier produced top_score /
+   *  effectiveness_score. Surfaces as the MethodBadge in notebook
+   *  rows so the user always sees the method behind the number. */
+  evaluation_method?:
+    | "heuristic"
+    | "rubric"
+    | "evidence"
+    | "simulation"
+    | "tested";
   /** For elect/reject — the prior state if known. */
   prior_disposition?: "elected" | "rejected" | "deferred" | null;
   /** R&D / refine fields. */

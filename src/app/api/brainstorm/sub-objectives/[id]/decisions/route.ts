@@ -300,6 +300,15 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
           | undefined,
         top_score: numberOrUndefined(meta.top_score),
         effectiveness_score: numberOrUndefined(meta.effectiveness_score),
+        // Phase 11.1 — pass through the evaluation tier so notebook
+        // rows can render the MethodBadge alongside the score chip.
+        evaluation_method: stringOrUndefined(meta.evaluation_method) as
+          | "heuristic"
+          | "rubric"
+          | "evidence"
+          | "simulation"
+          | "tested"
+          | undefined,
         prior_disposition: stringOrUndefined(meta.prior_disposition) as
           | "elected"
           | "rejected"

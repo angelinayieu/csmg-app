@@ -91,6 +91,29 @@ export interface ItemVariation {
    *  elections change the room's mechanism graph — user can
    *  re-score from the panel header. */
   effectiveness_score?: number;
+  /** Phase 11.1 — which evaluation tier produced effectiveness_score.
+   *  Surfaces alongside the number everywhere via <MethodBadge /> so
+   *  the user always sees what method ran. Five tiers per lock-in
+   *  M10: heuristic / rubric / evidence / simulation / tested.
+   *  Undefined for variations scored before Phase 11.1 (treat as
+   *  "simulation" — that was the only path that existed). */
+  evaluation_method?:
+    | "heuristic"
+    | "rubric"
+    | "evidence"
+    | "simulation"
+    | "tested";
+  /** Phase 11.1 — when evaluation_method = "rubric", carries the
+   *  per-criterion grades (plausibility / addresses_pain /
+   *  constraint_fit / novelty / risk) + their one-sentence reasons.
+   *  Surfaced in the Lab page's Indicators table (Phase 11.2). */
+  rubric_criteria?: {
+    plausibility: { score: number; reason: string };
+    addresses_pain: { score: number; reason: string };
+    constraint_fit: { score: number; reason: string };
+    novelty: { score: number; reason: string };
+    risk: { score: number; reason: string };
+  };
   /** Phase 5b — provenance flag distinguishing R&D-engine-proposed
    *  candidates from human-generated or originally-LLM-generated
    *  variations. Lets the UI render the "Candidates from experiment"
@@ -228,19 +251,34 @@ export interface ExpandedItemDetail {
    *
    *  Soft signal — undefined means "never scored." */
   effectiveness_envelope?: {
-    /** The pain entity that was used as the target for MC propagation. */
+    /** Phase 11.1 — which evaluation tier produced this envelope.
+     *  Defaults to "simulation" for envelopes written before 11.1
+     *  (that was the only scoring path before this phase). The UI
+     *  branches on this to render the right artifact set (lift band
+     *  for sim, criteria table for rubric, citations for evidence). */
+    evaluation_method?:
+      | "heuristic"
+      | "rubric"
+      | "evidence"
+      | "simulation"
+      | "tested";
+    /** The pain entity that was used as the target for MC propagation.
+     *  Only meaningful when evaluation_method = "simulation". */
     target_entity_id: string | null;
     target_entity_name: string | null;
     target_edge_strength: number | null;
-    /** Signed lift % returned by simulate-variant-lift. */
+    /** Signed lift % returned by simulate-variant-lift.
+     *  Only meaningful when evaluation_method = "simulation". */
     lift_pct: number | null;
     lift_band: { p10: number; p50: number; p90: number } | null;
-    /** Specificity verdict from placebo refutation. */
+    /** Specificity verdict from placebo refutation.
+     *  Only meaningful when evaluation_method = "simulation". */
     placebo_verdict: "pass" | "fail" | "skip" | null;
     placebo_ratio: number | null;
     /** Envelope-level diagnostic status from the scoring run.
      *  "ok" when scores are valid; other values explain why the
-     *  panel can't show effective scores. */
+     *  panel can't show effective scores. "llm_failed" added in
+     *  Phase 11.1 for the rubric path. */
     status:
       | "ok"
       | "no_target"
@@ -248,7 +286,8 @@ export interface ExpandedItemDetail {
       | "lever_unreachable"
       | "sim_failed"
       | "not_feature"
-      | "no_expanded";
+      | "no_expanded"
+      | "llm_failed";
     status_detail: string | null;
     /** ISO of when this envelope was computed. Drives the "scored
      *  Xm ago" hint in the panel. */

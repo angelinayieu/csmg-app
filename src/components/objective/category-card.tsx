@@ -51,6 +51,7 @@ import {
   X,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { MethodBadge } from "./method-badge";
 import type { ChainTriple } from "@/lib/objective-canvas/compute-chains";
 import type {
   PainCardItem,
@@ -71,6 +72,16 @@ interface LineupVariation {
    *  the variant's unknowns. */
   open_questions?: string[];
   effectiveness_score?: number;
+  /** Phase 11.1 — which evaluation tier scored this row. Drives the
+   *  MethodBadge displayed inline beside the score so the user
+   *  always sees the method that produced the number. Undefined for
+   *  pre-11.1 rows (treat as simulation — the only old path). */
+  evaluation_method?:
+    | "heuristic"
+    | "rubric"
+    | "evidence"
+    | "simulation"
+    | "tested";
   disposition?: "elected" | "rejected" | "deferred" | null;
   provenance?: "rd_iteration";
   /** Phase 8b — root_cause this candidate was generated to address
@@ -209,6 +220,9 @@ export function CategoryCard({
         open_questions: v.open_questions,
         target_root_cause: v.target_root_cause,
         effectiveness_score: v.effectiveness_score,
+        // Phase 11.1 — thread the evaluation method through so the
+        // LineupRow can render <MethodBadge /> beside the score.
+        evaluation_method: v.evaluation_method,
         disposition: v.disposition,
         provenance: v.provenance,
       })),
@@ -1261,6 +1275,13 @@ function LineupRow({
             {score > 0 ? (score * 100).toFixed(0) : "—"}
           </span>
         </div>
+        {/* Phase 11.1c — method badge alongside the score so the user
+            always sees the evaluation tier that produced the number.
+            Compact mode (no tier label) keeps row chrome tight; the
+            full label surfaces on hover via the title attribute. */}
+        {score > 0 && v.evaluation_method && (
+          <MethodBadge method={v.evaluation_method} compact />
+        )}
         {/* Phase 8b — expand toggle. Always renders when there's
             extras to show; the chevron itself is the affordance. */}
         {hasExtras && (
