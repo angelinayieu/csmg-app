@@ -130,6 +130,15 @@ export interface PrototypeBriefContext {
    *  empty/undefined → block silently omitted (typical for pains,
    *  which have no upstream by graph design). */
   upstreamContext?: UpstreamItem[];
+  /** K4 Wire 2 — pre-rendered learnings block (from
+   *  buildLearningsBlock). The strongest signal for brief design:
+   *  when the user has already concluded that a mechanism didn't
+   *  work, the new brief MUST NOT propose testing that same
+   *  mechanism again — that's amnesia. Conversely, when a learning
+   *  reveals a working mechanism, the new brief should build on it
+   *  rather than re-derive it. Optional — empty when no experiments
+   *  in this space have reached a terminal status. */
+  learningsBlock?: string;
 }
 
 const DOMAIN_TEMPLATES: Record<DomainKind, string> = {
@@ -270,7 +279,17 @@ Return strict JSON.`;
       ? `\n\nUPSTREAM-BRIEF RULE: When designing signal_to_watch, ensure the observable validates whether this variation COMPOSES with the upstream elections above — not whether it works in isolation. If upstream has elected "tight feedback loops" on the pain, your signal should test whether THIS variation produces a tighter feedback loop (or fails to), not just whether the variation runs. Frame the hypothesis to reference the upstream mechanism by name when present.`
       : "";
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1000)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}\n\n${variationContext}${upstreamBlock}${upstreamBriefRule}${compositionBlock}${siblingBlock}\n\nOPEN QUESTION (the binary target):\n"""\n${ctx.open_question}\n"""\n\nDesign the prototype brief per the system instructions.`;
+  // K4 Wire 2 — learnings rule. The brief must respect what's
+  // already been tested. If the user concluded a mechanism didn't
+  // work, don't redesign an experiment around the same mechanism.
+  // If a learning shows a working mechanism, build on it. This is
+  // the highest-leverage anti-amnesia rule in the system.
+  const learningsRule =
+    ctx.learningsBlock && ctx.learningsBlock.length > 0
+      ? `\n\nLEARNINGS RULE: When prior briefs above conclude a mechanism didn't work, the new brief MUST NOT re-test that same mechanism — surface the prior finding in the hypothesis and pivot to an untested angle of the open question. When a learning shows a mechanism worked, build the new experiment on top of it rather than re-deriving the same signal.`
+      : "";
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1000)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}${learningsRule}\n\n${variationContext}${upstreamBlock}${upstreamBriefRule}${compositionBlock}${siblingBlock}\n\nOPEN QUESTION (the binary target):\n"""\n${ctx.open_question}\n"""\n\nDesign the prototype brief per the system instructions.`;
 
   const raw = await llmJSON<{
     domain?: unknown;

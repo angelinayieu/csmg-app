@@ -17,6 +17,10 @@ import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import { loadUpstreamContext } from "@/lib/objective-canvas/upstream-context";
 import { computeBriefStaleness } from "@/lib/objective-canvas/upstream-staleness";
+import {
+  loadRecentLearnings,
+  buildLearningsBlock,
+} from "@/lib/objective-canvas/load-recent-learnings";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -239,8 +243,30 @@ export async function POST(req: NextRequest) {
             (upstreamContext ?? []).some((u) => !!u.edge_mechanism),
         },
       },
-      () =>
-        generatePrototypeBrief({
+      async () => {
+        // K4 Wire 2 — space-wide concluded/abandoned briefs into
+        // brief design. The strongest anti-amnesia signal: when
+        // the user already concluded a mechanism didn't work, the
+        // new brief MUST NOT redesign around the same mechanism.
+        // The loader only returns terminal-status briefs (concluded
+        // / abandoned), so in-flight signal stays in siblingBriefs.
+        let learningsBlock: string | undefined;
+        try {
+          const allLearnings = await loadRecentLearnings({
+            db,
+            userId: auth.user.id,
+            spaceId: entity.space_id,
+            limit: 8,
+          });
+          if (allLearnings.length > 0) {
+            learningsBlock = buildLearningsBlock(allLearnings, {
+              crossSpace: false,
+            });
+          }
+        } catch {
+          // Non-fatal — brief generation continues without learnings.
+        }
+        return generatePrototypeBrief({
           variation,
           open_question: openQuestion,
           itemName: entity.name,
@@ -251,7 +277,9 @@ export async function POST(req: NextRequest) {
           composedDesign: composedDesignForCtx,
           siblingBriefs,
           upstreamContext,
-        }),
+          learningsBlock,
+        });
+      },
     );
   } catch (err) {
     return NextResponse.json(
