@@ -19,6 +19,7 @@ import {
   AnnotationChipRow,
   type AnnotationChipRowItem,
 } from "./annotation-chip-row";
+import { BaselineEditor } from "@/components/objective/baseline-editor";
 
 export interface OutcomeCardItem {
   id: string;
@@ -29,6 +30,21 @@ export interface OutcomeCardItem {
    *  outcome happened. Mirrors PainItem.root_causes. When missing,
    *  callers fall through to [measured_by]. */
   indicators?: string[];
+  /** Phase 11.6 — user-grounded baseline + target per indicator.
+   *  Keyed by indicator name. Empty when the user hasn't set any
+   *  baselines yet. Drives the "Set baselines" affordance + the
+   *  inline chip rendering ("baseline 8/10 → target 4/10"). */
+  indicator_baselines?: Record<
+    string,
+    {
+      baseline_value?: string;
+      target_value?: string;
+      unit?: string;
+      measurement_method?: string;
+      source: "user" | "llm";
+      updated_at: string;
+    }
+  >;
 }
 
 interface Props {
@@ -79,6 +95,11 @@ export function OutcomeCard({
   onHoverAnnotation,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // Phase 11.6 — baseline editor modal state. Self-contained inside
+  // the card so callers don't need to thread modal state through
+  // the lane view. Opens when the user clicks "Set baselines"
+  // inside the expanded card body.
+  const [baselineOpen, setBaselineOpen] = useState(false);
   // Always expandable when there's a detail drawer trigger — even
   // an outcome with no upstream edges has the depth surface worth
   // opening (definition, variations, planning).
@@ -328,6 +349,84 @@ export function OutcomeCard({
             </div>
           )}
 
+          {/* Phase 11.6 — indicator baselines surface. Renders when
+              the outcome has indicators[]. Shows existing baselines
+              as inline chips ("baseline 8 → target 4") and a button
+              to open the BaselineEditor for inline edits. */}
+          {item.indicators && item.indicators.length > 0 && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between">
+                <div
+                  className="text-[11px] font-semibold uppercase tracking-[0.12em]"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  Indicators
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setBaselineOpen(true);
+                  }}
+                  className="text-[10px] font-semibold uppercase tracking-[0.12em] transition-opacity hover:opacity-80"
+                  style={{ color: OUTCOME_COLOR }}
+                >
+                  Set baselines →
+                </button>
+              </div>
+              <ul className="mt-1.5 space-y-1">
+                {item.indicators.slice(0, 4).map((indName) => {
+                  const baseline = item.indicator_baselines?.[indName];
+                  const hasBaseline = !!(
+                    baseline?.baseline_value || baseline?.target_value
+                  );
+                  return (
+                    <li
+                      key={indName}
+                      className="flex items-baseline justify-between gap-2 text-[12px]"
+                    >
+                      <span
+                        className="line-clamp-1 font-medium"
+                        style={{ color: appleVibe.text.primary }}
+                      >
+                        {indName}
+                      </span>
+                      {hasBaseline && (
+                        <span
+                          className="flex-shrink-0 font-mono text-[10.5px] tabular-nums"
+                          style={{ color: appleVibe.text.tertiary }}
+                          title={
+                            baseline?.measurement_method
+                              ? `Method: ${baseline.measurement_method}`
+                              : undefined
+                          }
+                        >
+                          {baseline?.baseline_value ?? "—"}
+                          {baseline?.target_value && (
+                            <>
+                              {" → "}
+                              <span style={{ color: OUTCOME_COLOR }}>
+                                {baseline.target_value}
+                              </span>
+                            </>
+                          )}
+                          {baseline?.unit && (
+                            <span
+                              className="ml-1 italic"
+                              style={{ color: appleVibe.text.faint }}
+                            >
+                              {baseline.unit}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
           {onOpenDetail && (
             <button
               type="button"
@@ -342,6 +441,21 @@ export function OutcomeCard({
             </button>
           )}
         </motion.div>
+      )}
+
+      {/* Phase 11.6 — BaselineEditor modal. Mounted at the card root
+          so it can render outside the card's overflow boundary. Only
+          opens when the user clicks "Set baselines" inside the
+          expanded card body. */}
+      {item.indicators && item.indicators.length > 0 && (
+        <BaselineEditor
+          open={baselineOpen}
+          onClose={() => setBaselineOpen(false)}
+          entityId={item.id}
+          entityName={item.name}
+          indicators={item.indicators}
+          existingBaselines={item.indicator_baselines}
+        />
       )}
     </motion.li>
   );

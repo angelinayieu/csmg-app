@@ -56,7 +56,14 @@ export type DecisionAction =
   // or as Step 2 of the canvas autopilot). Metadata carries chain
   // counts + avg_chain_strength + orphans_closed so the notebook can
   // render "enriched 6 chains · avg strength 0.71 · 2 orphans closed".
-  | "chains_enriched";
+  | "chains_enriched"
+  // Phase 11.6 — indicator baseline set. Fires whenever the user
+  // (or the LLM via expansion-tree calibration_baseline auto-fill)
+  // sets a baseline + target on an outcome's indicator. Metadata
+  // carries indicator_name, baseline_value, target_value, unit,
+  // source: "user" | "llm" so the chat agent can reference the
+  // measurement context when reasoning about projected delta.
+  | "baseline_set";
 
 export interface LogDecisionArgs {
   userId: string;

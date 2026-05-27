@@ -128,6 +128,20 @@ export interface NotebookEventMeta {
    *  before this run and now have at least one. The Portfolio strip
    *  reads this to know when its orphan list shrinks. */
   orphans_closed?: number;
+  // ── Phase 11.6 — indicator baselines ──────────────────────────
+  /** baseline_set — which indicator received the new baseline. */
+  indicator_name?: string;
+  /** baseline_set — the baseline value as a string (it can be a
+   *  number, range, percentage, or even a self-rating like "8/10").
+   *  Stored as string for flexibility; client renders as-is. */
+  baseline_value?: string;
+  /** baseline_set — the target value the user / LLM wants to hit. */
+  target_value?: string;
+  /** baseline_set — unit string ("minutes/day", "bpm", "score 1-10"). */
+  baseline_unit?: string;
+  /** baseline_set — whether the user entered the value or the LLM
+   *  auto-filled it from a calibration_baseline expansion-tree node. */
+  baseline_source?: "user" | "llm";
 }
 
 export interface NotebookEvent {

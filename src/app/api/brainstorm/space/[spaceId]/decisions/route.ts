@@ -57,6 +57,8 @@ const ALLOWED_ACTIONS: ReadonlyArray<DecisionAction> = [
   "stage_transitioned",
   // Phase 11.4
   "chains_enriched",
+  // Phase 11.6
+  "baseline_set",
 ];
 
 const DEFAULT_LIMIT = 30;
@@ -415,6 +417,15 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
         new_chains_count: numberOrUndefined(meta.new_chains_count),
         avg_chain_strength: numberOrUndefined(meta.avg_chain_strength),
         orphans_closed: numberOrUndefined(meta.orphans_closed),
+        // Phase 11.6 — baseline metadata pass-through.
+        indicator_name: stringOrUndefined(meta.indicator_name),
+        baseline_value: stringOrUndefined(meta.baseline_value),
+        target_value: stringOrUndefined(meta.target_value),
+        baseline_unit: stringOrUndefined(meta.baseline_unit),
+        baseline_source: stringOrUndefined(meta.baseline_source) as
+          | "user"
+          | "llm"
+          | undefined,
       },
     };
   });
