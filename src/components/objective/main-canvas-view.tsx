@@ -38,6 +38,8 @@ import type { ConceptMemoryEntry } from "@/lib/objective-canvas/concept-memory-f
 import type { RoomDecisionSummary } from "@/lib/objective-canvas/canvas-decisions";
 import { CanvasDecisionSurface } from "@/components/objective/canvas-decision-surface";
 import { LabNotebookPanel } from "@/components/objective/lab-notebook-panel";
+import { HCDToggle } from "@/components/objective/hcd-toggle";
+import { CanvasAutopilotRunner } from "@/components/objective/canvas-autopilot-runner";
 
 export interface ApprovedItem {
   id: string;
@@ -233,11 +235,31 @@ export function MainCanvasView({
 
   return (
     <div className="relative mx-auto w-full max-w-5xl">
-      {/* Phase 10b — canvas-level notebook trigger. Floats top-right so
-          it's always reachable without competing with the centerpiece.
-          Mirrors the room view's notebook button visually so the user
-          recognizes the affordance across surfaces. */}
-      <div className="absolute right-2 top-2 z-10">
+      {/* Phase 10b/11 — canvas-level toolbar. Notebook trigger +
+          HCD toggle + Canvas Autopilot sit top-right as a paired
+          cluster so they read as one chrome. HCDToggle self-fetches
+          its state on mount; no prop plumbing required from the
+          parent. CanvasAutopilotRunner triggers the canvas-wide
+          score+refine loop and posts the parent autopilot_run
+          event so the notebook can group every per-chain event
+          under one header. */}
+      <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5">
+        <HCDToggle spaceId={spaceId} />
+        {/* Only render the canvas autopilot button when at least one
+            sub-objective room has been generated. Empty-canvas runs
+            would return zero targets anyway; hiding the button
+            removes a dead affordance. */}
+        {subs.some((s) => s.generatedAt) && (
+          <CanvasAutopilotRunner
+            spaceId={spaceId}
+            onAllComplete={() => {
+              // Refresh the page so the new candidates from refine
+              // appear in the per-room SubCards + the cross-room
+              // signals strip picks up the freshly-rescanned findings.
+              router.refresh();
+            }}
+          />
+        )}
         <button
           type="button"
           onClick={() => setNotebookOpen(true)}

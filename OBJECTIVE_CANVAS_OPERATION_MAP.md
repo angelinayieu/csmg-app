@@ -657,6 +657,52 @@ These last bits are now all closed enough for Phase 10 design.
 
 ---
 
+## 16. Phase 11+ lock-ins (decided 2026-05-27, post-10b)
+
+Architectural collapse to **three surfaces**: room · notebook+chat (always-open right rail) · Lab page (utility-first tables). Plus a canvas-wide autopilot trigger that pre-populates the substrate so chat has data to talk about.
+
+| # | Decision | Implication |
+|---|---|---|
+| **M1** | **Notebook is a persistent right rail (default open, 380px), not a slide-in modal** | Lift mount from page to `app/objective/[spaceId]/layout.tsx`; collapse to 32px strip via caret; state persisted in `localStorage` keyed by spaceId. Mobile (≤1100px) keeps current slide-in modal pattern. |
+| **M2** | **Canvas-wide autopilot is one button on main canvas** | New `CanvasAutopilotRunner` iterates sub-objectives sequentially → for each, runs existing score+refine per chain. Logs ONE parent `autopilot_run` event with `scope: "canvas"` + sub_objective_ids[]. Per-room score/rd_iterate events log as normal. Cancellable. Auto-fires `/api/brainstorm/space/analysis/scan` on completion so cross-room findings refresh. |
+| **M3** | **Default evaluation tier is Tier 2 (rubric), not Monte Carlo** | New `score-rubric.ts`. 5 criteria: plausibility, addresses_pain, constraint_fit, novelty, risk. Single LLM call per variation. Saves ~3s × N variations on every room creation. MC fires on demand only (chat tool or Lab page button). |
+| **M4** | **Universal `MethodBadge` component renders alongside every score** | Single file `~/components/objective/method-badge.tsx`. Emoji + tier label + optional ± band. Used in cards, notebook rows, drawer, Lab page. Variations get `evaluation_method` field. |
+| **M5** | **Lab page is a route, not a modal** | `/app/objective/[spaceId]/sub/[subId]/lab/[entityId]`. URL-addressable. Tables only — Indicators · Evidence · Simulation · Variation Diff · Actions. No charts. |
+| **M6** | **Cards summarize; Lab page elaborates** | Category card body height capped. No expanded card view. No inline indicator lists. Mechanism name + method badge + score chip + "Open Lab" link. |
+| **M7** | **Chat agent has 8 tools max** (per L7 in §11) | score_mechanism, score_per_indicator, open_experimentation_room, propose_real_test, set_disposition, set_constraints, research_item, acknowledge_finding. Hard wall on approve_bet, compose, room/generate, confirm, add, branch-from-concept. |
+| **M8** | **Notebook chat persistence: same `notebook_messages` table, keyed by scope** | `(space_id, sub_objective_id NULL allowed, message_id)`. Per-room chats keyed on sub_objective_id; canvas chats keyed on space_id alone. |
+| **M9** | **Cross-room agent conversations reuse the same chat surface** | In space mode, the chat reads space-scoped events + cross-room analysis findings + per-room state. No separate cross-room chat surface. |
+| **M10** | **Method badges proliferation rule: emoji + score + ± band, no color shouting** | Single emoji set: 🧠 Heuristic · 📋 Rubric · 📚 Evidence · 🎲 Simulated · 🧪 Tested. Restrained typography. Tables only for deeper data. |
+
+### Final outcome criteria (post-Phase-14)
+
+A user landing on the canvas MUST be able to:
+- See the notebook already open on the right
+- Click "Autopilot all rooms" and watch live progress + events populate
+- Ask chat any cross-room question and get specific (not generic) answers
+- See a method badge next to every score, everywhere
+- Click any score → open the Lab page → see indicator + evidence + sim tables
+- Toggle HCD and get persona-aware scoring
+- Generate an HTML/JSX mockup via chat
+- View the prompt library + positioning section in the Strategy Brief
+
+### Phase 11+ build plan (sequenced)
+
+| Phase | Scope | Lines | Status |
+|---|---|---|---|
+| **10c** *(in progress, parallel chat)* | Chat surface + 8 tool calls + `notebook_messages` table | ~900 | 🟡 |
+| **11.0** | Always-open notebook rail + Canvas Autopilot Runner | ~450 | ⏳ |
+| **11.1** | MethodBadge + `evaluation_method` field + Tier 2 rubric scorer | ~350 | ⏳ |
+| **11.2** | Lab page route (5 tables) + agent `open_experimentation_room` tool | ~600 | ⏳ |
+| **11.3** | Per-indicator scoring + Tier 3 evidence-grounded scorer | ~550 | ⏳ |
+| **12** | HCD toggle + persona generation + persona-aware rubric | ~250 | ⏳ |
+| **13** | Mockup generation tool callable from chat | ~300 | ⏳ |
+| **14** | Prompt library tab in Lab page + Positioning section in Strategy Brief | ~150 | ⏳ |
+
+Critical path (core UX): **10c → 11.0 → 11.1 → 11.2** = ~2300 lines.
+
+---
+
 ## 14. Changelog
 
 - **2026-05-27** Initial draft after Phase 9 ship. Captures pre-room, room, per-item, cross-room operations + Phase 10 design substrate.
