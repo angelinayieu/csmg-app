@@ -58,6 +58,16 @@ interface Props {
    *  drives exit). The host owns the open state. */
   open: boolean;
   onClose: () => void;
+  /** Phase 11.8b — chrome style.
+   *    "modal" (default, backward compat) — full-height slide-in
+   *      with backdrop. Suits one-off opens.
+   *    "rail-card" — floating card with margins from screen edges,
+   *      rounded corners, drop shadow, NO backdrop. The canvas
+   *      underneath stays interactive (user can pan/click the
+   *      whiteboard behind the card). The layout-level mount uses
+   *      this so the notebook always sits on the side without
+   *      locking the rest of the canvas. */
+  chrome?: "modal" | "rail-card";
   /** Phase 10b — which feed to read:
    *   "room"  → GET /sub-objectives/[id]/decisions (Phase 9 path).
    *             `subObjectiveId` required.
@@ -128,6 +138,7 @@ const FILTERS: ReadonlyArray<{
 export function LabNotebookPanel({
   open,
   onClose,
+  chrome = "modal",
   mode = "room",
   subObjectiveId,
   spaceId,
@@ -361,20 +372,30 @@ export function LabNotebookPanel({
     });
   }, [open, messages.length, reduce]);
 
+  // Phase 11.8b — rail-card chrome: floating card with margins, no
+  // backdrop, canvas underneath stays interactive. Modal chrome is
+  // the original full-height slide-in with backdrop. The two share
+  // the same body — only the outer aside positioning + backdrop
+  // presence differs.
+  const isRail = chrome === "rail-card";
   return (
     <AnimatePresence>
       {open && (
         <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0 : 0.2 }}
-            onClick={onClose}
-            className="fixed inset-0 z-40"
-            style={{ background: "rgba(15,23,42,0.32)" }}
-            aria-hidden
-          />
+          {/* Backdrop — only in modal mode. Rail-card mode skips it
+              entirely so the user can pan/click the canvas behind. */}
+          {!isRail && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduce ? 0 : 0.2 }}
+              onClick={onClose}
+              className="fixed inset-0 z-40"
+              style={{ background: "rgba(15,23,42,0.32)" }}
+              aria-hidden
+            />
+          )}
           <motion.aside
             role="dialog"
             aria-label="Lab Notebook"
@@ -385,13 +406,38 @@ export function LabNotebookPanel({
               duration: reduce ? 0 : 0.36,
               ease: [0.22, 1, 0.36, 1],
             }}
-            className="fixed inset-y-0 right-0 z-50 flex w-full flex-col overflow-hidden md:w-[480px]"
-            style={{
-              background: appleVibe.surface.card,
-              borderLeft: `1px solid ${appleVibe.stroke.hairline}`,
-              fontFamily: appleVibe.font.stack,
-              boxShadow: "0 0 40px -8px rgba(11,18,40,0.28)",
-            }}
+            className={
+              isRail
+                ? "fixed z-50 flex flex-col overflow-hidden"
+                : "fixed inset-y-0 right-0 z-50 flex w-full flex-col overflow-hidden md:w-[480px]"
+            }
+            style={
+              isRail
+                ? {
+                    // Floating card: margins from each edge so the
+                    // canvas peeks through on all four sides. Rounded
+                    // corners + soft drop shadow give the "hovering"
+                    // feel. Width matches the modal chrome's desktop
+                    // width minus a bit for visual breathing room.
+                    top: 16,
+                    right: 16,
+                    bottom: 16,
+                    width: 420,
+                    maxWidth: "calc(100vw - 32px)",
+                    background: appleVibe.surface.card,
+                    border: `1px solid ${appleVibe.stroke.hairline}`,
+                    borderRadius: 20,
+                    fontFamily: appleVibe.font.stack,
+                    boxShadow:
+                      "0 24px 64px -16px rgba(11,18,40,0.32), 0 4px 12px -4px rgba(11,18,40,0.10)",
+                  }
+                : {
+                    background: appleVibe.surface.card,
+                    borderLeft: `1px solid ${appleVibe.stroke.hairline}`,
+                    fontFamily: appleVibe.font.stack,
+                    boxShadow: "0 0 40px -8px rgba(11,18,40,0.28)",
+                  }
+            }
           >
             {/* Header */}
             <header

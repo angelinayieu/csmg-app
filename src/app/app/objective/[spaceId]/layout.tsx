@@ -44,7 +44,11 @@ interface Props {
  *  panel's actual width on desktop. Mobile keeps the modal pattern
  *  (no padding) because slide-in over content is fine when the
  *  viewport is narrow. */
-const RAIL_WIDTH_OPEN = 480;
+// Phase 11.8b — narrower rail-card so the canvas behind stays
+// generously visible. The card has 16px margin on each side, so the
+// content area gets (RAIL_WIDTH_OPEN + 16 + 16) of right-padding.
+const RAIL_WIDTH_OPEN = 420;
+const RAIL_MARGIN = 16;
 const RAIL_WIDTH_COLLAPSED = 32;
 const MOBILE_BREAKPOINT = 1100;
 
@@ -111,8 +115,13 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   // Until we've hydrated localStorage, render as if collapsed (no
   // padding) to avoid the page flashing with extra right-padding on
   // the first paint. The panel itself starts closed too — no flash.
+  // Phase 11.8b — when open, add room for the rail-card's two-sided
+  // margin (left + right + width). When collapsed, just the strip
+  // width (no margin doubling).
   const railWidth =
-    hydrated && open ? RAIL_WIDTH_OPEN : RAIL_WIDTH_COLLAPSED;
+    hydrated && open
+      ? RAIL_WIDTH_OPEN + RAIL_MARGIN * 2
+      : RAIL_WIDTH_COLLAPSED;
 
   return (
     <>
@@ -123,41 +132,42 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
         {children}
       </div>
 
-      {/* Collapsed strip — visible when notebook is closed. Subtle
-          vertical bar on the right edge with a book icon button.
-          Click expands the notebook. Same visual weight as the
-          page's other accent affordances. */}
+      {/* Collapsed strip — visible when notebook is closed. Phase
+          11.8b: matches the rail-card aesthetic (small floating
+          pill near the right edge, not a flush vertical bar).
+          Click expands the notebook back to the floating card. */}
       {hydrated && !open && (
-        <aside
-          className="fixed inset-y-0 right-0 z-30 flex flex-col items-center justify-start py-4"
+        <button
+          type="button"
+          onClick={() => persistOpen(true)}
+          className="fixed z-30 flex h-9 w-9 items-center justify-center rounded-full transition-all duration-150 ease-out hover:scale-105"
+          title="Open Lab Notebook"
+          aria-label="Open Lab Notebook"
           style={{
-            width: RAIL_WIDTH_COLLAPSED,
+            top: RAIL_MARGIN,
+            right: RAIL_MARGIN,
             background: appleVibe.surface.card,
-            borderLeft: `1px solid ${appleVibe.stroke.hairline}`,
-            fontFamily: appleVibe.font.stack,
+            border: `1px solid ${appleVibe.stroke.hairline}`,
+            color: appleVibe.accent.primary,
+            boxShadow:
+              "0 8px 24px -8px rgba(11,18,40,0.20), 0 2px 6px -2px rgba(11,18,40,0.08)",
           }}
         >
-          <button
-            type="button"
-            onClick={() => persistOpen(true)}
-            className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-[rgba(15,23,42,0.04)]"
-            title="Open Lab Notebook"
-            aria-label="Open Lab Notebook"
-            style={{ color: appleVibe.accent.primary }}
-          >
-            <BookOpen className="h-3.5 w-3.5" strokeWidth={2} />
-          </button>
-        </aside>
+          <BookOpen className="h-4 w-4" strokeWidth={2} />
+        </button>
       )}
 
-      {/* The notebook panel itself. Position: fixed (inherited from
-          the panel's chrome) so it floats over the right padding
-          we reserved on the wrapper. mode auto-detected from URL.
-          When the user closes it via the panel header X, we persist
-          that preference + show the collapsed strip. */}
+      {/* The notebook panel itself. Position: fixed via the panel's
+          rail-card chrome (16px margin from each edge, rounded
+          corners, drop shadow, no backdrop). Canvas underneath
+          stays interactive — user can pan/click the whiteboard
+          behind the card. mode auto-detected from URL. When closed
+          via the panel header X, we persist + show the collapsed
+          strip. */}
       <LabNotebookPanel
         open={hydrated && open}
         onClose={() => persistOpen(false)}
+        chrome="rail-card"
         mode={mode}
         spaceId={spaceId}
         subObjectiveId={subObjectiveId}
