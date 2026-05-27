@@ -136,16 +136,37 @@ export async function POST(req: NextRequest) {
 
   // ── 3. Build the LLM call ──
   const systemPrompt = buildSystemPrompt(ctx);
+  // Format the thread history so the agent can see WHAT it called +
+  // WHAT came back, not just a generic "ok/failed" line. Without the
+  // args + result data the agent forgets what it just changed and
+  // can't say "I marked variation X as elected" on the next turn.
   const historyBlock = ctx.recent_messages
     .map((m) => {
       if (m.role === "user") return `User: ${m.content ?? ""}`;
       if (m.role === "assistant") {
-        const tool = m.tool_call ? ` [tool: ${m.tool_call.tool_name}]` : "";
-        return `Assistant: ${m.content ?? ""}${tool}`;
+        if (m.tool_call) {
+          // Stringify args compactly so the LLM can see exactly what
+          // entityId / variationId / disposition the previous turn
+          // requested. Clip to keep history token cost bounded.
+          const argsStr = JSON.stringify(m.tool_call.args ?? {}).slice(0, 240);
+          const statusTag =
+            m.tool_call.status === "suggested" ? "suggested" : "executed";
+          return `Assistant: ${m.content ?? ""}\n  [tool ${statusTag}: ${m.tool_call.tool_name}(${argsStr})]`;
+        }
+        return `Assistant: ${m.content ?? ""}`;
       }
-      // role === "tool"
+      // role === "tool" — include the data payload so the agent can
+      // reference what concretely changed (variation_name, disposition,
+      // constraints summary, etc.). Bounded at 240 chars per row.
       const r = m.tool_result;
-      return `Tool result: ${r?.ok ? "ok" : "failed"}${r?.error ? ` (${r.error})` : ""}`;
+      if (!r) return "Tool result: (empty)";
+      if (!r.ok) {
+        return `Tool result: failed${r.error ? ` — ${r.error}` : ""}`;
+      }
+      const dataStr = r.data
+        ? JSON.stringify(r.data).slice(0, 240)
+        : "(no data)";
+      return `Tool result: ok — ${dataStr}`;
     })
     .join("\n");
   const userPrompt = `${historyBlock ? historyBlock + "\n\n" : ""}User: ${content}`;

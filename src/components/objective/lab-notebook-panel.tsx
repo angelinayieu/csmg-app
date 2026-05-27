@@ -28,7 +28,7 @@
 // Pagination via "Load older" — cursor is the OLDEST event's ISO
 // timestamp from the current page.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ArrowRight,
@@ -341,6 +341,21 @@ export function LabNotebookPanel({
   // Group events by day for the timeline display.
   const grouped = useMemo(() => groupByDay(events), [events]);
 
+  // Phase 10c-polish — auto-scroll the chat to the newest message
+  // whenever a turn lands. Without this, long conversations stay
+  // pinned to the top of the panel and the user has to scroll down
+  // manually after every send. Ref points at a sentinel <div /> at
+  // the bottom of the messages list.
+  const chatEndRef = useRef<HTMLLIElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    if (messages.length === 0) return;
+    chatEndRef.current?.scrollIntoView({
+      behavior: reduce ? "auto" : "smooth",
+      block: "nearest",
+    });
+  }, [open, messages.length, reduce]);
+
   return (
     <AnimatePresence>
       {open && (
@@ -454,50 +469,54 @@ export function LabNotebookPanel({
                   so the user reads recent conversation in context
                   before the structured event log below. Sticky input
                   is below the scroll area (in the panel chrome). */}
-              {(messages.length > 0 || messagesLoading) && (
-                <section className="mb-5">
-                  <div
-                    className="mb-2 flex items-center gap-2"
+              <section className="mb-5">
+                <div
+                  className="mb-2 flex items-center gap-2"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  <MessageCircle
+                    className="h-3 w-3"
+                    strokeWidth={2}
+                    style={{ color: appleVibe.accent.primary }}
+                  />
+                  <span
+                    className="text-[10px] font-semibold uppercase tracking-[0.14em]"
                     style={{ color: appleVibe.text.tertiary }}
                   >
-                    <MessageCircle
-                      className="h-3 w-3"
-                      strokeWidth={2}
-                      style={{ color: appleVibe.accent.primary }}
+                    Conversation
+                  </span>
+                  <span
+                    className="h-px flex-1"
+                    style={{ background: appleVibe.stroke.hairline }}
+                  />
+                </div>
+                {messages.length === 0 && !messagesLoading && (
+                  <ChatWelcome mode={mode} />
+                )}
+                {messagesLoading && messages.length === 0 && (
+                  <p
+                    className="text-[11.5px] font-light italic"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Loading conversation…
+                  </p>
+                )}
+                <ul className="space-y-2">
+                  {messages.map((m) => (
+                    <ChatBubble
+                      key={m.id}
+                      message={m}
+                      dispatchStatus={toolDispatchStatus[m.id] ?? "idle"}
+                      onRunSuggested={(action) =>
+                        runSuggestedTool(m.id, action)
+                      }
                     />
-                    <span
-                      className="text-[10px] font-semibold uppercase tracking-[0.14em]"
-                      style={{ color: appleVibe.text.tertiary }}
-                    >
-                      Conversation
-                    </span>
-                    <span
-                      className="h-px flex-1"
-                      style={{ background: appleVibe.stroke.hairline }}
-                    />
-                  </div>
-                  <ul className="space-y-2">
-                    {messages.map((m) => (
-                      <ChatBubble
-                        key={m.id}
-                        message={m}
-                        dispatchStatus={toolDispatchStatus[m.id] ?? "idle"}
-                        onRunSuggested={(action) =>
-                          runSuggestedTool(m.id, action)
-                        }
-                      />
-                    ))}
-                    {messagesLoading && messages.length === 0 && (
-                      <li
-                        className="text-[11.5px] font-light italic"
-                        style={{ color: appleVibe.text.tertiary }}
-                      >
-                        Loading conversation…
-                      </li>
-                    )}
-                  </ul>
-                </section>
-              )}
+                  ))}
+                  {/* Auto-scroll anchor — useEffect scrolls this into
+                      view whenever a new turn lands. */}
+                  <li ref={chatEndRef} aria-hidden className="h-0" />
+                </ul>
+              </section>
 
               {error && (
                 <div
@@ -521,43 +540,62 @@ export function LabNotebookPanel({
                 <EmptyState />
               )}
 
-              {grouped.map(({ label, events: dayEvents }) => (
-                <section key={label} className="mb-5">
-                  <div
-                    className="mb-2 flex items-center gap-2"
-                    style={{ color: appleVibe.text.tertiary }}
-                  >
-                    <span
-                      className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+              {grouped.map(({ label, events: dayEvents }) => {
+                // Phase 10c-polish — autopilot grouping. Inside each
+                // day section, fold score/rd_iterate events that fired
+                // within 5 minutes AFTER an autopilot_run into the
+                // parent row so the timeline tells the autopilot story
+                // as one unit instead of a scattered burst.
+                const items = groupAutopilotChildren(dayEvents);
+                return (
+                  <section key={label} className="mb-5">
+                    <div
+                      className="mb-2 flex items-center gap-2"
                       style={{ color: appleVibe.text.tertiary }}
                     >
-                      {label}
-                    </span>
-                    <span
-                      className="h-px flex-1"
-                      style={{ background: appleVibe.stroke.hairline }}
-                    />
-                  </div>
-                  <ul className="space-y-1.5">
-                    {dayEvents.map((ev) => (
-                      <NotebookRow
-                        key={ev.id}
-                        event={ev}
-                        onClick={() =>
-                          onNavigate?.({
-                            entityId: ev.subject.entity_id ?? null,
-                            variationId: ev.subject.variation_id ?? null,
-                            // Phase 10b — forward room context so the
-                            // host (main canvas) can route to the
-                            // right room before opening the drawer.
-                            subObjectiveId: ev.subject.sub_objective_id ?? null,
-                          })
-                        }
+                      <span
+                        className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+                        style={{ color: appleVibe.text.tertiary }}
+                      >
+                        {label}
+                      </span>
+                      <span
+                        className="h-px flex-1"
+                        style={{ background: appleVibe.stroke.hairline }}
                       />
-                    ))}
-                  </ul>
-                </section>
-              ))}
+                    </div>
+                    <ul className="space-y-1.5">
+                      {items.map((item) => {
+                        if (item.kind === "autopilot_group") {
+                          return (
+                            <AutopilotGroupRow
+                              key={item.parent.id}
+                              parent={item.parent}
+                              children={item.children}
+                              onClick={(target) => onNavigate?.(target)}
+                            />
+                          );
+                        }
+                        const ev = item.event;
+                        return (
+                          <NotebookRow
+                            key={ev.id}
+                            event={ev}
+                            onClick={() =>
+                              onNavigate?.({
+                                entityId: ev.subject.entity_id ?? null,
+                                variationId: ev.subject.variation_id ?? null,
+                                subObjectiveId:
+                                  ev.subject.sub_objective_id ?? null,
+                              })
+                            }
+                          />
+                        );
+                      })}
+                    </ul>
+                  </section>
+                );
+              })}
 
               {/* Load older */}
               {nextCursor && (
@@ -1278,6 +1316,204 @@ function formatTime(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+// Phase 10c-polish — fold autopilot child events into their parent row.
+//
+// AutopilotRunner fires a single `autopilot_run` event up front, then
+// iterates chains client-side firing `score` + `rd_iterate` per chain
+// via the underlying brainstorm routes (which each log their own
+// decision). Without grouping, the timeline shows the parent
+// surrounded by ~N×2 child events — high noise, hard to read.
+//
+// Heuristic: any `score` or `rd_iterate` event that fires within the
+// AUTOPILOT_WINDOW_MS after an `autopilot_run` becomes a child of it.
+// 5 minutes is comfortably above typical autopilot duration (~30s per
+// chain × ~5 chains) and tight enough to avoid sweeping in unrelated
+// later manual runs.
+//
+// We don't try to match by feature_id — the autopilot_run metadata
+// stores chain_ids (chain.id), not feature entity_ids, so an exact
+// match would need a schema change. Time-window grouping is the
+// pragmatic MVP. False positives are rare in single-user workflows.
+
+const AUTOPILOT_WINDOW_MS = 5 * 60 * 1000;
+
+type DisplayItem =
+  | { kind: "event"; event: NotebookEvent }
+  | { kind: "autopilot_group"; parent: NotebookEvent; children: NotebookEvent[] };
+
+function groupAutopilotChildren(events: NotebookEvent[]): DisplayItem[] {
+  // events arrive sorted DESC by created_at (newest first).
+  const consumed = new Set<string>();
+  const out: DisplayItem[] = [];
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (consumed.has(ev.id)) continue;
+    if (ev.action !== "autopilot_run") {
+      out.push({ kind: "event", event: ev });
+      continue;
+    }
+    const parentTime = new Date(ev.created_at).getTime();
+    const children: NotebookEvent[] = [];
+    // Walk BACKWARD (toward newer events in DESC order = events with
+    // larger timestamps that came AFTER this autopilot_run in real time).
+    for (let j = i - 1; j >= 0; j--) {
+      const cand = events[j];
+      if (consumed.has(cand.id)) continue;
+      const candTime = new Date(cand.created_at).getTime();
+      const delta = candTime - parentTime;
+      if (delta < 0) continue; // older than the parent — skip
+      if (delta > AUTOPILOT_WINDOW_MS) break;
+      if (cand.action === "score" || cand.action === "rd_iterate") {
+        children.push(cand);
+        consumed.add(cand.id);
+      }
+    }
+    consumed.add(ev.id);
+    // Restore chronological order within children (oldest first).
+    children.reverse();
+    out.push({ kind: "autopilot_group", parent: ev, children });
+  }
+  return out;
+}
+
+// Empty-state welcome bubble shown when no chat messages exist yet —
+// removes the cold-start awkwardness of opening the panel and seeing
+// just a blank input. Static content per mode, no LLM call.
+function ChatWelcome({ mode }: { mode: "room" | "space" }) {
+  return (
+    <div
+      className="rounded-2xl px-3 py-2.5"
+      style={{
+        background: appleVibe.surface.cardElevated,
+        border: `1px dashed ${appleVibe.stroke.medium}`,
+      }}
+    >
+      <p
+        className="text-[12px] leading-snug"
+        style={{ color: appleVibe.text.primary }}
+      >
+        Hi — I&apos;m the notebook agent. Ask me about{" "}
+        {mode === "space"
+          ? "anything across your canvas: what rooms are pending, where conflicts are open, what to do next."
+          : "this room: what variations are elected, where the score gaps are, what to refine next."}
+      </p>
+      <p
+        className="mt-1.5 text-[10.5px] font-light italic"
+        style={{ color: appleVibe.text.tertiary }}
+      >
+        I can also mark variations / findings / constraints for you. Try
+        &ldquo;what should I focus on?&rdquo;
+      </p>
+    </div>
+  );
+}
+
+// Autopilot group row — renders the parent autopilot_run prominently
+// with its score/rd_iterate children listed underneath as a compact
+// summary instead of separate full-height rows.
+function AutopilotGroupRow({
+  parent,
+  children,
+  onClick,
+}: {
+  parent: NotebookEvent;
+  children: NotebookEvent[];
+  onClick: (target: NotebookNavigateTarget) => void;
+}) {
+  const time = formatTime(parent.created_at);
+  const scoreCount = children.filter((c) => c.action === "score").length;
+  const refineCount = children.filter((c) => c.action === "rd_iterate").length;
+  return (
+    <motion.li
+      whileHover={{ y: -0.5, transition: { duration: 0.15 } }}
+      className="cursor-default"
+      style={{
+        background: appleVibe.surface.cardElevated,
+        border: `1px solid ${appleVibe.stage.features}26`,
+        borderLeft: `3px solid ${appleVibe.stage.features}`,
+        borderRadius: appleVibe.radius.sm,
+        padding: "10px 12px",
+      }}
+    >
+      <div className="flex items-start gap-2.5">
+        <div
+          className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full"
+          style={{
+            background: `${appleVibe.stage.features}14`,
+            color: appleVibe.stage.features,
+          }}
+          aria-hidden
+        >
+          <Sparkles className="h-3 w-3" strokeWidth={2.4} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span
+              className="text-[11.5px] font-semibold"
+              style={{ color: appleVibe.text.primary }}
+            >
+              Autopilot run
+            </span>
+            <span
+              className="flex-shrink-0 font-mono text-[10px] tabular-nums"
+              style={{ color: appleVibe.text.tertiary }}
+              title={new Date(parent.created_at).toLocaleString()}
+            >
+              {time}
+            </span>
+          </div>
+          <p
+            className="mt-0.5 text-[11.5px] leading-snug"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            {parent.meta.chain_count
+              ? `${parent.meta.chain_count} chain${parent.meta.chain_count === 1 ? "" : "s"}`
+              : "Started"}
+            {children.length > 0
+              ? ` · ${scoreCount} scored · ${refineCount} refined`
+              : children.length === 0
+                ? " · no work captured in window"
+                : ""}
+          </p>
+          {children.length > 0 && (
+            <ul className="mt-2 space-y-1 border-l pl-3" style={{ borderColor: appleVibe.stroke.hairline }}>
+              {children.map((c) => {
+                const v = visualFor(c.action);
+                const subject = formatSubject(c);
+                return (
+                  <li
+                    key={c.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onClick({
+                        entityId: c.subject.entity_id ?? null,
+                        variationId: c.subject.variation_id ?? null,
+                        subObjectiveId: c.subject.sub_objective_id ?? null,
+                      });
+                    }}
+                    className="cursor-pointer text-[11px] leading-snug"
+                    style={{ color: appleVibe.text.secondary }}
+                  >
+                    <span style={{ color: v.color }}>{v.label}</span>
+                    {subject ? (
+                      <>
+                        <span style={{ color: appleVibe.text.tertiary }}>
+                          {" — "}
+                        </span>
+                        <span>{subject}</span>
+                      </>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </motion.li>
+  );
 }
 
 function groupByDay(
