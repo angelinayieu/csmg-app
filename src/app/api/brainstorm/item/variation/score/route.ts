@@ -80,10 +80,13 @@ export async function POST(req: NextRequest) {
   const db = auth.supabase as any;
 
   // ── Load entity + ownership check (also load expanded_detail so
-  //    we can persist scores back into it after MC runs). ──
+  //    we can persist scores back into it after MC runs + causal_chain
+  //    so the rubric prompt grounds in positive_outcome + first_principles). ──
   const { data: entity } = await db
     .from("entities")
-    .select("id, name, space_id, parent_sub_objective_id, expanded_detail")
+    .select(
+      "id, name, space_id, parent_sub_objective_id, causal_chain, expanded_detail",
+    )
     .eq("id", entityId)
     .maybeSingle();
   if (!entity) {
@@ -165,14 +168,47 @@ export async function POST(req: NextRequest) {
             ? (p.causal_chain.negative_outcome as string)
             : undefined,
       }));
+    // Phase 11.2 wiring fix — pass each outcome's proxy indicators
+    // through so the rubric scorer can grade "how much does this
+    // variation move THIS indicator" alongside the 5 generic criteria.
+    // Indicators live at outcome.causal_chain.indicators[]; missing or
+    // non-array values resolve to undefined cleanly so the scorer
+    // skips the indicator side of the prompt for that outcome.
     const roomOutcomes = lanes
       .filter((r) => r.entity_type === "outcome")
-      .map((o) => ({ name: o.name }));
+      .map((o) => {
+        const indicators = Array.isArray(o.causal_chain?.indicators)
+          ? (o.causal_chain.indicators as unknown[])
+              .filter((x): x is string => typeof x === "string" && x.length > 0)
+              .slice(0, 6)
+          : undefined;
+        return {
+          id: o.id,
+          name: o.name,
+          indicators,
+        };
+      });
     const constraints = readConstraints(space.synthesis_data);
 
-    // Score against the rubric.
-    const featureCausal = (entity.expanded_detail as ExpandedItemDetail | null)
-      ?.definition;
+    // Score against the rubric. positive_outcome + first_principles
+    // come from entity.causal_chain (the feature's own causal chain),
+    // NOT from expanded_detail.definition (which is the plain-language
+    // explainer). Critical for prompt grounding — first_principles
+    // tell the LLM what the feature is built on; definition only
+    // describes what it IS in user-facing terms.
+    const featureCausalChain =
+      (entity.causal_chain as Record<string, unknown> | null) ?? {};
+    const featurePositiveOutcome =
+      typeof featureCausalChain.positive_outcome === "string"
+        ? (featureCausalChain.positive_outcome as string)
+        : undefined;
+    const featureFirstPrinciples = Array.isArray(
+      featureCausalChain.first_principles,
+    )
+      ? (featureCausalChain.first_principles as unknown[])
+          .filter((x): x is string => typeof x === "string" && x.length > 0)
+          .slice(0, 6)
+      : undefined;
     let rubricEnvelope: Awaited<
       ReturnType<typeof scoreVariationsWithRubric>
     >;
@@ -180,7 +216,8 @@ export async function POST(req: NextRequest) {
       rubricEnvelope = await scoreVariationsWithRubric({
         feature: {
           name: entity.name,
-          positive_outcome: featureCausal ?? undefined,
+          positive_outcome: featurePositiveOutcome,
+          first_principles: featureFirstPrinciples,
         },
         room_pains: roomPains,
         room_outcomes: roomOutcomes,
@@ -201,6 +238,12 @@ export async function POST(req: NextRequest) {
     const scoreById = new Map(
       rubricEnvelope.variation_scores.map((s) => [s.variation_id, s] as const),
     );
+    // Persist indicator_scores alongside rubric_criteria so the Lab
+    // page can render the per-proxy-indicator breakdown without
+    // re-fetching. The rubric scorer returns indicator_scores as an
+    // empty array when no indicators were graded — passing through
+    // preserves that signal (UI can show "no indicators graded" vs
+    // "indicators present but all zero").
     const updatedVariations = existing.variations.map((v) => {
       const s = v.id ? scoreById.get(v.id) : undefined;
       return s
@@ -209,6 +252,7 @@ export async function POST(req: NextRequest) {
             effectiveness_score: s.composite_score,
             evaluation_method: "rubric" as const,
             rubric_criteria: s.criteria,
+            indicator_scores: s.indicator_scores ?? [],
           }
         : v;
     });
@@ -248,6 +292,49 @@ export async function POST(req: NextRequest) {
         (max, s) => (s.composite_score > max ? s.composite_score : max),
         0,
       );
+
+      // Phase 11.2 — aggregate per-indicator across variations so the
+      // notebook event can surface "this run touched these proxies"
+      // as a top-3 breakdown. avg_score = mean across variations;
+      // min_confidence = lowest proxy-confidence we saw (the "shaky
+      // proxy" flag). Empty array when no indicators were graded.
+      const indicatorAgg = new Map<
+        string,
+        {
+          score_sum: number;
+          conf_min: number;
+          count: number;
+          outcome_name: string;
+        }
+      >();
+      for (const v of rubricEnvelope.variation_scores) {
+        for (const ind of v.indicator_scores ?? []) {
+          const key = `${ind.outcome_id}::${ind.indicator_text}`;
+          const cell = indicatorAgg.get(key) ?? {
+            score_sum: 0,
+            conf_min: 1,
+            count: 0,
+            outcome_name: ind.outcome_name,
+          };
+          cell.score_sum += ind.score;
+          cell.conf_min = Math.min(cell.conf_min, ind.confidence);
+          cell.count += 1;
+          indicatorAgg.set(key, cell);
+        }
+      }
+      const indicatorBreakdown = Array.from(indicatorAgg.entries())
+        .map(([key, cell]) => {
+          const [, indicator_text] = key.split("::");
+          return {
+            indicator: indicator_text,
+            avg_score: cell.score_sum / Math.max(1, cell.count),
+            min_confidence: cell.conf_min,
+            outcome_name: cell.outcome_name,
+          };
+        })
+        .sort((a, b) => b.avg_score - a.avg_score)
+        .slice(0, 3);
+
       void logDecision(db, {
         userId: auth.user.id,
         spaceId: entity.space_id,
@@ -262,6 +349,11 @@ export async function POST(req: NextRequest) {
           evaluation_method: "rubric",
           variation_count: rubricEnvelope.variation_scores.length,
           top_score: topScore,
+          // Phase 11.2 — proxy-indicator breakdown for the notebook.
+          // Top 3 by average score across variations + lowest proxy
+          // confidence so the row can flag "shaky proxy" when low.
+          indicator_breakdown: indicatorBreakdown,
+          indicator_count: indicatorAgg.size,
         },
       });
     }

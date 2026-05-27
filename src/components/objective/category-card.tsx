@@ -90,6 +90,19 @@ interface LineupVariation {
   /** Phase 8b — root_cause this candidate was generated to address
    *  (R&D iterations only). Surfaces as a chip in the expanded row. */
   target_root_cause?: string;
+  /** Phase 11.2 — per-proxy-indicator grades from the rubric scorer.
+   *  Each row says "this variation moves this indicator by this much,
+   *  and we have this much confidence the proxy is real." Renders as
+   *  a chip strip in the expanded row, grouped by outcome. Undefined
+   *  for legacy rows scored before Phase 11.2 (no chip strip shows). */
+  indicator_scores?: Array<{
+    indicator_text: string;
+    outcome_id: string;
+    outcome_name: string;
+    score: number;
+    reason: string;
+    confidence: number;
+  }>;
 }
 
 interface FeatureDetail {
@@ -232,6 +245,11 @@ export function CategoryCard({
         // LineupRow can render it inline without a server round trip
         // when the user expands an elected variation.
         mockup_thumbnail_html: v.mockup_thumbnail_html,
+        // Phase 11.2 — thread the per-proxy-indicator breakdown so
+        // the expanded row's IndicatorBreakdown component can render
+        // chips without a separate server round trip. Empty/undefined
+        // when no indicators were graded.
+        indicator_scores: v.indicator_scores,
       })),
       envelope: eds.effectiveness_envelope
         ? {
@@ -1447,6 +1465,18 @@ function LineupRow({
               </span>
             </div>
           )}
+          {/* Phase 11.2 — per-proxy-indicator breakdown. Surfaces
+              "how does this variation move each measurable thing the
+              outcome is trying to track" — directly answering the
+              user's stated vision: "scoring based on proxy indicators."
+              Grouped by outcome so chips with the same outcome stay
+              together; the ⚠️ marks low-confidence proxies so the
+              user can reconsider what they're measuring. */}
+          {v.indicator_scores && v.indicator_scores.length > 0 && (
+            <IndicatorBreakdown
+              indicators={v.indicator_scores}
+            />
+          )}
           {/* Op C — inline thumbnail mockup for elected variations.
               Surfaces the interface design WHERE the user expanded
               the mechanism, instead of behind the drawer's
@@ -1461,6 +1491,98 @@ function LineupRow({
         </div>
       )}
     </li>
+  );
+}
+
+// ── Phase 11.2 — per-proxy-indicator chip strip ────────────────────
+//
+// Shows each indicator the rubric scored this variation against,
+// grouped by outcome. Score is the explicit number; confidence ≤0.4
+// renders a ⚠️ tooltip to flag "this proxy is shaky — reconsider
+// what you're measuring" so the user doesn't chase a vanity metric.
+//
+// Why a chip strip vs. a table: variations live in a dense lineup,
+// each row competes for vertical space, and the user's primary
+// question is "did this move what I care about" — answerable at a
+// glance. The drawer can host a fuller table view when needed.
+
+function IndicatorBreakdown({
+  indicators,
+}: {
+  indicators: NonNullable<LineupVariation["indicator_scores"]>;
+}) {
+  // Group by outcome so chips with the same outcome cluster together
+  // and the user can see "this variation moved 2 of 3 indicators on
+  // Outcome A" at a glance.
+  const grouped = new Map<string, typeof indicators>();
+  for (const ind of indicators) {
+    const key = ind.outcome_name;
+    const arr = grouped.get(key) ?? [];
+    arr.push(ind);
+    grouped.set(key, arr);
+  }
+  return (
+    <div>
+      <div
+        className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.12em]"
+        style={{ color: appleVibe.text.tertiary }}
+      >
+        Proxy indicators
+      </div>
+      <div className="space-y-1">
+        {Array.from(grouped.entries()).map(([outcomeName, list]) => (
+          <div key={outcomeName} className="space-y-0.5">
+            <div
+              className="text-[9.5px] font-medium italic"
+              style={{ color: appleVibe.text.faint }}
+            >
+              in {outcomeName}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {list.map((ind, i) => {
+                const shaky = ind.confidence <= 0.4;
+                const truncated =
+                  ind.indicator_text.length > 32
+                    ? `${ind.indicator_text.slice(0, 30)}…`
+                    : ind.indicator_text;
+                // Tier the score color: strong (≥0.7) = outcomes green,
+                // medium (0.4..0.7) = neutral text, weak (<0.4) = pain
+                // red. Mirrors the score-bar palette used elsewhere.
+                const tier =
+                  ind.score >= 0.7
+                    ? OUTCOME_COLOR
+                    : ind.score < 0.4
+                      ? appleVibe.stage.pain
+                      : appleVibe.text.secondary;
+                return (
+                  <span
+                    key={`${ind.indicator_text}-${i}`}
+                    title={`${ind.reason}${shaky ? ` · shaky proxy: confidence ${ind.confidence.toFixed(2)}` : ""}`}
+                    className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-medium"
+                    style={{
+                      background: shaky
+                        ? `${appleVibe.stage.pain}10`
+                        : appleVibe.surface.chip,
+                      color: tier,
+                      border: shaky
+                        ? `1px solid ${appleVibe.stage.pain}40`
+                        : `1px solid ${appleVibe.stroke.hairline}`,
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    <span>{truncated}</span>
+                    <span style={{ fontWeight: 600 }}>
+                      {ind.score.toFixed(2)}
+                    </span>
+                    {shaky && <span aria-hidden>⚠️</span>}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

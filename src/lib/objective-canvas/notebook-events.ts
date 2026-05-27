@@ -94,6 +94,24 @@ export interface NotebookEventMeta {
   /** autopilot_run — how many chains the user kicked off in this session. */
   chain_count?: number;
   chain_ids?: string[];
+  // ── Phase 11.2 — proxy-indicator breakdown for `score` events ──
+  /** Top 3 indicators touched by this scoring run, sorted by avg
+   *  score desc across all graded variations. `min_confidence` is the
+   *  lowest proxy-confidence we saw for that indicator across the
+   *  variations — flag "shaky proxy" when ≤0.4 so the user can
+   *  reconsider what they're measuring rather than chase a number
+   *  on an unreliable signal. Empty array when the target room had
+   *  no proxy indicators on its outcomes. */
+  indicator_breakdown?: Array<{
+    indicator: string;
+    avg_score: number;
+    min_confidence: number;
+    outcome_name: string;
+  }>;
+  /** Total distinct indicators graded in this scoring run — gives
+   *  the user a sense of "scored across 5 proxies" even when only
+   *  3 fit in the breakdown chip set. */
+  indicator_count?: number;
 }
 
 export interface NotebookEvent {

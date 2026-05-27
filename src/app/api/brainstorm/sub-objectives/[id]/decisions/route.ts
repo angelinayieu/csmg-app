@@ -379,6 +379,31 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
         chain_ids: Array.isArray(meta.chain_ids)
           ? (meta.chain_ids.filter((s) => typeof s === "string") as string[])
           : undefined,
+        // Phase 11.2 — proxy-indicator breakdown for `score` events.
+        // Validate the array shape defensively because the row was
+        // written by older code paths too (legacy `score` events have
+        // no indicator_breakdown — render-time falls back to no chips).
+        indicator_breakdown: Array.isArray(meta.indicator_breakdown)
+          ? (meta.indicator_breakdown as unknown[])
+              .filter(
+                (x): x is {
+                  indicator: string;
+                  avg_score: number;
+                  min_confidence: number;
+                  outcome_name: string;
+                } =>
+                  !!x &&
+                  typeof x === "object" &&
+                  typeof (x as { indicator?: unknown }).indicator === "string" &&
+                  typeof (x as { avg_score?: unknown }).avg_score === "number" &&
+                  typeof (x as { min_confidence?: unknown }).min_confidence ===
+                    "number" &&
+                  typeof (x as { outcome_name?: unknown }).outcome_name ===
+                    "string",
+              )
+              .slice(0, 3)
+          : undefined,
+        indicator_count: numberOrUndefined(meta.indicator_count),
       },
     };
   });

@@ -1109,6 +1109,37 @@ function MetadataChips({ event: ev }: { event: NotebookEvent }) {
       label: `${ev.meta.chain_count} chain${ev.meta.chain_count === 1 ? "" : "s"}`,
     });
   }
+  // ── Phase 11.2 — proxy-indicator breakdown chips ──
+  // Renders the top-3 indicators the scoring run touched as a strip:
+  //   "[indicator name] · 0.71"  (or "0.71 ⚠️" when proxy confidence ≤0.4)
+  // The ⚠️ is the load-bearing affordance — it tells the user "this
+  // proxy is shaky; don't chase the number." When indicator_count >
+  // 3 we also append a "+N more" chip so the user knows the run
+  // graded more than the visible top-3.
+  if (
+    Array.isArray(ev.meta.indicator_breakdown) &&
+    ev.meta.indicator_breakdown.length > 0
+  ) {
+    for (const ind of ev.meta.indicator_breakdown) {
+      const shaky = ind.min_confidence <= 0.4;
+      const truncated =
+        ind.indicator.length > 28
+          ? `${ind.indicator.slice(0, 26)}…`
+          : ind.indicator;
+      chips.push({
+        key: `ind:${ind.indicator}`,
+        label: `${truncated} · ${ind.avg_score.toFixed(2)}${shaky ? " ⚠️" : ""}`,
+        color: shaky ? appleVibe.stage.pain : appleVibe.stage.features,
+      });
+    }
+    const extras = (ev.meta.indicator_count ?? 0) - ev.meta.indicator_breakdown.length;
+    if (extras > 0) {
+      chips.push({
+        key: "ind-more",
+        label: `+${extras} more`,
+      });
+    }
+  }
   if (chips.length === 0) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-1">
