@@ -65,6 +65,40 @@ export interface BriefExperiment {
   learning_target: string;
 }
 
+/** L1 — A cluster of expansion-tree nodes hanging off one parent
+ *  surface in the room, surfaced in the brief so the user's L3+
+ *  cognitive work shows up in the read-out. Grouped by attach point
+ *  so the brief reads "Streak-based variation → mechanism story /
+ *  data model / edge cases" rather than a flat list of node titles. */
+export interface BriefExpansionHighlight {
+  /** Which item the expansion lives on. */
+  item_id: string;
+  item_name: string;
+  /** Display label for the attach surface — variation name,
+   *  open-question text, conflict text, etc. */
+  parent_title: string;
+  /** Catalog of attach kinds we surface. We skip "expansion_node"
+   *  (recursive children) since they're already represented under
+   *  their L3 parent in the same list. */
+  attach_kind:
+    | "variation"
+    | "open_question"
+    | "conflict_open"
+    | "planning_risk"
+    | "integration_point";
+  /** The kept / null-disposition L3+ nodes under this attach.
+   *  Excludes "parked" — the user explicitly hid those. */
+  nodes: Array<{
+    title: string;
+    node_type: string;
+    depth: number;
+    /** Optional first-line excerpt for prose-heavy node types
+     *  (mechanism_story, alternative_framings, etc). Empty when
+     *  the body is structured (arrays of objects) rather than prose. */
+    excerpt: string;
+  }>;
+}
+
 /** One sub-objective room as it appears in the brief. */
 export interface BriefRoom {
   id: string;
@@ -74,6 +108,9 @@ export interface BriefRoom {
   composed_designs: BriefComposedDesign[];
   elected_variations: BriefElectedVariation[];
   experiments: BriefExperiment[];
+  /** L1 — expansion-tree highlights per item in this room.
+   *  Empty when the user hasn't drilled into any variation. */
+  expansion_highlights: BriefExpansionHighlight[];
   /** Number of items in the room — used in the section subtitle so
    *  the user sees the breadth at a glance ("4 frictions · 3 mechanisms"). */
   lane_counts: {
@@ -115,6 +152,10 @@ export interface StrategyBrief {
     composed_designs: number;
     experiments_planned: number;
     open_conflicts: number;
+    /** L1 — count of L3+ expansion nodes the user has KEPT (non-parked)
+     *  across all rooms. Surfaced in the caption so the brief signals
+     *  "this objective has 12 deep cards under it" — depth visibility. */
+    expansion_nodes: number;
   };
   /** Optional — present only when the user ran the polish endpoint.
    *  Plain prose, max ~3 sentences. */
@@ -192,6 +233,99 @@ export function buildStrategyBrief(
       }));
     });
 
+    // L1 — Expansion highlights per item. Group L3+ nodes by their
+    // attach surface (variation / open question / conflict / etc.) so
+    // the brief reads "Streak-based → mechanism story + data model +
+    // edge cases" rather than a flat list. Skip "parked" disposition
+    // (user explicitly hid) and "expansion_node" attach (recursive
+    // children, already represented under their L3 parent).
+    const expansion_highlights: BriefExpansionHighlight[] =
+      items.flatMap((it) => {
+        const tree = it.expanded_detail?.expansion_tree ?? [];
+        if (tree.length === 0) return [];
+
+        // Build a parent_title lookup so each attach group renders
+        // with a human label (variation name, etc.) — not the raw
+        // attach_ref slug.
+        const variationName = (variationId: string): string | null => {
+          const v = (it.expanded_detail?.variations ?? []).find(
+            (vv) => vv.id === variationId,
+          );
+          return v?.name ?? null;
+        };
+
+        // Group nodes by (attach_point, attach_ref) tuple.
+        type GroupKey = string;
+        const groups = new Map<
+          GroupKey,
+          {
+            attach_point: string;
+            attach_ref: string;
+            nodes: typeof tree;
+          }
+        >();
+        for (const n of tree) {
+          if (n.attach_point === "expansion_node") continue; // recursive child
+          if (n.disposition === "parked") continue;
+          const key = `${n.attach_point}::${n.attach_ref}`;
+          const g = groups.get(key) ?? {
+            attach_point: n.attach_point,
+            attach_ref: n.attach_ref,
+            nodes: [] as typeof tree,
+          };
+          g.nodes.push(n);
+          groups.set(key, g);
+        }
+
+        // Map each group → BriefExpansionHighlight.
+        const highlights: BriefExpansionHighlight[] = [];
+        for (const g of groups.values()) {
+          let parent_title = g.attach_ref;
+          let attach_kind: BriefExpansionHighlight["attach_kind"] = "variation";
+          if (g.attach_point === "variation") {
+            attach_kind = "variation";
+            parent_title = variationName(g.attach_ref) ?? "Variation";
+          } else if (g.attach_point === "open_question") {
+            attach_kind = "open_question";
+            // attach_ref shape: "<variation_id>::<question_slug>"
+            // — we don't have the verbatim question stored, so we
+            // surface the slug as a readable hint.
+            const [vid, ...rest] = g.attach_ref.split("::");
+            const slug = rest.join("::");
+            const vname = variationName(vid);
+            parent_title = vname
+              ? `${vname} · open question (${slug.slice(0, 40)})`
+              : `Open question (${slug.slice(0, 40)})`;
+          } else if (g.attach_point === "conflict_open") {
+            attach_kind = "conflict_open";
+            parent_title = `Conflict: ${g.attach_ref.slice(0, 50)}`;
+          } else if (g.attach_point === "planning_risk") {
+            attach_kind = "planning_risk";
+            parent_title = `Planning: ${g.attach_ref.slice(0, 50)}`;
+          } else if (g.attach_point === "integration_point") {
+            attach_kind = "integration_point";
+            parent_title = `Integration: ${g.attach_ref.slice(0, 50)}`;
+          }
+
+          // Cap nodes per group to keep the brief scannable.
+          const nodes = g.nodes.slice(0, 6).map((n) => ({
+            title: n.title,
+            node_type: n.node_type,
+            depth: n.depth,
+            excerpt: extractNodeExcerpt(n.node_type, n.body),
+          }));
+
+          highlights.push({
+            item_id: it.id,
+            item_name: it.name,
+            parent_title,
+            attach_kind,
+            nodes,
+          });
+        }
+        return highlights;
+      });
+
     const lane_counts = {
       pain: items.filter((i) => i.layer === "pain").length,
       features: items.filter((i) => i.layer === "features").length,
@@ -206,6 +340,7 @@ export function buildStrategyBrief(
       composed_designs,
       elected_variations,
       experiments,
+      expansion_highlights,
       lane_counts,
     } satisfies BriefRoom;
   });
@@ -324,6 +459,11 @@ export function buildStrategyBrief(
         ),
       0,
     ),
+    expansion_nodes: briefRooms.reduce(
+      (sum, r) =>
+        sum + r.expansion_highlights.reduce((c, h) => c + h.nodes.length, 0),
+      0,
+    ),
   };
 
   return {
@@ -340,6 +480,57 @@ export function buildStrategyBrief(
   };
 }
 
+/** L1 — pull a short prose excerpt out of an expansion node's body
+ *  for the Strategy Brief. The catalog body shapes vary wildly across
+ *  domains (paragraph for mechanism_story, levels[] for root_cause_tree,
+ *  cases[] for edge_cases, etc.) so we walk a priority list of known
+ *  prose keys and use the first non-empty one. For structured bodies
+ *  (data_model, manifestation_map) we return empty — the node title
+ *  alone is enough; the user clicks through for the structure.
+ *
+ *  Cap each excerpt at one short clause so the brief stays scannable. */
+function extractNodeExcerpt(
+  nodeType: string,
+  body: Record<string, unknown> | undefined | null,
+): string {
+  if (!body) return "";
+  // Highest-priority prose keys, ordered by how often the catalog
+  // uses them. First match wins. Each is a top-level string field.
+  const PROSE_KEYS = [
+    "paragraph", // *.mechanism_story, *.felt_mechanism
+    "default_path", // *.disambiguation_decision, *.decision_rule
+    "experiment", // journaling.smallest_experiment
+    "check", // software.simplest_check
+    "recommended_action", // (recommend_next_move-style)
+    "load_bearing_root", // pain.root_cause_tree
+    "load_bearing_stage", // journaling.recurrence_cycle
+    "affected_most", // pain.severity_calibration
+    "kill_switch", // software.rollback_strategy
+    "session_signal", // journaling.felt_sense_signal
+    "weekly_signal",
+    "anti_metric", // software.telemetry
+    "anti_signal", // journaling.felt_sense_signal
+    "target", // outcome.calibration_baseline
+    "two_to_four_weeks", // journaling.week_to_week_delta
+  ] as const;
+  for (const key of PROSE_KEYS) {
+    const v = body[key];
+    if (typeof v === "string" && v.trim().length > 0) {
+      const trimmed = v.trim();
+      // First sentence or 140 chars, whichever comes first.
+      const firstStop = trimmed.search(/[.!?]\s/);
+      const clause =
+        firstStop > 20 && firstStop < 160
+          ? trimmed.slice(0, firstStop + 1)
+          : trimmed.slice(0, 140);
+      return clause.length < trimmed.length ? `${clause.trim()}…` : clause.trim();
+    }
+  }
+  // Suppress noisy structured fields — the node title carries enough
+  // signal on its own. Caller falls back to empty string.
+  return "";
+}
+
 /** Render the brief as clean markdown for export / copy-paste.
  *  Pure function — no DOM. The UI's "Copy markdown" button just
  *  calls this and writes the result to the clipboard. */
@@ -351,7 +542,11 @@ export function renderStrategyBriefMarkdown(brief: StrategyBrief): string {
   out.push(`> ${brief.objective_text}`);
   out.push("");
   out.push(
-    `_${brief.totals.rooms} rooms · ${brief.totals.items} items · ${brief.totals.elected_variations} elected · ${brief.totals.composed_designs} composed · ${brief.totals.experiments_planned} experiments_`,
+    `_${brief.totals.rooms} rooms · ${brief.totals.items} items · ${brief.totals.elected_variations} elected · ${brief.totals.composed_designs} composed · ${brief.totals.experiments_planned} experiments${
+      brief.totals.expansion_nodes > 0
+        ? ` · ${brief.totals.expansion_nodes} deep dives`
+        : ""
+    }_`,
   );
   out.push("");
 
@@ -439,6 +634,20 @@ export function renderStrategyBriefMarkdown(brief: StrategyBrief): string {
         out.push("");
         for (const e of r.experiments) {
           out.push(`- _${e.artifact_type}_ — ${e.hypothesis} (effort: ${e.build_estimate})`);
+        }
+        out.push("");
+      }
+      if (r.expansion_highlights.length > 0) {
+        out.push(`**Deep dives**`);
+        out.push("");
+        for (const h of r.expansion_highlights) {
+          out.push(
+            `- **${h.item_name}** → ${h.parent_title}`,
+          );
+          for (const n of h.nodes) {
+            const excerpt = n.excerpt ? ` — ${n.excerpt}` : "";
+            out.push(`  - _L${n.depth}_ ${n.title}${excerpt}`);
+          }
         }
         out.push("");
       }

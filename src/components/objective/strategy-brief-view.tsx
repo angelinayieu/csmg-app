@@ -287,6 +287,15 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
                 </Caption>
               </>
             )}
+            {brief.totals.expansion_nodes > 0 && (
+              <>
+                <CaptionDot />
+                <Caption>
+                  {brief.totals.expansion_nodes} deep{" "}
+                  {brief.totals.expansion_nodes === 1 ? "dive" : "dives"}
+                </Caption>
+              </>
+            )}
             {brief.totals.open_conflicts > 0 && (
               <>
                 <CaptionDot />
@@ -798,7 +807,7 @@ function RoomBlock({
 
         {/* ── Experiments planned ── */}
         {room.experiments.length > 0 && (
-          <div className="mb-2">
+          <div className="mb-6">
             <SubLabel>Experiments planned</SubLabel>
             <ul className="mt-3 flex flex-col gap-4">
               {room.experiments.map((e, idx) => (
@@ -851,6 +860,85 @@ function RoomBlock({
                       {e.build_estimate}
                     </span>
                   </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* ── Deep dives (L3+ expansion-tree highlights) ── */}
+        {room.expansion_highlights.length > 0 && (
+          <div className="mb-2">
+            <SubLabel>Deep dives</SubLabel>
+            <p
+              className="mt-2 text-[12.5px] italic leading-relaxed"
+              style={{ color: COLOR.inkMuted }}
+            >
+              The L3+ surfaces you&rsquo;ve expanded — mechanism stories, data
+              models, edge cases, calibration. Click through for the full body.
+            </p>
+            <ul className="mt-3 flex flex-col gap-4">
+              {room.expansion_highlights.map((h, idx) => (
+                <li key={idx}>
+                  <div
+                    className="text-[12.5px] font-semibold uppercase"
+                    style={{
+                      color: COLOR.inkMuted,
+                      letterSpacing: "0.06em",
+                    }}
+                  >
+                    <Link
+                      href={`/app/objective/${spaceId}/sub/${room.id}?item=${h.item_id}`}
+                      style={{ color: "inherit", textDecoration: "none" }}
+                      className="hover:underline"
+                    >
+                      {h.item_name}
+                    </Link>
+                  </div>
+                  <div
+                    className="mt-0.5 text-[12.5px]"
+                    style={{ color: COLOR.inkSoft }}
+                  >
+                    {ATTACH_LABEL[h.attach_kind]}{" "}
+                    <span
+                      style={{ color: COLOR.ink, fontWeight: 500 }}
+                    >
+                      {h.parent_title}
+                    </span>
+                  </div>
+                  <ul className="mt-2 flex flex-col gap-1.5">
+                    {h.nodes.map((n, nIdx) => (
+                      <li
+                        key={nIdx}
+                        className="flex gap-2.5 text-[13px] leading-[1.55]"
+                        style={{ color: COLOR.inkSoft }}
+                      >
+                        <span
+                          aria-hidden
+                          className="font-mono"
+                          style={{
+                            color: COLOR.inkFaint,
+                            fontSize: "10.5px",
+                            paddingTop: 3,
+                            letterSpacing: "0.04em",
+                            flexShrink: 0,
+                          }}
+                        >
+                          L{n.depth}
+                        </span>
+                        <div>
+                          <span style={{ color: COLOR.ink, fontWeight: 500 }}>
+                            {n.title}
+                          </span>
+                          {n.excerpt && (
+                            <span style={{ color: COLOR.inkMuted }}>
+                              {" "}— {n.excerpt}
+                            </span>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
                 </li>
               ))}
             </ul>
@@ -1013,6 +1101,17 @@ const KIND_HINT: Record<string, string> = {
   alternative: "alternative",
   additive: "additive",
   principle: "principle",
+};
+
+// Prefix word for each expansion attach kind, rendered before the
+// parent_title so the user reads "Variation: Streak-based" rather than
+// the bare slug. Kept ultra-short — the parent_title carries the noun.
+const ATTACH_LABEL: Record<string, string> = {
+  variation: "Variation:",
+  open_question: "Question:",
+  conflict_open: "",
+  planning_risk: "",
+  integration_point: "",
 };
 
 // ── Helpers ──
