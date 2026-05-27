@@ -29,6 +29,7 @@ import {
   ChevronUp,
   Compass,
   ExternalLink,
+  FileCode,
   Highlighter,
   Layers,
   Link2,
@@ -48,6 +49,7 @@ import {
   DecisionSurface,
   DECISION_ANCHORS,
 } from "@/components/objective/decision-surface";
+import { VariationDeliverablesModal } from "@/components/objective/variation-deliverables-modal";
 
 interface DefinitionHighlight {
   phrase: string;
@@ -141,6 +143,12 @@ interface ItemVariation {
   target_root_cause?: string;
   /** Phase 5b — constraint compliance score 0..1 for R&D candidates. */
   constraint_compliance?: number;
+  /** Phase 12 — cached HTML mockup of the variation's interface. */
+  mockup_html?: string;
+  mockup_generated_at?: string;
+  /** Phase 13 — cached exportable AI prompt for the variation. */
+  export_prompt?: string;
+  export_prompt_generated_at?: string;
 }
 
 interface ItemPlanning {
@@ -2310,7 +2318,70 @@ function VariationCard({
           onTreeUpdate={onExpansionTreeUpdate}
         />
       )}
+
+      {/* Phase 12 + 13 — Deliverables affordance. Only shows on
+          ELECTED variations (the user signaled they're committed to
+          this direction) to avoid generating LLM mockups for
+          variations the user is still browsing. Modal handles both
+          HTML mockup + export prompt with lazy generation. */}
+      {elected && entityId && v.id && (
+        <VariationDeliverablesLauncher
+          entityId={entityId}
+          variation={v}
+        />
+      )}
     </motion.li>
+  );
+}
+
+// ── Variation deliverables launcher — pill + modal ───────────────
+//
+// Tiny wrapper that owns the modal open state so we don't bloat
+// VariationCard's signature. Lazy-imports VariationDeliverablesModal
+// only when the user clicks — saves bundle weight on variation lists
+// where most variations never get the modal opened.
+
+function VariationDeliverablesLauncher({
+  entityId,
+  variation,
+}: {
+  entityId: string;
+  variation: ItemVariation;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div className="mt-2 flex items-center justify-end">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(true);
+          }}
+          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors hover:bg-[rgba(15,23,42,0.04)]"
+          style={{
+            background: "transparent",
+            color: appleVibe.text.secondary,
+            border: `1px solid ${appleVibe.stroke.medium}`,
+          }}
+          title="Generate HTML mockup + export prompt for this variation"
+        >
+          <FileCode className="h-2.5 w-2.5" strokeWidth={2.4} />
+          Deliverables
+        </button>
+      </div>
+      {open && variation.id && (
+        <VariationDeliverablesModal
+          open={open}
+          onClose={() => setOpen(false)}
+          entityId={entityId}
+          variationId={variation.id}
+          variationName={variation.name}
+          initialMockupHtml={variation.mockup_html}
+          initialExportPrompt={variation.export_prompt}
+        />
+      )}
+    </>
   );
 }
 

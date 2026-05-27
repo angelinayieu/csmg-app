@@ -66,6 +66,11 @@ export interface ClarifyingBlock {
 export interface ObjectiveCanvasState {
   stage: ObjectiveCanvasStage;
   clarifying?: ClarifyingBlock;
+  /** Phase 11 — when true, generation prompts (sub-objective propose
+   *  for now; item/expand may follow) get an HCD bias mixin that
+   *  pushes proposals toward user-need-grounded, prototype-first
+   *  framings. Defaults to false to preserve legacy behavior. */
+  hcd_mode?: boolean;
 }
 
 const ROOT_KEY = "objective_canvas";

@@ -94,10 +94,28 @@ export function temperatureForIntent(intent: SubObjectiveIntent): number {
   return INTENT_TEMPERATURE[intent] ?? 0.55;
 }
 
-export function buildSystemPrompt(intent: SubObjectiveIntent = "initial"): string {
+export function buildSystemPrompt(
+  intent: SubObjectiveIntent = "initial",
+  hcdMode: boolean = false,
+): string {
   const mixin = INTENT_MIXINS[intent] ?? "";
-  return baseSystemPrompt() + mixin;
+  const hcd = hcdMode ? HCD_MIXIN : "";
+  return baseSystemPrompt() + mixin + hcd;
 }
+
+// Phase 11 — Human-Centered Design bias. Appended when the space has
+// hcd_mode=true. Pushes proposals to anchor on real users + observable
+// pain + early prototyping, not on tech-first abstractions. Intent
+// mixins still steer style (creative / concrete / contrarian / etc.);
+// HCD layers a separate axis on top of that.
+const HCD_MIXIN = `
+
+HUMAN-CENTERED DESIGN BIAS — APPLY TO EVERY PROPOSAL:
+- Anchor each sub-objective in a SPECIFIC user role / segment whose pain it addresses (mention the role in the rationale).
+- Prefer proposals that name an observable USER BEHAVIOR or felt need over proposals that name a technology, system, or process. (Bad: "AI recommendation engine." Good: "Reducing decision fatigue for first-time users.")
+- Each rationale must reference how the user would EXPERIENCE the result — what changes in their day if this sub-objective lands.
+- Bias toward proposals that can be PROTOTYPED quickly and tested with a real user within 2 weeks, even if the longer-term form is bigger. Mention the prototype angle in the rationale when it isn't obvious.
+- Treat accessibility, inclusivity, and edge-case users as load-bearing dimensions. Reject proposals that only work for the canonical happy-path user.`;
 
 function baseSystemPrompt(): string {
   return `You are a strategy decomposer.

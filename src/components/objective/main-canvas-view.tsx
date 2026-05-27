@@ -15,14 +15,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import {
-  ArrowRight,
-  BookOpen,
-  Check,
-  Layers,
-  RefreshCw,
-  Sparkles,
-} from "lucide-react";
+import { ArrowRight, Check, Layers, RefreshCw, Sparkles } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
   AnnotatedObjectiveCard,
@@ -37,9 +30,13 @@ import type { ClusterAnalysis } from "@/lib/objective-canvas/cluster-proposals";
 import type { ConceptMemoryEntry } from "@/lib/objective-canvas/concept-memory-feed";
 import type { RoomDecisionSummary } from "@/lib/objective-canvas/canvas-decisions";
 import { CanvasDecisionSurface } from "@/components/objective/canvas-decision-surface";
-import { LabNotebookPanel } from "@/components/objective/lab-notebook-panel";
 import { HCDToggle } from "@/components/objective/hcd-toggle";
 import { CanvasAutopilotRunner } from "@/components/objective/canvas-autopilot-runner";
+// Phase 11.0b — LabNotebookPanel is mounted at the layout level
+// (app/objective/[spaceId]/layout.tsx) as a persistent right rail.
+// The page-level mount + Notebook button moved out so we don't
+// double-render. router stays — IncrementalCutLab still uses it
+// (and CanvasAutopilotRunner's onAllComplete refreshes via it).
 
 export interface ApprovedItem {
   id: string;
@@ -157,12 +154,8 @@ export function MainCanvasView({
       ? "themes"
       : "grid",
   );
-  // Phase 10b — canvas notebook (all-rooms view). Mirrors the per-room
-  // notebook UI but feeds from the space-scoped GET so the user can
-  // see pre-room work (stage transitions, picking, clarifying), cross-
-  // room work (workbench dispositions, theme distillations), and a
-  // running interleaved view of every room's events in one timeline.
-  const [notebookOpen, setNotebookOpen] = useState(false);
+  // Phase 11.0b — notebook state moved to the layout. router still
+  // needed for IncrementalCutLab + CanvasAutopilotRunner refresh.
   const router = useRouter();
   const [themes, setThemes] = useState<ClusterAnalysis | null>(
     initialSubObjectiveThemes,
@@ -260,31 +253,9 @@ export function MainCanvasView({
             }}
           />
         )}
-        <button
-          type="button"
-          onClick={() => setNotebookOpen(true)}
-          className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(15,23,42,0.04)]"
-          style={{
-            background: appleVibe.surface.card,
-            color: appleVibe.text.secondary,
-            border: `1px solid ${appleVibe.stroke.medium}`,
-            borderRadius: appleVibe.radius.pill,
-            padding: "5px 11px",
-            fontSize: "10.5px",
-            fontWeight: 600,
-            letterSpacing: "0.02em",
-            boxShadow: appleVibe.shadow.chip,
-            fontFamily: appleVibe.font.stack,
-          }}
-          title="Canvas Notebook — every event across every room"
-        >
-          <BookOpen
-            className="h-3 w-3"
-            strokeWidth={2}
-            style={{ color: appleVibe.accent.primary }}
-          />
-          Notebook
-        </button>
+        {/* Phase 11.0b — Notebook button removed. The Lab Notebook
+            is now a persistent right rail mounted at the layout
+            level, default open, collapse-to-strip when hidden. */}
       </div>
 
       {/* Annotated core objective — the centerpiece */}
@@ -433,26 +404,9 @@ export function MainCanvasView({
         />
       )}
 
-      {/* Phase 10b — space-scoped Lab Notebook. Same panel component
-          as the room view; mode="space" swaps the feed URL to the
-          new GET /api/brainstorm/space/[spaceId]/decisions. onNavigate
-          routes to the right sub-objective room when a per-room event
-          is clicked, so the canvas notebook acts as a jump menu into
-          deeper work. */}
-      <LabNotebookPanel
-        open={notebookOpen}
-        onClose={() => setNotebookOpen(false)}
-        mode="space"
-        spaceId={spaceId}
-        onNavigate={(target) => {
-          if (target.subObjectiveId) {
-            router.push(
-              `/app/objective/${spaceId}/sub/${target.subObjectiveId}`,
-            );
-            setNotebookOpen(false);
-          }
-        }}
-      />
+      {/* Phase 11.0b — LabNotebookPanel mount moved to
+          src/app/app/objective/[spaceId]/layout.tsx so it persists
+          as a right rail across all pages in the objective canvas. */}
     </div>
   );
 }

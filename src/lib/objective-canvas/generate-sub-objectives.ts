@@ -39,6 +39,11 @@ export interface GenerateSubObjectivesOptions {
   /** Variant Lab — intent that steers this generation pass. Default
    *  "initial" preserves legacy behavior. */
   intent?: SubObjectiveIntent;
+  /** Phase 11 — when true, the system prompt gets an HCD bias mixin
+   *  pushing proposals toward user-role-grounded, prototypable
+   *  framings. Sourced from spaces.synthesis_data.objective_canvas.hcd_mode
+   *  at the route layer. */
+  hcdMode?: boolean;
   /** Variant Lab — proposals from prior batches. Drives the
    *  ANTI-DUPLICATE block in the user prompt. */
   existingProposals?: SubObjectiveProposal[];
@@ -97,7 +102,7 @@ export async function generateSubObjectiveProposals(
     : undefined;
 
   const raw = await llmJSON<LlmShape>({
-    system: buildSystemPrompt(intent),
+    system: buildSystemPrompt(intent, opts.hcdMode === true),
     user: buildUserPrompt({
       objective: opts.objective,
       clarifying: opts.clarifying,

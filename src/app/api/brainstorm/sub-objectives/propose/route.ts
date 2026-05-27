@@ -239,6 +239,9 @@ export async function POST(req: NextRequest) {
       annotations: annotations.length > 0 ? annotations : undefined,
       uncoveredLensIndices,
       priorConcepts: priorConcepts.length > 0 ? priorConcepts : undefined,
+      // Phase 11 — read HCD mode from space state and bias proposals
+      // toward user-role-grounded, prototypable framings.
+      hcdMode: state.hcd_mode === true,
     });
 
     if (mode === "variant" && existingBlock) {
