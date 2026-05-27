@@ -40,7 +40,11 @@ import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
 import { ConstraintsStrip } from "./cards/constraints-strip";
 import { CategoryCardsView } from "./category-cards-view";
 import { AutopilotRunner } from "./autopilot-runner";
-import { LabNotebookPanel } from "./lab-notebook-panel";
+// Phase 11.0b — LabNotebookPanel is mounted at the layout level
+// (app/objective/[spaceId]/layout.tsx) as a persistent right rail.
+// The per-room Notebook button + panel mount moved out so the panel
+// renders once. Room-scoped events surface there in room mode
+// (detected from the URL by the layout).
 import { RoomEdgesOverlay } from "./room-edges-overlay";
 import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
@@ -184,7 +188,7 @@ export function SubObjectiveRoomView({
   // sub_objective_decisions feed for this room and renders the
   // decision timeline (elections / experiments / approvals /
   // compositions). Closed by default; opens via a top-chrome button.
-  const [notebookOpen, setNotebookOpen] = useState(false);
+  // Phase 11.0b — notebookOpen removed; layout-level rail owns state.
   // Phase 7c — autopilot refresh signal. Bumped after each
   // chain that autopilot processes so the corresponding CategoryCard
   // re-fetches its expanded_detail and the new candidates show up
@@ -898,52 +902,11 @@ export function SubObjectiveRoomView({
           }
           onAllComplete={() => setAutopilotRefreshKey((k) => k + 1)}
         />
-        {/* Phase 9 — Lab Notebook button. Sits between Autopilot
-            and the view toggle so the cluster reads as
-            "automation · history · view." */}
-        <button
-          type="button"
-          onClick={() => setNotebookOpen(true)}
-          className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(15,23,42,0.04)]"
-          style={{
-            background: "transparent",
-            color: appleVibe.text.secondary,
-            border: `1px solid ${appleVibe.stroke.medium}`,
-            borderRadius: appleVibe.radius.pill,
-            padding: "5px 11px",
-            fontSize: "10.5px",
-            fontWeight: 600,
-            letterSpacing: "0.02em",
-            fontFamily: appleVibe.font.stack,
-          }}
-          title="Open Lab Notebook — decision history for this room"
-          aria-label="Open Lab Notebook"
-        >
-          <Sparkle className="h-3 w-3" />
-          Notebook
-        </button>
+        {/* Phase 11.0b — Notebook button removed. Layout-level rail
+            owns the notebook UI; this room's events stream into it
+            via the URL-detected room mode. */}
         <ViewToggleInline value={roomView} onChange={setRoomView} />
       </div>
-
-      {/* Phase 9 — Lab Notebook side panel. Opens via the Notebook
-          button above. onNavigate routes variation-scoped events
-          to the detail drawer; entity-only events focus the chain
-          in the Category View (defer to Category View's own
-          internal arrow-key navigation since we don't have a
-          direct chain → sidebar index handle here). */}
-      <LabNotebookPanel
-        open={notebookOpen}
-        onClose={() => setNotebookOpen(false)}
-        mode="room"
-        spaceId={spaceId}
-        subObjectiveId={subObjectiveId}
-        onNavigate={(target) => {
-          if (target.entityId) {
-            setDetailEntityId(target.entityId);
-          }
-          setNotebookOpen(false);
-        }}
-      />
 
       {/* Three-column layout — Objective lane removed (it just
           duplicated the sub-objective title rendered in the page
