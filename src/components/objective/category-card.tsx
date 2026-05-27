@@ -153,6 +153,22 @@ interface LineupVariation {
     evidence_supports?: number;
     evidence_refutes?: number;
     evidence_contextual?: number;
+    /** Phase 11.8 — HCD persona stratification overlay. Per-persona
+     *  in-character grades when hcd_mode=true on the space. The
+     *  matters-weighted consensus + disagreement signal what holds
+     *  up across user types vs which variations are loved by some
+     *  + hated by others. */
+    persona_scores?: Array<{
+      persona_id: string;
+      persona_name: string;
+      score: number;
+      matters: number;
+      reason: string;
+    }>;
+    persona_consensus_score?: number;
+    persona_disagreement_score?: number;
+    persona_coverage_count?: number;
+    persona_coverage_total?: number;
     /** Phase 11.7 — empirical overlay from concluded prototype briefs.
      *  When present, the chip surface flips to 🧪 tier — reality
      *  outranks theory. Aggregates lift + rigor + sample size
@@ -1987,6 +2003,35 @@ function IndicatorBreakdown({
                     `MC lift band: p10 ${(ind.lift_band.p10 * 100).toFixed(1)}% · p50 ${(ind.lift_band.p50 * 100).toFixed(1)}% · p90 ${(ind.lift_band.p90 * 100).toFixed(1)}%`,
                   );
                 }
+                // Phase 11.8 — HCD persona stratification chip. When
+                // hcd_mode was on during scoring, each indicator has
+                // persona_scores. The "N/M" chip surfaces how many
+                // personas (out of total) actually care about this
+                // indicator AND whether persona disagreement is high
+                // (variation works for some user types not others).
+                const hasPersona =
+                  Array.isArray(ind.persona_scores) &&
+                  ind.persona_scores.length > 0;
+                const personaCoverCount = ind.persona_coverage_count ?? 0;
+                const personaCoverTotal = ind.persona_coverage_total ?? 0;
+                const personaDisagreement =
+                  ind.persona_disagreement_score ?? 0;
+                // Append persona reasons to tooltip (top 2 by matters).
+                if (hasPersona && ind.persona_scores) {
+                  const topPersonas = [...ind.persona_scores]
+                    .sort((a, b) => b.matters - a.matters)
+                    .slice(0, 2);
+                  for (const ps of topPersonas) {
+                    tooltipParts.push(
+                      `👥 ${ps.persona_name} (matters ${ps.matters.toFixed(1)}): ${ps.reason}`,
+                    );
+                  }
+                  if (typeof ind.persona_consensus_score === "number") {
+                    tooltipParts.push(
+                      `persona consensus ${ind.persona_consensus_score.toFixed(2)} · disagreement ${personaDisagreement.toFixed(2)}`,
+                    );
+                  }
+                }
                 // Phase 11.7 — empirical overlay. When present, this
                 // is the load-bearing tier and gets the headline chip
                 // styling (🧪 + lift % + rigor bar). Theoretical
@@ -2147,6 +2192,30 @@ function IndicatorBreakdown({
                       >
                         {liftSign}
                         {(liftPct * 100).toFixed(0)}%
+                      </span>
+                    )}
+                    {/* Phase 11.8 — persona-coverage chip. "👥 N/M"
+                        where N = personas with matters ≥ 0.5, M = total.
+                        High disagreement (stddev > 0.2) tints amber as
+                        a "polarizing variation" flag — works for some
+                        user types but not all. */}
+                    {hasPersona && (
+                      <span
+                        style={{
+                          color:
+                            personaDisagreement > 0.2
+                              ? "rgba(217,119,6,0.85)" // amber for polarizing
+                              : appleVibe.text.tertiary,
+                          fontWeight: 500,
+                          marginLeft: "2px",
+                        }}
+                      >
+                        · 👥{personaCoverCount}/{personaCoverTotal}
+                        {personaDisagreement > 0.2 && (
+                          <span aria-hidden style={{ marginLeft: "1px" }}>
+                            ÷
+                          </span>
+                        )}
                       </span>
                     )}
                     {/* Phase 11.6 — citation chip: 📚N · supports/refutes

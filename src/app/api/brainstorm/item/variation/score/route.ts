@@ -53,6 +53,12 @@ import {
   scoreIndicatorsWithEvidence,
   buildEvidenceSourcePool,
 } from "@/lib/objective-canvas/score-indicator-evidence";
+import {
+  generateHCDPersonas,
+  type HCDPersona,
+} from "@/lib/objective-canvas/generate-personas";
+import { scoreIndicatorsWithPersonas } from "@/lib/objective-canvas/score-indicator-personas";
+import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
@@ -761,6 +767,135 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── Phase 11.8 — HCD persona overlay ──
+    // When hcd_mode=true on the space, every variation × indicator
+    // gets graded from 3-5 persona perspectives in-character.
+    // Personas are persisted on the sub-objective room so they stay
+    // stable across scoring runs (cross-variation comparability
+    // requires the same personas). Generated on first HCD-on scoring
+    // run; cached for subsequent runs.
+    //
+    // Key keyed by (variation_id, outcome_id, indicator_text) so we
+    // can attach per-variation persona scores below.
+    const hcdMode =
+      readObjectiveCanvasState(space.synthesis_data).hcd_mode === true;
+    const personaByIndicatorKey = new Map<
+      string,
+      {
+        persona_scores: Array<{
+          persona_id: string;
+          persona_name: string;
+          score: number;
+          matters: number;
+          reason: string;
+        }>;
+        persona_consensus_score: number;
+        persona_disagreement_score: number;
+        persona_coverage_count: number;
+        persona_coverage_total: number;
+      }
+    >();
+    if (hcdMode && entity.parent_sub_objective_id) {
+      try {
+        // Load or generate personas. Stored on improvement_goals.
+        // synthesis_data.hcd_personas as a stable array.
+        const { data: subRow } = await db
+          .from("improvement_goals")
+          .select("synthesis_data")
+          .eq("id", entity.parent_sub_objective_id)
+          .maybeSingle();
+        const existingPersonas: HCDPersona[] = Array.isArray(
+          subRow?.synthesis_data?.hcd_personas,
+        )
+          ? (subRow.synthesis_data.hcd_personas as HCDPersona[])
+          : [];
+        let personas = existingPersonas;
+        if (personas.length === 0) {
+          // First HCD scoring run — generate + persist.
+          const state = readObjectiveCanvasState(space.synthesis_data);
+          const clarifyingAnswers: Array<{
+            question: string;
+            answer: string;
+          }> = [];
+          if (state.clarifying) {
+            for (const q of state.clarifying.questions) {
+              const a = state.clarifying.answers[q.id];
+              if (a?.status === "answered" && a.value) {
+                clarifyingAnswers.push({
+                  question: q.question,
+                  answer: a.value,
+                });
+              }
+            }
+          }
+          personas = await generateHCDPersonas({
+            sub_objective_title: subObjectiveTitle,
+            core_objective_text: coreObjectiveText,
+            room_pains: roomPains,
+            clarifying_answers: clarifyingAnswers,
+          });
+          if (personas.length > 0) {
+            const nextSynth = {
+              ...((subRow?.synthesis_data as Record<string, unknown>) ?? {}),
+              hcd_personas: personas,
+            };
+            await db
+              .from("improvement_goals")
+              .update({ synthesis_data: nextSynth })
+              .eq("id", entity.parent_sub_objective_id);
+          }
+        }
+
+        // Score with personas when we have them + indicators.
+        if (personas.length > 0) {
+          const uniqIndicators = new Map<
+            string,
+            { indicator_text: string; outcome_id: string; outcome_name: string }
+          >();
+          for (const v of ensembleEnvelope.variation_scores) {
+            for (const ind of v.indicator_scores) {
+              const key = `${ind.outcome_id}::${ind.indicator_text}`;
+              if (!uniqIndicators.has(key)) {
+                uniqIndicators.set(key, {
+                  indicator_text: ind.indicator_text,
+                  outcome_id: ind.outcome_id,
+                  outcome_name: ind.outcome_name,
+                });
+              }
+            }
+          }
+          const personaEnvelope = await scoreIndicatorsWithPersonas({
+            personas,
+            variations: existing.variations,
+            indicators: Array.from(uniqIndicators.values()),
+            feature_name: entity.name,
+            sub_objective_title: subObjectiveTitle,
+          });
+          if (personaEnvelope.status === "ok") {
+            for (const r of personaEnvelope.results) {
+              personaByIndicatorKey.set(
+                `${r.variation_id}::${r.outcome_id}::${r.indicator_text}`,
+                {
+                  persona_scores: r.persona_scores,
+                  persona_consensus_score: r.persona_consensus_score,
+                  persona_disagreement_score: r.persona_disagreement_score,
+                  persona_coverage_count: r.persona_coverage_count,
+                  persona_coverage_total: r.persona_coverage_total,
+                },
+              );
+            }
+          }
+        }
+      } catch (personaErr) {
+        console.warn(
+          "[item/variation/score] HCD persona overlay failed (non-fatal):",
+          personaErr instanceof Error
+            ? personaErr.message
+            : String(personaErr),
+        );
+      }
+    }
+
     // ── Persist: per-variation lens-rich indicator_scores + envelope
     //    with counter_indicators + indicator_pool. Soft-fail on write. ──
     const ensembleScoreById = new Map(
@@ -846,6 +981,25 @@ export async function POST(req: NextRequest) {
                   evidence_contextual: evidence.contextual_count,
                 }
               : {}),
+            // Phase 11.8 — HCD persona overlay fields. Keyed per
+            // (variation × indicator) so each variation's persona
+            // grades get attached to the right row.
+            ...((() => {
+              const personaCell = personaByIndicatorKey.get(
+                `${v.id}::${ind.outcome_id}::${ind.indicator_text}`,
+              );
+              return personaCell
+                ? {
+                    persona_scores: personaCell.persona_scores,
+                    persona_consensus_score:
+                      personaCell.persona_consensus_score,
+                    persona_disagreement_score:
+                      personaCell.persona_disagreement_score,
+                    persona_coverage_count: personaCell.persona_coverage_count,
+                    persona_coverage_total: personaCell.persona_coverage_total,
+                  }
+                : {};
+            })()),
           };
         }),
       };

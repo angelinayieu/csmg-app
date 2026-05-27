@@ -31,6 +31,11 @@ interface PostBody {
   team_size?: TeamSize;
   risk_tolerance?: RiskTolerance;
   compliance_requirements?: string[];
+  /** Phase 11.8 — use-case mode. consumer_app / personal_health /
+   *  scientific. When present, drives downstream default scorer +
+   *  whether baselines are required + indicator templates. Pre-11.8
+   *  spaces default to consumer_app on read. */
+  use_case_mode?: "consumer_app" | "personal_health" | "scientific";
 }
 
 export async function GET(req: NextRequest) {
@@ -158,6 +163,14 @@ export async function POST(req: NextRequest) {
             .map((s) => s.trim().slice(0, 80))
             .slice(0, 6),
         }
+      : {}),
+    // Phase 11.8 — use-case mode merge. Validates against the enum;
+    // unknown values are silently dropped so a typo in the client
+    // can't corrupt the constraint set.
+    ...(body?.use_case_mode === "consumer_app" ||
+    body?.use_case_mode === "personal_health" ||
+    body?.use_case_mode === "scientific"
+      ? { use_case_mode: body.use_case_mode }
       : {}),
     source: "user",
     generated_at: new Date().toISOString(),

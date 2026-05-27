@@ -34,6 +34,30 @@ export type RiskTolerance =
   | "calibrated"
   | "conservative";
 
+/** Phase 11.8 — what kind of work the user is doing in this space.
+ *  Drives default tier mix, indicator templates, and whether
+ *  baselines are required. Same engine flexes per intent:
+ *
+ *    consumer_app    — building a product. Rubric default, no
+ *                      baseline required, indicators slant toward
+ *                      engagement/retention/conversion.
+ *    personal_health — designing an intervention for self or
+ *                      patient. Ensemble default, BASELINE REQUIRED
+ *                      on every outcome before scoring fires,
+ *                      indicators slant toward validated psychometrics
+ *                      / wearable data / clinical instruments.
+ *    scientific      — predicting effects across a population from
+ *                      literature. Ensemble + evidence pooling
+ *                      default, indicators slant toward meta-analysis-
+ *                      ready endpoints (VAS, BPI, ODI, etc.).
+ *
+ *  Null = mode hasn't been set yet; treat as consumer_app
+ *  (current behavior) for backward compat. */
+export type UseCaseMode =
+  | "consumer_app"
+  | "personal_health"
+  | "scientific";
+
 export interface OperationalConstraints {
   /** How long the user has to actually act. Drives prototype-lab
    *  cost gates ("you can't afford a 4-week experiment"). */
@@ -51,6 +75,10 @@ export interface OperationalConstraints {
    *  whatever the user named. The LLM treats them as hard rejects
    *  for variations that violate them. */
   compliance_requirements: string[];
+  /** Phase 11.8 — use-case mode. Drives default scorer + indicator
+   *  templates + baseline requirement. Optional for backward compat;
+   *  pre-11.8 spaces default to consumer_app at read time. */
+  use_case_mode?: UseCaseMode;
   /** Source — auto-inferred from clarifying or hand-set by user. */
   source: "inferred" | "user";
   /** When this constraint set was captured. Used for invalidation
@@ -81,12 +109,59 @@ export function readConstraints(
           .filter((s): s is string => typeof s === "string")
           .slice(0, 6)
       : [],
+    use_case_mode:
+      r.use_case_mode === "consumer_app" ||
+      r.use_case_mode === "personal_health" ||
+      r.use_case_mode === "scientific"
+        ? (r.use_case_mode as UseCaseMode)
+        : undefined,
     source: r.source === "user" ? "user" : "inferred",
     generated_at:
       typeof r.generated_at === "string"
         ? r.generated_at
         : new Date().toISOString(),
   };
+}
+
+/** Phase 11.8 — resolve the mode with the back-compat default.
+ *  Returns "consumer_app" when no mode has been set (preserves
+ *  pre-11.8 behavior where every space behaved like an app build).
+ *  Use this everywhere instead of reading use_case_mode directly so
+ *  the fallback stays consistent. */
+export function resolveUseCaseMode(
+  c: OperationalConstraints | null,
+): UseCaseMode {
+  return c?.use_case_mode ?? "consumer_app";
+}
+
+/** Phase 11.8 — default scoring method for the use case mode.
+ *  Score routes call this to pick rubric vs ensemble when the
+ *  caller didn't specify method explicitly. */
+export function defaultScoringMethodFor(
+  mode: UseCaseMode,
+): "rubric" | "simulation" {
+  // Personal health + scientific use cases benefit from the heavier
+  // ensemble path (multi-lens + REML τ² pooling) by default. App
+  // builders default to rubric — cheaper, faster, fits the iteration
+  // velocity an app team needs.
+  // NOTE: "simulation" here is the existing route enum; ensemble is
+  // gated by the same param value in the route's branch.
+  if (mode === "personal_health" || mode === "scientific") {
+    return "simulation";
+  }
+  return "rubric";
+}
+
+/** Phase 11.8 — when set, baselines on outcome indicators are
+ *  treated as REQUIRED before scoring fires. The score route can
+ *  use this to short-circuit with a friendly "set baselines first"
+ *  error rather than producing meaningless abstract scores. */
+export function baselinesRequiredFor(mode: UseCaseMode): boolean {
+  // Personal-health + scientific use cases need measurable baselines
+  // to produce honest projected-delta scores. App-build mode treats
+  // baselines as optional (most app indicators are operational
+  // metrics the user discovers post-launch). */
+  return mode === "personal_health" || mode === "scientific";
 }
 
 /** Build the prompt block injected into expand / compose / room

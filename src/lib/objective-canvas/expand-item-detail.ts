@@ -241,6 +241,31 @@ export interface ItemVariation {
     evidence_refutes?: number;
     evidence_contextual?: number;
     // ── Phase 11.7 — Tested tier (empirical override) ──
+    // ── Phase 11.8 — HCD Persona stratification ──
+    /** Phase 11.8 — when hcd_mode=true and the scorer ran persona
+     *  stratification, each indicator gets per-persona { score,
+     *  matters, reason } rows. The aggregate signals matter for the
+     *  chip strip: persona_consensus_score (matters-weighted mean),
+     *  persona_disagreement_score (stddev — variation works for some
+     *  user types not others), persona_coverage_count (how many
+     *  personas actually care about this indicator). */
+    persona_scores?: Array<{
+      persona_id: string;
+      persona_name: string;
+      score: number;
+      matters: number;
+      reason: string;
+    }>;
+    /** Phase 11.8 — matters-weighted mean of persona scores. Filters
+     *  out perspectives that don't care so noise doesn't drown signal. */
+    persona_consensus_score?: number;
+    /** Phase 11.8 — stddev of persona scores. High = variation
+     *  works for some user types but not others. Load-bearing flag. */
+    persona_disagreement_score?: number;
+    /** Phase 11.8 — count of personas where matters ≥ 0.5. UI
+     *  renders "👥 N/M" so the user sees coverage at a glance. */
+    persona_coverage_count?: number;
+    persona_coverage_total?: number;
     /** Phase 11.7 — when one or more of the variation's prototype
      *  briefs concluded with a result_summary, the empirical
      *  extractor produces a structured overlay PER indicator. When
