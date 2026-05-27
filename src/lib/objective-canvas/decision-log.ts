@@ -63,7 +63,18 @@ export type DecisionAction =
   // carries indicator_name, baseline_value, target_value, unit,
   // source: "user" | "llm" so the chat agent can reference the
   // measurement context when reasoning about projected delta.
-  | "baseline_set";
+  | "baseline_set"
+  // Phase 11.A — objective layering. The decompose-into-layers
+  // pass produces a causal stack at the clarifying→picking
+  // transition (or on explicit regenerate). Each layer carries
+  // 3-7 variables; sub-objectives later get tagged with their
+  // layer_ordinals so the picker can show structural coverage.
+  | "layers_generated"
+  | "layers_regenerated"
+  // Phase 11.A — user manually overrode a sub-objective's layer
+  // assignment. Surfaces in the notebook with the prior + new
+  // ordinals so the audit trail shows tagging history.
+  | "layer_position_set";
 
 export interface LogDecisionArgs {
   userId: string;
