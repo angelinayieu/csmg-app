@@ -85,7 +85,8 @@ interface LineupVariation {
     | "rubric"
     | "evidence"
     | "simulation"
-    | "tested";
+    | "tested"
+    | "ensemble";
   disposition?: "elected" | "rejected" | "deferred" | null;
   provenance?: "rd_iteration";
   /** Phase 8b — root_cause this candidate was generated to address
