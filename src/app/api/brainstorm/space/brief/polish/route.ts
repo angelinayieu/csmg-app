@@ -121,10 +121,36 @@ export async function POST(req: NextRequest) {
       const conflicts = r.composed_designs.flatMap(
         (cd) => cd.conflicts_open,
       ).length;
-      return `  • ${r.title}${r.top_negative_outcome ? ` — counters "${r.top_negative_outcome.slice(0, 80)}"` : ""}${electedNames ? `\n    elected: ${electedNames}` : ""}${conflicts > 0 ? `\n    open conflicts: ${conflicts}` : ""}`;
+      // M1 — surface depth per room so the summary can name "you've
+      // deepened 4 surfaces on streak-based" instead of treating
+      // every room as a shallow card list. Count + breakdown of the
+      // surfaces the user expanded into.
+      const depthCount = r.expansion_highlights.reduce(
+        (acc, h) => acc + h.nodes.length,
+        0,
+      );
+      const surfaceTypes = r.expansion_highlights
+        .flatMap((h) => h.nodes.map((n) => n.node_type.split(".").pop() ?? n.node_type))
+        .filter((t, i, arr) => arr.indexOf(t) === i)
+        .slice(0, 3)
+        .join(" / ");
+      const depthLine =
+        depthCount > 0
+          ? `\n    deepened: ${depthCount} L3+ surface${depthCount === 1 ? "" : "s"}${surfaceTypes ? ` (${surfaceTypes})` : ""}`
+          : "";
+      return `  • ${r.title}${r.top_negative_outcome ? ` — counters "${r.top_negative_outcome.slice(0, 80)}"` : ""}${electedNames ? `\n    elected: ${electedNames}` : ""}${conflicts > 0 ? `\n    open conflicts: ${conflicts}` : ""}${depthLine}`;
     })
     .join("\n");
   const constraintsBlock = buildConstraintsBlock(brief.constraints);
+
+  // M1 — total deep-work signal. When present, the summary should
+  // acknowledge the depth axis (the user spent real time here);
+  // when absent, the summary stays compact on the shallow surface.
+  const totalDepth = brief.totals.expansion_nodes;
+  const depthGuidance =
+    totalDepth > 0
+      ? `\n\nThe user has expanded ${totalDepth} L3+ surface${totalDepth === 1 ? "" : "s"} (mechanism stories, data models, edge cases, calibrations, etc.). The summary should HINT at the depth where it reinforces the shape of the strategy — don't list surfaces, but name that the work is concrete, not just sketched.`
+      : "";
 
   const system = `You write a 2-3 sentence executive summary for a strategy brief.
 
@@ -139,7 +165,7 @@ DO NOT:
   • Be vague ("an approach that balances X and Y" — banned).
   • Exceed 3 sentences.
 
-Voice: confident, plainspoken, no hedges. Read like a co-founder summarizing the strategy in a slack message, not a consulting report.
+Voice: confident, plainspoken, no hedges. Read like a co-founder summarizing the strategy in a slack message, not a consulting report.${depthGuidance}
 
 Return strict JSON.`;
 

@@ -117,6 +117,83 @@ export async function composeVariations(
     )
     .join("\n\n");
 
+  // M3 — Effectiveness ladder. When the user has scored elected
+  // variations (Phase 4c+ — rubric / ensemble / evidence / simulation
+  // / tested), composition should anchor on the highest-scoring
+  // variation and treat lower-scored ones as junior partners. Without
+  // this, composition treats all elected variations as peers — even
+  // when one has been MC-validated at 0.85 and another sits at 0.42.
+  //
+  // M4 — Empirical overlay (Phase 11.7). When a variation has at
+  // least one indicator with an empirical_overlay (from a concluded
+  // brief), it's no longer theoretical. Empirical signal outranks
+  // theoretical score regardless of magnitude — reality is the prior.
+  // Mixed empirical signal across elected variations surfaces as a
+  // conflict_open (the user must reconcile the field disagreement).
+  type ScoredRow = {
+    index: number;
+    name: string;
+    score: number;
+    method: string | null;
+    topEmpirical: {
+      indicator: string;
+      observed_lift_pct: number | null;
+      observed_direction: string;
+      methodology_rigor: number;
+    } | null;
+  };
+  const scoredVariations: ScoredRow[] = [];
+  for (let i = 0; i < ctx.electedVariations.length; i++) {
+    const v = ctx.electedVariations[i];
+    if (typeof v.effectiveness_score !== "number") continue;
+    let topEmpirical: ScoredRow["topEmpirical"] = null;
+    if (Array.isArray(v.indicator_scores)) {
+      for (const ind of v.indicator_scores) {
+        const ov = ind.empirical_overlay;
+        if (!ov) continue;
+        if (
+          !topEmpirical ||
+          ov.methodology_rigor > topEmpirical.methodology_rigor
+        ) {
+          topEmpirical = {
+            indicator: ind.indicator_text,
+            observed_lift_pct: ov.observed_lift_pct,
+            observed_direction: ov.observed_direction,
+            methodology_rigor: ov.methodology_rigor,
+          };
+        }
+      }
+    }
+    scoredVariations.push({
+      index: i + 1,
+      name: v.name,
+      score: v.effectiveness_score,
+      method: v.evaluation_method ?? null,
+      topEmpirical,
+    });
+  }
+  // Sort descending so anchor appears first in the prompt block.
+  scoredVariations.sort((a, b) => b.score - a.score);
+  const effectivenessBlock =
+    scoredVariations.length > 0
+      ? `\n\nEFFECTIVENESS LADDER (score 0..1 from prior scoring runs; method tells you what produced it):\n${scoredVariations
+          .map((s) => {
+            const scoreStr = s.score.toFixed(2);
+            const methodHint = s.method ? ` · ${s.method}` : "";
+            const empiricalHint = s.topEmpirical
+              ? `\n      EMPIRICAL — observed ${
+                  s.topEmpirical.observed_lift_pct !== null
+                    ? `${s.topEmpirical.observed_lift_pct > 0 ? "+" : ""}${s.topEmpirical.observed_lift_pct.toFixed(0)}% on "${s.topEmpirical.indicator.slice(0, 60)}"`
+                    : `${s.topEmpirical.observed_direction} on "${s.topEmpirical.indicator.slice(0, 60)}"`
+                } (rigor ${s.topEmpirical.methodology_rigor.toFixed(2)}) — REAL, not theoretical`
+              : "";
+            return `  [${s.index}] ${s.name} — ${scoreStr}${methodHint}${empiricalHint}`;
+          })
+          .join(
+            "\n",
+          )}\n  EFFECTIVENESS RULE for composition:\n    • The HIGHEST-SCORED variation ANCHORS the composition. The unified design's center of gravity sits on its mechanism. Lower-scored variations are JUNIOR PARTNERS — they extend / specialize / safeguard the anchor; they do NOT dilute its core.\n    • EMPIRICAL > theoretical. A variation with empirical_overlay (observed lift from a concluded brief) outranks any theoretical score regardless of magnitude — even a 0.55 empirical beats a 0.85 simulated. Reality is the prior.\n    • MIXED empirical signal (one validated + one refuted in the same composition) is a structural conflict_open. Name it explicitly: "the field signal disagrees with the simulated rank; the user should re-run the failing brief or accept the empirical verdict."\n    • Score gap > 0.30 between anchor and junior: surface in conflicts_open as "junior variation is materially weaker — keep only if its tradeoff is uniquely load-bearing."`
+      : "";
+
   // Lens block — same shape as the variation expansion, kept compact
   // since composition needs the highest-weight readings only.
   const ranked = (ctx.annotations ?? [])
@@ -169,6 +246,8 @@ export async function composeVariations(
           )}\n  CROSS-ROOM RULE for composition:\n    • DISMISSED findings (any kind): the user already declared their stance — this duplicate / contradiction / overlap is INTENTIONAL. Do NOT re-raise as conflicts_open. Quietly proceed; mention in the description ONLY if it strengthens the unified read.\n    • OPEN or ACKNOWLEDGED findings: either reconcile via integration_points (then list under conflicts_resolved) OR escalate to conflicts_open if the composition genuinely cannot resolve it. Pretending to resolve a real contradiction silently ships a broken design.\n    • A "contradiction" finding touching this item's elected variations is the strongest signal — the composition must address it explicitly.`
       : "";
 
+  const hasEffectiveness = scoredVariations.length > 0;
+
   const system = `You synthesize multiple elected variations of a strategy-room item into a SINGLE coherent design.
 
 ${framing}
@@ -177,13 +256,21 @@ THE COMPOSITION IS NOT A LIST. It is a unified description that names how the el
 
 OUTPUT:
 
-1) DESCRIPTION — 2-3 sentences. The unified design read aloud. Not a recap of each variation; the WHOLE that emerges.
+1) DESCRIPTION — 2-3 sentences. The unified design read aloud. Not a recap of each variation; the WHOLE that emerges.${
+    hasEffectiveness
+      ? " When an EFFECTIVENESS LADDER is provided, the description must read as if the highest-scored (or empirically-validated) variation is the ANCHOR — the composition's center of gravity sits there, not on a generic equal-weight blend."
+      : ""
+  }
 
 2) INTEGRATION_POINTS — 2-4 concrete interlocks. Where do these variations TOUCH each other in practice? What's the data flow / UX path / dependency that ties them?
 
 3) CONFLICTS_RESOLVED — 0-3 tensions the composition reconciled. "Variation A wants X; Variation B wants Y; the design handles this by …". Be specific — not "we resolved the tension by being thoughtful."
 
-4) CONFLICTS_OPEN — 0-3 tensions that DO NOT resolve. The user must make a decision the composition can't make for them. THESE ARE LOUD. If you fudge an open conflict into "resolved," the design ships broken.
+4) CONFLICTS_OPEN — 0-3 tensions that DO NOT resolve. The user must make a decision the composition can't make for them. THESE ARE LOUD. If you fudge an open conflict into "resolved," the design ships broken.${
+    hasEffectiveness
+      ? " When the EFFECTIVENESS LADDER shows mixed empirical signal (one validated + one refuted) or a score gap > 0.30, those go HERE — don't quietly bury a real signal disagreement under integration_points."
+      : ""
+  }
 
 ANTI-PLATITUDE: every output must reference the actual variation names + tradeoffs. Generic synthesis filler is forbidden.
 
@@ -191,7 +278,7 @@ Return strict JSON.`;
 
   const constraintsBlock = buildConstraintsBlock(ctx.constraints ?? null);
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${lensBlock}${findingsBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${effectivenessBlock}${lensBlock}${findingsBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
 
   const raw = await llmJSON<{
     description?: unknown;

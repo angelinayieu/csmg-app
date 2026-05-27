@@ -9,16 +9,28 @@
 //   • The set of rooms (a new room = new analyses possible)
 //   • The set of items per room (entities added/removed by regenerate)
 //   • The set of elected variation ids (cross-room election changes)
+//   • The set of expansion-tree node ids that are KEPT (M1 — added
+//     once Strategy Brief began surfacing expansion depth. Without
+//     this, the user could click [+] 12 times and the cached
+//     polish/analysis would never invalidate because the room/item/
+//     election footprint hadn't changed.)
 //
 // Inputs that should NOT invalidate:
 //   • Item text / description / definition (cosmetic)
 //   • Variation rank / addresses_pain values (drift only)
 //   • Composition cache state (derived)
+//   • Parked expansion nodes (user hid; same as never spawned)
 
 export interface StateHashInput {
   roomIds: string[];
   itemIds: string[];
   electedVariationIds: string[];
+  /** M1 — ids of expansion-tree nodes whose disposition is "kept" or
+   *  null (LLM-generated, user has not parked). Parked nodes are
+   *  excluded so toggling a node to parked produces the same hash as
+   *  if it had never been spawned. Optional for back-compat with
+   *  callers that haven't been updated. */
+  expansionNodeIds?: string[];
 }
 
 export function stateHash(input: StateHashInput): string {
@@ -26,6 +38,7 @@ export function stateHash(input: StateHashInput): string {
     `r:${input.roomIds.join("|")}`,
     `i:${input.itemIds.join("|")}`,
     `e:${input.electedVariationIds.join("|")}`,
+    `x:${(input.expansionNodeIds ?? []).join("|")}`,
   ];
   return foldHash(parts.join("\n"));
 }

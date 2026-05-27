@@ -187,6 +187,14 @@ export function WorkspaceLibraryCard({
               sep
             />
           )}
+          {card.totals.expansion_nodes > 0 && (
+            <Stat
+              label={`${card.totals.expansion_nodes} deep ${
+                card.totals.expansion_nodes === 1 ? "dive" : "dives"
+              }`}
+              sep
+            />
+          )}
           {hasAttention && (
             <span
               className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"

@@ -65,6 +65,10 @@ export interface WorkspaceCardData {
     composed_designs: number;
     experiments_planned: number;
     open_conflicts: number;
+    /** M2 — count of L3+ expansion-tree nodes the user has kept
+     *  (non-parked) across all rooms in this space. Without this,
+     *  deep spaces look identical to shallow ones at library level. */
+    expansion_nodes: number;
   };
   /** Top 3 themes from distill_concepts findings — first chips shown. */
   themes: WorkspaceTheme[];
@@ -190,6 +194,7 @@ export async function loadWorkspaceLibrary(
     let composedCount = 0;
     let experimentsCount = 0;
     let openConflictCount = 0;
+    let expansionNodesCount = 0;
     for (const e of myEntities) {
       const det = e.expanded_detail;
       if (!det) continue;
@@ -209,6 +214,14 @@ export async function loadWorkspaceLibrary(
       // Prototype briefs.
       if (Array.isArray(det.prototype_briefs)) {
         experimentsCount += det.prototype_briefs.length;
+      }
+      // M2 — kept expansion-tree depth. Parked nodes excluded so
+      // toggling a node to parked has the same visible effect as
+      // never spawning it.
+      if (Array.isArray(det.expansion_tree)) {
+        for (const n of det.expansion_tree) {
+          if (n.disposition !== "parked") expansionNodesCount += 1;
+        }
       }
     }
 
@@ -279,6 +292,7 @@ export async function loadWorkspaceLibrary(
         composed_designs: composedCount,
         experiments_planned: experimentsCount,
         open_conflicts: openConflictCount,
+        expansion_nodes: expansionNodesCount,
       },
       themes,
       has_polished_brief: hasPolishedBrief,
