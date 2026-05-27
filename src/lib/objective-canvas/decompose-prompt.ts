@@ -47,6 +47,13 @@ export interface BuildDecomposeArgs {
    *  array → block is omitted, generation falls through to
    *  intra-space-only context (legacy behavior). */
   priorConcepts?: RelevantCanonicalConcept[];
+  /** Phase 11.A.4 — when the objective's layer stack has been
+   *  generated, pass it here so the system prompt gains a JOB 3
+   *  (tag each proposal with layer_ordinals + layer_position_label)
+   *  and the user prompt injects an AVAILABLE LAYERS block. Without
+   *  this, the proposer behaves identically to pre-11.A — proposals
+   *  are emitted without layer tags. Back-compat preserved. */
+  objectiveStack?: import("./layer-model").ObjectiveStack;
 }
 
 /** Intent-specific mixins appended to the base system prompt. Each
@@ -97,11 +104,45 @@ export function temperatureForIntent(intent: SubObjectiveIntent): number {
 export function buildSystemPrompt(
   intent: SubObjectiveIntent = "initial",
   hcdMode: boolean = false,
+  hasLayerStack: boolean = false,
 ): string {
   const mixin = INTENT_MIXINS[intent] ?? "";
   const hcd = hcdMode ? HCD_MIXIN : "";
-  return baseSystemPrompt() + mixin + hcd;
+  const layers = hasLayerStack ? LAYER_TAGGING_MIXIN : "";
+  return baseSystemPrompt() + mixin + hcd + layers;
 }
+
+// Phase 11.A.4 — Layer tagging instructions. Only included when an
+// ObjectiveStack is supplied to the user prompt. Tells the LLM to
+// tag every proposal with which layers it operates at + a
+// human-readable layer_position_label. The available layers + their
+// variables get listed in the user prompt's AVAILABLE LAYERS block.
+const LAYER_TAGGING_MIXIN = `
+
+JOB 3 — TAG EACH PROPOSAL WITH ITS LAYER POSITION:
+You will receive an AVAILABLE LAYERS block in the user prompt listing the objective's causal stack (4-6 layers, ordinal 1 = substrate / inputs, ordinal N = outcome / measurement).
+
+For EACH proposal, populate two fields:
+
+  layer_ordinals : integer[]
+    — Which layers this proposal touches. Most proposals touch 1-2 layers.
+    — Substrate (L1) and outcome (L_top) proposals are common as single-layer.
+    — Mechanism-altitude proposals often BRIDGE adjacent layers (L_n → L_(n+1)).
+    — Cross-stack proposals (≥3 layers) are rare — only when the proposal
+      genuinely spans the whole stack (e.g., a measurement-and-feedback framework).
+    — Use the ordinals exactly as shown in the AVAILABLE LAYERS block. Never invent ordinals beyond what's listed.
+
+  layer_position_label : string
+    — Standard format based on layer_ordinals:
+      Single layer:        "L3 · Direct"
+      Adjacent pair:       "L2→L3 · Bridge"
+      Non-adjacent pair:   "L1+L4 · Span"
+      ≥3 layers:           "Cross-stack"
+    — Use L<ordinal> where the layer's actual id matches. Don't include layer NAMES in the label — that's just the ordinal.
+
+COVERAGE BIAS:
+When proposing 4-5 sub-objectives, aim for layer DIVERSITY — don't generate every proposal at the same layer. The user should see proposals across the stack so they can choose where to invest.
+Concretely: if the stack has 5 layers and you're emitting 4 proposals, prefer touching at least 3 distinct layers across the set. Single-layer concentration is a smell unless one layer is overwhelmingly load-bearing.`;
 
 // Phase 11 — Human-Centered Design bias. Appended when the space has
 // hcd_mode=true. Pushes proposals to anchor on real users + observable
@@ -171,6 +212,7 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
     lens,
     uncoveredLensIndices,
     priorConcepts,
+    objectiveStack,
   } = args;
 
   const clarifyingBlock =
@@ -258,18 +300,42 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
       ? `\n\n${PRIOR_CONCEPTS_RULE}\n`
       : "";
 
+  // Phase 11.A.4 — AVAILABLE LAYERS block. Renders the ObjectiveStack
+  // top-down so ordinals are visually obvious. Each layer lists its
+  // archetype + 3-7 variables; the LLM uses this to tag every
+  // proposal with layer_ordinals + layer_position_label.
+  const layerBlock =
+    objectiveStack && objectiveStack.layers.length > 0
+      ? `\n\nAVAILABLE LAYERS (the objective's causal stack, ordinal 1 = substrate / ordinal N = outcome):\n${[
+          ...objectiveStack.layers,
+        ]
+          .sort((a, b) => b.ordinal - a.ordinal)
+          .map((l) => {
+            const varNames = l.variables
+              .slice(0, 7)
+              .map((v) => v.name)
+              .join(", ");
+            return `  L${l.ordinal} · ${l.archetype} · ${l.name}\n     ${l.description}\n     variables: ${varNames}`;
+          })
+          .join("\n")}`
+      : "";
+
   return `REFINED OBJECTIVE:
 """
 ${objective.slice(0, 4000)}
-"""${clarifyingBlock}${researchBlock}${lensBlock}${priorConceptsBlock}${existingBlock}${uncoveredBlock}${lensCoverageRule}${priorConceptsRule}
+"""${clarifyingBlock}${researchBlock}${lensBlock}${layerBlock}${priorConceptsBlock}${existingBlock}${uncoveredBlock}${lensCoverageRule}${priorConceptsRule}
 
 Propose 4–5 sub-objectives per the system instructions. Mark exactly 3 as recommended=true (the ones most load-bearing for delivering the parent).`;
 }
 
 /** Schema is built dynamically — when a lens is in play, every
  *  proposal must include lens_coverage[]. Keeps strict-mode happy
- *  (every field in `required`). */
-export function buildResponseSchema(hasLens: boolean) {
+ *  (every field in `required`). Phase 11.A.4 — hasLayerStack adds
+ *  layer_ordinals + layer_position_label to the proposal schema. */
+export function buildResponseSchema(
+  hasLens: boolean,
+  hasLayerStack: boolean = false,
+) {
   const proposalProps: Record<string, unknown> = {
     title: { type: "string" },
     summary: { type: "string" },
@@ -290,6 +356,14 @@ export function buildResponseSchema(hasLens: boolean) {
       items: { type: "number" },
     };
     proposalRequired.push("lens_coverage");
+  }
+  if (hasLayerStack) {
+    proposalProps.layer_ordinals = {
+      type: "array",
+      items: { type: "integer" },
+    };
+    proposalProps.layer_position_label = { type: "string" };
+    proposalRequired.push("layer_ordinals", "layer_position_label");
   }
 
   return {

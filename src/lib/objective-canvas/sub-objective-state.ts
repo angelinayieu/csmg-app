@@ -68,6 +68,20 @@ export interface SubObjectiveProposal {
    *  / orphan flags + power the gap_fill intent prompt. Empty array
    *  when no annotation directly seeded the proposal. */
   lens_coverage?: number[];
+  /** Phase 11.A.4 — which ObjectiveStack layers this proposal touches.
+   *  1-based ordinals matching synthesis_data.objective_canvas.layers.
+   *  Empty / undefined when no stack was available at generation time
+   *  (legacy proposals or generation before stack landed). */
+  layer_ordinals?: number[];
+  /** Phase 11.A.4 — human-readable layer-position chip computed at
+   *  generation time. Standard shapes:
+   *    "L3 · Direct"        — single-layer
+   *    "L2→L3 · Bridge"     — adjacent pair
+   *    "L1+L4 · Span"       — non-adjacent
+   *    "Cross-stack"        — ≥3 layers
+   *  The picker card surfaces this verbatim — no client-side
+   *  derivation needed. Optional for legacy + back-compat. */
+  layer_position_label?: string;
 }
 
 export interface SubObjectiveBatch {
@@ -193,6 +207,25 @@ export function normalizeProposals(
           ? dispositionRaw
           : null;
 
+      // Phase 11.A.4 — layer tagging (optional). 1-based ordinals
+      // dedup + cap at 6 (matches LAYER_MAX in layer-model). Drop
+      // any non-numeric / out-of-range entries silently — pre-A.A
+      // generations won't have these, so absence is normal.
+      const rawLayers = Array.isArray(rec.layer_ordinals)
+        ? (rec.layer_ordinals as unknown[])
+        : [];
+      const layerSet = new Set<number>();
+      for (const v of rawLayers) {
+        if (typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 6) {
+          layerSet.add(Math.floor(v));
+        }
+      }
+      const layer_ordinals = Array.from(layerSet).sort((a, b) => a - b);
+      const layer_position_label =
+        typeof rec.layer_position_label === "string"
+          ? rec.layer_position_label.trim().slice(0, 40)
+          : undefined;
+
       return {
         id,
         title,
@@ -202,6 +235,8 @@ export function normalizeProposals(
         recommended,
         ...(batch_id ? { batch_id } : {}),
         ...(lens_coverage.length > 0 ? { lens_coverage } : {}),
+        ...(layer_ordinals.length > 0 ? { layer_ordinals } : {}),
+        ...(layer_position_label ? { layer_position_label } : {}),
         disposition,
       };
     })

@@ -118,6 +118,16 @@ export async function POST(req: NextRequest) {
     title: p.title.slice(0, 200),
     description: p.summary,
     auto_detection_rationale: p.rationale,
+    // Phase 11.A.4 — persist the proposer's layer tagging onto
+    // improvement_goals. Empty arrays + nulls are fine — the migration
+    // defaults layer_ordinals to '{}' and layer_position_label is
+    // already nullable. Pre-11.A proposals just don't carry these.
+    ...(p.layer_ordinals && p.layer_ordinals.length > 0
+      ? { layer_ordinals: p.layer_ordinals }
+      : {}),
+    ...(p.layer_position_label
+      ? { layer_position_label: p.layer_position_label }
+      : {}),
   }));
 
   const insertRes = await db

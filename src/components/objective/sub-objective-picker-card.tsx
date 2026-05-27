@@ -43,6 +43,7 @@ import type {
   ProposalCluster,
 } from "@/lib/objective-canvas/cluster-proposals";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
+import { LayerPositionChip } from "@/components/objective/layer-position-chip";
 
 interface ObjectiveAnnotationLite {
   phrase: string;
@@ -1093,6 +1094,18 @@ function ProposalRow({
               >
                 Rep
               </span>
+            )}
+            {/* Phase 11.A.6 — layer position chip. Renders only when
+                the proposer tagged this proposal with layer_ordinals
+                (requires the space's ObjectiveStack to exist at gen
+                time). Compact mode so the title doesn't get crowded
+                — full label still readable on hover via title attr. */}
+            {proposal.layer_ordinals && proposal.layer_ordinals.length > 0 && (
+              <LayerPositionChip
+                ordinals={proposal.layer_ordinals}
+                positionLabel={proposal.layer_position_label}
+                compact
+              />
             )}
           </div>
 

@@ -242,6 +242,14 @@ export async function POST(req: NextRequest) {
       // Phase 11 — read HCD mode from space state and bias proposals
       // toward user-role-grounded, prototypable framings.
       hcdMode: state.hcd_mode === true,
+      // Phase 11.A.4 — when the space's ObjectiveStack has been
+      // generated (auto-fired by clarify/complete, or via the
+      // /layers/generate endpoint), thread it through so JOB 3 fires
+      // + each proposal carries layer_ordinals + layer_position_label.
+      // Undefined when no stack exists yet — proposer behaves
+      // identically to pre-11.A.
+      objectiveStack:
+        space.synthesis_data?.objective_canvas?.layers ?? undefined,
     });
 
     if (mode === "variant" && existingBlock) {

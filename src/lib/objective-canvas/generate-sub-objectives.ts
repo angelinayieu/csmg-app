@@ -16,6 +16,7 @@ import {
 } from "./sub-objective-state";
 import type { ObjectiveAnnotation } from "./generate-annotations";
 import type { RelevantCanonicalConcept } from "./canonical-concept-lookup";
+import type { ObjectiveStack } from "./layer-model";
 
 interface LlmShape {
   category?: unknown;
@@ -26,6 +27,8 @@ interface LlmShape {
     confidence?: unknown;
     recommended?: unknown;
     lens_coverage?: unknown;
+    layer_ordinals?: unknown;
+    layer_position_label?: unknown;
   }>;
 }
 
@@ -58,6 +61,11 @@ export interface GenerateSubObjectivesOptions {
    *  objective. Drives the "link or diverge" block in the prompt.
    *  Empty / undefined → omitted (legacy single-space behavior). */
   priorConcepts?: RelevantCanonicalConcept[];
+  /** Phase 11.A.4 — when the space's ObjectiveStack has been
+   *  generated, pass it here so JOB 3 (layer tagging) fires + each
+   *  proposal carries layer_ordinals + layer_position_label.
+   *  Undefined preserves legacy behavior (no layer tags). */
+  objectiveStack?: ObjectiveStack;
 }
 
 export interface GeneratedSubObjectives {
@@ -101,8 +109,11 @@ export async function generateSubObjectiveProposals(
         .slice(0, 8)
     : undefined;
 
+  const hasLayerStack =
+    !!opts.objectiveStack && opts.objectiveStack.layers.length > 0;
+
   const raw = await llmJSON<LlmShape>({
-    system: buildSystemPrompt(intent, opts.hcdMode === true),
+    system: buildSystemPrompt(intent, opts.hcdMode === true, hasLayerStack),
     user: buildUserPrompt({
       objective: opts.objective,
       clarifying: opts.clarifying,
@@ -112,8 +123,9 @@ export async function generateSubObjectiveProposals(
       lens,
       uncoveredLensIndices: opts.uncoveredLensIndices,
       priorConcepts: opts.priorConcepts,
+      objectiveStack: opts.objectiveStack,
     }),
-    responseSchema: buildResponseSchema(hasLens),
+    responseSchema: buildResponseSchema(hasLens, hasLayerStack),
     temperature,
     maxTokens: 2400,
   });
@@ -130,6 +142,11 @@ export async function generateSubObjectiveProposals(
     title:
       typeof p?.title === "string" ? stripVerbPrefix(p.title) : p?.title,
     lens_coverage: p?.lens_coverage,
+    // Phase 11.A.4 — forward layer tags through the normalizer when
+    // the LLM emitted them. The normalizer validates ordinals + caps
+    // the label length; missing fields drop cleanly.
+    layer_ordinals: p?.layer_ordinals,
+    layer_position_label: p?.layer_position_label,
   }));
   const proposals = normalizeProposals(idAssigned);
 
