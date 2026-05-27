@@ -14,8 +14,14 @@ import type { DecisionAction } from "./decision-log";
 export type NotebookAction = DecisionAction;
 
 export interface NotebookEventSubject {
-  /** Sub-objective room id. Always present — events are scoped. */
+  /** Sub-objective room id. Nullable post-Phase-10a — space-scoped
+   *  events (stage transitions, constraints, finding curation, theme
+   *  distillation, concept branching) leave this null. */
   sub_objective_id?: string | null;
+  /** Sub-objective TITLE — populated by the GET handler enrichment
+   *  so the All-rooms (space-scoped) view can render "in Room X"
+   *  without a second lookup. */
+  sub_objective_title?: string | null;
   /** Entity (typically a feature) the event acted on. */
   entity_id?: string | null;
   entity_name?: string | null;
@@ -45,6 +51,40 @@ export interface NotebookEventMeta {
   approved?: boolean;
   /** Generic display blurb the UI can use when nothing else fits. */
   blurb?: string;
+  // ── Phase 10a system event metadata ──
+  /** room_generated — counts per layer to render "Room born: 4 pains, 5 mechanisms, 3 outcomes". */
+  room_layer_counts?: { pain?: number; features?: number; outcomes?: number };
+  /** item_expanded — surface how many variations + whether research backed it. */
+  variation_count?: number;
+  had_research?: boolean;
+  /** expansion_spawned — title of the new node + which attach point it grew from. */
+  expansion_node_title?: string;
+  attach_point?: string;
+  /** prototype_status_changed — prior + new lifecycle state + optional result_summary on concluded. */
+  prototype_status?: "planned" | "running" | "concluded" | "abandoned" | null;
+  prior_prototype_status?: "planned" | "running" | "concluded" | "abandoned" | null;
+  result_summary?: string;
+  /** finding_* — what was acknowledged/dismissed/resolved. */
+  finding_id?: string;
+  finding_title?: string;
+  finding_category?: string;
+  finding_severity?: string;
+  /** theme_distilled — theme + the new sub-objective it spawned. */
+  theme_title?: string;
+  spawned_sub_objective_id?: string;
+  spawned_sub_objective_title?: string;
+  /** concept_branched — canonical concept that seeded a new room. */
+  canonical_code?: string;
+  canonical_display_name?: string;
+  prior_entity_count?: number;
+  /** constraints_set — short human-readable summary like "time=3mo, budget=low, team=2". */
+  constraints_summary?: string;
+  /** stage_transitioned — clarifying → picking, picking → main. */
+  stage_from?: "clarifying" | "picking" | "main" | "done";
+  stage_to?: "clarifying" | "picking" | "main" | "done";
+  /** autopilot_run — how many chains the user kicked off in this session. */
+  chain_count?: number;
+  chain_ids?: string[];
 }
 
 export interface NotebookEvent {

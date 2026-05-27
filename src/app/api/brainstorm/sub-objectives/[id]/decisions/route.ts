@@ -44,6 +44,18 @@ const ALLOWED_ACTIONS: ReadonlyArray<DecisionAction> = [
   "compose",
   "autopilot_run",
   "autopilot_iteration",
+  // Phase 10a — system events + cross-room curation.
+  "room_generated",
+  "item_expanded",
+  "expansion_spawned",
+  "prototype_status_changed",
+  "finding_acknowledged",
+  "finding_dismissed",
+  "finding_resolved",
+  "theme_distilled",
+  "concept_branched",
+  "constraints_set",
+  "stage_transitioned",
 ];
 
 const DEFAULT_LIMIT = 30;
@@ -300,6 +312,64 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
         approved:
           typeof meta.approved === "boolean" ? (meta.approved as boolean) : undefined,
         blurb: stringOrUndefined(meta.blurb),
+        // ── Phase 10a — system event metadata pass-through ──
+        room_layer_counts:
+          meta.room_layer_counts && typeof meta.room_layer_counts === "object"
+            ? (meta.room_layer_counts as {
+                pain?: number;
+                features?: number;
+                outcomes?: number;
+              })
+            : undefined,
+        variation_count: numberOrUndefined(meta.variation_count),
+        had_research:
+          typeof meta.had_research === "boolean"
+            ? (meta.had_research as boolean)
+            : undefined,
+        expansion_node_title: stringOrUndefined(meta.expansion_node_title),
+        attach_point: stringOrUndefined(meta.attach_point),
+        prototype_status: stringOrUndefined(meta.prototype_status) as
+          | "planned"
+          | "running"
+          | "concluded"
+          | "abandoned"
+          | undefined,
+        prior_prototype_status: stringOrUndefined(meta.prior_prototype_status) as
+          | "planned"
+          | "running"
+          | "concluded"
+          | "abandoned"
+          | undefined,
+        result_summary: stringOrUndefined(meta.result_summary),
+        finding_id: stringOrUndefined(meta.finding_id),
+        finding_title: stringOrUndefined(meta.finding_title),
+        finding_category: stringOrUndefined(meta.finding_category),
+        finding_severity: stringOrUndefined(meta.finding_severity),
+        theme_title: stringOrUndefined(meta.theme_title),
+        spawned_sub_objective_id: stringOrUndefined(meta.spawned_sub_objective_id),
+        spawned_sub_objective_title: stringOrUndefined(
+          meta.spawned_sub_objective_title,
+        ),
+        canonical_code: stringOrUndefined(meta.canonical_code),
+        canonical_display_name: stringOrUndefined(meta.canonical_display_name),
+        prior_entity_count: numberOrUndefined(meta.prior_entity_count),
+        constraints_summary: stringOrUndefined(meta.constraints_summary),
+        stage_from: stringOrUndefined(meta.stage_from) as
+          | "clarifying"
+          | "picking"
+          | "main"
+          | "done"
+          | undefined,
+        stage_to: stringOrUndefined(meta.stage_to) as
+          | "clarifying"
+          | "picking"
+          | "main"
+          | "done"
+          | undefined,
+        chain_count: numberOrUndefined(meta.chain_count),
+        chain_ids: Array.isArray(meta.chain_ids)
+          ? (meta.chain_ids.filter((s) => typeof s === "string") as string[])
+          : undefined,
       },
     };
   });

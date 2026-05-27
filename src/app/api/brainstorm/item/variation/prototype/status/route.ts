@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse } from "@/lib/api-helpers";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 
@@ -64,7 +65,7 @@ export async function PATCH(req: NextRequest) {
 
   const { data: entity } = await db
     .from("entities")
-    .select("id, space_id, expanded_detail")
+    .select("id, space_id, parent_sub_objective_id, name, expanded_detail")
     .eq("id", entityId)
     .maybeSingle();
   if (!entity) {
@@ -90,9 +91,13 @@ export async function PATCH(req: NextRequest) {
 
   const now = new Date().toISOString();
   let found = false;
+  let priorStatus: ExperimentStatus = null;
+  let variationId: string | null = null;
   const nextBriefs = detail.prototype_briefs.map((b) => {
     if (b.id !== briefId) return b;
     found = true;
+    priorStatus = (b.status ?? null) as ExperimentStatus;
+    variationId = typeof b.variation_id === "string" ? b.variation_id : null;
     return {
       ...b,
       status,
@@ -121,6 +126,32 @@ export async function PATCH(req: NextRequest) {
       { error: "persist failed", detail: writeRes.error.message },
       { status: 500 },
     );
+  }
+
+  // Phase 10a — log the lifecycle transition for the Lab Notebook.
+  // Only log when status actually changed (avoid noise from idempotent calls).
+  if (priorStatus !== status) {
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId: entity.space_id,
+      subObjectiveId:
+        typeof entity.parent_sub_objective_id === "string"
+          ? entity.parent_sub_objective_id
+          : null,
+      proposalId: variationId,
+      action: "prototype_status_changed",
+      metadata: {
+        entity_type: "prototype_brief",
+        entity_id: entityId,
+        entity_name: typeof entity.name === "string" ? entity.name : null,
+        brief_id: briefId,
+        prototype_status: status,
+        prior_prototype_status: priorStatus,
+        ...(status === "concluded" && resultSummary
+          ? { result_summary: resultSummary }
+          : {}),
+      },
+    });
   }
 
   return NextResponse.json({

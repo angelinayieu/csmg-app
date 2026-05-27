@@ -40,6 +40,7 @@ import {
   type UpstreamStaleness,
 } from "@/lib/objective-canvas/upstream-staleness";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -913,6 +914,29 @@ export async function POST(req: NextRequest) {
       "[item/expand] failed to persist expanded_detail:",
       writeRes.error.message,
     );
+  }
+
+  // Phase 10a — log item_expanded for the Lab Notebook. ONLY logs on
+  // the fresh-generation path (we're past the cache-hit early return)
+  // so the notebook reflects actual LLM work, not idempotent re-reads.
+  if (!writeRes.error) {
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId: entity.space_id,
+      subObjectiveId:
+        typeof entity.parent_sub_objective_id === "string"
+          ? entity.parent_sub_objective_id
+          : null,
+      action: "item_expanded",
+      metadata: {
+        entity_id: entityId,
+        entity_name: typeof entity.name === "string" ? entity.name : null,
+        layer,
+        variation_count: merged.variations?.length ?? 0,
+        had_research: !!ragBlock,
+        regenerated: !!existing,
+      },
+    });
   }
 
   // Fresh-generation response — by construction NOT stale (we just

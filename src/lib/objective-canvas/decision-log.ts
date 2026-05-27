@@ -35,7 +35,22 @@ export type DecisionAction =
   | "approve_bet"
   | "compose"
   | "autopilot_run"
-  | "autopilot_iteration";
+  | "autopilot_iteration"
+  // Phase 10a — system events + cross-room curation. The CHECK
+  // constraint is extended in 20260829_phase10a_notebook_events.
+  // sub_objective_id null = space-scoped event (stage / constraints /
+  // findings / themes / concepts).
+  | "room_generated"
+  | "item_expanded"
+  | "expansion_spawned"
+  | "prototype_status_changed"
+  | "finding_acknowledged"
+  | "finding_dismissed"
+  | "finding_resolved"
+  | "theme_distilled"
+  | "concept_branched"
+  | "constraints_set"
+  | "stage_transitioned";
 
 export interface LogDecisionArgs {
   userId: string;

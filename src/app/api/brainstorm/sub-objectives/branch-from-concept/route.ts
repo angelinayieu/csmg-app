@@ -24,6 +24,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { branchConceptIntoSpace } from "@/lib/objective-canvas/branch-concept-into-space";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -209,6 +210,22 @@ export async function POST(req: NextRequest) {
   // will link the resulting entities to the canonical_concepts row.
   // Tally bumping happens through that path. We're not re-implementing
   // the matcher here.
+
+  // Phase 10a — log the concept-branched event for the Lab Notebook.
+  // Space-scoped (sub_objective_id null) so it lands on the All-rooms view.
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId,
+    subObjectiveId: null,
+    action: "concept_branched",
+    metadata: {
+      canonical_code: concept.canonical_code,
+      canonical_display_name: concept.display_name,
+      prior_entity_count: priorUsages.length,
+      spawned_sub_objective_id: newGoalId,
+      spawned_sub_objective_title: proposal.title,
+    },
+  });
 
   return NextResponse.json({
     goal_id: newGoalId,

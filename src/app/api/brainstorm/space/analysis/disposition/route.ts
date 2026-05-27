@@ -11,6 +11,10 @@ import type {
   CrossRoomAnalysisState,
   FindingDisposition,
 } from "@/lib/objective-canvas/analyses/types";
+import {
+  logDecision,
+  type DecisionAction,
+} from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 
@@ -97,6 +101,38 @@ export async function PATCH(req: NextRequest) {
       { error: "persist failed", detail: writeRes.error.message },
       { status: 500 },
     );
+  }
+
+  // Phase 10a — log finding disposition for the Lab Notebook.
+  // Only the three terminal states earn an event; flipping back to
+  // "open" is treated as a noop (preserves the audit-grade story
+  // of decisions actually made). Space-scoped event.
+  const finding = next.findings[idx];
+  const actionByDisposition: Record<
+    FindingDisposition,
+    DecisionAction | null
+  > = {
+    open: null,
+    acknowledged: "finding_acknowledged",
+    resolved: "finding_resolved",
+    dismissed: "finding_dismissed",
+  };
+  const action = actionByDisposition[disposition];
+  if (action) {
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId,
+      subObjectiveId: null,
+      action,
+      metadata: {
+        finding_id: finding.id,
+        finding_title: finding.title,
+        finding_category: finding.category,
+        finding_severity: finding.severity,
+        analysis_key: finding.analysis_key,
+        room_ids: finding.references?.room_ids ?? [],
+      },
+    });
   }
 
   return NextResponse.json({ analysis: next });

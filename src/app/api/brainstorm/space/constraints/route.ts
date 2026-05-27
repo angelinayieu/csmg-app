@@ -19,6 +19,7 @@ import {
   type TeamSize,
   type RiskTolerance,
 } from "@/lib/objective-canvas/constraints";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -176,6 +177,31 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+
+  // Phase 10a — log space-scoped constraint changes for the Lab Notebook.
+  // Short readable summary so the notebook can render at a glance.
+  const summaryParts: string[] = [];
+  if (next.time_horizon) summaryParts.push(`time=${next.time_horizon}`);
+  if (next.budget_tier) summaryParts.push(`budget=${next.budget_tier}`);
+  if (next.team_size) summaryParts.push(`team=${next.team_size}`);
+  if (next.risk_tolerance) summaryParts.push(`risk=${next.risk_tolerance}`);
+  if (next.compliance_requirements && next.compliance_requirements.length > 0) {
+    summaryParts.push(`compliance(${next.compliance_requirements.length})`);
+  }
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId,
+    subObjectiveId: null,
+    action: "constraints_set",
+    metadata: {
+      constraints_summary: summaryParts.join(", "),
+      time_horizon: next.time_horizon,
+      budget_tier: next.budget_tier,
+      team_size: next.team_size,
+      risk_tolerance: next.risk_tolerance,
+      compliance_count: next.compliance_requirements?.length ?? 0,
+    },
+  });
 
   return NextResponse.json({ constraints: next });
 }

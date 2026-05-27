@@ -49,6 +49,7 @@ import {
 } from "@/lib/objective-canvas/expansion-tree";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -467,6 +468,35 @@ export async function POST(req: NextRequest) {
       "[item/expansion/spawn] persist failed (non-fatal):",
       writeRes.error.message,
     );
+  }
+
+  // Phase 10a — log expansion_spawned for the Lab Notebook.
+  // Use the first new node as the canonical "what was spawned" for
+  // the headline; metadata carries the full set so the chat agent
+  // can later reason about clusters. Only emits if persist succeeded
+  // (writeRes.error means the tree isn't on disk).
+  if (!writeRes.error && newNodes.length > 0) {
+    const headline = newNodes[0];
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId: entity.space_id,
+      subObjectiveId:
+        typeof entity.parent_sub_objective_id === "string"
+          ? entity.parent_sub_objective_id
+          : null,
+      action: "expansion_spawned",
+      metadata: {
+        entity_type: "expansion_node",
+        entity_id: entityId,
+        entity_name: typeof entity.name === "string" ? entity.name : null,
+        expansion_node_title: headline.title,
+        attach_point: headline.attach_point,
+        spawned_ids: newNodes.map((n) => n.id),
+        spawned_count: newNodes.length,
+        depth,
+        domain,
+      },
+    });
   }
 
   return NextResponse.json({

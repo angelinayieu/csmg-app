@@ -31,9 +31,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
+  ArrowRight,
   Check,
   ChevronDown,
+  Layers,
   Loader2,
+  Plus,
   RefreshCw,
   Sparkles,
   X,
@@ -67,9 +70,32 @@ const FILTERS: ReadonlyArray<{
   actions: NotebookEvent["action"][] | null;
 }> = [
   { label: "All", actions: null },
-  { label: "Experiments", actions: ["rd_iterate", "score"] },
+  {
+    label: "Experiments",
+    actions: ["rd_iterate", "score", "autopilot_run", "autopilot_iteration"],
+  },
   { label: "Elections", actions: ["elect", "reject", "defer", "clear"] },
   { label: "Bets", actions: ["approve_bet", "compose"] },
+  // Phase 10a — System events: room births, item expansions, expansion tree
+  // growth, prototype lifecycle, finding curation, theme/concept branching,
+  // constraint changes, stage transitions. These describe what the canvas
+  // (and the user) did at the system altitude rather than per-chain work.
+  {
+    label: "System",
+    actions: [
+      "room_generated",
+      "item_expanded",
+      "expansion_spawned",
+      "prototype_status_changed",
+      "finding_acknowledged",
+      "finding_dismissed",
+      "finding_resolved",
+      "theme_distilled",
+      "concept_branched",
+      "constraints_set",
+      "stage_transitioned",
+    ],
+  },
 ];
 
 export function LabNotebookPanel({
@@ -525,6 +551,90 @@ function MetadataChips({ event: ev }: { event: NotebookEvent }) {
       label: `targets: "${ev.meta.target_root_cause}"`,
     });
   }
+  // ── Phase 10a system-event chips ──
+  if (ev.meta.room_layer_counts) {
+    const c = ev.meta.room_layer_counts;
+    const parts: string[] = [];
+    if (c.pain !== undefined) parts.push(`${c.pain} pains`);
+    if (c.features !== undefined) parts.push(`${c.features} mechanisms`);
+    if (c.outcomes !== undefined) parts.push(`${c.outcomes} outcomes`);
+    if (parts.length > 0) {
+      chips.push({ key: "layer-counts", label: parts.join(" · ") });
+    }
+  }
+  if (typeof ev.meta.variation_count === "number" && ev.meta.variation_count > 0) {
+    chips.push({
+      key: "variations",
+      label: `${ev.meta.variation_count} variation${ev.meta.variation_count === 1 ? "" : "s"}`,
+    });
+  }
+  if (ev.meta.had_research) {
+    chips.push({ key: "research", label: "research-backed" });
+  }
+  if (ev.meta.prototype_status) {
+    const ps = ev.meta.prototype_status;
+    chips.push({
+      key: "proto-status",
+      label: ev.meta.prior_prototype_status
+        ? `${ev.meta.prior_prototype_status} → ${ps}`
+        : ps,
+      color:
+        ps === "concluded"
+          ? appleVibe.stage.outcomes
+          : ps === "abandoned"
+            ? appleVibe.stage.pain
+            : ps === "running"
+              ? appleVibe.stage.features
+              : appleVibe.text.tertiary,
+    });
+  }
+  if (ev.meta.expansion_node_title) {
+    chips.push({
+      key: "exp-title",
+      label: `"${ev.meta.expansion_node_title}"`,
+    });
+  }
+  if (ev.meta.finding_category) {
+    chips.push({
+      key: "find-cat",
+      label: ev.meta.finding_severity
+        ? `${ev.meta.finding_category} · ${ev.meta.finding_severity}`
+        : ev.meta.finding_category,
+      color:
+        ev.meta.finding_severity === "critical"
+          ? appleVibe.stage.pain
+          : appleVibe.text.tertiary,
+    });
+  }
+  if (ev.meta.theme_title) {
+    chips.push({ key: "theme", label: `"${ev.meta.theme_title}"` });
+  }
+  if (ev.meta.canonical_display_name) {
+    chips.push({
+      key: "concept",
+      label: ev.meta.canonical_display_name,
+      color: appleVibe.stage.objective,
+    });
+  }
+  if (ev.meta.constraints_summary) {
+    chips.push({
+      key: "constraints",
+      label: ev.meta.constraints_summary,
+    });
+  }
+  if (ev.meta.stage_from && ev.meta.stage_to) {
+    chips.push({
+      key: "stage",
+      label: `${ev.meta.stage_from} → ${ev.meta.stage_to}`,
+      color: appleVibe.accent.primary,
+    });
+  }
+  if (typeof ev.meta.chain_count === "number" && ev.meta.chain_count > 0) {
+    chips.push({
+      key: "chains",
+      label: `${ev.meta.chain_count} chain${ev.meta.chain_count === 1 ? "" : "s"}`,
+    });
+  }
   if (chips.length === 0) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-1">
@@ -610,11 +720,83 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
         color: appleVibe.text.tertiary,
       };
     case "autopilot_run":
+      return {
+        icon: Sparkles,
+        label: "Autopilot started",
+        color: appleVibe.stage.features,
+      };
     case "autopilot_iteration":
       return {
         icon: Sparkles,
         label: "Autopilot iteration",
         color: appleVibe.stage.features,
+      };
+    // ── Phase 10a — system event visuals ──
+    case "room_generated":
+      return {
+        icon: Layers,
+        label: "Room generated",
+        color: appleVibe.accent.primary,
+      };
+    case "item_expanded":
+      return {
+        icon: Sparkles,
+        label: "Expanded item",
+        color: appleVibe.stage.features,
+      };
+    case "expansion_spawned":
+      return {
+        icon: Plus,
+        label: "Spawned deeper",
+        color: appleVibe.stage.objective,
+      };
+    case "prototype_status_changed":
+      return {
+        icon: RefreshCw,
+        label: "Prototype status",
+        color: appleVibe.stage.features,
+      };
+    case "finding_acknowledged":
+      return {
+        icon: ChevronDown,
+        label: "Acknowledged finding",
+        color: appleVibe.text.tertiary,
+      };
+    case "finding_dismissed":
+      return {
+        icon: X,
+        label: "Dismissed finding",
+        color: appleVibe.text.tertiary,
+      };
+    case "finding_resolved":
+      return {
+        icon: Check,
+        label: "Resolved finding",
+        color: appleVibe.stage.outcomes,
+      };
+    case "theme_distilled":
+      return {
+        icon: ArrowRight,
+        label: "Distilled into room",
+        color: appleVibe.accent.primary,
+      };
+    case "concept_branched":
+      return {
+        icon: ArrowRight,
+        label: "Branched from concept",
+        color: appleVibe.accent.primary,
+      };
+    case "constraints_set":
+      return {
+        icon: RefreshCw,
+        label: "Updated constraints",
+        color: appleVibe.text.tertiary,
+      };
+    case "stage_transitioned":
+      return {
+        icon: ArrowRight,
+        label: "Stage advanced",
+        color: appleVibe.accent.primary,
       };
     default:
       return {

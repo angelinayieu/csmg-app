@@ -21,6 +21,7 @@ import {
   makeVersion,
   parseVersions,
 } from "@/lib/objective-canvas/annotation-versions";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 
@@ -74,6 +75,29 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+
+  // Phase 10a — log the stage transition for the Lab Notebook.
+  // Counts answered/skipped questions so the space-scoped notebook can
+  // render "transitioned to picking · 4 answered, 1 skipped" without
+  // another round trip.
+  const answeredCount = state.clarifying
+    ? Object.values(state.clarifying.answers).filter((a) => a.status === "answered").length
+    : 0;
+  const skippedCount = state.clarifying
+    ? Object.values(state.clarifying.answers).filter((a) => a.status === "skipped").length
+    : 0;
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId,
+    subObjectiveId: null,
+    action: "stage_transitioned",
+    metadata: {
+      stage_from: "clarifying",
+      stage_to: "picking",
+      answered_count: answeredCount,
+      skipped_count: skippedCount,
+    },
+  });
 
   // ── Kick off deep research (fire-and-forget) ────────────────────
   // Targeted 3-5 lens queries that ground the upcoming decompose +

@@ -35,6 +35,12 @@ type ChainResult = "ok" | "error" | "skipped";
 
 interface Props {
   chains: ChainTriple[];
+  /** Phase 10a — needed to log the autopilot_run event into the Lab
+   *  Notebook before the loop starts. Both can be omitted for legacy
+   *  mount sites that don't care about notebook integration; the run
+   *  still works, just without the parent grouping in the timeline. */
+  spaceId?: string;
+  subObjectiveId?: string;
   /** Called after each chain completes successfully (or fails).
    *  Caller typically bumps a refreshSignal that triggers
    *  per-CategoryCard re-fetches so the new candidates appear
@@ -48,6 +54,8 @@ const FEATURES = appleVibe.stage.features;
 
 export function AutopilotRunner({
   chains,
+  spaceId,
+  subObjectiveId,
   onChainComplete,
   onAllComplete,
 }: Props) {
@@ -72,6 +80,24 @@ export function AutopilotRunner({
     cancelRef.current = false;
     setResults(new Map());
     setCurrentIndex(0);
+
+    // Phase 10a — fire-and-forget log of the autopilot_run header.
+    // Notebook timestamp-groups the subsequent score / rd_iterate
+    // events under this row. Errors silently — the run continues
+    // regardless of whether logging succeeds.
+    if (spaceId && subObjectiveId) {
+      void fetch(
+        `/api/brainstorm/sub-objectives/${subObjectiveId}/autopilot/start`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            spaceId,
+            chainIds: chains.map((c) => c.id),
+          }),
+        },
+      ).catch(() => undefined);
+    }
 
     for (let i = 0; i < chains.length; i++) {
       if (cancelRef.current) {

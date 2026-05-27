@@ -36,6 +36,7 @@ import {
   type DeepBundle,
   type ResearchSource,
 } from "@/lib/research/research-service";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 // ── entities table contracts (Phase 6) ────────────────────────────
 // entity_category has a CHECK constraint to one of these values;
@@ -654,6 +655,26 @@ export async function POST(req: NextRequest) {
       room_lane_labels: lane_labels,
     })
     .eq("id", subObjectiveId);
+
+  // Phase 10a — log room_generated for the Lab Notebook. The room
+  // panel renders this as the room's "birthday" event; the All-rooms
+  // view surfaces it as the room's appearance on the canvas timeline.
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId,
+    subObjectiveId,
+    action: "room_generated",
+    metadata: {
+      mode,
+      room_layer_counts: {
+        pain: pain.length,
+        features: features.length,
+        outcomes: outcomes.length,
+      },
+      edge_count: edgeCount,
+      correlation_warning: correlationWarning,
+    },
+  });
 
   return NextResponse.json({
     summary: {

@@ -891,6 +891,8 @@ export function SubObjectiveRoomView({
       <div className="mb-3 flex items-center justify-end gap-2">
         <AutopilotRunner
           chains={allChains}
+          spaceId={spaceId}
+          subObjectiveId={subObjectiveId}
           onChainComplete={() =>
             setAutopilotRefreshKey((k) => k + 1)
           }

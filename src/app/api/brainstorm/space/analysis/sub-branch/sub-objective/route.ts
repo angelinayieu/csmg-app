@@ -17,6 +17,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse } from "@/lib/api-helpers";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 
@@ -143,6 +144,31 @@ export async function POST(req: NextRequest) {
       }
     }
   }
+
+  // Phase 10a — log the theme distillation for the Lab Notebook.
+  // Space-scoped (sub_objective_id null on the event itself; the
+  // spawned room id lives in metadata for navigation).
+  const cachedForLog: CrossRoomAnalysisState | null =
+    (space.synthesis_data?.cross_room_analysis as
+      | CrossRoomAnalysisState
+      | null
+      | undefined) ?? null;
+  const finding = cachedForLog && findingId
+    ? cachedForLog.findings.find((f) => f.id === findingId) ?? null
+    : null;
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId,
+    subObjectiveId: null,
+    action: "theme_distilled",
+    metadata: {
+      finding_id: findingId || null,
+      theme_title: finding?.title ?? title,
+      spawned_sub_objective_id: newSubObjectiveId,
+      spawned_sub_objective_title: title,
+      analysis_key: finding?.analysis_key ?? null,
+    },
+  });
 
   return NextResponse.json({ subObjectiveId: newSubObjectiveId });
 }
