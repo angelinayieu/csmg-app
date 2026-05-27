@@ -934,6 +934,8 @@ export function SubObjectiveRoomView({
       <LabNotebookPanel
         open={notebookOpen}
         onClose={() => setNotebookOpen(false)}
+        mode="room"
+        spaceId={spaceId}
         subObjectiveId={subObjectiveId}
         onNavigate={(target) => {
           if (target.entityId) {

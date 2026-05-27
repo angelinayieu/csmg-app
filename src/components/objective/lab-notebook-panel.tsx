@@ -36,8 +36,10 @@ import {
   ChevronDown,
   Layers,
   Loader2,
+  MessageCircle,
   Plus,
   RefreshCw,
+  Send,
   Sparkles,
   X,
 } from "lucide-react";
@@ -46,6 +48,10 @@ import type {
   NotebookEvent,
   NotebookEventPage,
 } from "@/lib/objective-canvas/notebook-events";
+import type {
+  AgentToolAction,
+  NotebookMessage,
+} from "@/lib/objective-canvas/notebook-chat";
 
 interface Props {
   /** When false, the panel is unmounted entirely (AnimatePresence
@@ -129,6 +135,20 @@ export function LabNotebookPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterIdx, setFilterIdx] = useState(0);
+  // Phase 10c — chat thread state. Sticky input at bottom + message
+  // bubbles at the top of the scrollable body. Loads on open + after
+  // every send so the thread stays in sync without polling.
+  const [messages, setMessages] = useState<NotebookMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  // Tracks which suggested-action tool calls the user has fired client-
+  // side so the UI shows "running…" then "done" without re-rendering
+  // from scratch. Keyed by assistant message id.
+  const [toolDispatchStatus, setToolDispatchStatus] = useState<
+    Record<string, "idle" | "running" | "done" | "error">
+  >({});
 
   // Phase 10b — switch feed URL based on mode. Room mode uses the
   // existing Phase 9 endpoint (filters by sub_objective_id). Space
@@ -185,6 +205,128 @@ export function LabNotebookPanel({
     setNextCursor(null);
     void fetchPage({ reset: true });
   }, [open, fetchPage]);
+
+  // Phase 10c — load chat thread on open. Thread is keyed by
+  // (space_id, sub_objective_id) — null sub_objective_id = canvas-
+  // level thread when the panel mounts in space mode.
+  const loadMessages = useCallback(async () => {
+    if (!open) return;
+    const sid =
+      mode === "space" ? spaceId : await (async () => spaceId)();
+    if (!sid) return;
+    setMessagesLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      qs.set("spaceId", sid);
+      if (mode === "room" && subObjectiveId) {
+        qs.set("subObjectiveId", subObjectiveId);
+      }
+      const res = await fetch(
+        `/api/brainstorm/notebook/messages?${qs.toString()}`,
+      );
+      if (res.ok) {
+        const j = (await res.json()) as { messages: NotebookMessage[] };
+        setMessages(j.messages ?? []);
+      }
+    } catch {
+      // Soft-fail: thread is optional. Timeline still works.
+    } finally {
+      setMessagesLoading(false);
+    }
+  }, [open, mode, spaceId, subObjectiveId]);
+
+  useEffect(() => {
+    void loadMessages();
+  }, [loadMessages]);
+
+  // ── Submit handler — POSTs the user turn, appends returned msgs ──
+  const sendChat = useCallback(async () => {
+    const text = chatInput.trim();
+    if (!text || chatSending) return;
+    // Resolve the spaceId — in room mode the host may not have passed
+    // it, but the chat endpoint needs it. We can't fetch the missing
+    // spaceId from here; fall back to "no chat" gracefully.
+    if (!spaceId) {
+      setChatError(
+        "Chat needs a space context — try opening the notebook again.",
+      );
+      return;
+    }
+    setChatSending(true);
+    setChatError(null);
+    try {
+      const res = await fetch("/api/brainstorm/notebook/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          spaceId,
+          subObjectiveId: mode === "room" ? subObjectiveId ?? null : null,
+          content: text,
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setChatError(j.error ?? "Couldn't send.");
+        return;
+      }
+      const j = (await res.json()) as { messages: NotebookMessage[] };
+      setMessages((prev) => [...prev, ...(j.messages ?? [])]);
+      setChatInput("");
+      // Refresh the timeline too — server-executed tools may have
+      // landed new decision-log rows.
+      setEvents([]);
+      setNextCursor(null);
+      void fetchPage({ reset: true });
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "Network error.");
+    } finally {
+      setChatSending(false);
+    }
+  }, [chatInput, chatSending, spaceId, subObjectiveId, mode, fetchPage]);
+
+  // ── Suggested client-tool dispatch — fires the real route from
+  //    the UI when the user clicks a "Run" button on an assistant
+  //    suggested action. Records status locally + refreshes timeline. ──
+  const runSuggestedTool = useCallback(
+    async (assistantMessageId: string, action: AgentToolAction) => {
+      setToolDispatchStatus((prev) => ({
+        ...prev,
+        [assistantMessageId]: "running",
+      }));
+      try {
+        const url = clientToolUrl(action);
+        const body = clientToolBody(action);
+        if (!url || !body) {
+          setToolDispatchStatus((prev) => ({
+            ...prev,
+            [assistantMessageId]: "error",
+          }));
+          return;
+        }
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        setToolDispatchStatus((prev) => ({
+          ...prev,
+          [assistantMessageId]: res.ok ? "done" : "error",
+        }));
+        if (res.ok) {
+          // Refresh timeline — the underlying route logged a decision.
+          setEvents([]);
+          setNextCursor(null);
+          void fetchPage({ reset: true });
+        }
+      } catch {
+        setToolDispatchStatus((prev) => ({
+          ...prev,
+          [assistantMessageId]: "error",
+        }));
+      }
+    },
+    [fetchPage],
+  );
 
   // ESC to close.
   useEffect(() => {
@@ -308,6 +450,55 @@ export function LabNotebookPanel({
 
             {/* Scrollable body */}
             <div className="flex-1 overflow-y-auto px-5 py-4">
+              {/* Phase 10c — Chat thread. Renders above the timeline
+                  so the user reads recent conversation in context
+                  before the structured event log below. Sticky input
+                  is below the scroll area (in the panel chrome). */}
+              {(messages.length > 0 || messagesLoading) && (
+                <section className="mb-5">
+                  <div
+                    className="mb-2 flex items-center gap-2"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    <MessageCircle
+                      className="h-3 w-3"
+                      strokeWidth={2}
+                      style={{ color: appleVibe.accent.primary }}
+                    />
+                    <span
+                      className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+                      style={{ color: appleVibe.text.tertiary }}
+                    >
+                      Conversation
+                    </span>
+                    <span
+                      className="h-px flex-1"
+                      style={{ background: appleVibe.stroke.hairline }}
+                    />
+                  </div>
+                  <ul className="space-y-2">
+                    {messages.map((m) => (
+                      <ChatBubble
+                        key={m.id}
+                        message={m}
+                        dispatchStatus={toolDispatchStatus[m.id] ?? "idle"}
+                        onRunSuggested={(action) =>
+                          runSuggestedTool(m.id, action)
+                        }
+                      />
+                    ))}
+                    {messagesLoading && messages.length === 0 && (
+                      <li
+                        className="text-[11.5px] font-light italic"
+                        style={{ color: appleVibe.text.tertiary }}
+                      >
+                        Loading conversation…
+                      </li>
+                    )}
+                  </ul>
+                </section>
+              )}
+
               {error && (
                 <div
                   className="mb-3 px-3 py-2"
@@ -420,11 +611,217 @@ export function LabNotebookPanel({
                 </div>
               )}
             </div>
+
+            {/* Phase 10c — sticky chat input bar. Sits in the panel
+                chrome (per L3 lock-in: timeline-first, chat as side
+                action). Always visible at the bottom of the panel so
+                the user can ask the agent anything regardless of
+                where they are in the timeline. */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void sendChat();
+              }}
+              className="flex flex-col gap-1.5 px-4 py-3"
+              style={{
+                borderTop: `1px solid ${appleVibe.stroke.hairline}`,
+                background:
+                  "linear-gradient(180deg, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.97) 100%)",
+                backdropFilter: "blur(12px)",
+              }}
+            >
+              {chatError && (
+                <p
+                  className="text-[10.5px] font-light"
+                  style={{ color: "rgba(127,29,29,0.95)" }}
+                >
+                  {chatError}
+                </p>
+              )}
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Enter to send, Shift+Enter for newline. Matches
+                    // most modern chat UIs.
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void sendChat();
+                    }
+                  }}
+                  placeholder={
+                    mode === "space"
+                      ? "Ask about the whole canvas…"
+                      : "Ask about this room…"
+                  }
+                  rows={1}
+                  disabled={chatSending}
+                  className="min-h-[34px] flex-1 resize-none rounded-2xl px-3 py-2 outline-none transition-colors focus:bg-white"
+                  style={{
+                    background: appleVibe.surface.cardElevated,
+                    border: `1px solid ${appleVibe.stroke.medium}`,
+                    color: appleVibe.text.primary,
+                    fontSize: "12.5px",
+                    fontFamily: appleVibe.font.stack,
+                    lineHeight: 1.4,
+                    maxHeight: "120px",
+                  }}
+                />
+                <button
+                  type="submit"
+                  disabled={chatSending || !chatInput.trim()}
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{
+                    background: appleVibe.accent.primary,
+                    color: appleVibe.text.onAccent,
+                  }}
+                  aria-label="Send"
+                >
+                  {chatSending ? (
+                    <Loader2
+                      className="h-3.5 w-3.5 animate-spin"
+                      strokeWidth={2.4}
+                    />
+                  ) : (
+                    <Send className="h-3.5 w-3.5" strokeWidth={2.4} />
+                  )}
+                </button>
+              </div>
+            </form>
           </motion.aside>
         </>
       )}
     </AnimatePresence>
   );
+}
+
+// ── Chat bubble + suggested tool action ───────────────────────────
+
+/** Renders one chat message. User and assistant get bubbles in the
+ *  Apple-vibe palette; tool result rows render as a small inline
+ *  status badge below the assistant bubble. Suggested-action calls
+ *  surface as a "Run" button the user can click to fire the real
+ *  route. */
+function ChatBubble({
+  message,
+  dispatchStatus,
+  onRunSuggested,
+}: {
+  message: NotebookMessage;
+  dispatchStatus: "idle" | "running" | "done" | "error";
+  onRunSuggested: (action: AgentToolAction) => void;
+}) {
+  if (message.role === "tool") {
+    const r = message.tool_result;
+    return (
+      <li
+        className="text-[10.5px] font-light italic"
+        style={{
+          color: r?.ok
+            ? appleVibe.stage.outcomes
+            : "rgba(127,29,29,0.95)",
+        }}
+      >
+        Tool {r?.ok ? "executed" : "failed"}
+        {r?.error ? ` — ${r.error}` : ""}
+      </li>
+    );
+  }
+  const isUser = message.role === "user";
+  const action = message.tool_call;
+  return (
+    <li
+      className={`flex ${isUser ? "justify-end" : "justify-start"}`}
+    >
+      <div
+        className="max-w-[88%] rounded-2xl px-3 py-2"
+        style={{
+          background: isUser
+            ? appleVibe.accent.primary
+            : appleVibe.surface.cardElevated,
+          color: isUser
+            ? appleVibe.text.onAccent
+            : appleVibe.text.primary,
+          border: isUser
+            ? "none"
+            : `1px solid ${appleVibe.stroke.hairline}`,
+        }}
+      >
+        <p
+          className="whitespace-pre-wrap text-[12px] leading-snug"
+          style={{ fontFamily: appleVibe.font.stack }}
+        >
+          {message.content ?? ""}
+        </p>
+        {action && action.status === "suggested" && (
+          <div className="mt-2 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => onRunSuggested(action)}
+              disabled={dispatchStatus === "running" || dispatchStatus === "done"}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold transition-opacity disabled:opacity-50"
+              style={{
+                background: "rgba(255,255,255,0.20)",
+                color: appleVibe.text.onAccent,
+                border: "1px solid rgba(255,255,255,0.35)",
+              }}
+            >
+              {dispatchStatus === "running" ? (
+                <Loader2 className="h-2.5 w-2.5 animate-spin" strokeWidth={2.4} />
+              ) : dispatchStatus === "done" ? (
+                <Check className="h-2.5 w-2.5" strokeWidth={2.4} />
+              ) : (
+                <Sparkles className="h-2.5 w-2.5" strokeWidth={2.4} />
+              )}
+              {dispatchStatus === "done"
+                ? "Ran"
+                : dispatchStatus === "error"
+                  ? "Retry"
+                  : action.label ?? `Run ${action.tool_name}`}
+            </button>
+          </div>
+        )}
+        {action && action.status === "executed" && (
+          <p
+            className="mt-1.5 text-[10px] font-light italic"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Fired {action.tool_name}
+          </p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+// ── Client-side tool URL + body resolver ──────────────────────────
+//
+// Maps a suggested ClientTool to the existing brainstorm route the
+// UI fires when the user clicks the "Run" button on an agent
+// suggestion. Returns null when args are missing so the UI can show
+// an error badge instead of firing a malformed request.
+
+function clientToolUrl(action: AgentToolAction): string | null {
+  switch (action.tool_name) {
+    case "score_feature":
+      return "/api/brainstorm/item/variation/score";
+    case "refine_feature":
+      return "/api/brainstorm/item/variation/refine";
+    case "research_item":
+      return "/api/brainstorm/item/research";
+    default:
+      return null;
+  }
+}
+
+function clientToolBody(
+  action: AgentToolAction,
+): Record<string, unknown> | null {
+  const entityId =
+    typeof action.args.entityId === "string" ? action.args.entityId : "";
+  if (!entityId) return null;
+  return { entityId };
 }
 
 // ── Empty state ───────────────────────────────────────────────────
