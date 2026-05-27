@@ -172,6 +172,21 @@ export interface EnsembleContext {
     id: string;
     name: string;
     indicators: string[];
+    /** Phase 11.6 — user-grounded baseline + target per indicator,
+     *  keyed by indicator name. When present, the prompt renders a
+     *  per-indicator BASELINE → TARGET annotation so the 5 lenses
+     *  grade projected movement toward measurable goals rather than
+     *  abstract effectiveness. Undefined when no baselines set. */
+    indicator_baselines?: Record<
+      string,
+      {
+        baseline_value?: string;
+        target_value?: string;
+        unit?: string;
+        measurement_method?: string;
+        source?: "user" | "llm";
+      }
+    >;
   }>;
   sub_objective_title: string;
   core_objective_text: string;
@@ -258,11 +273,55 @@ function buildUserPrompt(
         .join("\n")
     : "  [No outcome entities provided.]";
 
+  // Phase 11.6 — surface user-set baselines + targets inline so the
+  // 5 lenses grade movement toward measurable goals rather than
+  // abstract effectiveness. Same pattern as the rubric scorer:
+  // append "[BASELINE x → TARGET y (unit) · method: m]" suffix when
+  // present. Case-insensitive lookup for LLM paraphrase tolerance.
+  type BaselineEntry = {
+    baseline_value?: string;
+    target_value?: string;
+    unit?: string;
+    measurement_method?: string;
+  };
+  const baselinesByOutcomeId = new Map<
+    string,
+    Record<string, BaselineEntry> | undefined
+  >();
+  for (const o of ctx.room_outcomes) {
+    baselinesByOutcomeId.set(o.id, o.indicator_baselines);
+  }
+  function baselineSuffix(
+    outcomeId: string,
+    indicatorText: string,
+  ): string {
+    const map = baselinesByOutcomeId.get(outcomeId);
+    if (!map) return "";
+    let entry = map[indicatorText];
+    if (!entry) {
+      const lower = indicatorText.toLowerCase();
+      for (const [k, v] of Object.entries(map)) {
+        if (k.toLowerCase() === lower) {
+          entry = v;
+          break;
+        }
+      }
+    }
+    if (!entry) return "";
+    const parts: string[] = [];
+    if (entry.baseline_value)
+      parts.push(`BASELINE ${entry.baseline_value}`);
+    if (entry.target_value) parts.push(`→ TARGET ${entry.target_value}`);
+    if (entry.unit) parts.push(`(${entry.unit})`);
+    if (entry.measurement_method)
+      parts.push(`· method: ${entry.measurement_method}`);
+    return parts.length === 0 ? "" : ` [${parts.join(" ")}]`;
+  }
   const indicatorsBlock = flat.length > 0
     ? flat
         .map(
           (ind, i) =>
-            `  [${i + 1}] (under outcome "${ind.outcome_name}" id=${ind.outcome_id}) ${ind.indicator_text}`,
+            `  [${i + 1}] (under outcome "${ind.outcome_name}" id=${ind.outcome_id}) ${ind.indicator_text}${baselineSuffix(ind.outcome_id, ind.indicator_text)}`,
         )
         .join("\n")
     : "  [No proxy indicators on the room's outcomes — return status=no_indicators.]";

@@ -126,6 +126,21 @@ export interface RubricContext {
     id?: string;
     name: string;
     indicators?: string[];
+    /** Phase 11.6 — user-grounded baseline + target per indicator,
+     *  keyed by indicator name. When present, the prompt renders a
+     *  per-indicator BASELINE CONTEXT block so the LLM grades
+     *  projected MOVEMENT FROM BASELINE rather than abstract
+     *  effectiveness. Undefined when no baselines set. */
+    indicator_baselines?: Record<
+      string,
+      {
+        baseline_value?: string;
+        target_value?: string;
+        unit?: string;
+        measurement_method?: string;
+        source?: "user" | "llm";
+      }
+    >;
   }>;
   /** Parent sub-objective title for domain grounding. */
   sub_objective_title: string;
@@ -167,6 +182,9 @@ PART 2 — for EACH variation × EACH proxy indicator listed under "ROOM PROXY I
 - score (0..1): how much would THIS variation move THIS specific indicator if shipped. 0.0 means no effect or wrong direction; 1.0 means strong, direct, sustained movement.
 - reason: ONE sentence — why this score.
 - confidence (0..1): how well does THIS indicator actually proxy for the outcome it's listed under? 0.0 = clearly the wrong proxy or trivially gameable; 1.0 = canonical and well-established measure of the outcome. Lower this aggressively when the proxy is a vanity metric or easily Goodharted — flagging shaky proxies is a feature, not a flaw.
+
+PART 2 — BASELINE CONTEXT (when present):
+When a proxy indicator carries a [BASELINE → TARGET] annotation, your score is the user's projected MOVEMENT FROM BASELINE TOWARD TARGET. 0.0 means no measurable movement or wrong direction (worsens baseline). 0.5 means partial movement (~50% of the gap closed). 1.0 means hitting or exceeding the target. Be HONEST about the gap — a "8/10 → 4/10" anxiety reduction is hard; a "20 min → 30 min" focus increase is moderate. Use the baseline + unit + measurement_method as ground truth context.
 
 Constraints on your scores:
 - Be strict but fair. Use the full 0..1 range. A 0.5 means "average for this domain."
@@ -221,12 +239,55 @@ function buildUserPrompt(ctx: RubricContext): string {
     }
     if (flattenedIndicators.length >= MAX_INDICATORS) break;
   }
+  // Phase 11.6 — when an indicator has a user-set baseline + target,
+  // render them inline so the LLM sees the measurable gap rather than
+  // a free-floating proxy name. The format compresses to one line
+  // per indicator: "[N] (under outcome "X") indicator_text [BASELINE
+  // value → TARGET value, UNIT unit · METHOD method]". The LLM is
+  // instructed (in PART 2 of the system prompt) to score relative to
+  // closing that gap.
+  type BaselineMap = NonNullable<
+    NonNullable<RubricContext["room_outcomes"]>[number]["indicator_baselines"]
+  >;
+  function baselineSuffix(
+    baselines: BaselineMap | undefined,
+    indicatorText: string,
+  ): string {
+    if (!baselines) return "";
+    // Match case-insensitively so LLM paraphrasing tolerance carries
+    // forward — try exact match first, then lowercase fallback.
+    let entry = baselines[indicatorText];
+    if (!entry) {
+      const lower = indicatorText.toLowerCase();
+      for (const [k, v] of Object.entries(baselines)) {
+        if (k.toLowerCase() === lower) {
+          entry = v;
+          break;
+        }
+      }
+    }
+    if (!entry) return "";
+    const parts: string[] = [];
+    if (entry.baseline_value)
+      parts.push(`BASELINE ${entry.baseline_value}`);
+    if (entry.target_value) parts.push(`→ TARGET ${entry.target_value}`);
+    if (entry.unit) parts.push(`(${entry.unit})`);
+    if (entry.measurement_method)
+      parts.push(`· method: ${entry.measurement_method}`);
+    if (parts.length === 0) return "";
+    return ` [${parts.join(" ")}]`;
+  }
+  const outcomeBaselinesByName = new Map<string, BaselineMap | undefined>();
+  for (const o of ctx.room_outcomes ?? []) {
+    outcomeBaselinesByName.set(o.name, o.indicator_baselines);
+  }
   const indicatorsBlock = flattenedIndicators.length > 0
     ? flattenedIndicators
-        .map(
-          (ind, i) =>
-            `  [${i + 1}] (under outcome "${ind.outcome_name}") ${ind.indicator_text}`,
-        )
+        .map((ind, i) => {
+          const baselines = outcomeBaselinesByName.get(ind.outcome_name);
+          const suffix = baselineSuffix(baselines, ind.indicator_text);
+          return `  [${i + 1}] (under outcome "${ind.outcome_name}") ${ind.indicator_text}${suffix}`;
+        })
         .join("\n")
     : "  [No proxy indicators on the room's outcomes — skip PART 2 entirely.]";
 

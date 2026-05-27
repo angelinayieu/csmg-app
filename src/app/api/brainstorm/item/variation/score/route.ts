@@ -479,6 +479,24 @@ export async function POST(req: NextRequest) {
               .filter((x): x is string => typeof x === "string" && x.length > 0)
               .slice(0, 6)
           : [],
+        // Phase 11.6 — pass user-set baselines through to the scorer
+        // so the rubric and ensemble prompts can ground scores in
+        // measurable movement from baseline. Undefined for outcomes
+        // that haven't had baselines set; the scorers tolerate
+        // undefined cleanly (fall back to abstract scoring).
+        indicator_baselines:
+          (o.causal_chain?.indicator_baselines as
+            | Record<
+                string,
+                {
+                  baseline_value?: string;
+                  target_value?: string;
+                  unit?: string;
+                  measurement_method?: string;
+                  source?: "user" | "llm";
+                }
+              >
+            | undefined) ?? undefined,
       }));
     const constraints = readConstraints(space.synthesis_data);
 
