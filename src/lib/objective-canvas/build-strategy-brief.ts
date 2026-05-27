@@ -49,6 +49,12 @@ export interface BriefElectedVariation {
   variation_name: string;
   variation_kind: ItemVariation["kind"];
   tradeoff: string;
+  /** Phase 11.9a — full variation payload threaded through so the
+   *  brief can render <IndicatorValidityMatrix /> inline as a
+   *  citation-grade artifact. Optional because legacy elected rows
+   *  in cached briefs may pre-date Phase 11.9; absence → matrix
+   *  doesn't render (graceful degradation). */
+  variation?: ItemVariation;
 }
 
 /** A prototype brief planned for a variation × open question. */
@@ -214,6 +220,11 @@ export function buildStrategyBrief(
           variation_name: v.name,
           variation_kind: v.kind,
           tradeoff: v.tradeoff,
+          // Phase 11.9a — thread the full ItemVariation payload so the
+          // brief view can render the validity matrix per elected
+          // variation. Cheap (already in memory from the items walk
+          // above) and degrades gracefully when omitted.
+          variation: v,
         }));
     });
 

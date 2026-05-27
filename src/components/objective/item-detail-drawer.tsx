@@ -50,6 +50,7 @@ import {
   DECISION_ANCHORS,
 } from "@/components/objective/decision-surface";
 import { VariationDeliverablesModal } from "@/components/objective/variation-deliverables-modal";
+import { IndicatorValidityMatrix } from "@/components/objective/indicator-validity-matrix";
 
 interface DefinitionHighlight {
   phrase: string;
@@ -171,6 +172,76 @@ interface ItemVariation {
     final_prompt: string;
     iterations: number;
   };
+  /** Phase 11.2-11.8 — per-proxy-indicator audit (rubric/ensemble/MC/
+   *  evidence/persona/empirical). Threaded into the drawer's local
+   *  variation shape so the Validity Matrix section can render
+   *  without an additional fetch. Optional — pre-Phase-11.2 variations
+   *  won't have it. */
+  indicator_scores?: Array<{
+    indicator_text: string;
+    outcome_id: string;
+    outcome_name: string;
+    score: number;
+    reason: string;
+    confidence: number;
+    lens_scores?: Array<{
+      lens:
+        | "systems_analyst"
+        | "skeptic"
+        | "operator"
+        | "engineer"
+        | "historian";
+      score: number;
+      confidence: number;
+      reason: string;
+    }>;
+    disagreement_score?: number;
+    disagreement_confidence?: number;
+    lens_agreement_count?: number;
+    mediation_check?: "necessary" | "indirect" | "questionable";
+    goodhart_risk?: "low" | "medium" | "high";
+    lift_pct?: number;
+    lift_band?: { p10: number; p50: number; p90: number };
+    lift_band_method?: "mc_scaled" | "mc_direct";
+    evidence_citations?: Array<{
+      source_idx: number;
+      source_title: string;
+      source_url: string;
+      source_snippet: string;
+      source_lens?: string;
+      classification: "supports" | "refutes" | "contextual";
+      relevance: number;
+      argument: string;
+    }>;
+    evidence_strength?: number;
+    evidence_supports?: number;
+    evidence_refutes?: number;
+    evidence_contextual?: number;
+    persona_scores?: Array<{
+      persona_id: string;
+      persona_name: string;
+      score: number;
+      matters: number;
+      reason: string;
+    }>;
+    persona_consensus_score?: number;
+    persona_disagreement_score?: number;
+    persona_coverage_count?: number;
+    persona_coverage_total?: number;
+    empirical_overlay?: {
+      observed_lift_pct: number | null;
+      observed_direction:
+        | "increased"
+        | "decreased"
+        | "no_change"
+        | "inconsistent";
+      methodology_rigor: number;
+      sample_size_total: number | null;
+      n_briefs: number;
+      extraction_rationale: string;
+      extracted_at: string;
+    };
+  }>;
 }
 
 interface ItemPlanning {
@@ -1210,6 +1281,38 @@ export function ItemDetailDrawer({
                   />
                 )}
               </Section>
+
+              {/* ── Phase 11.9a — INDICATOR VALIDITY MATRIX ── */}
+              {/* Decision-stakes view of the rigor stack. Renders one
+                  matrix per variation that has indicator_scores. When
+                  no variation has been scored yet, the section hides
+                  entirely (no value showing an empty grid). */}
+              {expanded?.variations &&
+                expanded.variations.some(
+                  (v) =>
+                    Array.isArray(v.indicator_scores) &&
+                    v.indicator_scores.length > 0,
+                ) && (
+                  <Section
+                    icon={<Sparkle className="h-3 w-3" />}
+                    title="Validity Matrix"
+                  >
+                    <div className="space-y-3">
+                      {expanded.variations
+                        .filter(
+                          (v) =>
+                            Array.isArray(v.indicator_scores) &&
+                            v.indicator_scores.length > 0,
+                        )
+                        .map((v) => (
+                          <IndicatorValidityMatrix
+                            key={v.id}
+                            variation={v}
+                          />
+                        ))}
+                    </div>
+                  </Section>
+                )}
 
               {/* ── 4. PLANNING (assumes / depends_on / risks) ── */}
               <Section

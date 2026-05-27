@@ -35,6 +35,7 @@ import {
   type StrategyBrief,
   type BriefRoom,
 } from "@/lib/objective-canvas/build-strategy-brief";
+import { IndicatorValidityMatrix } from "@/components/objective/indicator-validity-matrix";
 
 // ── Style tokens — local to this view ──
 //
@@ -798,6 +799,24 @@ function RoomBlock({
                     >
                       {v.tradeoff}
                     </p>
+                    {/* Phase 11.9a — inline IndicatorValidityMatrix
+                        when the elected variation carries indicator
+                        audit data. Compact mode so the matrix tucks
+                        cleanly under each variation in the brief's
+                        single-column layout. Renders nothing when
+                        no audit data — graceful for un-scored
+                        elections (legacy or fresh rooms). */}
+                    {v.variation &&
+                      Array.isArray(v.variation.indicator_scores) &&
+                      v.variation.indicator_scores.length > 0 && (
+                        <div className="mt-2">
+                          <IndicatorValidityMatrix
+                            variation={v.variation}
+                            title={v.variation_name}
+                            compact
+                          />
+                        </div>
+                      )}
                   </div>
                 </li>
               ))}
