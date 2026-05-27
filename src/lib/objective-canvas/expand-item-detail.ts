@@ -206,6 +206,40 @@ export interface ItemVariation {
      *   "mc_direct" — future: indicator was promoted to a virtual
      *                 graph node and MC propagated directly to it. */
     lift_band_method?: "mc_scaled" | "mc_direct";
+    // ── Phase 11.6 — Evidence tier overlay ──
+    /** Phase 11.6 — research citations the LLM found supporting or
+     *  refuting the indicator-outcome link. Pulled from the space's
+     *  surface_research + deep_research + the item's detail_research
+     *  via score-indicator-evidence.ts. Each citation carries
+     *  classification ("supports" | "refutes" | "contextual"),
+     *  relevance (0..1), the LLM's argument, and the source's
+     *  title/url/snippet/lens so the UI can render full source cards.
+     *  Empty array when no sources were available or LLM found none
+     *  applicable. */
+    evidence_citations?: Array<{
+      source_idx: number;
+      source_title: string;
+      source_url: string;
+      source_snippet: string;
+      source_lens?: string;
+      classification: "supports" | "refutes" | "contextual";
+      relevance: number;
+      argument: string;
+    }>;
+    /** Phase 11.6 — aggregate evidence quality from the citations:
+     *  0.5 = neutral (no signal, no citations OR balanced supports/
+     *  refutes). Above 0.5 = net supporting; below = net refuting.
+     *  Composed with ensemble consensus_confidence via:
+     *    evidence_weighted_confidence = consensus_confidence × evidence_strength
+     *  When no evidence data, this is 0.5 → multiplier = 0.5, but the
+     *  composition layer pass-throughs to 1.0 (no penalty for
+     *  unstudied proxies — the ensemble grade stands as-is). */
+    evidence_strength?: number;
+    /** Phase 11.6 — convenience counts so the UI can render
+     *  "3✓ 1✗ 2·" without iterating citations. */
+    evidence_supports?: number;
+    evidence_refutes?: number;
+    evidence_contextual?: number;
   }>;
   /** Phase 5b — provenance flag distinguishing R&D-engine-proposed
    *  candidates from human-generated or originally-LLM-generated

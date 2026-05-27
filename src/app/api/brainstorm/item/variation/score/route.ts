@@ -49,6 +49,10 @@ import {
   composeIndicatorLiftBands,
   indexOverlays,
 } from "@/lib/objective-canvas/compose-indicator-lift-bands";
+import {
+  scoreIndicatorsWithEvidence,
+  buildEvidenceSourcePool,
+} from "@/lib/objective-canvas/score-indicator-evidence";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
@@ -108,7 +112,7 @@ export async function POST(req: NextRequest) {
   const { data: entity } = await db
     .from("entities")
     .select(
-      "id, name, space_id, parent_sub_objective_id, causal_chain, expanded_detail",
+      "id, name, space_id, parent_sub_objective_id, causal_chain, expanded_detail, detail_research",
     )
     .eq("id", entityId)
     .maybeSingle();
@@ -117,7 +121,9 @@ export async function POST(req: NextRequest) {
   }
   const { data: space } = await db
     .from("spaces")
-    .select("id, user_id, description, input_text, synthesis_data")
+    .select(
+      "id, user_id, description, input_text, synthesis_data, surface_research, deep_research",
+    )
     .eq("id", entity.space_id)
     .maybeSingle();
   if (!space || space.user_id !== auth.user.id) {
@@ -634,6 +640,109 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── Phase 11.6 — Evidence tier overlay ──
+    // Pool the available research sources (item-level detail_research
+    // + space-level deep_research + surface_research), dedup by URL,
+    // hand to the evidence scorer. ONE LLM call maps sources to
+    // indicators with supports/refutes/contextual classification.
+    // The result is keyed by indicator_text so we can lookup and
+    // attach to the right indicator_score below. Soft-fail: when no
+    // sources are available (most fresh spaces) the scorer returns
+    // status="no_sources" and we proceed with ensemble + MC only.
+    const evidenceByIndicator = new Map<
+      string,
+      {
+        citations: Array<{
+          source_idx: number;
+          source_title: string;
+          source_url: string;
+          source_snippet: string;
+          source_lens?: string;
+          classification: "supports" | "refutes" | "contextual";
+          relevance: number;
+          argument: string;
+        }>;
+        evidence_strength: number;
+        supports_count: number;
+        refutes_count: number;
+        contextual_count: number;
+      }
+    >();
+    try {
+      const sourcePool = buildEvidenceSourcePool({
+        item_research: entity.detail_research as
+          | { sources?: Parameters<typeof buildEvidenceSourcePool>[0]["item_research"] extends infer T
+              ? T extends { sources?: infer S }
+                ? S
+                : never
+              : never }
+          | null,
+        deep_research: space.deep_research as
+          | { all_sources?: Parameters<typeof buildEvidenceSourcePool>[0]["deep_research"] extends infer T
+              ? T extends { all_sources?: infer S }
+                ? S
+                : never
+              : never }
+          | null,
+        surface_research: space.surface_research as
+          | { sources?: Parameters<typeof buildEvidenceSourcePool>[0]["surface_research"] extends infer T
+              ? T extends { sources?: infer S }
+                ? S
+                : never
+              : never }
+          | null,
+      });
+      if (sourcePool.length > 0) {
+        // Build a deduped indicator list (one per unique
+        // (outcome_id, indicator_text)) so the LLM scores each
+        // proxy once across all variations — they share the same
+        // indicator-outcome link regardless of which variation.
+        const uniqIndicators = new Map<
+          string,
+          { indicator_text: string; outcome_id: string; outcome_name: string }
+        >();
+        for (const v of ensembleEnvelope.variation_scores) {
+          for (const ind of v.indicator_scores) {
+            const key = `${ind.outcome_id}::${ind.indicator_text}`;
+            if (!uniqIndicators.has(key)) {
+              uniqIndicators.set(key, {
+                indicator_text: ind.indicator_text,
+                outcome_id: ind.outcome_id,
+                outcome_name: ind.outcome_name,
+              });
+            }
+          }
+        }
+        const evidenceEnvelope = await scoreIndicatorsWithEvidence({
+          indicators: Array.from(uniqIndicators.values()),
+          sources: sourcePool,
+          feature_name: entity.name,
+          sub_objective_title: subObjectiveTitle,
+        });
+        if (evidenceEnvelope.status === "ok") {
+          for (const r of evidenceEnvelope.indicator_results) {
+            evidenceByIndicator.set(
+              `${r.outcome_id}::${r.indicator_text}`,
+              {
+                citations: r.citations,
+                evidence_strength: r.evidence_strength,
+                supports_count: r.supports_count,
+                refutes_count: r.refutes_count,
+                contextual_count: r.contextual_count,
+              },
+            );
+          }
+        }
+      }
+    } catch (evidenceErr) {
+      console.warn(
+        "[item/variation/score] evidence overlay failed (non-fatal):",
+        evidenceErr instanceof Error
+          ? evidenceErr.message
+          : String(evidenceErr),
+      );
+    }
+
     // ── Persist: per-variation lens-rich indicator_scores + envelope
     //    with counter_indicators + indicator_pool. Soft-fail on write. ──
     const ensembleScoreById = new Map(
@@ -662,6 +771,29 @@ export async function POST(req: NextRequest) {
                 }
               >).get(`${v.id}::${ind.outcome_id}::${ind.indicator_text}`)
             : undefined;
+          // Phase 11.6 — attach evidence citations + strength for
+          // this indicator (keyed by outcome_id + indicator_text;
+          // shared across all variations since the proxy-outcome
+          // link is the same regardless of variation).
+          const evidence = evidenceByIndicator.get(
+            `${ind.outcome_id}::${ind.indicator_text}`,
+          );
+          // Compose evidence-weighted confidence:
+          //   When evidence available → consensus × evidence_strength
+          //   When no evidence → consensus (pass-through)
+          // We DON'T overwrite confidence — we keep consensus_confidence
+          // as a separate axis and let the UI choose what to render.
+          // For now we mutate confidence on persist so the chip
+          // surface reflects the most informed estimate.
+          const evidenceWeightedConf = evidence
+            ? Math.max(
+                0,
+                Math.min(
+                  1,
+                  ind.consensus_confidence * (evidence.evidence_strength * 2),
+                ),
+              )
+            : ind.consensus_confidence;
           return {
             indicator_text: ind.indicator_text,
             outcome_id: ind.outcome_id,
@@ -671,7 +803,7 @@ export async function POST(req: NextRequest) {
               ind.lens_scores.length > 0
                 ? `${ind.lens_scores[0].lens}: ${ind.lens_scores[0].reason}`
                 : "",
-            confidence: ind.consensus_confidence,
+            confidence: evidenceWeightedConf,
             lens_scores: ind.lens_scores,
             disagreement_score: ind.disagreement_score,
             disagreement_confidence: ind.disagreement_confidence,
@@ -684,6 +816,16 @@ export async function POST(req: NextRequest) {
                   lift_pct: overlay.lift_pct,
                   lift_band: overlay.lift_band,
                   lift_band_method: overlay.lift_band_method,
+                }
+              : {}),
+            // Phase 11.6 — evidence overlay fields.
+            ...(evidence
+              ? {
+                  evidence_citations: evidence.citations,
+                  evidence_strength: evidence.evidence_strength,
+                  evidence_supports: evidence.supports_count,
+                  evidence_refutes: evidence.refutes_count,
+                  evidence_contextual: evidence.contextual_count,
                 }
               : {}),
           };

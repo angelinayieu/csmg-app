@@ -133,6 +133,26 @@ interface LineupVariation {
     /** Phase 11.5 — MC sample-quantile band, also scaled by confidence. */
     lift_band?: { p10: number; p50: number; p90: number };
     lift_band_method?: "mc_scaled" | "mc_direct";
+    /** Phase 11.6 — research citations supporting or refuting the
+     *  indicator-outcome link. Sourced from item.detail_research +
+     *  space.{surface,deep}_research via score-indicator-evidence.ts.
+     *  When present, the chip strip renders citation count + a
+     *  supports/refutes split. */
+    evidence_citations?: Array<{
+      source_idx: number;
+      source_title: string;
+      source_url: string;
+      source_snippet: string;
+      source_lens?: string;
+      classification: "supports" | "refutes" | "contextual";
+      relevance: number;
+      argument: string;
+    }>;
+    /** Phase 11.6 — aggregate 0..1 evidence quality. 0.5 = neutral. */
+    evidence_strength?: number;
+    evidence_supports?: number;
+    evidence_refutes?: number;
+    evidence_contextual?: number;
   }>;
 }
 
@@ -1950,6 +1970,36 @@ function IndicatorBreakdown({
                     `MC lift band: p10 ${(ind.lift_band.p10 * 100).toFixed(1)}% · p50 ${(ind.lift_band.p50 * 100).toFixed(1)}% · p90 ${(ind.lift_band.p90 * 100).toFixed(1)}%`,
                   );
                 }
+                // Phase 11.6 — evidence chip + tooltip. Citations
+                // count + supports/refutes split renders inline; top
+                // 3 citation arguments + evidence_strength get
+                // appended to the tooltip so a hover reveals the
+                // load-bearing research grounding without a click.
+                const hasEvidence =
+                  Array.isArray(ind.evidence_citations) &&
+                  ind.evidence_citations.length > 0;
+                const supports = ind.evidence_supports ?? 0;
+                const refutes = ind.evidence_refutes ?? 0;
+                const contextual = ind.evidence_contextual ?? 0;
+                const totalCitations = supports + refutes + contextual;
+                if (hasEvidence && ind.evidence_citations) {
+                  for (const c of ind.evidence_citations.slice(0, 3)) {
+                    const tag =
+                      c.classification === "supports"
+                        ? "✓"
+                        : c.classification === "refutes"
+                          ? "✗"
+                          : "·";
+                    tooltipParts.push(
+                      `${tag} ${c.source_title.slice(0, 60)}: ${c.argument}`,
+                    );
+                  }
+                  if (typeof ind.evidence_strength === "number") {
+                    tooltipParts.push(
+                      `evidence strength: ${ind.evidence_strength.toFixed(2)} (${supports}✓ ${refutes}✗ ${contextual}·)`,
+                    );
+                  }
+                }
                 return (
                   <span
                     key={`${ind.indicator_text}-${i}`}
@@ -1992,6 +2042,37 @@ function IndicatorBreakdown({
                       >
                         {liftSign}
                         {(liftPct * 100).toFixed(0)}%
+                      </span>
+                    )}
+                    {/* Phase 11.6 — citation chip: 📚N · supports/refutes
+                        split. Refuting evidence tints pain-red as a
+                        load-bearing flag. */}
+                    {hasEvidence && (
+                      <span
+                        style={{
+                          color:
+                            refutes > supports
+                              ? appleVibe.stage.pain
+                              : appleVibe.text.tertiary,
+                          fontWeight: 500,
+                          marginLeft: "2px",
+                        }}
+                      >
+                        · 📚{totalCitations}
+                        {(supports > 0 || refutes > 0) && (
+                          <span style={{ marginLeft: "1px" }}>
+                            {supports > 0 && (
+                              <span style={{ color: OUTCOME_COLOR }}>
+                                {supports}✓
+                              </span>
+                            )}
+                            {refutes > 0 && (
+                              <span style={{ color: appleVibe.stage.pain }}>
+                                {refutes}✗
+                              </span>
+                            )}
+                          </span>
+                        )}
                       </span>
                     )}
                     {goodhartRisk === "high" && <span aria-hidden>⚠️</span>}
