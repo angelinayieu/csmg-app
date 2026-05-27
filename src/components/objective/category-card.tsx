@@ -37,7 +37,7 @@
 // The Category Card is the OVERVIEW + experiment trigger; the
 // drawer is curation.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowDown, ArrowUp, Check, Loader2, RefreshCw, Sparkles, X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -80,6 +80,13 @@ interface Props {
   onOpenFeatureDetail: () => void;
   onOpenPainDetail: () => void;
   onOpenOutcomeDetail: () => void;
+  /** Phase 7c — external refresh signal. When this number changes
+   *  (bumped by the room-level AutopilotRunner after writing new
+   *  candidates/scores for this chain's feature), the card re-fetches
+   *  expanded_detail so the lineup picks up the new data without
+   *  user interaction. Optional — undefined means "no external
+   *  refresh." */
+  refreshSignal?: number;
 }
 
 // Lane colors — referenced so the Category Card can paint its
@@ -103,6 +110,7 @@ export function CategoryCard({
   onOpenFeatureDetail,
   onOpenPainDetail,
   onOpenOutcomeDetail,
+  refreshSignal,
 }: Props) {
   // ── Lazy load the feature's expanded_detail for the lineup ──
   // The lineup needs the feature's variations[] + effectiveness
@@ -210,6 +218,24 @@ export function CategoryCard({
       cancelled = true;
     };
   }, [chain.featureId, parseDetail]);
+
+  // ── Phase 7c — external refresh signal ──
+  // Bumped by the room-level AutopilotRunner after it writes new
+  // candidates / fresh scores for this chain's feature. We re-fetch
+  // expanded_detail so the lineup picks up the new data without the
+  // user having to scroll, click, or interact.
+  //
+  // We skip the FIRST render by tracking with a ref — the lazy-load
+  // useEffect above already fires on mount, so refetching ON THE
+  // SAME mount would be wasted. Only fires when refreshSignal CHANGES
+  // after mount.
+  const lastRefreshSignalRef = useRef<number | undefined>(refreshSignal);
+  useEffect(() => {
+    if (refreshSignal === undefined) return;
+    if (lastRefreshSignalRef.current === refreshSignal) return;
+    lastRefreshSignalRef.current = refreshSignal;
+    void refetchDetail();
+  }, [refreshSignal, refetchDetail]);
 
   // ── Phase 7b actions ──────────────────────────────────────────
   //

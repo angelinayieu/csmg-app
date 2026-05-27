@@ -39,6 +39,7 @@ import { PortfolioStrip } from "./cards/portfolio-strip";
 import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
 import { ConstraintsStrip } from "./cards/constraints-strip";
 import { CategoryCardsView } from "./category-cards-view";
+import { AutopilotRunner } from "./autopilot-runner";
 import { RoomEdgesOverlay } from "./room-edges-overlay";
 import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
@@ -178,6 +179,14 @@ export function SubObjectiveRoomView({
   const [roomView, setRoomView] = useState<"categories" | "variables">(
     "categories",
   );
+  // Phase 7c — autopilot refresh signal. Bumped after each
+  // chain that autopilot processes so the corresponding CategoryCard
+  // re-fetches its expanded_detail and the new candidates show up
+  // in the lineup immediately. A single counter is enough because
+  // CategoryCards individually decide whether they need to refetch
+  // based on their own chain.featureId. (Each card re-fetches on
+  // every bump — cheap because the /expand cache returns instantly.)
+  const [autopilotRefreshKey, setAutopilotRefreshKey] = useState(0);
   // Layer 2 — currently-open item detail drawer entity id. Null
   // means closed.
   const [detailEntityId, setDetailEntityId] = useState<string | null>(null);
@@ -852,12 +861,27 @@ export function SubObjectiveRoomView({
           when an inline constraints editor lands. */}
       <ConstraintsStrip constraints={constraints} />
 
-      {/* Phase 7a — view toggle. Categories = chain-centric
-          experiment frame view (default). Variables = the legacy
-          3-lane Variable View. Subtle segmented pill aligned right
-          so it doesn't shout — the room's primary surface is still
-          whichever view is selected. */}
-      <ViewToggle value={roomView} onChange={setRoomView} />
+      {/* Phase 7a + 7c — top-right chrome: view toggle + autopilot.
+          Both align right so the eye reads them as room-level controls
+          rather than canvas content. ViewToggle is structural (which
+          layout); Autopilot is operational (run experiments). They
+          share the same row so the toggle doesn't feel orphaned and
+          the autopilot has a recognizable home next to the most
+          relevant view.
+          The runner bumps autopilotRefreshKey after each completed
+          chain — CategoryCards observe it as refreshSignal and
+          re-fetch their expanded_detail so new candidates appear
+          inline without user interaction. */}
+      <div className="mb-3 flex items-center justify-end gap-2">
+        <AutopilotRunner
+          chains={allChains}
+          onChainComplete={() =>
+            setAutopilotRefreshKey((k) => k + 1)
+          }
+          onAllComplete={() => setAutopilotRefreshKey((k) => k + 1)}
+        />
+        <ViewToggleInline value={roomView} onChange={setRoomView} />
+      </div>
 
       {/* Three-column layout — Objective lane removed (it just
           duplicated the sub-objective title rendered in the page
@@ -883,6 +907,7 @@ export function SubObjectiveRoomView({
           roomCategories={roomCategories}
           onApprovalChange={handleApprovalChange}
           onOpenItemDetail={setDetailEntityId}
+          refreshSignal={autopilotRefreshKey}
         />
       )}
       {roomView === "variables" && (
@@ -1360,7 +1385,7 @@ function EmptyHint() {
 // still whichever view is selected, and the toggle is a quiet
 // affordance for switching when needed.
 
-function ViewToggle({
+function ViewToggleInline({
   value,
   onChange,
 }: {
@@ -1380,7 +1405,6 @@ function ViewToggle({
     },
   ];
   return (
-    <div className="mb-3 flex items-center justify-end">
       <div
         className="inline-flex items-center"
         style={{
@@ -1415,6 +1439,5 @@ function ViewToggle({
           );
         })}
       </div>
-    </div>
   );
 }
