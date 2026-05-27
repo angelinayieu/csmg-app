@@ -43,6 +43,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  FlaskConical,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -124,6 +125,12 @@ interface Props {
    *  the chain.categoryTriple. */
   categoryLabel: string;
   approved: boolean;
+  /** Phase 11.2 — used by LineupRow's "Open Lab" link to build the
+   *  deep-link URL into /app/objective/[spaceId]/sub/[subId]/lab/[featureId].
+   *  Optional for legacy mounts; the affordance is hidden when either
+   *  is missing. */
+  spaceId?: string;
+  subObjectiveId?: string;
   onApprove: () => void;
   onOpenFeatureDetail: () => void;
   onOpenPainDetail: () => void;
@@ -174,6 +181,8 @@ export function CategoryCard({
   outcome,
   categoryLabel,
   approved,
+  spaceId,
+  subObjectiveId,
   onApprove,
   onOpenFeatureDetail,
   onOpenPainDetail,
@@ -695,6 +704,8 @@ export function CategoryCard({
         <MechanismLineup
           variations={sortedVariations}
           featureId={chain.featureId}
+          spaceId={spaceId}
+          subObjectiveId={subObjectiveId}
           loading={detailLoading}
           envelope={detail?.envelope}
           hasScores={hasScores}
@@ -922,6 +933,8 @@ function OutcomeHalf({
 function MechanismLineup({
   variations,
   featureId,
+  spaceId,
+  subObjectiveId,
   loading,
   envelope,
   hasScores,
@@ -938,6 +951,9 @@ function MechanismLineup({
   /** Op C — passed down to LineupRow so it can fire the mockup route
    *  for elected variations. */
   featureId: string;
+  /** Phase 11.2 — used by LineupRow's "Open Lab" deep-link. */
+  spaceId?: string;
+  subObjectiveId?: string;
   loading: boolean;
   envelope?: { lift_pct: number | null; placebo_verdict: "pass" | "fail" | "skip" | null; target_entity_name: string | null };
   /** Phase 7b — has the lineup ever been scored? Drives Score vs
@@ -1176,6 +1192,8 @@ function MechanismLineup({
             rank={i + 1}
             variation={v}
             featureId={featureId}
+            spaceId={spaceId}
+            subObjectiveId={subObjectiveId}
             onElect={onElect}
             onReject={onReject}
           />
@@ -1197,6 +1215,8 @@ function LineupRow({
   rank,
   variation: v,
   featureId,
+  spaceId,
+  subObjectiveId,
   onElect,
   onReject,
 }: {
@@ -1206,6 +1226,11 @@ function LineupRow({
    *  variations. The LineupRow can render the inline mockup inside
    *  its expanded section without bubbling state up. */
   featureId: string;
+  /** Phase 11.2 — used to build the Open Lab deep-link URL. When
+   *  either is missing the link is hidden (legacy mount sites that
+   *  don't surface the affordance). */
+  spaceId?: string;
+  subObjectiveId?: string;
   /** Phase 7b — inline disposition handlers. The id arg lets the
    *  parent route to /variation/disposition without the row needing
    *  to know about the entity. */
@@ -1313,6 +1338,27 @@ function LineupRow({
             full label surfaces on hover via the title attribute. */}
         {score > 0 && v.evaluation_method && (
           <MethodBadge method={v.evaluation_method} compact />
+        )}
+        {/* Phase 11.2 — "Open Lab" deep-link. Small flask icon that
+            routes to the focused evaluation page for this mechanism.
+            Hidden when spaceId/subObjectiveId aren't threaded through
+            (older mount sites). Sits to the LEFT of the expand
+            chevron so it reads as a parallel affordance, not a
+            secondary control. */}
+        {spaceId && subObjectiveId && (
+          <a
+            href={`/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${featureId}`}
+            onClick={(e) => e.stopPropagation()}
+            className="flex h-5 w-5 items-center justify-center rounded-full transition-all duration-150 ease-out hover:bg-[rgba(124,58,237,0.10)]"
+            style={{
+              color: appleVibe.accent.primary,
+              opacity: 0.55,
+            }}
+            title="Open Lab — focused evaluation for this mechanism"
+            aria-label="Open Lab"
+          >
+            <FlaskConical className="h-3 w-3" strokeWidth={2.2} />
+          </a>
         )}
         {/* Phase 8b — expand toggle. Always renders when there's
             extras to show; the chevron itself is the affordance. */}

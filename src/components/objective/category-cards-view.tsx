@@ -278,6 +278,8 @@ export function CategoryCardsView({
               outcome={outcomeById.get(activeChain.outcomeId)}
               categoryLabel={activeLabel}
               approved={activeApproved}
+              spaceId={spaceId}
+              subObjectiveId={subObjectiveId}
               onApprove={() => {
                 const e1 = activeChain.painFeatureEdge.id;
                 const e2 = activeChain.featureOutcomeEdge.id;
