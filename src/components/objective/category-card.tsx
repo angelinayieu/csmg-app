@@ -37,9 +37,9 @@
 // The Category Card is the OVERVIEW + experiment trigger; the
 // drawer is curation.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowDown, ArrowUp, Check, Loader2, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Loader2, RefreshCw, Sparkles, X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ChainTriple } from "@/lib/objective-canvas/compute-chains";
 import type {
@@ -113,6 +113,82 @@ export function CategoryCard({
   // (avoids the React lint rule against setState directly in effect).
   const [detail, setDetail] = useState<FeatureDetail | null>(null);
 
+  // ── Phase 7b action state — score / refine / dispatch (elect+reject)
+  // status flags. Separate from detail because actions are user-driven
+  // and should not collide with the initial lazy-load.
+  const [scoringBusy, setScoringBusy] = useState(false);
+  const [refiningBusy, setRefiningBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // Optimistic dispatch tracking — when the user clicks elect/reject
+  // on a row, we update the UI before the API responds. The Set
+  // tracks which variation ids have an in-flight disposition update;
+  // the optimistic disposition is applied per row via a separate
+  // Map so the UI can render the new state immediately.
+  const [optimisticDisposition, setOptimisticDisposition] = useState<
+    Map<string, "elected" | "rejected">
+  >(new Map());
+
+  // Reusable: parse /expand response into FeatureDetail shape.
+  // Extracted so re-fetches after actions share the same parsing
+  // logic as the initial mount load.
+  const parseDetail = useCallback((ed: unknown): FeatureDetail => {
+    const eds = ed as
+      | {
+          variations?: LineupVariation[];
+          effectiveness_envelope?: {
+            lift_pct?: number | null;
+            placebo_verdict?: "pass" | "fail" | "skip" | null;
+            target_entity_name?: string | null;
+          };
+        }
+      | null
+      | undefined;
+    if (!eds || !Array.isArray(eds.variations)) {
+      return { variations: [] };
+    }
+    return {
+      variations: eds.variations.map((v: LineupVariation) => ({
+        id: v.id,
+        name: v.name,
+        description: v.description,
+        effectiveness_score: v.effectiveness_score,
+        disposition: v.disposition,
+        provenance: v.provenance,
+      })),
+      envelope: eds.effectiveness_envelope
+        ? {
+            lift_pct: eds.effectiveness_envelope.lift_pct ?? null,
+            placebo_verdict:
+              eds.effectiveness_envelope.placebo_verdict ?? null,
+            target_entity_name:
+              eds.effectiveness_envelope.target_entity_name ?? null,
+          }
+        : undefined,
+    };
+  }, []);
+
+  // Soft re-fetch: pull fresh /expand without showing a loader.
+  // Used after score / refine / disposition actions so the lineup
+  // reflects the latest persisted state. Optimistic disposition
+  // tracking is cleared after a successful refetch — server state
+  // wins.
+  const refetchDetail = useCallback(async () => {
+    if (!chain.featureId) return;
+    try {
+      const res = await fetch("/api/brainstorm/item/expand", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entityId: chain.featureId }),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      setDetail(parseDetail(json?.expanded_detail));
+      setOptimisticDisposition(new Map());
+    } catch {
+      // Soft re-fetch — silent on failure. UI keeps last known state.
+    }
+  }, [chain.featureId, parseDetail]);
+
   useEffect(() => {
     let cancelled = false;
     if (!chain.featureId) return;
@@ -124,31 +200,8 @@ export function CategoryCard({
       .then(async (res) => {
         if (!res.ok || cancelled) return;
         const json = await res.json();
-        const ed = json?.expanded_detail;
-        if (!ed || !Array.isArray(ed.variations)) {
-          if (!cancelled) setDetail({ variations: [] });
-          return;
-        }
         if (cancelled) return;
-        setDetail({
-          variations: ed.variations.map((v: LineupVariation) => ({
-            id: v.id,
-            name: v.name,
-            description: v.description,
-            effectiveness_score: v.effectiveness_score,
-            disposition: v.disposition,
-            provenance: v.provenance,
-          })),
-          envelope: ed.effectiveness_envelope
-            ? {
-                lift_pct: ed.effectiveness_envelope.lift_pct ?? null,
-                placebo_verdict:
-                  ed.effectiveness_envelope.placebo_verdict ?? null,
-                target_entity_name:
-                  ed.effectiveness_envelope.target_entity_name ?? null,
-              }
-            : undefined,
-        });
+        setDetail(parseDetail(json?.expanded_detail));
       })
       .catch(() => {
         if (!cancelled) setDetail({ variations: [] });
@@ -156,21 +209,157 @@ export function CategoryCard({
     return () => {
       cancelled = true;
     };
-  }, [chain.featureId]);
+  }, [chain.featureId, parseDetail]);
+
+  // ── Phase 7b actions ──────────────────────────────────────────
+  //
+  // All three flows post to existing Phase 4 / 5b endpoints with
+  // optimistic UI then re-fetch. No new server endpoints needed.
+
+  /** Score this card's mechanism. Calls Phase 4 scoring engine. */
+  async function handleScore() {
+    if (!chain.featureId) return;
+    setScoringBusy(true);
+    setActionError(null);
+    try {
+      const res = await fetch("/api/brainstorm/item/variation/score", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entityId: chain.featureId }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          detail?: string;
+        };
+        const tail =
+          typeof j.detail === "string" && j.detail.length > 0
+            ? ` — ${j.detail}`
+            : "";
+        setActionError(`${j.error ?? "Scoring failed."}${tail}`);
+        return;
+      }
+      // Score route persists envelope + per-row effectiveness_score
+      // into expanded_detail; the soft refetch pulls it back.
+      await refetchDetail();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Network error.");
+    } finally {
+      setScoringBusy(false);
+    }
+  }
+
+  /** Run R&D experiment — proposes 3 new candidates + scores them. */
+  async function handleRefine() {
+    if (!chain.featureId) return;
+    setRefiningBusy(true);
+    setActionError(null);
+    try {
+      const res = await fetch("/api/brainstorm/item/variation/refine", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entityId: chain.featureId }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          detail?: string;
+        };
+        const tail =
+          typeof j.detail === "string" && j.detail.length > 0
+            ? ` — ${j.detail}`
+            : "";
+        setActionError(`${j.error ?? "Experiment failed."}${tail}`);
+        return;
+      }
+      const json = (await res.json()) as { status?: string; status_detail?: string };
+      if (json.status && json.status !== "ok") {
+        setActionError(json.status_detail ?? `Experiment: ${json.status}`);
+        return;
+      }
+      await refetchDetail();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Network error.");
+    } finally {
+      setRefiningBusy(false);
+    }
+  }
+
+  /** Inline elect/reject for a lineup row. Optimistic — flips local
+   *  state before the API call completes; reconciled on refetch. */
+  async function handleDispatch(
+    variationId: string,
+    disposition: "elected" | "rejected",
+  ) {
+    if (!chain.featureId || !variationId) return;
+    setOptimisticDisposition((prev) => {
+      const next = new Map(prev);
+      next.set(variationId, disposition);
+      return next;
+    });
+    setActionError(null);
+    try {
+      const res = await fetch(
+        "/api/brainstorm/item/variation/disposition",
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            entityId: chain.featureId,
+            variationId,
+            disposition,
+          }),
+        },
+      );
+      if (!res.ok) {
+        // Roll back the optimistic flip.
+        setOptimisticDisposition((prev) => {
+          const next = new Map(prev);
+          next.delete(variationId);
+          return next;
+        });
+        setActionError("Couldn't update disposition. Try again.");
+        return;
+      }
+      await refetchDetail();
+    } catch {
+      setOptimisticDisposition((prev) => {
+        const next = new Map(prev);
+        next.delete(variationId);
+        return next;
+      });
+      setActionError("Network error.");
+    }
+  }
   const detailLoading = detail === null;
 
-  // Sorted lineup — variations by effectiveness score desc, rejected
-  // dimmed at the bottom. Phase 7a default: show all variations,
-  // user can dig into the drawer to manage them.
-  const sortedVariations = (detail?.variations ?? [])
-    .slice()
-    .sort((a, b) => {
+  // Phase 7b — fold optimistic disposition flips into the lineup
+  // BEFORE sorting so the row visually moves to the bottom (rejected)
+  // or gets the elected ring immediately on click. The server-side
+  // reconciliation happens in the background via refetchDetail.
+  const sortedVariations = useMemo(() => {
+    const merged = (detail?.variations ?? []).map((v) => {
+      if (!v.id) return v;
+      const optimistic = optimisticDisposition.get(v.id);
+      return optimistic ? { ...v, disposition: optimistic } : v;
+    });
+    return merged.slice().sort((a, b) => {
       if (a.disposition === "rejected" && b.disposition !== "rejected") return 1;
       if (b.disposition === "rejected" && a.disposition !== "rejected") return -1;
       const sa = a.effectiveness_score ?? 0;
       const sb = b.effectiveness_score ?? 0;
       return sb - sa;
     });
+  }, [detail, optimisticDisposition]);
+
+  // Has the lineup ever been scored? Drives Score vs Re-score copy.
+  const hasScores = useMemo(
+    () =>
+      (detail?.variations ?? []).some(
+        (v) => typeof v.effectiveness_score === "number",
+      ),
+    [detail],
+  );
 
   const compositePct = Math.round((chain.composite ?? 0) * 100);
 
@@ -310,6 +499,14 @@ export function CategoryCard({
           variations={sortedVariations}
           loading={detailLoading}
           envelope={detail?.envelope}
+          hasScores={hasScores}
+          scoringBusy={scoringBusy}
+          refiningBusy={refiningBusy}
+          actionError={actionError}
+          onScore={handleScore}
+          onRefine={handleRefine}
+          onElect={(id) => void handleDispatch(id, "elected")}
+          onReject={(id) => void handleDispatch(id, "rejected")}
           onOpenFeatureDetail={onOpenFeatureDetail}
         />
       </div>
@@ -514,11 +711,31 @@ function MechanismLineup({
   variations,
   loading,
   envelope,
+  hasScores,
+  scoringBusy,
+  refiningBusy,
+  actionError,
+  onScore,
+  onRefine,
+  onElect,
+  onReject,
   onOpenFeatureDetail,
 }: {
   variations: LineupVariation[];
   loading: boolean;
   envelope?: { lift_pct: number | null; placebo_verdict: "pass" | "fail" | "skip" | null; target_entity_name: string | null };
+  /** Phase 7b — has the lineup ever been scored? Drives Score vs
+   *  Re-score button copy + visibility of the experiment trigger. */
+  hasScores: boolean;
+  scoringBusy: boolean;
+  refiningBusy: boolean;
+  actionError: string | null;
+  /** Phase 7b — inline action handlers. All three route to existing
+   *  Phase 4 / 5b endpoints with optimistic UI in the parent. */
+  onScore: () => void;
+  onRefine: () => void;
+  onElect: (variationId: string) => void;
+  onReject: (variationId: string) => void;
   onOpenFeatureDetail: () => void;
 }) {
   // Empty state — feature hasn't been expanded yet
@@ -547,6 +764,9 @@ function MechanismLineup({
   }
 
   if (!loading && variations.length === 0) {
+    // Empty state — feature was expanded but had no variations.
+    // Rare in practice (room generation always seeds variations);
+    // surfacing the drawer link lets the user investigate.
     return (
       <motion.button
         type="button"
@@ -572,7 +792,7 @@ function MechanismLineup({
             className="mt-0.5 text-[12px] font-light italic"
             style={{ color: appleVibe.text.tertiary }}
           >
-            Open the mechanism to generate + score IV candidates.
+            No variations yet — open the mechanism to inspect.
           </p>
         </div>
         <Sparkles
@@ -586,28 +806,145 @@ function MechanismLineup({
 
   return (
     <div>
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <div
-          className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-          style={{ color: appleVibe.text.tertiary }}
-        >
-          Mechanism lineup · {variations.length} candidate
-          {variations.length === 1 ? "" : "s"}
-        </div>
-        {envelope?.lift_pct !== undefined && envelope.lift_pct !== null && (
-          <span
-            className="text-[10px] font-light"
+      {/* Header row — title + (when scored) envelope summary + action
+          buttons. The Apple-tier choice is to keep the buttons in
+          the header so the lineup row is just signal (no buttons
+          per row except elect/reject which are tiny). */}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <div
+            className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
             style={{ color: appleVibe.text.tertiary }}
-            title="Structural lift from the last scoring run"
           >
-            lift {(envelope.lift_pct * 100).toFixed(0)}% · placebo{" "}
-            {envelope.placebo_verdict ?? "—"}
-          </span>
-        )}
+            Mechanism lineup · {variations.length} candidate
+            {variations.length === 1 ? "" : "s"}
+          </div>
+          {envelope?.lift_pct !== undefined && envelope.lift_pct !== null && (
+            <span
+              className="truncate text-[10px] font-light"
+              style={{ color: appleVibe.text.tertiary }}
+              title="Structural lift from the last scoring run"
+            >
+              · lift {(envelope.lift_pct * 100).toFixed(0)}% · placebo{" "}
+              {envelope.placebo_verdict ?? "—"}
+            </span>
+          )}
+        </div>
+        {/* Phase 7b — action buttons. The score button copy shifts
+            from "Score lineup" (cold) to "Re-score" (warm) so the
+            user always sees the next-most-likely action. The
+            experiment button only appears once scored — refining
+            without a target pain has nothing to optimize against. */}
+        <div className="flex flex-shrink-0 items-center gap-1.5">
+          <motion.button
+            type="button"
+            onClick={onScore}
+            disabled={scoringBusy || refiningBusy}
+            whileHover={{
+              y: -1,
+              transition: { duration: 0.15, ease: [0.22, 1, 0.36, 1] },
+            }}
+            whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
+            className="inline-flex items-center gap-1 transition-[background,color] duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              background: "transparent",
+              color: appleVibe.text.secondary,
+              border: `1px solid ${appleVibe.stroke.medium}`,
+              borderRadius: appleVibe.radius.pill,
+              padding: "3px 9px",
+              fontSize: "10px",
+              fontWeight: 600,
+              letterSpacing: "0.02em",
+            }}
+            title={
+              hasScores
+                ? "Re-score this mechanism's variations"
+                : "Score this mechanism's variations against the room's target pain"
+            }
+          >
+            {scoringBusy ? (
+              <>
+                <Loader2 className="h-2.5 w-2.5 animate-spin" strokeWidth={2.5} />
+                Scoring…
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-2.5 w-2.5" strokeWidth={2.5} />
+                {hasScores ? "Re-score" : "Score"}
+              </>
+            )}
+          </motion.button>
+          {hasScores && (
+            <motion.button
+              type="button"
+              onClick={onRefine}
+              disabled={scoringBusy || refiningBusy}
+              whileHover={{
+                y: -1,
+                transition: { duration: 0.15, ease: [0.22, 1, 0.36, 1] },
+              }}
+              whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
+              className="inline-flex items-center gap-1 transition-all duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50"
+              style={{
+                background: appleVibe.accent.primary,
+                color: appleVibe.text.onAccent,
+                borderRadius: appleVibe.radius.pill,
+                padding: "3px 10px",
+                fontSize: "10px",
+                fontWeight: 600,
+                letterSpacing: "0.02em",
+                boxShadow: appleVibe.shadow.chip,
+              }}
+              title="Propose 3 new IV candidates targeting the weakest gap"
+            >
+              {refiningBusy ? (
+                <>
+                  <Loader2
+                    className="h-2.5 w-2.5 animate-spin"
+                    strokeWidth={2.5}
+                  />
+                  Running…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-2.5 w-2.5" strokeWidth={2.5} />
+                  Run experiment
+                </>
+              )}
+            </motion.button>
+          )}
+        </div>
       </div>
+
+      {/* Error banner — surfaced inline, not modal. Disappears on
+          next successful action. */}
+      {actionError && (
+        <div
+          className="mb-2 px-2.5 py-1.5"
+          style={{
+            background: "rgba(220,38,38,0.04)",
+            border: "1px solid rgba(220,38,38,0.20)",
+            borderRadius: appleVibe.radius.sm,
+          }}
+        >
+          <p
+            className="text-[11px] leading-snug"
+            style={{ color: "rgba(127,29,29,0.95)" }}
+          >
+            {actionError}
+          </p>
+        </div>
+      )}
+
       <ul className="space-y-1">
         {variations.slice(0, 6).map((v, i) => (
-          <LineupRow key={v.id} rank={i + 1} variation={v} />
+          <LineupRow
+            key={v.id}
+            rank={i + 1}
+            variation={v}
+            onElect={onElect}
+            onReject={onReject}
+          />
         ))}
         {variations.length > 6 && (
           <li
@@ -625,9 +962,16 @@ function MechanismLineup({
 function LineupRow({
   rank,
   variation: v,
+  onElect,
+  onReject,
 }: {
   rank: number;
   variation: LineupVariation;
+  /** Phase 7b — inline disposition handlers. The id arg lets the
+   *  parent route to /variation/disposition without the row needing
+   *  to know about the entity. */
+  onElect: (variationId: string) => void;
+  onReject: (variationId: string) => void;
 }) {
   const score = v.effectiveness_score ?? 0;
   const isElected = v.disposition === "elected";
@@ -635,7 +979,7 @@ function LineupRow({
   const isRdCandidate = v.provenance === "rd_iteration";
   return (
     <li
-      className="flex items-center gap-2.5 px-2 py-1.5 transition-colors duration-150 ease-out hover:bg-[rgba(15,23,42,0.025)]"
+      className="group flex items-center gap-2.5 px-2 py-1.5 transition-colors duration-150 ease-out hover:bg-[rgba(15,23,42,0.025)]"
       style={{
         borderRadius: appleVibe.radius.sm,
         opacity: isRejected ? 0.5 : 1,
@@ -701,6 +1045,44 @@ function LineupRow({
         >
           {score > 0 ? (score * 100).toFixed(0) : "—"}
         </span>
+      </div>
+      {/* Phase 7b — inline elect/reject. Visible by default on
+          row hover only (group-hover) so the lineup reads as
+          INFO at rest + the actions reveal on intent. Already-
+          elected/rejected rows show the icon button in active
+          state instead.
+          The id is non-null here in practice — LineupVariation
+          objects always carry one from /expand. The optional-chain
+          + ?? "" guard keeps tsc happy. */}
+      <div className="flex w-12 flex-shrink-0 items-center justify-end gap-0.5">
+        <button
+          type="button"
+          onClick={() => v.id && onReject(v.id)}
+          disabled={isRejected || !v.id}
+          aria-label="Reject this candidate"
+          className="flex h-5 w-5 items-center justify-center rounded-full transition-all duration-150 ease-out hover:bg-[rgba(15,23,42,0.06)] disabled:cursor-not-allowed disabled:opacity-30 group-hover:opacity-100"
+          style={{
+            color: isRejected ? "rgba(220,38,38,0.85)" : appleVibe.text.tertiary,
+            opacity: isRejected ? 1 : 0.4,
+          }}
+          title="Reject"
+        >
+          <X className="h-3 w-3" strokeWidth={2.4} />
+        </button>
+        <button
+          type="button"
+          onClick={() => v.id && onElect(v.id)}
+          disabled={isElected || !v.id}
+          aria-label="Elect this candidate"
+          className="flex h-5 w-5 items-center justify-center rounded-full transition-all duration-150 ease-out hover:bg-[rgba(22,163,74,0.10)] disabled:cursor-not-allowed disabled:opacity-30 group-hover:opacity-100"
+          style={{
+            color: isElected ? OUTCOME_COLOR : appleVibe.text.tertiary,
+            opacity: isElected ? 1 : 0.4,
+          }}
+          title="Elect"
+        >
+          <Check className="h-3 w-3" strokeWidth={2.4} />
+        </button>
       </div>
     </li>
   );
