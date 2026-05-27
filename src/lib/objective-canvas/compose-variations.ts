@@ -81,6 +81,13 @@ export interface ComposeContext {
      *  reaches the generator. */
     disposition: "open" | "acknowledged" | "dismissed";
   }>;
+  /** K4 Wire 2 — pre-rendered learnings block (from
+   *  buildLearningsBlock). When the user has concluded or abandoned
+   *  experiments in this space, the composition should respect that:
+   *  don't propose integrations that depend on a mechanism the user
+   *  already concluded didn't work. Optional — empty when no
+   *  experiments have terminal status. */
+  learningsBlock?: string;
 }
 
 const LAYER_FRAMING: Record<ComposeContext["itemLayer"], string> = {
@@ -184,7 +191,7 @@ Return strict JSON.`;
 
   const constraintsBlock = buildConstraintsBlock(ctx.constraints ?? null);
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${lensBlock}${findingsBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${lensBlock}${findingsBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
 
   const raw = await llmJSON<{
     description?: unknown;

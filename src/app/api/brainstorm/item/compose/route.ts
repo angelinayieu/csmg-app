@@ -18,6 +18,10 @@ import { composeVariations } from "@/lib/objective-canvas/compose-variations";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import {
+  loadRecentLearnings,
+  buildLearningsBlock,
+} from "@/lib/objective-canvas/load-recent-learnings";
+import {
   resolveParentObjectiveContext,
   resolveEntityLayer,
   type LayerSlug,
@@ -324,8 +328,29 @@ export async function POST(req: NextRequest) {
           ).length,
         },
       },
-      () =>
-        composeVariations({
+      async () => {
+        // K4 Wire 2 — space-wide learnings into composition. When the
+        // user has concluded experiments anywhere in this space, the
+        // composition should respect them — don't propose
+        // integration_points that depend on a mechanism the user
+        // already concluded didn't work.
+        let learningsBlock: string | undefined;
+        try {
+          const allLearnings = await loadRecentLearnings({
+            db,
+            userId: auth.user.id,
+            spaceId: entity.space_id,
+            limit: 8,
+          });
+          if (allLearnings.length > 0) {
+            learningsBlock = buildLearningsBlock(allLearnings, {
+              crossSpace: false,
+            });
+          }
+        } catch {
+          // Non-fatal — composition continues without the block.
+        }
+        return composeVariations({
           itemName: entity.name,
           itemLayer: layer,
           electedVariations: elected,
@@ -335,7 +360,9 @@ export async function POST(req: NextRequest) {
           constraints: readConstraints(space.synthesis_data),
           crossRoomFindings:
             crossRoomFindings.length > 0 ? crossRoomFindings : undefined,
-        }),
+          learningsBlock,
+        });
+      },
     );
   } catch (err) {
     return NextResponse.json(

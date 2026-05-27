@@ -81,6 +81,27 @@ export interface RoomContext {
    *  surface chips on each card. Empty / undefined → fallback to
    *  legacy pure-research generation. */
   annotations?: ObjectiveAnnotation[];
+  /** Wire 1 (K2) — operational constraints. When provided, every
+   *  stage prompt sees the user's time / budget / team / risk /
+   *  compliance situation and emits items that respect it. Without
+   *  this the room ideates as if every user is a funded enterprise.
+   *  Optional + back-compat — missing means generation respects the
+   *  user's situation only through other (less direct) signals. */
+  constraintsBlock?: string;
+  /** Wire 4 (K2) — cached cross-room signals to RESPECT during new
+   *  room generation. Recurring mechanisms / themes / orphan
+   *  annotations across sibling rooms in this space. Prevents the
+   *  4th room from re-proposing what the system has already flagged
+   *  as recurring across the other 3. Empty / undefined when no
+   *  prior analysis exists (first room generated in a space). */
+  crossRoomFindingsBlock?: string;
+  /** Wire 2 (K4) — RecentLearnings rendered into a prompt block by
+   *  buildLearningsBlock(). Closes the amnesia loop: a user who
+   *  concluded "streak gamification didn't move retention" sees
+   *  future generations RESPECT that learning instead of re-
+   *  proposing the same losing mechanism. Empty / undefined when
+   *  no concluded or abandoned experiments exist yet. */
+  learningsBlock?: string;
 }
 
 // ── Output shapes ──────────────────────────────────────────────────
@@ -438,7 +459,7 @@ Return strict JSON.`;
     ctx.subObjectiveDescription
       ? `\n\n${ctx.subObjectiveDescription}`
       : ""
-  }\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${painCats.instructions}${lens.lensBlock}${lens.provenanceRule}${rag.ragBlock}${rag.citationRule}
+  }\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${ctx.constraintsBlock ?? ""}${ctx.crossRoomFindingsBlock ?? ""}${ctx.learningsBlock ?? ""}${painCats.instructions}${lens.lensBlock}${lens.provenanceRule}${rag.ragBlock}${rag.citationRule}
 
 Generate 3-5 pain points with full causal chains, plus the single TOP_NEGATIVE_OUTCOME for the room.${
     painCats.slugs.length > 0
@@ -616,7 +637,7 @@ Return strict JSON.`;
     outcomeRequired.push("derived_from_annotations");
   }
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${ctx.constraintsBlock ?? ""}${ctx.crossRoomFindingsBlock ?? ""}${ctx.learningsBlock ?? ""}
 
 PAIN POINTS (each with its negative_outcome):
 ${painPoints.map((p, i) => `  ${i + 1}. ${p.name} → ${p.negative_outcome}`).join("\n")}${outcomeCats.instructions}${lensO.lensBlock}${lensO.provenanceRule}${ragO.ragBlock}${ragO.citationRule}
@@ -774,7 +795,7 @@ Return strict JSON.`;
     featureRequired.push("derived_from_annotations");
   }
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${ctx.constraintsBlock ?? ""}${ctx.crossRoomFindingsBlock ?? ""}${ctx.learningsBlock ?? ""}
 
 PAIN POINTS (with negative_outcomes):
 ${painPoints.map((p, i) => `  ${i + 1}. ${p.name} → ${p.negative_outcome}`).join("\n")}

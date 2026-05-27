@@ -187,6 +187,25 @@ export interface ItemVariation {
      *   "medium" — game-able with sustained effort
      *   "high"   — pure-volume / vanity / trivially Goodharted */
     goodhart_risk?: "low" | "medium" | "high";
+    // ── Phase 11.5 — Multi-target MC overlay ──
+    /** Phase 11.5 — propagated lift % on THIS indicator under the
+     *  variation's intervention. Computed as outcome_mc_lift_pct ×
+     *  consensus_confidence (treating ensemble confidence as a proxy
+     *  for the Prentice proportion-explained between this indicator
+     *  and its parent outcome). Signed; negative means the indicator
+     *  moves AGAINST the desired direction. Undefined when MC didn't
+     *  run or the feature lacks a valid target_pain. */
+    lift_pct?: number;
+    /** Phase 11.5 — propagated MC lift_band on this indicator
+     *  ({p10, p50, p90} percentiles from the MC sample distribution,
+     *  scaled by consensus_confidence). Empty when lift_pct is. */
+    lift_band?: { p10: number; p50: number; p90: number };
+    /** Phase 11.5 — discriminator for which method produced lift_band:
+     *   "mc_scaled" — outcome MC propagation scaled by indicator
+     *                 confidence (the Phase-11.5 default)
+     *   "mc_direct" — future: indicator was promoted to a virtual
+     *                 graph node and MC propagated directly to it. */
+    lift_band_method?: "mc_scaled" | "mc_direct";
   }>;
   /** Phase 5b — provenance flag distinguishing R&D-engine-proposed
    *  candidates from human-generated or originally-LLM-generated
@@ -638,6 +657,17 @@ export interface ExpandItemContext {
      *  partner room, the addressing room titles. Empty allowed. */
     hint?: string;
   }>;
+  /** K4 Wire 2 — space-wide learnings rendered into a prompt block
+   *  (typically by buildLearningsBlock from load-recent-learnings).
+   *  Distinct from testedBriefs (which is THIS item's briefs):
+   *  spaceLearningsBlock surfaces concluded / abandoned briefs from
+   *  OTHER items in the same space, so variation generation respects
+   *  cross-item learnings (e.g., "user abandoned streak gamification
+   *  in another item — don't propose it here either"). Caller is
+   *  responsible for filtering out this item's own briefs to avoid
+   *  duplicating testedBriefs. Empty / undefined when no learnings
+   *  exist or the caller chose to skip. */
+  spaceLearningsBlock?: string;
 }
 
 // ── Per-layer framing — different prompts for different lane types ──
@@ -1071,7 +1101,7 @@ Return strict JSON.`;
           )}\n  CROSS-ROOM RULE: When a finding above directly touches THIS item, EITHER (a) propose variations that FOLD the structural signal in (extend the shared mechanism by name; differentiate from the duplicate variation; resolve / sidestep the contradiction; emit a counter-variation for the uncovered pain), OR (b) name the friction explicitly in the variation's TRADEOFF so the user reads where the open decision lives. Do NOT silently propose a variation that re-introduces a duplicate, re-extends a contradiction, or ignores an uncovered pain — those are exactly the signals the analysis workbench surfaced so they wouldn't recur.`
       : "";
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${upstreamBlock}${lateralBlock}${testedBriefsBlock}${crossRoomFindingsBlock}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1500)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.subObjectiveTitle}\n"""\n\nITEM:\n  Layer: ${ctx.layer}\n  Title: ${ctx.name}${ccBlock}${roomPainsBlock}${roomOutcomesBlock}${constraintsBlock}${lens.block}${upstreamBlock}${lateralBlock}${testedBriefsBlock}${ctx.spaceLearningsBlock ?? ""}${crossRoomFindingsBlock}${priorConceptsBlock}${kindPrefBlock}${themesBlock}${ragBlockOut}\n\nExpand this item per the system instructions. Variations and open_questions must respect the operational constraints — if a variation is unreachable for this user's budget / team / time, do not emit it.`;
 
   // ── Schema (dynamic — adds derived_from_annotations only when
   //    the lens has entries, mirroring the room generator pattern). ──

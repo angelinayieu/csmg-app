@@ -347,12 +347,36 @@ export async function POST(req: NextRequest) {
         })
       : undefined;
 
+  // ── K3 Wire 3 — composed-design context into variation expansion ──
+  // When deepening a variation that's part of an active composition
+  // (≥2 elected sibling variations that the system has woven into a
+  // unified design), the LLM should know what it's part of so the
+  // L3+ output (mechanism story / data model / edge cases / etc.)
+  // can frame this variation as ONE COMPONENT of the composed whole
+  // — not as a standalone design. Without this wire, deepening
+  // "Streak-based" doesn't know it's been paired with "Mastery
+  // progression" in the composed design.
+  let parentDescriptionEnriched = parentDescription;
+  if (attachPoint === "variation" && detail.composed_design) {
+    const cd = detail.composed_design;
+    const isInComposition =
+      Array.isArray(cd.source_variation_ids) &&
+      cd.source_variation_ids.includes(attachRef);
+    if (isInComposition && cd.description) {
+      parentDescriptionEnriched =
+        `${parentDescription}\n\nCOMPOSED DESIGN CONTEXT — this variation is part of a unified design across ${cd.source_variation_ids.length} elected variations:\n${cd.description}` +
+        (cd.conflicts_open && cd.conflicts_open.length > 0
+          ? `\n\nOpen conflicts in the composition (informs adversarial / edge-case work):\n${cd.conflicts_open.map((c) => `  • ${c}`).join("\n")}`
+          : "");
+    }
+  }
+
   try {
     generated = await generateExpansionNode({
       catalogEntry: entry,
       parent: {
         title: parentTitle,
-        description: parentDescription,
+        description: parentDescriptionEnriched,
         itemLayer: layer,
         itemName: entity.name,
         subObjectiveTitle,

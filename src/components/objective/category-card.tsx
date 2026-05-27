@@ -125,6 +125,13 @@ interface LineupVariation {
     lens_agreement_count?: number;
     mediation_check?: "necessary" | "indirect" | "questionable";
     goodhart_risk?: "low" | "medium" | "high";
+    /** Phase 11.5 — MC-propagated lift % on this indicator under the
+     *  variation's intervention. Composed as outcome_mc_lift ×
+     *  consensus_confidence (Prentice proportion-explained proxy). */
+    lift_pct?: number;
+    /** Phase 11.5 — MC sample-quantile band, also scaled by confidence. */
+    lift_band?: { p10: number; p50: number; p90: number };
+    lift_band_method?: "mc_scaled" | "mc_direct";
   }>;
 }
 
@@ -1923,6 +1930,25 @@ function IndicatorBreakdown({
                     "Goodhart: high risk — pure-volume or vanity proxy, easily gamed",
                   );
                 }
+                // Phase 11.5 — lift chip. When MC ran AND produced a
+                // valid band, render the signed lift % beside the
+                // score. Color tiers: positive = outcomes green,
+                // negative = pain red, ≈0 = neutral.
+                const hasLift = typeof ind.lift_pct === "number";
+                const liftPct = ind.lift_pct ?? 0;
+                const liftSign = liftPct > 0 ? "+" : "";
+                const liftColor =
+                  liftPct > 0.02
+                    ? OUTCOME_COLOR
+                    : liftPct < -0.02
+                      ? appleVibe.stage.pain
+                      : appleVibe.text.tertiary;
+                // Append lift band to tooltip when present
+                if (ind.lift_band) {
+                  tooltipParts.push(
+                    `MC lift band: p10 ${(ind.lift_band.p10 * 100).toFixed(1)}% · p50 ${(ind.lift_band.p50 * 100).toFixed(1)}% · p90 ${(ind.lift_band.p90 * 100).toFixed(1)}%`,
+                  );
+                }
                 return (
                   <span
                     key={`${ind.indicator_text}-${i}`}
@@ -1953,6 +1979,18 @@ function IndicatorBreakdown({
                         }}
                       >
                         · {lensCount}/{lensTotal}
+                      </span>
+                    )}
+                    {hasLift && (
+                      <span
+                        style={{
+                          color: liftColor,
+                          fontWeight: 600,
+                          marginLeft: "2px",
+                        }}
+                      >
+                        {liftSign}
+                        {(liftPct * 100).toFixed(0)}%
                       </span>
                     )}
                     {goodhartRisk === "high" && <span aria-hidden>⚠️</span>}

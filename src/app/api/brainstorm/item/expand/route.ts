@@ -27,6 +27,10 @@ import {
 import { loadRelevantCanonicalConcepts } from "@/lib/objective-canvas/canonical-concept-lookup";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 import {
+  loadRecentLearnings,
+  buildLearningsBlock,
+} from "@/lib/objective-canvas/load-recent-learnings";
+import {
   resolveParentObjectiveContext,
   resolveEntityLayer,
   type LayerSlug,
@@ -810,8 +814,33 @@ export async function POST(req: NextRequest) {
           ),
         },
       },
-      () =>
-        expandItemDetail({
+      async () => {
+        // K4 Wire 2 — pull space-wide learnings from OTHER items in
+        // this space (this item's own briefs are already covered by
+        // testedBriefs above). Soft-fail to empty when no concluded
+        // experiments exist anywhere.
+        let spaceLearningsBlock: string | undefined;
+        try {
+          const allLearnings = await loadRecentLearnings({
+            db,
+            userId: auth.user.id,
+            spaceId: entity.space_id,
+            limit: 8,
+          });
+          // Filter out learnings from THIS item — testedBriefs already
+          // surfaces those at a richer granularity (per-variation).
+          const otherItemLearnings = allLearnings.filter(
+            (L) => L.item_name !== entity.name,
+          );
+          if (otherItemLearnings.length > 0) {
+            spaceLearningsBlock = buildLearningsBlock(otherItemLearnings, {
+              crossSpace: false,
+            });
+          }
+        } catch {
+          // Non-fatal — generation continues without the block.
+        }
+        return expandItemDetail({
           layer,
           name: entity.name,
           causalChain: (entity.causal_chain as Record<string, unknown>) ?? {},
@@ -830,7 +859,9 @@ export async function POST(req: NextRequest) {
           testedBriefs: testedBriefs.length > 0 ? testedBriefs : undefined,
           crossRoomFindings:
             crossRoomFindings.length > 0 ? crossRoomFindings : undefined,
-        }),
+          spaceLearningsBlock,
+        });
+      },
     );
   } catch (err) {
     return NextResponse.json(

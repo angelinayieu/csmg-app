@@ -45,6 +45,10 @@ import {
   type EnsembleScoreEnvelope,
 } from "@/lib/objective-canvas/score-indicator-ensemble";
 import { poolEnsembleIndicators } from "@/lib/objective-canvas/pool-indicator-confidence";
+import {
+  composeIndicatorLiftBands,
+  indexOverlays,
+} from "@/lib/objective-canvas/compose-indicator-lift-bands";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
@@ -551,6 +555,85 @@ export async function POST(req: NextRequest) {
       Array.from(poolGroups.values()),
     );
 
+    // ── Phase 11.5 — Multi-target MC overlay ──
+    // After ensemble produces per-indicator confidence grades, run
+    // the existing MC simulator (scoreVariationsForFeature) on the
+    // same feature. When MC succeeds (target_pain reachable, no
+    // diagnostic), compose per-indicator lift bands as
+    //   outcome_lift × consensus_confidence
+    // The consensus_confidence is our proxy for the Prentice
+    // proportion-explained — treating it as the fraction of the
+    // outcome's variance the indicator captures. Each indicator
+    // ends up with a defensible lift distribution {p10, p50, p90}
+    // rather than ensemble's qualitative grade alone. Soft-fail:
+    // if MC has issues we just skip the overlay (indicator_scores
+    // still carry the ensemble grades + lens data).
+    let mcOverlay: ReturnType<typeof indexOverlays> | null = null;
+    try {
+      const mcEnvelope = await scoreVariationsForFeature(db, {
+        spaceId: entity.space_id,
+        featureEntityId: entityId,
+        parentSubObjectiveId: entity.parent_sub_objective_id ?? null,
+      });
+      // Build a flat indicator list across all variations so we
+      // can compose once per indicator (consensus_confidence is
+      // already aggregated). We use the first occurrence's
+      // confidence — they're all the same indicator per (variation,
+      // indicator) cell so we group by composite key.
+      const allIndicators = new Map<
+        string,
+        { indicator_text: string; outcome_id: string; confidence: number }
+      >();
+      for (const v of ensembleEnvelope.variation_scores) {
+        for (const ind of v.indicator_scores) {
+          const key = `${ind.outcome_id}::${ind.indicator_text}::${v.variation_id}`;
+          allIndicators.set(key, {
+            indicator_text: ind.indicator_text,
+            outcome_id: ind.outcome_id,
+            confidence: ind.consensus_confidence,
+          });
+        }
+      }
+      const overlays = composeIndicatorLiftBands(
+        {
+          lift_pct: mcEnvelope.lift_pct,
+          lift_band: mcEnvelope.lift_band,
+          status: mcEnvelope.status,
+        },
+        Array.from(allIndicators.values()),
+      );
+      // Index by (variation_id, outcome_id, indicator_text) so we
+      // can attach per-variation lift bands below. The compose call
+      // already produced one overlay per row (each variation's
+      // indicator gets its own lift_pct via its own confidence).
+      const overlayByCompositeKey = new Map<
+        string,
+        (typeof overlays)[number]
+      >();
+      // Reconstruct the variation_id from allIndicators iteration order
+      // (overlays come out in the same order they went in).
+      let idx = 0;
+      for (const v of ensembleEnvelope.variation_scores) {
+        for (const ind of v.indicator_scores) {
+          const overlay = overlays[idx++];
+          if (overlay) {
+            overlayByCompositeKey.set(
+              `${v.variation_id}::${ind.outcome_id}::${ind.indicator_text}`,
+              overlay,
+            );
+          }
+        }
+      }
+      mcOverlay = overlayByCompositeKey as unknown as ReturnType<
+        typeof indexOverlays
+      >;
+    } catch (mcErr) {
+      console.warn(
+        "[item/variation/score] MC overlay failed (non-fatal, ensemble persists without it):",
+        mcErr instanceof Error ? mcErr.message : String(mcErr),
+      );
+    }
+
     // ── Persist: per-variation lens-rich indicator_scores + envelope
     //    with counter_indicators + indicator_pool. Soft-fail on write. ──
     const ensembleScoreById = new Map(
@@ -566,26 +649,45 @@ export async function POST(req: NextRequest) {
         ...v,
         effectiveness_score: s.composite_score,
         evaluation_method: "ensemble" as const,
-        indicator_scores: s.indicator_scores.map((ind) => ({
-          indicator_text: ind.indicator_text,
-          outcome_id: ind.outcome_id,
-          outcome_name: ind.outcome_name,
-          score: ind.consensus_score,
-          // Compose a one-sentence summary by joining the most extreme
-          // lens reasons — gives the user a useful tooltip without
-          // surfacing 5 separate sentences in a chip's title attribute.
-          reason:
-            ind.lens_scores.length > 0
-              ? `${ind.lens_scores[0].lens}: ${ind.lens_scores[0].reason}`
-              : "",
-          confidence: ind.consensus_confidence,
-          lens_scores: ind.lens_scores,
-          disagreement_score: ind.disagreement_score,
-          disagreement_confidence: ind.disagreement_confidence,
-          lens_agreement_count: ind.lens_agreement_count,
-          mediation_check: ind.mediation_check,
-          goodhart_risk: ind.goodhart_risk,
-        })),
+        indicator_scores: s.indicator_scores.map((ind) => {
+          // Phase 11.5 — attach MC-scaled lift_band when the overlay
+          // produced one for THIS (variation, indicator) cell.
+          const overlay = mcOverlay
+            ? (mcOverlay as unknown as Map<
+                string,
+                {
+                  lift_pct: number;
+                  lift_band: { p10: number; p50: number; p90: number };
+                  lift_band_method: "mc_scaled";
+                }
+              >).get(`${v.id}::${ind.outcome_id}::${ind.indicator_text}`)
+            : undefined;
+          return {
+            indicator_text: ind.indicator_text,
+            outcome_id: ind.outcome_id,
+            outcome_name: ind.outcome_name,
+            score: ind.consensus_score,
+            reason:
+              ind.lens_scores.length > 0
+                ? `${ind.lens_scores[0].lens}: ${ind.lens_scores[0].reason}`
+                : "",
+            confidence: ind.consensus_confidence,
+            lens_scores: ind.lens_scores,
+            disagreement_score: ind.disagreement_score,
+            disagreement_confidence: ind.disagreement_confidence,
+            lens_agreement_count: ind.lens_agreement_count,
+            mediation_check: ind.mediation_check,
+            goodhart_risk: ind.goodhart_risk,
+            // Phase 11.5 — per-indicator MC overlay fields.
+            ...(overlay
+              ? {
+                  lift_pct: overlay.lift_pct,
+                  lift_band: overlay.lift_band,
+                  lift_band_method: overlay.lift_band_method,
+                }
+              : {}),
+          };
+        }),
       };
     });
     const nextDetail: ExpandedItemDetail = {
