@@ -95,7 +95,13 @@ interface LineupVariation {
    *  Each row says "this variation moves this indicator by this much,
    *  and we have this much confidence the proxy is real." Renders as
    *  a chip strip in the expanded row, grouped by outcome. Undefined
-   *  for legacy rows scored before Phase 11.2 (no chip strip shows). */
+   *  for legacy rows scored before Phase 11.2 (no chip strip shows).
+   *
+   *  Phase 11.3 — ensemble tier adds optional lens_scores +
+   *  disagreement + mediation_check + goodhart_risk. When the
+   *  IndicatorBreakdown component sees lens_scores it switches to
+   *  the richer display (lens-agreement chip, Goodhart flag,
+   *  mediation tag). Rubric tier renders the Phase 11.2 minimal chip. */
   indicator_scores?: Array<{
     indicator_text: string;
     outcome_id: string;
@@ -103,6 +109,22 @@ interface LineupVariation {
     score: number;
     reason: string;
     confidence: number;
+    lens_scores?: Array<{
+      lens:
+        | "systems_analyst"
+        | "skeptic"
+        | "operator"
+        | "engineer"
+        | "historian";
+      score: number;
+      confidence: number;
+      reason: string;
+    }>;
+    disagreement_score?: number;
+    disagreement_confidence?: number;
+    lens_agreement_count?: number;
+    mediation_check?: "necessary" | "indirect" | "questionable";
+    goodhart_risk?: "low" | "medium" | "high";
   }>;
 }
 
@@ -191,6 +213,68 @@ export function CategoryCard({
   lateralLinks = [],
   onOpenItem,
 }: Props) {
+  // ── Phase 11.4 — chain enrichment surface ───────────────────────
+  // Read enrichment from the pain→feature edge's agent_feedback.
+  // Both edges in a chain carry the same enrichment payload (the
+  // enrich-chains endpoint writes it to both), so either works.
+  // Undefined when the chain hasn't been enriched yet — the
+  // "Causal mechanism" section just doesn't render in that case.
+  // The user runs canvas autopilot or POSTs to /enrich-chains to
+  // populate it.
+  const chainEnrichment = useMemo((): {
+    narrative: string;
+    chain_strength: number;
+    mediators: Array<{
+      name: string;
+      assumption: string;
+      effect: "amplifies" | "dampens" | "conditional";
+    }>;
+    causal_flow_rationale: string;
+    outcome_closes_loop: string;
+    weak_points: string[];
+  } | null => {
+    const af = chain.painFeatureEdge.agent_feedback as
+      | Record<string, unknown>
+      | null;
+    if (!af) return null;
+    const narrative = typeof af.narrative === "string" ? af.narrative : "";
+    if (!narrative) return null;
+    const chain_strength =
+      typeof af.chain_strength === "number" ? af.chain_strength : 0;
+    const mediators = Array.isArray(af.mediators)
+      ? (af.mediators as unknown[]).filter(
+          (m): m is {
+            name: string;
+            assumption: string;
+            effect: "amplifies" | "dampens" | "conditional";
+          } =>
+            typeof m === "object" &&
+            m !== null &&
+            typeof (m as { name: unknown }).name === "string" &&
+            typeof (m as { assumption: unknown }).assumption === "string",
+        )
+      : [];
+    return {
+      narrative,
+      chain_strength,
+      mediators,
+      causal_flow_rationale:
+        typeof af.causal_flow_rationale === "string"
+          ? af.causal_flow_rationale
+          : "",
+      outcome_closes_loop:
+        typeof af.outcome_closes_loop === "string"
+          ? af.outcome_closes_loop
+          : "",
+      weak_points: Array.isArray(af.weak_points)
+        ? (af.weak_points as unknown[]).filter(
+            (s): s is string => typeof s === "string",
+          )
+        : [],
+    };
+  }, [chain.painFeatureEdge.agent_feedback]);
+  const [mechanismExpanded, setMechanismExpanded] = useState(false);
+
   // ── Lazy load the feature's expanded_detail for the lineup ──
   // The lineup needs the feature's variations[] + effectiveness
   // scores. These live in expanded_detail (Phase 4c persistence).
@@ -647,6 +731,197 @@ export function CategoryCard({
           </span>
         )}
       </button>
+
+      {/* Phase 11.4 — Causal mechanism section. Renders when the chain
+          has been enriched (post canvas autopilot or explicit POST to
+          /enrich-chains). Collapsed by default — header shows chain
+          strength + mediator count + expand caret. Expanded shows the
+          full narrative + mediators + weak points + outcome-closes-
+          loop rationale. Restrained styling — tables only inside,
+          per lock-in M5 "Lab elaborates with tables." */}
+      {chainEnrichment && (
+        <div
+          className="mx-6 mt-3 rounded-lg"
+          style={{
+            background: appleVibe.surface.chip,
+            border: `1px solid ${appleVibe.stroke.hairline}`,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setMechanismExpanded((v) => !v)}
+            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-[rgba(15,23,42,0.025)]"
+            style={{ borderRadius: 7 }}
+            aria-label={
+              mechanismExpanded
+                ? "Hide causal mechanism"
+                : "Show causal mechanism"
+            }
+            aria-expanded={mechanismExpanded}
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <span
+                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                Causal mechanism
+              </span>
+              <span
+                className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+                style={{
+                  background:
+                    chainEnrichment.chain_strength >= 0.7
+                      ? `${OUTCOME_COLOR}1F`
+                      : chainEnrichment.chain_strength >= 0.4
+                        ? `${FEATURE_COLOR}1F`
+                        : `${PAIN_COLOR}1F`,
+                  color:
+                    chainEnrichment.chain_strength >= 0.7
+                      ? OUTCOME_COLOR
+                      : chainEnrichment.chain_strength >= 0.4
+                        ? FEATURE_COLOR
+                        : PAIN_COLOR,
+                }}
+                title="End-to-end chain strength (0 to 1) — how plausibly Pain → Feature → Outcome closes the loop"
+              >
+                ⚡ {chainEnrichment.chain_strength.toFixed(2)}
+              </span>
+              {chainEnrichment.mediators.length > 0 && (
+                <span
+                  className="text-[10px] font-light"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  · {chainEnrichment.mediators.length}{" "}
+                  {chainEnrichment.mediators.length === 1
+                    ? "mediator"
+                    : "mediators"}
+                </span>
+              )}
+              {chainEnrichment.weak_points.length > 0 && (
+                <span
+                  className="text-[10px] font-light"
+                  style={{ color: PAIN_COLOR }}
+                  title={chainEnrichment.weak_points.join(" · ")}
+                >
+                  · {chainEnrichment.weak_points.length} weak{" "}
+                  {chainEnrichment.weak_points.length === 1
+                    ? "point"
+                    : "points"}
+                </span>
+              )}
+            </div>
+            {mechanismExpanded ? (
+              <ChevronUp
+                className="h-3 w-3 flex-shrink-0"
+                strokeWidth={2.4}
+                style={{ color: appleVibe.text.tertiary }}
+              />
+            ) : (
+              <ChevronDown
+                className="h-3 w-3 flex-shrink-0"
+                strokeWidth={2.4}
+                style={{ color: appleVibe.text.tertiary }}
+              />
+            )}
+          </button>
+          {mechanismExpanded && (
+            <div
+              className="px-3 pb-3 pt-1"
+              style={{
+                borderTop: `1px solid ${appleVibe.stroke.hairline}`,
+              }}
+            >
+              <p
+                className="text-[11.5px] leading-snug"
+                style={{ color: appleVibe.text.primary }}
+              >
+                {chainEnrichment.narrative}
+              </p>
+              {chainEnrichment.mediators.length > 0 && (
+                <div className="mt-2">
+                  <div
+                    className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Mediators
+                  </div>
+                  <ul className="mt-1 space-y-1">
+                    {chainEnrichment.mediators.map((m, idx) => (
+                      <li
+                        key={idx}
+                        className="flex items-baseline gap-2 text-[11px]"
+                      >
+                        <span
+                          className="font-medium"
+                          style={{ color: appleVibe.text.primary }}
+                        >
+                          {m.name}
+                        </span>
+                        <span
+                          className="text-[9.5px] uppercase tracking-[0.1em]"
+                          style={{
+                            color:
+                              m.effect === "amplifies"
+                                ? OUTCOME_COLOR
+                                : m.effect === "dampens"
+                                  ? PAIN_COLOR
+                                  : appleVibe.text.tertiary,
+                          }}
+                        >
+                          {m.effect}
+                        </span>
+                        <span
+                          className="flex-1 font-light"
+                          style={{ color: appleVibe.text.secondary }}
+                        >
+                          {m.assumption}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {chainEnrichment.outcome_closes_loop && (
+                <div className="mt-2">
+                  <div
+                    className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Outcome closes loop
+                  </div>
+                  <p
+                    className="mt-0.5 text-[11px] leading-snug"
+                    style={{ color: appleVibe.text.secondary }}
+                  >
+                    {chainEnrichment.outcome_closes_loop}
+                  </p>
+                </div>
+              )}
+              {chainEnrichment.weak_points.length > 0 && (
+                <div className="mt-2">
+                  <div
+                    className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                    style={{ color: PAIN_COLOR }}
+                  >
+                    Weak points
+                  </div>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    {chainEnrichment.weak_points.map((w, idx) => (
+                      <li
+                        key={idx}
+                        className="text-[11px] leading-snug"
+                        style={{ color: appleVibe.text.secondary }}
+                      >
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Phase 8b — within-layer relationship chips. Surface
           composes_with / interferes_with links to OTHER chains'
@@ -1557,9 +1832,6 @@ function IndicatorBreakdown({
 }: {
   indicators: NonNullable<LineupVariation["indicator_scores"]>;
 }) {
-  // Group by outcome so chips with the same outcome cluster together
-  // and the user can see "this variation moved 2 of 3 indicators on
-  // Outcome A" at a glance.
   const grouped = new Map<string, typeof indicators>();
   for (const ind of indicators) {
     const key = ind.outcome_name;
@@ -1567,15 +1839,35 @@ function IndicatorBreakdown({
     arr.push(ind);
     grouped.set(key, arr);
   }
+  // Phase 11.3 — render mode auto-detected. When lens_scores is
+  // present on the first row, we surface the ensemble visuals
+  // (lens-agreement chip + Goodhart flag + mediation tag). When
+  // absent, we fall back to the Phase 11.2 minimal chip strip.
+  const isEnsemble =
+    indicators.length > 0 && Array.isArray(indicators[0].lens_scores);
   return (
     <div>
       <div
-        className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.12em]"
+        className="mb-0.5 flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.12em]"
         style={{ color: appleVibe.text.tertiary }}
       >
-        Proxy indicators
+        <span>Proxy indicators</span>
+        {isEnsemble && (
+          <span
+            className="rounded-full px-1.5 py-0.5 text-[9px] font-medium normal-case"
+            style={{
+              background: appleVibe.surface.chip,
+              color: appleVibe.text.secondary,
+              border: `1px solid ${appleVibe.stroke.hairline}`,
+              letterSpacing: "0.01em",
+            }}
+            title="Each indicator graded from 5 lenses (systems_analyst / skeptic / operator / engineer / historian). Variance across lenses is the confidence signal — when lenses agree the proxy is well-formed; when they diverge it's a Potemkin metric."
+          >
+            📊 5-lens
+          </span>
+        )}
       </div>
-      <div className="space-y-1">
+      <div className="space-y-1.5">
         {Array.from(grouped.entries()).map(([outcomeName, list]) => (
           <div key={outcomeName} className="space-y-0.5">
             <div
@@ -1591,19 +1883,50 @@ function IndicatorBreakdown({
                   ind.indicator_text.length > 32
                     ? `${ind.indicator_text.slice(0, 30)}…`
                     : ind.indicator_text;
-                // Tier the score color: strong (≥0.7) = outcomes green,
-                // medium (0.4..0.7) = neutral text, weak (<0.4) = pain
-                // red. Mirrors the score-bar palette used elsewhere.
                 const tier =
                   ind.score >= 0.7
                     ? OUTCOME_COLOR
                     : ind.score < 0.4
                       ? appleVibe.stage.pain
                       : appleVibe.text.secondary;
+                // Phase 11.3 — lens-aware signals. lens_agreement
+                // becomes a "N/5" chip; mediation=="questionable"
+                // and goodhart=="high" surface as small icon glyphs.
+                const lensCount = ind.lens_agreement_count ?? 0;
+                const lensTotal = ind.lens_scores?.length ?? 0;
+                const lensShaky = lensTotal > 0 && lensCount < 3;
+                const mediation = ind.mediation_check;
+                const goodhartRisk = ind.goodhart_risk;
+                // Tooltip composes lens-specific reasons when present
+                // (one sentence per lens, joined by " | ") so hovering
+                // a chip reveals the full multi-perspective rationale.
+                const tooltipParts: string[] = [];
+                if (ind.lens_scores && ind.lens_scores.length > 0) {
+                  for (const ls of ind.lens_scores) {
+                    tooltipParts.push(`${ls.lens}: ${ls.reason}`);
+                  }
+                } else if (ind.reason) {
+                  tooltipParts.push(ind.reason);
+                }
+                if (shaky) {
+                  tooltipParts.push(
+                    `shaky proxy: pooled confidence ${ind.confidence.toFixed(2)}`,
+                  );
+                }
+                if (mediation === "questionable") {
+                  tooltipParts.push(
+                    "Prentice mediation: questionable — proxy might invert under intervention",
+                  );
+                }
+                if (goodhartRisk === "high") {
+                  tooltipParts.push(
+                    "Goodhart: high risk — pure-volume or vanity proxy, easily gamed",
+                  );
+                }
                 return (
                   <span
                     key={`${ind.indicator_text}-${i}`}
-                    title={`${ind.reason}${shaky ? ` · shaky proxy: confidence ${ind.confidence.toFixed(2)}` : ""}`}
+                    title={tooltipParts.join(" | ")}
                     className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-medium"
                     style={{
                       background: shaky
@@ -1620,7 +1943,23 @@ function IndicatorBreakdown({
                     <span style={{ fontWeight: 600 }}>
                       {ind.score.toFixed(2)}
                     </span>
-                    {shaky && <span aria-hidden>⚠️</span>}
+                    {ind.lens_scores && (
+                      <span
+                        style={{
+                          color: lensShaky
+                            ? appleVibe.stage.pain
+                            : appleVibe.text.tertiary,
+                          fontWeight: 500,
+                        }}
+                      >
+                        · {lensCount}/{lensTotal}
+                      </span>
+                    )}
+                    {goodhartRisk === "high" && <span aria-hidden>⚠️</span>}
+                    {mediation === "questionable" && (
+                      <span aria-hidden>⚡</span>
+                    )}
+                    {shaky && <span aria-hidden>🔻</span>}
                   </span>
                 );
               })}

@@ -26,7 +26,7 @@ import { motion } from "framer-motion";
 import { Check, Loader2, Play, Sparkles, X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
-type Status = "idle" | "running" | "done" | "cancelled";
+type Status = "idle" | "running" | "enriching" | "done" | "cancelled";
 
 interface AutopilotTarget {
   subObjectiveId: string;
@@ -161,6 +161,36 @@ export function CanvasAutopilotRunner({
       onRoomComplete?.(room.subObjectiveId);
     }
 
+    // ── Step 2: enrich every chain in every room (Phase 11.4) ──
+    // After scoring + refining, run the enrichment pass per room.
+    // This turns shallow (Pain × Feature × Outcome) labels into
+    // sophisticated narratives + closes orphan gaps via complementary
+    // chain proposals. Per lock-in M3+M4, this is the "make chains
+    // actually causal" step the user explicitly asked for.
+    setStatus("enriching");
+    for (let i = 0; i < workList.length; i++) {
+      if (cancelRef.current) {
+        setStatus("cancelled");
+        onAllComplete?.();
+        return;
+      }
+      setRoomIdx(i);
+      const room = workList[i];
+      try {
+        await fetch(
+          `/api/brainstorm/room/${room.subObjectiveId}/enrich-chains`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({}),
+          },
+        );
+      } catch {
+        // Soft-fail — one room's enrichment failing doesn't kill the
+        // whole canvas run. The notebook will show partial results.
+      }
+    }
+
     // ── Step 3: refresh cross-room findings so chat has fresh data ──
     // Soft-fail — if the scan errors out, the autopilot run itself
     // still counts as complete.
@@ -238,6 +268,60 @@ export function CanvasAutopilotRunner({
           </p>
         )}
       </div>
+    );
+  }
+
+  // ── ENRICHING — progress chip during chain enrichment pass ──
+  if (status === "enriching") {
+    const room = targets[roomIdx];
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: -4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+        className="inline-flex items-center gap-2"
+        style={{
+          background: appleVibe.surface.card,
+          border: `1px solid ${FEATURES}40`,
+          borderRadius: appleVibe.radius.pill,
+          padding: "4px 4px 4px 12px",
+          fontSize: "11px",
+          fontWeight: 600,
+          letterSpacing: "0.02em",
+          boxShadow: appleVibe.shadow.chip,
+          fontFamily: appleVibe.font.stack,
+          color: appleVibe.text.primary,
+        }}
+      >
+        <Loader2
+          className="h-3 w-3 flex-shrink-0 animate-spin"
+          style={{ color: FEATURES }}
+          strokeWidth={2}
+        />
+        <span>
+          Enriching {roomIdx + 1}/{targets.length}
+        </span>
+        <span
+          className="font-light italic"
+          style={{ color: appleVibe.text.tertiary }}
+          title={room?.subObjectiveTitle ?? ""}
+        >
+          · causal chains
+        </span>
+        <button
+          type="button"
+          onClick={cancel}
+          className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[rgba(15,23,42,0.06)]"
+          title="Cancel — stops after the current room finishes enriching"
+          aria-label="Cancel canvas autopilot"
+        >
+          <X
+            className="h-3 w-3"
+            strokeWidth={2}
+            style={{ color: appleVibe.text.tertiary }}
+          />
+        </button>
+      </motion.div>
     );
   }
 
@@ -440,10 +524,11 @@ function CanvasAutopilotDropdown({
             className="mt-1.5 text-[11.5px] leading-snug"
             style={{ color: appleVibe.text.secondary }}
           >
-            Scores each mechanism + proposes 3 fresh IV candidates per
-            chain across every room. After, refreshes cross-room
-            findings so chat has fresh data. You still curate
-            elections — autopilot proposes, never auto-elects.
+            Scores each mechanism + proposes fresh IV candidates per
+            chain across every room. Then enriches each chain with
+            mechanism narratives + closes orphan gaps. Finally
+            refreshes cross-room findings. You still curate elections
+            — autopilot proposes, never auto-elects.
           </p>
           <div
             className="mt-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5"
@@ -456,7 +541,7 @@ function CanvasAutopilotDropdown({
               className="text-[10px] font-light italic"
               style={{ color: appleVibe.text.tertiary }}
             >
-              estimated ~3-10 min
+              estimated ~5-15 min
             </span>
           </div>
         </div>

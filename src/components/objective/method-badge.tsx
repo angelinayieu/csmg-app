@@ -29,7 +29,8 @@ export type EvaluationMethod =
   | "rubric"
   | "evidence"
   | "simulation"
-  | "tested";
+  | "tested"
+  | "ensemble";
 
 interface Props {
   method: EvaluationMethod;
@@ -74,6 +75,12 @@ const TIER_VISUAL: Record<
     emoji: "🧪",
     label: "Tested",
     explainer: "Real empirical outcome from a prototype run",
+  },
+  ensemble: {
+    emoji: "📊",
+    label: "Ensemble",
+    explainer:
+      "5-lens grade (systems / skeptic / operator / engineer / historian) + REML τ² heterogeneity pool across variations + Prentice mediation + Goodhart risk + counter-indicator pairing",
   },
 };
 

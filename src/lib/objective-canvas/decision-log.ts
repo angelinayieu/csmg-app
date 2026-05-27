@@ -50,7 +50,13 @@ export type DecisionAction =
   | "theme_distilled"
   | "concept_branched"
   | "constraints_set"
-  | "stage_transitioned";
+  | "stage_transitioned"
+  // Phase 11.4 — causal chain enrichment. Fires once per room per
+  // enrichment run (either via the explicit /enrich-chains endpoint
+  // or as Step 2 of the canvas autopilot). Metadata carries chain
+  // counts + avg_chain_strength + orphans_closed so the notebook can
+  // render "enriched 6 chains · avg strength 0.71 · 2 orphans closed".
+  | "chains_enriched";
 
 export interface LogDecisionArgs {
   userId: string;

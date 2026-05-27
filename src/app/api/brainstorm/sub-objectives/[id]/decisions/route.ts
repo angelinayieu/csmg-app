@@ -56,6 +56,8 @@ const ALLOWED_ACTIONS: ReadonlyArray<DecisionAction> = [
   "concept_branched",
   "constraints_set",
   "stage_transitioned",
+  // Phase 11.4
+  "chains_enriched",
 ];
 
 const DEFAULT_LIMIT = 30;
@@ -404,6 +406,11 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
               .slice(0, 3)
           : undefined,
         indicator_count: numberOrUndefined(meta.indicator_count),
+        // Phase 11.4 — chain enrichment metadata pass-through.
+        enriched_chain_count: numberOrUndefined(meta.enriched_chain_count),
+        new_chains_count: numberOrUndefined(meta.new_chains_count),
+        avg_chain_strength: numberOrUndefined(meta.avg_chain_strength),
+        orphans_closed: numberOrUndefined(meta.orphans_closed),
       },
     };
   });

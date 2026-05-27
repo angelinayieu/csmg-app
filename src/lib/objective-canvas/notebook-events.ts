@@ -112,6 +112,22 @@ export interface NotebookEventMeta {
    *  the user a sense of "scored across 5 proxies" even when only
    *  3 fit in the breakdown chip set. */
   indicator_count?: number;
+  // ── Phase 11.4 — chain enrichment ──────────────────────────────
+  /** chains_enriched — total chains the run enriched (existing
+   *  triplets that received narrative + mediators + chain_strength). */
+  enriched_chain_count?: number;
+  /** chains_enriched — net-new chains the complementary proposer
+   *  added for previously-orphaned items. Renders as "+ 2 new chains"
+   *  on the timeline event. */
+  new_chains_count?: number;
+  /** chains_enriched — mean of chain_strength across all enriched
+   *  chains. Surfaces as the headline number on the timeline
+   *  ("enriched chains · avg strength 0.71"). */
+  avg_chain_strength?: number;
+  /** chains_enriched — count of items in lanes that had no edges
+   *  before this run and now have at least one. The Portfolio strip
+   *  reads this to know when its orphan list shrinks. */
+  orphans_closed?: number;
 }
 
 export interface NotebookEvent {
