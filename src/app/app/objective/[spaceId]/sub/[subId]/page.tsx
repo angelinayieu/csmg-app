@@ -20,6 +20,7 @@ import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
+import { AnnotatedSubObjectiveCard } from "@/components/objective/annotated-sub-objective-card";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +63,11 @@ interface Sub {
    *  when not yet generated; lane card chips + portfolio strip
    *  hide gracefully in that case. */
   room_categories: unknown;
+  /** K1 — sub-objective's own annotations. Parallel to parent
+   *  objective lens. Auto-generated on first room/generate; user
+   *  can re-trigger via POST /api/brainstorm/sub-objectives/[id]
+   *  /annotate?mode=force. Null until generated. */
+  annotations: unknown;
 }
 
 export default async function SubObjectiveRoomPage({
@@ -81,7 +87,7 @@ export default async function SubObjectiveRoomPage({
   const { data: sub } = (await db
     .from("improvement_goals")
     .select(
-      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels, room_categories",
+      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels, room_categories, annotations",
     )
     .eq("id", subId)
     .maybeSingle()) as { data: Sub | null };
@@ -150,6 +156,10 @@ export default async function SubObjectiveRoomPage({
       null;
   }
   const parentAnnotations = normalizeAnnotations(parentAnnotationsRaw);
+  // K1 — sub-objective's own annotations. Parallel lens, scoped to
+  // this sub-objective's text. Renders as an AnnotatedObjectiveCard
+  // below the title.
+  const subAnnotations = normalizeAnnotations(sub.annotations);
 
   // ── Layers ──
   const { data: layerRows } = await db
@@ -346,6 +356,23 @@ export default async function SubObjectiveRoomPage({
                 ? parentObjectiveText.slice(0, 218).trimEnd() + "…"
                 : parentObjectiveText}
             </p>
+          )}
+
+          {/* ── K1 — Sub-objective Annotation Lens ──
+              Parallel to the parent objective's annotation lens.
+              Renders the sub-objective's own title + description
+              with annotation chips inline. Auto-generated after
+              first room/generate; loaded by the page server-side.
+              Hidden when generation hasn't run (gracefully empty). */}
+          {(sub.description?.trim() || subAnnotations.length > 0) && (
+            <div className="mt-4 max-w-2xl">
+              <AnnotatedSubObjectiveCard
+                objectiveText={[sub.title, sub.description ?? ""]
+                  .filter((s) => s && s.trim().length > 0)
+                  .join("\n\n")}
+                annotations={subAnnotations}
+              />
+            </div>
           )}
         </div>
 

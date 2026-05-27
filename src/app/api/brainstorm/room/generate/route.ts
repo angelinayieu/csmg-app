@@ -29,6 +29,7 @@ import {
   type RoomCategories,
 } from "@/lib/objective-canvas/generate-categories";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import { generateObjectiveAnnotations } from "@/lib/objective-canvas/generate-annotations";
 import {
   buildRagBlock,
   collectRagSources,
@@ -37,6 +38,12 @@ import {
   type ResearchSource,
 } from "@/lib/research/research-service";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { readConstraints, buildConstraintsBlock } from "@/lib/objective-canvas/constraints";
+import {
+  loadRecentLearnings,
+  buildLearningsBlock,
+} from "@/lib/objective-canvas/load-recent-learnings";
+import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 
 // ── entities table contracts (Phase 6) ────────────────────────────
 // entity_category has a CHECK constraint to one of these values;
@@ -300,6 +307,40 @@ export async function POST(req: NextRequest) {
   // causal_chain so the UI can render real source previews.
   const ragSources = collectRagSources(surfaceBundle, deepBundle, 12);
 
+  // ── K2 Wire 1 — operational constraints into room gen ──
+  // Lifts the user's situation (time / budget / team / risk /
+  // compliance) into every stage prompt. Without this the room
+  // generates as if every user is a funded enterprise PM.
+  const constraints = readConstraints(space.synthesis_data);
+  const constraintsBlock = buildConstraintsBlock(constraints);
+
+  // ── K2 Wire 4 — cross-room findings into room gen ──
+  // When the space already has cached analysis findings (themes,
+  // recurring mechanisms, annotation overlaps, orphan annotations),
+  // surface them so the NEW room respects what's already been
+  // discovered across sibling rooms. Skipped on first room — no
+  // findings exist yet.
+  const cachedAnalysis: CrossRoomAnalysisState | null =
+    (space.synthesis_data?.cross_room_analysis as
+      | CrossRoomAnalysisState
+      | null
+      | undefined) ?? null;
+  const crossRoomFindingsBlock = buildCrossRoomFindingsBlock(cachedAnalysis);
+
+  // ── K4 Wire 2 — concluded experiment learnings into room gen ──
+  // Closes the amnesia loop. The user's concluded / abandoned
+  // experiments in THIS space inform new room generation so we
+  // don't propose mechanisms they've already tested and discarded.
+  const recentLearnings = await loadRecentLearnings({
+    db,
+    userId: auth.user.id,
+    spaceId,
+    limit: 8,
+  });
+  const learningsBlock = buildLearningsBlock(recentLearnings, {
+    crossSpace: false,
+  });
+
   const ctx: RoomContext = {
     spaceId,
     userId: auth.user.id,
@@ -314,6 +355,9 @@ export async function POST(req: NextRequest) {
       : undefined,
     ragBlock,
     annotations: annotations.length > 0 ? annotations : undefined,
+    constraintsBlock,
+    crossRoomFindingsBlock,
+    learningsBlock,
   };
 
   // ── Generate (3 LLM calls back to back) ─────────────────────────
@@ -675,6 +719,49 @@ export async function POST(req: NextRequest) {
       correlation_warning: correlationWarning,
     },
   });
+
+  // ── K3 — Auto-trigger sub-objective annotation generation ──
+  // The sub-objective's own text (title + description) deserves
+  // its own Annotation Lens, parallel to the parent objective's
+  // lens. Auto-fire on first room generation; skip when the sub
+  // already has annotations OR was regenerated (annotations stay
+  // valid across room regen since they derive from the sub text,
+  // not the room contents). Soft-fail: a failure here doesn't
+  // affect the room generation response.
+  if (mode === "initial") {
+    const { data: subAnnRow } = await db
+      .from("improvement_goals")
+      .select("annotations")
+      .eq("id", subObjectiveId)
+      .maybeSingle();
+    const hasSubAnnotations =
+      Array.isArray(subAnnRow?.annotations) &&
+      (subAnnRow!.annotations as unknown[]).length > 0;
+    if (!hasSubAnnotations) {
+      const focusText = [sub.title, sub.description ?? ""]
+        .filter((s) => s && s.trim().length > 0)
+        .join("\n\n");
+      if (focusText.trim().length >= 12) {
+        try {
+          const subAnnotations = await generateObjectiveAnnotations({
+            objective: focusText,
+            subObjectives: [],
+          });
+          if (subAnnotations.length > 0) {
+            await db
+              .from("improvement_goals")
+              .update({ annotations: subAnnotations })
+              .eq("id", subObjectiveId);
+          }
+        } catch (err) {
+          console.warn(
+            "[room/generate] sub-objective annotation gen failed (non-fatal):",
+            sanitizeErrorMessage(err),
+          );
+        }
+      }
+    }
+  }
 
   return NextResponse.json({
     summary: {
