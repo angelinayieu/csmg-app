@@ -89,6 +89,24 @@ export interface EnrichChainInput {
     name: string;
     measured_by?: string;
     indicators?: string[];
+    /** Phase 11.6++ — user-set baselines + targets per indicator,
+     *  keyed by indicator name. When present, the chain narrative
+     *  prompt receives a "BASELINE → TARGET" block so the LLM
+     *  references the measurable gap in its causal flow rationale
+     *  + outcome_closes_loop reasoning. Chain strength is graded
+     *  against the realism of closing THIS specific gap. Undefined
+     *  when no baselines set — the prompt falls through to the
+     *  abstract "moves indicator X" framing. */
+    indicator_baselines?: Record<
+      string,
+      {
+        baseline_value?: string;
+        target_value?: string;
+        unit?: string;
+        measurement_method?: string;
+        source?: "user" | "llm";
+      }
+    >;
   };
   /** Mechanism string from the existing edge — when present, frames
    *  the prompt around expanding it. Empty falls back to "infer the
@@ -122,6 +140,8 @@ For each chain, you must produce:
 5. outcome_closes_loop (1-2 sentences)
    How does this Outcome actually address the Pain? An Outcome that doesn't close the loop is worthless — name the mechanism by which moving the Outcome reduces the Pain. If the Outcome is just a metric that correlates with the Pain but doesn't cause its reduction, say so.
 
+When indicators carry BASELINE → TARGET annotations, GROUND the narrative + chain_strength in the measurable gap. "Pomodoro plausibly closes the 25→60 min sustained-attention gap" beats "Pomodoro improves attention." chain_strength should reflect how realistic the chain is at producing THAT specific delta — a 3x gap is harder than a 10% gap; grade accordingly.
+
 6. weak_points (1-3 strings)
    Places this chain could fail. Specific. "Won't work if the user disables notifications" — not "depends on user behavior." Used to target refinement.
 
@@ -144,9 +164,40 @@ function buildUserPrompt(ctx: EnrichChainInput): string {
     ctx.feature.first_principles && ctx.feature.first_principles.length > 0
       ? `\n  first_principles: ${ctx.feature.first_principles.slice(0, 5).join(" · ")}`
       : "";
+  // Phase 11.6++ — render each indicator inline with its baseline +
+  // target when present, otherwise just the name. The LLM uses this
+  // to ground chain_strength + outcome_closes_loop in the measurable
+  // gap. Example output:
+  //    indicators:
+  //      • Sustained attention [BASELINE 25 min → TARGET 60 min (minutes/day)]
+  //      • Interruption recovery
+  //      • Deep work depth [BASELINE 2 → TARGET 5 (sessions/week)]
+  function indicatorLine(name: string): string {
+    const baselines = ctx.outcome.indicator_baselines;
+    if (!baselines) return name;
+    let entry = baselines[name];
+    if (!entry) {
+      const lower = name.toLowerCase();
+      for (const [k, v] of Object.entries(baselines)) {
+        if (k.toLowerCase() === lower) {
+          entry = v;
+          break;
+        }
+      }
+    }
+    if (!entry) return name;
+    const parts: string[] = [];
+    if (entry.baseline_value) parts.push(`BASELINE ${entry.baseline_value}`);
+    if (entry.target_value) parts.push(`→ TARGET ${entry.target_value}`);
+    if (entry.unit) parts.push(`(${entry.unit})`);
+    return parts.length === 0 ? name : `${name} [${parts.join(" ")}]`;
+  }
   const outcomeIndicators =
     ctx.outcome.indicators && ctx.outcome.indicators.length > 0
-      ? `\n  indicators: ${ctx.outcome.indicators.slice(0, 5).join(" · ")}`
+      ? `\n  indicators:\n${ctx.outcome.indicators
+          .slice(0, 5)
+          .map((ind) => `    • ${indicatorLine(ind)}`)
+          .join("\n")}`
       : "";
   const pfMech = ctx.pain_feature_mechanism
     ? `\n  current mechanism (Pain ← Feature): "${ctx.pain_feature_mechanism}"`

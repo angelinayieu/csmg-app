@@ -264,6 +264,26 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
                 })
                 .filter((s): s is string => s !== null)
             : undefined,
+          // Phase 11.6++ — pass user-set baselines through so chain
+          // narratives can reference the measurable gap (e.g.,
+          // "Pomodoro plausibly closes the 25→60 min sustained-
+          // attention gap by..."). The enrichChain prompt renders
+          // baselines inline on each indicator line. Undefined for
+          // outcomes without baselines — narrative falls through to
+          // the abstract framing cleanly.
+          indicator_baselines:
+            (outcomeEntity.causal_chain?.indicator_baselines as
+              | Record<
+                  string,
+                  {
+                    baseline_value?: string;
+                    target_value?: string;
+                    unit?: string;
+                    measurement_method?: string;
+                    source?: "user" | "llm";
+                  }
+                >
+              | undefined) ?? undefined,
         },
         pain_feature_mechanism:
           typeof chain.painFeatureEdge.agent_feedback?.mechanism === "string"
