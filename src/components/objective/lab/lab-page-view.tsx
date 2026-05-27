@@ -38,6 +38,8 @@ import {
   ExternalLink,
   FileText,
   FlaskConical,
+  GitBranch,
+  Layers,
   Loader2,
   RefreshCw,
   X,
@@ -276,6 +278,71 @@ export function LabPageView({
     });
   }, [dispatchAction, entityId]);
 
+  // Phase 11.3 ensemble scorer — 5 lenses + Goodhart counter-indicator
+  // + Prentice mediation classification. Slower than rubric (~5-8s) but
+  // surfaces lens disagreement as a confidence signal. Use when you
+  // want the strongest read short of an empirical test.
+  const runEnsemble = useCallback(() => {
+    void dispatchAction("Ensemble scoring", async () => {
+      const res = await fetch("/api/brainstorm/item/variation/score", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entityId, method: "ensemble" }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        status?: string;
+        status_detail?: string | null;
+      };
+      if (!res.ok || j.status !== "ok") {
+        return {
+          ok: false,
+          message:
+            j.status_detail ??
+            "Ensemble scoring failed. Re-run rubric instead — it's lighter and almost always sufficient.",
+        };
+      }
+      return {
+        ok: true,
+        message:
+          "Ensemble scored — lens disagreement, Goodhart risk, and mediation classifications populated.",
+        refreshRoute: true,
+      };
+    });
+  }, [dispatchAction, entityId]);
+
+  // Phase 11.4 chain enrichment — turns shallow (Pain × Feature × Outcome)
+  // labels into sophisticated narratives + closes orphan gaps via
+  // complementary chain proposals. Room-scoped (not per-mechanism)
+  // because the endpoint operates over the room's chain set.
+  const runEnrichChains = useCallback(() => {
+    void dispatchAction("Chain enrichment", async () => {
+      const res = await fetch(
+        `/api/brainstorm/room/${subObjectiveId}/enrich-chains`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        return { ok: false, message: j.error ?? "Enrichment failed." };
+      }
+      const j = (await res.json().catch(() => ({}))) as {
+        enriched_count?: number;
+        new_chains_count?: number;
+        avg_chain_strength?: number;
+      };
+      return {
+        ok: true,
+        message: `Enriched ${j.enriched_count ?? 0} chains · ${j.new_chains_count ?? 0} new · avg strength ${(j.avg_chain_strength ?? 0).toFixed(2)}`,
+        refreshRoute: true,
+      };
+    });
+  }, [dispatchAction, subObjectiveId]);
+
   // ── Per-variation disposition (elect/reject) ──
   const setDisposition = useCallback(
     (variationId: string, disposition: "elected" | "rejected" | null) => {
@@ -433,11 +500,25 @@ export function LabPageView({
             disabled={actionStatus?.state === "running"}
           />
           <ActionButton
+            label="Run ensemble"
+            icon={Layers}
+            onClick={runEnsemble}
+            disabled={actionStatus?.state === "running"}
+            title="5-lens scoring (systems / skeptic / operator / engineer / historian) + Goodhart counter-indicators + Prentice mediation classification. ~5-8s. The strongest read short of an empirical test."
+          />
+          <ActionButton
             label="Run simulation"
             icon={Dice5}
             onClick={runSimulation}
             disabled={actionStatus?.state === "running"}
             title="Monte Carlo + placebo refutation. Use when adherence/dose introduces real propagating uncertainty."
+          />
+          <ActionButton
+            label="Enrich chains"
+            icon={GitBranch}
+            onClick={runEnrichChains}
+            disabled={actionStatus?.state === "running"}
+            title="Room-scoped — enriches every chain's narrative and closes orphan gaps via complementary chain proposals."
           />
           <ActionButton
             label="Propose R&D iteration"
@@ -472,6 +553,20 @@ export function LabPageView({
           />
         </Section>
       )}
+
+      {/* ── Section 2b: Counter-indicators (ensemble yin proxies) ──
+          Renders only when ensemble scoring has populated them on
+          the envelope. The whole concept (Goodhart defense via paired
+          opposing proxies) is meaningless without an ensemble run, so
+          empty-state-CTA explains that when missing. */}
+      {Array.isArray(envelopeLocal?.counter_indicators) &&
+        envelopeLocal.counter_indicators.length > 0 && (
+          <Section title="Counter-indicators · Goodhart defense">
+            <CounterIndicatorsTable
+              counterIndicators={envelopeLocal.counter_indicators}
+            />
+          </Section>
+        )}
 
       {/* ── Section 3: Variation diff (2-pick) ── */}
       {variationsLocal.length >= 2 && (
@@ -821,19 +916,22 @@ function ProxyIndicatorsTable({
     );
   }
 
+  // Phase 11.3+ ensemble decorations: when ensemble has run, each
+  // indicator_scores entry carries lens_scores + disagreement_score
+  // + mediation_check + goodhart_risk. We return the FULL hit so the
+  // cell renderer can surface those signals as small badges/icons.
   function findScore(
     v: ItemVariation,
     outcomeId: string,
     indicatorText: string,
-  ): { score: number; confidence: number; reason: string } | null {
+  ): NonNullable<ItemVariation["indicator_scores"]>[number] | null {
     if (!Array.isArray(v.indicator_scores)) return null;
-    const hit = v.indicator_scores.find(
-      (s) =>
-        s.outcome_id === outcomeId && s.indicator_text === indicatorText,
+    return (
+      v.indicator_scores.find(
+        (s) =>
+          s.outcome_id === outcomeId && s.indicator_text === indicatorText,
+      ) ?? null
     );
-    return hit
-      ? { score: hit.score, confidence: hit.confidence, reason: hit.reason }
-      : null;
   }
 
   return (
@@ -895,25 +993,7 @@ function ProxyIndicatorsTable({
                   return (
                     <Td key={v.id} className="text-right tabular-nums">
                       {cell ? (
-                        <span
-                          title={`${cell.reason} (proxy confidence ${cell.confidence.toFixed(2)})`}
-                          style={{
-                            color:
-                              cell.confidence < 0.4
-                                ? appleVibe.stage.pain
-                                : appleVibe.text.primary,
-                          }}
-                        >
-                          {cell.score.toFixed(2)}
-                          {cell.confidence < 0.4 && (
-                            <span
-                              className="ml-1 text-[9px]"
-                              title="Proxy confidence below 0.4 — this indicator may not actually map to the outcome you care about"
-                            >
-                              ⚠
-                            </span>
-                          )}
-                        </span>
+                        <IndicatorCell cell={cell} />
                       ) : (
                         <span style={{ color: appleVibe.text.faint }}>—</span>
                       )}
@@ -932,9 +1012,231 @@ function ProxyIndicatorsTable({
           borderTop: `1px solid ${appleVibe.stroke.hairline}`,
         }}
       >
-        Hover any cell for the rubric&rsquo;s reason + proxy confidence.
-        ⚠ flags indicators with confidence &lt;0.4 — reconsider whether
-        the proxy actually maps to your outcome.
+        Hover any cell for reason + proxy confidence. ⚠ = confidence &lt;0.4.
+        When ensemble has run, cells also show lens-agreement chips (e.g.
+        &ldquo;4/5&rdquo;), mediation classification (necessary / indirect /
+        questionable), and Goodhart risk warnings.
+      </p>
+    </div>
+  );
+}
+
+// ── Indicator cell — renders one variation × indicator score with
+//    ensemble decorations when present. Pure-rubric cells stay
+//    minimal (just score + ⚠); ensemble cells layer in lens
+//    agreement count + mediation classification + Goodhart risk. ──
+
+type IndicatorScoreCell = NonNullable<
+  ItemVariation["indicator_scores"]
+>[number];
+
+function IndicatorCell({ cell }: { cell: IndicatorScoreCell }) {
+  const hasEnsemble =
+    Array.isArray(cell.lens_scores) && cell.lens_scores.length > 0;
+  const titleBase = `${cell.reason} (proxy confidence ${cell.confidence.toFixed(2)})`;
+  // Compose the hover-title with ensemble extras when present so users
+  // can see the lens spread without us needing a dropdown.
+  const titleFull = hasEnsemble
+    ? [
+        titleBase,
+        cell.lens_scores
+          ? `Lens scores: ${cell.lens_scores.map((l) => `${l.lens}=${l.score.toFixed(2)}`).join(", ")}`
+          : null,
+        typeof cell.disagreement_score === "number"
+          ? `Disagreement σ=${cell.disagreement_score.toFixed(2)} ${cell.disagreement_score > 0.2 ? "(meaningful divergence)" : ""}`
+          : null,
+        cell.mediation_check
+          ? `Mediation: ${cell.mediation_check}`
+          : null,
+        cell.goodhart_risk ? `Goodhart risk: ${cell.goodhart_risk}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : titleBase;
+
+  const mediationColor = cell.mediation_check
+    ? cell.mediation_check === "necessary"
+      ? appleVibe.stage.outcomes
+      : cell.mediation_check === "questionable"
+        ? appleVibe.stage.pain
+        : appleVibe.text.tertiary
+    : null;
+
+  const goodhartColor =
+    cell.goodhart_risk === "high"
+      ? appleVibe.stage.pain
+      : cell.goodhart_risk === "medium"
+        ? "rgba(217,119,6,0.85)"
+        : null;
+
+  return (
+    <span
+      title={titleFull}
+      className="inline-flex flex-col items-end gap-0.5"
+    >
+      <span
+        className="font-semibold"
+        style={{
+          color:
+            cell.confidence < 0.4
+              ? appleVibe.stage.pain
+              : appleVibe.text.primary,
+        }}
+      >
+        {cell.score.toFixed(2)}
+        {cell.confidence < 0.4 && (
+          <span
+            className="ml-1 text-[9px]"
+            title="Proxy confidence below 0.4 — this indicator may not actually map to the outcome you care about"
+          >
+            ⚠
+          </span>
+        )}
+      </span>
+      {hasEnsemble && (
+        <span className="flex items-center gap-1 text-[9px] font-light">
+          {typeof cell.lens_agreement_count === "number" && (
+            <span
+              className="rounded-full px-1 py-px"
+              style={{
+                background: appleVibe.surface.chip,
+                color: appleVibe.text.tertiary,
+                border: `1px solid ${appleVibe.stroke.hairline}`,
+              }}
+              title={`${cell.lens_agreement_count} of 5 lenses had confidence ≥0.5`}
+            >
+              {cell.lens_agreement_count}/5
+            </span>
+          )}
+          {mediationColor && cell.mediation_check && (
+            <span
+              className="rounded-full px-1 py-px font-medium uppercase tracking-[0.1em]"
+              style={{
+                background: `${mediationColor}14`,
+                color: mediationColor,
+                border: `1px solid ${mediationColor}26`,
+                fontSize: "8px",
+              }}
+              title={`Prentice mediation: ${cell.mediation_check}`}
+            >
+              {cell.mediation_check === "necessary"
+                ? "Nec"
+                : cell.mediation_check === "indirect"
+                  ? "Ind"
+                  : "?"}
+            </span>
+          )}
+          {goodhartColor && cell.goodhart_risk && cell.goodhart_risk !== "low" && (
+            <span
+              className="rounded-full px-1 py-px font-medium uppercase tracking-[0.1em]"
+              style={{
+                background: `${goodhartColor}14`,
+                color: goodhartColor,
+                border: `1px solid ${goodhartColor}26`,
+                fontSize: "8px",
+              }}
+              title={`Goodhart risk: ${cell.goodhart_risk} — ${cell.goodhart_risk === "high" ? "trivially gameable / vanity proxy" : "gameable with sustained effort"}`}
+            >
+              {cell.goodhart_risk === "high" ? "GH!" : "GH"}
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
+// ── Counter-indicators section — renders envelope.counter_indicators
+//    when ensemble scoring populated them. These are "yin" proxies the
+//    rigor doc calls for: pair every primary indicator with one that
+//    should hold steady or improve alongside, to defend against
+//    Goodhart-style optimization that wins the metric but loses the
+//    outcome. ──
+
+interface CounterIndicator {
+  outcome_id: string;
+  outcome_name: string;
+  counter_indicator: string;
+  rationale: string;
+}
+
+function CounterIndicatorsTable({
+  counterIndicators,
+}: {
+  counterIndicators: CounterIndicator[];
+}) {
+  if (counterIndicators.length === 0) {
+    return (
+      <EmptyTable text="Counter-indicators populate when ensemble scoring runs — each outcome gets paired with an opposing proxy that should hold steady to defend against Goodhart-style optimization." />
+    );
+  }
+  return (
+    <div
+      className="overflow-hidden"
+      style={{
+        background: appleVibe.surface.card,
+        border: `1px solid ${appleVibe.stroke.hairline}`,
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      <table className="min-w-full text-[11.5px]">
+        <thead
+          style={{
+            background: appleVibe.surface.chip,
+            borderBottom: `1px solid ${appleVibe.stroke.hairline}`,
+          }}
+        >
+          <tr>
+            <Th className="text-left">Outcome</Th>
+            <Th className="text-left">Counter-indicator (yin)</Th>
+            <Th className="text-left">Rationale</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {counterIndicators.map((ci, i) => (
+            <tr
+              key={`${ci.outcome_id}-${i}`}
+              style={{
+                borderTop: `1px solid ${appleVibe.stroke.hairline}`,
+              }}
+            >
+              <Td className="text-left">
+                <span
+                  className="text-[10.5px] font-light"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  {ci.outcome_name}
+                </span>
+              </Td>
+              <Td className="text-left">
+                <span
+                  className="font-medium"
+                  style={{ color: appleVibe.text.primary }}
+                >
+                  {ci.counter_indicator}
+                </span>
+              </Td>
+              <Td className="text-left" style={{ maxWidth: 360 }}>
+                <span
+                  className="text-[10.5px] font-light leading-snug"
+                  style={{ color: appleVibe.text.secondary }}
+                >
+                  {ci.rationale}
+                </span>
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p
+        className="px-3 py-2 text-[10px] font-light italic"
+        style={{
+          color: appleVibe.text.faint,
+          borderTop: `1px solid ${appleVibe.stroke.hairline}`,
+        }}
+      >
+        If a variation moves the primary indicator BUT the counter-indicator
+        also moves against you, you&rsquo;ve probably Goodharted the proxy.
       </p>
     </div>
   );
