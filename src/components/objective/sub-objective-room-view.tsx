@@ -869,7 +869,7 @@ export function SubObjectiveRoomView({
           space.synthesis_data.constraints; renders nothing when
           unset. Edit affordance not wired here — left for future
           when an inline constraints editor lands. */}
-      <ConstraintsStrip constraints={constraints} />
+      <ConstraintsStrip constraints={constraints} spaceId={spaceId} />
 
       {/* Phase 7a + 7c — top-right chrome: view toggle + autopilot.
           Both align right so the eye reads them as room-level controls
