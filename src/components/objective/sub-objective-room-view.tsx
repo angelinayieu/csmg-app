@@ -38,6 +38,7 @@ import { SharedCausesStrip } from "./cards/shared-causes-strip";
 import { PortfolioStrip } from "./cards/portfolio-strip";
 import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
 import { ConstraintsStrip } from "./cards/constraints-strip";
+import { CategoryCardsView } from "./category-cards-view";
 import { RoomEdgesOverlay } from "./room-edges-overlay";
 import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
@@ -169,6 +170,14 @@ export function SubObjectiveRoomView({
   // (the grid) so the rect math + selector queries see the right
   // bounding box.
   const lanesContainerRef = useRef<HTMLDivElement | null>(null);
+  // Phase 7a — room view mode. Categories = chain-centric experiment
+  // frame view (default). Variables = the legacy 3-lane variable
+  // view. Both share the same underlying data; the toggle just
+  // re-groups the rendering. Default to Categories since it's the
+  // clearer scientific frame.
+  const [roomView, setRoomView] = useState<"categories" | "variables">(
+    "categories",
+  );
   // Layer 2 — currently-open item detail drawer entity id. Null
   // means closed.
   const [detailEntityId, setDetailEntityId] = useState<string | null>(null);
@@ -843,10 +852,40 @@ export function SubObjectiveRoomView({
           when an inline constraints editor lands. */}
       <ConstraintsStrip constraints={constraints} />
 
+      {/* Phase 7a — view toggle. Categories = chain-centric
+          experiment frame view (default). Variables = the legacy
+          3-lane Variable View. Subtle segmented pill aligned right
+          so it doesn't shout — the room's primary surface is still
+          whichever view is selected. */}
+      <ViewToggle value={roomView} onChange={setRoomView} />
+
       {/* Three-column layout — Objective lane removed (it just
           duplicated the sub-objective title rendered in the page
           header). The "rolls up to" rollup banner on the page
-          header carries the parent-objective link instead. */}
+          header carries the parent-objective link instead.
+          Phase 7a: gated on roomView === "variables" — only the
+          Variables view shows the 3-lane layout. */}
+      {roomView === "categories" && (
+        <CategoryCardsView
+          chains={allChains}
+          painById={
+            new Map(painItems.map((p) => [p.id, p]))
+          }
+          featureById={
+            new Map(featureItems.map((f) => [f.id, f]))
+          }
+          outcomeById={
+            new Map(outcomeItems.map((o) => [o.id, o]))
+          }
+          approvedEdgeIds={approvedEdgeIds}
+          spaceId={spaceId}
+          subObjectiveId={subObjectiveId}
+          roomCategories={roomCategories}
+          onApprovalChange={handleApprovalChange}
+          onOpenItemDetail={setDetailEntityId}
+        />
+      )}
+      {roomView === "variables" && (
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="min-w-0 flex-1">
           <div
@@ -1080,6 +1119,7 @@ export function SubObjectiveRoomView({
           />
         )}
       </div>
+      )}
 
       {/* Research sources sheet — opened by CitationBadge "See all
           sources" footer on any card. Mounted at room-view root so
@@ -1308,6 +1348,73 @@ function EmptyHint() {
       }}
     >
       Nothing here yet
+    </div>
+  );
+}
+
+// ── Phase 7a — View Toggle ────────────────────────────────────────
+//
+// Segmented pill that switches between Categories (chain-centric
+// experiment frame view) and Variables (legacy 3-lane view).
+// Right-aligned so it doesn't shout — the room's primary surface is
+// still whichever view is selected, and the toggle is a quiet
+// affordance for switching when needed.
+
+function ViewToggle({
+  value,
+  onChange,
+}: {
+  value: "categories" | "variables";
+  onChange: (next: "categories" | "variables") => void;
+}) {
+  const options: Array<{ key: "categories" | "variables"; label: string; hint: string }> = [
+    {
+      key: "categories",
+      label: "Categories",
+      hint: "Each chain as one experiment frame — recommended",
+    },
+    {
+      key: "variables",
+      label: "Variables",
+      hint: "3-lane view — pain · mechanism · result",
+    },
+  ];
+  return (
+    <div className="mb-3 flex items-center justify-end">
+      <div
+        className="inline-flex items-center"
+        style={{
+          background: appleVibe.surface.chip,
+          border: `1px solid ${appleVibe.stroke.hairline}`,
+          borderRadius: appleVibe.radius.pill,
+          padding: 2,
+          fontFamily: appleVibe.font.stack,
+        }}
+      >
+        {options.map((opt) => {
+          const active = value === opt.key;
+          return (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => onChange(opt.key)}
+              title={opt.hint}
+              className="inline-flex items-center px-3 py-1 text-[11px] font-semibold transition-all duration-150 ease-out"
+              style={{
+                background: active ? appleVibe.surface.card : "transparent",
+                color: active
+                  ? appleVibe.text.primary
+                  : appleVibe.text.tertiary,
+                borderRadius: appleVibe.radius.pill,
+                boxShadow: active ? appleVibe.shadow.chip : "none",
+                letterSpacing: "0.02em",
+              }}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
