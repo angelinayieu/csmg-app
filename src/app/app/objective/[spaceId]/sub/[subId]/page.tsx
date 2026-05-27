@@ -19,6 +19,7 @@ import {
 import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import { readConstraints } from "@/lib/objective-canvas/constraints";
 
 export const dynamic = "force-dynamic";
 
@@ -90,15 +91,19 @@ export default async function SubObjectiveRoomPage({
   }
 
   // Pipeline mode drives auto-generate behavior in the room view.
+  // Also pull synthesis_data so we can extract the operational
+  // constraints (Phase 5a — surfaces them as a CONTROL VARIABLES
+  // strip inside the room).
   const { data: spaceModeRow } = await db
     .from("spaces")
-    .select("pipeline_mode")
+    .select("pipeline_mode, synthesis_data")
     .eq("id", spaceId)
     .maybeSingle();
   const pipelineMode: PipelineMode =
     spaceModeRow?.pipeline_mode === "review_each"
       ? "review_each"
       : "autopilot";
+  const operationalConstraints = readConstraints(spaceModeRow?.synthesis_data);
 
   // ── Parent core objective — drives the "rolls up to" rollup
   //    banner so the user sees this room's place in the broader
@@ -354,6 +359,7 @@ export default async function SubObjectiveRoomPage({
             pipelineMode={pipelineMode}
             roomCategoriesRaw={sub.room_categories}
             annotations={parentAnnotations}
+            constraints={operationalConstraints}
           />
         </div>
       </div>

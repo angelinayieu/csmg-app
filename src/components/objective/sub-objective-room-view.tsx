@@ -16,7 +16,13 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { RefreshCw } from "lucide-react";
+import {
+  ArrowLeftRight,
+  RefreshCw,
+  Target,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { CorrelationSidePanel } from "./correlation-side-panel";
@@ -31,7 +37,9 @@ import { ResearchSourcesSheet } from "./research-sources-sheet";
 import { SharedCausesStrip } from "./cards/shared-causes-strip";
 import { PortfolioStrip } from "./cards/portfolio-strip";
 import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
+import { ConstraintsStrip } from "./cards/constraints-strip";
 import { RoomEdgesOverlay } from "./room-edges-overlay";
+import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
 import {
   normalizeRoomCategories,
@@ -112,6 +120,12 @@ interface Props {
    *  feeds the hover-to-link interaction between annotation chips
    *  and items derived from them. Empty array hides the strip. */
   annotations?: ObjectiveAnnotation[];
+  /** Phase 5a — operational constraints the user set at intake (or
+   *  the inferred set). Rendered as a CONTROL VARIABLES strip above
+   *  the lanes so the user always sees which conditions are held
+   *  fixed when the R&D engine runs mechanism experiments. Null
+   *  hides the strip (no constraints captured yet). */
+  constraints?: OperationalConstraints | null;
 }
 
 export function SubObjectiveRoomView({
@@ -123,6 +137,7 @@ export function SubObjectiveRoomView({
   pipelineMode,
   roomCategoriesRaw,
   annotations = [],
+  constraints = null,
 }: Props) {
   const roomCategories: RoomCategories = useMemo(
     () => normalizeRoomCategories(roomCategoriesRaw),
@@ -820,6 +835,14 @@ export function SubObjectiveRoomView({
         }}
       />
 
+      {/* Phase 5a — Control variables strip. Surfaces the user's
+          operational constraints between the Portfolio (Tier 3 macro
+          diagnostic) and the lanes themselves. Reads from
+          space.synthesis_data.constraints; renders nothing when
+          unset. Edit affordance not wired here — left for future
+          when an inline constraints editor lands. */}
+      <ConstraintsStrip constraints={constraints} />
+
       {/* Three-column layout — Objective lane removed (it just
           duplicated the sub-objective title rendered in the page
           header). The "rolls up to" rollup banner on the page
@@ -1110,6 +1133,49 @@ export function SubObjectiveRoomView({
 
 // ── Lane shell ─────────────────────────────────────────────────────
 
+/** Scientific role per lane — captures the variable type + the
+ *  optimization direction so the user reads "↓ minimize THIS" or
+ *  "↑ maximize THIS" at a glance instead of just a layer label.
+ *
+ *  This is the centerpiece of Phase 5a: turn the room from a
+ *  flat 3-column grid into an EXPERIMENT INSTRUMENT where each
+ *  column is structurally distinct.
+ *
+ *  Variable roles match the digital-twin model:
+ *    PROBLEMS  = dependent variables we want to MINIMIZE
+ *    MECHANISMS = independent variables (manipulable levers)
+ *    RESULTS   = dependent variables we want to MAXIMIZE
+ *    OBJECTIVE = roll-up anchor (not part of the IV/DV system) */
+const LANE_ROLE: Record<
+  "pain" | "features" | "outcomes" | "objective",
+  {
+    icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+    roleLabel: string;
+    direction: string;
+  }
+> = {
+  pain: {
+    icon: TrendingDown,
+    roleLabel: "Dependent",
+    direction: "minimize",
+  },
+  features: {
+    icon: ArrowLeftRight,
+    roleLabel: "Independent",
+    direction: "test",
+  },
+  outcomes: {
+    icon: TrendingUp,
+    roleLabel: "Dependent",
+    direction: "maximize",
+  },
+  objective: {
+    icon: Target,
+    roleLabel: "Anchor",
+    direction: "roll-up",
+  },
+};
+
 function Lane({
   slug,
   label,
@@ -1125,7 +1191,8 @@ function Lane({
   loading: boolean;
   children: React.ReactNode;
 }) {
-  void slug;
+  const role = LANE_ROLE[slug];
+  const RoleIcon = role.icon;
   return (
     <div
       className="flex min-h-[260px] flex-col p-5 transition-shadow duration-300 ease-out"
@@ -1143,31 +1210,53 @@ function Lane({
         fontFamily: appleVibe.font.stack,
       }}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span
-            className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
-            style={{
-              background: color,
-              // Lane-color dot gets a small glow so it reads as a
-              // status pip, not a decoration.
-              boxShadow: `0 0 0 3px ${color}1A`,
-            }}
-            aria-hidden
-          />
-          <h3
-            className="text-[15px] font-semibold tracking-tight"
-            style={{
-              color: appleVibe.text.primary,
-              letterSpacing: "-0.01em",
-              fontFamily: appleVibe.font.display,
-            }}
-          >
-            {label}
-          </h3>
+      {/* Header — two stacked rows so the title gets the visual
+          weight + the scientific role line gets its own breathing room.
+          Phase 5a: this header turns the lane from a "things in a
+          column" container into a labeled experiment role. */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          {/* Row 1 — role icon + variable type chip. Lane-color
+              anchored so each lane reads as a distinct kind of
+              variable, not "another column." */}
+          <div className="flex items-center gap-1.5">
+            <RoleIcon
+              className="h-3.5 w-3.5 flex-shrink-0"
+              strokeWidth={2}
+            />
+            <span
+              className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+              style={{ color }}
+            >
+              {role.roleLabel} var · {role.direction}
+            </span>
+          </div>
+          {/* Row 2 — the lane title, big and centered like before. */}
+          <div className="mt-1.5 flex items-center gap-2">
+            <span
+              className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
+              style={{
+                background: color,
+                // Lane-color dot gets a small glow so it reads as a
+                // status pip, not a decoration.
+                boxShadow: `0 0 0 3px ${color}1A`,
+              }}
+              aria-hidden
+            />
+            <h3
+              className="text-[15px] font-semibold tracking-tight"
+              style={{
+                color: appleVibe.text.primary,
+                letterSpacing: "-0.01em",
+                fontFamily: appleVibe.font.display,
+              }}
+            >
+              {label}
+            </h3>
+          </div>
         </div>
         <span
-          className="rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums"
+          className="mt-0.5 flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums"
           style={{
             background: appleVibe.surface.chip,
             color: appleVibe.text.tertiary,

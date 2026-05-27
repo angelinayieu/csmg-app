@@ -1023,7 +1023,24 @@ export function ItemDetailDrawer({
                     strokeWidth={1.75}
                   />
                 }
-                title="Variations"
+                // Phase 5a — Section title per scientific role:
+                //   pain     → "Manifestations" (observable shapes)
+                //   features → "IV Candidates" (the manipulable lever
+                //              settings — only the mechanism lane carries
+                //              true scientific variations)
+                //   outcomes → "Measurement strategies" (how the DV
+                //              gets measured)
+                //   objective → "Variations" (legacy fallback)
+                // Underlying data structure unchanged.
+                title={
+                  itemLayer === "features"
+                    ? "IV Candidates"
+                    : itemLayer === "pain"
+                      ? "Manifestations"
+                      : itemLayer === "outcomes"
+                        ? "Measurement strategies"
+                        : "Variations"
+                }
                 anchorId={DECISION_ANCHORS.variations}
                 subtitle={
                   expanded?.variations && expanded.variations.length > 0
