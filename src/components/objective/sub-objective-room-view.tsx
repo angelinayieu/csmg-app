@@ -31,6 +31,7 @@ import { ResearchSourcesSheet } from "./research-sources-sheet";
 import { SharedCausesStrip } from "./cards/shared-causes-strip";
 import { PortfolioStrip } from "./cards/portfolio-strip";
 import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
+import { RoomEdgesOverlay } from "./room-edges-overlay";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
 import {
   normalizeRoomCategories,
@@ -146,6 +147,13 @@ export function SubObjectiveRoomView({
   // Hover-to-link: which card is currently hovered (or null). Linked
   // ids are derived from this + the edges map.
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
+  // Phase 6 — ref for the lanes-grid container. Threaded into the
+  // SVG wire overlay so it can query card positions via data-entity-id
+  // selectors + observe layout changes via ResizeObserver. The ref
+  // must be on the SAME element that hosts the cards as descendants
+  // (the grid) so the rect math + selector queries see the right
+  // bounding box.
+  const lanesContainerRef = useRef<HTMLDivElement | null>(null);
   // Layer 2 — currently-open item detail drawer entity id. Null
   // means closed.
   const [detailEntityId, setDetailEntityId] = useState<string | null>(null);
@@ -819,7 +827,8 @@ export function SubObjectiveRoomView({
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="min-w-0 flex-1">
           <div
-            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+            ref={lanesContainerRef}
+            className="relative grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
             // Dim non-linked cards while hovering one — gives the
             // glow ring its companion contrast cue.
             style={{
@@ -827,6 +836,16 @@ export function SubObjectiveRoomView({
             }}
             data-hover-active={anyHoverActive ? "true" : undefined}
           >
+            {/* Phase 6 — SVG wire overlay drawn UNDER the cards (cards
+                sit in their own stacking context above the absolute
+                overlay). Pointer-events: none so cards remain
+                interactive. Wires highlight when either endpoint card
+                is hovered, driven by the existing hoveredEntityId. */}
+            <RoomEdgesOverlay
+              containerRef={lanesContainerRef}
+              edges={edges}
+              hoveredEntityId={hoveredEntityId}
+            />
             {/* PAIN lane */}
             <Lane
               slug="pain"
@@ -847,9 +866,17 @@ export function SubObjectiveRoomView({
                   return (
                     <div
                       key={p.id}
+                      data-entity-id={p.id}
                       style={{
                         opacity: dim ? 0.35 : 1,
                         transition: "opacity 180ms ease-out",
+                        // Phase 6 — stack above the SVG wire overlay
+                        // (which sits at z-index 0 inside the grid
+                        // container). Without this, wires would paint
+                        // OVER cards because absolute elements stack
+                        // above static siblings by default.
+                        position: "relative",
+                        zIndex: 1,
                       }}
                     >
                       <PainCard
@@ -893,9 +920,17 @@ export function SubObjectiveRoomView({
                   return (
                     <div
                       key={f.id}
+                      data-entity-id={f.id}
                       style={{
                         opacity: dim ? 0.35 : 1,
                         transition: "opacity 180ms ease-out",
+                        // Phase 6 — stack above the SVG wire overlay
+                        // (which sits at z-index 0 inside the grid
+                        // container). Without this, wires would paint
+                        // OVER cards because absolute elements stack
+                        // above static siblings by default.
+                        position: "relative",
+                        zIndex: 1,
                       }}
                     >
                       <FeatureCard
@@ -945,9 +980,17 @@ export function SubObjectiveRoomView({
                   return (
                     <div
                       key={o.id}
+                      data-entity-id={o.id}
                       style={{
                         opacity: dim ? 0.35 : 1,
                         transition: "opacity 180ms ease-out",
+                        // Phase 6 — stack above the SVG wire overlay
+                        // (which sits at z-index 0 inside the grid
+                        // container). Without this, wires would paint
+                        // OVER cards because absolute elements stack
+                        // above static siblings by default.
+                        position: "relative",
+                        zIndex: 1,
                       }}
                     >
                       <OutcomeCard
