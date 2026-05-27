@@ -568,6 +568,18 @@ export function LabPageView({
           </Section>
         )}
 
+      {/* ── Section 2c: REML τ² indicator pool (ensemble extra) ──
+          Surfaces between-variation heterogeneity for each proxy.
+          Hidden when ensemble hasn't populated indicator_pool. */}
+      {Array.isArray(envelopeLocal?.indicator_pool) &&
+        envelopeLocal.indicator_pool.length > 0 && (
+          <Section title="Proxy stability · REML τ² heterogeneity pool">
+            <IndicatorPoolTable
+              indicatorPool={envelopeLocal.indicator_pool}
+            />
+          </Section>
+        )}
+
       {/* ── Section 3: Variation diff (2-pick) ── */}
       {variationsLocal.length >= 2 && (
         <Section title="Variation diff">
@@ -1142,7 +1154,176 @@ function IndicatorCell({ cell }: { cell: IndicatorScoreCell }) {
           )}
         </span>
       )}
+      {/* Phase 11.5 — propagated MC lift on THIS indicator. Renders
+          only when multi-target MC has run (caller wrote lift_pct +
+          optional lift_band). Negative lift_pct means the indicator
+          moves AGAINST the desired direction — color shifts to red
+          so the user reads the warning at a glance. */}
+      {typeof cell.lift_pct === "number" && (
+        <span
+          className="rounded-full px-1 py-px text-[9px] font-medium tabular-nums"
+          style={{
+            background:
+              cell.lift_pct >= 0
+                ? `${appleVibe.stage.features}14`
+                : `${appleVibe.stage.pain}14`,
+            color:
+              cell.lift_pct >= 0
+                ? appleVibe.stage.features
+                : appleVibe.stage.pain,
+            border: `1px solid ${cell.lift_pct >= 0 ? appleVibe.stage.features : appleVibe.stage.pain}26`,
+          }}
+          title={
+            cell.lift_band
+              ? `MC propagated lift on this indicator: ${(cell.lift_pct * 100).toFixed(1)}% (p10/p50/p90 = ${(cell.lift_band.p10 * 100).toFixed(0)} / ${(cell.lift_band.p50 * 100).toFixed(0)} / ${(cell.lift_band.p90 * 100).toFixed(0)}%)`
+              : `MC propagated lift on this indicator: ${(cell.lift_pct * 100).toFixed(1)}%`
+          }
+        >
+          MC {cell.lift_pct >= 0 ? "+" : ""}
+          {(cell.lift_pct * 100).toFixed(0)}%
+        </span>
+      )}
     </span>
+  );
+}
+
+// ── REML τ²-pooled indicator confidence section ───────────────────
+//
+// Phase 11.3 — the ensemble scorer pools per-indicator confidence
+// across all variations using REML to estimate τ² (between-variation
+// heterogeneity). High τ² means the same indicator is graded
+// inconsistently across variations → the proxy itself is contestable,
+// not just the specific scoring run. This section surfaces that
+// envelope-level signal so the user can see which proxies are
+// epistemically stable vs. shaky.
+
+interface IndicatorPoolEntry {
+  indicator_text: string;
+  outcome_id: string;
+  outcome_name: string;
+  pooled_confidence: number;
+  pooled_ci_lower: number;
+  pooled_ci_upper: number;
+  tau_squared: number;
+  n_variations: number;
+}
+
+function IndicatorPoolTable({
+  indicatorPool,
+}: {
+  indicatorPool: IndicatorPoolEntry[];
+}) {
+  if (indicatorPool.length === 0) {
+    return (
+      <EmptyTable text="REML τ² heterogeneity pool populates when ensemble scoring runs across ≥2 variations — surfaces which proxies are graded consistently vs. which the lenses can't agree on across variations." />
+    );
+  }
+  // Sort by τ² desc — highest heterogeneity first so the user sees
+  // the most contestable proxies at the top.
+  const sorted = [...indicatorPool].sort(
+    (a, b) => b.tau_squared - a.tau_squared,
+  );
+  return (
+    <div
+      className="overflow-hidden"
+      style={{
+        background: appleVibe.surface.card,
+        border: `1px solid ${appleVibe.stroke.hairline}`,
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      <table className="min-w-full text-[11.5px]">
+        <thead
+          style={{
+            background: appleVibe.surface.chip,
+            borderBottom: `1px solid ${appleVibe.stroke.hairline}`,
+          }}
+        >
+          <tr>
+            <Th className="text-left">Indicator</Th>
+            <Th className="text-left">Outcome</Th>
+            <Th className="text-right">Pooled confidence</Th>
+            <Th className="text-right">95% CI</Th>
+            <Th className="text-right">τ²</Th>
+            <Th className="text-right">n</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((p, i) => {
+            const heterogeneous = p.tau_squared > 0.05;
+            return (
+              <tr
+                key={`${p.outcome_id}::${i}`}
+                style={{
+                  borderTop: `1px solid ${appleVibe.stroke.hairline}`,
+                }}
+              >
+                <Td className="text-left" style={{ maxWidth: 280 }}>
+                  <span
+                    className="font-medium"
+                    style={{ color: appleVibe.text.primary }}
+                  >
+                    {p.indicator_text}
+                  </span>
+                </Td>
+                <Td className="text-left">
+                  <span
+                    className="text-[10.5px] font-light"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    {p.outcome_name}
+                  </span>
+                </Td>
+                <Td className="text-right tabular-nums">
+                  <span style={{ color: appleVibe.text.primary }}>
+                    {p.pooled_confidence.toFixed(2)}
+                  </span>
+                </Td>
+                <Td className="text-right tabular-nums text-[10.5px]">
+                  <span style={{ color: appleVibe.text.tertiary }}>
+                    {p.pooled_ci_lower.toFixed(2)}–{p.pooled_ci_upper.toFixed(2)}
+                  </span>
+                </Td>
+                <Td className="text-right tabular-nums">
+                  <span
+                    style={{
+                      color: heterogeneous
+                        ? appleVibe.stage.pain
+                        : appleVibe.text.primary,
+                      fontWeight: heterogeneous ? 600 : 400,
+                    }}
+                    title={
+                      heterogeneous
+                        ? "τ² > 0.05 — variations grade this proxy inconsistently. Reconsider whether the indicator is well-defined or whether the variations are measuring different things."
+                        : "τ² ≤ 0.05 — variations agree on this proxy's value."
+                    }
+                  >
+                    {p.tau_squared.toFixed(3)}
+                    {heterogeneous && " ⚠"}
+                  </span>
+                </Td>
+                <Td className="text-right tabular-nums text-[10.5px]">
+                  <span style={{ color: appleVibe.text.tertiary }}>
+                    {p.n_variations}
+                  </span>
+                </Td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p
+        className="px-3 py-2 text-[10px] font-light italic"
+        style={{
+          color: appleVibe.text.faint,
+          borderTop: `1px solid ${appleVibe.stroke.hairline}`,
+        }}
+      >
+        Sorted by τ² desc. High τ² ⚠ means lenses + variations
+        disagree on how much this proxy moves — treat as contestable
+        signal, not ground truth.
+      </p>
+    </div>
   );
 }
 

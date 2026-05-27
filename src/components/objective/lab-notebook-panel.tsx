@@ -116,6 +116,11 @@ const FILTERS: ReadonlyArray<{
       "concept_branched",
       "constraints_set",
       "stage_transitioned",
+      // Phase 11.4 chain enrichment + Phase 11.6 baseline-set both
+      // belong here — system-altitude events the user didn't directly
+      // initiate at a per-variation level but that shape downstream work.
+      "chains_enriched",
+      "baseline_set",
     ],
   },
 ];
@@ -1140,6 +1145,65 @@ function MetadataChips({ event: ev }: { event: NotebookEvent }) {
       });
     }
   }
+  // ── Phase 11.4 chains_enriched chips ──
+  if (typeof ev.meta.enriched_chain_count === "number") {
+    chips.push({
+      key: "enriched",
+      label: `${ev.meta.enriched_chain_count} chains enriched`,
+      color: appleVibe.stage.features,
+    });
+  }
+  if (
+    typeof ev.meta.new_chains_count === "number" &&
+    ev.meta.new_chains_count > 0
+  ) {
+    chips.push({
+      key: "new-chains",
+      label: `+${ev.meta.new_chains_count} new chains`,
+      color: appleVibe.stage.outcomes,
+    });
+  }
+  if (typeof ev.meta.avg_chain_strength === "number") {
+    chips.push({
+      key: "chain-strength",
+      label: `avg strength ${ev.meta.avg_chain_strength.toFixed(2)}`,
+    });
+  }
+  if (
+    typeof ev.meta.orphans_closed === "number" &&
+    ev.meta.orphans_closed > 0
+  ) {
+    chips.push({
+      key: "orphans",
+      label: `${ev.meta.orphans_closed} orphan${ev.meta.orphans_closed === 1 ? "" : "s"} closed`,
+    });
+  }
+  // ── Phase 11.6 baseline_set chips ──
+  if (ev.meta.indicator_name) {
+    chips.push({
+      key: "indicator",
+      label: `"${ev.meta.indicator_name}"`,
+      color: appleVibe.stage.outcomes,
+    });
+  }
+  if (ev.meta.baseline_value) {
+    const valueText = ev.meta.baseline_unit
+      ? `${ev.meta.baseline_value} ${ev.meta.baseline_unit}`
+      : ev.meta.baseline_value;
+    const targetText = ev.meta.target_value
+      ? ` → target ${ev.meta.target_value}`
+      : "";
+    chips.push({
+      key: "baseline",
+      label: `baseline ${valueText}${targetText}`,
+    });
+  }
+  if (ev.meta.baseline_source === "llm") {
+    chips.push({
+      key: "baseline-src",
+      label: "auto-baselined",
+    });
+  }
   if (chips.length === 0) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-1">
@@ -1302,6 +1366,20 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
         icon: ArrowRight,
         label: "Stage advanced",
         color: appleVibe.accent.primary,
+      };
+    // ── Phase 11.4 ─────────────────────────────────────────────
+    case "chains_enriched":
+      return {
+        icon: Layers,
+        label: "Enriched chains",
+        color: appleVibe.stage.features,
+      };
+    // ── Phase 11.6 ─────────────────────────────────────────────
+    case "baseline_set":
+      return {
+        icon: Check,
+        label: "Set baseline",
+        color: appleVibe.stage.outcomes,
       };
     default:
       return {
