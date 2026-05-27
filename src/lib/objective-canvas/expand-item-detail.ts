@@ -91,6 +91,25 @@ export interface ItemVariation {
    *  elections change the room's mechanism graph — user can
    *  re-score from the panel header. */
   effectiveness_score?: number;
+  /** Phase 5b — provenance flag distinguishing R&D-engine-proposed
+   *  candidates from human-generated or originally-LLM-generated
+   *  variations. Lets the UI render the "Candidates from experiment"
+   *  section separately + lets analytics filter for refinement
+   *  effectiveness over time. Undefined = original generation. */
+  provenance?: "rd_iteration";
+  /** Phase 5b — when provenance = "rd_iteration", this names the
+   *  specific root_cause of the target pain that this candidate was
+   *  generated to address. Powers the comparison panel label
+   *  ("targets: context switching") + future analytics on which
+   *  root causes get the most refinement attention. */
+  target_root_cause?: string;
+  /** Phase 5b — constraint compliance score (0..1) for R&D
+   *  candidates. The LLM check rates each candidate against the
+   *  user's operational constraints (time / budget / team / risk /
+   *  compliance). Soft penalty in the composite score, not a hard
+   *  gate — a variant that ignores a constraint still shows up
+   *  but scores lower. Undefined when not an R&D candidate. */
+  constraint_compliance?: number;
 }
 
 export interface ItemPlanning {

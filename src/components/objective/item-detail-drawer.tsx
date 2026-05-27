@@ -135,6 +135,12 @@ interface ItemVariation {
    *  drawer re-open so prior scoring runs survive close+reopen
    *  without re-spending MC budget. */
   effectiveness_score?: number;
+  /** Phase 5b — R&D-iteration provenance flag. */
+  provenance?: "rd_iteration";
+  /** Phase 5b — root_cause this candidate was generated to address. */
+  target_root_cause?: string;
+  /** Phase 5b — constraint compliance score 0..1 for R&D candidates. */
+  constraint_compliance?: number;
 }
 
 interface ItemPlanning {
@@ -521,6 +527,33 @@ export function ItemDetailDrawer({
       })
       .finally(() => setResearchLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityId]);
+
+  // ── Soft re-fetch (Phase 5b) ──
+  // Light-weight refetch of the current entity's /expand payload
+  // WITHOUT toggling the loading skeleton (we already have content
+  // on screen — replacing it cleanly without flash is the goal).
+  // Threaded into VariationScoringPanel so the experiment loop can
+  // pull fresh state after writing new candidates / dispositions.
+  const refetchExpandedSoft = useCallback(() => {
+    if (!entityId) return;
+    void fetch("/api/brainstorm/item/expand", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ entityId }),
+    })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const json = await res.json();
+        setExpanded(json.expanded_detail ?? null);
+        if (Array.isArray(json?.prior_concepts)) {
+          setPriorConcepts(json.prior_concepts);
+        }
+      })
+      .catch(() => {
+        // Soft refresh — failures are silent. The user keeps what
+        // was on screen + can hit "Re-score" manually if needed.
+      });
   }, [entityId]);
 
   // ── Regenerate (user-triggered) ──
@@ -1079,6 +1112,7 @@ export function ItemDetailDrawer({
                         entityId,
                         itemName,
                       )}
+                      onRefreshExpanded={refetchExpandedSoft}
                     />
                   )}
 
@@ -3754,6 +3788,7 @@ function VariationScoringPanel({
   itemName,
   variations,
   initialEnvelope = null,
+  onRefreshExpanded,
 }: {
   entityId: string;
   itemName: string;
@@ -3763,6 +3798,13 @@ function VariationScoringPanel({
    *  "scored" mode so the user sees the prior run immediately
    *  without re-spending the ~1-3s MC budget. */
   initialEnvelope?: VariationScoreEnvelope | null;
+  /** Phase 5b — callback the parent provides so the panel can ask
+   *  for a fresh /expand fetch after writing new R&D candidates +
+   *  dispositions. Without this the experiment section would have
+   *  to maintain a parallel copy of variations, which is brittle.
+   *  Optional — older callers still work but won't see refinement
+   *  output flow into the main variations list. */
+  onRefreshExpanded?: () => void;
 }) {
   const [envelope, setEnvelope] = useState<VariationScoreEnvelope | null>(
     initialEnvelope,
@@ -3779,6 +3821,25 @@ function VariationScoringPanel({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Phase 5b — R&D experiment state. Tracked separately from the
+  // scoring flow so the user can re-run experiments without
+  // affecting their prior scoring envelope.
+  const [refining, setRefining] = useState(false);
+  const [refineError, setRefineError] = useState<string | null>(null);
+  // After a successful refine, this is the root_cause the agent
+  // targeted — displayed in the "Candidates from experiment"
+  // section header so the user knows WHY these candidates exist.
+  const [refineTargetRootCause, setRefineTargetRootCause] = useState<
+    string | null
+  >(null);
+  // Optimistic dispatch tracking — when the user elects/rejects a
+  // candidate, we hide it from the local panel immediately even
+  // before the disposition route returns. Keeps the experiment
+  // section feeling responsive.
+  const [dispatchedCandidateIds, setDispatchedCandidateIds] = useState<
+    Set<string>
+  >(new Set());
 
   async function runScoring() {
     setBusy(true);
@@ -3808,6 +3869,120 @@ function VariationScoringPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  // Phase 5b — R&D experiment trigger. Posts to the refine endpoint
+  // which proposes 3 new candidates targeting the weakest root_cause
+  // of the prior-scored target pain, scores them bi-directionally
+  // (incl. constraint compliance), and appends them to expanded_detail.
+  // We then ask the parent to re-fetch /expand so the new candidates
+  // appear in `variations` and our pendingCandidates filter picks
+  // them up.
+  async function runRefine() {
+    setRefining(true);
+    setRefineError(null);
+    try {
+      const res = await fetch("/api/brainstorm/item/variation/refine", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entityId }),
+      });
+      const json = (await res.json()) as {
+        status?: string;
+        status_detail?: string;
+        target_root_cause?: string | null;
+        envelope?: VariationScoreEnvelope;
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok) {
+        const detail =
+          typeof json.detail === "string" && json.detail.trim().length > 0
+            ? ` — ${json.detail.trim()}`
+            : "";
+        setRefineError(`${json.error ?? "Refinement failed."}${detail}`);
+        return;
+      }
+      // Non-ok status codes are soft-fails (no_envelope etc).
+      // Surface them in the error slot too so the user sees what
+      // happened.
+      if (json.status && json.status !== "ok") {
+        setRefineError(
+          json.status_detail ?? `Refinement: ${json.status}`,
+        );
+        return;
+      }
+      setRefineTargetRootCause(json.target_root_cause ?? null);
+      // Bump scored_at to reflect the fresh scoring pass that the
+      // refine route does internally as its last step. The panel
+      // header's "scored Xm ago" should read "just now."
+      setScoredAtIso(new Date().toISOString());
+      // Clear any prior dispatch state — fresh experiment, fresh
+      // candidate set.
+      setDispatchedCandidateIds(new Set());
+      // Ask the parent to re-fetch /expand. Without this, the
+      // candidates exist on disk but our `variations` prop is stale.
+      onRefreshExpanded?.();
+    } catch (err) {
+      setRefineError(err instanceof Error ? err.message : "Network error.");
+    } finally {
+      setRefining(false);
+    }
+  }
+
+  // Phase 5b — elect/reject a candidate via the existing disposition
+  // route. Optimistic dispatch ID tracking so the candidate row
+  // hides immediately while the POST is in flight. After success
+  // we ask the parent to refresh so the variation moves into the
+  // main list (elected) or persists as rejected.
+  async function dispatchCandidate(
+    candidateId: string,
+    disposition: "elected" | "rejected",
+  ) {
+    setDispatchedCandidateIds((prev) => {
+      const next = new Set(prev);
+      next.add(candidateId);
+      return next;
+    });
+    try {
+      await fetch("/api/brainstorm/item/variation/disposition", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          entityId,
+          variationId: candidateId,
+          disposition,
+        }),
+      });
+      onRefreshExpanded?.();
+    } catch {
+      // Disposition is non-critical; the optimistic remove already
+      // ran. If the POST genuinely fails, the next /expand refetch
+      // will surface the un-disposed candidate again — the user can
+      // re-click.
+    }
+  }
+
+  async function discardAllPending(pendingIds: string[]) {
+    setDispatchedCandidateIds((prev) => {
+      const next = new Set(prev);
+      for (const id of pendingIds) next.add(id);
+      return next;
+    });
+    await Promise.all(
+      pendingIds.map((id) =>
+        fetch("/api/brainstorm/item/variation/disposition", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            entityId,
+            variationId: id,
+            disposition: "rejected",
+          }),
+        }).catch(() => undefined),
+      ),
+    );
+    onRefreshExpanded?.();
   }
 
   // Look up score by variation id for inline rendering.
@@ -4071,9 +4246,297 @@ function VariationScoringPanel({
                 ))}
             </ul>
           )}
+
+          {/* Phase 5b — Experiment trigger + candidates section.
+              Only renders when scoring succeeded (envelope.status === "ok")
+              so the user has a target pain + gap to refine against.
+              The trigger is intentionally subtle — a thin separator
+              with a small graphite button. The candidates section
+              below it surfaces only after a successful run, with
+              an Apple-style "appeared from below" feel via the
+              CSS transition on max-height. */}
+          {envelope.status === "ok" && (
+            <ExperimentTrigger
+              busy={refining}
+              error={refineError}
+              onRun={runRefine}
+            />
+          )}
+
+          {/* Pending candidates — variations with provenance="rd_iteration"
+              + no disposition, minus any we just optimistically dispatched. */}
+          {(() => {
+            const pending = variations.filter(
+              (v) =>
+                v.id &&
+                v.provenance === "rd_iteration" &&
+                !v.disposition &&
+                !dispatchedCandidateIds.has(v.id),
+            );
+            if (pending.length === 0) return null;
+            return (
+              <ExperimentCandidatesSection
+                candidates={pending}
+                targetRootCause={
+                  refineTargetRootCause ??
+                  pending[0]?.target_root_cause ??
+                  null
+                }
+                featureColor={FEATURES}
+                onElect={(id) =>
+                  void dispatchCandidate(id, "elected")
+                }
+                onReject={(id) =>
+                  void dispatchCandidate(id, "rejected")
+                }
+                onDiscardAll={() =>
+                  void discardAllPending(
+                    pending.map((c) => c.id!).filter(Boolean),
+                  )
+                }
+              />
+            );
+          })()}
         </div>
       )}
     </div>
+  );
+}
+
+// ── Experiment trigger sub-component ─────────────────────────────
+//
+// The thin separator + graphite "Run experiment on weakest gap"
+// button. Visible only when a prior scoring run succeeded. Subtle
+// by intent — we don't want to compete with the actual variation
+// list above it, just offer the next action.
+
+function ExperimentTrigger({
+  busy,
+  error,
+  onRun,
+}: {
+  busy: boolean;
+  error: string | null;
+  onRun: () => void;
+}) {
+  return (
+    <div className="mt-2 pt-3" style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}>
+      <div className="flex items-center justify-between gap-2">
+        <span
+          className="text-[10.5px] font-light italic"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          Run an experiment — propose 3 new variants targeting the weakest gap
+        </span>
+        <button
+          type="button"
+          onClick={onRun}
+          disabled={busy}
+          className="inline-flex flex-shrink-0 items-center gap-1.5 transition-all duration-150 ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
+          style={{
+            background: "transparent",
+            color: appleVibe.text.secondary,
+            border: `1px solid ${appleVibe.stroke.medium}`,
+            borderRadius: appleVibe.radius.pill,
+            padding: "4px 11px",
+            fontSize: "10.5px",
+            fontWeight: 600,
+            letterSpacing: "0.02em",
+          }}
+        >
+          {busy ? "Running…" : "Run experiment"}
+        </button>
+      </div>
+      {error && (
+        <p className="mt-1.5 text-[11px]" style={{ color: "rgba(127,29,29,0.95)" }}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Experiment candidates section ────────────────────────────────
+//
+// Renders the new candidate IV settings as a dedicated section with
+// the gap they target labeled at the top. Each row carries: name,
+// description (truncated), compliance badge, score bar, Elect/Reject.
+// Visually distinct from the existing variation list — narrower
+// surface, faint lane-color tint, "candidates" framing — so the
+// user understands these are PROPOSALS not committed variations.
+
+function ExperimentCandidatesSection({
+  candidates,
+  targetRootCause,
+  featureColor,
+  onElect,
+  onReject,
+  onDiscardAll,
+}: {
+  candidates: ItemVariation[];
+  targetRootCause: string | null;
+  featureColor: string;
+  onElect: (id: string) => void;
+  onReject: (id: string) => void;
+  onDiscardAll: () => void;
+}) {
+  return (
+    <div
+      className="mt-3 overflow-hidden"
+      style={{
+        background: `linear-gradient(135deg, ${featureColor}08 0%, transparent 70%)`,
+        border: `1px solid ${appleVibe.stroke.soft}`,
+        borderRadius: appleVibe.radius.sm,
+      }}
+    >
+      <div
+        className="flex items-center justify-between gap-2 px-3 py-2"
+        style={{ borderBottom: `1px solid ${appleVibe.stroke.hairline}` }}
+      >
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: featureColor }}
+          >
+            Candidates from experiment
+          </span>
+          {targetRootCause && (
+            <span
+              className="truncate text-[10.5px] font-light italic"
+              style={{ color: appleVibe.text.tertiary }}
+              title={`Each candidate targets: ${targetRootCause}`}
+            >
+              · targets: &ldquo;{targetRootCause}&rdquo;
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onDiscardAll}
+          className="flex-shrink-0 text-[10px] font-medium underline-offset-2 hover:underline"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          discard all
+        </button>
+      </div>
+      <ul className="divide-y" style={{ borderColor: appleVibe.stroke.hairline }}>
+        {candidates.map((c) => (
+          <ExperimentCandidateRow
+            key={c.id}
+            candidate={c}
+            featureColor={featureColor}
+            onElect={() => c.id && onElect(c.id)}
+            onReject={() => c.id && onReject(c.id)}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ExperimentCandidateRow({
+  candidate: c,
+  featureColor,
+  onElect,
+  onReject,
+}: {
+  candidate: ItemVariation;
+  featureColor: string;
+  onElect: () => void;
+  onReject: () => void;
+}) {
+  const score =
+    typeof c.effectiveness_score === "number"
+      ? c.effectiveness_score
+      : 0;
+  const compliance =
+    typeof c.constraint_compliance === "number"
+      ? c.constraint_compliance
+      : 1;
+  return (
+    <li className="px-3 py-2.5">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span
+              className="text-[12px] font-medium truncate"
+              style={{ color: appleVibe.text.primary }}
+            >
+              {c.name}
+            </span>
+            {compliance < 0.9 && (
+              <span
+                className="inline-flex flex-shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
+                style={{
+                  background: "rgba(245,158,11,0.10)",
+                  color: "rgba(146,64,14,0.95)",
+                  border: "1px solid rgba(245,158,11,0.22)",
+                }}
+                title={`Constraint compliance ${(compliance * 100).toFixed(0)}%`}
+              >
+                ⚠ strained
+              </span>
+            )}
+          </div>
+          <p
+            className="mt-0.5 text-[11px] leading-snug"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            {c.description}
+          </p>
+          <div className="mt-1.5 flex items-center gap-2">
+            <div
+              className="relative h-[4px] w-24 overflow-hidden"
+              style={{
+                background: `${featureColor}1F`,
+                borderRadius: appleVibe.radius.pill,
+              }}
+            >
+              <div
+                className="absolute inset-y-0 left-0"
+                style={{
+                  width: `${Math.max(3, Math.min(100, score * 100))}%`,
+                  background: `linear-gradient(90deg, ${featureColor}D9 0%, ${featureColor} 100%)`,
+                  borderRadius: appleVibe.radius.pill,
+                }}
+              />
+            </div>
+            <span
+              className="font-mono text-[10px] font-semibold tabular-nums"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              {(score * 100).toFixed(0)}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={onReject}
+            className="rounded-full px-2 py-1 text-[10px] font-medium transition-colors duration-150 ease-out"
+            style={{
+              background: "transparent",
+              color: appleVibe.text.tertiary,
+              border: `1px solid ${appleVibe.stroke.hairline}`,
+            }}
+          >
+            reject
+          </button>
+          <button
+            type="button"
+            onClick={onElect}
+            className="rounded-full px-2.5 py-1 text-[10px] font-semibold transition-all duration-150 ease-out active:translate-y-px"
+            style={{
+              background: appleVibe.accent.primary,
+              color: appleVibe.text.onAccent,
+              boxShadow: appleVibe.shadow.chip,
+            }}
+          >
+            elect
+          </button>
+        </div>
+      </div>
+    </li>
   );
 }
 

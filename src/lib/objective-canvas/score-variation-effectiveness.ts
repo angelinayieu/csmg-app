@@ -235,13 +235,25 @@ async function findTargetPain(
 }
 
 /** Score the variations on a feature card. Lever = the feature
- *  entity. Target = its highest-strength linked pain. */
+ *  entity. Target = its highest-strength linked pain.
+ *
+ *  Phase 5b — adds optional `onlyVariationIds` so the R&D refine
+ *  path can score JUST the newly-proposed candidates without
+ *  re-running expensive MC for sibling variants that already
+ *  carry a fresh score. When omitted, scores all variations.
+ *  The envelope's structural/specificity/lift fields are still
+ *  shared across siblings (lever-level), so scoring a subset
+ *  produces the same envelope-level signals — just a smaller
+ *  variation_scores array. */
 export async function scoreVariationsForFeature(
   db: AnyDb,
   opts: {
     spaceId: string;
     featureEntityId: string;
     parentSubObjectiveId: string | null;
+    /** Phase 5b — restrict per-row scoring to these variation ids.
+     *  When undefined or empty, all variations get scored. */
+    onlyVariationIds?: string[];
   },
 ): Promise<VariationScoreEnvelope> {
   // Load the feature entity + its expanded_detail (variations live
@@ -363,12 +375,36 @@ export async function scoreVariationsForFeature(
       ? SPECIFICITY_FAIL
       : SPECIFICITY_SKIP;
 
-  const variation_scores: VariationScore[] = detail.variations.map((v) => {
+  // Filter to a subset of variation ids when the caller scoped the
+  // run (e.g. R&D refine wanting only the newly-proposed candidates).
+  // Empty/undefined filter falls through to "score everything."
+  const onlySet =
+    Array.isArray(opts.onlyVariationIds) && opts.onlyVariationIds.length > 0
+      ? new Set(opts.onlyVariationIds)
+      : null;
+  const variationsToScore = onlySet
+    ? detail.variations.filter((v) => v.id && onlySet.has(v.id))
+    : detail.variations;
+
+  const variation_scores: VariationScore[] = variationsToScore.map((v) => {
     const ap =
       typeof v.addresses_pain === "number" && Number.isFinite(v.addresses_pain)
         ? Math.max(0, Math.min(1, v.addresses_pain))
         : 0.5;
-    const score = clamp01(structural_signal * specificity_multiplier * ap);
+    // Phase 5b — when a candidate carries a constraint_compliance
+    // score from the R&D compliance check, fold it into the composite
+    // as a SOFT penalty. Variants that respect constraints (score 1)
+    // pass through unchanged; variants that ignore them (score 0)
+    // collapse to 0. This is intentionally lossy so the user can
+    // still see non-compliant candidates ranked LOWER, not hidden.
+    const compliance =
+      typeof v.constraint_compliance === "number" &&
+      Number.isFinite(v.constraint_compliance)
+        ? Math.max(0, Math.min(1, v.constraint_compliance))
+        : 1.0;
+    const score = clamp01(
+      structural_signal * specificity_multiplier * ap * compliance,
+    );
     return {
       variation_id: v.id,
       variation_name: v.name,
