@@ -147,6 +147,10 @@ export async function PATCH(req: NextRequest) {
   void logDecision(db, {
     userId: auth.user.id,
     spaceId: entity.space_id,
+    // Phase 9 — thread sub_objective_id so the Lab Notebook can
+    // scope its timeline to ONE room. Kept null-safe for entities
+    // that aren't in a room (rare).
+    subObjectiveId: entity.parent_sub_objective_id ?? null,
     proposalId: variationId,
     action,
     // Variations live in `kind` not `intent` so the batch_intent

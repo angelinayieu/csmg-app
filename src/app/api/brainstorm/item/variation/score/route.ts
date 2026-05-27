@@ -40,6 +40,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { scoreVariationsForFeature } from "@/lib/objective-canvas/score-variation-effectiveness";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -155,6 +156,37 @@ export async function POST(req: NextRequest) {
         writeRes.error.message,
       );
     }
+  }
+
+  // Phase 9 — log the scoring run to the Lab Notebook so the timeline
+  // shows which mechanisms got scored when, with their lift + placebo
+  // verdict. Only log OK runs — diagnostic-status runs (no_target /
+  // lever_unreachable) aren't user-facing events worth surfacing.
+  if (envelope.status === "ok") {
+    const topScore = envelope.variation_scores.reduce(
+      (max, s) => (s.effectiveness_score > max ? s.effectiveness_score : max),
+      0,
+    );
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId: entity.space_id,
+      subObjectiveId: entity.parent_sub_objective_id ?? null,
+      proposalId: entityId,
+      action: "score",
+      batchIntent: null,
+      metadata: {
+        entity_type: "feature",
+        entity_id: entityId,
+        entity_name: envelope.lever_entity_name,
+        target_pain_id: envelope.target_entity_id,
+        target_pain_name: envelope.target_entity_name,
+        lift_pct: envelope.lift_pct,
+        placebo_verdict: envelope.placebo_verdict,
+        placebo_ratio: envelope.placebo_ratio,
+        variation_count: envelope.variation_scores.length,
+        top_score: topScore,
+      },
+    });
   }
 
   return NextResponse.json(envelope);

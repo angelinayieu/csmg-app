@@ -15,6 +15,7 @@ import type {
   ComposedDesign,
 } from "@/lib/objective-canvas/expand-item-detail";
 import { composeVariations } from "@/lib/objective-canvas/compose-variations";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import {
   resolveParentObjectiveContext,
@@ -360,6 +361,31 @@ export async function POST(req: NextRequest) {
       writeRes.error.message,
     );
   }
+
+  // Phase 9 — log to the Lab Notebook. The notebook surfaces this
+  // as "Composed design across N variations." Conflicts_open count
+  // is the load-bearing diagnostic — if non-zero the notebook
+  // shows it as an attention indicator.
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId: entity.space_id,
+    subObjectiveId: entity.parent_sub_objective_id ?? null,
+    proposalId: entityId,
+    action: "compose",
+    batchIntent: null,
+    metadata: {
+      entity_type: "feature",
+      entity_id: entityId,
+      entity_name: entity.name,
+      source_variation_ids: composed.source_variation_ids ?? [],
+      conflicts_open_count: Array.isArray(composed.conflicts_open)
+        ? composed.conflicts_open.length
+        : 0,
+      integration_points_count: Array.isArray(composed.integration_points)
+        ? composed.integration_points.length
+        : 0,
+    },
+  });
 
   return NextResponse.json({ composed_design: composed });
 }

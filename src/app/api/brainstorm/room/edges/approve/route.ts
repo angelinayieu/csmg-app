@@ -13,6 +13,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse } from "@/lib/api-helpers";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 
@@ -79,6 +80,29 @@ export async function POST(req: NextRequest) {
       { status: 404 },
     );
   }
+
+  // Phase 9 — log the approval / revocation to the Lab Notebook.
+  // Edge-level events are mostly noise; the meaningful row appears
+  // when a CHAIN is approved (both edges of a pain → feature →
+  // outcome triplet). Logging here writes one row per edge; the
+  // notebook UI groups consecutive edge approvals from the same
+  // chain into a single "Approved bet" event via shared metadata
+  // chain_id when present. For now we log each edge with enough
+  // context for the notebook to render meaningfully.
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId,
+    subObjectiveId,
+    proposalId: edgeId,
+    action: "approve_bet",
+    batchIntent: null,
+    metadata: {
+      entity_type: "edge",
+      edge_id: edgeId,
+      approved: approved,
+      approved_at: update.data.approved_at,
+    },
+  });
 
   return NextResponse.json({
     edgeId: update.data.id,

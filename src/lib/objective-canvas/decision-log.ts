@@ -26,11 +26,24 @@ export type DecisionAction =
   | "defer"
   | "clear"
   | "generate_batch"
-  | "confirm";
+  | "confirm"
+  // Phase 9 — Lab Notebook event types. The DB CHECK constraint
+  // is extended in migration 20260828_lab_notebook_phase9 to
+  // accept these. Earlier callers still use the original six.
+  | "rd_iterate"
+  | "score"
+  | "approve_bet"
+  | "compose"
+  | "autopilot_run"
+  | "autopilot_iteration";
 
 export interface LogDecisionArgs {
   userId: string;
   spaceId: string;
+  /** Phase 9 — finer-grained scope so the Lab Notebook can filter
+   *  to ONE room. Backward-compatible: pre-Phase-9 callers can omit
+   *  it and the row stays scoped to space_id only. */
+  subObjectiveId?: string | null;
   proposalId?: string | null;
   action: DecisionAction;
   batchIntent?: SubObjectiveIntent | null;
@@ -45,6 +58,7 @@ export async function logDecision(db: any, args: LogDecisionArgs): Promise<void>
     const { error } = await db.from("sub_objective_decisions").insert({
       user_id: args.userId,
       space_id: args.spaceId,
+      sub_objective_id: args.subObjectiveId ?? null,
       proposal_id: args.proposalId ?? null,
       action: args.action,
       batch_intent: args.batchIntent ?? null,

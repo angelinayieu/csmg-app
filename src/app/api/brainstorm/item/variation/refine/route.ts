@@ -44,6 +44,7 @@ import {
 } from "@/lib/objective-canvas/refine-mechanism";
 import { checkConstraintCompliance } from "@/lib/objective-canvas/constraint-compliance";
 import { scoreVariationsForFeature } from "@/lib/objective-canvas/score-variation-effectiveness";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -479,5 +480,40 @@ export async function POST(req: NextRequest) {
     target_root_cause: gap_root_cause,
     envelope: finalDetail.effectiveness_envelope,
   };
+
+  // Phase 9 — log the R&D iteration to the Lab Notebook timeline.
+  // Fire-and-forget; the actual scoring/persisting already happened
+  // above. Metadata captures everything the notebook needs to render
+  // a meaningful row: the gap targeted, how many candidates landed,
+  // the top score, the envelope verdict.
+  if (refineStatus === "ok") {
+    const topScore = candidatesWithScore.reduce(
+      (max, c) =>
+        typeof c.effectiveness_score === "number" && c.effectiveness_score > max
+          ? c.effectiveness_score
+          : max,
+      0,
+    );
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId: entity.space_id,
+      subObjectiveId: entity.parent_sub_objective_id ?? null,
+      proposalId: entityId, // the feature being refined
+      action: "rd_iterate",
+      batchIntent: null,
+      metadata: {
+        entity_type: "feature",
+        entity_id: entityId,
+        entity_name: entity.name,
+        target_root_cause: gap_root_cause,
+        candidate_count: candidatesWithScore.length,
+        candidate_ids: candidatesWithScore.map((c) => c.id),
+        top_score: topScore,
+        lift_pct: scoringEnvelope.lift_pct,
+        placebo_verdict: scoringEnvelope.placebo_verdict,
+      },
+    });
+  }
+
   return NextResponse.json(resp);
 }
