@@ -186,12 +186,28 @@ export async function generatePrototypeBrief(
   ctx: PrototypeBriefContext,
 ): Promise<PrototypeBrief> {
   const constraintsBlock = buildConstraintsBlock(ctx.constraints);
+
+  // N2 — R&D context. When the variation under test came from the
+  // refinement engine (provenance="rd_iteration"), the prototype
+  // brief must STAY anchored on the specific root_cause the iteration
+  // was generated to attack. Without this, the brief drifts toward
+  // testing a generic variation feature — defeating the targeting
+  // that made the iteration worth running.
+  const rdContext =
+    ctx.variation.provenance === "rd_iteration"
+      ? `\n  Provenance: R&D-iterated — generated specifically to attack root cause "${ctx.variation.target_root_cause?.slice(0, 120) ?? "unspecified"}"${
+          typeof ctx.variation.constraint_compliance === "number"
+            ? `\n  Constraint fit (R&D-graded): ${ctx.variation.constraint_compliance.toFixed(2)}`
+            : ""
+        }\n  R&D RULE: The hypothesis + signal_to_watch must reference this root cause explicitly. If the experiment instead tests a generic feature property, the iteration's targeting was wasted.`
+      : "";
+
   const variationContext = `VARIATION BEING TESTED:
   Name: ${ctx.variation.name}
   Description: ${ctx.variation.description}
   Tradeoff: ${ctx.variation.tradeoff}
   Kind: ${ctx.variation.kind ?? "alternative"}
-  How directly it addresses the pain: ${((ctx.variation.addresses_pain ?? 0.5) * 100).toFixed(0)}/100`;
+  How directly it addresses the pain: ${((ctx.variation.addresses_pain ?? 0.5) * 100).toFixed(0)}/100${rdContext}`;
 
   const system = `You design the ONE smallest experiment that would let the user answer their open question about a variation they're considering, within their actual operational constraints.
 

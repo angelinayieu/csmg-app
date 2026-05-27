@@ -130,6 +130,107 @@ export const recommendNextMove: AnalysisModule = {
       }
     });
 
+    // ── N1 — Scoring signals across elected variations ──
+    // Three signal classes that should be loud candidates for "replace
+    // this elected variation" recommendations:
+    //   1) Low-score elected (score < 0.45) — user picked something
+    //      the scorer downgraded. Worth re-asking.
+    //   2) Score gap within an item — anchor scored ≥0.30 higher than
+    //      a junior elected variation. The junior probably dilutes.
+    //   3) Refuted empirical — variation has empirical_overlay with
+    //      observed_direction="decreased" or negative observed_lift_pct.
+    //      The field rejected it. Composition is shipping a refuted
+    //      mechanism.
+    // Without these signals, recommend_next_move never proposes the
+    // "replace your weakest elected variation" move, even though that's
+    // often the single highest-leverage call when scoring exists.
+    const lowScoreElections: string[] = [];
+    const scoreGapElections: string[] = [];
+    const refutedEmpiricalElections: string[] = [];
+    for (const it of state.items) {
+      const electedIds = new Set(it.elected_variation_ids);
+      if (electedIds.size === 0) continue;
+      const variations = it.expanded_detail?.variations ?? [];
+      const electedScored = variations
+        .filter(
+          (v) =>
+            electedIds.has(v.id) && typeof v.effectiveness_score === "number",
+        )
+        .map((v) => ({
+          name: v.name,
+          score: v.effectiveness_score as number,
+          method: v.evaluation_method ?? null,
+          indicator_scores: v.indicator_scores ?? [],
+        }));
+      if (electedScored.length === 0) continue;
+      // (1) Low-score elected
+      for (const v of electedScored) {
+        if (v.score < 0.45) {
+          lowScoreElections.push(
+            `${it.name} → "${v.name}" @ ${v.score.toFixed(2)}${v.method ? ` (${v.method})` : ""}`,
+          );
+        }
+      }
+      // (2) Gap > 0.30 within item
+      if (electedScored.length >= 2) {
+        const sorted = [...electedScored].sort((a, b) => b.score - a.score);
+        const anchor = sorted[0];
+        const weakest = sorted[sorted.length - 1];
+        if (anchor.score - weakest.score >= 0.3) {
+          scoreGapElections.push(
+            `${it.name} → anchor "${anchor.name}" (${anchor.score.toFixed(2)}) vs junior "${weakest.name}" (${weakest.score.toFixed(2)}) — gap ${(anchor.score - weakest.score).toFixed(2)}`,
+          );
+        }
+      }
+      // (3) Refuted empirical
+      for (const v of electedScored) {
+        for (const ind of v.indicator_scores) {
+          const ov = ind.empirical_overlay;
+          if (!ov) continue;
+          const isRefuted =
+            ov.observed_direction === "decreased" ||
+            (typeof ov.observed_lift_pct === "number" && ov.observed_lift_pct < 0);
+          if (isRefuted) {
+            refutedEmpiricalElections.push(
+              `${it.name} → "${v.name}" empirically REFUTED on "${ind.indicator_text.slice(0, 50)}" (${
+                ov.observed_lift_pct !== null
+                  ? `${ov.observed_lift_pct.toFixed(0)}%`
+                  : ov.observed_direction
+              }, rigor ${ov.methodology_rigor.toFixed(2)})`,
+            );
+            break; // one refutation per variation is enough signal
+          }
+        }
+      }
+    }
+    const scoringBlock =
+      lowScoreElections.length > 0 ||
+      scoreGapElections.length > 0 ||
+      refutedEmpiricalElections.length > 0
+        ? `\n\nSCORING SIGNALS (elected variations the scorer/field flagged — strong candidates for REPLACE moves):${
+            refutedEmpiricalElections.length > 0
+              ? `\n  EMPIRICALLY REFUTED:\n${refutedEmpiricalElections
+                  .slice(0, 4)
+                  .map((s) => `    • ${s}`)
+                  .join("\n")}`
+              : ""
+          }${
+            lowScoreElections.length > 0
+              ? `\n  LOW-SCORE ELECTIONS (< 0.45):\n${lowScoreElections
+                  .slice(0, 4)
+                  .map((s) => `    • ${s}`)
+                  .join("\n")}`
+              : ""
+          }${
+            scoreGapElections.length > 0
+              ? `\n  SCORE GAPS (anchor vs junior ≥ 0.30):\n${scoreGapElections
+                  .slice(0, 4)
+                  .map((s) => `    • ${s}`)
+                  .join("\n")}`
+              : ""
+          }\n  SCORING RULE: Empirical refutations OUTRANK theoretical low scores. When both exist, the refuted variation is the most-leverage REPLACE candidate. Treat scoring gaps as "the junior is probably padding the composition" — recommending its removal can be the right move when no upstream signal forces its inclusion.`
+        : "";
+
     // ── User intent preferences (decision-log signal) ──
     // When the user has revealed a clear pattern, surface their top
     // 1-2 intents to the LLM. This biases recommendations toward
@@ -175,7 +276,8 @@ A high-leverage action is one that:
   • Resolves an open conflict the user is stuck on, OR
   • Generates the information that would unstick a key decision, OR
   • Eliminates redundant work before it compounds, OR
-  • Tests the load-bearing assumption that, if wrong, makes the rest pointless.
+  • Tests the load-bearing assumption that, if wrong, makes the rest pointless, OR
+  • REPLACES an elected variation that scoring or empirical evidence has refuted (when SCORING SIGNALS surface refutations or gaps, this is often the highest-leverage call — silently shipping a refuted mechanism wastes future work).
 
 A low-leverage action is one that:
   • Just adds more content without resolving anything (banned)
@@ -195,7 +297,7 @@ ANTI-PLATITUDE: "iterate on the design" or "talk to users" are banned. Be specif
 
 Return strict JSON.`;
 
-    const user = `PARENT OBJECTIVE:\n"""\n${state.core_objective_text.slice(0, 800)}\n"""\n\nROOMS (${state.rooms.length}):\n${roomBlocks.join("\n\n")}${orphanBlock}${prototypeBlock}${userPatternBlock}${constraintsBlock}\n\nRecommend the single next move per the system instructions. When orphan annotations exist, gap-fill moves earn priority. When open questions exist without prototypes on elected variations, a prototype is often the right next move. The user-pattern signal is a TIEBREAKER — don't let it override objective criteria, just bias when two moves are roughly equal.`;
+    const user = `PARENT OBJECTIVE:\n"""\n${state.core_objective_text.slice(0, 800)}\n"""\n\nROOMS (${state.rooms.length}):\n${roomBlocks.join("\n\n")}${orphanBlock}${prototypeBlock}${scoringBlock}${userPatternBlock}${constraintsBlock}\n\nRecommend the single next move per the system instructions. When orphan annotations exist, gap-fill moves earn priority. When open questions exist without prototypes on elected variations, a prototype is often the right next move. When SCORING SIGNALS show empirical refutations, a REPLACE move on the refuted variation is usually highest-leverage — refuted mechanisms shipped silently waste every downstream commitment. The user-pattern signal is a TIEBREAKER — don't let it override objective criteria, just bias when two moves are roughly equal.`;
 
     const raw = await llmJSON<RawRecommendation>({
       system,

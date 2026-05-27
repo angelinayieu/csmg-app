@@ -248,6 +248,32 @@ export async function composeVariations(
 
   const hasEffectiveness = scoredVariations.length > 0;
 
+  // N2 — R&D context propagation. When one or more elected variations
+  // were produced by the R&D engine (provenance="rd_iteration"), they
+  // carry target_root_cause (the specific pain root_cause they were
+  // generated to attack) and constraint_compliance (a 0..1 score for
+  // how well they fit operational constraints). Without surfacing
+  // these, composition drifts off-target — folding an R&D-iterated
+  // candidate in as if it were a generic peer defeats the purpose of
+  // having iterated it.
+  const rdRows = ctx.electedVariations
+    .filter((v) => v.provenance === "rd_iteration")
+    .map((v) => {
+      const index = ctx.electedVariations.indexOf(v) + 1;
+      const target = v.target_root_cause
+        ? ` targets: "${v.target_root_cause.slice(0, 100)}"`
+        : "";
+      const fit =
+        typeof v.constraint_compliance === "number"
+          ? ` · constraint fit ${v.constraint_compliance.toFixed(2)}`
+          : "";
+      return `  [${index}] ${v.name} —${target}${fit}`;
+    });
+  const rdBlock =
+    rdRows.length > 0
+      ? `\n\nR&D-ITERATED VARIATIONS (these came from the refinement engine — keep them ON-TARGET):\n${rdRows.join("\n")}\n  R&D RULE for composition:\n    • The target_root_cause is the load-bearing reason the iteration was generated. The unified design must STILL clearly attack that root cause — if your description drifts into addressing a different pain, the iteration was wasted.\n    • Low constraint_compliance (<0.6) is a yellow flag: the iteration scored well on mechanism but barely fits the user's operational reality. Either name how the composition CLAWS BACK fit, or surface it in conflicts_open ("R&D candidate X scored 0.45 on constraint fit — keeping it requires loosening constraint Y, the user should confirm").`
+      : "";
+
   const system = `You synthesize multiple elected variations of a strategy-room item into a SINGLE coherent design.
 
 ${framing}
@@ -278,7 +304,7 @@ Return strict JSON.`;
 
   const constraintsBlock = buildConstraintsBlock(ctx.constraints ?? null);
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${effectivenessBlock}${lensBlock}${findingsBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${effectivenessBlock}${rdBlock}${lensBlock}${findingsBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
 
   const raw = await llmJSON<{
     description?: unknown;

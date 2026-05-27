@@ -371,6 +371,30 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── N2 Wire — R&D iteration targeting into variation expansion ──
+  // When deepening a variation produced by the R&D refinement engine
+  // (provenance="rd_iteration"), the L3+ output must stay anchored on
+  // the specific root_cause the iteration was generated to attack.
+  // Without this, deepening an R&D candidate produces generic-shaped
+  // mechanism stories / data models / etc. — defeating the targeting
+  // that made the iteration worth running.
+  if (attachPoint === "variation") {
+    const variation = (detail.variations ?? []).find(
+      (v) => v.id === attachRef,
+    );
+    if (variation?.provenance === "rd_iteration") {
+      const target = variation.target_root_cause
+        ? `\n  Specifically targets root cause: "${variation.target_root_cause.slice(0, 200)}"`
+        : "";
+      const fit =
+        typeof variation.constraint_compliance === "number"
+          ? `\n  Constraint fit (R&D-graded): ${variation.constraint_compliance.toFixed(2)}`
+          : "";
+      parentDescriptionEnriched =
+        `${parentDescriptionEnriched}\n\nR&D ITERATION CONTEXT — this variation came from the refinement engine:${target}${fit}\n  RULE: Every child node must STILL clearly attack that root cause. If a mechanism story / data model / edge case drifts onto a different problem surface, the R&D targeting was wasted. Cite the targeting explicitly in body where it constrains the design.`;
+    }
+  }
+
   try {
     generated = await generateExpansionNode({
       catalogEntry: entry,
