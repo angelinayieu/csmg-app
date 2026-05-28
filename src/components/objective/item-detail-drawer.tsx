@@ -51,6 +51,7 @@ import {
 } from "@/components/objective/decision-surface";
 import { VariationDeliverablesModal } from "@/components/objective/variation-deliverables-modal";
 import { IndicatorValidityMatrix } from "@/components/objective/indicator-validity-matrix";
+import { GoodhartPairingsPanel } from "@/components/objective/goodhart-pairings-panel";
 
 interface DefinitionHighlight {
   phrase: string;
@@ -322,6 +323,29 @@ interface ExpandedItemDetail {
       | "no_expanded";
     status_detail: string | null;
     scored_at: string;
+    /** Phase 11.3 — Goodhart counter-indicators proposed by the
+     *  ensemble scorer. One per outcome that carried indicators.
+     *  Surfaces in the Goodhart Pairings Panel (Phase 11.9b). */
+    counter_indicators?: Array<{
+      outcome_id: string;
+      outcome_name: string;
+      counter_indicator: string;
+      rationale: string;
+    }>;
+    /** Phase 11.3 — REML τ²-pooled per-indicator confidence across
+     *  variations. Used by the Forest Plot (Phase 11.9c, deferred).
+     *  Threaded here so the data is locally available when that
+     *  panel ships. */
+    indicator_pool?: Array<{
+      indicator_text: string;
+      outcome_id: string;
+      outcome_name: string;
+      pooled_confidence: number;
+      pooled_ci_lower: number;
+      pooled_ci_upper: number;
+      tau_squared: number;
+      n_variations: number;
+    }>;
   };
   generated_at?: string;
 }
@@ -1311,6 +1335,28 @@ export function ItemDetailDrawer({
                           />
                         ))}
                     </div>
+                  </Section>
+                )}
+
+              {/* ── Phase 11.9b — GOODHART PAIRINGS PANEL ── */}
+              {/* Counter-indicators ensemble proposed (Phase 11.3) but
+                  no UI surface had been rendering. Surfaces the yang/yin
+                  pairing per outcome so the user actually sees the
+                  Goodhart antidote they should track alongside the
+                  primary indicator set. Always rendered (use_case_mode
+                  agnostic) when counter_indicators are present. */}
+              {expanded?.effectiveness_envelope?.counter_indicators &&
+                expanded.effectiveness_envelope.counter_indicators.length >
+                  0 && (
+                  <Section
+                    icon={<Sparkle className="h-3 w-3" />}
+                    title="Goodhart Pairings"
+                  >
+                    <GoodhartPairingsPanel
+                      counterIndicators={
+                        expanded.effectiveness_envelope.counter_indicators
+                      }
+                    />
                   </Section>
                 )}
 
