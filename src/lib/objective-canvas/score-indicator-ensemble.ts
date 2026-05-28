@@ -372,7 +372,7 @@ VARIATIONS TO SCORE (${ctx.variations.length} total):
 
 ${variationsBlock}
 
-Grade each variation × each indicator from each of the 5 lenses. Also propose ONE counter_indicator per outcome that had indicators. Return one variation_score entry per variation.`;
+Grade each variation × each indicator from each of the 5 lenses. Cite each indicator by its indicator_index (the 1-based number from the ROOM PROXY INDICATORS list) — never rephrase the indicator text. Also propose ONE counter_indicator per outcome that had indicators. Return one variation_score entry per variation.`;
 }
 
 // ── Schema ────────────────────────────────────────────────────────
@@ -396,9 +396,10 @@ const INDICATOR_SCORE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    indicator_text: { type: "string" },
-    outcome_id: { type: "string" },
-    outcome_name: { type: "string" },
+    // 1-based index into the canonical pre-generated indicator list.
+    // indicator_text / outcome_id / outcome_name are resolved from this
+    // server-side so the LLM can't drift off the real indicator.
+    indicator_index: { type: "number" },
     lens_scores: { type: "array", items: LENS_SCORE_SCHEMA },
     mediation_check: {
       type: "string",
@@ -410,9 +411,7 @@ const INDICATOR_SCORE_SCHEMA = {
     },
   },
   required: [
-    "indicator_text",
-    "outcome_id",
-    "outcome_name",
+    "indicator_index",
     "lens_scores",
     "mediation_check",
     "goodhart_risk",
@@ -503,9 +502,7 @@ export async function scoreVariationsWithEnsemble(
       variation_id?: unknown;
       composite_score?: unknown;
       indicator_scores?: Array<{
-        indicator_text?: unknown;
-        outcome_id?: unknown;
-        outcome_name?: unknown;
+        indicator_index?: unknown;
         lens_scores?: Array<{
           lens?: unknown;
           score?: unknown;
@@ -548,9 +545,6 @@ export async function scoreVariationsWithEnsemble(
 
   // ── Validate + aggregate ──
   const variationsById = new Map(ctx.variations.map((v) => [v.id, v]));
-  const flatLookup = new Map(
-    flat.map((f) => [f.indicator_text.toLowerCase(), f] as const),
-  );
   const variation_scores: EnsembleVariationScore[] = [];
 
   for (const row of raw?.variation_scores ?? []) {
@@ -563,27 +557,24 @@ export async function scoreVariationsWithEnsemble(
         : 0.5;
 
     const indicator_scores: EnsembleIndicatorScore[] = [];
+    const seenIdx = new Set<number>();
     for (const ind of row?.indicator_scores ?? []) {
-      const indicator_text =
-        typeof ind?.indicator_text === "string"
-          ? ind.indicator_text.trim().slice(0, 240)
-          : "";
-      if (indicator_text.length === 0) continue;
-
-      // Attribute via outcome_id; fall back to indicator-text lookup.
-      let outcome_id =
-        typeof ind?.outcome_id === "string" ? ind.outcome_id : "";
-      let outcome_name =
-        typeof ind?.outcome_name === "string" ? ind.outcome_name : "";
-      if (!outcome_id || !outcome_name) {
-        const hit = flatLookup.get(indicator_text.toLowerCase());
-        if (hit) {
-          outcome_id = hit.outcome_id;
-          outcome_name = hit.outcome_name;
-        } else {
-          continue;
-        }
-      }
+      // Resolve the indicator from its 1-based index into the canonical
+      // pre-generated list — the persisted indicator_text / outcome_id
+      // are therefore always the real values (no LLM paraphrase drift),
+      // so this row joins correctly with the rubric/evidence/persona/
+      // empirical overlays. Out-of-range index dropped; repeats deduped.
+      const idx =
+        typeof ind?.indicator_index === "number" &&
+        Number.isFinite(ind.indicator_index)
+          ? Math.round(ind.indicator_index)
+          : NaN;
+      const canonical = Number.isFinite(idx) ? flat[idx - 1] : undefined;
+      if (!canonical || seenIdx.has(idx)) continue;
+      seenIdx.add(idx);
+      const indicator_text = canonical.indicator_text;
+      const outcome_id = canonical.outcome_id;
+      const outcome_name = canonical.outcome_name;
 
       // Parse lens_scores. Must have ≥3 lens rows to count as ensemble
       // — fewer than that means the model hand-waved and we don't

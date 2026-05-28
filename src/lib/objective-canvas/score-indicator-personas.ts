@@ -186,7 +186,7 @@ VARIATIONS (${ctx.variations.length}):
 
 ${variationsBlock}
 
-Grade each (variation × indicator × persona) cell. Return one persona_indicator entry per (variation × indicator) cell, with persona_scores[] containing one row per persona inside.`;
+Grade each (variation × indicator × persona) cell. Return one persona_indicator entry per (variation × indicator) cell, citing the indicator by its indicator_index (the 1-based number from the list above) — never rephrase it — with persona_scores[] containing one row per persona inside.`;
 }
 
 const RESPONSE_SCHEMA = {
@@ -200,8 +200,9 @@ const RESPONSE_SCHEMA = {
         additionalProperties: false,
         properties: {
           variation_id: { type: "string" },
-          indicator_text: { type: "string" },
-          outcome_id: { type: "string" },
+          // 1-based index into the canonical pre-generated indicator
+          // list; text/outcome resolved server-side (no drift).
+          indicator_index: { type: "number" },
           persona_scores: {
             type: "array",
             items: {
@@ -219,8 +220,7 @@ const RESPONSE_SCHEMA = {
         },
         required: [
           "variation_id",
-          "indicator_text",
-          "outcome_id",
+          "indicator_index",
           "persona_scores",
         ],
       },
@@ -263,8 +263,7 @@ export async function scoreIndicatorsWithPersonas(
   let raw: {
     persona_indicators?: Array<{
       variation_id?: unknown;
-      indicator_text?: unknown;
-      outcome_id?: unknown;
+      indicator_index?: unknown;
       persona_scores?: Array<{
         persona_id?: unknown;
         score?: unknown;
@@ -293,23 +292,31 @@ export async function scoreIndicatorsWithPersonas(
 
   // ── Validate + aggregate ──
   const variationIds = new Set(ctx.variations.map((v) => v.id));
-  const indicatorByText = new Map(
-    ctx.indicators.map((i) => [i.indicator_text.toLowerCase(), i] as const),
-  );
   const personaById = new Map(ctx.personas.map((p) => [p.id, p] as const));
   const results: PersonaIndicatorResult[] = [];
+  // Dedupe per (variation, indicator index) so a repeated index doesn't
+  // double-count.
+  const seenPair = new Set<string>();
 
   for (const row of raw?.persona_indicators ?? []) {
     const variation_id =
       typeof row?.variation_id === "string" ? row.variation_id : "";
     if (!variation_id || !variationIds.has(variation_id)) continue;
-    const indicator_text =
-      typeof row?.indicator_text === "string"
-        ? row.indicator_text.trim().slice(0, 240)
-        : "";
-    if (indicator_text.length === 0) continue;
-    const matchedIndicator = indicatorByText.get(indicator_text.toLowerCase());
+    // Resolve the indicator from its 1-based index into the canonical
+    // pre-generated list (ctx.indicators) — persisted text/outcome are
+    // the real values so the persona overlay lands on the right row.
+    const idx =
+      typeof row?.indicator_index === "number" &&
+      Number.isFinite(row.indicator_index)
+        ? Math.round(row.indicator_index)
+        : NaN;
+    const matchedIndicator = Number.isFinite(idx)
+      ? ctx.indicators[idx - 1]
+      : undefined;
     if (!matchedIndicator) continue;
+    const pairKey = `${variation_id}::${idx}`;
+    if (seenPair.has(pairKey)) continue;
+    seenPair.add(pairKey);
 
     const persona_scores: PersonaScore[] = [];
     for (const ps of row?.persona_scores ?? []) {
@@ -348,7 +355,7 @@ export async function scoreIndicatorsWithPersonas(
     ).length;
 
     results.push({
-      indicator_text,
+      indicator_text: matchedIndicator.indicator_text,
       outcome_id: matchedIndicator.outcome_id,
       variation_id,
       persona_scores,

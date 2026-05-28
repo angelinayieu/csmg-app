@@ -187,7 +187,7 @@ SOURCES (${Math.min(ctx.sources.length, MAX_SOURCES)} total — cite by [N] inde
 
 ${sourcesBlock}
 
-Return one indicator_evidence entry per indicator, keyed by indicator_text. List up to ${MAX_CITATIONS_PER_INDICATOR} citations per indicator. Sources that don't validly cite ANY indicator should not appear in any citation list.`;
+Return one indicator_evidence entry per indicator, citing the indicator by its indicator_index (the 1-based number from the list above) — never rephrase the indicator. List up to ${MAX_CITATIONS_PER_INDICATOR} citations per indicator. Sources that don't validly cite ANY indicator should not appear in any citation list.`;
 }
 
 const RESPONSE_SCHEMA = {
@@ -200,8 +200,9 @@ const RESPONSE_SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
-          indicator_text: { type: "string" },
-          outcome_id: { type: "string" },
+          // 1-based index into the canonical pre-generated indicator
+          // list; text/outcome resolved server-side (no drift).
+          indicator_index: { type: "number" },
           citations: {
             type: "array",
             items: {
@@ -225,7 +226,7 @@ const RESPONSE_SCHEMA = {
             },
           },
         },
-        required: ["indicator_text", "outcome_id", "citations"],
+        required: ["indicator_index", "citations"],
       },
     },
   },
@@ -268,8 +269,7 @@ export async function scoreIndicatorsWithEvidence(
 
   let raw: {
     indicator_evidence?: Array<{
-      indicator_text?: unknown;
-      outcome_id?: unknown;
+      indicator_index?: unknown;
       citations?: Array<{
         source_idx?: unknown;
         classification?: unknown;
@@ -301,21 +301,22 @@ export async function scoreIndicatorsWithEvidence(
   }
 
   // ── Validate + clean ──
-  const indicatorByText = new Map(
-    ctx.indicators.map(
-      (i) => [i.indicator_text.toLowerCase(), i] as const,
-    ),
-  );
   const indicator_results: IndicatorEvidenceResult[] = [];
+  const seenIdx = new Set<number>();
 
   for (const row of raw?.indicator_evidence ?? []) {
-    const indicator_text =
-      typeof row?.indicator_text === "string"
-        ? row.indicator_text.trim().slice(0, 240)
-        : "";
-    if (indicator_text.length === 0) continue;
-    const matched = indicatorByText.get(indicator_text.toLowerCase());
-    if (!matched) continue;
+    // Resolve from the 1-based index into the canonical pre-generated
+    // list (ctx.indicators) — the persisted indicator_text/outcome_id
+    // are therefore the real values, so this evidence overlay attaches
+    // to the correct indicator row. Out-of-range dropped; repeats deduped.
+    const idx =
+      typeof row?.indicator_index === "number" &&
+      Number.isFinite(row.indicator_index)
+        ? Math.round(row.indicator_index)
+        : NaN;
+    const matched = Number.isFinite(idx) ? ctx.indicators[idx - 1] : undefined;
+    if (!matched || seenIdx.has(idx)) continue;
+    seenIdx.add(idx);
 
     const citations: EvidenceCitation[] = [];
     let supports = 0;
@@ -380,7 +381,7 @@ export async function scoreIndicatorsWithEvidence(
     });
 
     indicator_results.push({
-      indicator_text,
+      indicator_text: matched.indicator_text,
       outcome_id: matched.outcome_id,
       citations,
       evidence_strength: computeEvidenceStrength(supports, refutes),
