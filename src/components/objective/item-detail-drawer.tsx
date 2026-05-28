@@ -4224,6 +4224,7 @@ function MechanismSpecPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDetail, setShowDetail] = useState(false);
+  const [showEng, setShowEng] = useState(false);
 
   const generate = useCallback(async () => {
     if (loading) return;
@@ -4327,46 +4328,26 @@ function MechanismSpecPanel({
             </p>
           </div>
 
-          {/* ── PRIORITY: active ingredients (the load-bearing parts) ── */}
-          {spec.active_ingredients.length > 0 && (
+          {/* ── PRIORITY: what the user sees (mechanism → UI link) ── */}
+          {spec.user_visible_behavior && (
             <div>
               <div
                 className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
                 style={{ color: appleVibe.text.tertiary }}
               >
-                Active ingredients
+                What the user sees
               </div>
-              <ul className="flex flex-col gap-1">
-                {spec.active_ingredients.map((a, i) => (
-                  <li
-                    key={i}
-                    className="rounded-xl px-2.5 py-1.5"
-                    style={{
-                      background: "rgba(255,255,255,0.6)",
-                      border: `1px solid ${appleVibe.stroke.hairline}`,
-                    }}
-                  >
-                    <span
-                      className="text-[12px] font-semibold"
-                      style={{ color: appleVibe.text.primary }}
-                    >
-                      {a.name}
-                    </span>
-                    <span
-                      className="text-[11.5px] font-light leading-snug"
-                      style={{ color: appleVibe.text.secondary }}
-                    >
-                      {" "}
-                      — {a.role}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <p
+                className="text-[12px] font-light leading-relaxed"
+                style={{ color: appleVibe.text.secondary }}
+              >
+                {spec.user_visible_behavior}
+              </p>
             </div>
           )}
 
-          {/* ── Evidence chip + detail toggle ── */}
-          <div className="flex items-center justify-between gap-2">
+          {/* ── Chips (evidence + quality gate) + tier toggles ── */}
+          <div className="flex flex-wrap items-center gap-1.5">
             {evidence && (
               <span
                 className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
@@ -4377,6 +4358,27 @@ function MechanismSpecPanel({
                 Evidence: {evidence.label}
               </span>
             )}
+            {(() => {
+              const axes = Object.values(spec.quality_score);
+              const min = axes.length ? Math.min(...axes) : 1;
+              const tone =
+                min >= 0.75
+                  ? { bg: "rgba(22,163,74,0.12)", color: "rgba(22,101,52,0.95)" }
+                  : min >= 0.6
+                    ? { bg: "rgba(217,119,6,0.12)", color: "rgba(146,64,14,0.95)" }
+                    : { bg: "rgba(220,38,38,0.1)", color: "rgba(127,29,29,0.95)" };
+              return (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                  style={{ background: tone.bg, color: tone.color }}
+                  title="Internal quality gate — lowest of 6 axes (specificity, technical depth, measurability, UI connection, feasibility, failure-mode clarity)"
+                >
+                  Quality {Math.round(min * 100)}
+                </span>
+              );
+            })()}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={() => setShowDetail((v) => !v)}
@@ -4389,13 +4391,118 @@ function MechanismSpecPanel({
               ) : (
                 <ChevronDown className="h-3 w-3" strokeWidth={2} />
               )}
-              {showDetail ? "Hide technical detail" : "Technical detail"}
+              {showDetail ? "Hide mechanism" : "Mechanism"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowEng((v) => !v)}
+              className="inline-flex items-center gap-0.5 text-[10.5px] font-semibold"
+              style={{ color: appleVibe.text.tertiary }}
+              aria-expanded={showEng}
+            >
+              {showEng ? (
+                <ChevronUp className="h-3 w-3" strokeWidth={2} />
+              ) : (
+                <ChevronDown className="h-3 w-3" strokeWidth={2} />
+              )}
+              {showEng ? "Hide engineering spec" : "Engineering spec"}
             </button>
           </div>
 
-          {/* ── COLLAPSIBLE: full technical spec ── */}
+          {/* ── TIER 2: Mechanism (showDetail) ── */}
           {showDetail && (
             <div className="flex flex-col gap-3">
+              {(spec.mechanism_hypothesis.if_do ||
+                spec.mechanism_hypothesis.then_improves) && (
+                <div
+                  className="rounded-xl px-2.5 py-2"
+                  style={{
+                    background: "rgba(255,255,255,0.6)",
+                    border: `1px solid ${appleVibe.stroke.hairline}`,
+                  }}
+                >
+                  <div
+                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Hypothesis
+                  </div>
+                  <p
+                    className="text-[11.5px] font-light leading-snug"
+                    style={{ color: appleVibe.text.primary }}
+                  >
+                    <b style={{ color: appleVibe.text.tertiary }}>If</b>{" "}
+                    {spec.mechanism_hypothesis.if_do}{" "}
+                    <b style={{ color: appleVibe.text.tertiary }}>→ then</b>{" "}
+                    {spec.mechanism_hypothesis.then_improves}{" "}
+                    <b style={{ color: appleVibe.text.tertiary }}>because</b>{" "}
+                    {spec.mechanism_hypothesis.because}
+                  </p>
+                </div>
+              )}
+
+              {spec.active_ingredients.length > 0 && (
+                <div>
+                  <div
+                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Active ingredients
+                  </div>
+                  <ul className="flex flex-col gap-1">
+                    {spec.active_ingredients.map((a, i) => (
+                      <li
+                        key={i}
+                        className="rounded-xl px-2.5 py-1.5"
+                        style={{
+                          background: "rgba(255,255,255,0.6)",
+                          border: `1px solid ${appleVibe.stroke.hairline}`,
+                        }}
+                      >
+                        <span
+                          className="text-[12px] font-semibold"
+                          style={{ color: appleVibe.text.primary }}
+                        >
+                          {a.name}
+                        </span>
+                        <span
+                          className="text-[11.5px] font-light leading-snug"
+                          style={{ color: appleVibe.text.secondary }}
+                        >
+                          {" "}
+                          — {a.role}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {spec.input_data.length > 0 && (
+                <div>
+                  <div
+                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Input data
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {spec.input_data.map((d, i) => (
+                      <span
+                        key={i}
+                        className="rounded-full px-2 py-0.5 text-[10.5px] font-medium"
+                        style={{
+                          background: appleVibe.surface.chip,
+                          color: appleVibe.text.secondary,
+                        }}
+                      >
+                        {d}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {spec.how_it_works.length > 0 && (
                 <div>
                   <div
@@ -4425,6 +4532,190 @@ function MechanismSpecPanel({
                       </li>
                     ))}
                   </ol>
+                </div>
+              )}
+
+              {spec.fidelity_signals.length > 0 && (
+                <PlanningGroup
+                  label="Done right when"
+                  items={spec.fidelity_signals}
+                  tone="info"
+                />
+              )}
+              {spec.kill_criteria.length > 0 && (
+                <PlanningGroup
+                  label="Abandon if"
+                  items={spec.kill_criteria}
+                  tone="warn"
+                />
+              )}
+            </div>
+          )}
+
+          {/* ── TIER 3: Engineering spec (showEng) ── */}
+          {showEng && (
+            <div className="flex flex-col gap-3">
+              {spec.runtime_flow.length > 0 && (
+                <div>
+                  <div
+                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Runtime flow
+                  </div>
+                  <ol className="flex flex-col gap-1">
+                    {spec.runtime_flow.map((r, i) => (
+                      <li
+                        key={i}
+                        className="rounded-xl px-2.5 py-1.5"
+                        style={{
+                          background: "rgba(255,255,255,0.6)",
+                          border: `1px solid ${appleVibe.stroke.hairline}`,
+                        }}
+                      >
+                        <div
+                          className="flex gap-2 text-[11.5px] font-light leading-snug"
+                          style={{ color: appleVibe.text.primary }}
+                        >
+                          <span
+                            className="flex-shrink-0 font-semibold"
+                            style={{ color: appleVibe.text.tertiary }}
+                          >
+                            {i + 1}.
+                          </span>
+                          <span>{r.step}</span>
+                        </div>
+                        <div
+                          className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 pl-5 text-[10px]"
+                          style={{ color: appleVibe.text.faint }}
+                        >
+                          <span>⚙ {r.component}</span>
+                          {r.data !== "—" && <span>· data: {r.data}</span>}
+                          {r.user_sees !== "—" && <span>· sees: {r.user_sees}</span>}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {spec.implementation_methods.length > 0 && (
+                <div>
+                  <div
+                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Build methods
+                  </div>
+                  <ul className="flex flex-col gap-1">
+                    {spec.implementation_methods.map((m, i) => {
+                      const decTone =
+                        m.decision === "use"
+                          ? { bg: "rgba(22,163,74,0.12)", color: "rgba(22,101,52,0.95)" }
+                          : m.decision === "reject"
+                            ? { bg: "rgba(220,38,38,0.1)", color: "rgba(127,29,29,0.95)" }
+                            : { bg: appleVibe.surface.chip, color: appleVibe.text.tertiary };
+                      return (
+                        <li
+                          key={i}
+                          className="rounded-xl px-2.5 py-1.5"
+                          style={{
+                            background: "rgba(255,255,255,0.6)",
+                            border: `1px solid ${appleVibe.stroke.hairline}`,
+                          }}
+                        >
+                          <div className="flex items-baseline justify-between gap-1.5">
+                            <span
+                              className="text-[12px] font-semibold"
+                              style={{ color: appleVibe.text.primary }}
+                            >
+                              {m.name}
+                            </span>
+                            <span
+                              className="flex-shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+                              style={{ background: decTone.bg, color: decTone.color }}
+                            >
+                              {m.decision.replace("_", " ")} · {m.difficulty}
+                            </span>
+                          </div>
+                          {m.how && (
+                            <p
+                              className="mt-0.5 text-[11px] font-light leading-snug"
+                              style={{ color: appleVibe.text.secondary }}
+                            >
+                              {m.how}
+                            </p>
+                          )}
+                          <div
+                            className="mt-0.5 flex flex-col gap-0.5 text-[10.5px] font-light"
+                            style={{ color: appleVibe.text.faint }}
+                          >
+                            {m.strength && <span>＋ {m.strength}</span>}
+                            {m.weakness && <span>－ {m.weakness}</span>}
+                            {m.risk && <span>⚠ {m.risk}</span>}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+
+              {spec.decision_record.chosen && (
+                <div>
+                  <div
+                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Decision (why this method)
+                  </div>
+                  <div
+                    className="flex flex-col gap-1 rounded-xl px-2.5 py-2"
+                    style={{
+                      background: "rgba(255,255,255,0.6)",
+                      border: `1px solid ${appleVibe.stroke.hairline}`,
+                    }}
+                  >
+                    <p
+                      className="text-[11.5px] leading-snug"
+                      style={{ color: appleVibe.text.primary }}
+                    >
+                      <b style={{ color: appleVibe.text.tertiary }}>Chosen:</b>{" "}
+                      {spec.decision_record.chosen}
+                    </p>
+                    {spec.decision_record.rationale && (
+                      <p
+                        className="text-[11px] font-light leading-snug"
+                        style={{ color: appleVibe.text.secondary }}
+                      >
+                        {spec.decision_record.rationale}
+                      </p>
+                    )}
+                    {spec.decision_record.alternatives_rejected.length > 0 && (
+                      <div
+                        className="text-[10.5px] font-light"
+                        style={{ color: appleVibe.text.faint }}
+                      >
+                        {spec.decision_record.alternatives_rejected.map((a, i) => (
+                          <div key={i}>
+                            ✗ {a.name}
+                            {a.why_not ? ` — ${a.why_not}` : ""}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {spec.decision_record.consequences && (
+                      <p
+                        className="text-[11px] font-light leading-snug"
+                        style={{ color: appleVibe.text.secondary }}
+                      >
+                        <b style={{ color: appleVibe.text.tertiary }}>
+                          Consequences:
+                        </b>{" "}
+                        {spec.decision_record.consequences}
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -4496,15 +4787,6 @@ function MechanismSpecPanel({
                 </div>
               )}
 
-              {spec.fidelity_signals.length > 0 && (
-                <PlanningGroup
-                  label="Done right when"
-                  items={spec.fidelity_signals}
-                  tone="info"
-                />
-              )}
-
-              {/* Research basis — what's known + how to validate */}
               <div>
                 <div
                   className="mb-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -4542,6 +4824,52 @@ function MechanismSpecPanel({
                       {spec.research_basis.validation_experiment}
                     </p>
                   )}
+                </div>
+              </div>
+
+              <div>
+                <div
+                  className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  Quality (self-graded)
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  {(
+                    Object.entries(spec.quality_score) as Array<[string, number]>
+                  ).map(([axis, v]) => (
+                    <div key={axis} className="flex items-center gap-2">
+                      <span
+                        className="w-[120px] flex-shrink-0 text-[10.5px] font-light"
+                        style={{ color: appleVibe.text.secondary }}
+                      >
+                        {axis.replace(/_/g, " ")}
+                      </span>
+                      <div
+                        className="h-1.5 flex-1 overflow-hidden rounded-full"
+                        style={{ background: appleVibe.surface.chip }}
+                      >
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${Math.round(v * 100)}%`,
+                            background:
+                              v >= 0.75
+                                ? "rgba(22,163,74,0.8)"
+                                : v >= 0.6
+                                  ? "rgba(217,119,6,0.8)"
+                                  : "rgba(220,38,38,0.7)",
+                          }}
+                        />
+                      </div>
+                      <span
+                        className="w-[28px] flex-shrink-0 text-right text-[10px] font-medium"
+                        style={{ color: appleVibe.text.faint }}
+                      >
+                        {Math.round(v * 100)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

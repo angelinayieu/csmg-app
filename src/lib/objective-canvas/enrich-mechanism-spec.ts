@@ -116,26 +116,120 @@ export interface MechanismResearchBasis {
   validation_experiment: string;
 }
 
+// ── v2 (gold-standard) structures ──────────────────────────────────
+// The user's standard: a mechanism is an EXECUTABLE technical causal
+// chain, not an explanation. These fields separate what/why (PRD),
+// how (design doc), why-this-choice (ADR), and whether-it-works
+// (validation) — and force a quality gate.
+
+/** "If X → then Y because Z" — the falsifiable mechanism hypothesis. */
+export interface MechanismHypothesis {
+  /** The system action / intervention. */
+  if_do: string;
+  /** What measurably improves. */
+  then_improves: string;
+  /** The causal reason it works — the load-bearing "because". */
+  because: string;
+}
+
+/** One row of the runtime sequence: step · component · data flow ·
+ *  what the user sees. The executable spine. */
+export interface MechanismRuntimeStep {
+  /** What happens at this step (imperative). */
+  step: string;
+  /** Which component performs it. */
+  component: string;
+  /** Data in → out (or "—"). */
+  data: string;
+  /** User-visible effect at this step, or "—" when internal. */
+  user_sees: string;
+}
+
+/** One way to BUILD the mechanism — the implementation-method
+ *  comparison (template D). The ADR picks among these. */
+export interface MechanismImplementationMethod {
+  name: string;
+  /** How it works in one line. */
+  how: string;
+  /** Data / infrastructure it needs. */
+  required_data: string;
+  strength: string;
+  weakness: string;
+  risk: string;
+  difficulty: "low" | "medium" | "high";
+  /** The call: use now / test later / reject. */
+  decision: "use" | "test_later" | "reject";
+}
+
+/** Architecture Decision Record — WHY this method, what was ruled
+ *  out, and the consequences. The "why this choice" layer. */
+export interface MechanismDecisionRecord {
+  /** The selected method/approach. */
+  chosen: string;
+  /** Why it was chosen given the context/constraints. */
+  rationale: string;
+  /** Alternatives considered + why each was ruled out. */
+  alternatives_rejected: Array<{ name: string; why_not: string }>;
+  /** What this decision commits you to / its downstream load. */
+  consequences: string;
+}
+
+/** The internal quality gate. Each axis 0..1. A mechanism that scores
+ *  low on any axis is "still vague" and triggers one regeneration. */
+export interface MechanismQualityScore {
+  /** Is it specific (not generic platitudes)? */
+  specificity: number;
+  /** Could an engineer build from it? */
+  technical_depth: number;
+  /** Can the system measure whether it worked? */
+  measurability: number;
+  /** Does it connect to actual user-visible UI/behavior? */
+  ui_connection: number;
+  /** Is it actually buildable under the constraints? */
+  feasibility: number;
+  /** Are the failure modes named clearly? */
+  failure_mode_clarity: number;
+}
+
 export interface MechanismSpec {
   /** The causal process — names the root cause engaged + indicator
    *  moved + the path between. ≤ ~700 chars. */
   mechanism_of_action: string;
+  /** v2 — the falsifiable "if → then → because" hypothesis. */
+  mechanism_hypothesis: MechanismHypothesis;
+  /** v2 — what data the mechanism consumes (logic-model inputs). */
+  input_data: string[];
   /** Smallest replicable components carrying the causal load (BCT).
    *  2-5 typical. */
   active_ingredients: MechanismActiveIngredient[];
   /** Ordered operational procedure — what actually happens. 3-7
    *  steps. */
   how_it_works: string[];
+  /** v2 — the executable runtime sequence (step · component · data ·
+   *  user_sees). Deeper than how_it_works; the engineering spine. */
+  runtime_flow: MechanismRuntimeStep[];
   /** Concrete parts to build / provision. Use-case adaptive. 2-6. */
   system_components: MechanismComponent[];
+  /** v2 — what the USER actually sees/experiences — connects the
+   *  mechanism to real UI/behavior (the missing mechanism→UI link). */
+  user_visible_behavior: string;
+  /** v2 — different methods of achieving the same result, COMPARED
+   *  (template D). 2-4. */
+  implementation_methods: MechanismImplementationMethod[];
+  /** v2 — ADR: why the chosen method over the rejected alternatives. */
+  decision_record: MechanismDecisionRecord;
   /** Intensity × frequency × duration. Null when no meaningful
    *  cadence. */
   dosage: string | null;
   /** How you'd know the mechanism is being delivered correctly.
    *  2-4. */
   fidelity_signals: string[];
+  /** v2 — when to ABANDON this mechanism (kill criteria). 2-4. */
+  kill_criteria: string[];
   /** Evidence + a concrete validation experiment. */
   research_basis: MechanismResearchBasis;
+  /** v2 — the internal quality gate's final 6-axis score. */
+  quality_score: MechanismQualityScore;
   /** Which use-case mode framed this spec — lets the UI label the
    *  vocabulary ("clinical protocol" vs "feature spec") + lets a
    *  re-gen detect a mode change. */
@@ -225,44 +319,65 @@ This mechanism is a manipulated causal factor whose effect you're predicting acr
   • research_basis — cite the established mechanism class + the effect-size range literature would predict; validation_experiment = a controlled design (RCT / quasi-experiment) with the confirming endpoint + the threshold that would falsify the mechanism.`,
 };
 
-const SYSTEM_PROMPT = `You are a mechanism-design engineer. You turn a named feature/mechanism into a rigorous, replicable TECHNICAL SPEC — deep enough that a competent builder could implement it and a skeptic could test it. You are NOT writing marketing copy or restating the definition.
+const SYSTEM_PROMPT = `You are a mechanism-design engineer. A mechanism is NOT an explanation — it is an EXECUTABLE TECHNICAL CAUSAL CHAIN. Turn a named feature/mechanism into a rigorous, replicable spec deep enough that an ENGINEER could build it, a DESIGNER knows what the user sees, a RESEARCHER knows the hypothesis + test, and the SYSTEM can measure whether it worked. You are NOT writing marketing copy or restating the definition.
 
 You will be told the USE-CASE so you use the right vocabulary (product feature vs clinical protocol vs experimental method). Adapt — the template is universal, the concretes are not.
 
 Produce these fields:
 
 1. mechanism_of_action (1 paragraph, ≤700 chars)
-   The causal process. This is the load-bearing field. You MUST name:
-     (a) WHICH root cause of the room's pain(s) the active ingredients engage,
-     (b) WHICH outcome indicator(s) the mechanism moves, and
-     (c) the directional path between them ("by X → which shifts Y → observably moving Z").
-   When an indicator carries a BASELINE → TARGET gap, ground the path in closing THAT specific gap. Be mechanistic, not aspirational. If the honest answer is "the path is weak / indirect", say so.
+   The causal process. MUST name: (a) WHICH root cause of the room's pain(s) the active ingredients engage, (b) WHICH outcome indicator(s) it moves, (c) the directional path ("by X → which shifts Y → observably moving Z"). When an indicator carries a BASELINE → TARGET gap, ground the path in closing THAT gap. Mechanistic, not aspirational.
 
-2. active_ingredients (2-5)
-   The SMALLEST replicable components that actually carry the causal load — the parts that, if removed, break the effect. Each: name (the component) + role (why it's load-bearing, one sentence). Do NOT list the whole feature as one ingredient; decompose it. Do NOT list decorative parts.
+2. mechanism_hypothesis — the falsifiable claim, as three parts:
+   • if_do — the system action / intervention ("the system ranks candidate actions by goal-relevance + distraction-risk and gates the low-value ones")
+   • then_improves — what measurably improves ("goal-relevant task completion rises, irrelevant navigation falls")
+   • because — the load-bearing causal reason ("the comparison happens BEFORE attention is spent, so the detour never reaches the main surface")
 
-3. how_it_works (3-7 ordered steps)
-   The operational procedure — what actually happens, in sequence, from trigger to effect. Concrete enough to follow. Each step ≤140 chars.
+3. input_data (3-7) — the data the mechanism consumes to do its work (logic-model inputs). Concrete ("user's active goal", "knowledge-graph dependencies", "session attention history") — not "user data".
 
-4. system_components (2-6)
-   The concrete parts that must be built / provisioned for the mechanism to exist. Each: name + category (use the categories from the USE-CASE framing) + detail (what it is + the minimum it must do, one sentence).
+4. active_ingredients (2-5) — the SMALLEST replicable components that carry the causal load — the parts that, if removed, break the effect. Each: name + role (why load-bearing). Decompose; don't list the whole feature as one ingredient.
 
-5. dosage (string or null)
-   Intensity × frequency × duration, per the USE-CASE framing. Null ONLY when the mechanism genuinely has no meaningful cadence.
+5. how_it_works (3-7 ordered steps) — the operational procedure / transformation logic, trigger → effect. Each ≤140 chars.
 
-6. fidelity_signals (2-4)
-   How you'd know the mechanism is being DELIVERED as intended (not whether it worked — whether it actually RAN as specified). These separate "the theory was wrong" from "it was never properly done". Specific + observable. E.g. "user completes ≥3 intervals/day" not "user engages".
+6. runtime_flow (4-8 rows) — the EXECUTABLE sequence. Each row: { step (what happens), component (which component does it), data (data in → out, or "—"), user_sees (the user-visible effect at this step, or "—" if internal) }. This is the engineering spine — be concrete about which component touches which data.
 
-7. research_basis
-   • evidence_strength — "established" (well-replicated causal support) / "plausible" (credible, partial/indirect support) / "speculative" (first-principles, untested here). Be honest — most novel mechanisms are "plausible" at best.
-   • basis — what's actually known: the cited mechanism class or the first-principles argument (1-2 sentences).
-   • validation_experiment — a concrete, runnable test to confirm THIS mechanism HERE, per the USE-CASE framing (1-2 sentences).
+7. system_components (2-6) — concrete parts to build/provision. Each: name + category (per USE-CASE framing) + detail.
+
+8. user_visible_behavior (1-2 sentences) — what the USER actually sees / experiences. This connects the mechanism to real UI/behavior — never leave it abstract.
+
+9. implementation_methods (2-4) — different TECHNICAL ways to BUILD the chosen mechanism. These are ENGINEERING approaches to implement the SAME chosen direction — NOT design alternatives (the feature's design variants / "IV candidates" are picked elsewhere; do not re-list them here). Examples: rule-based vs embedding-similarity vs graph-dependency vs learned/adaptive vs hybrid; or manual vs scripted vs sensor-driven for a health protocol. Each: name, how (1 line), required_data, strength, weakness, risk, difficulty ("low"|"medium"|"high"), decision ("use"|"test_later"|"reject"). At least one "use".
+
+10. decision_record (ADR — why THIS method over the others):
+   • chosen — the selected method/approach
+   • rationale — why, given the context + constraints
+   • alternatives_rejected — the methods you marked test_later/reject, each with why_not
+   • consequences — what choosing this commits you to (its downstream load / dependency)
+
+11. dosage (string or null) — intensity × frequency × duration per USE-CASE framing. Null only if genuinely no cadence.
+
+12. fidelity_signals (2-4) — how you'd know the mechanism is being DELIVERED as intended (RAN as specified), not whether it worked. Separates "theory wrong" from "never done". Specific + observable.
+
+13. kill_criteria (2-4) — when to ABANDON this mechanism. Specific failure conditions ("users override the ranking >50% of the time", "no completion lift after tuning").
+
+14. research_basis:
+   • evidence_strength — "established" / "plausible" / "speculative". Be honest — most novel mechanisms are "plausible" at best.
+   • basis — what's actually known (cited mechanism class or first-principles argument).
+   • validation_experiment — a concrete, runnable test per USE-CASE framing.
+
+15. quality_score — HONESTLY self-grade the spec you just wrote, each 0.0–1.0:
+   • specificity — is it specific, not generic platitudes?
+   • technical_depth — could an engineer build from it?
+   • measurability — can the system measure whether it worked?
+   • ui_connection — does it connect to actual user-visible UI/behavior?
+   • feasibility — is it buildable under the constraints?
+   • failure_mode_clarity — are the failure modes named clearly?
+   Score honestly — a low score is a useful signal, not a failure. Do NOT inflate.
 
 Rules:
-- EVERY field must reference something specific from the feature, its elected direction, the room's pains/root_causes, or the outcomes/indicators. Generic spec filler is forbidden.
-- If the user has ELECTED a variation, the spec describes THAT chosen direction concretely — not the generic feature.
-- Respect the operational constraints (time / budget / team / risk / compliance). A spec the user can't build or run is wasted.
-- Be honest about evidence_strength. Padding it is dishonest.
+- EVERY field references something specific from the feature, its elected direction, the room's pains/root_causes, or the outcomes/indicators. Generic filler is forbidden.
+- If the user ELECTED a variation, spec THAT chosen direction concretely.
+- Respect the operational constraints. A spec the user can't build is wasted.
+- Be honest about evidence_strength + quality_score.
 
 Return JSON matching the response schema. No prose outside the JSON.`;
 
@@ -393,6 +508,17 @@ const SPEC_SCHEMA = {
     additionalProperties: false,
     properties: {
       mechanism_of_action: { type: "string" },
+      mechanism_hypothesis: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          if_do: { type: "string" },
+          then_improves: { type: "string" },
+          because: { type: "string" },
+        },
+        required: ["if_do", "then_improves", "because"],
+      },
+      input_data: { type: "array", items: { type: "string" } },
       active_ingredients: {
         type: "array",
         items: {
@@ -409,6 +535,20 @@ const SPEC_SCHEMA = {
         type: "array",
         items: { type: "string" },
       },
+      runtime_flow: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            step: { type: "string" },
+            component: { type: "string" },
+            data: { type: "string" },
+            user_sees: { type: "string" },
+          },
+          required: ["step", "component", "data", "user_sees"],
+        },
+      },
       system_components: {
         type: "array",
         items: {
@@ -422,8 +562,70 @@ const SPEC_SCHEMA = {
           required: ["name", "category", "detail"],
         },
       },
+      user_visible_behavior: { type: "string" },
+      implementation_methods: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: { type: "string" },
+            how: { type: "string" },
+            required_data: { type: "string" },
+            strength: { type: "string" },
+            weakness: { type: "string" },
+            risk: { type: "string" },
+            difficulty: { type: "string", enum: ["low", "medium", "high"] },
+            decision: {
+              type: "string",
+              enum: ["use", "test_later", "reject"],
+            },
+          },
+          required: [
+            "name",
+            "how",
+            "required_data",
+            "strength",
+            "weakness",
+            "risk",
+            "difficulty",
+            "decision",
+          ],
+        },
+      },
+      decision_record: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          chosen: { type: "string" },
+          rationale: { type: "string" },
+          alternatives_rejected: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                name: { type: "string" },
+                why_not: { type: "string" },
+              },
+              required: ["name", "why_not"],
+            },
+          },
+          consequences: { type: "string" },
+        },
+        required: [
+          "chosen",
+          "rationale",
+          "alternatives_rejected",
+          "consequences",
+        ],
+      },
       dosage: { type: ["string", "null"] },
       fidelity_signals: {
+        type: "array",
+        items: { type: "string" },
+      },
+      kill_criteria: {
         type: "array",
         items: { type: "string" },
       },
@@ -440,113 +642,174 @@ const SPEC_SCHEMA = {
         },
         required: ["evidence_strength", "basis", "validation_experiment"],
       },
+      quality_score: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          specificity: { type: "number" },
+          technical_depth: { type: "number" },
+          measurability: { type: "number" },
+          ui_connection: { type: "number" },
+          feasibility: { type: "number" },
+          failure_mode_clarity: { type: "number" },
+        },
+        required: [
+          "specificity",
+          "technical_depth",
+          "measurability",
+          "ui_connection",
+          "feasibility",
+          "failure_mode_clarity",
+        ],
+      },
     },
     required: [
       "mechanism_of_action",
+      "mechanism_hypothesis",
+      "input_data",
       "active_ingredients",
       "how_it_works",
+      "runtime_flow",
       "system_components",
+      "user_visible_behavior",
+      "implementation_methods",
+      "decision_record",
       "dosage",
       "fidelity_signals",
+      "kill_criteria",
       "research_basis",
+      "quality_score",
     ],
   },
 };
 
-/** Single-feature mechanism spec. Soft-fails on LLM error — returns
- *  null so the caller can render "couldn't generate" without crashing
- *  the drawer. Mirrors enrichChain()'s contract. */
-export async function enrichMechanismSpec(
-  ctx: EnrichMechanismSpecInput,
-): Promise<MechanismSpec | null> {
-  const mode = resolveUseCaseMode(ctx.constraints);
+const QUALITY_THRESHOLD = 0.6;
 
-  let raw: {
-    mechanism_of_action?: unknown;
-    active_ingredients?: Array<{ name?: unknown; role?: unknown }>;
-    how_it_works?: unknown[];
-    system_components?: Array<{
-      name?: unknown;
-      category?: unknown;
-      detail?: unknown;
-    }>;
-    dosage?: unknown;
-    fidelity_signals?: unknown[];
-    research_basis?: {
-      evidence_strength?: unknown;
-      basis?: unknown;
-      validation_experiment?: unknown;
-    };
-  };
-  try {
-    raw = await llmJSON({
-      system: SYSTEM_PROMPT,
-      user: buildUserPrompt(ctx, mode),
-      responseSchema: SPEC_SCHEMA,
-      temperature: 0.3,
-      maxTokens: 2200,
-    });
-  } catch (err) {
-    console.warn(
-      "[enrich-mechanism-spec] LLM failed (soft-fail):",
-      err instanceof Error ? err.message : String(err),
-    );
-    return null;
-  }
+/** Clamp a raw quality axis to 0..1; default 0.7 when missing/invalid. */
+function clampAxis(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v)
+    ? Math.max(0, Math.min(1, v))
+    : 0.7;
+}
 
-  // ── Clean + validate ──
-  const mechanism_of_action =
-    typeof raw?.mechanism_of_action === "string"
-      ? raw.mechanism_of_action.trim().slice(0, 900)
-      : "";
+function str(v: unknown, max: number): string {
+  return typeof v === "string" ? v.trim().slice(0, max) : "";
+}
+function strArr(v: unknown, max: number, maxLen: number): string[] {
+  return Array.isArray(v)
+    ? v
+        .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+        .map((s) => s.trim().slice(0, maxLen))
+        .slice(0, max)
+    : [];
+}
+
+/** Parse one raw LLM payload into a MechanismSpec. Returns null when
+ *  the load-bearing mechanism_of_action is missing. */
+function parseSpec(
+  raw: Record<string, unknown>,
+  mode: UseCaseMode,
+): MechanismSpec | null {
+  const mechanism_of_action = str(raw?.mechanism_of_action, 900);
   if (!mechanism_of_action) return null;
 
+  const h = (raw?.mechanism_hypothesis as Record<string, unknown>) ?? {};
+  const mechanism_hypothesis: MechanismHypothesis = {
+    if_do: str(h.if_do, 280),
+    then_improves: str(h.then_improves, 280),
+    because: str(h.because, 360),
+  };
+
+  const input_data = strArr(raw?.input_data, 8, 120);
+
   const active_ingredients: MechanismActiveIngredient[] = [];
-  for (const a of raw?.active_ingredients ?? []) {
-    const name = typeof a?.name === "string" ? a.name.trim().slice(0, 90) : "";
-    const role = typeof a?.role === "string" ? a.role.trim().slice(0, 240) : "";
+  for (const a of (raw?.active_ingredients as Array<Record<string, unknown>>) ?? []) {
+    const name = str(a?.name, 90);
+    const role = str(a?.role, 240);
     if (!name || !role) continue;
     active_ingredients.push({ name, role });
     if (active_ingredients.length >= 6) break;
   }
 
-  const how_it_works = Array.isArray(raw?.how_it_works)
-    ? raw.how_it_works
-        .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
-        .map((s) => s.trim().slice(0, 200))
-        .slice(0, 8)
-    : [];
+  const how_it_works = strArr(raw?.how_it_works, 8, 200);
+
+  const runtime_flow: MechanismRuntimeStep[] = [];
+  for (const r of (raw?.runtime_flow as Array<Record<string, unknown>>) ?? []) {
+    const step = str(r?.step, 200);
+    if (!step) continue;
+    runtime_flow.push({
+      step,
+      component: str(r?.component, 90) || "—",
+      data: str(r?.data, 160) || "—",
+      user_sees: str(r?.user_sees, 160) || "—",
+    });
+    if (runtime_flow.length >= 9) break;
+  }
 
   const system_components: MechanismComponent[] = [];
-  for (const c of raw?.system_components ?? []) {
-    const name = typeof c?.name === "string" ? c.name.trim().slice(0, 90) : "";
-    const category =
-      typeof c?.category === "string" ? c.category.trim().slice(0, 40) : "";
-    const detail =
-      typeof c?.detail === "string" ? c.detail.trim().slice(0, 240) : "";
+  for (const c of (raw?.system_components as Array<Record<string, unknown>>) ?? []) {
+    const name = str(c?.name, 90);
+    const detail = str(c?.detail, 240);
     if (!name || !detail) continue;
     system_components.push({
       name,
-      category: category || "component",
+      category: str(c?.category, 40) || "component",
       detail,
     });
     if (system_components.length >= 6) break;
   }
 
-  const dosageRaw =
-    typeof raw?.dosage === "string" ? raw.dosage.trim().slice(0, 200) : "";
-  // Treat empty / "null" / "n/a" sentinel strings as genuinely null.
+  const user_visible_behavior = str(raw?.user_visible_behavior, 400);
+
+  const implementation_methods: MechanismImplementationMethod[] = [];
+  for (const m of (raw?.implementation_methods as Array<Record<string, unknown>>) ?? []) {
+    const name = str(m?.name, 90);
+    if (!name) continue;
+    const difficulty =
+      m?.difficulty === "low" || m?.difficulty === "high"
+        ? m.difficulty
+        : "medium";
+    const decision =
+      m?.decision === "use" || m?.decision === "reject"
+        ? m.decision
+        : "test_later";
+    implementation_methods.push({
+      name,
+      how: str(m?.how, 200),
+      required_data: str(m?.required_data, 160),
+      strength: str(m?.strength, 160),
+      weakness: str(m?.weakness, 160),
+      risk: str(m?.risk, 160),
+      difficulty: difficulty as MechanismImplementationMethod["difficulty"],
+      decision: decision as MechanismImplementationMethod["decision"],
+    });
+    if (implementation_methods.length >= 5) break;
+  }
+
+  const dr = (raw?.decision_record as Record<string, unknown>) ?? {};
+  const alternatives_rejected: Array<{ name: string; why_not: string }> = [];
+  for (const a of (dr.alternatives_rejected as Array<Record<string, unknown>>) ?? []) {
+    const name = str(a?.name, 90);
+    const why_not = str(a?.why_not, 240);
+    if (!name) continue;
+    alternatives_rejected.push({ name, why_not });
+    if (alternatives_rejected.length >= 5) break;
+  }
+  const decision_record: MechanismDecisionRecord = {
+    chosen: str(dr.chosen, 160),
+    rationale: str(dr.rationale, 400),
+    alternatives_rejected,
+    consequences: str(dr.consequences, 400),
+  };
+
+  const dosageRaw = str(raw?.dosage, 200);
   const dosage =
     dosageRaw && !/^(null|none|n\/a|na)$/i.test(dosageRaw) ? dosageRaw : null;
 
-  const fidelity_signals = Array.isArray(raw?.fidelity_signals)
-    ? raw.fidelity_signals
-        .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
-        .map((s) => s.trim().slice(0, 200))
-        .slice(0, 4)
-    : [];
+  const fidelity_signals = strArr(raw?.fidelity_signals, 4, 200);
+  const kill_criteria = strArr(raw?.kill_criteria, 4, 200);
 
-  const rb = raw?.research_basis ?? {};
+  const rb = (raw?.research_basis as Record<string, unknown>) ?? {};
   const evidence_strength: MechanismResearchBasis["evidence_strength"] =
     rb.evidence_strength === "established" ||
     rb.evidence_strength === "speculative"
@@ -554,24 +817,92 @@ export async function enrichMechanismSpec(
       : "plausible";
   const research_basis: MechanismResearchBasis = {
     evidence_strength,
-    basis:
-      typeof rb.basis === "string" ? rb.basis.trim().slice(0, 500) : "",
-    validation_experiment:
-      typeof rb.validation_experiment === "string"
-        ? rb.validation_experiment.trim().slice(0, 500)
-        : "",
+    basis: str(rb.basis, 500),
+    validation_experiment: str(rb.validation_experiment, 500),
+  };
+
+  const qs = (raw?.quality_score as Record<string, unknown>) ?? {};
+  const quality_score: MechanismQualityScore = {
+    specificity: clampAxis(qs.specificity),
+    technical_depth: clampAxis(qs.technical_depth),
+    measurability: clampAxis(qs.measurability),
+    ui_connection: clampAxis(qs.ui_connection),
+    feasibility: clampAxis(qs.feasibility),
+    failure_mode_clarity: clampAxis(qs.failure_mode_clarity),
   };
 
   return {
     mechanism_of_action,
+    mechanism_hypothesis,
+    input_data,
     active_ingredients,
     how_it_works,
+    runtime_flow,
     system_components,
+    user_visible_behavior,
+    implementation_methods,
+    decision_record,
     dosage,
     fidelity_signals,
+    kill_criteria,
     research_basis,
+    quality_score,
     use_case_mode: mode,
     generated_at: new Date().toISOString(),
     evaluation_method: "rubric",
   };
+}
+
+/** Lowest of the 6 quality axes. */
+function minQuality(s: MechanismSpec): number {
+  return Math.min(...Object.values(s.quality_score));
+}
+
+/** Single-feature mechanism spec (v2). Soft-fails on LLM error.
+ *
+ *  Quality gate: the LLM self-scores 6 axes; if any axis lands below
+ *  QUALITY_THRESHOLD, the spec is "still vague" so we regenerate ONCE
+ *  with the weak axes named, then keep whichever draft scores higher.
+ *  Mirrors enrichChain()'s soft-fail contract. */
+export async function enrichMechanismSpec(
+  ctx: EnrichMechanismSpecInput,
+): Promise<MechanismSpec | null> {
+  const mode = resolveUseCaseMode(ctx.constraints);
+  const userPrompt = buildUserPrompt(ctx, mode);
+
+  async function attempt(systemSuffix: string): Promise<MechanismSpec | null> {
+    let raw: Record<string, unknown>;
+    try {
+      raw = await llmJSON({
+        system: SYSTEM_PROMPT + systemSuffix,
+        user: userPrompt,
+        responseSchema: SPEC_SCHEMA,
+        temperature: 0.3,
+        maxTokens: 3800,
+      });
+    } catch (err) {
+      console.warn(
+        "[enrich-mechanism-spec] LLM failed (soft-fail):",
+        err instanceof Error ? err.message : String(err),
+      );
+      return null;
+    }
+    return parseSpec(raw, mode);
+  }
+
+  const first = await attempt("");
+  if (!first) return null;
+  if (minQuality(first) >= QUALITY_THRESHOLD) return first;
+
+  // Weak — regenerate once, naming the axes that fell short.
+  const weak = (
+    Object.entries(first.quality_score) as Array<[string, number]>
+  )
+    .filter(([, v]) => v < QUALITY_THRESHOLD)
+    .map(([k]) => k);
+  const suffix = `\n\nYOUR PREVIOUS DRAFT SCORED LOW ON: ${weak.join(", ")}. That means it is STILL TOO VAGUE on those axes. Regenerate the FULL spec, materially stronger on exactly those axes (more specific, more buildable, more measurable, better connected to user-visible behavior, more feasible, or clearer failure modes — as applicable). Earn the score; do not inflate it.`;
+  const retry = await attempt(suffix);
+  if (!retry) return first;
+  // Keep the stronger draft (prefer the retry on ties).
+  return minQuality(retry) >= minQuality(first) ? retry : first;
 }
