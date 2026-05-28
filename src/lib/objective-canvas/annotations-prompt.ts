@@ -304,6 +304,11 @@ Return strict JSON.`;
 export function buildUserPrompt(args: {
   objective: string;
   subObjectives: AnnotationSubObjectiveRef[];
+  /** O1 — Utility signal (phrase → count of items deriving from it).
+   *  When present, the generator should PRESERVE high-utility v1
+   *  phrases (≥2 derivations) and bias against zero-utility orphans.
+   *  Soft signal — empty/undefined tolerated for cold-start runs. */
+  priorUtility?: Array<{ phrase: string; count: number }>;
 }): string {
   const subBlock =
     args.subObjectives.length > 0
@@ -317,10 +322,36 @@ export function buildUserPrompt(args: {
           .join("\n")}`
       : "";
 
+  // O1 — Utility signal. Surface the user's REVEALED reliance on
+  // specific v1 phrases. The generator preserves high-utility phrases
+  // (the user's strategy work has been derived from them) and treats
+  // orphaned phrases as suspect (worth reframing or merging).
+  const utility = args.priorUtility ?? [];
+  const reinforced = utility.filter((u) => u.count >= 2);
+  const orphans = utility.filter((u) => u.count === 0);
+  const utilityBlock =
+    utility.length > 0 && (reinforced.length > 0 || orphans.length > 0)
+      ? `\n\nUTILITY SIGNAL (your prior annotation phrases + how many items across rooms derive from each — the user's actual reliance):${
+          reinforced.length > 0
+            ? `\n  HIGH-UTILITY (≥2 items derive — PRESERVE these phrases as annotation slots, even if you reframe the reading):\n${reinforced
+                .slice(0, 6)
+                .map((u) => `    • "${u.phrase.slice(0, 60)}" (${u.count})`)
+                .join("\n")}`
+            : ""
+        }${
+          orphans.length > 0
+            ? `\n  ORPHANED (0 items derive — suspect; either find a sharper reading, merge into a neighbor, or drop):\n${orphans
+                .slice(0, 6)
+                .map((u) => `    • "${u.phrase.slice(0, 60)}"`)
+                .join("\n")}`
+            : ""
+        }\n  UTILITY RULE: When phrases are HIGH-UTILITY, treat them as anchors — your output should include the same phrase (or its sub-phrase) as an annotation slot so the user's existing derivations don't go orphan. When phrases are ORPHANED, you have permission to drop or reframe them.`
+      : "";
+
   return `CORE OBJECTIVE (user's typed text):
 """
 ${args.objective}
-"""${subBlock}
+"""${subBlock}${utilityBlock}
 
 Produce 7-9 RICH annotations per the system instructions: 4-6 word-scope (loaded concept words) AND 2-3 phrase-scope (multi-word interpretive units from text NOT covered by the word-scope picks). Each phrase must be a verbatim substring of the text above. Both layers are required — shipping only word-scope is a regression.`;
 }

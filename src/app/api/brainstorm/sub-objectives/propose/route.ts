@@ -39,6 +39,7 @@ import {
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
 import { loadRelevantCanonicalConcepts } from "@/lib/objective-canvas/canonical-concept-lookup";
+import { loadConceptMemoryFeed } from "@/lib/objective-canvas/concept-memory-feed";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -130,13 +131,33 @@ export async function POST(req: NextRequest) {
   //
   // Soft-fail by design — empty array on any failure, prompt + UI
   // both gracefully degrade.
-  const priorConcepts = await loadRelevantCanonicalConcepts({
-    db,
-    userId: auth.user.id,
-    queryText: objective,
-    excludeSpaceId: spaceId,
-    limit: 8,
-  });
+  // ── O2 — Load BOTH semantically-relevant concepts (priorConcepts)
+  // AND the user's activity-ranked concept memory (recentConcepts) in
+  // parallel. priorConcepts is similarity-scoped to this objective;
+  // recentConcepts captures cross-space attention regardless of
+  // similarity. The proposer uses both as distinct signals.
+  const [priorConcepts, recentConceptMemory] = await Promise.all([
+    loadRelevantCanonicalConcepts({
+      db,
+      userId: auth.user.id,
+      queryText: objective,
+      excludeSpaceId: spaceId,
+      limit: 8,
+    }),
+    loadConceptMemoryFeed({ db, userId: auth.user.id, limit: 6 }),
+  ]);
+  // Strip non-prompt fields + drop overlap with priorConcepts (avoid
+  // saying the same concept in two blocks — priorConcepts wins for
+  // similarity-scoped concepts; recentConcepts shows the rest).
+  const priorIds = new Set(priorConcepts.map((c) => c.id));
+  const recentConcepts = recentConceptMemory
+    .filter((c) => !priorIds.has(c.id))
+    .map((c) => ({
+      display_name: c.display_name,
+      description: c.description,
+      entity_count: c.entity_count,
+      space_count: c.space_count,
+    }));
   // Strip cross-space evidence for the response payload — the picker
   // only needs display_name + description + space_count for badge
   // rendering. Full record stays in scope for the LLM prompt.
@@ -239,6 +260,10 @@ export async function POST(req: NextRequest) {
       annotations: annotations.length > 0 ? annotations : undefined,
       uncoveredLensIndices,
       priorConcepts: priorConcepts.length > 0 ? priorConcepts : undefined,
+      // O2 — Pass activity-ranked concept memory alongside similarity-
+      // scoped priorConcepts. Two distinct signals into the same
+      // proposer; the prompt's RECENT-CONCEPT RULE governs when to act.
+      recentConcepts: recentConcepts.length > 0 ? recentConcepts : undefined,
       // Phase 11 — read HCD mode from space state and bias proposals
       // toward user-role-grounded, prototypable framings.
       hcdMode: state.hcd_mode === true,
@@ -301,8 +326,16 @@ export async function POST(req: NextRequest) {
         category: existingBlock.category ?? newCategory,
       };
 
+      // Re-read synthesis_data right before the merge so concurrent
+      // writes during the LLM call (e.g. clarify/complete's fire-
+      // and-forget layer-gen) aren't clobbered by our stale snapshot.
+      const { data: freshSpace } = await db
+        .from("spaces")
+        .select("synthesis_data")
+        .eq("id", spaceId)
+        .maybeSingle();
       const nextSynth = writeSubObjectiveBlock(
-        space.synthesis_data,
+        freshSpace?.synthesis_data ?? space.synthesis_data,
         nextBlock,
       );
       const writeRes = await db
@@ -366,7 +399,18 @@ export async function POST(req: NextRequest) {
       category: newCategory,
     };
 
-    const nextSynth = writeSubObjectiveBlock(space.synthesis_data, block);
+    // Re-read synthesis_data right before the merge — see the variant
+    // branch above for rationale (avoid clobbering concurrent writes
+    // during the LLM call, e.g. fire-and-forget layer generation).
+    const { data: freshSpaceForWrite } = await db
+      .from("spaces")
+      .select("synthesis_data")
+      .eq("id", spaceId)
+      .maybeSingle();
+    const nextSynth = writeSubObjectiveBlock(
+      freshSpaceForWrite?.synthesis_data ?? space.synthesis_data,
+      block,
+    );
     const writeRes = await db
       .from("spaces")
       .update({ synthesis_data: nextSynth })

@@ -98,11 +98,53 @@ export async function POST(req: NextRequest) {
     description: s.description,
   }));
 
+  // ── O1 — Utility signal: how many items across this space's rooms
+  // have derived from each v1 annotation phrase. Phrases (not indices)
+  // are the stable key — indices shift when annotations regenerate
+  // (Phase-2 stability note). Counts every derivation per item so a
+  // phrase used by 4 items gets count=4. Soft-fails to empty when
+  // no rooms exist yet.
+  let priorUtility: Array<{ phrase: string; count: number }> | undefined;
+  const subIds = subObjectives.map((s) => s.id);
+  if (subIds.length > 0) {
+    const { data: entityRows } = await db
+      .from("entities")
+      .select("causal_chain")
+      .in("parent_sub_objective_id", subIds);
+    const counts = new Map<string, number>();
+    for (const row of (entityRows ?? []) as Array<{
+      causal_chain: Record<string, unknown> | null;
+    }>) {
+      const dfa = row.causal_chain?.derived_from_annotations;
+      if (!Array.isArray(dfa)) continue;
+      // Dedup phrases within a single item so 3 dimensions on the
+      // same phrase don't double-count.
+      const itemPhrases = new Set<string>();
+      for (const entry of dfa as Array<{ phrase?: unknown }>) {
+        if (
+          typeof entry?.phrase === "string" &&
+          entry.phrase.trim().length > 0
+        ) {
+          itemPhrases.add(entry.phrase.trim().toLowerCase());
+        }
+      }
+      for (const p of itemPhrases) {
+        counts.set(p, (counts.get(p) ?? 0) + 1);
+      }
+    }
+    // Build rows aligned to v1 phrases — that's what the prompts read.
+    priorUtility = v1.map((a) => ({
+      phrase: a.phrase,
+      count: counts.get(a.phrase.trim().toLowerCase()) ?? 0,
+    }));
+  }
+
   try {
     const v2 = await generateDeepenedAnnotations({
       objective: objectiveText,
       v1,
       subObjectives,
+      priorUtility,
     });
 
     const history = parseVersions(core.annotations_versions);

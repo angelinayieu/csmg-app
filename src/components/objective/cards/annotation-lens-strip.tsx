@@ -29,6 +29,11 @@ interface Props {
   /** annotation 1-based index → set of item ids derived from it.
    *  Used to render the coverage count badge + orphan styling. */
   coverageByIndex: Map<number, Set<string>>;
+  /** O3 — annotation 1-based index → count of items in SIBLING
+   *  rooms derived from the same annotation. Renders as a "+N"
+   *  subscript next to the in-room count. Empty / missing keys
+   *  mean "no cross-room coverage" — the subscript hides. */
+  crossRoomCoverageByIndex?: Record<number, number>;
   hoveredIndex: number | null;
   onHoverIndex: (index: number | null) => void;
 }
@@ -47,6 +52,7 @@ function dotColorFor(tag: string | null): string {
 export function AnnotationLensStrip({
   annotations,
   coverageByIndex,
+  crossRoomCoverageByIndex = {},
   hoveredIndex,
   onHoverIndex,
 }: Props) {
@@ -139,7 +145,11 @@ export function AnnotationLensStrip({
           {ranked.map((a, i) => {
             const idx = i + 1;
             const coverage = coverageByIndex.get(idx)?.size ?? 0;
-            const isOrphan = coverage === 0;
+            const crossRoom = crossRoomCoverageByIndex[idx] ?? 0;
+            // O3 — when cross-room coverage exists, the chip is NOT
+            // truly orphaned even if this room has zero — the user's
+            // strategy work elsewhere derives from it.
+            const isOrphan = coverage === 0 && crossRoom === 0;
             const isHovered = hoveredIndex === idx;
             const someHovered = hoveredIndex !== null;
             const dimByOtherHover = someHovered && !isHovered;
@@ -197,6 +207,19 @@ export function AnnotationLensStrip({
                 >
                   {coverage}
                 </span>
+                {crossRoom > 0 && (
+                  <span
+                    className="ml-0.5 inline-flex h-[15px] min-w-[18px] items-center justify-center rounded-full px-1 text-[9.5px] font-semibold tabular-nums"
+                    style={{
+                      background: "rgba(124,58,237,0.10)",
+                      color: "rgba(76,29,149,0.95)",
+                      border: "1px solid rgba(124,58,237,0.16)",
+                    }}
+                    title={`Also derives ${crossRoom} ${crossRoom === 1 ? "item" : "items"} in your other rooms — load-bearing across the space.`}
+                  >
+                    +{crossRoom}
+                  </span>
+                )}
               </motion.button>
             );
           })}

@@ -61,6 +61,17 @@ export interface GenerateSubObjectivesOptions {
    *  objective. Drives the "link or diverge" block in the prompt.
    *  Empty / undefined → omitted (legacy single-space behavior). */
   priorConcepts?: RelevantCanonicalConcept[];
+  /** O2 — Recent concept memory feed. Distinct from priorConcepts:
+   *  activity-ranked (recency × cross-space spread) rather than
+   *  similarity-ranked. Surfaces what's hot in the user's mind. The
+   *  proposer reads this as an ambient attention signal — bias toward
+   *  natural overlap, ignore when no overlap exists. */
+  recentConcepts?: Array<{
+    display_name: string;
+    description: string | null;
+    entity_count: number;
+    space_count: number;
+  }>;
   /** Phase 11.A.4 — when the space's ObjectiveStack has been
    *  generated, pass it here so JOB 3 (layer tagging) fires + each
    *  proposal carries layer_ordinals + layer_position_label.
@@ -123,6 +134,7 @@ export async function generateSubObjectiveProposals(
       lens,
       uncoveredLensIndices: opts.uncoveredLensIndices,
       priorConcepts: opts.priorConcepts,
+      recentConcepts: opts.recentConcepts,
       objectiveStack: opts.objectiveStack,
     }),
     responseSchema: buildResponseSchema(hasLens, hasLayerStack),

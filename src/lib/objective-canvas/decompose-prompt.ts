@@ -47,6 +47,21 @@ export interface BuildDecomposeArgs {
    *  array → block is omitted, generation falls through to
    *  intra-space-only context (legacy behavior). */
   priorConcepts?: RelevantCanonicalConcept[];
+  /** O2 — Concept memory feed. Distinct from priorConcepts:
+   *  priorConcepts is SIMILARITY-scoped to this objective (precision);
+   *  recentConcepts is ACTIVITY-scoped (recency × cross-space spread,
+   *  regardless of similarity to this objective). Surfaces what's HOT
+   *  in the user's mind across all spaces. When natural overlap with
+   *  the objective's decomposition exists, prefer that framing — when
+   *  it doesn't, treat as background attention signal, don't force.
+   *
+   *  Empty / undefined tolerated; cold-start users have none. */
+  recentConcepts?: Array<{
+    display_name: string;
+    description: string | null;
+    entity_count: number;
+    space_count: number;
+  }>;
   /** Phase 11.A.4 — when the objective's layer stack has been
    *  generated, pass it here so the system prompt gains a JOB 3
    *  (tag each proposal with layer_ordinals + layer_position_label)
@@ -212,6 +227,7 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
     lens,
     uncoveredLensIndices,
     priorConcepts,
+    recentConcepts,
     objectiveStack,
   } = args;
 
@@ -300,6 +316,29 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
       ? `\n\n${PRIOR_CONCEPTS_RULE}\n`
       : "";
 
+  // O2 — Recent concept memory feed. Distinct from priorConcepts:
+  // these are ACTIVITY-ranked (the user has been thinking about them
+  // across spaces, regardless of similarity to this objective).
+  // Bias proposals TOWARD natural overlap when sensible — don't
+  // force a hot concept into a proposal where it doesn't fit. This is
+  // an attention signal, not a directive.
+  const recentConceptsBlock =
+    recentConcepts && recentConcepts.length > 0
+      ? `\n\nRECENT CONCEPT MEMORY (top concepts the user has been actively reasoning across in OTHER spaces — hot in their mind right now):\n${recentConcepts
+          .slice(0, 6)
+          .map((c, i) => {
+            const desc = c.description
+              ? ` — ${c.description.slice(0, 140)}`
+              : "";
+            const spread =
+              c.space_count > 1 ? ` · ${c.space_count} spaces` : "";
+            return `  ${i + 1}. ${c.display_name}${spread}${desc}`;
+          })
+          .join(
+            "\n",
+          )}\n  RECENT-CONCEPT RULE: When a proposal NATURALLY overlaps with one of these concepts, name the connection explicitly in its rationale ("connects to your work on X"). When no natural overlap exists, IGNORE — don't manufacture an attention link. This is an ambient signal, not a directive.`
+      : "";
+
   // Phase 11.A.4 — AVAILABLE LAYERS block. Renders the ObjectiveStack
   // top-down so ordinals are visually obvious. Each layer lists its
   // archetype + 3-7 variables; the LLM uses this to tag every
@@ -323,7 +362,7 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
   return `REFINED OBJECTIVE:
 """
 ${objective.slice(0, 4000)}
-"""${clarifyingBlock}${researchBlock}${lensBlock}${layerBlock}${priorConceptsBlock}${existingBlock}${uncoveredBlock}${lensCoverageRule}${priorConceptsRule}
+"""${clarifyingBlock}${researchBlock}${lensBlock}${layerBlock}${priorConceptsBlock}${recentConceptsBlock}${existingBlock}${uncoveredBlock}${lensCoverageRule}${priorConceptsRule}
 
 Propose 4–5 sub-objectives per the system instructions. Mark exactly 3 as recommended=true (the ones most load-bearing for delivering the parent).`;
 }

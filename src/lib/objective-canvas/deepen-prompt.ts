@@ -67,6 +67,19 @@ export interface BuildDeepenPromptArgs {
   objective: string;
   v1: ObjectiveAnnotation[];
   subObjectives: AnnotationSubObjectiveRef[];
+  /** O1 — Utility signal: how many items across the user's rooms
+   *  have derived from each v1 annotation phrase. The deepen pass
+   *  uses this to:
+   *    • REINFORCE high-utility annotations (≥2 derivations) — these
+   *      are load-bearing in practice; deepen them harder.
+   *    • RE-THINK never-used annotations (0 derivations) — the
+   *      abstraction may be wrong; the rival reading deserves more
+   *      weight, or the annotation should be merged / dropped.
+   *  Keyed by phrase (case-insensitive) because v1 indices shift in
+   *  v2 — phrases are the stable matching key (Phase-2 stability note).
+   *  Optional; absent when no rooms have been generated yet (cold-
+   *  start, deepen still works without the signal). */
+  priorUtility?: Array<{ phrase: string; count: number }>;
 }
 
 export function buildDeepenSystemPrompt(): string {
@@ -107,13 +120,79 @@ export function buildDeepenUserPrompt(args: BuildDeepenPromptArgs): string {
           .join("\n")}`
       : "";
 
+  // O1 — Utility signal block. Splits v1 annotations into three
+  // groups by how many items have derived from them across the user's
+  // rooms. The deepen pass uses this to bias depth toward what's
+  // actually load-bearing in the user's strategy work — not just what
+  // the v1 prompt happened to surface.
+  const utilityBlock = buildUtilityBlock(args);
+
   return `CORE OBJECTIVE:
 """
 ${args.objective}
-"""${subBlock}
+"""${subBlock}${utilityBlock}
 
 CURRENT ANNOTATIONS (v1) — extend these, don't restate:
 ${JSON.stringify(args.v1, null, 2)}
 
-Now apply all 7 probes and emit v2. Every annotation in v2 must be measurably deeper than its v1 counterpart in ≥2 dimensions, AND surface ≥1 new annotation from probe 6 (implicit anchors).`;
+Now apply all 7 probes and emit v2. Every annotation in v2 must be measurably deeper than its v1 counterpart in ≥2 dimensions, AND surface ≥1 new annotation from probe 6 (implicit anchors).${
+    args.priorUtility && args.priorUtility.length > 0
+      ? "\n\nUTILITY RULE: When a v1 annotation has been derived from by ≥2 items, its deepening must add MORE depth than usual (extra distant analogies, deeper pre-mortems, sharper steelmanned rivals) — the user is leaning on it, so v2 must reward that lean. When a v1 annotation has been derived from by ZERO items, treat it as a SUSPECT: strengthen its rival reading aggressively and consider whether the annotation should be reframed entirely. Don't silently keep dead weight."
+      : ""
+  }`;
+}
+
+function buildUtilityBlock(args: BuildDeepenPromptArgs): string {
+  const counts = args.priorUtility ?? [];
+  if (counts.length === 0) return "";
+
+  // Normalize: lower-cased phrase → count, dedup if caller sent dupes.
+  const countByPhrase = new Map<string, number>();
+  for (const c of counts) {
+    const k = c.phrase.trim().toLowerCase();
+    if (k.length === 0) continue;
+    countByPhrase.set(k, (countByPhrase.get(k) ?? 0) + c.count);
+  }
+
+  // Bucket v1 annotations by utility tier.
+  const reinforced: string[] = []; // ≥2 derivations
+  const stable: string[] = []; // exactly 1
+  const orphaned: string[] = []; // 0
+  for (const a of args.v1) {
+    const key = a.phrase.trim().toLowerCase();
+    const c = countByPhrase.get(key) ?? 0;
+    const row = `"${a.phrase.slice(0, 50)}" (${c})`;
+    if (c >= 2) reinforced.push(row);
+    else if (c === 1) stable.push(row);
+    else orphaned.push(row);
+  }
+
+  const lines: string[] = [
+    "\nUTILITY SIGNAL (how many items across the user's rooms have derived from each v1 annotation — load-bearing in practice):",
+  ];
+  if (reinforced.length > 0) {
+    lines.push(
+      `  REINFORCED (≥2 items derive — deepen these HARDER):\n${reinforced
+        .slice(0, 6)
+        .map((r) => `    • ${r}`)
+        .join("\n")}`,
+    );
+  }
+  if (orphaned.length > 0) {
+    lines.push(
+      `  ORPHANED (0 items derive — suspect; strengthen the rival reading or consider reframing):\n${orphaned
+        .slice(0, 6)
+        .map((r) => `    • ${r}`)
+        .join("\n")}`,
+    );
+  }
+  if (stable.length > 0 && reinforced.length + orphaned.length < 8) {
+    lines.push(
+      `  STABLE (1 item derives — keep as-is unless probe surfaces a deeper read):\n${stable
+        .slice(0, 4)
+        .map((r) => `    • ${r}`)
+        .join("\n")}`,
+    );
+  }
+  return `\n${lines.join("\n")}`;
 }

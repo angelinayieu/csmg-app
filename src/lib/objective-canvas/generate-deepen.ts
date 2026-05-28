@@ -23,6 +23,11 @@ export interface DeepenOptions {
   objective: string;
   v1: ObjectiveAnnotation[];
   subObjectives: AnnotationSubObjectiveRef[];
+  /** O1 — Utility signal (phrase → count of items deriving from it).
+   *  Threaded into BOTH the deepen prompt and the v2 fresh-pass so
+   *  whichever generation produces the final v2 still sees which
+   *  annotations the user is actually leaning on. */
+  priorUtility?: Array<{ phrase: string; count: number }>;
 }
 
 /**
@@ -57,9 +62,14 @@ export async function generateDeepenedAnnotations(
   // dimension caps, tension dedup, etc. — code we don't want to
   // duplicate. Running the standard pass also re-checks phrase
   // offsets, so we never persist a hallucinated phrase.
+  //
+  // O1 — Pass priorUtility into the fresh pass too: this is the
+  // call that produces the final v2, so the utility signal must reach
+  // it directly (the deepen call above is effectively a context warm).
   const v2 = await generateObjectiveAnnotations({
     objective: opts.objective,
     subObjectives: opts.subObjectives,
+    priorUtility: opts.priorUtility,
   });
 
   return v2.length > 0 ? v2 : opts.v1;

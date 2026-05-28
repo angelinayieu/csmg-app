@@ -127,6 +127,12 @@ interface Props {
    *  feeds the hover-to-link interaction between annotation chips
    *  and items derived from them. Empty array hides the strip. */
   annotations?: ObjectiveAnnotation[];
+  /** O3 — Cross-room coverage counts (annotation 1-based index →
+   *  number of items in SIBLING rooms that derive from it). When
+   *  present, the lens strip renders a "+N" subscript next to the
+   *  in-room coverage count so the user can see when an annotation
+   *  is load-bearing elsewhere even when it looks orphaned here. */
+  crossRoomCoverageByIndex?: Record<number, number>;
   /** Phase 5a — operational constraints the user set at intake (or
    *  the inferred set). Rendered as a CONTROL VARIABLES strip above
    *  the lanes so the user always sees which conditions are held
@@ -144,6 +150,7 @@ export function SubObjectiveRoomView({
   pipelineMode,
   roomCategoriesRaw,
   annotations = [],
+  crossRoomCoverageByIndex = {},
   constraints = null,
 }: Props) {
   const roomCategories: RoomCategories = useMemo(
@@ -837,6 +844,7 @@ export function SubObjectiveRoomView({
         <AnnotationLensStrip
           annotations={annotations}
           coverageByIndex={itemIdsByAnnotationIndex}
+          crossRoomCoverageByIndex={crossRoomCoverageByIndex}
           hoveredIndex={hoveredAnnotationIndex}
           onHoverIndex={setHoveredAnnotationIndex}
         />

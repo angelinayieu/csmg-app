@@ -116,6 +116,11 @@ interface LlmShape {
 export interface GenerateAnnotationsOptions {
   objective: string;
   subObjectives: AnnotationSubObjectiveRef[];
+  /** O1 — Utility signal (phrase → derivation count across items in
+   *  the user's rooms). When present, the generator biases v2 toward
+   *  preserving high-utility annotations + reframing orphaned ones.
+   *  Optional; absent for cold-start (no rooms exist yet). */
+  priorUtility?: Array<{ phrase: string; count: number }>;
 }
 
 const ALLOWED_TAGS = new Set(["features", "outcomes", "pain", "objective"]);

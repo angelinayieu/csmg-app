@@ -161,6 +161,72 @@ export default async function SubObjectiveRoomPage({
   // below the title.
   const subAnnotations = normalizeAnnotations(sub.annotations);
 
+  // ── O3 — Cross-room annotation coverage ──
+  // Same parent annotations seed every sibling room in the space.
+  // When the user hovers a chip in this room's lens strip, we want to
+  // surface "+N items in other rooms also derive from this reading"
+  // so the annotation's load-bearing status is visible even when its
+  // derivations live elsewhere. Without this, a high-utility cross-
+  // room annotation looks orphaned at the per-room level.
+  //
+  // Strategy: load sibling rooms' entities (causal_chain only — no
+  // expanded_detail bulk), aggregate derived_from_annotation_phrases
+  // by phrase, then map to parentAnnotation indices.
+  const crossRoomCoverageByIndex: Record<number, number> = {};
+  if (parentAnnotations.length > 0 && sub.parent_goal_id) {
+    const { data: siblingRoomRows } = await db
+      .from("improvement_goals")
+      .select("id")
+      .eq("parent_goal_id", sub.parent_goal_id)
+      .neq("id", subId);
+    const siblingIds = (
+      (siblingRoomRows ?? []) as Array<{ id: string }>
+    ).map((r) => r.id);
+    if (siblingIds.length > 0) {
+      const { data: siblingEntityRows } = await db
+        .from("entities")
+        .select("parent_sub_objective_id, causal_chain")
+        .in("parent_sub_objective_id", siblingIds);
+      // Aggregate: phrase (lowercased) → count of items deriving from
+      // it. A single item with 3 dimensions on the same phrase counts
+      // ONCE per item; an item across 3 rooms counts 3.
+      const countByPhrase = new Map<string, number>();
+      for (const row of (siblingEntityRows ?? []) as Array<{
+        parent_sub_objective_id: string;
+        causal_chain: Record<string, unknown> | null;
+      }>) {
+        const dfa = row.causal_chain?.derived_from_annotations;
+        if (!Array.isArray(dfa)) continue;
+        const itemPhrases = new Set<string>();
+        for (const entry of dfa as Array<{ phrase?: unknown }>) {
+          if (
+            typeof entry?.phrase === "string" &&
+            entry.phrase.trim().length > 0
+          ) {
+            itemPhrases.add(entry.phrase.trim().toLowerCase());
+          }
+        }
+        for (const p of itemPhrases) {
+          countByPhrase.set(p, (countByPhrase.get(p) ?? 0) + 1);
+        }
+      }
+      // Map phrase counts → 1-based annotation indices. CRITICAL:
+      // weight-sort first to match the lens strip + the LLM's view
+      // (the room generator sorts annotations by weight desc before
+      // showing them to the LLM, then the LLM emits 1-based indices
+      // against that sorted order; the in-room coverageByIndex uses
+      // those same indices). Without this sort, the cross-room
+      // subscript would land on the wrong chips.
+      const rankedForIndexing = [...parentAnnotations]
+        .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
+        .slice(0, 8);
+      rankedForIndexing.forEach((a, i) => {
+        const c = countByPhrase.get(a.phrase.trim().toLowerCase()) ?? 0;
+        if (c > 0) crossRoomCoverageByIndex[i + 1] = c;
+      });
+    }
+  }
+
   // ── Layers ──
   const { data: layerRows } = await db
     .from("layer_ontology")
@@ -386,6 +452,7 @@ export default async function SubObjectiveRoomPage({
             pipelineMode={pipelineMode}
             roomCategoriesRaw={sub.room_categories}
             annotations={parentAnnotations}
+            crossRoomCoverageByIndex={crossRoomCoverageByIndex}
             constraints={operationalConstraints}
           />
         </div>
