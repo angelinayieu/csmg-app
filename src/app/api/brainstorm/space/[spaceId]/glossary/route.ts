@@ -11,11 +11,14 @@
 // drawer + a definition page. See generate-glossary.ts.
 
 import { NextRequest, NextResponse } from "next/server";
-import { safeAuth } from "@/lib/api-helpers";
+import { safeAuth, safeJsonParse } from "@/lib/api-helpers";
 import {
   generateGlossary,
   type GlossaryTerm,
+  type GlossarySource,
+  type AnnotationSeed,
 } from "@/lib/objective-canvas/generate-glossary";
+import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -24,12 +27,16 @@ interface RouteContext {
   params: Promise<{ spaceId: string }>;
 }
 
+const VALID_SOURCES: GlossarySource[] = ["annotation", "entity", "llm", "user"];
+
+/** Read the persisted glossary, preserving v2 provenance fields so a
+ *  merge / edit round-trips without losing source / pinned state. */
 function readGlossary(synthesisData: unknown): GlossaryTerm[] {
   if (!synthesisData || typeof synthesisData !== "object") return [];
   const g = (synthesisData as Record<string, unknown>).glossary;
   if (!Array.isArray(g)) return [];
   return (g as unknown[])
-    .map((t) => {
+    .map((t): GlossaryTerm | null => {
       if (!t || typeof t !== "object") return null;
       const o = t as Record<string, unknown>;
       const term = typeof o.term === "string" ? o.term : "";
@@ -40,9 +47,44 @@ function readGlossary(synthesisData: unknown): GlossaryTerm[] {
             (a): a is string => typeof a === "string",
           )
         : [];
-      return { term, definition, aliases };
+      const source: GlossarySource = VALID_SOURCES.includes(
+        o.source as GlossarySource,
+      )
+        ? (o.source as GlossarySource)
+        : "llm"; // legacy rows (pre-v2) had no source
+      const out: GlossaryTerm = {
+        term,
+        definition,
+        aliases,
+        source,
+        layer_tag: typeof o.layer_tag === "string" ? o.layer_tag : null,
+        pinned: o.pinned === true,
+        updated_at:
+          typeof o.updated_at === "string"
+            ? o.updated_at
+            : new Date(0).toISOString(),
+      };
+      // Only set optional fields when actually present (keeps the type
+      // clean under exactOptionalPropertyTypes).
+      if (typeof o.annotation_phrase === "string")
+        out.annotation_phrase = o.annotation_phrase;
+      if (typeof o.weight === "number") out.weight = o.weight;
+      return out;
     })
     .filter((t): t is GlossaryTerm => t !== null);
+}
+
+/** Extract authoritative glossary seeds from a raw annotations blob
+ *  (improvement_goals.annotations). */
+function seedsFromAnnotations(raw: unknown): AnnotationSeed[] {
+  return normalizeAnnotations(raw)
+    .filter((a) => a.phrase && a.reading)
+    .map((a) => ({
+      phrase: a.phrase,
+      reading: a.reading,
+      weight: typeof a.weight === "number" ? a.weight : undefined,
+      layer_tag: a.layer_tag ?? null,
+    }));
 }
 
 async function loadSpace(
@@ -86,7 +128,7 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
   let coreObjectiveText = "";
   const { data: rootGoal } = await db
     .from("improvement_goals")
-    .select("title, description")
+    .select("title, description, annotations")
     .eq("space_id", spaceId)
     .is("parent_goal_id", null)
     .maybeSingle();
@@ -97,15 +139,27 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
     (typeof space.input_text === "string" && space.input_text.trim()) ||
     "";
 
-  // ── Sub-objective titles + entity names (jargon source). ──
+  // ── Sub-objective titles + annotations + entity names ──
   const { data: subs } = await db
     .from("improvement_goals")
-    .select("title")
+    .select("title, annotations")
     .eq("space_id", spaceId)
     .not("parent_goal_id", "is", null);
-  const subObjectiveTitles = ((subs ?? []) as Array<{ title?: unknown }>)
+  const subRows = (subs ?? []) as Array<{
+    title?: unknown;
+    annotations?: unknown;
+  }>;
+  const subObjectiveTitles = subRows
     .map((s) => (typeof s.title === "string" ? s.title : ""))
     .filter((s) => s.length > 0);
+
+  // ── Authoritative seeds from the Annotation Lens (parent + subs) ──
+  // These are the vetted, generation-steering readings — the glossary's
+  // highest-authority definitions. Deduped by phrase in the generator.
+  const annotationSeeds: AnnotationSeed[] = [
+    ...seedsFromAnnotations(rootGoal?.annotations),
+    ...subRows.flatMap((s) => seedsFromAnnotations(s.annotations)),
+  ];
 
   const { data: ents } = await db
     .from("entities")
@@ -116,17 +170,26 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
     .map((e) => (typeof e.name === "string" ? e.name : ""))
     .filter((s) => s.length > 0);
 
-  if (!coreObjectiveText && entityNames.length === 0) {
+  if (
+    !coreObjectiveText &&
+    entityNames.length === 0 &&
+    annotationSeeds.length === 0
+  ) {
     return NextResponse.json(
       { error: "Nothing to build a glossary from yet — generate some rooms first." },
       { status: 409 },
     );
   }
 
+  // generateGlossary seeds from the annotation readings, mines new
+  // entity jargon, and ACCUMULATE-MERGES into the existing glossary
+  // (authority + pinned rules inside). It returns the final list.
   const glossary = await generateGlossary({
     coreObjectiveText,
     subObjectiveTitles,
     entityNames,
+    annotations: annotationSeeds,
+    existing: readGlossary(space.synthesis_data),
   });
 
   // ── Persist into synthesis_data.glossary (merge, don't clobber). ──
@@ -146,4 +209,73 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
   }
 
   return NextResponse.json({ glossary });
+}
+
+// ── PATCH — edit / pin a single term ──────────────────────────────
+// A user-edited definition becomes source:"user" + pinned:true, so
+// future regenerations never overwrite it. Body: { term, definition?,
+// pinned? }. Matches case-insensitively on the term.
+interface PatchBody {
+  term?: string;
+  definition?: string;
+  pinned?: boolean;
+}
+
+export async function PATCH(req: NextRequest, ctx: RouteContext) {
+  const auth = await safeAuth();
+  if (auth.error) return auth.error;
+  const { spaceId } = await ctx.params;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = auth.supabase as any;
+
+  const { data: body, error: parseError } = await safeJsonParse<PatchBody>(req);
+  if (parseError) return parseError;
+  const term = typeof body?.term === "string" ? body.term.trim() : "";
+  if (!term) {
+    return NextResponse.json({ error: "term required" }, { status: 400 });
+  }
+
+  const space = await loadSpace(db, spaceId, auth.user.id);
+  if (!space) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  const glossary = readGlossary(space.synthesis_data);
+  const idx = glossary.findIndex(
+    (t) => t.term.toLowerCase() === term.toLowerCase(),
+  );
+  if (idx < 0) {
+    return NextResponse.json(
+      { error: `term "${term}" not in glossary` },
+      { status: 404 },
+    );
+  }
+
+  const now = new Date().toISOString();
+  const next = { ...glossary[idx] };
+  if (typeof body?.definition === "string" && body.definition.trim()) {
+    next.definition = body.definition.trim().slice(0, 320);
+    next.source = "user";
+    next.pinned = true; // editing the text pins it by default
+  }
+  if (typeof body?.pinned === "boolean") {
+    next.pinned = body.pinned;
+    if (body.pinned) next.source = "user";
+  }
+  next.updated_at = now;
+  glossary[idx] = next;
+
+  const nextSynthesis: Record<string, unknown> = {
+    ...((space.synthesis_data as Record<string, unknown> | null) ?? {}),
+    glossary,
+  };
+  const { error: updateErr } = await db
+    .from("spaces")
+    .update({ synthesis_data: nextSynthesis })
+    .eq("id", spaceId);
+  if (updateErr) {
+    return NextResponse.json(
+      { error: "persist failed", detail: updateErr.message },
+      { status: 500 },
+    );
+  }
+  return NextResponse.json({ term: next });
 }
