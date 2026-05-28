@@ -57,6 +57,11 @@ const ALLOWED_ACTIONS: ReadonlyArray<DecisionAction> = [
   "stage_transitioned",
   // Phase 11.4
   "chains_enriched",
+  // Phase 11.A — objective layering events. Always space-scoped
+  // (sub_objective_id null on the row).
+  "layers_generated",
+  "layers_regenerated",
+  "layer_position_set",
   // Phase 11.6
   "baseline_set",
 ];
@@ -426,6 +431,36 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
           | "user"
           | "llm"
           | undefined,
+        // Phase 11.A — layer event metadata pass-through. Mirror of
+        // the per-room decisions route so the notebook timeline
+        // renders the same chips regardless of which feed it pulls
+        // from. Layer events are always space-scoped so this is the
+        // primary surface.
+        domain_template: stringOrUndefined(meta.domain_template) as
+          | "software"
+          | "cognition_health"
+          | "business_ops"
+          | "behavior_change"
+          | "scientific"
+          | "generic"
+          | undefined,
+        layer_count: numberOrUndefined(meta.layer_count),
+        variable_count: numberOrUndefined(meta.variable_count),
+        influence_count: numberOrUndefined(meta.influence_count),
+        previous_state_hash: stringOrUndefined(meta.previous_state_hash),
+        triggered_by: stringOrUndefined(meta.triggered_by),
+        layer_ordinals: Array.isArray(meta.layer_ordinals)
+          ? (meta.layer_ordinals as unknown[]).filter(
+              (n): n is number =>
+                typeof n === "number" && Number.isFinite(n),
+            )
+          : undefined,
+        prior_layer_ordinals: Array.isArray(meta.prior_layer_ordinals)
+          ? (meta.prior_layer_ordinals as unknown[]).filter(
+              (n): n is number =>
+                typeof n === "number" && Number.isFinite(n),
+            )
+          : undefined,
       },
     };
   });

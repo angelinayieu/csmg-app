@@ -60,6 +60,10 @@ const ALLOWED_ACTIONS: ReadonlyArray<DecisionAction> = [
   "chains_enriched",
   // Phase 11.6
   "baseline_set",
+  // Phase 11.A — objective layering events
+  "layers_generated",
+  "layers_regenerated",
+  "layer_position_set",
 ];
 
 const DEFAULT_LIMIT = 30;
@@ -422,6 +426,35 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
           | "user"
           | "llm"
           | undefined,
+        // Phase 11.A — layer event metadata pass-through.
+        // layers_generated / layers_regenerated render the domain
+        // template + leaf counts as a compact stack-summary chip.
+        // layer_position_set surfaces ordinal shifts (prior → next).
+        domain_template: stringOrUndefined(meta.domain_template) as
+          | "software"
+          | "cognition_health"
+          | "business_ops"
+          | "behavior_change"
+          | "scientific"
+          | "generic"
+          | undefined,
+        layer_count: numberOrUndefined(meta.layer_count),
+        variable_count: numberOrUndefined(meta.variable_count),
+        influence_count: numberOrUndefined(meta.influence_count),
+        previous_state_hash: stringOrUndefined(meta.previous_state_hash),
+        triggered_by: stringOrUndefined(meta.triggered_by),
+        layer_ordinals: Array.isArray(meta.layer_ordinals)
+          ? (meta.layer_ordinals as unknown[]).filter(
+              (n): n is number =>
+                typeof n === "number" && Number.isFinite(n),
+            )
+          : undefined,
+        prior_layer_ordinals: Array.isArray(meta.prior_layer_ordinals)
+          ? (meta.prior_layer_ordinals as unknown[]).filter(
+              (n): n is number =>
+                typeof n === "number" && Number.isFinite(n),
+            )
+          : undefined,
       },
     };
   });

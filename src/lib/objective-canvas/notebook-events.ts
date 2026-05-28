@@ -94,6 +94,35 @@ export interface NotebookEventMeta {
   /** autopilot_run — how many chains the user kicked off in this session. */
   chain_count?: number;
   chain_ids?: string[];
+  // ── Phase 11.A — objective layering event metadata ──
+  /** layers_generated / layers_regenerated — which domain template
+   *  the decomposer picked. Surfaces as a chip on the notebook row
+   *  ("Cognition / Health · 5L · 24 vars"). */
+  domain_template?:
+    | "software"
+    | "cognition_health"
+    | "business_ops"
+    | "behavior_change"
+    | "scientific"
+    | "generic";
+  /** Total layers in the generated stack (4-6). */
+  layer_count?: number;
+  /** Total leaf variables across all layers (3-7 per layer). */
+  variable_count?: number;
+  /** Total cross-layer influences (adjacent + long-range). */
+  influence_count?: number;
+  /** layers_regenerated only — the prior stack's state_hash so the
+   *  audit trail captures regeneration cause. */
+  previous_state_hash?: string;
+  /** layers_generated — distinguishes auto-fire ("clarify_complete")
+   *  from explicit /layers/generate calls. */
+  triggered_by?: string;
+  /** layer_position_set — the new ordinals the user picked, useful
+   *  for "I moved this sub-objective from L3 to L2+L3 bridge". */
+  layer_ordinals?: number[];
+  /** layer_position_set — same row's prior ordinals (when known) so
+   *  the notebook can render "L3 · Direct → L2→L3 · Bridge". */
+  prior_layer_ordinals?: number[];
   // ── Phase 11.2 — proxy-indicator breakdown for `score` events ──
   /** Top 3 indicators touched by this scoring run, sorted by avg
    *  score desc across all graded variations. `min_confidence` is the

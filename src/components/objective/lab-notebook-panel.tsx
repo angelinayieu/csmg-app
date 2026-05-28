@@ -131,6 +131,12 @@ const FILTERS: ReadonlyArray<{
       // initiate at a per-variation level but that shape downstream work.
       "chains_enriched",
       "baseline_set",
+      // Phase 11.A — objective layering events. Always space-scoped;
+      // surface them in System alongside chains_enriched + baseline_set
+      // since they shape downstream proposer + room behavior the same way.
+      "layers_generated",
+      "layers_regenerated",
+      "layer_position_set",
     ],
   },
 ];
@@ -1250,6 +1256,68 @@ function MetadataChips({ event: ev }: { event: NotebookEvent }) {
       label: "auto-baselined",
     });
   }
+  // ── Phase 11.A — layers_generated / layers_regenerated chips ──
+  // Surface the domain template + layer/variable counts as a compact
+  // "Cognition · 5L · 24v" chip so the notebook row reads like a
+  // tiny stack summary.
+  if (ev.meta.domain_template) {
+    const tmpl = ev.meta.domain_template;
+    // Short label for the chip — matches the ObjectiveStack widget's
+    // tooltip vocabulary (Cognition / Health rather than the raw enum).
+    const TEMPLATE_SHORT: Record<string, string> = {
+      software: "Software",
+      cognition_health: "Cognition",
+      business_ops: "Business",
+      behavior_change: "Behavior",
+      scientific: "Scientific",
+      generic: "Generic",
+    };
+    const parts: string[] = [TEMPLATE_SHORT[tmpl] ?? tmpl];
+    if (typeof ev.meta.layer_count === "number" && ev.meta.layer_count > 0) {
+      parts.push(`${ev.meta.layer_count}L`);
+    }
+    if (
+      typeof ev.meta.variable_count === "number" &&
+      ev.meta.variable_count > 0
+    ) {
+      parts.push(`${ev.meta.variable_count}v`);
+    }
+    chips.push({
+      key: "layers-stack",
+      label: parts.join(" · "),
+      color: appleVibe.accent.primary,
+    });
+  }
+  if (ev.meta.triggered_by === "clarify_complete") {
+    chips.push({
+      key: "layers-auto",
+      label: "auto-fired",
+    });
+  }
+  // ── Phase 11.A — layer_position_set chips ──
+  if (
+    Array.isArray(ev.meta.prior_layer_ordinals) &&
+    ev.meta.prior_layer_ordinals.length > 0 &&
+    Array.isArray(ev.meta.layer_ordinals) &&
+    ev.meta.layer_ordinals.length > 0
+  ) {
+    const prior = ev.meta.prior_layer_ordinals.join(",");
+    const next = ev.meta.layer_ordinals.join(",");
+    chips.push({
+      key: "layer-shift",
+      label: `L${prior} → L${next}`,
+      color: appleVibe.text.tertiary,
+    });
+  } else if (
+    Array.isArray(ev.meta.layer_ordinals) &&
+    ev.meta.layer_ordinals.length > 0
+  ) {
+    chips.push({
+      key: "layer-set",
+      label: `L${ev.meta.layer_ordinals.join(",")}`,
+      color: appleVibe.text.tertiary,
+    });
+  }
   if (chips.length === 0) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-1">
@@ -1426,6 +1494,25 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
         icon: Check,
         label: "Set baseline",
         color: appleVibe.stage.outcomes,
+      };
+    // ── Phase 11.A — objective layering ────────────────────────
+    case "layers_generated":
+      return {
+        icon: Layers,
+        label: "Layers mapped",
+        color: appleVibe.accent.primary,
+      };
+    case "layers_regenerated":
+      return {
+        icon: Layers,
+        label: "Layers remapped",
+        color: appleVibe.accent.primary,
+      };
+    case "layer_position_set":
+      return {
+        icon: Layers,
+        label: "Layer position set",
+        color: appleVibe.text.tertiary,
       };
     default:
       return {
