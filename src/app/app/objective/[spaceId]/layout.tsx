@@ -151,14 +151,15 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
         <div aria-hidden />
       </div>
 
-      {/* Collapsed pill — visible when notebook is closed. Floats
-          mid-right edge of the viewport so it's always findable
-          (top-right tends to collide with app-shell nav). z-60 sits
-          above the panel's z-50 so it's visible immediately as the
-          panel exits (instead of waiting for the 0.36s animation to
-          complete with the user staring at empty space). Bigger
-          target + explicit label so users don't miss it. */}
-      {hydrated && !open && (
+      {/* Collapsed pill — visible whenever the notebook is closed.
+          Render WITHOUT the hydration gate so it's visible on first
+          paint (server render shows open=false → button visible;
+          hydration matches; if stored state is "true", `open` flips
+          true on first effect and the button hides). Previously this
+          was gated behind `hydrated && !open` which meant the button
+          didn't render at all before hydration completed — on slow
+          connections users saw nothing on the right side. */}
+      {!open && (
         <button
           type="button"
           onClick={() => persistOpen(true)}
@@ -170,24 +171,20 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
             right: RAIL_MARGIN,
             transform: "translateY(-50%)",
             zIndex: 60,
-            background: appleVibe.surface.card,
-            border: `1px solid ${appleVibe.stroke.medium}`,
-            color: appleVibe.text.primary,
-            padding: "8px 12px",
-            fontSize: 11,
+            background: appleVibe.accent.primary,
+            border: `1px solid ${appleVibe.accent.primary}`,
+            color: appleVibe.text.onAccent,
+            padding: "10px 14px",
+            fontSize: 12,
             fontWeight: 600,
             letterSpacing: "0.02em",
             boxShadow:
-              "0 12px 32px -10px rgba(11,18,40,0.28), 0 4px 8px -2px rgba(11,18,40,0.10)",
+              "0 16px 40px -12px rgba(124,58,237,0.40), 0 4px 12px -2px rgba(11,18,40,0.12)",
             cursor: "pointer",
             fontFamily: appleVibe.font.stack,
           }}
         >
-          <BookOpen
-            className="h-3.5 w-3.5"
-            strokeWidth={2}
-            style={{ color: appleVibe.accent.primary }}
-          />
+          <BookOpen className="h-4 w-4" strokeWidth={2.2} />
           Notebook
         </button>
       )}
