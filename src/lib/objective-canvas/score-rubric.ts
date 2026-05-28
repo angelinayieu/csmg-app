@@ -164,6 +164,38 @@ export interface RubricContext {
  *  3 indicators (cap=6 grades all; cap=5 drops the last). */
 const MAX_INDICATORS = 6;
 
+/** The canonical, capped, ordered list of PRE-GENERATED proxy
+ *  indicators (from each outcome's causal_chain.indicators[]). This is
+ *  the single source of truth the scorer grades against — built once
+ *  and used BOTH to render the numbered prompt list AND to map the
+ *  LLM's `indicator_index` back to the verbatim pre-generated text.
+ *  That round-trip is what guarantees the persisted indicator_score is
+ *  wired to the real indicator (not a paraphrase), so the ensemble /
+ *  evidence / persona / empirical overlays — which all key by
+ *  `${outcome_id}::${indicator_text}` — stack on the SAME row. */
+function flattenIndicators(
+  outcomes: RubricContext["room_outcomes"],
+): Array<{ indicator_text: string; outcome_id: string; outcome_name: string }> {
+  const out: Array<{
+    indicator_text: string;
+    outcome_id: string;
+    outcome_name: string;
+  }> = [];
+  for (const o of outcomes ?? []) {
+    for (const ind of o.indicators ?? []) {
+      if (typeof ind !== "string" || ind.trim().length === 0) continue;
+      out.push({
+        indicator_text: ind.trim(),
+        outcome_id: o.id ?? "",
+        outcome_name: o.name,
+      });
+      if (out.length >= MAX_INDICATORS) break;
+    }
+    if (out.length >= MAX_INDICATORS) break;
+  }
+  return out;
+}
+
 const SYSTEM_PROMPT = `You are an expert evaluator scoring proposed mechanisms (interventions) on a 5-criteria rubric AND against the room's proxy indicators.
 
 PART 1 — for EACH variation, score these 5 criteria from 0 to 1 with a one-sentence reason:
@@ -179,6 +211,7 @@ PART 1 — for EACH variation, score these 5 criteria from 0 to 1 with a one-sen
 5. risk — Likelihood of failure or harm. INVERTED scale: score 0.0 (high risk of failing or causing damage) to 1.0 (low risk, safe to ship).
 
 PART 2 — for EACH variation × EACH proxy indicator listed under "ROOM PROXY INDICATORS", produce ONE indicator_score row:
+- indicator_index (integer): the 1-based number of the indicator from the "ROOM PROXY INDICATORS" list — copy it EXACTLY. This is how the row is wired to the indicator; do NOT rephrase the indicator, just cite its number. Only use indices that appear in the list.
 - score (0..1): how much would THIS variation move THIS specific indicator if shipped. 0.0 means no effect or wrong direction; 1.0 means strong, direct, sustained movement.
 - reason: ONE sentence — why this score.
 - confidence (0..1): how well does THIS indicator actually proxy for the outcome it's listed under? 0.0 = clearly the wrong proxy or trivially gameable; 1.0 = canonical and well-established measure of the outcome. Lower this aggressively when the proxy is a vanity metric or easily Goodharted — flagging shaky proxies is a feature, not a flaw.
@@ -222,23 +255,7 @@ function buildUserPrompt(ctx: RubricContext): string {
   // 1-based index used by the LLM to refer back to the indicator
   // when grading. We keep outcome + indicator text together so the
   // model can grade each in context.
-  const flattenedIndicators: Array<{
-    indicator_text: string;
-    outcome_id: string;
-    outcome_name: string;
-  }> = [];
-  for (const o of ctx.room_outcomes ?? []) {
-    for (const ind of o.indicators ?? []) {
-      if (typeof ind !== "string" || ind.trim().length === 0) continue;
-      flattenedIndicators.push({
-        indicator_text: ind.trim(),
-        outcome_id: o.id ?? "",
-        outcome_name: o.name,
-      });
-      if (flattenedIndicators.length >= MAX_INDICATORS) break;
-    }
-    if (flattenedIndicators.length >= MAX_INDICATORS) break;
-  }
+  const flattenedIndicators = flattenIndicators(ctx.room_outcomes);
   // Phase 11.6 — when an indicator has a user-set baseline + target,
   // render them inline so the LLM sees the measurable gap rather than
   // a free-floating proxy name. The format compresses to one line
@@ -333,28 +350,7 @@ VARIATIONS TO SCORE (${ctx.variations.length} total):
 
 ${variationsBlock}
 
-Grade each variation on the 5 criteria (PART 1) AND on each proxy indicator (PART 2) per the system instructions. Return one variation_score entry per variation, keyed by id. The indicator_scores array on each row references indicators by their 1-based index from the list above; include outcome_id + outcome_name so the consumer can group.`;
-}
-
-/** Built once per scoring run from ctx.room_outcomes; passed to the
- *  parser so we can match LLM-emitted indicator_text back to its
- *  outcome_id by text (LLMs sometimes paraphrase). Fallback when the
- *  LLM omits outcome_id but includes indicator_text. */
-function buildIndicatorLookup(
-  outcomes: RubricContext["room_outcomes"],
-): Map<string, { outcome_id: string; outcome_name: string }> {
-  const lookup = new Map<string, { outcome_id: string; outcome_name: string }>();
-  for (const o of outcomes ?? []) {
-    for (const ind of o.indicators ?? []) {
-      if (typeof ind === "string" && ind.trim().length > 0) {
-        lookup.set(ind.trim().toLowerCase(), {
-          outcome_id: o.id ?? "",
-          outcome_name: o.name,
-        });
-      }
-    }
-  }
-  return lookup;
+Grade each variation on the 5 criteria (PART 1) AND on each proxy indicator (PART 2) per the system instructions. Return one variation_score entry per variation, keyed by id. Each indicator_scores row cites its indicator by indicator_index (the 1-based number from the list above) — never rephrase the indicator text.`;
 }
 
 /** Grade variations against the 5-criteria rubric. Returns an
@@ -389,9 +385,7 @@ export async function scoreVariationsWithRubric(
         risk?: { score?: unknown; reason?: unknown };
       };
       indicator_scores?: Array<{
-        indicator_text?: unknown;
-        outcome_id?: unknown;
-        outcome_name?: unknown;
+        indicator_index?: unknown;
         score?: unknown;
         reason?: unknown;
         confidence?: unknown;
@@ -483,17 +477,16 @@ export async function scoreVariationsWithRubric(
                       type: "object",
                       additionalProperties: false,
                       properties: {
-                        indicator_text: { type: "string" },
-                        outcome_id: { type: "string" },
-                        outcome_name: { type: "string" },
+                        // Index into the canonical pre-generated indicator
+                        // list (1-based). The text/outcome are resolved
+                        // server-side from this, so the LLM can't drift.
+                        indicator_index: { type: "number" },
                         score: { type: "number" },
                         reason: { type: "string" },
                         confidence: { type: "number" },
                       },
                       required: [
-                        "indicator_text",
-                        "outcome_id",
-                        "outcome_name",
+                        "indicator_index",
                         "score",
                         "reason",
                         "confidence",
@@ -524,7 +517,10 @@ export async function scoreVariationsWithRubric(
 
   // ── Validate + clean raw → typed scores ──
   const variationsById = new Map(ctx.variations.map((v) => [v.id, v]));
-  const indicatorLookup = buildIndicatorLookup(ctx.room_outcomes);
+  // Same canonical list the prompt numbered — the LLM's indicator_index
+  // maps 1:1 back into this, guaranteeing the persisted indicator_text /
+  // outcome_id are the VERBATIM pre-generated values (no paraphrase).
+  const flat = flattenIndicators(ctx.room_outcomes);
   const scores: RubricVariationScore[] = [];
 
   for (const row of raw?.variation_scores ?? []) {
@@ -564,19 +560,25 @@ export async function scoreVariationsWithRubric(
         criteria.risk.score) /
       5;
 
-    // Phase 11.2 — parse + clean the indicator_scores side. Tolerant
-    // of LLM drift: if outcome_id is missing or doesn't match a known
-    // outcome, we recover via lookup-by-text (LLMs sometimes paraphrase
-    // the outcome but quote the indicator verbatim). If both id and
-    // text fail to match a known indicator, drop the row silently —
-    // we'd rather show fewer trustworthy rows than fabricate links.
+    // Phase 11.2 + wiring fix — the LLM cites each indicator by its
+    // 1-based indicator_index into the canonical pre-generated list.
+    // We resolve indicator_text + outcome_id + outcome_name FROM that
+    // index (never from LLM free-text), so the persisted row is wired
+    // to the real indicator and the downstream overlays
+    // (ensemble/evidence/persona/empirical) join on it correctly. An
+    // out-of-range index is dropped (no fabrication); a repeated index
+    // is deduped.
     const indicator_scores: IndicatorScore[] = [];
+    const seenIdx = new Set<number>();
     for (const ind of row?.indicator_scores ?? []) {
-      const indicator_text =
-        typeof ind?.indicator_text === "string"
-          ? ind.indicator_text.trim().slice(0, 240)
-          : "";
-      if (indicator_text.length === 0) continue;
+      const idx =
+        typeof ind?.indicator_index === "number" &&
+        Number.isFinite(ind.indicator_index)
+          ? Math.round(ind.indicator_index)
+          : NaN;
+      const canonical = Number.isFinite(idx) ? flat[idx - 1] : undefined;
+      if (!canonical || seenIdx.has(idx)) continue;
+      seenIdx.add(idx);
       const score =
         typeof ind?.score === "number" && Number.isFinite(ind.score)
           ? Math.max(0, Math.min(1, ind.score))
@@ -589,26 +591,10 @@ export async function scoreVariationsWithRubric(
         typeof ind?.confidence === "number" && Number.isFinite(ind.confidence)
           ? Math.max(0, Math.min(1, ind.confidence))
           : 0.5;
-      let outcome_id =
-        typeof ind?.outcome_id === "string" ? ind.outcome_id : "";
-      let outcome_name =
-        typeof ind?.outcome_name === "string" ? ind.outcome_name : "";
-      // Recovery: when outcome_id is missing/unknown, look up by
-      // indicator text against the room's outcomes.
-      if (!outcome_id || !outcome_name) {
-        const hit = indicatorLookup.get(indicator_text.toLowerCase());
-        if (hit) {
-          outcome_id = hit.outcome_id;
-          outcome_name = hit.outcome_name;
-        } else {
-          // No way to attribute → drop. Better than wrong attribution.
-          continue;
-        }
-      }
       indicator_scores.push({
-        indicator_text,
-        outcome_id,
-        outcome_name,
+        indicator_text: canonical.indicator_text,
+        outcome_id: canonical.outcome_id,
+        outcome_name: canonical.outcome_name,
         score,
         reason,
         confidence,
