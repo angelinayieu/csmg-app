@@ -136,6 +136,19 @@ export interface FeatureItem {
   positive_outcome: string;
   /** 2-4 short noun phrases (≤6 words each) — why this works. */
   first_principles: string[];
+  /** Arc 3.2 (two-phase grounding) — DECLARED causal bindings. Each
+   *  feature names WHICH pain root-cause it counters (addresses[]) and
+   *  WHICH outcome indicator it moves (moves[]). room/generate turns
+   *  these into Pain→Feature + Feature→Outcome edges DIRECTLY (declared-
+   *  primary), so the chain reflects the mechanism's stated causal
+   *  intent rather than being re-inferred post-hoc by the correlation
+   *  pass. Optional — soft-fail / legacy paths omit them. */
+  addresses?: Array<{ pain: string; root_cause: string }>;
+  moves?: Array<{
+    outcome: string;
+    indicator: string;
+    direction: "increase" | "decrease";
+  }>;
   /** Tier 3 — sub-category slug picked from RoomCategories.mechanism. */
   sub_category?: string | null;
   /** Commit-2 — 1-based source indices informing this feature. */
@@ -161,6 +174,19 @@ export interface OutcomeItem {
    *  Backward-compat: when missing, callers fall through to
    *  [measured_by]. */
   indicators: string[];
+  /** Arc 3.2 (two-phase grounding) — per-indicator measurement
+   *  scaffold so RESULTS are measurable at generation, not just named.
+   *  Each entry carries the LLM's suggested unit + measurement_method
+   *  + direction (which way is GOOD). room/generate seeds these into
+   *  causal_chain.indicator_baselines (source:"llm"), leaving the
+   *  actual baseline_value/target_value for the user's BaselineEditor.
+   *  Optional — soft-fail / legacy paths omit it. */
+  indicator_specs?: Array<{
+    indicator: string;
+    unit?: string;
+    measurement_method?: string;
+    direction?: "increase" | "decrease";
+  }>;
   /** Tier 3 — sub-category slug picked from RoomCategories.result. */
   sub_category?: string | null;
   /** Commit-2 — 1-based source indices informing this outcome. */
@@ -530,6 +556,8 @@ interface OutcomeShape {
     measured_by?: unknown;
     /** Phase 8 — 2-4 observable indicators. */
     indicators?: unknown;
+    /** Arc 3.2 — per-indicator measurement scaffold. */
+    indicator_specs?: unknown;
     sub_category?: unknown;
     citations?: unknown;
     derived_from_annotations?: unknown;
@@ -566,6 +594,15 @@ Example for outcome "Sustained deep-dive sessions":
   measured_by: "8+ min average session length"
   indicators: ["sessions ≥ 8 min", "≥3 deep-dive sessions/week", "≥60% sessions exit on a saved artifact", "<25% bounces before second hop"]
 
+MEASUREMENT SCAFFOLD (Arc 3.2 — makes results MEASURABLE, not just named):
+For EVERY indicator, also emit an indicator_specs entry: {
+  indicator           — the indicator text VERBATIM (must match an entry in indicators[]),
+  unit                — the measurement unit ("min/session", "% of sessions", "score 1-10", "count/week"),
+  measurement_method  — how you'd actually capture it ("session analytics", "daily self-report", "wearable", "GAD-7 instrument"),
+  direction           — "increase" or "decrease": which way is GOOD for this indicator.
+}
+This is what lets the user set a real baseline → target later. Be concrete about unit + method — "vibes" is not a measurement method.
+
 OUTCOME RULES:
 - 3-5 outcomes, ordered by how directly they signal sub-objective success.
 - ${TITLE_RULES}
@@ -601,8 +638,30 @@ Return strict JSON.`;
     // Phase 8 — 2-4 observable indicators mirroring pain.root_causes
     // so the Category Card right half can render symmetrically.
     indicators: { type: "array", items: { type: "string" } },
+    // Arc 3.2 — per-indicator measurement scaffold. One entry per
+    // indicator with unit + method + direction so results are
+    // measurable at generation (seeded into indicator_baselines).
+    indicator_specs: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          indicator: { type: "string" },
+          unit: { type: "string" },
+          measurement_method: { type: "string" },
+          direction: { type: "string", enum: ["increase", "decrease"] },
+        },
+        required: ["indicator", "unit", "measurement_method", "direction"],
+      },
+    },
   };
-  const outcomeRequired: string[] = ["name", "measured_by", "indicators"];
+  const outcomeRequired: string[] = [
+    "name",
+    "measured_by",
+    "indicators",
+    "indicator_specs",
+  ];
   if (outcomeCats.slugs.length > 0) {
     outcomeProps.sub_category = { type: "string", enum: outcomeCats.slugs };
     outcomeRequired.push("sub_category");
@@ -691,6 +750,9 @@ interface FeatureShape {
     name?: unknown;
     positive_outcome?: unknown;
     first_principles?: unknown;
+    /** Arc 3.2 — declared causal bindings. */
+    addresses?: unknown;
+    moves?: unknown;
     sub_category?: unknown;
     citations?: unknown;
     derived_from_annotations?: unknown;
@@ -744,6 +806,12 @@ POSITIVE_OUTCOME RULES:
 - BAD (paraphrase — REJECT): "Personalized Interest Dashboards" → "Personalization satisfaction improves"
 - GOOD (downstream — KEEP):  "Personalized Interest Dashboards" → "Users return next day at 70%+"
 
+DECLARED BINDINGS (Arc 3.2 — two-phase grounding — THIS IS LOAD-BEARING):
+These declarations become the ACTUAL causal edges of the room. The chain is built from what you declare here, not re-guessed later. Be precise.
+- addresses[] — 1-2 entries. Each: { pain (VERBATIM from the PAIN POINTS list), root_cause (VERBATIM from THAT pain's root_causes — the specific underlying cause this feature neutralizes) }. Only declare a pain this feature genuinely attacks AT THE ROOT-CAUSE level. If you can't name a specific root_cause it counters, you don't understand the mechanism yet — sharpen the feature.
+- moves[] — 1-2 entries. Each: { outcome (VERBATIM from the DESIRED OUTCOMES list), indicator (VERBATIM from THAT outcome's indicators), direction ("increase" or "decrease" — the GOOD direction for that indicator) }. Name the SPECIFIC indicator this feature shifts, not the whole outcome.
+- A feature must have ≥1 addresses AND ≥1 moves. A feature that can't connect a real root_cause to a real indicator is too vague — drop it rather than declaring a hand-wavy binding.
+
 ${ANTI_PLATITUDE}
 
 Return strict JSON.`;
@@ -755,11 +823,40 @@ Return strict JSON.`;
     name: { type: "string" },
     positive_outcome: { type: "string" },
     first_principles: { type: "array", items: { type: "string" } },
+    // Arc 3.2 — declared causal bindings (two-phase grounding). These
+    // become the room's Pain→Feature + Feature→Outcome edges directly.
+    addresses: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          pain: { type: "string" },
+          root_cause: { type: "string" },
+        },
+        required: ["pain", "root_cause"],
+      },
+    },
+    moves: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          outcome: { type: "string" },
+          indicator: { type: "string" },
+          direction: { type: "string", enum: ["increase", "decrease"] },
+        },
+        required: ["outcome", "indicator", "direction"],
+      },
+    },
   };
   const featureRequired: string[] = [
     "name",
     "positive_outcome",
     "first_principles",
+    "addresses",
+    "moves",
   ];
   if (featureCats.slugs.length > 0) {
     featureProps.sub_category = { type: "string", enum: featureCats.slugs };
@@ -797,13 +894,31 @@ Return strict JSON.`;
 
   const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${ctx.constraintsBlock ?? ""}${ctx.crossRoomFindingsBlock ?? ""}${ctx.learningsBlock ?? ""}
 
-PAIN POINTS (with negative_outcomes):
-${painPoints.map((p, i) => `  ${i + 1}. ${p.name} → ${p.negative_outcome}`).join("\n")}
+PAIN POINTS (with negative_outcomes + root_causes — declare addresses[] against these):
+${painPoints
+  .map(
+    (p, i) =>
+      `  ${i + 1}. ${p.name} → ${p.negative_outcome}${
+        p.root_causes.length > 0
+          ? `\n     root_causes: ${p.root_causes.join(" · ")}`
+          : ""
+      }`,
+  )
+  .join("\n")}
 
-DESIRED OUTCOMES:
-${outcomes.map((o, i) => `  ${i + 1}. ${o.name} (measured by: ${o.measured_by})`).join("\n")}${featureCats.instructions}${lensF.lensBlock}${lensF.provenanceRule}${ragF.ragBlock}${ragF.citationRule}
+DESIRED OUTCOMES (with indicators — declare moves[] against these):
+${outcomes
+  .map(
+    (o, i) =>
+      `  ${i + 1}. ${o.name} (measured by: ${o.measured_by})${
+        o.indicators.length > 0
+          ? `\n     indicators: ${o.indicators.join(" · ")}`
+          : ""
+      }`,
+  )
+  .join("\n")}${featureCats.instructions}${lensF.lensBlock}${lensF.provenanceRule}${ragF.ragBlock}${ragF.citationRule}
 
-Generate 3-6 features that bridge the pains to the outcomes. Each feature must plausibly counter ≥1 pain AND produce ≥1 outcome.${
+Generate 3-6 features that bridge the pains to the outcomes. Each feature must plausibly counter ≥1 pain AND produce ≥1 outcome, and DECLARE those bindings in addresses[] (pain + root_cause) and moves[] (outcome + indicator + direction).${
     featureCats.slugs.length > 0
       ? " Each feature must include sub_category — the slug of the mechanism sub-category it belongs to."
       : ""
@@ -1642,10 +1757,57 @@ function cleanFeatures(raw: unknown, ctx: RoomContext): FeatureItem[] {
       const pos =
         typeof r.positive_outcome === "string" ? r.positive_outcome.trim() : "";
       const principles = trimList(r.first_principles, 4, 80);
+      // Arc 3.2 — clean declared bindings. Drop entries missing the
+      // load-bearing endpoint (pain / outcome name); cap at 4 each.
+      const addresses = Array.isArray(r.addresses)
+        ? (r.addresses as unknown[])
+            .map((a) => {
+              if (!a || typeof a !== "object") return null;
+              const o = a as Record<string, unknown>;
+              const pain =
+                typeof o.pain === "string" ? o.pain.trim().slice(0, 200) : "";
+              if (!pain) return null;
+              const root_cause =
+                typeof o.root_cause === "string"
+                  ? o.root_cause.trim().slice(0, 160)
+                  : "";
+              return { pain, root_cause };
+            })
+            .filter(
+              (a): a is { pain: string; root_cause: string } => a !== null,
+            )
+            .slice(0, 4)
+        : [];
+      const moves = Array.isArray(r.moves)
+        ? (r.moves as unknown[])
+            .map((m) => {
+              if (!m || typeof m !== "object") return null;
+              const o = m as Record<string, unknown>;
+              const outcome =
+                typeof o.outcome === "string"
+                  ? o.outcome.trim().slice(0, 200)
+                  : "";
+              if (!outcome) return null;
+              const indicator =
+                typeof o.indicator === "string"
+                  ? o.indicator.trim().slice(0, 100)
+                  : "";
+              const direction =
+                o.direction === "decrease" ? "decrease" : "increase";
+              return { outcome, indicator, direction: direction as "increase" | "decrease" };
+            })
+            .filter(
+              (m): m is { outcome: string; indicator: string; direction: "increase" | "decrease" } =>
+                m !== null,
+            )
+            .slice(0, 4)
+        : [];
       return {
         name: stripVerbPrefix(name).slice(0, 200),
         positive_outcome: pos.slice(0, 200),
         first_principles: principles,
+        addresses: addresses.length > 0 ? addresses : undefined,
+        moves: moves.length > 0 ? moves : undefined,
         sub_category: cleanSubCategory(r.sub_category),
         citations: cleanCitations(r.citations),
         derived_from_annotations: resolveProvenance(
@@ -1686,10 +1848,45 @@ function cleanOutcomes(raw: unknown, ctx: RoomContext): OutcomeItem[] {
           : measured.length > 0
             ? [measured]
             : [];
+      // Arc 3.2 — clean the per-indicator measurement scaffold. Drop
+      // entries without an indicator name; cap at 6; tolerate missing
+      // unit/method/direction (soft signals).
+      const indicatorSpecs = Array.isArray(r.indicator_specs)
+        ? (r.indicator_specs as unknown[])
+            .map((s) => {
+              if (!s || typeof s !== "object") return null;
+              const o = s as Record<string, unknown>;
+              const indicator =
+                typeof o.indicator === "string"
+                  ? o.indicator.trim().slice(0, 100)
+                  : "";
+              if (!indicator) return null;
+              const unit =
+                typeof o.unit === "string" && o.unit.trim().length > 0
+                  ? o.unit.trim().slice(0, 60)
+                  : undefined;
+              const measurement_method =
+                typeof o.measurement_method === "string" &&
+                o.measurement_method.trim().length > 0
+                  ? o.measurement_method.trim().slice(0, 160)
+                  : undefined;
+              const direction =
+                o.direction === "increase" || o.direction === "decrease"
+                  ? (o.direction as "increase" | "decrease")
+                  : undefined;
+              return { indicator, unit, measurement_method, direction };
+            })
+            .filter(
+              (s): s is NonNullable<typeof s> => s !== null,
+            )
+            .slice(0, 6)
+        : [];
       return {
         name: stripVerbPrefix(name).slice(0, 200),
         measured_by: measured.slice(0, 150),
         indicators,
+        indicator_specs:
+          indicatorSpecs.length > 0 ? indicatorSpecs : undefined,
         sub_category: cleanSubCategory(r.sub_category),
         citations: cleanCitations(r.citations),
         derived_from_annotations: resolveProvenance(

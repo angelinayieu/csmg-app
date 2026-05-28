@@ -21,6 +21,7 @@ import {
   linkWithinLayer,
   type RoomContext,
   type RoomCategoryEnum,
+  type OutcomeItem,
 } from "@/lib/objective-canvas/layered-generation";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import {
@@ -430,6 +431,34 @@ export async function POST(req: NextRequest) {
     return out;
   }
 
+  // Arc 3.2 — seed indicator_baselines from the outcome's measurement
+  // scaffold (indicator_specs). We persist the LLM's suggested unit +
+  // measurement_method + direction with source:"llm" so the
+  // BaselineEditor opens pre-filled and the scorer/enrichChain have
+  // measurement context immediately. baseline_value/target_value stay
+  // empty — those are the user's to set. Reuses the Phase 11.6
+  // causal_chain.indicator_baselines structure (no new schema).
+  const nowIso = new Date().toISOString();
+  function seedBaselines(
+    specs: OutcomeItem["indicator_specs"],
+  ): Record<string, Record<string, unknown>> | undefined {
+    if (!specs || specs.length === 0) return undefined;
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const s of specs) {
+      if (!s.indicator) continue;
+      out[s.indicator] = {
+        ...(s.unit ? { unit: s.unit } : {}),
+        ...(s.measurement_method
+          ? { measurement_method: s.measurement_method }
+          : {}),
+        ...(s.direction ? { direction: s.direction } : {}),
+        source: "llm",
+        updated_at: nowIso,
+      };
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+
   const entityRows = [
     // Pain: name is the EFFECT title; description is the
     // negative_outcome (one line); causal_chain carries the root
@@ -459,6 +488,12 @@ export async function POST(req: NextRequest) {
         // so the Category Card's OUTCOME panel renders symmetrically
         // with the PROBLEM panel.
         indicators: Array.isArray(o.indicators) ? o.indicators : [],
+        // Arc 3.2 — measurement scaffold (raw) + seeded baselines.
+        // indicator_specs keeps the raw {unit, method, direction} for
+        // reference; indicator_baselines is the canonical store the
+        // BaselineEditor / scorer / enrichChain read.
+        indicator_specs: o.indicator_specs ?? [],
+        indicator_baselines: seedBaselines(o.indicator_specs) ?? {},
         sub_category: o.sub_category ?? null,
         citations: resolveCitations(o.citations),
         derived_from_annotations: o.derived_from_annotations ?? [],
@@ -471,6 +506,11 @@ export async function POST(req: NextRequest) {
       buildRow("features", f.name, f.positive_outcome, 0.65, {
         positive_outcome: f.positive_outcome,
         first_principles: f.first_principles,
+        // Arc 3.2 — declared causal bindings persisted on the feature.
+        // These drive the declared-primary edge build below + give the
+        // mechanism-spec endpoint accurate root_cause/indicator anchors.
+        addresses: f.addresses ?? [],
+        moves: f.moves ?? [],
         sub_category: f.sub_category ?? null,
         citations: resolveCitations(f.citations),
         derived_from_annotations: f.derived_from_annotations ?? [],
@@ -560,6 +600,133 @@ export async function POST(req: NextRequest) {
     return base;
   });
 
+  // ── Arc 3.2 — declared-primary edges (two-phase grounding) ──────
+  // Build Pain→Feature + Feature→Outcome edges DIRECTLY from each
+  // feature's declared addresses[]/moves[] bindings. These reflect the
+  // mechanism's STATED causal intent (which root_cause it counters,
+  // which indicator it moves), so they're higher-confidence than the
+  // inferred correlation pass — which now runs only to fill in links
+  // the features did NOT declare (deduped against declaredPairs below).
+  const painIdByName = new Map<string, string>();
+  const outcomeIdByName = new Map<string, string>();
+  const featureIdByName = new Map<string, string>();
+  for (const e of inserted) {
+    const layer = slugByLayerId.get(e.layer_ontology_id);
+    if (layer === "pain") painIdByName.set(e.name.toLowerCase(), e.id);
+    else if (layer === "outcomes")
+      outcomeIdByName.set(e.name.toLowerCase(), e.id);
+    else if (layer === "features")
+      featureIdByName.set(e.name.toLowerCase(), e.id);
+  }
+  // Resolve a declared endpoint name → entity id. Exact (case-
+  // insensitive) first, then a contains-fallback for slight LLM
+  // paraphrases. Returns null when nothing plausibly matches (the
+  // binding is then dropped — correlation may still catch it).
+  const resolveId = (
+    m: Map<string, string>,
+    name: string,
+  ): string | null => {
+    if (!name) return null;
+    const lower = name.toLowerCase();
+    const exact = m.get(lower);
+    if (exact) return exact;
+    for (const [k, v] of m) {
+      if (k.includes(lower) || lower.includes(k)) return v;
+    }
+    return null;
+  };
+  const declaredPairs = new Set<string>();
+  const declaredEdgeRows: Array<Record<string, unknown>> = [];
+  for (const f of features) {
+    const fid = featureIdByName.get(f.name.toLowerCase());
+    if (!fid) continue;
+    for (const a of f.addresses ?? []) {
+      const pid = resolveId(painIdByName, a.pain);
+      if (!pid) continue;
+      const key = `${pid}|${fid}`;
+      if (declaredPairs.has(key)) continue;
+      declaredPairs.add(key);
+      declaredEdgeRows.push({
+        space_id: spaceId,
+        parent_sub_objective_id: subObjectiveId,
+        source_entity_id: pid,
+        target_entity_id: fid,
+        relationship_type: "addressed_by",
+        dimension: "causal",
+        source_tag: "inferred",
+        strength: 0.72,
+        polarity: "negative",
+        confidence: 0.7,
+        conditions: a.root_cause
+          ? `Declared: feature addresses root cause "${a.root_cause}"`.slice(
+              0,
+              500,
+            )
+          : "Declared binding (feature addresses pain)",
+        agent_feedback: {
+          mechanism: a.root_cause
+            ? a.root_cause.slice(0, 60)
+            : "addresses pain",
+          binding: "declared",
+          ...(a.root_cause ? { root_cause: a.root_cause } : {}),
+        },
+      });
+    }
+    for (const mv of f.moves ?? []) {
+      const oid = resolveId(outcomeIdByName, mv.outcome);
+      if (!oid) continue;
+      const key = `${fid}|${oid}`;
+      if (declaredPairs.has(key)) continue;
+      declaredPairs.add(key);
+      declaredEdgeRows.push({
+        space_id: spaceId,
+        parent_sub_objective_id: subObjectiveId,
+        source_entity_id: fid,
+        target_entity_id: oid,
+        // "produces" edge — the feature positively produces the
+        // desired outcome state. The indicator's good direction lives
+        // in agent_feedback.direction; edge polarity is positive
+        // because the feature drives the outcome (matches the
+        // enrich-chains complementary-edge convention).
+        relationship_type: "produces",
+        dimension: "causal",
+        source_tag: "inferred",
+        strength: 0.72,
+        polarity: "positive",
+        confidence: 0.7,
+        conditions: mv.indicator
+          ? `Declared: feature moves indicator "${mv.indicator}" (${mv.direction})`.slice(
+              0,
+              500,
+            )
+          : "Declared binding (feature produces outcome)",
+        agent_feedback: {
+          mechanism: mv.indicator
+            ? mv.indicator.slice(0, 60)
+            : "produces outcome",
+          binding: "declared",
+          ...(mv.indicator ? { indicator: mv.indicator } : {}),
+          direction: mv.direction,
+        },
+      });
+    }
+  }
+  let declaredEdgeCount = 0;
+  if (declaredEdgeRows.length > 0) {
+    const declaredInsert = await db
+      .from("edges")
+      .insert(declaredEdgeRows)
+      .select("id");
+    if (declaredInsert.error) {
+      console.warn(
+        "[room/generate] declared edge insert failed (non-fatal):",
+        declaredInsert.error.message,
+      );
+    } else {
+      declaredEdgeCount = (declaredInsert.data ?? []).length;
+    }
+  }
+
   // ── Generate cross-layer correlations ───────────────────────────
   // Soft-fail kept so partial generation lands (entities still
   // persist) BUT we now SURFACE the warning in the response so the
@@ -570,7 +737,11 @@ export async function POST(req: NextRequest) {
   let correlationWarning: string | null = null;
   try {
     correlations = await linkCorrelations(ctx, itemRefs);
-    if (correlations.length === 0) {
+    // Arc 3.2 — only warn when there's NO chain at all. Declared-
+    // primary edges (built above from feature bindings) already give
+    // the room a Pain→Feature→Outcome spine, so a 0-correlation result
+    // is fine when declaredEdgeCount > 0 — don't nag the user to retry.
+    if (correlations.length === 0 && declaredEdgeCount === 0) {
       correlationWarning =
         "The correlation step returned 0 edges meeting the strength threshold. Click 'Generate correlations' in the side panel to retry.";
     }
@@ -582,7 +753,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let edgeCount = 0;
+  let edgeCount = declaredEdgeCount;
   if (correlations.length > 0) {
     // edges CHECK constraints (Phase 6 wire-up):
     //   source_tag ∈ {stated, inferred, predicted}  → "inferred" for AI-derived
@@ -597,7 +768,18 @@ export async function POST(req: NextRequest) {
       // polarity is real but depends on context the LLM couldn't pin down.
       return "conditional";
     };
-    const edgeRows = correlations.map((c) => {
+    // Arc 3.2 — dedupe against declared edges. A correlation that
+    // re-states a binding the feature already declared is dropped
+    // (either direction), so we don't double-insert the same Pain↔
+    // Feature / Feature↔Outcome link. Correlations that touch pairs
+    // NOT declared still land — that's the supplementary coverage.
+    const edgeRows = correlations
+      .filter(
+        (c) =>
+          !declaredPairs.has(`${c.sourceId}|${c.targetId}`) &&
+          !declaredPairs.has(`${c.targetId}|${c.sourceId}`),
+      )
+      .map((c) => {
       // agent_feedback is jsonb — we layer in:
       //   • mechanism: the specific lever name (LLM-emitted)
       //   • derived_from_annotation: single resolved provenance entry
@@ -631,7 +813,8 @@ export async function POST(req: NextRequest) {
         edgeInsert.error.message,
       );
     } else {
-      edgeCount = (edgeInsert.data ?? []).length;
+      // += because edgeCount already holds the declared-edge count.
+      edgeCount += (edgeInsert.data ?? []).length;
     }
   }
 
@@ -716,6 +899,9 @@ export async function POST(req: NextRequest) {
         outcomes: outcomes.length,
       },
       edge_count: edgeCount,
+      // Arc 3.2 — how many of those edges came from declared feature
+      // bindings vs the inferred correlation pass.
+      declared_edge_count: declaredEdgeCount,
       correlation_warning: correlationWarning,
     },
   });
