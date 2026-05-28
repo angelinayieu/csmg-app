@@ -1144,6 +1144,79 @@ const CATALOG: CatalogEntry[] = [
  *  match — but only against entries that don't specify a lane OR
  *  whose lane is "features" (the original default). New callers
  *  should always pass lane. */
+/** Arc 2 — generic fallback expansion. The hand-authored CATALOG only
+ *  covers software + journaling domains across a few attach points,
+ *  so deepening an outcome/result (or any item in an uncovered
+ *  domain) hard-failed with "no_catalog_entry" → the UI showed
+ *  "Expansion failed". This builds a lane-agnostic 3-child outline
+ *  that works for ANY (domain, lane, parent): how it concretely
+ *  works, where it could fail, and how you'd know it succeeded. Less
+ *  domain-tailored than a bespoke entry, but deepening now always
+ *  produces something useful instead of erroring. */
+function genericExpansionEntry(
+  domain: DomainSignature,
+  parent: ExpansionAttachPoint | ExpansionNodeType,
+  lane: LayerSlug,
+): CatalogEntry {
+  return {
+    domain,
+    lane,
+    parent,
+    framing:
+      "You are deepening this item into the three surfaces anyone would write before acting on it: how it concretely works, where it could fail, and how you'd know it succeeded. Anchor EVERY child to THIS specific item — no generic advice that could apply to anything else.",
+    spawns: [
+      {
+        node_type: "generic.how_it_works",
+        label: "How it works",
+        body_hint:
+          "The concrete mechanism / steps — 3-5 specifics anchored to this item, not abstractions.",
+        body_schema: {
+          required: ["steps"],
+          properties: {
+            steps: {
+              description:
+                "3-5 concrete steps or components that make this item work. Each a short sentence referencing something specific about this item.",
+              kind: "string_array",
+            },
+          },
+        },
+      },
+      {
+        node_type: "generic.failure_modes",
+        label: "Where it could fail",
+        body_hint:
+          "2-4 specific ways this item breaks or under-delivers, each with how to catch it early.",
+        body_schema: {
+          required: ["failures"],
+          properties: {
+            failures: {
+              description:
+                "2-4 entries. Each: failure (a concrete way this item fails) + early_signal (1 sentence on how you'd notice before it's too late).",
+              kind: "list_of_objects",
+            },
+          },
+        },
+      },
+      {
+        node_type: "generic.success_signal",
+        label: "Signal of success",
+        body_hint:
+          "The single observable that tells you this item is actually working.",
+        body_schema: {
+          required: ["signal"],
+          properties: {
+            signal: {
+              description:
+                "One concrete, observable signal that confirms this item is working. Specific — a number, a behavior, a sensed change — not 'it works'.",
+              kind: "string",
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
 export function lookupCatalogEntry(
   domain: DomainSignature,
   parent: ExpansionAttachPoint | ExpansionNodeType,
@@ -1155,7 +1228,10 @@ export function lookupCatalogEntry(
       (e) => e.domain === domain && e.parent === parent && e.lane === lane,
     );
     if (exact) return exact;
-    return null;
+    // Arc 2 — no bespoke entry for this (domain, lane, parent); fall
+    // back to the generic outline so deepening always works rather
+    // than hard-failing with "Expansion failed".
+    return genericExpansionEntry(domain, parent, lane);
   }
   // Legacy lookup (no lane provided): match on domain + parent only,
   // breaking ties by preferring "features" (the original behavior).
@@ -1164,7 +1240,7 @@ export function lookupCatalogEntry(
       (e) => e.domain === domain && e.parent === parent && e.lane === "features",
     ) ??
     CATALOG.find((e) => e.domain === domain && e.parent === parent) ??
-    null
+    genericExpansionEntry(domain, parent, "features")
   );
 }
 

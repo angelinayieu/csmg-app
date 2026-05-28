@@ -232,9 +232,9 @@ OUTPUT:
 
 6) ARTIFACT_TYPE — short label (4-8 words) naming what the user is actually producing: "5-screen paper prototype", "7-day journaling template", "structured reading plan", "5-call discovery week", etc.
 
-7) ARTIFACT_BODY — the actual prototype content, domain-adapted (template instructions below). 200-500 words. NOT a description of WHAT to build — it IS what to build, ready to act on.
+7) ARTIFACT_BODY — the actual prototype content, domain-adapted (template instructions below). 200-500 words. NOT a description of WHAT to build — it IS what to build, ready to act on. START DIRECTLY WITH THE CONTENT — do NOT open with a title, header, or meta-line like "Here's what you'll produce this week" or restate the artifact_type. The UI already labels this section; a header inside the body double-prints.
 
-8) LEARNING_TARGET — single sentence. What the user will know after running this that they don't know now. The binary update.
+8) LEARNING_TARGET — single sentence. NOT a restatement of the hypothesis. This is the DECISION the result drives: what the user DOES differently in each branch. Format: "If [signal passes] → [next action]; if [signal fails] → [different next action]." The hypothesis is the prediction; the learning_target is the fork in the road. If your learning_target could swap with your hypothesis unnoticed, rewrite it as an explicit decision.
 
 DOMAIN TEMPLATES (use the one matching your chosen domain):
 

@@ -1546,6 +1546,31 @@ function hasDefinition(d: ExpandedItemDetail | null | undefined): boolean {
   return !!d?.definition && d.definition.length > 0;
 }
 
+/** Arc 2 — defensively strip a leading header line from a prototype
+ *  brief's artifact_body. The prompt now instructs the LLM not to
+ *  emit one, but older briefs (or the occasional drift) open with a
+ *  markdown header ("## What you produce…") or an echoed intro line.
+ *  Drops a single leading line when it's a markdown header or matches
+ *  the boilerplate intro, so it doesn't double-print under the
+ *  section label. Leaves normal content untouched. */
+function stripLeadingHeader(body: string): string {
+  const lines = body.split("\n");
+  if (lines.length === 0) return body;
+  const first = lines[0].trim();
+  const looksLikeHeader =
+    /^#{1,6}\s/.test(first) || // markdown header
+    /^(here'?s\s+)?what\s+you('?ll|\s+will)?\s+produce/i.test(first) ||
+    /^deliverable\b/i.test(first) ||
+    /^artifact\b/i.test(first);
+  if (looksLikeHeader) {
+    // Drop the header line + any immediately-following blank line.
+    let rest = lines.slice(1);
+    while (rest.length > 0 && rest[0].trim() === "") rest = rest.slice(1);
+    return rest.join("\n");
+  }
+  return body;
+}
+
 function Section({
   icon,
   title,
@@ -2033,10 +2058,34 @@ function VariationsGroup({
       setBusyId(variationId);
       setError(null);
 
-      // Optimistic local mutation so the UI is instant.
-      const next = variations.map((v) =>
-        v.id === variationId ? { ...v, disposition } : v,
-      );
+      // Arc 2 — single-select enforcement for the "alternative" kind.
+      // Alternatives are mutually exclusive by definition (the label
+      // says "choose one design pattern"), so electing one clears any
+      // sibling alternative that was already elected — radio-button
+      // behavior. Additive + principle kinds stay multi-select (they
+      // stack / apply across). This makes the behavior match the
+      // subtitle the user flagged as a mismatch.
+      const target = variations.find((v) => v.id === variationId);
+      const siblingsToClear =
+        disposition === "elected" && target?.kind === "alternative"
+          ? variations.filter(
+              (v) =>
+                v.kind === "alternative" &&
+                v.id !== variationId &&
+                v.disposition === "elected" &&
+                !!v.id,
+            )
+          : [];
+
+      // Optimistic local mutation so the UI is instant — apply the
+      // target's new disposition AND clear any displaced siblings.
+      const clearIds = new Set(siblingsToClear.map((s) => s.id));
+      const next = variations.map((v) => {
+        if (v.id === variationId) return { ...v, disposition };
+        if (v.id && clearIds.has(v.id))
+          return { ...v, disposition: null as VariationDisposition };
+        return v;
+      });
       onLocalUpdate(next);
 
       try {
@@ -2053,6 +2102,24 @@ function VariationsGroup({
           setError(json?.error ?? "Failed to save disposition.");
           onLocalUpdate(variations); // revert
           return;
+        }
+        // Persist the sibling clears too. Fire in parallel; soft-fail
+        // per sibling so one network hiccup doesn't revert the whole
+        // election. The optimistic local state already reflects them.
+        if (siblingsToClear.length > 0) {
+          await Promise.all(
+            siblingsToClear.map((s) =>
+              fetch("/api/brainstorm/item/variation/disposition", {
+                method: "PATCH",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  entityId,
+                  variationId: s.id,
+                  disposition: null,
+                }),
+              }).catch(() => undefined),
+            ),
+          );
         }
         // Election set changed — server invalidated composition.
         if (json?.composed_design_invalidated) {
@@ -3275,32 +3342,44 @@ function PrototypeBriefBlock({
             border: `1px solid ${appleVibe.stroke.hairline}`,
           }}
         >
+          {/* Header uses the specific artifact_type when present
+              ("5-screen paper prototype") rather than the generic
+              "What you produce this week" — more informative + avoids
+              feeling boilerplate. */}
           <div
             className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: appleVibe.text.tertiary }}
+            style={{ color: appleVibe.text.secondary }}
           >
-            What you produce this week
+            {brief.artifact_type
+              ? `Deliverable · ${brief.artifact_type}`
+              : "What you produce this week"}
           </div>
           <p
-            className="mt-1 whitespace-pre-wrap text-[11.5px] font-light leading-snug"
+            className="mt-1 whitespace-pre-wrap text-[11.5px] leading-snug"
             style={{ color: appleVibe.text.primary }}
           >
-            {brief.artifact_body}
+            {/* Defensive strip — drop a leading markdown header / echoed
+                "what you produce" line if the LLM still emits one
+                despite the prompt instruction not to. */}
+            {stripLeadingHeader(brief.artifact_body)}
           </p>
         </div>
       )}
 
-      {/* Learning target — the binary update */}
+      {/* Decision — the fork the result drives (Arc 2: reframed from
+          "what you'll know" to the explicit if-pass / if-fail action,
+          so it no longer echoes the hypothesis). Contrast bumped from
+          tertiary to secondary for readability. */}
       {brief.learning_target && (
         <p
-          className="mt-2 text-[10.5px] font-light italic leading-snug"
-          style={{ color: appleVibe.text.tertiary }}
+          className="mt-2 text-[11px] leading-snug"
+          style={{ color: appleVibe.text.secondary }}
         >
           <span
-            className="font-semibold uppercase tracking-[0.12em] not-italic"
+            className="font-semibold uppercase tracking-[0.12em]"
             style={{ color: appleVibe.text.tertiary }}
           >
-            You&rsquo;ll know:
+            Decision:
           </span>{" "}
           {brief.learning_target}
         </p>
