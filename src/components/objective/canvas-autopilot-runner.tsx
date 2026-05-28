@@ -26,7 +26,13 @@ import { motion } from "framer-motion";
 import { Check, Loader2, Play, Sparkles, X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
-type Status = "idle" | "running" | "enriching" | "done" | "cancelled";
+type Status =
+  | "idle"
+  | "running"
+  | "enriching"
+  | "speccing"
+  | "done"
+  | "cancelled";
 
 interface AutopilotTarget {
   subObjectiveId: string;
@@ -62,7 +68,7 @@ export function CanvasAutopilotRunner({
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function runCanvasAutopilot() {
+  async function runCanvasAutopilot(withSpecs: boolean) {
     setOpen(false);
     cancelRef.current = false;
     setError(null);
@@ -191,6 +197,43 @@ export function CanvasAutopilotRunner({
       }
     }
 
+    // ── Step 2.5 (opt-in): pre-generate v2 mechanism specs ──
+    // When the user opted in, generate the engineering-grade technical
+    // spec for every feature across every room so the full operation
+    // (mechanism of action → active ingredients → runtime flow → ADR →
+    // validation, with the quality gate) is visible without manual
+    // clicking — the "see the operations from the start" path. Skipped
+    // by default because each spec is a heavy LLM call (15-field +
+    // possible one regeneration). Soft-fail per feature.
+    if (withSpecs) {
+      setStatus("speccing");
+      for (let i = 0; i < workList.length; i++) {
+        if (cancelRef.current) {
+          setStatus("cancelled");
+          onAllComplete?.();
+          return;
+        }
+        setRoomIdx(i);
+        const room = workList[i];
+        for (let j = 0; j < room.featureIds.length; j++) {
+          if (cancelRef.current) {
+            setStatus("cancelled");
+            onAllComplete?.();
+            return;
+          }
+          setFeatureIdx(j);
+          try {
+            await fetch(
+              `/api/brainstorm/item/${room.featureIds[j]}/mechanism-spec`,
+              { method: "POST" },
+            );
+          } catch {
+            // Soft-fail — one feature's spec failing doesn't kill the run.
+          }
+        }
+      }
+    }
+
     // ── Step 3: refresh cross-room findings so chat has fresh data ──
     // Soft-fail — if the scan errors out, the autopilot run itself
     // still counts as complete.
@@ -254,7 +297,6 @@ export function CanvasAutopilotRunner({
         </motion.button>
         {open && (
           <CanvasAutopilotDropdown
-            spaceId={spaceId}
             onRun={runCanvasAutopilot}
             onClose={() => setOpen(false)}
           />
@@ -313,6 +355,60 @@ export function CanvasAutopilotRunner({
           onClick={cancel}
           className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[rgba(15,23,42,0.06)]"
           title="Cancel — stops after the current room finishes enriching"
+          aria-label="Cancel canvas autopilot"
+        >
+          <X
+            className="h-3 w-3"
+            strokeWidth={2}
+            style={{ color: appleVibe.text.tertiary }}
+          />
+        </button>
+      </motion.div>
+    );
+  }
+
+  // ── SPECCING — progress chip during mechanism-spec pre-gen pass ──
+  if (status === "speccing") {
+    const room = targets[roomIdx];
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: -4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+        className="inline-flex items-center gap-2"
+        style={{
+          background: appleVibe.surface.card,
+          border: `1px solid ${FEATURES}40`,
+          borderRadius: appleVibe.radius.pill,
+          padding: "4px 4px 4px 12px",
+          fontSize: "11px",
+          fontWeight: 600,
+          letterSpacing: "0.02em",
+          boxShadow: appleVibe.shadow.chip,
+          fontFamily: appleVibe.font.stack,
+          color: appleVibe.text.primary,
+        }}
+      >
+        <Loader2
+          className="h-3 w-3 flex-shrink-0 animate-spin"
+          style={{ color: FEATURES }}
+          strokeWidth={2}
+        />
+        <span>
+          Speccing {roomIdx + 1}/{targets.length}
+        </span>
+        <span
+          className="font-light italic"
+          style={{ color: appleVibe.text.tertiary }}
+          title={room?.subObjectiveTitle ?? ""}
+        >
+          · mechanism specs
+        </span>
+        <button
+          type="button"
+          onClick={cancel}
+          className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[rgba(15,23,42,0.06)]"
+          title="Cancel — stops after the current spec finishes"
           aria-label="Cancel canvas autopilot"
         >
           <X
@@ -467,12 +563,10 @@ export function CanvasAutopilotRunner({
 // ── Confirmation dropdown ─────────────────────────────────────────
 
 function CanvasAutopilotDropdown({
-  spaceId,
   onRun,
   onClose,
 }: {
-  spaceId: string;
-  onRun: () => void;
+  onRun: (withSpecs: boolean) => void;
   onClose: () => void;
 }) {
   // Estimated time displayed before user commits — same heuristic as
@@ -480,6 +574,10 @@ function CanvasAutopilotDropdown({
   // altitude. Caps display at "X min" for legibility.
   // We can't know totalFeatures without calling /start, so show a
   // rough "~3-10 min" placeholder. Refined once the run kicks off.
+
+  // Opt-in: also pre-generate the v2 technical mechanism spec for every
+  // feature. Default off — it's a heavy extra LLM pass per feature.
+  const [withSpecs, setWithSpecs] = useState(false);
 
   return (
     <>
@@ -544,6 +642,23 @@ function CanvasAutopilotDropdown({
               estimated ~5-15 min
             </span>
           </div>
+          {/* Opt-in — pre-generate the v2 technical mechanism specs. */}
+          <label className="mt-2.5 flex cursor-pointer items-start gap-2">
+            <input
+              type="checkbox"
+              checked={withSpecs}
+              onChange={(e) => setWithSpecs(e.target.checked)}
+              className="mt-0.5 h-3 w-3 flex-shrink-0"
+            />
+            <span
+              className="text-[11px] font-light leading-snug"
+              style={{ color: appleVibe.text.secondary }}
+            >
+              Also generate technical mechanism specs (mechanism of action,
+              runtime flow, build methods, ADR, validation). Slower — a deep
+              LLM pass per feature.
+            </span>
+          </label>
         </div>
         <div
           className="flex items-center justify-end gap-2 px-3.5 py-2"
@@ -559,7 +674,7 @@ function CanvasAutopilotDropdown({
           </button>
           <motion.button
             type="button"
-            onClick={onRun}
+            onClick={() => onRun(withSpecs)}
             whileHover={{ y: -1 }}
             whileTap={{ y: 0.5 }}
             className="inline-flex items-center gap-1.5 transition-all duration-150 ease-out"
