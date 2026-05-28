@@ -703,7 +703,447 @@ Critical path (core UX): **10c → 11.0 → 11.1 → 11.2** = ~2300 lines.
 
 ---
 
+## 17. Phase 12.A lock-ins — Causal System Map (decided 2026-05-27)
+
+The architectural pivot from "grid of sub-objective cards" to "multi-altitude causal system visualization." Locks the central design principle: **the main canvas IS a causal system map, not a list of items grouped by themes**.
+
+### One-paragraph summary
+
+Multi-altitude visualization with consistent visual grammar across four zoom levels: **Canvas** (layered causal graph of sub-objectives positioned by `layer_ordinals` Y-axis) → **Room** (CLD of pain/feature/outcome with mediator nodes) → **Item** (comparison matrix of variations × criteria + mockup iframe + prompt) → **Variation** (full-screen mockup detail). Uses React Flow as the graph primitive, ELK.js + Dagre for auto-layout, framer-motion for shared-element zoom transitions. Health overlay, loop detection via Tarjan's SCC, polarity coloring, layer-band positioning all rendered as first-class signal. Chat agent gets 4 new tools for narrating + manipulating the map. Live refresh via the existing decision-log change-signal pattern. Cards-grid view retained as toggle for users who prefer linear browse.
+
+### 17.1 Lock-in decisions
+
+| # | Decision | Implication |
+|---|---|---|
+| **N1** | **React Flow** as graph primitive, NOT Cytoscape / D3 | React-first, custom node types easy, smaller bundle |
+| **N2** | **ELK.js** (canvas altitude — layered) + **Dagre** (room altitude — LR) for layout, wrapped behind `useLayoutAlgorithm` hook | Right algorithm per altitude, swappable |
+| **N3** | **URL-based altitude state**, NOT global store | Shareable links, browser back/forward works |
+| **N4** | **Cards view kept indefinitely as toggle** alongside Map view | No user flow gets broken by rollout |
+| **N5** | **Per-user `causal_map_state`** (collapsed clusters, pinned layers, toggle states) | Two users on same canvas can have independent views |
+| **N6** | **Auto-layout default; user pins override** via `improvement_goals.canvas_position` | Most users don't manually position; pins available for power users |
+| **N7** | **Health overlay is opt-in toggle**, not always-on | Reduces visual density when user just wants to browse |
+| **N8** | **Loop detection runs client-side** via Tarjan's SCC | Real-time recompute as edges change; no server round-trip |
+| **N9** | **Edge polarity** from `edges.polarity` (existing) + `agent_feedback.layer_reach.cross_layer_movements[].verb` (Phase 11.4) | Reuses existing data; no new enrichment |
+| **N10** | **Chat agent tools are READ-PRIMARY** (highlight, focus) + write via `chain_proposed` only with user confirm | Map is the user's; agent narrates but doesn't restructure without consent |
+
+### 17.2 Migration
+
+```sql
+-- supabase/migrations/20260902_phase_12a_causal_map.sql
+
+-- 1. Optional user-pinned positions on canvas-altitude nodes. NULL =
+--    use auto-layout. Set = override for that node only.
+alter table public.improvement_goals
+  add column if not exists canvas_position jsonb;
+  -- Shape: { x: number, y: number, pinned_at: ISO } | null
+
+-- 2. Per-(user, space) view state. Composite PK; RLS-scoped to user.
+create table if not exists public.causal_map_state (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  space_id uuid not null references public.spaces(id) on delete cascade,
+  state jsonb not null default '{}'::jsonb,
+  -- Shape: {
+  --   altitude: "canvas" | "room" | "item",
+  --   focused_node_id: string | null,
+  --   collapsed_layers: number[],
+  --   pinned_loops: string[],
+  --   show_health_overlay: boolean,
+  --   show_inactive_edges: boolean,
+  -- }
+  updated_at timestamp with time zone default now(),
+  primary key (user_id, space_id)
+);
+
+alter table public.causal_map_state enable row level security;
+create policy "Users manage their own map state"
+  on public.causal_map_state for all
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- 3. Extend decision-log CHECK with 4 new map-interaction action types.
+alter table public.sub_objective_decisions
+  drop constraint sub_objective_decisions_action_check;
+
+alter table public.sub_objective_decisions
+  add constraint sub_objective_decisions_action_check
+  check (action in (
+    -- ... all 29 existing actions through Phase 11.A ...
+    'map_view_changed',         -- zoom / pan / altitude switch
+    'loop_highlighted',         -- agent or user surfaced a detected loop
+    'node_pinned',              -- user dragged a node to a custom position
+    'chain_proposed'            -- user drew an inter-sub-objective edge
+  ));
+```
+
+### 17.3 Architecture — three orthogonal axes
+
+**Axis 1 — Altitude (zoom levels, C4-inspired):**
+
+| Altitude | Route | What renders | Primitive |
+|---|---|---|---|
+| **L0 Canvas** | `/app/objective/[spaceId]` | Sub-objectives as nodes, positioned by `layer_ordinals` on Y. Edges = cross-room causal influences. | React Flow + ELK layered + horizontal layer bands |
+| **L1 Room** | `/app/objective/[spaceId]/sub/[subId]` | Pain / feature / outcome / mediator nodes for this room's chains. | React Flow + Dagre LR |
+| **L2 Item** | `/app/objective/[spaceId]/sub/[subId]/lab/[entityId]` | Comparison matrix of variations × criteria + indicators + mockup iframe + prompt | Tables + iframe (Lab page extension) |
+| **L3 Variation** | `/app/objective/[spaceId]/sub/[subId]/lab/[entityId]?v=variationId` | Full-screen mockup, prompt, indicator scores | Modal-style overlay |
+
+Zoom is **smooth** (framer-motion shared-element via `layoutId`), NOT a hard page nav. URL changes drive state for shareability.
+
+**Axis 2 — Visual grammar (consistent across altitudes):**
+
+| Primitive | Visual | Meaning |
+|---|---|---|
+| Node | Rounded rectangle, lane-colored border | An entity (sub-obj / pain / feature / outcome / variation / mediator) |
+| Outgoing arrow → | Directed line, polarity-colored | Causal effect: A → B means A influences B |
+| Polarity (+/−) | Green / red arrow tint | + same-direction, − opposite-direction |
+| Edge thickness | 1-4px gradient | `chain_strength` × placebo_verdict × disposition |
+| Loop annotation | R (orange ring) / B (purple ring) on detected SCC | Reinforcing / Balancing feedback loop |
+| Layer band | Faint horizontal stripe (canvas altitude only) | Layer ordinal positioning |
+| Health overlay | Traffic light on node border | `chain_strength` + disposition + coverage aggregate |
+| Mediator | Small pill on the edge | Variable that moderates the chain |
+| Delay marker | `\|\|` symbol on arrow | Temporal lag |
+| Method badge | `📋 0.71` chip in node corner | `evaluation_method` from existing MethodBadge |
+
+**Axis 3 — Health overlay (toggleable):**
+
+| Source | Visual | Read from |
+|---|---|---|
+| Node health | Border traffic-light | `chain_strength` of inbound + outbound edges |
+| Edge confidence | Opacity gradient | `agent_feedback.chain_strength` |
+| Disposition state | Inner glow (green=elected, red=rejected, gray=deferred) | `variations[].disposition` |
+| Layer coverage gap | Pulsing border on uncovered layers | `analyses/layer-coverage.ts` findings |
+| Empirical signal | 🧪 badge | `evaluation_method === "tested"` |
+| Recent activity | Brief flash | New `score` / `rd_iterate` event within last 30s |
+
+### 17.4 Visual mockups (reference)
+
+**L0 — Canvas Altitude (the main whiteboard):**
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ ◀ Canvas        Layout: ▼ Layered   Health: ●   Loops: 2  ▣ Cards     │
+├────────────────────────────────────────────────────────────────────────┤
+│ ░░░░ L5 OUTCOME ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│         ┌──────────────────┐         ┌──────────────────┐              │
+│         │ 📊 Goal Track    │←·······→│ 💰 Monetization  │              │
+│         │ ⚡0.78 · 5L mat. │   R     │ ⚡0.64 · 2L map. │              │
+│         └────────┬─────────┘         └────────┬─────────┘              │
+│                  │ produces                   │ measures              │
+│ ░░░░ L4 BEHAVIORAL ░░░░░░░░░░░│░░░░░░░░░░░░░░│░░░░░░░░░░░░░░░░░░░░░ │
+│         ┌──────────────────┐    │    ┌────────▼─────────┐              │
+│         │ 🎯 Goal Align Tool│    │    │ 🔍 Search Intent  │              │
+│         │ ⚡0.71 · L3→L4    │   ←┘    │ ⚡0.52 · L4 dir.  │              │
+│         └────────▲─────────┘         └──────────────────┘              │
+│                  │ enables                                             │
+│ ░░░░ L3 COGNITIVE ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│         ┌──────────────────┐         ┌──────────────────┐              │
+│         │ 🧠 Attention Reg │═══─Q──→│ 👥 Community Eng │              │
+│         │ ⚡0.85 · L3 dir. │amplifies│ ⚡0.43 · L4 dir. │              │
+│         └────────▲─────────┘         └──────────────────┘              │
+│                  │ depends on                                          │
+│ ░░░░ L2 NEUROBIOLOGICAL ░░░░░░░░  ⚠ uncovered                       │
+│ ░░░░ L1 FOUNDATIONAL ░░░░░░░░░░░  ⚠ uncovered                       │
+│                                                                        │
+│  R · Reinforcing loop: Attention Reg ⇌ Goal Track ⇌ Search Intent     │
+│  ⚠ 2 layers uncovered — agent suggests proposing L1/L2 sub-objectives │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**L1 — Room Altitude (sub-objective CLD with mediators):**
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ ◀ Canvas > Attention Regulation        Layout: ▼ Causal Loop          │
+├────────────────────────────────────────────────────────────────────────┤
+│                              [mediator]                               │
+│                          ┌─ Adherence ≥80% ─┐                          │
+│                          ▼                  ▼                          │
+│  ┌──────────────┐  amplifies   ┌──────────────┐  produces  ┌────────┐  │
+│  │ 🔴 Distraction│←───────────│ 🔵 Pomodoro  │───────────→│🟢 Focus│  │
+│  │  Overload    │   counters  │  Time-Boxing │  L3→L4    │  Min   │  │
+│  └──────┬───────┘             └──────┬───────┘            └───┬────┘  │
+│         └─────────── closes ─────────┴─────── ⚡ 0.78 ─────────┘        │
+│                       (B balancing loop)                              │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**L2 — Item Altitude (comparison matrix + inline mockup + prompt):**
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ ◀ Canvas > Attention Regulation > Pomodoro     Method: 📋 Rubric      │
+├────────────────────────────────────────────────────────────────────────┤
+│ INDICATORS MATRIX                                                     │
+│                  Sustained   Interrupt   Deep Work    Composite       │
+│  Classic 25/5      0.85        0.82        0.40         0.78           │
+│  Adaptive Sess.    0.78        0.65        0.70         0.71           │
+│  Hard 50/10        0.55        0.45        0.85         0.58           │
+│  Indicator conf.   0.85        0.75        0.40 (shaky) —              │
+│                                                                        │
+│ MOCKUP                              EXPORT PROMPT                     │
+│ ┌──────────────────────┐            ┌──────────────────────┐           │
+│ │ [iframe srcDoc=HTML] │            │ # Pomodoro Spec       │           │
+│ └──────────────────────┘            └──────────────────────┘           │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### 17.5 Component file tree
+
+```
+src/components/objective/causal-map/
+  ├── CausalMap.tsx                    // top-level orchestrator
+  ├── altitudes/
+  │     ├── CanvasAltitudeMap.tsx       // L0
+  │     ├── RoomAltitudeMap.tsx         // L1
+  │     ├── ItemAltitudeMatrix.tsx      // L2
+  │     └── VariationAltitudeDetail.tsx // L3
+  ├── nodes/
+  │     ├── SubObjectiveNode.tsx
+  │     ├── PainNode.tsx
+  │     ├── FeatureNode.tsx
+  │     ├── OutcomeNode.tsx
+  │     ├── VariationNode.tsx
+  │     └── MediatorNode.tsx           // edge-decoration node
+  ├── edges/
+  │     ├── CausalEdge.tsx              // polarity-colored arrow
+  │     ├── LoopEdge.tsx                // R/B annotated
+  │     └── CrossLayerEdge.tsx          // dotted, spans bands
+  ├── overlays/
+  │     ├── HealthOverlay.tsx
+  │     ├── LayerBands.tsx
+  │     └── ActivityPulse.tsx
+  ├── controls/
+  │     ├── AltitudeBreadcrumb.tsx     // Canvas > Sub > Room > Item > Var
+  │     ├── ViewToggle.tsx             // map / cards / matrix
+  │     ├── HealthOverlayToggle.tsx
+  │     └── LoopHighlighter.tsx        // sidebar listing detected loops
+  ├── hooks/
+  │     ├── useLayoutAlgorithm.ts      // ELK / Dagre wrapper
+  │     ├── useLoopDetection.ts        // Tarjan's SCC
+  │     ├── useHealthAggregation.ts    // per-node health from edges
+  │     ├── useMapState.ts             // reads/writes causal_map_state
+  │     ├── useRealtimeRefresh.ts      // listens for refresh signals
+  │     └── useZoomTransition.ts       // framer-motion shared-element
+  └── lib/
+        ├── graph-build.ts             // entities + edges → React Flow shape
+        ├── tarjan-scc.ts              // strongly-connected components
+        ├── loop-classify.ts           // R vs B based on polarity product
+        └── visual-grammar.ts          // colors, sizes, shapes constants
+
+src/lib/objective-canvas/causal-map/
+  ├── load-canvas-graph.ts             // server-side graph loader
+  ├── load-room-graph.ts
+  ├── compute-cross-room-edges.ts      // from cross_room_analysis findings
+  └── types.ts
+
+src/app/api/brainstorm/space/[spaceId]/causal-map/
+  ├── route.ts                         // GET full canvas graph
+  ├── pin-node/route.ts                // POST user-dragged position
+  └── state/route.ts                   // GET/POST causal_map_state CRUD
+```
+
+**~30 new files. ~2300-2800 lines.**
+
+### 17.6 Build sequence
+
+| Phase | Scope | Lines | Critical path? |
+|---|---|---|---|
+| **12.A.1** | Migration + types + visual grammar + React Flow setup | ~400 | ✅ |
+| **12.A.2** | Canvas-altitude Layered Causal Graph (nodes + edges + ELK layout + layer bands + loop detection + health overlay) | ~700 | ✅ |
+| **12.A.3** | View Toggle on main canvas (Cards / Map) so the new view is opt-in | ~80 | ✅ |
+| **12.A.4** | Room-altitude CLD (pain/feature/outcome/mediator nodes + Dagre LR) | ~500 | ✅ |
+| **12.A.5** | View Toggle in room view (Categories / Variables / Causal Loop) | ~50 | |
+| **12.A.6** | Item-altitude comparison matrix (Lab page extension: matrix + mockup iframe + prompt inline) | ~400 | |
+| **12.A.7** | Smooth zoom (framer-motion shared-element transitions) + breadcrumb | ~250 | ✅ |
+| **12.A.8** | Map state persistence (`canvas_position` + `causal_map_state` CRUD) | ~200 | |
+| **12.A.9** | Live refresh hook (`useDecisionLogSignal` — subscribes to existing decision-log polling) | ~150 | ✅ |
+| **12.A.10** | Chat agent map tools (`highlight_loop`, `propose_chain`, `pin_layer`, `focus_node`) + system prompt extension | ~250 | |
+| **12.A.11** | Notebook event wiring (4 new actions + visualFor + chips) | ~150 | |
+| **12.A.12** | Supabase Realtime channel subscription (optional, defer) | ~150 | |
+
+**Critical path to user-visible MVP: 12.A.1 → A.2 → A.3 → A.4 → A.7 → A.9 = ~2080 lines.** Lands the layered causal graph + zoom + live refresh + Cards toggle.
+
+### 17.7 Files touched (modifications)
+
+```
+src/components/objective/main-canvas-view.tsx        // add view toggle, mount CausalMap
+src/components/objective/sub-objective-room-view.tsx // add view toggle for room CLD
+src/app/app/objective/[spaceId]/sub/[subId]/lab/[entityId]/page.tsx  // extend with matrix + mockup
+src/lib/objective-canvas/decision-log.ts             // add 4 new action types
+src/lib/objective-canvas/notebook-events.ts          // extend meta with map state fields
+src/app/api/brainstorm/sub-objectives/[id]/decisions/route.ts  // ALLOWED_ACTIONS + meta passthrough
+src/app/api/brainstorm/space/[spaceId]/decisions/route.ts      // ALLOWED_ACTIONS + meta passthrough
+src/components/objective/lab-notebook-panel.tsx      // visualFor + System filter for new actions
+src/lib/objective-canvas/notebook-chat.ts            // add 4 new agent tool definitions
+src/app/api/brainstorm/notebook/chat/route.ts        // agent system prompt + tool dispatch
+```
+
+### 17.8 New npm dependencies
+
+```json
+"reactflow": "^11.x",      // graph rendering — React-first, custom nodes
+"elkjs": "^0.9.x",         // layered auto-layout — for canvas altitude
+"dagre": "^0.8.x"          // LR auto-layout — for room altitude
+```
+
+All three MIT-licensed, used in production by major tools.
+
+### 17.9 Coordination with existing systems
+
+**Refresh signals the map subscribes to:**
+
+| Source | When | What invalidates |
+|---|---|---|
+| `useDecisionLogSignal` | Notebook fetches new events | All map data hooks |
+| `router.refresh()` | Layout-level forced refresh | Server-side props re-fetch |
+| Canvas autopilot `onAllComplete` | After autopilot finishes | Re-fetch chain_strength + variations |
+| Chat agent tool result | After agent fires score / disposition / refine | Re-fetch the specific entity |
+| Layer regeneration | After `/layers/generate?mode=regenerate` | Re-fetch canvas graph + reposition |
+| Picker confirm | After `/sub-objectives/confirm` | Add new node to canvas |
+
+**Specific event-to-invalidation mapping:**
+
+| Event | Invalidates |
+|---|---|
+| `score` decision | Node health on the feature's parent sub-objective |
+| `rd_iterate` decision | Variations list at item altitude |
+| `chains_enriched` | All edges (re-compute thickness + loop detection) |
+| `layers_generated` | Whole canvas (reposition on new layer stack) |
+| `confirm` (sub-objective added) | Add new node to canvas |
+| `approve_bet` | Edge style on the chain |
+| `disposition` | Variation node coloring at item altitude |
+
+**Map-emitted events (logged to notebook):**
+
+| User action | Notebook event | Visible in agent context |
+|---|---|---|
+| Zoom to room | `map_view_changed` | Agent knows current altitude |
+| Click loop annotation | `loop_highlighted` | Agent can explain the loop |
+| Drag a node | `node_pinned` | Agent notes user's spatial preference |
+| Draw inter-sub-obj edge | `chain_proposed` | Agent reviews + suggests persistence |
+| Toggle health overlay | `map_view_changed` w/ subaction | Agent knows what user is reading |
+
+### 17.10 Agent integration — 4 new tools
+
+| Tool | Args | Effect |
+|---|---|---|
+| `highlight_loop` | `{ loop_id }` | Pulses loop's nodes + edges; pans/zooms to fit |
+| `propose_chain` | `{ from_sub_id, to_sub_id, polarity, rationale }` | Draws proposed cross-room edge; user confirms to persist |
+| `pin_layer` | `{ layer_ordinal }` | Collapses other layers; focuses on one |
+| `focus_node` | `{ node_id }` | Pans/zooms map to center this node |
+
+Agent system prompt extension:
+
+```
+MAP AWARENESS:
+You can read the current map state — the user's currently-focused node,
+detected loops, layer coverage, recent events. When answering "what
+should I focus on?" questions, reference SPECIFIC nodes + loops by
+name. Never give generic strategic advice when concrete map state is
+available.
+
+When the user asks "why does X loop exist?", explain the polarity flow
+explicitly — count negatives, identify the type.
+
+When you fire focus_node or highlight_loop, narrate it in the message
+so the user knows what's happening on the map.
+```
+
+### 17.11 Anti-patterns
+
+| Don't | Why |
+|---|---|
+| Use force-directed layout at canvas altitude | Layer stack needs deterministic positioning. ELK layered is the right algorithm. |
+| Render mockups as full screenshots at canvas altitude | Performance killer + visual noise. Mockups only at L3. |
+| Auto-pan on every refresh | Disorienting. Only pan on explicit user focus / zoom. |
+| Try to put all 4 altitudes in one giant graph | Cognitive overload. C4 zoom is the answer. |
+| Hide the cards view | Many users prefer linear browse. Toggle, don't replace. |
+| Couple to a specific layout engine | Wrap ELK + Dagre behind `useLayoutAlgorithm` for swappability. |
+| Persist node positions globally | Per-user via `causal_map_state` — different users have different mental maps. |
+| Render edges from EVERY analysis finding | Threshold by severity (high+critical only) to keep canvas readable. |
+| Fire decision-log events for every micro-interaction | `map_view_changed` debounces 500ms — only emit settled state. |
+| Re-fetch entire graph on every signal | Field-level invalidation via React Query / SWR with granular keys. |
+
+### 17.12 Edge cases
+
+| Scenario | Behavior |
+|---|---|
+| Empty canvas (no sub-objectives) | Map renders empty layer bands + "Confirm sub-objectives to populate the map" placeholder |
+| Pre-Phase-11.A space (no layer stack) | Falls back to force-directed layout WITHOUT layer bands; chip: "Generate layers to enable layered view" |
+| Pre-Phase-11.4 chains (no enrichment) | Edges render with NEUTRAL coloring; chip: "Enrich chains for polarity + strength" |
+| Pre-Phase-11.6 baselines | Variation nodes show composite only, no indicator breakdown |
+| Mobile (≤1100px) | Map degrades to existing card grid; chip: "Map view requires desktop" |
+| Huge canvas (>30 sub-objectives) | Viewport culling + cluster auto-collapse |
+| Real-time refresh while user is panning | Defer invalidation until pan settles |
+| Two users on same canvas in real-time | Each user has independent `causal_map_state`; map content same; pin positions per-user |
+| Loop detection fails (race) | Render without loop annotations; show "Loops re-computing…" chip |
+| Auto-layout fails | Fall back to grid layout; log to console |
+
+### 17.13 Cross-altitude provenance — end-to-end trace
+
+When user clicks a variation's mockup at L3, they should be able to TRACE through every layer that produced it:
+
+```
+1. Mockup at L3      ←ROLLS UP TO— variation card
+2. Variation at L2   ←PRODUCES— composite score per indicator (matrix row)
+3. Indicators at L2  ←MEASURED FROM— the parent outcome at L1
+4. Outcome at L1     ←CHAINED FROM— pain via feature (3-node CLD)
+5. Room at L0        ←POSITIONED ON— layer N of the canvas stack
+6. Sub-objective L0  ←INFLUENCES— other sub-objectives via cross-room edges
+7. Layer L_N         ←DEPENDS ON— layers below it
+```
+
+Breadcrumb at top of every altitude makes this provenance visible:
+
+```
+Canvas (Cognition · L1-L5) > L3 Cognitive States > Attention Regulation > Pomodoro > Classic 25/5
+                                                                                       │
+                                                                                       ▼
+                                                                              [mockup preview iframe]
+```
+
+Each segment hover-able — hovering shows what THAT altitude's work contributes to the chain.
+
+### 17.14 Migration / mount strategy
+
+Phased rollout to avoid breaking existing flows:
+
+**Stage 1 (12.A.1–A.7):** Map exists as a toggle alongside existing Cards view. Default = Cards. User opts into Map via a top-chrome toggle.
+
+**Stage 2 (12.A.8–A.11):** Map gets its own URL params (`?view=map`), shareable, persisted in `causal_map_state.altitude`.
+
+**Stage 3 (future):** Once usage signals which view users prefer, switch default per-user based on last-used view.
+
+Cards grid never removed — serves real purpose for linear browse + early-stage canvases without enough structure for a map.
+
+### 17.15 The single most important UX moment
+
+First time user clicks `🗺 Map` on the canvas. Three things must happen in <500ms:
+
+1. Cards view fades out
+2. Map fades in with sub-objective nodes appearing at their layer positions
+3. First detected loop (if any) gets a gentle pulse + chat agent drops a notebook message: "I see one reinforcing loop in your canvas — click R to highlight it, or ask me to explain."
+
+This moment transforms "I'm browsing my work" into "I'm looking at the system I'm building." Everything else in this spec is in service of that landing cleanly.
+
+### 17.16 What this phase locks in (the bigger picture)
+
+The central design principle: **the canvas IS a causal system map.** Once shipped, every existing feature reframes:
+
+- Theme clusters → node groupings on the map
+- Chain enrichment → edge thickness + loop detection
+- Layer stack → positional Y-axis
+- Cross-room analysis → edge palette
+- Autopilot → live update stream
+- Chat agent → narrator + co-pilot
+- Lab page → drill-down for variation altitude
+- Notebook → audit trail of map interactions
+
+The map becomes the single VISUAL truth. Other surfaces feed it. Nothing competes for "the main view" anymore.
+
+---
+
 ## 14. Changelog
 
 - **2026-05-27** Initial draft after Phase 9 ship. Captures pre-room, room, per-item, cross-room operations + Phase 10 design substrate.
 - **2026-05-27 (later same session)** Folded in: experiments-library-view (cross-workspace prototype browser), concept-memory-feed-strip, both decision surfaces (item + canvas altitudes), incremental-cut-lab, prototype/status PATCH lifecycle (4 statuses + null), verified `sub-objectives/add` logs `confirm`, verified pipeline-tier research emits `pipeline_run_events` while brainstorm-tier doesn't.
+- **2026-05-27 (session end)** Phase 11.A foundation through chip integration shipped (commits 002e01f, e29c2c8, 0c655d1, 00c953e, e4452b3). 9 of 12 sub-phases (75%): migration + types + decompose-into-layers LLM + endpoints + ObjectiveStack widget + LayerPositionChip + proposer extension + auto-fire trigger + layer_coverage analysis + notebook event wiring. Critical path to "user sees the stack on the picker" complete; A.8/A.9/A.12 deferred (hot files).
+- **2026-05-27 (session end)** Added §17 — Phase 12.A Causal System Map spec. Locks the pivot from "grid of cards" to "multi-altitude causal system visualization." 16 sub-decisions (N1-N10 + architecture) + migration + 30 new files spec + critical path (12.A.1→A.2→A.3→A.4→A.7→A.9 = ~2080 lines). React Flow + ELK.js + Dagre + framer-motion. Reuses all existing data substrate (layers, chains, mediators, indicators, mockups) — pure visualization layer over what already exists.
