@@ -17,12 +17,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import {
   runLayeredGeneration,
+  runDefineStage,
   linkCorrelations,
   linkWithinLayer,
   type RoomContext,
   type RoomCategoryEnum,
   type OutcomeItem,
 } from "@/lib/objective-canvas/layered-generation";
+import { buildDeclaredEdgeRows } from "@/lib/objective-canvas/declared-edges";
+import { buildCrossRoomFindingsBlock } from "@/lib/objective-canvas/room-cross-room-block";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import {
   generateRoomCategories,
@@ -81,6 +84,16 @@ interface Body {
   spaceId?: string;
   subObjectiveId?: string;
   mode?: "initial" | "regenerate";
+  /** Arc 3.6 — checkpoint phase:
+   *   "define"     — generate ONLY problems (pain) + results (outcome)
+   *                  + the objective anchor. No features, no edges,
+   *                  room_layers_generated_at stays null → the room
+   *                  sits at the review checkpoint.
+   *   "all"        — the one-shot full generation (DEFAULT, unchanged).
+   *  The mechanism (feature) phase lives in its own endpoint,
+   *  /api/brainstorm/room/[subObjectiveId]/mechanisms, so the user can
+   *  review/edit/sharpen problems + results first. */
+  phase?: "define" | "all";
 }
 
 const LAYER_SLUGS = ["pain", "features", "outcomes", "objective"] as const;
@@ -104,6 +117,10 @@ export async function POST(req: NextRequest) {
   }
   const mode: "initial" | "regenerate" =
     body?.mode === "regenerate" ? "regenerate" : "initial";
+  // Arc 3.6 — phase defaults to "all" (one-shot) so every existing
+  // caller (autopilot, manual "Generate", regenerate) behaves exactly
+  // as before. "define" is opt-in for the checkpoint flow.
+  const phase: "define" | "all" = body?.phase === "define" ? "define" : "all";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = auth.supabase as any;
@@ -206,6 +223,30 @@ export async function POST(req: NextRequest) {
       summary: { pain_count: 0, outcome_count: 0, feature_count: 0, edge_count: 0 },
       cached: true,
     });
+  }
+
+  // Arc 3.6 — checkpoint idempotency. A define-phase re-run with mode
+  // "initial" must NOT duplicate pain/outcome. If the room already has
+  // entities (it's parked at the checkpoint, or complete), no-op — the
+  // client just re-reads them. "Redo problems/results" uses mode
+  // "regenerate" instead, which cascade-deletes first (below).
+  if (phase === "define" && mode === "initial") {
+    const { count } = await db
+      .from("entities")
+      .select("id", { count: "exact", head: true })
+      .eq("parent_sub_objective_id", subObjectiveId);
+    if ((count ?? 0) > 0) {
+      return NextResponse.json({
+        summary: {
+          pain_count: 0,
+          outcome_count: 0,
+          feature_count: 0,
+          edge_count: 0,
+        },
+        cached: true,
+        phase: "defined",
+      });
+    }
   }
 
   if (mode === "regenerate") {
@@ -366,9 +407,18 @@ export async function POST(req: NextRequest) {
   // negative_outcome, root_causes[], influence_rank; feature →
   // positive_outcome, first_principles[]; outcome → measured_by)
   // plus the room-level top_negative_outcome.
+  // Arc 3.6 — phase gates how much we generate. "define" runs only
+  // stages A+B (pain + outcome); features stay [] so the checkpoint UI
+  // can render problems + results for review before mechanisms commit.
+  // "all" is the one-shot (pain → outcome → feature), unchanged.
   let gen: Awaited<ReturnType<typeof runLayeredGeneration>>;
   try {
-    gen = await runLayeredGeneration(ctx);
+    if (phase === "all") {
+      gen = await runLayeredGeneration(ctx);
+    } else {
+      const def = await runDefineStage(ctx);
+      gen = { ...def, features: [] };
+    }
   } catch (err) {
     return NextResponse.json(
       { error: `generation failed: ${sanitizeErrorMessage(err)}` },
@@ -600,117 +650,22 @@ export async function POST(req: NextRequest) {
     return base;
   });
 
-  // ── Arc 3.2 — declared-primary edges (two-phase grounding) ──────
-  // Build Pain→Feature + Feature→Outcome edges DIRECTLY from each
-  // feature's declared addresses[]/moves[] bindings. These reflect the
-  // mechanism's STATED causal intent (which root_cause it counters,
-  // which indicator it moves), so they're higher-confidence than the
-  // inferred correlation pass — which now runs only to fill in links
-  // the features did NOT declare (deduped against declaredPairs below).
-  const painIdByName = new Map<string, string>();
-  const outcomeIdByName = new Map<string, string>();
-  const featureIdByName = new Map<string, string>();
-  for (const e of inserted) {
-    const layer = slugByLayerId.get(e.layer_ontology_id);
-    if (layer === "pain") painIdByName.set(e.name.toLowerCase(), e.id);
-    else if (layer === "outcomes")
-      outcomeIdByName.set(e.name.toLowerCase(), e.id);
-    else if (layer === "features")
-      featureIdByName.set(e.name.toLowerCase(), e.id);
-  }
-  // Resolve a declared endpoint name → entity id. Exact (case-
-  // insensitive) first, then a contains-fallback for slight LLM
-  // paraphrases. Returns null when nothing plausibly matches (the
-  // binding is then dropped — correlation may still catch it).
-  const resolveId = (
-    m: Map<string, string>,
-    name: string,
-  ): string | null => {
-    if (!name) return null;
-    const lower = name.toLowerCase();
-    const exact = m.get(lower);
-    if (exact) return exact;
-    for (const [k, v] of m) {
-      if (k.includes(lower) || lower.includes(k)) return v;
-    }
-    return null;
-  };
-  const declaredPairs = new Set<string>();
-  const declaredEdgeRows: Array<Record<string, unknown>> = [];
-  for (const f of features) {
-    const fid = featureIdByName.get(f.name.toLowerCase());
-    if (!fid) continue;
-    for (const a of f.addresses ?? []) {
-      const pid = resolveId(painIdByName, a.pain);
-      if (!pid) continue;
-      const key = `${pid}|${fid}`;
-      if (declaredPairs.has(key)) continue;
-      declaredPairs.add(key);
-      declaredEdgeRows.push({
-        space_id: spaceId,
-        parent_sub_objective_id: subObjectiveId,
-        source_entity_id: pid,
-        target_entity_id: fid,
-        relationship_type: "addressed_by",
-        dimension: "causal",
-        source_tag: "inferred",
-        strength: 0.72,
-        polarity: "negative",
-        confidence: 0.7,
-        conditions: a.root_cause
-          ? `Declared: feature addresses root cause "${a.root_cause}"`.slice(
-              0,
-              500,
-            )
-          : "Declared binding (feature addresses pain)",
-        agent_feedback: {
-          mechanism: a.root_cause
-            ? a.root_cause.slice(0, 60)
-            : "addresses pain",
-          binding: "declared",
-          ...(a.root_cause ? { root_cause: a.root_cause } : {}),
-        },
-      });
-    }
-    for (const mv of f.moves ?? []) {
-      const oid = resolveId(outcomeIdByName, mv.outcome);
-      if (!oid) continue;
-      const key = `${fid}|${oid}`;
-      if (declaredPairs.has(key)) continue;
-      declaredPairs.add(key);
-      declaredEdgeRows.push({
-        space_id: spaceId,
-        parent_sub_objective_id: subObjectiveId,
-        source_entity_id: fid,
-        target_entity_id: oid,
-        // "produces" edge — the feature positively produces the
-        // desired outcome state. The indicator's good direction lives
-        // in agent_feedback.direction; edge polarity is positive
-        // because the feature drives the outcome (matches the
-        // enrich-chains complementary-edge convention).
-        relationship_type: "produces",
-        dimension: "causal",
-        source_tag: "inferred",
-        strength: 0.72,
-        polarity: "positive",
-        confidence: 0.7,
-        conditions: mv.indicator
-          ? `Declared: feature moves indicator "${mv.indicator}" (${mv.direction})`.slice(
-              0,
-              500,
-            )
-          : "Declared binding (feature produces outcome)",
-        agent_feedback: {
-          mechanism: mv.indicator
-            ? mv.indicator.slice(0, 60)
-            : "produces outcome",
-          binding: "declared",
-          ...(mv.indicator ? { indicator: mv.indicator } : {}),
-          direction: mv.direction,
-        },
-      });
-    }
-  }
+  // ── Arc 3.2/3.6 — declared-primary edges from feature bindings ──
+  // Built via the shared pure builder (declared-edges.ts) so the
+  // /room/[subId]/mechanisms checkpoint endpoint stays in lockstep —
+  // one source of truth, no drift. Empty in "define" phase (features
+  // is []) — a natural no-op. Higher-confidence than the correlation
+  // pass below; declaredPairs dedupes that pass.
+  const byLayerInserted = (slug: "pain" | "outcomes" | "features") =>
+    inserted.filter((e) => slugByLayerId.get(e.layer_ontology_id) === slug);
+  const { rows: declaredEdgeRows, declaredPairs } = buildDeclaredEdgeRows({
+    features,
+    painEntities: byLayerInserted("pain"),
+    outcomeEntities: byLayerInserted("outcomes"),
+    featureEntities: byLayerInserted("features"),
+    spaceId,
+    subObjectiveId,
+  });
   let declaredEdgeCount = 0;
   if (declaredEdgeRows.length > 0) {
     const declaredInsert = await db
@@ -736,12 +691,22 @@ export async function POST(req: NextRequest) {
   let correlations: Awaited<ReturnType<typeof linkCorrelations>> = [];
   let correlationWarning: string | null = null;
   try {
-    correlations = await linkCorrelations(ctx, itemRefs);
+    // Arc 3.6 — skip the correlation LLM call in "define" phase: there
+    // are no features yet, so there's no Pain→Feature→Outcome chain to
+    // correlate (the /mechanisms phase runs it). For "all" it runs as
+    // the supplementary pass that fills links features didn't declare.
+    if (phase === "all") {
+      correlations = await linkCorrelations(ctx, itemRefs);
+    }
     // Arc 3.2 — only warn when there's NO chain at all. Declared-
     // primary edges (built above from feature bindings) already give
     // the room a Pain→Feature→Outcome spine, so a 0-correlation result
     // is fine when declaredEdgeCount > 0 — don't nag the user to retry.
-    if (correlations.length === 0 && declaredEdgeCount === 0) {
+    if (
+      phase === "all" &&
+      correlations.length === 0 &&
+      declaredEdgeCount === 0
+    ) {
       correlationWarning =
         "The correlation step returned 0 edges meeting the strength threshold. Click 'Generate correlations' in the side panel to retry.";
     }
@@ -823,7 +788,10 @@ export async function POST(req: NextRequest) {
   // among features only. Soft-fail throughout; missing within-layer
   // edges don't block room finalization.
   try {
-    const withinLayerLinks = await linkWithinLayer(ctx, itemRefs);
+    // Arc 3.6 — within-layer links are feature↔feature; none exist in
+    // "define" phase, so skip the LLM call there.
+    const withinLayerLinks =
+      phase === "all" ? await linkWithinLayer(ctx, itemRefs) : [];
     if (withinLayerLinks.length > 0) {
       const lateralRows = withinLayerLinks.map((l) => ({
         space_id: spaceId,
@@ -874,13 +842,21 @@ export async function POST(req: NextRequest) {
   //    adaptive lane labels. lane_labels is a jsonb the room page
   //    reads to override the canonical Pain/Features/Outcomes/
   //    Objective names with domain-appropriate ones. ──
+  // Arc 3.6 — only stamp room_layers_generated_at when the FULL room
+  // (incl. mechanisms) is built. In "define" phase we persist the
+  // header anchor + lane labels but leave generatedAt null, so the
+  // room view detects the checkpoint state (pain+outcome present,
+  // features empty, generatedAt null) and renders the review surface.
+  const goalUpdate: Record<string, unknown> = {
+    top_negative_outcome: top_negative_outcome || null,
+    room_lane_labels: lane_labels,
+  };
+  if (phase === "all") {
+    goalUpdate.room_layers_generated_at = new Date().toISOString();
+  }
   await db
     .from("improvement_goals")
-    .update({
-      room_layers_generated_at: new Date().toISOString(),
-      top_negative_outcome: top_negative_outcome || null,
-      room_lane_labels: lane_labels,
-    })
+    .update(goalUpdate)
     .eq("id", subObjectiveId);
 
   // Phase 10a — log room_generated for the Lab Notebook. The room
@@ -893,6 +869,9 @@ export async function POST(req: NextRequest) {
     action: "room_generated",
     metadata: {
       mode,
+      // Arc 3.6 — "defined" = checkpoint (pain+outcome only);
+      // "complete" = full room (incl. mechanisms + edges).
+      phase: phase === "all" ? "complete" : "defined",
       room_layer_counts: {
         pain: pain.length,
         features: features.length,
@@ -956,80 +935,13 @@ export async function POST(req: NextRequest) {
       feature_count: features.length,
       edge_count: edgeCount,
     },
+    // Arc 3.6 — "defined" = room parked at the problem/result
+    // checkpoint (call /mechanisms next); "complete" = full room.
+    phase: phase === "all" ? "complete" : "defined",
     // null when correlations populated cleanly; populated string
     // when the LLM correlation step failed OR returned 0 edges.
     // The client surfaces this as a banner so the user knows to
     // retry from the side panel.
     correlation_warning: correlationWarning,
   });
-}
-
-// ── K2 Wire 4 — cross-room findings prompt block ──────────────────
-//
-// Renders the space's cached cross-room findings (themes / recurring
-// mechanisms / orphan annotations) as a compact block the new
-// room's prompts can read. Designed for SHORT inclusion — only the
-// signal density that actually changes what the LLM should emit.
-//
-// Skipped entirely when no analysis cache exists (first room in a
-// space) or when only Tier 1 findings exist that don't matter for
-// generation (e.g., low-severity orphans).
-
-function buildCrossRoomFindingsBlock(
-  analysis: CrossRoomAnalysisState | null,
-): string {
-  if (!analysis || !Array.isArray(analysis.findings)) return "";
-  const live = analysis.findings.filter(
-    (f) => f.disposition !== "dismissed",
-  );
-  if (live.length === 0) return "";
-
-  // Themes — load-bearing recurring concepts.
-  const themes = live
-    .filter((f) => f.analysis_key === "distill_concepts")
-    .slice(0, 3);
-  // Recurring mechanisms — same lever in ≥2 rooms.
-  const recurring = live
-    .filter((f) => f.analysis_key === "shared_mechanisms")
-    .slice(0, 4);
-  // Orphan annotations — high-weight lens readings NO room derived
-  // from. These are gap candidates the new room could fill.
-  const orphans = live
-    .filter(
-      (f) =>
-        f.analysis_key === "orphan_annotations" &&
-        (f.severity === "high" || f.severity === "critical"),
-    )
-    .slice(0, 3);
-
-  if (themes.length === 0 && recurring.length === 0 && orphans.length === 0) {
-    return "";
-  }
-
-  const lines: string[] = [
-    "CROSS-ROOM CONTEXT (what other rooms in this space have already produced — RESPECT, don't re-propose):",
-  ];
-  if (themes.length > 0) {
-    lines.push("  Recurring themes:");
-    for (const t of themes) {
-      lines.push(`    • ${t.title}${t.summary ? ` — ${t.summary}` : ""}`);
-    }
-  }
-  if (recurring.length > 0) {
-    lines.push(
-      "  Mechanisms already used in sibling rooms (don't redundantly re-design):",
-    );
-    for (const r of recurring) {
-      lines.push(`    • ${r.title}`);
-    }
-  }
-  if (orphans.length > 0) {
-    lines.push(
-      "  Parent-objective readings NO sibling room covers (gap-fill candidates if relevant):",
-    );
-    for (const o of orphans) {
-      lines.push(`    • ${o.title}`);
-    }
-  }
-  return `\n\n${lines.join("\n")}\n`;
 }

@@ -1356,6 +1356,54 @@ Phase 8 FULL-COVERAGE: every one of the ${layerCounts.features ?? 0} feature(s) 
 
 // ── Orchestrator ───────────────────────────────────────────────────
 
+// ── Checkpoint split (Arc 3.6) ─────────────────────────────────────
+//
+// The room generator's natural order is problem (pain) → result
+// (outcome) → mechanism (feature). To let the user REVIEW + EDIT +
+// SHARPEN the problem and result BEFORE mechanisms commit, the
+// orchestrator is split into two stages the route can run
+// independently:
+//
+//   runDefineStage    — stages A+B (pain + outcome). Produces the
+//                       "problem & result" substrate the checkpoint UI
+//                       renders. Carries indicator_specs (Arc 3.2) so
+//                       results are measurable from the start.
+//   runMechanismStage — stage C (features), fed the (possibly user-
+//                       EDITED) pains + outcomes. Because Arc 3.2 makes
+//                       each feature DECLARE addresses[]/moves[] against
+//                       specific root_causes + indicators, editing a
+//                       root_cause/indicator at the checkpoint changes
+//                       which binding the mechanism declares — the edit
+//                       propagates straight into the causal chain.
+//
+// runLayeredGeneration stays as the one-shot wrapper (autopilot +
+// phase:"all" back-compat) — it just calls both in sequence.
+
+export async function runDefineStage(ctx: RoomContext): Promise<{
+  pain: PainItem[];
+  outcomes: OutcomeItem[];
+  top_negative_outcome: string;
+  lane_labels: LaneLabels;
+}> {
+  const painPass = await generatePainPoints(ctx);
+  const outcomes = await generateOutcomes(ctx, painPass.items);
+  return {
+    pain: painPass.items,
+    outcomes,
+    top_negative_outcome: painPass.top_negative_outcome,
+    lane_labels: painPass.lane_labels,
+  };
+}
+
+export async function runMechanismStage(
+  ctx: RoomContext,
+  pain: PainItem[],
+  outcomes: OutcomeItem[],
+): Promise<{ features: FeatureItem[] }> {
+  const features = await generateFeatures(ctx, pain, outcomes);
+  return { features };
+}
+
 export async function runLayeredGeneration(ctx: RoomContext): Promise<{
   pain: PainItem[];
   outcomes: OutcomeItem[];
@@ -1363,15 +1411,18 @@ export async function runLayeredGeneration(ctx: RoomContext): Promise<{
   top_negative_outcome: string;
   lane_labels: LaneLabels;
 }> {
-  const painPass = await generatePainPoints(ctx);
-  const outcomes = await generateOutcomes(ctx, painPass.items);
-  const features = await generateFeatures(ctx, painPass.items, outcomes);
+  const define = await runDefineStage(ctx);
+  const { features } = await runMechanismStage(
+    ctx,
+    define.pain,
+    define.outcomes,
+  );
   return {
-    pain: painPass.items,
-    outcomes,
+    pain: define.pain,
+    outcomes: define.outcomes,
     features,
-    top_negative_outcome: painPass.top_negative_outcome,
-    lane_labels: painPass.lane_labels,
+    top_negative_outcome: define.top_negative_outcome,
+    lane_labels: define.lane_labels,
   };
 }
 
