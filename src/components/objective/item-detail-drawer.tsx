@@ -32,7 +32,6 @@ import {
   Compass,
   ExternalLink,
   FileCode,
-  FileText,
   FlaskConical,
   Highlighter,
   Layers,
@@ -50,6 +49,7 @@ import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 import { ThumbsRating } from "@/components/objective/thumbs-rating";
 import type { VariationScoreEnvelope } from "@/lib/objective-canvas/score-variation-effectiveness";
+import type { MechanismSpec } from "@/lib/objective-canvas/enrich-mechanism-spec";
 import {
   DecisionSurface,
   DECISION_ANCHORS,
@@ -353,6 +353,11 @@ interface ExpandedItemDetail {
     }>;
   };
   generated_at?: string;
+  /** Arc 3.1 — engineering-grade technical spec for FEATURE items.
+   *  Generated on demand via the Mechanism section button (POST
+   *  /api/brainstorm/item/[entityId]/mechanism-spec) or the canvas
+   *  autopilot. Imported lib type — no local mirror needed. */
+  mechanism_spec?: MechanismSpec | null;
 }
 
 const FACET_COLOR: Record<VariationFacet, string> = {
@@ -1108,6 +1113,28 @@ export function ItemDetailDrawer({
                   </p>
                 )}
               </Section>
+
+              {/* ── MECHANISM (Arc 3.1 — technical spec, feature-only) ──
+                  The Definition above says WHAT this mechanism is in
+                  plain language; this section says HOW it works as a
+                  system: mechanism of action (priority), active
+                  ingredients (priority), then collapsible procedure /
+                  components / dosage / fidelity / research basis.
+                  Only meaningful for the FEATURE lane — a pain or
+                  outcome has no "mechanism" to spec. */}
+              {itemLayer === "features" && entityId && (
+                <MechanismSpecPanel
+                  entityId={entityId}
+                  spec={expanded?.mechanism_spec}
+                  onSpecGenerated={(s) =>
+                    setExpanded((prev) =>
+                      prev
+                        ? { ...prev, mechanism_spec: s }
+                        : { mechanism_spec: s },
+                    )
+                  }
+                />
+              )}
 
               {/* ── 2. INSPIRATION (per-item research) ── */}
               <Section
@@ -4144,6 +4171,386 @@ function formatRelativeShort(iso: string): string {
 // Score lives in component state only — closes with the drawer.
 // Phase 4c will persist into expanded_detail.variations[].effectiveness_score
 // so scores survive re-opens. For now this is a working preview.
+
+// ── Mechanism Spec Panel (Arc 3.1) ────────────────────────────────
+//
+// The engineering-grade technical depth layer for FEATURE items. The
+// Definition (above) says what the mechanism IS in plain language;
+// this says HOW it works as a system. Self-contained: own fetch, own
+// loading/error state, own collapse. Priority-first per the user's
+// directive — mechanism_of_action + active ingredients are always
+// visible; the deeper spec (procedure / components / dosage / fidelity
+// / research) lives behind a "Technical detail" toggle.
+//
+// Data comes from entities.expanded_detail.mechanism_spec, generated
+// by POST /api/brainstorm/item/[entityId]/mechanism-spec.
+
+const EVIDENCE_TONE: Record<
+  MechanismSpec["research_basis"]["evidence_strength"],
+  { label: string; color: string; bg: string }
+> = {
+  established: {
+    label: "Established",
+    color: "rgba(22,101,52,0.95)",
+    bg: "rgba(22,163,74,0.12)",
+  },
+  plausible: {
+    label: "Plausible",
+    color: "rgba(146,64,14,0.95)",
+    bg: "rgba(217,119,6,0.12)",
+  },
+  speculative: {
+    label: "Speculative",
+    color: "rgba(71,85,105,0.95)",
+    bg: "rgba(100,116,139,0.12)",
+  },
+};
+
+const MODE_LABEL: Record<MechanismSpec["use_case_mode"], string> = {
+  consumer_app: "feature spec",
+  personal_health: "intervention protocol",
+  scientific: "experimental method",
+};
+
+function MechanismSpecPanel({
+  entityId,
+  spec,
+  onSpecGenerated,
+}: {
+  entityId: string;
+  spec: MechanismSpec | null | undefined;
+  onSpecGenerated: (spec: MechanismSpec) => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+
+  const generate = useCallback(async () => {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/brainstorm/item/${entityId}/mechanism-spec`,
+        { method: "POST" },
+      );
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.mechanism_spec) {
+        setError(
+          (json && typeof json.error === "string" && json.error) ||
+            "Couldn't generate the mechanism spec — try again.",
+        );
+        return;
+      }
+      onSpecGenerated(json.mechanism_spec as MechanismSpec);
+      setShowDetail(true);
+    } catch {
+      setError("Network error — try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, [entityId, loading, onSpecGenerated]);
+
+  const evidence = spec ? EVIDENCE_TONE[spec.research_basis.evidence_strength] : null;
+
+  return (
+    <Section
+      icon={<FileCode className="h-3 w-3" strokeWidth={1.75} />}
+      title="Mechanism"
+      subtitle={spec ? MODE_LABEL[spec.use_case_mode] : undefined}
+      action={
+        <button
+          type="button"
+          onClick={generate}
+          disabled={loading}
+          className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[9.5px] font-semibold"
+          style={{
+            background: appleVibe.surface.chip,
+            color: appleVibe.text.tertiary,
+            cursor: loading ? "wait" : "pointer",
+          }}
+          title={
+            spec
+              ? "Regenerate the technical spec"
+              : "Generate the technical mechanism spec"
+          }
+        >
+          {spec ? (
+            <RefreshCw
+              className={`h-2.5 w-2.5 ${loading ? "animate-spin" : ""}`}
+              strokeWidth={2}
+            />
+          ) : (
+            <Plus
+              className={`h-2.5 w-2.5 ${loading ? "animate-pulse" : ""}`}
+              strokeWidth={2}
+            />
+          )}
+          {loading ? "Working…" : spec ? "Regenerate" : "Generate"}
+        </button>
+      }
+    >
+      {loading && !spec ? (
+        <SkeletonLines lines={4} />
+      ) : error ? (
+        <ErrorRow message={error} />
+      ) : !spec ? (
+        <p
+          className="text-[12px] font-light leading-snug"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          No technical spec yet. Generate one to see how this mechanism
+          actually works — its active ingredients, procedure, what to
+          build, and how you&apos;d validate it.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {/* ── PRIORITY: mechanism of action ── */}
+          <div
+            className="rounded-2xl p-3"
+            style={{
+              background: "rgba(37,99,235,0.05)",
+              border: `1px solid rgba(37,99,235,0.16)`,
+            }}
+          >
+            <div
+              className="mb-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+              style={{ color: "rgba(30,64,175,0.95)" }}
+            >
+              How it produces the effect
+            </div>
+            <p
+              className="text-[12.5px] font-light leading-relaxed"
+              style={{ color: appleVibe.text.primary }}
+            >
+              {spec.mechanism_of_action}
+            </p>
+          </div>
+
+          {/* ── PRIORITY: active ingredients (the load-bearing parts) ── */}
+          {spec.active_ingredients.length > 0 && (
+            <div>
+              <div
+                className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                Active ingredients
+              </div>
+              <ul className="flex flex-col gap-1">
+                {spec.active_ingredients.map((a, i) => (
+                  <li
+                    key={i}
+                    className="rounded-xl px-2.5 py-1.5"
+                    style={{
+                      background: "rgba(255,255,255,0.6)",
+                      border: `1px solid ${appleVibe.stroke.hairline}`,
+                    }}
+                  >
+                    <span
+                      className="text-[12px] font-semibold"
+                      style={{ color: appleVibe.text.primary }}
+                    >
+                      {a.name}
+                    </span>
+                    <span
+                      className="text-[11.5px] font-light leading-snug"
+                      style={{ color: appleVibe.text.secondary }}
+                    >
+                      {" "}
+                      — {a.role}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* ── Evidence chip + detail toggle ── */}
+          <div className="flex items-center justify-between gap-2">
+            {evidence && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                style={{ background: evidence.bg, color: evidence.color }}
+                title="How well-supported this mechanism is"
+              >
+                <Shield className="h-2.5 w-2.5" strokeWidth={2} />
+                Evidence: {evidence.label}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowDetail((v) => !v)}
+              className="inline-flex items-center gap-0.5 text-[10.5px] font-semibold"
+              style={{ color: appleVibe.text.tertiary }}
+              aria-expanded={showDetail}
+            >
+              {showDetail ? (
+                <ChevronUp className="h-3 w-3" strokeWidth={2} />
+              ) : (
+                <ChevronDown className="h-3 w-3" strokeWidth={2} />
+              )}
+              {showDetail ? "Hide technical detail" : "Technical detail"}
+            </button>
+          </div>
+
+          {/* ── COLLAPSIBLE: full technical spec ── */}
+          {showDetail && (
+            <div className="flex flex-col gap-3">
+              {spec.how_it_works.length > 0 && (
+                <div>
+                  <div
+                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    How it works (procedure)
+                  </div>
+                  <ol className="flex flex-col gap-1">
+                    {spec.how_it_works.map((step, i) => (
+                      <li
+                        key={i}
+                        className="flex gap-2 rounded-xl px-2.5 py-1.5 text-[11.5px] font-light leading-snug"
+                        style={{
+                          background: "rgba(255,255,255,0.6)",
+                          border: `1px solid ${appleVibe.stroke.hairline}`,
+                          color: appleVibe.text.primary,
+                        }}
+                      >
+                        <span
+                          className="flex-shrink-0 font-semibold"
+                          style={{ color: appleVibe.text.tertiary }}
+                        >
+                          {i + 1}.
+                        </span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {spec.system_components.length > 0 && (
+                <div>
+                  <div
+                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    What to build
+                  </div>
+                  <ul className="flex flex-col gap-1">
+                    {spec.system_components.map((c, i) => (
+                      <li
+                        key={i}
+                        className="rounded-xl px-2.5 py-1.5"
+                        style={{
+                          background: "rgba(255,255,255,0.6)",
+                          border: `1px solid ${appleVibe.stroke.hairline}`,
+                        }}
+                      >
+                        <div className="flex items-baseline gap-1.5">
+                          <span
+                            className="text-[12px] font-semibold"
+                            style={{ color: appleVibe.text.primary }}
+                          >
+                            {c.name}
+                          </span>
+                          <span
+                            className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
+                            style={{
+                              background: appleVibe.surface.chip,
+                              color: appleVibe.text.faint,
+                            }}
+                          >
+                            {c.category}
+                          </span>
+                        </div>
+                        <p
+                          className="mt-0.5 text-[11.5px] font-light leading-snug"
+                          style={{ color: appleVibe.text.secondary }}
+                        >
+                          {c.detail}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {spec.dosage && (
+                <div>
+                  <div
+                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Dosage
+                  </div>
+                  <p
+                    className="rounded-xl px-2.5 py-1.5 text-[11.5px] font-light leading-snug"
+                    style={{
+                      background: "rgba(255,255,255,0.6)",
+                      border: `1px solid ${appleVibe.stroke.hairline}`,
+                      color: appleVibe.text.primary,
+                    }}
+                  >
+                    {spec.dosage}
+                  </p>
+                </div>
+              )}
+
+              {spec.fidelity_signals.length > 0 && (
+                <PlanningGroup
+                  label="Done right when"
+                  items={spec.fidelity_signals}
+                  tone="info"
+                />
+              )}
+
+              {/* Research basis — what's known + how to validate */}
+              <div>
+                <div
+                  className="mb-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  <FlaskConical className="h-2.5 w-2.5" strokeWidth={2} />
+                  Research basis
+                </div>
+                <div
+                  className="flex flex-col gap-1.5 rounded-xl px-2.5 py-2"
+                  style={{
+                    background: "rgba(255,255,255,0.6)",
+                    border: `1px solid ${appleVibe.stroke.hairline}`,
+                  }}
+                >
+                  {spec.research_basis.basis && (
+                    <p
+                      className="text-[11.5px] font-light leading-snug"
+                      style={{ color: appleVibe.text.secondary }}
+                    >
+                      {spec.research_basis.basis}
+                    </p>
+                  )}
+                  {spec.research_basis.validation_experiment && (
+                    <p
+                      className="text-[11.5px] font-light leading-snug"
+                      style={{ color: appleVibe.text.primary }}
+                    >
+                      <span
+                        className="font-semibold"
+                        style={{ color: appleVibe.text.tertiary }}
+                      >
+                        How to validate:{" "}
+                      </span>
+                      {spec.research_basis.validation_experiment}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
 
 function VariationScoringPanel({
   entityId,

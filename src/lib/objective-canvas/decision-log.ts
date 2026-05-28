@@ -74,7 +74,15 @@ export type DecisionAction =
   // Phase 11.A — user manually overrode a sub-objective's layer
   // assignment. Surfaces in the notebook with the prior + new
   // ordinals so the audit trail shows tagging history.
-  | "layer_position_set";
+  | "layer_position_set"
+  // Arc 3.1 — mechanism technical-depth spec generated for a FEATURE
+  // entity (POST /api/brainstorm/item/[entityId]/mechanism-spec or
+  // the canvas autopilot). Metadata carries entity_id, entity_name,
+  // evidence_strength, n_active_ingredients, n_components,
+  // use_case_mode so the notebook can render "spec'd Pomodoro Timer
+  // · 4 active ingredients · evidence: plausible". CHECK constraint
+  // extended in 20260903_arc3_1_mechanism_spec_action.sql.
+  | "mechanism_spec_generated";
 
 export interface LogDecisionArgs {
   userId: string;

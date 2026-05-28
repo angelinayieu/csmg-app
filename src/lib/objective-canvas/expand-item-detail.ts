@@ -25,6 +25,7 @@
 import { llmJSON } from "@/lib/llm";
 import type { ObjectiveAnnotation } from "./generate-annotations";
 import type { AnnotationProvenance } from "./layered-generation";
+import type { MechanismSpec } from "./enrich-mechanism-spec";
 import {
   buildConstraintsBlock,
   type OperationalConstraints,
@@ -560,6 +561,17 @@ export interface ExpandedItemDetail {
    *  expanded this item" before treating any of its variations
    *  as auto-gen ready. */
   generated_at?: string;
+  /** Arc 3.1 — engineering-grade technical spec for FEATURE items.
+   *  Generated on demand (drawer button) or by the canvas autopilot
+   *  via POST /api/brainstorm/item/[entityId]/mechanism-spec, NOT by
+   *  expandItemDetail() itself (kept out of the mega-call to avoid
+   *  slowing it + bloating pain/outcome expansions that don't need a
+   *  spec). Net-new depth vs definition/variations/planning:
+   *  mechanism_of_action, active_ingredients[], how_it_works[],
+   *  system_components[], dosage, fidelity_signals[], research_basis.
+   *  See enrich-mechanism-spec.ts. Undefined for pains/outcomes and
+   *  for features the user hasn't spec'd yet. */
+  mechanism_spec?: MechanismSpec | null;
 }
 
 export interface ExpandItemContext {

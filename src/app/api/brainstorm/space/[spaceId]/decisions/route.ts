@@ -64,6 +64,8 @@ const ALLOWED_ACTIONS: ReadonlyArray<DecisionAction> = [
   "layer_position_set",
   // Phase 11.6
   "baseline_set",
+  // Arc 3.1 — mechanism technical-depth spec
+  "mechanism_spec_generated",
 ];
 
 const DEFAULT_LIMIT = 30;

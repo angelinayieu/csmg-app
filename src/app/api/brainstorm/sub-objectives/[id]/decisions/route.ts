@@ -64,6 +64,8 @@ const ALLOWED_ACTIONS: ReadonlyArray<DecisionAction> = [
   "layers_generated",
   "layers_regenerated",
   "layer_position_set",
+  // Arc 3.1 — mechanism technical-depth spec
+  "mechanism_spec_generated",
 ];
 
 const DEFAULT_LIMIT = 30;
@@ -455,6 +457,22 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
                 typeof n === "number" && Number.isFinite(n),
             )
           : undefined,
+        // Arc 3.1 — mechanism technical-depth spec metadata. Renders
+        // an evidence chip + "N ingredients · M components" on the row.
+        spec_evidence_strength: stringOrUndefined(meta.evidence_strength) as
+          | "established"
+          | "plausible"
+          | "speculative"
+          | undefined,
+        spec_active_ingredient_count: numberOrUndefined(
+          meta.n_active_ingredients,
+        ),
+        spec_component_count: numberOrUndefined(meta.n_components),
+        spec_use_case_mode: stringOrUndefined(meta.use_case_mode) as
+          | "consumer_app"
+          | "personal_health"
+          | "scientific"
+          | undefined,
       },
     };
   });

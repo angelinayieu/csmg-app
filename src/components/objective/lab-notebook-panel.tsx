@@ -34,6 +34,7 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  FileCode,
   Layers,
   Loader2,
   MessageCircle,
@@ -137,6 +138,9 @@ const FILTERS: ReadonlyArray<{
       "layers_generated",
       "layers_regenerated",
       "layer_position_set",
+      // Arc 3.1 — mechanism technical-depth spec. System-altitude
+      // depth on a feature, same bucket as item_expanded.
+      "mechanism_spec_generated",
     ],
   },
 ];
@@ -1318,6 +1322,37 @@ function MetadataChips({ event: ev }: { event: NotebookEvent }) {
       color: appleVibe.text.tertiary,
     });
   }
+  // ── Arc 3.1 — mechanism_spec_generated chips ──
+  if (ev.meta.spec_evidence_strength) {
+    const tone =
+      ev.meta.spec_evidence_strength === "established"
+        ? appleVibe.stage.outcomes
+        : ev.meta.spec_evidence_strength === "speculative"
+          ? appleVibe.text.tertiary
+          : appleVibe.stage.features;
+    chips.push({
+      key: "spec-evidence",
+      label: `evidence: ${ev.meta.spec_evidence_strength}`,
+      color: tone,
+    });
+  }
+  if (
+    typeof ev.meta.spec_active_ingredient_count === "number" &&
+    ev.meta.spec_active_ingredient_count > 0
+  ) {
+    const n = ev.meta.spec_active_ingredient_count;
+    const m =
+      typeof ev.meta.spec_component_count === "number"
+        ? ev.meta.spec_component_count
+        : 0;
+    chips.push({
+      key: "spec-parts",
+      label:
+        m > 0
+          ? `${n} ingredient${n === 1 ? "" : "s"} · ${m} component${m === 1 ? "" : "s"}`
+          : `${n} ingredient${n === 1 ? "" : "s"}`,
+    });
+  }
   if (chips.length === 0) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-1">
@@ -1513,6 +1548,13 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
         icon: Layers,
         label: "Layer position set",
         color: appleVibe.text.tertiary,
+      };
+    // ── Arc 3.1 — mechanism technical-depth spec ───────────────
+    case "mechanism_spec_generated":
+      return {
+        icon: FileCode,
+        label: "Spec'd mechanism",
+        color: appleVibe.stage.features,
       };
     default:
       return {

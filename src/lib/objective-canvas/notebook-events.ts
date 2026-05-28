@@ -171,6 +171,19 @@ export interface NotebookEventMeta {
   /** baseline_set — whether the user entered the value or the LLM
    *  auto-filled it from a calibration_baseline expansion-tree node. */
   baseline_source?: "user" | "llm";
+  // ── Arc 3.1 — mechanism technical-depth spec ───────────────────
+  /** mechanism_spec_generated — how well-supported the spec's
+   *  mechanism_of_action is. Renders as an evidence chip on the row. */
+  spec_evidence_strength?: "established" | "plausible" | "speculative";
+  /** mechanism_spec_generated — count of active ingredients (BCT
+   *  components) the spec decomposed the mechanism into. */
+  spec_active_ingredient_count?: number;
+  /** mechanism_spec_generated — count of system components the spec
+   *  says must be built / provisioned. */
+  spec_component_count?: number;
+  /** mechanism_spec_generated — which use-case mode framed the spec
+   *  (feature spec vs intervention protocol vs experimental method). */
+  spec_use_case_mode?: "consumer_app" | "personal_health" | "scientific";
 }
 
 export interface NotebookEvent {
