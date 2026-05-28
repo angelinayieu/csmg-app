@@ -931,13 +931,14 @@ export async function POST(req: NextRequest) {
           const evidence = evidenceByIndicator.get(
             `${ind.outcome_id}::${ind.indicator_text}`,
           );
-          // Compose evidence-weighted confidence:
-          //   When evidence available → consensus × evidence_strength
-          //   When no evidence → consensus (pass-through)
-          // We DON'T overwrite confidence — we keep consensus_confidence
-          // as a separate axis and let the UI choose what to render.
-          // For now we mutate confidence on persist so the chip
-          // surface reflects the most informed estimate.
+          // `confidence` is the RAW proxy-validity confidence the
+          // ensemble emitted (consensus_confidence). We no longer
+          // overwrite it — that made the persisted value match no
+          // scorer + diverge from the rubric (whose confidence is also
+          // raw) and from the REML pool (which already uses the raw
+          // consensus). The evidence-adjusted blend is stored ALONGSIDE
+          // as evidence_weighted_confidence so the UI can render either
+          // without the two silently colliding.
           const evidenceWeightedConf = evidence
             ? Math.max(
                 0,
@@ -956,7 +957,7 @@ export async function POST(req: NextRequest) {
               ind.lens_scores.length > 0
                 ? `${ind.lens_scores[0].lens}: ${ind.lens_scores[0].reason}`
                 : "",
-            confidence: evidenceWeightedConf,
+            confidence: ind.consensus_confidence,
             lens_scores: ind.lens_scores,
             disagreement_score: ind.disagreement_score,
             disagreement_confidence: ind.disagreement_confidence,
@@ -979,6 +980,9 @@ export async function POST(req: NextRequest) {
                   evidence_supports: evidence.supports_count,
                   evidence_refutes: evidence.refutes_count,
                   evidence_contextual: evidence.contextual_count,
+                  // Derived blend (consensus × evidence) kept SEPARATE
+                  // from the raw `confidence` above — no silent overwrite.
+                  evidence_weighted_confidence: evidenceWeightedConf,
                 }
               : {}),
             // Phase 11.8 — HCD persona overlay fields. Keyed per

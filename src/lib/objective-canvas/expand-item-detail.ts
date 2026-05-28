@@ -236,6 +236,11 @@ export interface ItemVariation {
      *  composition layer pass-throughs to 1.0 (no penalty for
      *  unstudied proxies — the ensemble grade stands as-is). */
     evidence_strength?: number;
+    /** The evidence-adjusted blend (consensus_confidence ×
+     *  evidence_strength×2, clamped). Stored SEPARATELY from `confidence`
+     *  (which stays the raw proxy-validity confidence) so the two never
+     *  silently overwrite each other — the UI picks which to surface. */
+    evidence_weighted_confidence?: number;
     /** Phase 11.6 — convenience counts so the UI can render
      *  "3✓ 1✗ 2·" without iterating citations. */
     evidence_supports?: number;
