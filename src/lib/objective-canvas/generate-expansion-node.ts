@@ -174,7 +174,7 @@ FRAMING: ${catalogEntry.framing}
 OUTPUT: an array of children, one per CHILD SPEC below, IN THE SAME ORDER. For each:
   • node_type — exactly the slot id from the spec (do not invent)
   • title — usually the spec's label, optionally specialized to this parent (≤80 chars)
-  • body — keys per the spec's body_hint / schema
+  • body — a JSON OBJECT, SERIALIZED TO A STRING (valid JSON), with the keys per the spec's body_hint / schema. e.g. body: "{\\"how_it_works\\": [\\"step one\\", \\"step two\\"]}". Always a parseable JSON string, never a bare object.
   • derived_from_annotations — when this child draws on a specific annotation, 0-2 entries of { index, facet: "fragility" | "analogy" | "tension" | "dimension" | "inference" | "reading" }. Omit when ambient.
 
 ANTI-PLATITUDE: every child must reference something specific about the parent's design / question / conflict — generic strategy filler is forbidden.
@@ -193,10 +193,12 @@ Return strict JSON.`;
     properties: {
       node_type: { type: "string" },
       title: { type: "string" },
-      body: { type: "object", additionalProperties: true } as Record<
-        string,
-        unknown
-      >,
+      // body is free-form (its shape varies per node_type), and OpenAI
+      // strict structured outputs forbid `additionalProperties: true` on
+      // objects. So we transport it as a JSON STRING the model fills,
+      // then JSON.parse it in cleanup (parseBody). This is the standard
+      // strict-mode workaround for a variable-shape object.
+      body: { type: "string" },
       ...(hasLens
         ? {
             derived_from_annotations: {
@@ -275,10 +277,7 @@ Return strict JSON.`;
         typeof c?.title === "string" && c.title.trim().length > 0
           ? c.title.trim().slice(0, 80)
           : spec.label,
-      body:
-        c?.body && typeof c.body === "object" && !Array.isArray(c.body)
-          ? (c.body as Record<string, unknown>)
-          : {},
+      body: parseBody(c?.body),
       derived_from_annotations: cleanProv(
         c?.derived_from_annotations,
         ranked,
@@ -353,6 +352,28 @@ function cleanProv(
     if (out.length >= 2) break;
   }
   return out;
+}
+
+/** Parse the model's `body` field, which is now transported as a JSON
+ *  STRING (strict-mode workaround for a variable-shape object). Accepts
+ *  a real object too (lenient / back-compat). Falls back to {} on
+ *  garbage, or wraps an unparseable non-empty string under `text` so
+ *  the content isn't silently lost. */
+function parseBody(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return { text: raw.trim().slice(0, 2000) };
+    }
+  }
+  return {};
 }
 
 /** Convenience: convert generated children into ExpansionNode rows
