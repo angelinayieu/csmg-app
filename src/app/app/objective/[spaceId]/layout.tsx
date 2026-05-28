@@ -112,30 +112,48 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
     return <>{children}</>;
   }
 
-  // Until we've hydrated localStorage, render as if collapsed (no
-  // padding) to avoid the page flashing with extra right-padding on
-  // the first paint. The panel itself starts closed too — no flash.
-  // Phase 11.8b — when open, add room for the rail-card's two-sided
-  // margin (left + right + width). When collapsed, just the strip
-  // width (no margin doubling).
+  // Phase 11.8b — when open, reserve room for the rail-card's
+  // two-sided margin + width. When collapsed, just the strip width.
+  // Hydration guard: render zero width pre-hydration to avoid flash.
   const railWidth =
     hydrated && open
       ? RAIL_WIDTH_OPEN + RAIL_MARGIN * 2
       : RAIL_WIDTH_COLLAPSED;
 
+  // Phase 11.8b (fix) — switching from padding-right (which inner
+  // content patterns kept escaping via max-width / mx-auto centering
+  // calculations that didn't respect the reduced container width)
+  // to a hard CSS Grid two-column layout. The main column gets
+  // `minmax(0, 1fr)` so content can never extend past its column
+  // boundary; the right column is a sized PLACEHOLDER that reserves
+  // exactly the rail's footprint. The notebook itself still uses
+  // position:fixed so it floats over the placeholder column with
+  // its rounded-card chrome — but content + notebook now occupy
+  // disjoint regions, so they're visible side-by-side simultaneously.
   return (
     <>
       <div
-        className="min-h-screen transition-[padding-right] duration-300 ease-out"
-        style={{ paddingRight: hydrated ? railWidth : 0 }}
+        className="grid min-h-screen transition-[grid-template-columns] duration-300 ease-out"
+        style={{
+          gridTemplateColumns: `minmax(0, 1fr) ${railWidth}px`,
+        }}
       >
-        {children}
+        {/* Main content column. minWidth:0 lets the column shrink
+            below its content's intrinsic min-width (default grid
+            behavior is to fit-content, which would let max-w-5xl
+            mx-auto centered cards overflow into the right column —
+            the exact bug being fixed). */}
+        <main style={{ minWidth: 0 }}>{children}</main>
+        {/* Placeholder column — reserves space for the floating
+            notebook card. The card itself uses position:fixed and
+            renders over this column with its rounded-card chrome.
+            Empty div is intentional. */}
+        <div aria-hidden />
       </div>
 
-      {/* Collapsed strip — visible when notebook is closed. Phase
-          11.8b: matches the rail-card aesthetic (small floating
-          pill near the right edge, not a flush vertical bar).
-          Click expands the notebook back to the floating card. */}
+      {/* Collapsed strip — visible when notebook is closed. Small
+          floating pill at top-right. Click expands the notebook
+          back to the floating card. */}
       {hydrated && !open && (
         <button
           type="button"
@@ -157,13 +175,10 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
         </button>
       )}
 
-      {/* The notebook panel itself. Position: fixed via the panel's
-          rail-card chrome (16px margin from each edge, rounded
-          corners, drop shadow, no backdrop). Canvas underneath
-          stays interactive — user can pan/click the whiteboard
-          behind the card. mode auto-detected from URL. When closed
-          via the panel header X, we persist + show the collapsed
-          strip. */}
+      {/* The notebook panel itself. position:fixed via rail-card
+          chrome (16px margin from each edge, rounded, drop shadow,
+          no backdrop). Renders over the placeholder column so the
+          content + notebook are visible side-by-side. */}
       <LabNotebookPanel
         open={hydrated && open}
         onClose={() => persistOpen(false)}
