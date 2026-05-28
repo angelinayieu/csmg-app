@@ -162,7 +162,18 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
   // ── Persist atomically — merge into synthesis_data.objective_canvas ──
   // Layers slot in next to the existing fields (clarifying, stage,
   // sub_objectives, etc.) on the objective_canvas blob.
-  const synthesis_data = (space.synthesis_data as Record<string, unknown>) ?? {};
+  //
+  // Re-read synthesis_data right before writing so a concurrent
+  // write during the (potentially multi-second) LLM call doesn't
+  // get clobbered — e.g. the picker's auto-propose writing
+  // sub_objectives while this route was still decomposing.
+  const { data: freshSpace } = await db
+    .from("spaces")
+    .select("synthesis_data")
+    .eq("id", spaceId)
+    .maybeSingle();
+  const synthesis_data =
+    (freshSpace?.synthesis_data as Record<string, unknown>) ?? {};
   const objective_canvas =
     (synthesis_data.objective_canvas as Record<string, unknown>) ?? {};
   const nextSynth = {

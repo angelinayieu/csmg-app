@@ -280,7 +280,20 @@ async function generateInitialLayersForSpace(
     });
 
     // Persist into synthesis_data.objective_canvas.layers.
-    const synthesisData = (space.synthesis_data as Record<string, unknown>) ?? {};
+    //
+    // Re-read synthesis_data RIGHT NOW (not the snapshot from above)
+    // so concurrent writes during the LLM call (e.g. the picker's
+    // auto-propose race) aren't clobbered. The wide window between
+    // the initial read and this write was the cause of the
+    // "no sub-objective block to update" disposition error — fresh
+    // read narrows the race to a single round-trip.
+    const { data: freshSpace } = await db
+      .from("spaces")
+      .select("synthesis_data")
+      .eq("id", spaceId)
+      .maybeSingle();
+    const synthesisData =
+      (freshSpace?.synthesis_data as Record<string, unknown>) ?? {};
     const objectiveCanvas =
       (synthesisData.objective_canvas as Record<string, unknown>) ?? {};
     const nextSynth = {
