@@ -23,6 +23,7 @@
 import { llmJSON } from "@/lib/llm";
 import type { ItemVariation } from "./expand-item-detail";
 import type { OperationalConstraints } from "./constraints";
+import type { MechanismSpec } from "./enrich-mechanism-spec";
 
 export interface DescriptionDocResult {
   doc: string;
@@ -58,6 +59,13 @@ export interface GenerateDescriptionDocArgs {
   /** When true, fire a one-pass critic+rewrite to tighten language.
    *  Costs +1 LLM call (~$0.01); doubles latency. Off by default. */
   refine?: boolean;
+  /** The parent feature's v2 technical mechanism spec, when one has
+   *  been generated. When present, the doc's "How it works" + "How
+   *  it's built" + validation sections are GROUNDED in it (mechanism
+   *  of action, active ingredients, runtime flow, chosen build method,
+   *  validation experiment) instead of re-derived — so the deliverable
+   *  carries the same technical depth, no parallel content. */
+  mechanismSpec?: MechanismSpec | null;
 }
 
 export async function generateVariationDescriptionDoc(
@@ -87,15 +95,20 @@ One paragraph, 40-80 words. Name the specific user role / segment whose pain thi
 ## How it works
 One paragraph, 60-120 words. The mechanism in three beats: the user does X → the system does Y → the user experiences Z. Reference the tradeoff naturally — don't bury it.
 
+## How it's built
+One paragraph + 3-6 bullets, ≤140 words total. The TECHNICAL substance an engineer needs: the active ingredients (the components that carry the effect), what gets built/provisioned (data, UI, logic, or for non-software: materials, schedule, instrument), the runtime flow in brief (which component does what to which data), and the chosen build approach over the alternatives. Be concrete — name components, not categories. This is where the doc earns the word "spec".
+
 ## What we'd need to find out
 3-5 bullets, each <20 words. The open questions whose answers would change whether this is the right call. If the variation already has open_questions[], integrate them — don't repeat verbatim.
 
 ## How we'd know it worked
-2-3 bullets, each <20 words. Concrete observable signals — not vanity metrics. Tie to the parent room's success outcome when possible.
+2-3 bullets, each <20 words. Concrete observable signals — not vanity metrics. Tie to the parent room's success outcome. When a validation experiment is supplied, name it (the test that would confirm the mechanism).
+
+GROUNDING (when a TECHNICAL SPEC is provided below): the "How it works", "How it's built", and "How we'd know it worked" sections MUST draw their substance from it — reuse the mechanism-of-action, active ingredients, runtime flow, chosen build method, and validation experiment verbatim-in-spirit. Do NOT invent parallel technical claims that contradict the spec. When NO spec is provided, write "How it's built" from first principles, still concrete.
 
 RULES:
-- Total length 350-550 words. Tight. If you go over, cut.
-- No headings beyond the five above. No tables. No code blocks. No emojis.
+- Total length 450-700 words. Tight. If you go over, cut.
+- No headings beyond the six above. No tables. No code blocks. No emojis.
 - BANNED WORDS: innovative, leverage, robust, solution, platform, enables, seamless, holistic, synergy, paradigm, ecosystem, world-class, cutting-edge, best-in-class. Strip these on sight — they signal filler not substance.
 - The user has a domain. Reference it where natural; never use "user" as a placeholder for "anyone." When you say "the user", make it concrete in the next clause (e.g., "the user — a solo founder writing weekly investor updates — …").
 - If sibling elections exist, mention this variation composes WITH them, not replaces them.`;
@@ -114,6 +127,25 @@ RULES:
     ? args.variation.open_questions.join("; ")
     : "(none specified)";
 
+  const ms = args.mechanismSpec;
+  const specBlock = ms
+    ? `\n\nTECHNICAL SPEC (ground How-it-works / How-it's-built / validation in this — reuse, don't contradict):
+- Mechanism of action: ${ms.mechanism_of_action.slice(0, 400)}
+- Active ingredients: ${ms.active_ingredients.map((a) => a.name).slice(0, 6).join(" · ") || "—"}
+- Runtime flow: ${
+        ms.runtime_flow
+          .map(
+            (r, i) =>
+              `${i + 1}) ${r.step}${r.component && r.component !== "—" ? ` [${r.component}]` : ""}`,
+          )
+          .slice(0, 7)
+          .join("  →  ") || "—"
+      }
+- What to build: ${ms.system_components.map((c) => `${c.name} (${c.category})`).slice(0, 6).join(" · ") || "—"}
+- Chosen build method: ${ms.decision_record.chosen || "—"}${ms.decision_record.consequences ? ` (consequences: ${ms.decision_record.consequences.slice(0, 140)})` : ""}
+- Validation experiment: ${ms.research_basis.validation_experiment.slice(0, 240) || "—"}`
+    : "";
+
   const user = `Write the description doc for this variation.
 
 OBJECTIVE: ${args.objectiveText.slice(0, 400)}
@@ -123,7 +155,7 @@ VARIATION:
 - Name: ${args.variation.name}
 - Description: ${args.variation.description}
 - Tradeoff: ${args.variation.tradeoff}
-- Open questions: ${openQ}${constraintsBlock}${siblingBlock}`;
+- Open questions: ${openQ}${specBlock}${constraintsBlock}${siblingBlock}`;
 
   const raw = await llmJSON<DocLlmShape>({
     system: sys,
@@ -150,7 +182,7 @@ async function refineDraft(draft: string): Promise<string> {
 - Word counts outside section caps (60-110, 40-80, 60-120 for paragraphs; <20 each bullet)
 - Hedging language ("could potentially", "may help", "designed to")
 
-Rewrite the doc fixing these. Same five-heading shape. Same content intent. Tighter language. Return JSON: { "doc": "<revised markdown>" }.`;
+Rewrite the doc fixing these. Same SIX-heading shape (What it is / Who it serves / How it works / How it's built / What we'd need to find out / How we'd know it worked) — keep the technical substance of "How it's built" intact, just tighter. Same content intent. Return JSON: { "doc": "<revised markdown>" }.`;
 
   const raw = await llmJSON<DocLlmShape>({
     system: sys,

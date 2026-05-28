@@ -123,6 +123,9 @@ export async function POST(req: NextRequest) {
       painText,
       constraints: readConstraints(space.synthesis_data),
       siblingElections: siblingElections.length > 0 ? siblingElections : undefined,
+      // Arc 3.5+ — ground the doc's technical sections in the feature's
+      // v2 mechanism spec when one exists (reuse, not parallel content).
+      mechanismSpec: detail.mechanism_spec ?? null,
       refine,
     });
   } catch (err) {
