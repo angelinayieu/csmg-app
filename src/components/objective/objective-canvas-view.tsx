@@ -49,6 +49,7 @@ import { ClarifyingQuestionsCard } from "./clarifying-questions-card";
 import { ResearchIndicator } from "./research-indicator";
 import { ResearchSourcesSheet } from "./research-sources-sheet";
 import { SubObjectivePickerCard } from "./sub-objective-picker-card";
+import { ObjectiveStackWidget } from "./objective-stack";
 import { MainCanvasView, type MainCanvasSub } from "./main-canvas-view";
 import type { ObjectiveAnnotation } from "./annotated-objective-card";
 import type {
@@ -208,15 +209,45 @@ export function ObjectiveCanvasView({
         )}
 
         {stage === "picking" && (
-          <SubObjectivePickerCard
-            spaceId={spaceId}
-            initial={initialSubObjectives}
-            annotations={initialCoreAnnotations}
-            preferredIntent={initialPreferredIntent}
-            preferenceSource={initialPreferenceSource}
-            userPrefs={initialUserPrefs}
-            onConfirmed={handlePickerConfirmed}
-          />
+          <>
+            {/* Phase 11.A.6 — ObjectiveStack ABOVE the picker so the
+                user sees the causal structure of their problem BEFORE
+                picking sub-objectives. Coverage chip reflects the
+                server-render snapshot of elected proposals; refreshes
+                on reload. Compact mode keeps it tight in the already-
+                dense picker. Hidden until the stack exists. */}
+            {initialObjectiveStack &&
+              initialObjectiveStack.layers.length > 0 && (
+                <div className="mb-6">
+                  <ObjectiveStackWidget
+                    stack={initialObjectiveStack}
+                    taggedProposals={(initialSubObjectives?.proposals ?? [])
+                      .filter(
+                        (p) =>
+                          Array.isArray(p.layer_ordinals) &&
+                          p.layer_ordinals.length > 0,
+                      )
+                      .map((p) => ({
+                        id: p.id,
+                        layer_ordinals: p.layer_ordinals!,
+                      }))}
+                    pickedIds={(initialSubObjectives?.proposals ?? [])
+                      .filter((p) => p.disposition === "elected")
+                      .map((p) => p.id)}
+                    compact
+                  />
+                </div>
+              )}
+            <SubObjectivePickerCard
+              spaceId={spaceId}
+              initial={initialSubObjectives}
+              annotations={initialCoreAnnotations}
+              preferredIntent={initialPreferredIntent}
+              preferenceSource={initialPreferenceSource}
+              userPrefs={initialUserPrefs}
+              onConfirmed={handlePickerConfirmed}
+            />
+          </>
         )}
         {stage === "main" && (
           <MainCanvasView
