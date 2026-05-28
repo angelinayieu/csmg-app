@@ -23,6 +23,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowUpRight,
+  BarChart3,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
@@ -30,17 +32,20 @@ import {
   Compass,
   ExternalLink,
   FileCode,
+  FileText,
+  FlaskConical,
   Highlighter,
   Layers,
   Link2,
+  Maximize2,
+  Minimize2,
   Pause,
+  Plus,
   Radar,
   RefreshCw,
   Shield,
-  Sparkles as SparklesLucide,
   X,
 } from "lucide-react";
-import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 import { ThumbsRating } from "@/components/objective/thumbs-rating";
@@ -428,6 +433,10 @@ export function ItemDetailDrawer({
 }: Props) {
   const reduce = useReducedMotion();
   const open = !!entityId;
+  // Arc 1 — fullscreen toggle. Default false = floating rail-card
+  // (margins from each edge, canvas visible + interactive behind).
+  // true = expands to near-full-viewport for detail-heavy work.
+  const [fullscreen, setFullscreen] = useState(false);
 
   // ── Detail state ──
   const [expanded, setExpanded] = useState<ExpandedItemDetail | null>(
@@ -804,19 +813,27 @@ export function ItemDetailDrawer({
     <AnimatePresence>
       {open && (
         <>
-          {/* Backdrop */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0 : 0.2 }}
-            onClick={onClose}
-            className="fixed inset-0 z-40"
-            style={{ background: "rgba(15,23,42,0.32)" }}
-            aria-hidden
-          />
+          {/* Backdrop — only in fullscreen mode. Rail-card mode has no
+              backdrop so the canvas behind stays interactive (the user
+              can click/pan the room while the card floats). Fullscreen
+              dims to focus. */}
+          {fullscreen && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduce ? 0 : 0.2 }}
+              onClick={onClose}
+              className="fixed inset-0 z-40"
+              style={{ background: "rgba(15,23,42,0.32)" }}
+              aria-hidden
+            />
+          )}
 
-          {/* Drawer */}
+          {/* Drawer — floating rail-card (margins, rounded, shadow, no
+              backdrop) by default; near-full-viewport when expanded.
+              Matches the Lab Notebook's rail-card treatment so both
+              side surfaces read as the same family. */}
           <motion.aside
             role="dialog"
             aria-label={`Detail for ${itemName}`}
@@ -829,12 +846,20 @@ export function ItemDetailDrawer({
               duration: reduce ? 0 : 0.36,
               ease: [0.22, 1, 0.36, 1],
             }}
-            className="fixed inset-y-0 right-0 z-50 flex w-full flex-col overflow-hidden md:w-[480px]"
+            className="fixed z-50 flex flex-col overflow-hidden"
             style={{
+              top: 16,
+              right: 16,
+              bottom: 16,
+              left: fullscreen ? 16 : "auto",
+              width: fullscreen ? "auto" : "min(440px, calc(100vw - 32px))",
+              maxWidth: fullscreen ? undefined : "calc(100vw - 32px)",
               background: appleVibe.surface.card,
-              borderLeft: `1px solid ${appleVibe.stroke.hairline}`,
+              border: `1px solid ${appleVibe.stroke.hairline}`,
+              borderRadius: 20,
+              boxShadow:
+                "0 24px 64px -16px rgba(11,18,40,0.32), 0 4px 12px -4px rgba(11,18,40,0.10)",
               fontFamily: appleVibe.font.stack,
-              boxShadow: "0 0 40px -8px rgba(11,18,40,0.28)",
             }}
           >
             {/* Header */}
@@ -873,6 +898,20 @@ export function ItemDetailDrawer({
                   {itemName}
                 </h2>
               </div>
+              <button
+                type="button"
+                onClick={() => setFullscreen((v) => !v)}
+                className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[color:var(--home-chrome-fill,rgba(15,23,42,0.04))]"
+                aria-label={fullscreen ? "Collapse to side card" : "Expand to full screen"}
+                title={fullscreen ? "Collapse to side card" : "Expand to full screen"}
+                style={{ color: appleVibe.text.secondary }}
+              >
+                {fullscreen ? (
+                  <Minimize2 className="h-3.5 w-3.5" strokeWidth={2} />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" strokeWidth={2} />
+                )}
+              </button>
               <button
                 type="button"
                 onClick={onClose}
@@ -935,7 +974,7 @@ export function ItemDetailDrawer({
 
               {/* ── 1. DEFINITION ── */}
               <Section
-                icon={<Sparkle className="h-3 w-3" />}
+                icon={<BookOpen className="h-3 w-3" />}
                 title="Definition"
                 anchorId={DECISION_ANCHORS.definition}
                 action={
@@ -1176,7 +1215,7 @@ export function ItemDetailDrawer({
                   elected — conflicts_open render as a loud banner. */}
               <Section
                 icon={
-                  <SparklesLucide
+                  <Layers
                     className="h-3 w-3"
                     strokeWidth={1.75}
                   />
@@ -1318,7 +1357,7 @@ export function ItemDetailDrawer({
                     v.indicator_scores.length > 0,
                 ) && (
                   <Section
-                    icon={<Sparkle className="h-3 w-3" />}
+                    icon={<BarChart3 className="h-3 w-3" />}
                     title="Validity Matrix"
                   >
                     <div className="space-y-3">
@@ -1349,7 +1388,7 @@ export function ItemDetailDrawer({
                 expanded.effectiveness_envelope.counter_indicators.length >
                   0 && (
                   <Section
-                    icon={<Sparkle className="h-3 w-3" />}
+                    icon={<Shield className="h-3 w-3" />}
                     title="Goodhart Pairings"
                   >
                     <GoodhartPairingsPanel
@@ -3062,7 +3101,7 @@ function OpenQuestionsList({
                         opacity: loading ? 0.7 : 1,
                       }}
                     >
-                      <SparklesLucide
+                      <FlaskConical
                         className="h-2.5 w-2.5"
                         strokeWidth={2}
                       />
@@ -3130,7 +3169,7 @@ function PrototypeBriefBlock({
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
-          <SparklesLucide
+          <FlaskConical
             className="h-3 w-3 flex-shrink-0"
             strokeWidth={2}
             style={{ color: "rgba(37,99,235,0.85)" }}
@@ -3396,7 +3435,7 @@ function ExpansionPanel({
             opacity: spawning ? 0.7 : 1,
           }}
         >
-          <SparklesLucide className="h-2.5 w-2.5" strokeWidth={2} />
+          <Plus className="h-2.5 w-2.5" strokeWidth={2} />
           {spawning ? "Deepening…" : "Deepen"}
         </button>
       )}
@@ -3792,7 +3831,7 @@ function DrawerPriorConceptsStrip({
         className="flex w-full items-center justify-between"
       >
         <div className="flex items-center gap-2">
-          <SparklesLucide
+          <Link2
             className="h-3 w-3 flex-shrink-0"
             strokeWidth={2}
             style={{ color: "rgba(91,33,182,0.9)" }}
@@ -4280,7 +4319,7 @@ function VariationScoringPanel({
         }}
       >
         <div className="flex min-w-0 items-center gap-1.5">
-          <SparklesLucide
+          <Radar
             className="h-3 w-3 flex-shrink-0"
             strokeWidth={2}
             style={{ color: FEATURES }}

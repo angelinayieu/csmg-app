@@ -22,6 +22,7 @@
 // are instant.
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   Check,
@@ -88,6 +89,18 @@ export function VariationDeliverablesModal({
   initialExportPromptHistory,
 }: Props) {
   const reduce = useReducedMotion();
+  // Arc 1 fix — mounted guard for the portal. This modal is mounted
+  // from inside the item-detail drawer's framer-motion <motion.aside>,
+  // which carries a `transform`. A `position: fixed` element inside a
+  // transformed ancestor anchors to that ancestor, NOT the viewport —
+  // so without portaling, the modal clipped to the 480px drawer
+  // ("cropped in the panel") when the transform was present and
+  // escaped to full-screen when it cleared. Portaling to document.body
+  // moves it out of the transformed subtree so `fixed` behaves.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   // Op A — Doc tab is the default landing surface. It's the narrative
   // human-readable explainer; Mockup + Prompt are the more specialized
   // artifacts. Lead with the most legible.
@@ -287,7 +300,11 @@ export function VariationDeliverablesModal({
     }
   }, [descDoc]);
 
-  return (
+  // Don't render until mounted (portal needs document). Returning null
+  // pre-mount is safe — the modal only opens on user click anyway.
+  if (!mounted) return null;
+
+  return createPortal(
     <AnimatePresence>
       {open && (
         <>
@@ -400,7 +417,8 @@ export function VariationDeliverablesModal({
           </motion.div>
         </>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
 

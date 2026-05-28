@@ -26,6 +26,8 @@
 // the column. Honest about coverage gaps — if only rubric ran, only
 // the 📋 column populates; the user sees they have room to deepen.
 
+import { useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ItemVariation } from "@/lib/objective-canvas/expand-item-detail";
 
@@ -391,6 +393,59 @@ export function IndicatorValidityMatrix({
   const headerSize = compact ? "10.5px" : "11px";
   const cellSize = compact ? "11px" : "11.5px";
 
+  return <ValidityMatrixShell
+    title={title ?? variation.name}
+    indicators={indicators}
+    byOutcome={byOutcome}
+    callouts={callouts}
+    cellPad={cellPad}
+    headerSize={headerSize}
+    cellSize={cellSize}
+    compact={compact}
+  />;
+}
+
+// ── Shell — headline-first, collapsible (Arc 1) ───────────────────
+//
+// The grid is now EVIDENCE, surfaced behind a toggle. The headline
+// (always visible) carries the prioritized signal: indicator count,
+// overall alignment verdict, and any CRITICAL diverge flags (those
+// stay visible even when collapsed — they're load-bearing warnings
+// the user must see before committing). The full grid + all callouts
+// expand on demand. Also fixes the 640px-min-width table cropping in
+// the 480px drawer — the table only renders (and only scrolls) when
+// the user expands it.
+
+function ValidityMatrixShell({
+  title,
+  indicators,
+  byOutcome,
+  callouts,
+  cellPad,
+  headerSize,
+  cellSize,
+  compact,
+}: {
+  title: string;
+  indicators: IndicatorScore[];
+  byOutcome: Map<string, IndicatorScore[]>;
+  callouts: DivergeCallout[];
+  cellPad: string;
+  headerSize: string;
+  cellSize: string;
+  compact: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const criticalCount = callouts.filter((c) => c.severity === "critical").length;
+  const warningCount = callouts.length - criticalCount;
+  // Headline verdict — prioritized signal the user reads first.
+  const verdict =
+    criticalCount > 0
+      ? { text: `${criticalCount} critical flag${criticalCount === 1 ? "" : "s"}`, color: appleVibe.stage.pain }
+      : warningCount > 0
+        ? { text: `${warningCount} flag${warningCount === 1 ? "" : "s"}`, color: "rgba(217,119,6,0.95)" }
+        : { text: "tiers aligned", color: appleVibe.stage.outcomes };
+
   return (
     <div
       className="rounded-2xl border"
@@ -400,11 +455,15 @@ export function IndicatorValidityMatrix({
         fontFamily: appleVibe.font.stack,
       }}
     >
-      <div
-        className={`flex items-center justify-between border-b ${cellPad}`}
+      {/* Headline — always visible, click to expand the evidence grid. */}
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className={`flex w-full items-center justify-between border-b text-left transition-colors hover:bg-[rgba(15,23,42,0.02)] ${cellPad}`}
         style={{ borderColor: appleVibe.stroke.hairline }}
+        aria-expanded={expanded}
       >
-        <div className="flex items-baseline gap-1.5">
+        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
           <span
             className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
             style={{ color: appleVibe.text.tertiary }}
@@ -412,23 +471,71 @@ export function IndicatorValidityMatrix({
             Validity Matrix
           </span>
           <span
-            className="font-semibold"
-            style={{
-              color: appleVibe.text.primary,
-              fontSize: headerSize,
-            }}
+            className="truncate font-semibold"
+            style={{ color: appleVibe.text.primary, fontSize: headerSize }}
           >
-            {title ?? variation.name}
+            {title}
           </span>
         </div>
-        <span
-          className="text-[9.5px] italic"
-          style={{ color: appleVibe.text.faint }}
-        >
-          {indicators.length} indicator{indicators.length === 1 ? "" : "s"}
-        </span>
-      </div>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <span
+            className="text-[10px] font-medium"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            {indicators.length} ind.
+          </span>
+          <span
+            className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+            style={{ background: `${verdict.color}1A`, color: verdict.color }}
+          >
+            {verdict.text}
+          </span>
+          {expanded ? (
+            <ChevronUp
+              className="h-3 w-3"
+              strokeWidth={2.4}
+              style={{ color: appleVibe.text.tertiary }}
+            />
+          ) : (
+            <ChevronDown
+              className="h-3 w-3"
+              strokeWidth={2.4}
+              style={{ color: appleVibe.text.tertiary }}
+            />
+          )}
+        </div>
+      </button>
 
+      {/* Critical callouts — ALWAYS visible (even collapsed) because
+          they're the load-bearing "don't ship without reading this"
+          warnings. Non-critical flags only show when expanded. */}
+      {!expanded && criticalCount > 0 && (
+        <div
+          className={cellPad}
+          style={{ background: `${appleVibe.stage.pain}06` }}
+        >
+          <ul className="space-y-1">
+            {callouts
+              .filter((c) => c.severity === "critical")
+              .map((c) => (
+                <li
+                  key={c.indicator_text}
+                  className="text-[11px] leading-snug"
+                  style={{ color: "rgba(127,29,29,0.95)" }}
+                >
+                  <span aria-hidden style={{ marginRight: "4px", color: appleVibe.stage.pain }}>
+                    ⚠
+                  </span>
+                  <span style={{ fontWeight: 600 }}>&ldquo;{c.indicator_text}&rdquo;</span>
+                  : {c.message}
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
+
+      {expanded && (
+      <>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse" style={{ minWidth: "640px" }}>
           <thead>
@@ -618,6 +725,8 @@ export function IndicatorValidityMatrix({
             ))}
           </ul>
         </div>
+      )}
+      </>
       )}
     </div>
   );
