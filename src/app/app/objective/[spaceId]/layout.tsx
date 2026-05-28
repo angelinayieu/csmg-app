@@ -151,27 +151,44 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
         <div aria-hidden />
       </div>
 
-      {/* Collapsed strip — visible when notebook is closed. Small
-          floating pill at top-right. Click expands the notebook
-          back to the floating card. */}
+      {/* Collapsed pill — visible when notebook is closed. Floats
+          mid-right edge of the viewport so it's always findable
+          (top-right tends to collide with app-shell nav). z-60 sits
+          above the panel's z-50 so it's visible immediately as the
+          panel exits (instead of waiting for the 0.36s animation to
+          complete with the user staring at empty space). Bigger
+          target + explicit label so users don't miss it. */}
       {hydrated && !open && (
         <button
           type="button"
           onClick={() => persistOpen(true)}
-          className="fixed z-30 flex h-9 w-9 items-center justify-center rounded-full transition-all duration-150 ease-out hover:scale-105"
+          className="fixed flex items-center gap-1.5 rounded-full transition-all duration-150 ease-out hover:scale-105"
           title="Open Lab Notebook"
           aria-label="Open Lab Notebook"
           style={{
-            top: RAIL_MARGIN,
+            top: "50%",
             right: RAIL_MARGIN,
+            transform: "translateY(-50%)",
+            zIndex: 60,
             background: appleVibe.surface.card,
-            border: `1px solid ${appleVibe.stroke.hairline}`,
-            color: appleVibe.accent.primary,
+            border: `1px solid ${appleVibe.stroke.medium}`,
+            color: appleVibe.text.primary,
+            padding: "8px 12px",
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: "0.02em",
             boxShadow:
-              "0 8px 24px -8px rgba(11,18,40,0.20), 0 2px 6px -2px rgba(11,18,40,0.08)",
+              "0 12px 32px -10px rgba(11,18,40,0.28), 0 4px 8px -2px rgba(11,18,40,0.10)",
+            cursor: "pointer",
+            fontFamily: appleVibe.font.stack,
           }}
         >
-          <BookOpen className="h-4 w-4" strokeWidth={2} />
+          <BookOpen
+            className="h-3.5 w-3.5"
+            strokeWidth={2}
+            style={{ color: appleVibe.accent.primary }}
+          />
+          Notebook
         </button>
       )}
 
