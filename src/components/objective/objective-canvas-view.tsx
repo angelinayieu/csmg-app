@@ -107,6 +107,14 @@ interface Props {
    *  elections). Server-computed in page.tsx; empty array means
    *  the surface renders nothing. */
   initialRoomDecisions?: import("@/lib/objective-canvas/canvas-decisions").RoomDecisionSummary[];
+  /** Phase 11.A — ObjectiveStack the user's canvas was decomposed into.
+   *  Null when the stack hasn't been generated yet (pre-11.A spaces
+   *  or before clarify/complete fired the auto-decomposition). The
+   *  MainCanvasView mounts the stack widget when present; otherwise
+   *  surfaces a "Generate layers" CTA. */
+  initialObjectiveStack?:
+    | import("@/lib/objective-canvas/layer-model").ObjectiveStack
+    | null;
   /** Phase 10 integration contract — host wants to drop this into a
    *  panel. See module header. Defaults to false (standalone). */
   embedded?: boolean;
@@ -131,6 +139,7 @@ export function ObjectiveCanvasView({
   initialSubObjectiveThemes = null,
   initialConceptMemory = [],
   initialRoomDecisions = [],
+  initialObjectiveStack = null,
   embedded = false,
   // onExit is reserved for the host's chrome; not consumed here.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -220,6 +229,7 @@ export function ObjectiveCanvasView({
             initialSubObjectiveThemes={initialSubObjectiveThemes}
             conceptMemory={initialConceptMemory}
             roomDecisions={initialRoomDecisions}
+            objectiveStack={initialObjectiveStack}
           />
         )}
         {stage === "done" && <DonePlaceholder />}

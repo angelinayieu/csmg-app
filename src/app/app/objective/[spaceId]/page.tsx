@@ -152,7 +152,12 @@ export default async function ObjectiveCanvasPage({
       const { data: childRows } = await db
         .from("improvement_goals")
         .select(
-          "id, title, description, auto_detection_rationale, room_layers_generated_at, top_negative_outcome, room_categories, created_at",
+          // Phase 11.A.6 — layer_ordinals + layer_position_label
+          // selected so each main-canvas sub-card can surface its
+          // position on the ObjectiveStack via the LayerPositionChip
+          // + so the Stack widget can compute per-layer coverage.
+          // Both columns default to '{}' / null for pre-11.A rooms.
+          "id, title, description, auto_detection_rationale, room_layers_generated_at, top_negative_outcome, room_categories, layer_ordinals, layer_position_label, created_at",
         )
         .eq("space_id", spaceId)
         .eq("parent_goal_id", parentGoalId)
@@ -165,6 +170,8 @@ export default async function ObjectiveCanvasPage({
         room_layers_generated_at: string | null;
         top_negative_outcome: string | null;
         room_categories: unknown;
+        layer_ordinals: number[] | null;
+        layer_position_label: string | null;
       }>);
 
       // For each sub-objective, find approved-edge endpoints and the
@@ -476,6 +483,14 @@ export default async function ObjectiveCanvasPage({
               c.painFeatureEdge.approved_at !== null &&
               c.featureOutcomeEdge.approved_at !== null,
           ).length,
+          // Phase 11.A.6 — pass the per-row layer tagging through so
+          // the main canvas's ObjectiveStack widget can render
+          // taggedProposals + the LayerPositionChip can render on the
+          // sub-objective card. Both fields nullable for pre-11.A.
+          layerOrdinals: Array.isArray(r.layer_ordinals)
+            ? r.layer_ordinals
+            : [],
+          layerPositionLabel: r.layer_position_label ?? null,
         };
       });
     }
@@ -517,6 +532,19 @@ export default async function ObjectiveCanvasPage({
   const initialSubObjectiveThemes: InitialSubObjectiveThemes | null =
     (space.synthesis_data?.sub_objective_themes as
       | InitialSubObjectiveThemes
+      | null
+      | undefined) ?? null;
+
+  // ── Phase 11.A — ObjectiveStack ──
+  // The layer decomposition persists on synthesis_data.objective_canvas.layers
+  // (auto-fired by clarify/complete in Phase 11.A.7). Pre-11.A spaces
+  // return null cleanly; the widget on MainCanvasView short-circuits
+  // and renders a "Generate layers" CTA instead.
+  type InitialObjectiveStack =
+    import("@/lib/objective-canvas/layer-model").ObjectiveStack;
+  const initialObjectiveStack: InitialObjectiveStack | null =
+    (space.synthesis_data?.objective_canvas?.layers as
+      | InitialObjectiveStack
       | null
       | undefined) ?? null;
   const roomTitles: Record<string, string> = {};
@@ -605,6 +633,7 @@ export default async function ObjectiveCanvasPage({
             initialSubObjectiveThemes={initialSubObjectiveThemes}
             initialConceptMemory={initialConceptMemory}
             initialRoomDecisions={initialRoomDecisions}
+            initialObjectiveStack={initialObjectiveStack}
           />
         </div>
       </div>

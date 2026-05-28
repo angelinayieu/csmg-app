@@ -33,6 +33,7 @@ import { CanvasDecisionSurface } from "@/components/objective/canvas-decision-su
 import { HCDToggle } from "@/components/objective/hcd-toggle";
 import { DeliverablesStrip } from "@/components/objective/deliverables-strip";
 import { CanvasAutopilotRunner } from "@/components/objective/canvas-autopilot-runner";
+import { ObjectiveStackWidget } from "@/components/objective/objective-stack";
 // Phase 11.0b — LabNotebookPanel is mounted at the layout level
 // (app/objective/[spaceId]/layout.tsx) as a persistent right rail.
 // The page-level mount + Notebook button moved out so we don't
@@ -98,6 +99,16 @@ export interface MainCanvasSub {
   /** Total number of approved chains (regardless of archetype
    *  grouping). Used in the status pip. */
   approvedPlayCount: number;
+  /** Phase 11.A.6 — which ObjectiveStack layer(s) this sub-objective
+   *  operates at. Empty array for pre-11.A picks (no layer tagging
+   *  fired). The Stack widget at the top of the canvas uses these
+   *  to compute per-layer coverage; the sub-card's LayerPositionChip
+   *  uses them as the source of truth. */
+  layerOrdinals?: number[];
+  /** Phase 11.A.6 — human-readable position chip ("L3 · Direct",
+   *  "L2→L3 · Bridge"). Set by the proposer's JOB 3 when the stack
+   *  was present at generation time. Null for pre-11.A picks. */
+  layerPositionLabel?: string | null;
 }
 
 interface Props {
@@ -134,6 +145,13 @@ interface Props {
    *  hides the surface. Server-aggregated in page.tsx via
    *  computeRoomDecisionSummaries — no client-side fetches. */
   roomDecisions?: RoomDecisionSummary[];
+  /** Phase 11.A — the canvas's ObjectiveStack. When present, renders
+   *  the ObjectiveStackWidget above the sub-objective grid so the
+   *  user sees structural coverage + which layers their picks
+   *  touch. Null for pre-11.A spaces; the widget's slot collapses. */
+  objectiveStack?:
+    | import("@/lib/objective-canvas/layer-model").ObjectiveStack
+    | null;
 }
 
 export function MainCanvasView({
@@ -146,6 +164,7 @@ export function MainCanvasView({
   initialSubObjectiveThemes = null,
   conceptMemory = [],
   roomDecisions = [],
+  objectiveStack = null,
 }: Props) {
   // Themed view state — same pattern as the picker's cluster view.
   // Default to "grid" so existing users see no change unless they
@@ -277,6 +296,34 @@ export function MainCanvasView({
           <ConceptMemoryFeedStrip
             concepts={conceptMemory}
             currentSpaceId={spaceId}
+          />
+        </div>
+      )}
+
+      {/* Phase 11.A.6 — ObjectiveStack widget. Renders the canvas's
+          causal-stack decomposition (4-6 layers from substrate to
+          outcome) with sub-objectives positioned by layer_ordinals.
+          Coverage chip shows which layers user picks touch + which
+          are uncovered. Click a layer name → filter proposals to
+          that layer (future). Click a variable chip → popover with
+          description. Hidden when no stack exists yet — pre-11.A
+          spaces show the rest of the canvas as before. */}
+      {objectiveStack && objectiveStack.layers.length > 0 && (
+        <div className="mx-auto mt-6 w-full max-w-5xl">
+          <ObjectiveStackWidget
+            stack={objectiveStack}
+            taggedProposals={subs
+              .filter(
+                (s) => Array.isArray(s.layerOrdinals) && s.layerOrdinals.length > 0,
+              )
+              .map((s) => ({
+                id: s.id,
+                layer_ordinals: s.layerOrdinals!,
+              }))}
+            // Every sub on the main canvas is already picked
+            // (confirmed). The coverage chip shows which layers
+            // those picks actually touch.
+            pickedIds={subs.map((s) => s.id)}
           />
         </div>
       )}
