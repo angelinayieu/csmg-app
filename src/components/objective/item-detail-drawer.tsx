@@ -221,7 +221,9 @@ interface ItemVariation {
       relevance: number;
       argument: string;
     }>;
-    evidence_strength?: number;
+    /** Renamed from evidence_strength → evidence_support to disambiguate
+     *  from the mechanism-spec research_basis.evidence_strength ladder. */
+    evidence_support?: number;
     evidence_supports?: number;
     evidence_refutes?: number;
     evidence_contextual?: number;

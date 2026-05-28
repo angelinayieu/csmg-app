@@ -15,10 +15,10 @@
 //   - evidence_citations[]: each row = one source the LLM judged
 //     relevant, classified as supports / refutes / contextual, with
 //     a 0..1 relevance score
-//   - evidence_strength (0..1): aggregate evidence quality from the
+//   - evidence_support (0..1): aggregate evidence quality from the
 //     citations. Composed via smooth saturating function:
 //       net_support = supporting_count - 0.5 × refuting_count
-//       evidence_strength = 0.5 + 0.5 × tanh(net_support × 0.4)
+//       evidence_support = 0.5 + 0.5 × tanh(net_support × 0.4)
 //     0 net = 0.5 (neutral, no signal). 2 net supporters ≈ 0.85.
 //     5 net supporters → ~0.97 (saturates). Refutations halve the
 //     contribution since refuting evidence is rarer + more decisive.
@@ -34,13 +34,13 @@
 //
 // Composition with ensemble:
 //   final_confidence = ensemble_consensus_confidence × evidence_multiplier
-//   where evidence_multiplier = 0.5 + (evidence_strength - 0.5)
-//                            = evidence_strength
+//   where evidence_multiplier = 0.5 + (evidence_support - 0.5)
+//                            = evidence_support
 //   When no evidence available: multiplier = 1.0 (pass-through; no
 //   downgrade for unstudied proxies — let the ensemble grade stand).
 //
 // Output: extends each indicator_score with evidence_citations[] +
-// evidence_strength + (optionally) evidence_weighted_confidence.
+// evidence_support + (optionally) evidence_weighted_confidence.
 
 import { llmJSON } from "@/lib/llm";
 import type { ResearchSource } from "@/lib/research/research-service";
@@ -79,7 +79,7 @@ export interface IndicatorEvidenceResult {
   /** Aggregate strength signal (0..1). 0.5 = no signal (no
    *  citations or balanced supports/refutes). Above 0.5 = net
    *  supporting evidence; below = net refuting. */
-  evidence_strength: number;
+  evidence_support: number;
   /** Convenience: counts so the UI can render "3✓ 1✗ 2·" without
    *  iterating citations. */
   supports_count: number;
@@ -119,7 +119,7 @@ const MAX_CITATIONS_PER_INDICATOR = 6;
 // ── Aggregation math ──────────────────────────────────────────────
 
 /** Smooth saturating composition of supports / refutes into a single
- *  0..1 evidence_strength. Designed so that:
+ *  0..1 evidence_support. Designed so that:
  *   - No evidence (0 supports, 0 refutes) → 0.5 (neutral, pass-through
  *     multiplier when composed with ensemble confidence)
  *   - 2 net supporters → ~0.85 (clearly positive but not certain)
@@ -238,7 +238,7 @@ const RESPONSE_SCHEMA = {
 /** Run the evidence scorer over a pool of sources and a set of
  *  unique indicators. ONE LLM call. Soft-fails on empty sources
  *  (returns status="no_sources") or empty indicators ("no_indicators").
- *  Caller composes the resulting evidence_strength into ensemble
+ *  Caller composes the resulting evidence_support into ensemble
  *  consensus_confidence to get the final evidence-weighted confidence. */
 export async function scoreIndicatorsWithEvidence(
   ctx: EvidenceContext,
@@ -384,7 +384,7 @@ export async function scoreIndicatorsWithEvidence(
       indicator_text: matched.indicator_text,
       outcome_id: matched.outcome_id,
       citations,
-      evidence_strength: computeEvidenceStrength(supports, refutes),
+      evidence_support: computeEvidenceStrength(supports, refutes),
       supports_count: supports,
       refutes_count: refutes,
       contextual_count: contextual,

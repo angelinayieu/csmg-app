@@ -231,13 +231,13 @@ export interface ItemVariation {
      *  0.5 = neutral (no signal, no citations OR balanced supports/
      *  refutes). Above 0.5 = net supporting; below = net refuting.
      *  Composed with ensemble consensus_confidence via:
-     *    evidence_weighted_confidence = consensus_confidence × evidence_strength
+     *    evidence_weighted_confidence = consensus_confidence × evidence_support
      *  When no evidence data, this is 0.5 → multiplier = 0.5, but the
      *  composition layer pass-throughs to 1.0 (no penalty for
      *  unstudied proxies — the ensemble grade stands as-is). */
-    evidence_strength?: number;
+    evidence_support?: number;
     /** The evidence-adjusted blend (consensus_confidence ×
-     *  evidence_strength×2, clamped). Stored SEPARATELY from `confidence`
+     *  evidence_support×2, clamped). Stored SEPARATELY from `confidence`
      *  (which stays the raw proxy-validity confidence) so the two never
      *  silently overwrite each other — the UI picks which to surface. */
     evidence_weighted_confidence?: number;

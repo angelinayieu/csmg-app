@@ -686,7 +686,7 @@ export async function POST(req: NextRequest) {
           relevance: number;
           argument: string;
         }>;
-        evidence_strength: number;
+        evidence_support: number;
         supports_count: number;
         refutes_count: number;
         contextual_count: number;
@@ -749,7 +749,7 @@ export async function POST(req: NextRequest) {
               `${r.outcome_id}::${r.indicator_text}`,
               {
                 citations: r.citations,
-                evidence_strength: r.evidence_strength,
+                evidence_support: r.evidence_support,
                 supports_count: r.supports_count,
                 refutes_count: r.refutes_count,
                 contextual_count: r.contextual_count,
@@ -944,7 +944,7 @@ export async function POST(req: NextRequest) {
                 0,
                 Math.min(
                   1,
-                  ind.consensus_confidence * (evidence.evidence_strength * 2),
+                  ind.consensus_confidence * (evidence.evidence_support * 2),
                 ),
               )
             : ind.consensus_confidence;
@@ -976,7 +976,7 @@ export async function POST(req: NextRequest) {
             ...(evidence
               ? {
                   evidence_citations: evidence.citations,
-                  evidence_strength: evidence.evidence_strength,
+                  evidence_support: evidence.evidence_support,
                   evidence_supports: evidence.supports_count,
                   evidence_refutes: evidence.refutes_count,
                   evidence_contextual: evidence.contextual_count,
