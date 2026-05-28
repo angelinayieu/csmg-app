@@ -10,6 +10,7 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { ExternalLink } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { CausalMapNodeData, CausalMapNodeKind } from "../lib/types";
 import {
@@ -50,6 +51,7 @@ function RoomItemNodeInner({ data, selected }: NodeProps) {
           ? `0 0 0 4px ${loop.tint}, ${appleVibe.shadow.card}`
           : appleVibe.shadow.card,
         fontFamily: appleVibe.font.stack,
+        cursor: d.href ? "pointer" : "default",
         transition:
           "box-shadow 150ms ease, opacity 150ms ease, border-color 150ms ease",
       }}
@@ -73,12 +75,25 @@ function RoomItemNodeInner({ data, selected }: NodeProps) {
         style={{ background: accent, width: 6, height: 6, border: "none" }}
       />
 
-      <span
-        className="text-[8.5px] font-bold uppercase tracking-wide"
-        style={{ color: accent, opacity: 0.85 }}
-      >
-        {KIND_LABEL[d.kind]}
-      </span>
+      <div className="flex items-center justify-between gap-1">
+        <span
+          className="text-[8.5px] font-bold uppercase tracking-wide"
+          style={{ color: accent, opacity: 0.85 }}
+        >
+          {KIND_LABEL[d.kind]}
+        </span>
+        {/* L1→L2 affordance: mechanism nodes open their Lab page. */}
+        {d.href ? (
+          <span
+            className="inline-flex items-center gap-0.5 text-[8px] font-semibold"
+            style={{ color: accent, opacity: 0.75 }}
+            title="Open Lab — evaluate this mechanism"
+          >
+            <ExternalLink className="h-2.5 w-2.5" strokeWidth={2.4} />
+            Lab
+          </span>
+        ) : null}
+      </div>
       <p
         className="text-[12px] font-semibold leading-tight line-clamp-2"
         style={{ color: appleVibe.text.primary }}

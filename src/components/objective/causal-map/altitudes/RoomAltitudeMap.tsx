@@ -9,7 +9,8 @@
 // sidebar. The "Map" option alongside the room's Categories / Variables
 // views — it reads the SAME lanes + edges, just as a graph.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -35,6 +36,7 @@ import type {
 } from "@/components/objective/sub-objective-room-view";
 import { buildRoomGraph } from "../lib/build-room-graph";
 import { useLoopDetection } from "../hooks/useLoopDetection";
+import { useZoomTransition } from "../hooks/useZoomTransition";
 import { RoomItemNode } from "../nodes/RoomItemNode";
 import { CausalMapEdge } from "../edges/CausalMapEdge";
 import { LaneColumns } from "../overlays/LaneColumns";
@@ -81,16 +83,40 @@ function RoomAltitudeMapInner({
   );
   const rf = useReactFlow();
   const [initialized, setInitialized] = useState(false);
+  const router = useRouter();
+  // subId comes from the route (/app/objective/[spaceId]/sub/[subId]) so
+  // we don't have to thread a prop through the (other-session) room view.
+  const params = useParams();
+  const subId = typeof params?.subId === "string" ? params.subId : "";
+  const { trigger: triggerZoom, overlay: zoomOverlay } = useZoomTransition();
 
   const graph = useMemo(
-    () => buildRoomGraph({ lanes, edges }),
-    [lanes, edges],
+    () => buildRoomGraph({ lanes, edges, spaceId, subObjectiveId: subId }),
+    [lanes, edges, spaceId, subId],
   );
 
   const loops = useLoopDetection(graph.nodes, graph.edges);
   const activeLoop = useMemo(
     () => loops.find((l) => l.id === highlightedLoop) ?? null,
     [loops, highlightedLoop],
+  );
+
+  // L1→L2 drill-down: clicking a mechanism node blooms + opens its Lab
+  // page (the existing item altitude). Only feature nodes carry an href.
+  const onNodeClick = useCallback(
+    (event: React.MouseEvent, node: Node) => {
+      const d = node.data as unknown as CausalMapNodeData;
+      if (!d.href) return;
+      const href = d.href;
+      const r = (event.currentTarget as HTMLElement).getBoundingClientRect();
+      const color = NODE_KIND_ACCENT[d.kind] ?? appleVibe.stage.features;
+      triggerZoom(
+        { top: r.top, left: r.left, width: r.width, height: r.height },
+        color,
+        () => router.push(href),
+      );
+    },
+    [router, triggerZoom],
   );
 
   // URL-driven focus (?focus=<entityId>) — a deep-link / the chat agent
@@ -186,6 +212,7 @@ function RoomAltitudeMapInner({
         edges={flowEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
+        onNodeClick={onNodeClick}
         onInit={() => setInitialized(true)}
         fitView
         fitViewOptions={{ padding: 0.2, maxZoom: 1.2, minZoom: 0.25 }}
@@ -309,6 +336,7 @@ function RoomAltitudeMapInner({
           className="!bg-white/80 !ring-1 !ring-black/5 !rounded-lg !shadow-sm"
         />
       </ReactFlow>
+      {zoomOverlay}
     </motion.div>
   );
 }

@@ -19,8 +19,10 @@ export const NODE_W = 208;
 export const NODE_H = 84;
 /** Vertical gap between layer bands. */
 export const BAND_GAP = 28;
-/** Min band height — taller when a layer holds many nodes. */
-export const BAND_MIN_H = 132;
+/** Min band height — taller when a layer holds many nodes. Kept just
+ *  under a single node-row's footprint so sparse bands hug their content
+ *  instead of stranding nodes in whitespace. */
+export const BAND_MIN_H = 108;
 /** Horizontal gap between nodes within a band. */
 export const NODE_COL_GAP = 56;
 /** Left inset where node columns begin (room for the band label). */

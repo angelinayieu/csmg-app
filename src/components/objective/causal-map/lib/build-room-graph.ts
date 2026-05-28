@@ -114,8 +114,12 @@ function itemSubtitle(
 export function buildRoomGraph(input: {
   lanes: RoomLane[];
   edges: RoomEdge[];
+  /** L1→L2 drill-down: when provided, feature/mechanism nodes deep-link
+   *  to their existing Lab page. Omit → no node is navigable. */
+  spaceId?: string;
+  subObjectiveId?: string;
 }): RoomGraph {
-  const { lanes, edges } = input;
+  const { lanes, edges, spaceId, subObjectiveId } = input;
 
   // Lanes in canonical order, only those that actually have items.
   const present = LANE_ORDER.map((slug) =>
@@ -141,7 +145,13 @@ export function buildRoomGraph(input: {
         approvedCount: 0,
         methodTier: null,
         methodScore: null,
-        href: null,
+        // Only mechanism (feature) nodes have a Lab page — "focused
+        // evaluation for ONE mechanism" — so only they are the L1→L2
+        // drill-down target. Pain/outcome nodes stay non-navigable.
+        href:
+          kind === "feature" && spaceId && subObjectiveId
+            ? `/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${item.id}`
+            : null,
         canonicalConceptId: null,
       };
       nodes.push({

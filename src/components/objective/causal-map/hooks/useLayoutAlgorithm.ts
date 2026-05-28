@@ -37,9 +37,13 @@ export interface LayoutResult {
   height: number;
 }
 
-const BAND_PAD = 22;
-const ROW_GAP = 16;
+const BAND_PAD = 16;
+const ROW_GAP = 14;
 const MAX_PER_ROW = 5;
+/** Left gutter reserved for the floating band-label chips. */
+const LABEL_GUTTER = BAND_LABEL_W + 12;
+/** Right breathing room past the content. */
+const RIGHT_MARGIN = 48;
 
 // ── Layered (canvas altitude) ────────────────────────────────────────────
 
@@ -52,7 +56,7 @@ function layeredLayout(
     return gridFallback(nodes);
   }
 
-  // Group node indices by primary ordinal.
+  // Group nodes by primary ordinal.
   const byOrdinal = new Map<number, CausalMapNode[]>();
   for (const n of nodes) {
     const ord = primaryOrdinalOf(n.data.layerOrdinals);
@@ -69,10 +73,24 @@ function layeredLayout(
     return kb - ka;
   });
 
+  const rowWidthOf = (count: number) =>
+    count * NODE_W + Math.max(0, count - 1) * NODE_COL_GAP;
+
+  // Pass 1: the widest single row across all bands sets a shared centered
+  // content width, so every band's nodes align on ONE center axis instead
+  // of jamming against the left gutter (the "stranded in whitespace" bug).
+  let maxRowWidth = NODE_W;
+  for (const band of ordered) {
+    const n = (byOrdinal.get(band.ordinal) ?? []).length;
+    const perRow = Math.min(Math.max(n, 1), MAX_PER_ROW);
+    maxRowWidth = Math.max(maxRowWidth, rowWidthOf(Math.min(n, perRow)));
+  }
+  const contentCenterX = LABEL_GUTTER + maxRowWidth / 2;
+
+  // Pass 2: stack bands top→bottom; center each row on contentCenterX.
   const positioned: CausalMapNode[] = [];
   const finalizedBands: LayerBandSpec[] = [];
   let cursorY = 0;
-  let maxWidth = 0;
 
   for (const band of ordered) {
     const members = byOrdinal.get(band.ordinal) ?? [];
@@ -81,19 +99,14 @@ function layeredLayout(
     const contentH = rows * NODE_H + (rows - 1) * ROW_GAP;
     const bandH = Math.max(BAND_MIN_H, contentH + BAND_PAD * 2);
 
-    const startX = BAND_LABEL_W + 24;
     members.forEach((node, i) => {
-      const col = i % perRow;
       const row = Math.floor(i / perRow);
-      // Center each row horizontally within the band's used columns.
+      const col = i % perRow;
       const rowCount = Math.min(perRow, members.length - row * perRow);
-      const rowWidth = rowCount * NODE_W + (rowCount - 1) * NODE_COL_GAP;
-      const rowStart = startX;
-      const x = rowStart + col * (NODE_W + NODE_COL_GAP);
-      const y =
-        cursorY + (bandH - contentH) / 2 + row * (NODE_H + ROW_GAP);
+      const rowStartX = contentCenterX - rowWidthOf(rowCount) / 2;
+      const x = rowStartX + col * (NODE_W + NODE_COL_GAP);
+      const y = cursorY + (bandH - contentH) / 2 + row * (NODE_H + ROW_GAP);
       positioned.push({ ...node, position: { x, y } });
-      maxWidth = Math.max(maxWidth, rowStart + rowWidth);
     });
 
     finalizedBands.push({ ...band, y: cursorY, height: bandH });
@@ -103,7 +116,7 @@ function layeredLayout(
   return {
     nodes: positioned,
     bands: finalizedBands,
-    width: Math.max(maxWidth + 48, 960),
+    width: LABEL_GUTTER + maxRowWidth + RIGHT_MARGIN,
     height: cursorY,
   };
 }
