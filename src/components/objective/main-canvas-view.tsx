@@ -14,8 +14,16 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { ArrowRight, Check, Layers, RefreshCw, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  ArrowRight,
+  Check,
+  Layers,
+  LayoutGrid,
+  RefreshCw,
+  Sparkles,
+  Waypoints,
+} from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
   AnnotatedObjectiveCard,
@@ -34,6 +42,13 @@ import { HCDToggle } from "@/components/objective/hcd-toggle";
 import { DeliverablesStrip } from "@/components/objective/deliverables-strip";
 import { CanvasAutopilotRunner } from "@/components/objective/canvas-autopilot-runner";
 import { ObjectiveStackWidget } from "@/components/objective/objective-stack";
+// Phase 12.A — the Causal System Map (opt-in via the Cards/Map toggle;
+// N4: cards view kept indefinitely) + the at-a-glance insights digest
+// beneath it, + the live-refresh & view-persistence hooks.
+import { CausalMap } from "@/components/objective/causal-map/CausalMap";
+import { MapInsightsPanel } from "@/components/objective/causal-map/MapInsightsPanel";
+import { useDecisionLogSignal } from "@/components/objective/causal-map/hooks/useDecisionLogSignal";
+import { useLocalPref } from "@/components/objective/causal-map/hooks/useLocalPref";
 // Phase 11.0b — LabNotebookPanel is mounted at the layout level
 // (app/objective/[spaceId]/layout.tsx) as a persistent right rail.
 // The page-level mount + Notebook button moved out so we don't
@@ -174,9 +189,27 @@ export function MainCanvasView({
       ? "themes"
       : "grid",
   );
+  // Phase 12.A — Cards vs Map (per-space, sticky via localStorage).
+  // Default "cards" so no existing flow breaks (N4); Map is opt-in.
+  const [canvasView, setCanvasView] = useLocalPref<"cards" | "map">(
+    `causalmap:view:${spaceId}`,
+    "cards",
+  );
   // Phase 11.0b — notebook state moved to the layout. router still
   // needed for IncrementalCutLab + CanvasAutopilotRunner refresh.
   const router = useRouter();
+  // Phase 12.A.9 — live refresh. While the Map is active, poll the
+  // decision log; on a new event (autopilot / score / enrichment /
+  // layer regen / confirm) pull fresh server props so the map updates.
+  // Scoped to Map view so Cards users aren't interrupted; router.refresh
+  // emits no decision, so there's no loop.
+  const { signal: mapRefreshSignal } = useDecisionLogSignal({
+    spaceId,
+    enabled: canvasView === "map",
+  });
+  useEffect(() => {
+    if (mapRefreshSignal > 0) router.refresh();
+  }, [mapRefreshSignal, router]);
   const [themes, setThemes] = useState<ClusterAnalysis | null>(
     initialSubObjectiveThemes,
   );
@@ -257,6 +290,45 @@ export function MainCanvasView({
           event so the notebook can group every per-chain event
           under one header. */}
       <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5">
+        {/* Phase 12.A — Cards / Map segmented toggle. Shown once there's
+            something to lay out; Cards stays the default. */}
+        {subs.length > 0 && (
+          <div
+            className="flex items-center rounded-full p-0.5"
+            style={{
+              background: appleVibe.surface.chip,
+              border: `1px solid ${appleVibe.stroke.soft}`,
+            }}
+          >
+            {(["cards", "map"] as const).map((v) => {
+              const active = canvasView === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setCanvasView(v)}
+                  className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                  style={{
+                    background: active ? appleVibe.surface.card : "transparent",
+                    color: active
+                      ? appleVibe.text.primary
+                      : appleVibe.text.tertiary,
+                    boxShadow: active ? appleVibe.shadow.chip : "none",
+                  }}
+                  title={v === "cards" ? "Card grid" : "Causal system map"}
+                  aria-pressed={active}
+                >
+                  {v === "cards" ? (
+                    <LayoutGrid className="h-3.5 w-3.5" strokeWidth={2.2} />
+                  ) : (
+                    <Waypoints className="h-3.5 w-3.5" strokeWidth={2.2} />
+                  )}
+                  {v === "cards" ? "Cards" : "Map"}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <HCDToggle spaceId={spaceId} />
         {/* Only render the canvas autopilot button when at least one
             sub-objective room has been generated. Empty-canvas runs
@@ -391,7 +463,7 @@ export function MainCanvasView({
           "Detect themes" CTA. Post-themes: a view toggle + refresh
           button (stale-aware). Mounts above the grid so the user
           sees structure before scanning the cards. */}
-      {subs.length >= 4 && (
+      {canvasView === "cards" && subs.length >= 4 && (
         <div className="mx-auto mt-6 max-w-5xl">
           <ThemeControlBar
             hasThemes={!!themes && themes.clusters.length > 0}
@@ -407,27 +479,45 @@ export function MainCanvasView({
         </div>
       )}
 
-      {/* Trunk → fork connector */}
-      <div
-        aria-hidden
-        className={
-          // Tight top when ANY surface (decisions / signals / themes)
-          // already established the "between core + rooms" zone.
-          // Otherwise widen so the trunk reads as the connector
-          // between core and rooms across empty space.
-          roomDecisions.length > 0 ||
-          crossRoomSignals ||
-          (themes && themes.clusters.length > 0)
-            ? "mx-auto mt-2 h-8 w-px"
-            : "mx-auto mt-6 h-8 w-px"
-        }
-        style={{ background: appleVibe.stroke.medium }}
-      />
+      {/* Trunk → fork connector (cards view only — the map has its own
+          internal structure, so the trunk would be noise). */}
+      {canvasView === "cards" && (
+        <div
+          aria-hidden
+          className={
+            // Tight top when ANY surface (decisions / signals / themes)
+            // already established the "between core + rooms" zone.
+            // Otherwise widen so the trunk reads as the connector
+            // between core and rooms across empty space.
+            roomDecisions.length > 0 ||
+            crossRoomSignals ||
+            (themes && themes.clusters.length > 0)
+              ? "mx-auto mt-2 h-8 w-px"
+              : "mx-auto mt-6 h-8 w-px"
+          }
+          style={{ background: appleVibe.stroke.medium }}
+        />
+      )}
 
-      {/* Sub-objective cards — either the flat grid (default) or the
-          theme-row gallery (when the user has detected themes and is
-          viewing "by theme"). */}
-      {subs.length === 0 ? (
+      {/* Phase 12.A — Map view replaces the cards-region entirely.
+          Otherwise: sub-objective cards as the flat grid (default) or
+          the theme-row gallery ("by theme"). */}
+      {canvasView === "map" ? (
+        <div className="relative mx-auto mt-2 w-full">
+          <CausalMap
+            spaceId={spaceId}
+            subs={subs}
+            objectiveStack={objectiveStack}
+            crossRoomSignals={crossRoomSignals}
+          />
+          <MapInsightsPanel
+            spaceId={spaceId}
+            subs={subs}
+            objectiveStack={objectiveStack}
+            crossRoomSignals={crossRoomSignals}
+          />
+        </div>
+      ) : subs.length === 0 ? (
         <div className="relative mx-auto mt-2 grid w-full gap-5">
           <EmptyState />
         </div>
