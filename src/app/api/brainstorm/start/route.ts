@@ -28,6 +28,15 @@ export const dynamic = "force-dynamic";
 interface StartBody {
   objective?: string;
   mode?: "autopilot" | "human";
+  /** Define-before-generate gate (CROSS_AUDIT P1). `preciseFraming` is the
+   *  markdown framing block built client-side via buildPreciseSuffix; it's
+   *  appended to the RESEARCH seed only (not the displayed objective) so
+   *  every downstream stage that consumes the research bundle as RAG is
+   *  framed by the user's outcome / constraints / horizon / subject. Empty
+   *  when the user skipped the structured fields. `preciseFields` is the raw
+   *  set, persisted on synthesis_data.define for the record + future use. */
+  preciseFraming?: string;
+  preciseFields?: Record<string, unknown>;
 }
 
 // Mirror of the objective_brainstorm template's layer list. Used as
@@ -106,6 +115,31 @@ export async function POST(req: NextRequest) {
   const pipelineMode: "autopilot" | "review_each" =
     body.mode === "human" ? "review_each" : "autopilot";
 
+  // Define-before-generate framing (CROSS_AUDIT P1). The client serializes
+  // the structured fields; we cap + append to the RESEARCH seed only, so
+  // generation is framed without polluting the core objective text shown on
+  // the canvas. defineFields is persisted (best-effort) on a top-level
+  // synthesis_data.define key — which the objective_canvas state machine
+  // preserves across its merges (patchObjectiveCanvasState spreads the base).
+  const preciseFraming =
+    typeof body.preciseFraming === "string"
+      ? body.preciseFraming.slice(0, 2000)
+      : "";
+  const researchSeed = preciseFraming
+    ? `${objective}${preciseFraming}`
+    : objective;
+  const defineFields =
+    body.preciseFields &&
+    typeof body.preciseFields === "object" &&
+    !Array.isArray(body.preciseFields)
+      ? (body.preciseFields as Record<string, unknown>)
+      : null;
+  const hasDefine =
+    !!defineFields &&
+    Object.values(defineFields).some(
+      (v) => typeof v === "string" && v.trim().length > 0,
+    );
+
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
@@ -132,6 +166,9 @@ export async function POST(req: NextRequest) {
     maturity: "actionable_now",
     space_kind: "objective_canvas",
     pipeline_mode: pipelineMode,
+    // Define-before-generate (CROSS_AUDIT P1) — persist the structured
+    // framing as a top-level synthesis_data key the state machine preserves.
+    ...(hasDefine ? { synthesis_data: { define: defineFields } } : {}),
   };
 
   let insert = await db
@@ -238,7 +275,7 @@ export async function POST(req: NextRequest) {
   // UI polls /api/brainstorm/research/status to know when it lands.
   // `void` makes the no-await explicit; we never block the user's
   // entry on research completion.
-  void surfacePassToDb(db, spaceId, objective);
+  void surfacePassToDb(db, spaceId, researchSeed);
 
   return NextResponse.json({ spaceId, goalId, pipelineMode });
 }

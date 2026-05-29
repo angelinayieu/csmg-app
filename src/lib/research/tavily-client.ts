@@ -63,6 +63,12 @@ export interface SearchTavilyOpts {
   includeAnswer?: boolean;
   /** Topic hint — "general" | "news". Default general. */
   topic?: "general" | "news";
+  /** Domain allowlist — when set, restricts results to these hosts.
+   *  Used by typed inspiration (UI design vs technical) so each rail
+   *  pulls from sites that actually carry that kind of reference
+   *  (e.g. mobbin/dribbble for design, github/arxiv for technical).
+   *  Tavily-supported param; omit for unconstrained search. */
+  includeDomains?: string[];
 }
 
 /**
@@ -97,6 +103,10 @@ export async function searchTavily(
     opts.maxResults ?? (depth === "advanced" ? 15 : 8);
   const includeAnswer = opts.includeAnswer ?? false;
   const topic = opts.topic ?? "general";
+  const includeDomains =
+    Array.isArray(opts.includeDomains) && opts.includeDomains.length > 0
+      ? opts.includeDomains
+      : undefined;
 
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
@@ -112,6 +122,7 @@ export async function searchTavily(
         max_results: maxResults,
         include_answer: includeAnswer,
         topic,
+        ...(includeDomains ? { include_domains: includeDomains } : {}),
       }),
       signal: controller.signal,
     });

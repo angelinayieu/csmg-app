@@ -2,11 +2,14 @@
 
 // ── Annotated Heading ─────────────────────────────────────────────
 //
-// Renders a heading-sized block of text with inline colored
-// underlines for each annotation whose offset falls within the text.
-// Hovering (or focusing) an underlined phrase reveals its reading in a
-// small popover anchored under the phrase — the same hover-to-reveal
-// interaction as the body card, scaled down for a title.
+// Renders a block of text with inline colored underlines for each
+// annotation whose offset falls within the text. Hovering (or
+// focusing) an underlined phrase reveals its reading in a small
+// popover anchored under the phrase.
+//
+// Defaults to an <h1> (the sub-objective title), but `as` lets it
+// render body prose too (e.g. the Definition paragraph in the room
+// hero) so title + body share ONE underline renderer instead of two.
 //
 // Underline thickness scales with annotation.weight (matches the lens
 // body) so heavy readings read more present. Lane color is pulled from
@@ -91,13 +94,23 @@ function buildSegments(
 interface Props {
   text: string;
   annotations: ObjectiveAnnotation[];
-  /** Tailwind className for the heading wrapper. */
+  /** Tailwind className for the text wrapper. */
   className?: string;
-  /** Inline style for the heading wrapper. */
+  /** Inline style for the text wrapper. */
   style?: React.CSSProperties;
+  /** Wrapper element. Defaults to "h1" (title use); pass "p" for body
+   *  prose like the room hero's Definition paragraph. */
+  as?: "h1" | "h2" | "h3" | "p" | "div";
 }
 
-export function AnnotatedHeading({ text, annotations, className, style }: Props) {
+export function AnnotatedHeading({
+  text,
+  annotations,
+  className,
+  style,
+  as = "h1",
+}: Props) {
+  const Tag = as;
   const reduce = useReducedMotion();
   const safe = useMemo(() => normalizeAnnotations(annotations), [annotations]);
   const segments = useMemo(() => buildSegments(text, safe), [text, safe]);
@@ -127,7 +140,7 @@ export function AnnotatedHeading({ text, annotations, className, style }: Props)
 
   return (
     <div ref={wrapRef} className="relative">
-      <h1 className={className} style={style}>
+      <Tag className={className} style={style}>
         {segments.map((seg, i) => {
           if (seg.kind === "text") return <span key={i}>{seg.value}</span>;
           const thickness = Math.max(1.5, Math.min(3, 1.2 + seg.weight * 2));
@@ -170,7 +183,7 @@ export function AnnotatedHeading({ text, annotations, className, style }: Props)
             </motion.span>
           );
         })}
-      </h1>
+      </Tag>
 
       {/* Hover/focus reading popover — anchored under the phrase. */}
       <AnimatePresence>
@@ -202,7 +215,7 @@ export function AnnotatedHeading({ text, annotations, className, style }: Props)
                 aria-hidden
               />
               <span
-                className="text-[9.5px] font-medium uppercase tracking-[0.14em]"
+                className={appleVibe.label.className}
                 style={{ color: appleVibe.text.tertiary }}
               >
                 {activeSeg.tag ? LAYER_LABEL[activeSeg.tag] : "Reading"}

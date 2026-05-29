@@ -164,6 +164,12 @@ export function ObjectiveCanvasView({
   const [stage, setStage] = useState<ObjectiveCanvasStage>(initialStage);
   // Research sources sheet — opened by clicking the indicator.
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  // Set once when the picker confirms, so MainCanvasView auto-fills the
+  // newly-approved rooms' internal content (room/generate) exactly once.
+  // Persists across the confirm's router.refresh() (client state is
+  // preserved) and resets on a full reload — so a later canvas visit
+  // never re-triggers generation.
+  const [justConfirmed, setJustConfirmed] = useState(false);
 
   // When the picker confirms, the server inserts the chosen
   // improvement_goals rows and advances the canvas stage. The
@@ -172,6 +178,7 @@ export function ObjectiveCanvasView({
   // transition. Avoids the brief "no sub-objectives picked yet"
   // flash that would otherwise happen for the immediate hop.
   function handlePickerConfirmed() {
+    setJustConfirmed(true);
     setStage("main");
     router.refresh();
   }
@@ -279,6 +286,7 @@ export function ObjectiveCanvasView({
             analysisRoomTitles={analysisRoomTitles}
             operations={deckOperations}
             briefHref={briefHref}
+            autoFillRooms={justConfirmed}
           />
         )}
         {stage === "done" && <DonePlaceholder />}

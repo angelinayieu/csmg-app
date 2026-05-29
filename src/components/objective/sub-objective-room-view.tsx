@@ -29,6 +29,11 @@ import {
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { deployArtifactCard } from "@/components/objective/board-bus";
+import {
+  consumePendingCardFocus,
+  onCardFocus,
+  type CardFocusRequest,
+} from "@/lib/objective-canvas/notebook-focus";
 import { CorrelationSidePanel } from "./correlation-side-panel";
 import { PainCard, type PainCardItem } from "./cards/pain-card";
 import { FeatureCard, type FeatureCardItem } from "./cards/feature-card";
@@ -42,6 +47,8 @@ import { SharedCausesStrip } from "./cards/shared-causes-strip";
 import { PortfolioStrip } from "./cards/portfolio-strip";
 import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
 import { ConstraintsStrip } from "./cards/constraints-strip";
+import { PriorityStrip } from "./cards/priority-strip";
+import type { PriorityVector } from "@/lib/objective-canvas/priority-vector";
 import { CategoryCardsView } from "./category-cards-view";
 import { AutopilotRunner } from "./autopilot-runner";
 // Phase 11.0b — LabNotebookPanel is mounted at the layout level
@@ -65,6 +72,7 @@ import {
 } from "@/lib/objective-canvas/generate-categories";
 import type { PipelineMode } from "./mode-pill";
 import type { ObjectiveAnnotation } from "./annotated-objective-card";
+import { AnnotatedHeading } from "./annotated-heading";
 
 /** Provenance entry persisted on each entity's causal_chain.
  *  Resolved at generation time from the LLM's {index, facet} pairs
@@ -156,11 +164,25 @@ interface Props {
    *  fixed when the R&D engine runs mechanism experiments. Null
    *  hides the strip (no constraints captured yet). */
   constraints?: OperationalConstraints | null;
+  /** Per-sub-objective priority vector — soft trade-off weights
+   *  (speed / durability / reversibility / certainty / leverage).
+   *  Rendered as the Priorities strip just below the constraints
+   *  strip. Null = column unset; PriorityStrip auto-infers on mount
+   *  via GET /priorities. Distinct semantic role from constraints:
+   *  those are hard-fixed gates, these are soft weights. */
+  priorityVector?: PriorityVector | null;
   /** Hero prose, relocated from the page header so it shares one
-   *  two-column row with the portfolio (left: Definition + Counters +
-   *  coverage; right: strategic bets). Plain frameless text — the
+   *  two-column row with the portfolio (left: Definition + The problem +
+   *  coverage; right: hypotheses). Plain frameless text — the
    *  title + its inline annotations stay in the header. */
   description?: string | null;
+  /** Phase 1 — the sub-objective's own annotations whose offsets fall
+   *  within the description text (re-based to description-local by
+   *  splitAnnotationsByTitle). Rendered as frameless stage-colored
+   *  underlines on the Definition prose with hover-to-reveal readings —
+   *  the same annotation engine as the objective title, glossary-
+   *  consistent because the glossary is seeded from these readings. */
+  descriptionAnnotations?: ObjectiveAnnotation[];
   topNegativeOutcome?: string | null;
 }
 
@@ -175,7 +197,9 @@ export function SubObjectiveRoomView({
   annotations = [],
   crossRoomCoverageByIndex = {},
   constraints = null,
+  priorityVector = null,
   description = null,
+  descriptionAnnotations = [],
   topNegativeOutcome = null,
 }: Props) {
   const roomCategories: RoomCategories = useMemo(
@@ -348,6 +372,29 @@ export function SubObjectiveRoomView({
     }
     return map;
   }, [lanes]);
+
+  // Notebook tie-back — open the detail drawer for the card a clicked
+  // notebook event produced and scroll its lane card into view. Same-
+  // room clicks arrive live via the focus event; a cross-room hand-off
+  // is parked by the notebook host and consumed here on mount. We only
+  // act on entities that live in THIS room — events with no entity, or
+  // whose entity belongs to a sibling room / a higher altitude (e.g. a
+  // sub-objective proposal election), simply don't focus a card here.
+  useEffect(() => {
+    const focus = (req: CardFocusRequest) => {
+      const id = req.entityId;
+      if (!id || !entityIndex.has(id)) return;
+      setDetailEntityId(id);
+      // Defer the scroll until the drawer-open re-render settles.
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-entity-id="${CSS.escape(id)}"]`);
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    };
+    const parked = consumePendingCardFocus();
+    if (parked) focus(parked);
+    return onCardFocus(focus);
+  }, [entityIndex, subObjectiveId]);
 
   // ── Derive typed lane items from causal_chain payloads ──
   // Each item's sub_category slug is captured here so the card
@@ -943,12 +990,13 @@ export function SubObjectiveRoomView({
               <HeroProse
                 label="Definition"
                 dotColor={appleVibe.stage.objective}
-                text={description.trim()}
+                text={description ?? ""}
+                annotations={descriptionAnnotations}
               />
             )}
             {topNegativeOutcome && (
               <HeroProse
-                label="Counters"
+                label="The problem"
                 dotColor={appleVibe.stage.pain}
                 text={topNegativeOutcome}
               />
@@ -964,7 +1012,7 @@ export function SubObjectiveRoomView({
             )}
           </div>
 
-          {/* Right — strategic bets. Self-hides when the room has no
+          {/* Right — hypotheses portfolio. Self-hides when the room has no
               categories, so generated rooms always fill this column. */}
           {generatedAt && (
             <PortfolioStrip
@@ -1005,6 +1053,15 @@ export function SubObjectiveRoomView({
           unset. Edit affordance not wired here — left for future
           when an inline constraints editor lands. */}
       <ConstraintsStrip constraints={constraints} spaceId={spaceId} />
+
+      {/* Priority Strip — per-sub-objective soft trade-off weights.
+          Sibling to ConstraintsStrip (hard-fixed control variables);
+          paired here so the user reads them together as "the rules
+          for THIS room": fixed conditions + tunable preferences. */}
+      <PriorityStrip
+        initialVector={priorityVector}
+        subObjectiveId={subObjectiveId}
+      />
 
       {/* Always-on instrument legend — orients the user to the room's
           4 causal stages + their variable roles, above every view
@@ -1419,32 +1476,51 @@ function HeroProse({
   label,
   dotColor,
   text,
+  annotations,
 }: {
   label: string;
   dotColor: string;
   text: string;
+  /** When present, the prose renders with frameless stage-colored
+   *  underlines + hover-to-reveal readings (same engine as the title).
+   *  Offsets are description-local, so `text` must be the RAW
+   *  (untrimmed) description for the underlines to land correctly. */
+  annotations?: ObjectiveAnnotation[];
 }) {
+  const proseClass = "max-w-[70ch] text-[13.5px] font-light leading-relaxed";
+  const proseStyle = { color: appleVibe.text.secondary };
   return (
     <div>
-      <div className="mb-1.5 flex items-center gap-1.5">
+      <div className="mb-1.5 flex items-center gap-2">
         <span
-          className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+          className="h-2 w-2 flex-shrink-0 rounded-full"
           style={{ background: dotColor }}
           aria-hidden
         />
         <span
-          className={appleVibe.label.className}
-          style={{ color: appleVibe.label.color }}
+          className="text-[15px] font-semibold leading-tight"
+          style={{
+            color: appleVibe.text.primary,
+            letterSpacing: "-0.015em",
+            fontFamily: appleVibe.font.display,
+          }}
         >
           {label}
         </span>
       </div>
-      <p
-        className="max-w-[54ch] text-[13.5px] font-light leading-relaxed"
-        style={{ color: appleVibe.text.secondary }}
-      >
-        {text}
-      </p>
+      {annotations && annotations.length > 0 ? (
+        <AnnotatedHeading
+          as="p"
+          text={text}
+          annotations={annotations}
+          className={proseClass}
+          style={proseStyle}
+        />
+      ) : (
+        <p className={proseClass} style={proseStyle}>
+          {text.trim()}
+        </p>
+      )}
     </div>
   );
 }
@@ -1528,14 +1604,12 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
 
   return (
     <div
-      className="mb-3 flex items-center gap-1 overflow-x-auto px-4 py-3"
+      className="mb-3 flex items-start gap-1 overflow-x-auto px-5 py-4"
       style={{
         background: appleVibe.surface.cardElevated,
         border: `1px solid ${appleVibe.stroke.hairline}`,
         borderRadius: appleVibe.radius.lg,
-        boxShadow: appleVibe.shadow.card,
-        backdropFilter: "blur(20px)",
-        WebkitBackdropFilter: "blur(20px)",
+        boxShadow: appleVibe.shadow.chip,
         fontFamily: appleVibe.font.stack,
       }}
       aria-label="Causal stages in this room"
@@ -1557,47 +1631,51 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
             key={slug}
             className={
               next
-                ? "flex flex-1 items-center gap-1"
-                : "flex flex-shrink-0 items-center gap-1"
+                ? "flex flex-1 items-start gap-1"
+                : "flex flex-shrink-0 items-start gap-1"
             }
           >
-            <div className="flex min-w-0 flex-col items-center gap-1 px-1 text-center">
-              <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 flex-col items-center gap-1.5 px-2 text-center">
+              {/* Icon as the station glyph; count rides its lower-right
+                  corner as an iOS-style badge so there's no competing
+                  pill on the title row. */}
+              <div className="relative flex-shrink-0">
                 <span
-                  className="grid flex-shrink-0 place-items-center rounded-full"
+                  className="grid place-items-center rounded-full"
                   style={{
-                    width: 22,
-                    height: 22,
-                    background: `${color}14`,
+                    width: 36,
+                    height: 36,
+                    background: `${color}1F`,
                     color,
-                    boxShadow: `0 0 0 1px ${color}24, 0 4px 12px -6px ${color}66`,
                   }}
                   aria-hidden
                 >
-                  <RoleIcon className="h-3 w-3" strokeWidth={2.2} />
+                  <RoleIcon className="h-[18px] w-[18px]" strokeWidth={2} />
                 </span>
                 <span
-                  className="truncate text-[13px] font-semibold tracking-tight"
+                  className="absolute -bottom-1 -right-1 grid min-w-[18px] place-items-center rounded-full px-1 text-[10px] font-semibold tabular-nums"
                   style={{
-                    color: appleVibe.text.primary,
-                    fontFamily: appleVibe.font.display,
-                    letterSpacing: "-0.01em",
-                  }}
-                >
-                  {lane.label}
-                </span>
-                <span
-                  className="flex-shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
-                  style={{
-                    background: appleVibe.surface.chip,
-                    color: appleVibe.text.tertiary,
+                    height: 18,
+                    background: appleVibe.surface.card,
+                    color,
+                    boxShadow: `0 0 0 1px ${color}33, 0 1px 3px -1px rgba(15,23,42,0.18)`,
                   }}
                 >
                   {lane.items.length}
                 </span>
               </div>
               <span
-                className="text-[10px] font-semibold tracking-[0.02em]"
+                className="text-[12.5px] font-semibold leading-tight"
+                style={{
+                  color: appleVibe.text.primary,
+                  fontFamily: appleVibe.font.display,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                {lane.label}
+              </span>
+              <span
+                className="text-[10px] font-medium tracking-[0.01em]"
                 style={{ color }}
               >
                 {role.roleLabel} · {role.direction}
@@ -1605,10 +1683,22 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
             </div>
 
             {verb && (
-              <div className="flex min-w-[44px] flex-1 flex-col items-center gap-0.5 px-1">
+              // Connector height matches the icon (36px); items-center puts
+              // the line at the icon's vertical midpoint so it reads as one
+              // continuous pipeline icon→icon, with the title/descriptor
+              // hanging below. Verb floats just above the line.
+              <div
+                className="relative flex flex-1 items-center"
+                style={{ height: 36, minWidth: 44 }}
+              >
                 <span
-                  className="whitespace-nowrap text-[8.5px] font-medium lowercase tracking-wide"
-                  style={{ color: appleVibe.text.faint }}
+                  className="absolute whitespace-nowrap text-[8.5px] font-medium lowercase tracking-wide"
+                  style={{
+                    color: appleVibe.text.faint,
+                    left: "50%",
+                    top: "50%",
+                    transform: "translate(-50%, -150%)",
+                  }}
                 >
                   {verb}
                 </span>

@@ -15,6 +15,7 @@ import { orphanAnnotations } from "./orphan-annotations";
 import { painCoverage } from "./pain-coverage";
 import { duplicateVariations } from "./duplicate-variations";
 import { distillConcepts } from "./distill-concepts";
+import { distillMacroProblems } from "./distill-macro-problems";
 import { recommendNextMove } from "./recommend-next-move";
 import { crossRoomContradictions } from "./cross-room-contradictions";
 import { layerCoverage } from "./layer-coverage";
@@ -42,6 +43,7 @@ export const TIER_1_ANALYSES: AnalysisModule[] = [
  *  the cached scan output, preserving disposition state. */
 export const TIER_2_OPERATIONS: AnalysisModule[] = [
   distillConcepts,
+  distillMacroProblems,
   recommendNextMove,
   crossRoomContradictions,
 ];

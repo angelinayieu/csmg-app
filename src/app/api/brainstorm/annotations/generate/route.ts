@@ -15,6 +15,7 @@ import {
   makeVersion,
   parseVersions,
 } from "@/lib/objective-canvas/annotation-versions";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -127,6 +128,22 @@ export async function POST(req: NextRequest) {
       );
       // Soft-fail: still return what we computed so the UI can show.
     }
+
+    // Narrate the annotation pass on the Lab Notebook — the first,
+    // most KG-shaping step, previously silent. Only logged on an actual
+    // generation (cache hits returned earlier), so the timeline reflects
+    // real work. Space-scoped (subObjectiveId null). Soft-fail via void.
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId,
+      subObjectiveId: null,
+      action: "annotations_generated",
+      metadata: {
+        scope: "objective",
+        phrase_count: Array.isArray(annotations) ? annotations.length : 0,
+        mode,
+      },
+    });
 
     return NextResponse.json({
       annotations,

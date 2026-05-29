@@ -93,7 +93,7 @@ export async function loadCrossRoomState(
   const { data: subRows } = await db
     .from("improvement_goals")
     .select(
-      "id, title, description, top_negative_outcome, room_layers_generated_at",
+      "id, title, description, top_negative_outcome, room_layers_generated_at, layer_ordinals",
     )
     .eq("space_id", spaceId)
     .not("parent_goal_id", "is", null);
@@ -103,12 +103,16 @@ export async function loadCrossRoomState(
     description: string | null;
     top_negative_outcome: string | null;
     room_layers_generated_at: string | null;
+    layer_ordinals: number[] | null;
   }>).map((r) => ({
     id: r.id,
     title: r.title,
     description: r.description,
     top_negative_outcome: r.top_negative_outcome,
     generated_at: r.room_layers_generated_at,
+    // Project the room's layer tags so the layer_coverage analysis can
+    // map rooms → layers (the seam this previously couldn't see).
+    layer_ordinals: Array.isArray(r.layer_ordinals) ? r.layer_ordinals : [],
   }));
   const roomIds = rooms.map((r) => r.id);
 

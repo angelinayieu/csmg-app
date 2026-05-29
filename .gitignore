@@ -50,3 +50,8 @@ idea-synthesizer-claude-add-precision-control-slider-QC8rq/
 # Personal MCP server config — points at the developer's own Supabase
 # project ref. OAuth is per-user, so each contributor adds their own.
 .mcp.json
+
+# Personal Claude Code skill files (loaded as system prompt for the
+# author's local sessions, not part of the deployed app).
+UI agent /
+UI agent .zip

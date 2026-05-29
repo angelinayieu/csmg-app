@@ -110,19 +110,16 @@ export function SubObjectiveRoomHeader({
           </span>
           {placement && placementColor && (
             <span
-              className="ml-1 inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium"
+              className="ml-1 inline-flex flex-shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] font-medium"
               style={{
-                background: `${placementColor}12`,
+                // Pastel highlight, not a pill: a soft wash of the layer
+                // color with no ring + no dot. Reads as a calm highlighter
+                // swipe behind the label rather than a bordered button.
+                background: `${placementColor}1A`,
                 color: placementColor,
-                boxShadow: `inset 0 0 0 1px ${placementColor}2E`,
               }}
               title={`This room operates at ${placement.label} in the objective stack`}
             >
-              <span
-                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                style={{ background: placementColor }}
-                aria-hidden
-              />
               {placement.label}
             </span>
           )}

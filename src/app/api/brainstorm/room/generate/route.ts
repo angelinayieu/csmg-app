@@ -928,6 +928,36 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── Proactive inspiration kickoff (typed) ──
+  // Fire-and-forget per-entity research for every just-inserted
+  // entity. Each /item/research call is idempotent + soft-fails
+  // (missing Tavily key, weak query, etc.), so this never blocks or
+  // breaks generation — it just front-loads the technical + design
+  // rails so the drawer opens already-populated.
+  // Reference: MECHANISM_EXPERIENCE_SPEC.md §4d (proactive trigger).
+  // Coordinates with the parallel session's web-search gate: if
+  // research is disabled / Tavily key is missing, every call returns
+  // an empty bundle and the cost is one DB write per entity.
+  if (inserted.length > 0) {
+    const origin = req.nextUrl.origin;
+    const cookie = req.headers.get("cookie") ?? "";
+    void Promise.allSettled(
+      inserted.map((e) =>
+        fetch(`${origin}/api/brainstorm/item/research`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ entityId: e.id }),
+        }).catch(() => {
+          // Already a void promise — swallow any network error.
+          // The drawer's on-open fetch is the fallback path.
+        }),
+      ),
+    );
+  }
+
   return NextResponse.json({
     summary: {
       pain_count: pain.length,

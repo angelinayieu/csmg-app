@@ -102,9 +102,10 @@ export function PortfolioStrip({
   onGapsClick,
 }: Props) {
   const router = useRouter();
-  const [expanded, setExpanded] = useState(false);
-  // Coverage detail is a power-user sub-panel inside the expanded
-  // body — collapsed by default so the bets list stays the focus.
+  // Coverage detail is a power-user sub-panel — collapsed by default
+  // so the bets list stays the focus. The portfolio itself is always
+  // open (no top-level collapse): it's primary orientation, not a
+  // detail to tuck away.
   const [coverageOpen, setCoverageOpen] = useState(false);
   // Local optimistic mirror of categories — lets renames render
   // instantly while the PATCH is in flight. Reverts on failure.
@@ -292,16 +293,6 @@ export function PortfolioStrip({
     return gaps;
   }, [chains, laneCoverage]);
 
-  // ── Diversity score ──
-  // Number of distinct archetypes / total chains, scaled to /5.
-  // Max diversity = each chain is its own archetype; min = all
-  // chains stack on one archetype. Reads as "3/5" or "5/5".
-  const diversity = useMemo(() => {
-    if (chains.length === 0) return null;
-    const n = Math.min(5, archetypeRows.length);
-    return { n, of: 5 };
-  }, [chains, archetypeRows]);
-
   // ── Render ──
   // If no categories exist, hide the strip entirely — there's
   // nothing to diagnose.
@@ -317,16 +308,6 @@ export function PortfolioStrip({
   const totalProblems = painItems.length;
   const totalMechanisms = featureItems.length;
   const totalResults = outcomeItems.length;
-  // One-line summary shown when the strip is collapsed.
-  const collapsedSummary = [
-    `${totalChains} bet${totalChains === 1 ? "" : "s"}`,
-    `${approvedChains} approved`,
-    gapWarnings.length > 0
-      ? `${gapWarnings.length} unaddressed`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
 
   return (
     <motion.div
@@ -341,23 +322,9 @@ export function PortfolioStrip({
         fontFamily: appleVibe.font.stack,
       }}
     >
-      {/* Header — eyebrow + (collapsed) summary on the left, hero
-          diversity metric + chevron on the right. One eyebrow only. */}
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setExpanded((v) => !v);
-          }
-        }}
-        className="flex w-full items-center justify-between gap-4 px-6 py-4"
-        style={{ cursor: "pointer" }}
-      >
+      {/* Header — eyebrow + title on the left, hero diversity metric on
+          the right. Always open: no toggle, no chevron. */}
+      <div className="flex w-full items-center justify-between gap-4 px-6 pb-3 pt-4">
         <div className="min-w-0 flex-1">
           <div
             className="text-[9.5px] font-medium uppercase tracking-[0.18em]"
@@ -374,73 +341,14 @@ export function PortfolioStrip({
             }}
           >
             {totalChains > 0
-              ? `${totalChains} strategic bet${totalChains === 1 ? "" : "s"}`
-              : "No bets yet"}
+              ? `${totalChains} hypothes${totalChains === 1 ? "is" : "es"}`
+              : "No hypotheses yet"}
           </div>
-          {!expanded && (
-            <div
-              className="mt-0.5 truncate text-[11.5px] font-light"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              {totalChains > 0
-                ? collapsedSummary
-                : "Approve correlations to populate the portfolio."}
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-shrink-0 items-center gap-3">
-          {diversity && (
-            <div className="text-right leading-none">
-              <div
-                className="tabular-nums"
-                style={{
-                  color: appleVibe.text.primary,
-                  fontFamily: appleVibe.font.display,
-                  fontSize: 22,
-                  fontWeight: 600,
-                  letterSpacing: "-0.025em",
-                }}
-              >
-                {diversity.n}
-                <span
-                  style={{
-                    color: appleVibe.text.tertiary,
-                    fontSize: 14,
-                    fontWeight: 500,
-                  }}
-                >
-                  /{diversity.of}
-                </span>
-              </div>
-              <div
-                className="mt-1 text-[8.5px] font-medium uppercase tracking-[0.2em]"
-                style={{ color: appleVibe.text.faint }}
-              >
-                Diversity
-              </div>
-            </div>
-          )}
-          <ChevronDown
-            className="h-4 w-4"
-            strokeWidth={2}
-            style={{
-              color: appleVibe.text.faint,
-              transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
-              transition: "transform 200ms ease-out",
-            }}
-          />
         </div>
       </div>
 
-      {/* Expanded body */}
-      {expanded && (
-        <motion.div
-          initial={{ opacity: 0, y: -4 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.22, ease: "easeOut" }}
-          className="px-6 pb-5"
-        >
+      {/* Body — always rendered. */}
+      <div className="px-6 pb-5">
           {/* Gap callout — the single most actionable insight, surfaced
               FIRST. Quiet amber, clickable to open the correlation
               panel where the user can add a complementary bet. */}
@@ -474,7 +382,8 @@ export function PortfolioStrip({
                 {gapWarnings.length > 1
                   ? ` and ${gapWarnings.length - 1} more dimension${gapWarnings.length - 1 === 1 ? "" : "s"} have`
                   : " has"}{" "}
-                items but no bet yet. Consider a complementary bet to cover{" "}
+                items but no hypothesis yet. Consider a complementary hypothesis
+                to cover{" "}
                 {gapWarnings.length > 1 ? "them" : "it"}.
               </span>
             </button>
@@ -485,13 +394,7 @@ export function PortfolioStrip({
               approval status on the right. Hairline separators. */}
           {archetypeRows.length > 0 && (
             <div>
-              <div className="mb-1 flex items-baseline justify-between">
-                <span
-                  className="text-[11px] font-medium tracking-tight"
-                  style={{ color: appleVibe.text.tertiary }}
-                >
-                  Your bets
-                </span>
+              <div className="mb-1 flex items-baseline justify-end">
                 <span
                   className="text-[11px] font-light tabular-nums"
                   style={{ color: appleVibe.text.faint }}
@@ -612,8 +515,7 @@ export function PortfolioStrip({
               </div>
             )}
           </div>
-        </motion.div>
-      )}
+        </div>
     </motion.div>
   );
 }

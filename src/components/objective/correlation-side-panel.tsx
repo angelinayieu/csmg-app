@@ -388,8 +388,8 @@ export function CorrelationSidePanel({
           style={{ color: appleVibe.text.secondary }}
         >
           {edges.length === 0
-            ? `The room has items but they aren't linked yet. Each correlation forms one complete ${laneLabels.pain.toLowerCase()} → ${laneLabels.features.toLowerCase()} → ${laneLabels.outcomes.toLowerCase()} chain — the strategic bet you'll approve. Run the correlation step to populate.`
-            : `Each chain is a complete ${laneLabels.pain.toLowerCase()} → ${laneLabels.features.toLowerCase()} → ${laneLabels.outcomes.toLowerCase()} bet. Approve the ones you want promoted to the main canvas.`}
+            ? `The room has items but they aren't linked yet. Each correlation forms one complete ${laneLabels.pain.toLowerCase()} → ${laneLabels.features.toLowerCase()} → ${laneLabels.outcomes.toLowerCase()} chain — the hypothesis you'll approve. Run the correlation step to populate.`
+            : `Each chain is a complete ${laneLabels.pain.toLowerCase()} → ${laneLabels.features.toLowerCase()} → ${laneLabels.outcomes.toLowerCase()} hypothesis. Approve the ones you want promoted to the main canvas.`}
         </p>
       </header>
 

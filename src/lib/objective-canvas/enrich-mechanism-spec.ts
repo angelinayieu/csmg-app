@@ -226,6 +226,14 @@ export interface MechanismSpec {
   fidelity_signals: string[];
   /** v2 — when to ABANDON this mechanism (kill criteria). 2-4. */
   kill_criteria: string[];
+  /** P1.2 — testable "done / working" conditions a coding agent can
+   *  build against (definition of done). 2-5. Distinct from
+   *  fidelity_signals (delivered-as-intended) + kill_criteria (abandon). */
+  acceptance_criteria: string[];
+  /** P1.2 — what this mechanism explicitly is NOT doing (scope
+   *  boundaries / non-goals). 2-5. The per-feature anti-drift control the
+   *  agent-build-spec aggregates. */
+  scope_boundaries: string[];
   /** Evidence + a concrete validation experiment. */
   research_basis: MechanismResearchBasis;
   /** v2 — the internal quality gate's final 6-axis score. */
@@ -390,6 +398,10 @@ Produce these fields:
    • feasibility — is it buildable under the constraints?
    • failure_mode_clarity — are the failure modes named clearly?
    Score honestly — a low score is a useful signal, not a failure. Do NOT inflate.
+
+16. acceptance_criteria (2-5) — testable "done / working" conditions an engineer or coding agent can build against. Observable + checkable ("a returning user sees their top-3 ranked items in <200ms", "completing a task increments the streak exactly once"). Definition of DONE — not whether the theory holds (that's validation_experiment).
+
+17. scope_boundaries (2-5) — what this mechanism explicitly does NOT do, to stop scope creep ("does not handle multi-user shared streaks", "no offline mode in v1"). Concrete non-goals, not vague disclaimers.
 
 Rules:
 - EVERY field references something specific from the feature, its elected direction, the room's pains/root_causes, or the outcomes/indicators. Generic filler is forbidden.
@@ -685,6 +697,14 @@ const SPEC_SCHEMA = {
         type: "array",
         items: { type: "string" },
       },
+      acceptance_criteria: {
+        type: "array",
+        items: { type: "string" },
+      },
+      scope_boundaries: {
+        type: "array",
+        items: { type: "string" },
+      },
       research_basis: {
         type: "object",
         additionalProperties: false,
@@ -733,6 +753,8 @@ const SPEC_SCHEMA = {
       "dosage",
       "fidelity_signals",
       "kill_criteria",
+      "acceptance_criteria",
+      "scope_boundaries",
       "research_basis",
       "quality_score",
     ],
@@ -864,6 +886,8 @@ function parseSpec(
 
   const fidelity_signals = strArr(raw?.fidelity_signals, 4, 200);
   const kill_criteria = strArr(raw?.kill_criteria, 4, 200);
+  const acceptance_criteria = strArr(raw?.acceptance_criteria, 5, 240);
+  const scope_boundaries = strArr(raw?.scope_boundaries, 5, 240);
 
   const rb = (raw?.research_basis as Record<string, unknown>) ?? {};
   const evidence_strength: MechanismResearchBasis["evidence_strength"] =
@@ -901,6 +925,8 @@ function parseSpec(
     dosage,
     fidelity_signals,
     kill_criteria,
+    acceptance_criteria,
+    scope_boundaries,
     research_basis,
     quality_score,
     use_case_mode: mode,

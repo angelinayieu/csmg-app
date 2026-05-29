@@ -49,6 +49,7 @@ import {
   Plus,
   RefreshCw,
   Send,
+  Sliders,
   X,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -155,6 +156,9 @@ const FILTERS: ReadonlyArray<{
       // Arc 3.1 — mechanism technical-depth spec. System-altitude
       // depth on a feature, same bucket as item_expanded.
       "mechanism_spec_generated",
+      // Priority vector — per-sub-objective soft weights edited.
+      // Same bucket as constraints_set (settings-altitude change).
+      "priorities_set",
     ],
   },
 ];
@@ -1716,6 +1720,13 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
         icon: FileCode,
         label: "Spec'd mechanism",
         color: appleVibe.stage.features,
+      };
+    // ── Priority vector — per-sub-objective soft weights ────────
+    case "priorities_set":
+      return {
+        icon: Sliders,
+        label: "Tuned priorities",
+        color: appleVibe.accent.primary,
       };
     default:
       return {

@@ -58,20 +58,14 @@ export const layerCoverage: AnalysisModule = {
     if (!stack || stack.layers.length === 0) return [];
     if (state.rooms.length === 0) return [];
 
-    // Build layer_ordinals lookup per room from the state's room
-    // snapshots. The loader doesn't currently project layer_ordinals
-    // onto RoomSnapshot, so we fall back to room.id → 0 and flag
-    // an empty-state finding when no rooms have ordinals. A follow-up
-    // can extend RoomSnapshot to carry layer_ordinals natively.
+    // Build a layer_ordinals lookup per room. The loader now projects
+    // improvement_goals.layer_ordinals onto RoomSnapshot, so rooms tagged
+    // to one or more layers populate the map; untagged rooms are skipped
+    // (and surface as the "not yet tagged" finding below).
     const ordinalsByRoom = new Map<string, number[]>();
     for (const r of state.rooms) {
-      // RoomSnapshot doesn't yet include layer_ordinals — when the
-      // loader extends to project it, this read becomes (r as any)
-      // .layer_ordinals. For now, treat all rooms as untagged.
-      const tagged = (r as unknown as { layer_ordinals?: number[] })
-        .layer_ordinals;
-      if (Array.isArray(tagged) && tagged.length > 0) {
-        ordinalsByRoom.set(r.id, tagged);
+      if (Array.isArray(r.layer_ordinals) && r.layer_ordinals.length > 0) {
+        ordinalsByRoom.set(r.id, r.layer_ordinals);
       }
     }
 

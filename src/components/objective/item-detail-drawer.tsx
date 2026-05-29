@@ -39,6 +39,7 @@ import {
   Link2,
   Maximize2,
   Minimize2,
+  Palette,
   Pause,
   Plus,
   Radar,
@@ -100,9 +101,47 @@ export interface ItemSource {
 }
 
 interface ItemResearchBundle {
-  sources?: ItemSource[];
+  /** Precedents / case studies / papers. */
+  technical: ItemSource[];
+  /** UI patterns / interaction references. */
+  design: ItemSource[];
   failed?: boolean;
   fetched_at?: string;
+}
+
+/**
+ * Tolerate both the new shaped bundle ({ technical, design }) and the
+ * legacy flat shape ({ sources }) that older rows still carry. Legacy
+ * rows are promoted into the Technical rail until a force re-fetch
+ * re-shapes them. Returns null when the input is unparseable.
+ */
+function normalizeItemResearch(
+  raw: unknown,
+): ItemResearchBundle | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const failed = obj.failed === true;
+  const fetched_at =
+    typeof obj.fetched_at === "string" ? obj.fetched_at : undefined;
+  if (Array.isArray(obj.technical) || Array.isArray(obj.design)) {
+    return {
+      technical: Array.isArray(obj.technical)
+        ? (obj.technical as ItemSource[])
+        : [],
+      design: Array.isArray(obj.design) ? (obj.design as ItemSource[]) : [],
+      failed,
+      fetched_at,
+    };
+  }
+  if (Array.isArray(obj.sources)) {
+    return {
+      technical: obj.sources as ItemSource[],
+      design: [],
+      failed,
+      fetched_at,
+    };
+  }
+  return null;
 }
 
 type VariationFacet =
@@ -547,7 +586,7 @@ export function ItemDetailDrawer({
   }, [entityId, spaceId]);
 
   const [research, setResearch] = useState<ItemResearchBundle | null>(
-    initialDetailResearch ?? null,
+    normalizeItemResearch(initialDetailResearch),
   );
   const [researchLoading, setResearchLoading] = useState(false);
 
@@ -611,7 +650,7 @@ export function ItemDetailDrawer({
         ? initialExpandedDetail
         : null;
     setExpanded(propPaint);
-    setResearch(initialDetailResearch ?? null);
+    setResearch(normalizeItemResearch(initialDetailResearch));
     setExpandError(null);
 
     // /expand — always. Skeleton only when we have nothing to
@@ -676,11 +715,12 @@ export function ItemDetailDrawer({
     // less likely to be stale. We still re-fetch so retries on
     // prior failures resolve, and so cold opens populate. The
     // route is idempotent: cache hit returns the stored bundle.
+    const paint = normalizeItemResearch(initialDetailResearch);
     const hasResearchPaint =
-      !!initialDetailResearch &&
-      Array.isArray(initialDetailResearch.sources) &&
-      (initialDetailResearch.sources.length > 0 ||
-        initialDetailResearch.failed === true);
+      !!paint &&
+      (paint.technical.length > 0 ||
+        paint.design.length > 0 ||
+        paint.failed === true);
     if (!hasResearchPaint) setResearchLoading(true);
     void fetch("/api/brainstorm/item/research", {
       method: "POST",
@@ -689,7 +729,7 @@ export function ItemDetailDrawer({
     })
       .then(async (res) => {
         const json = await res.json();
-        if (res.ok) setResearch(json.detail_research ?? null);
+        if (res.ok) setResearch(normalizeItemResearch(json.detail_research));
       })
       .catch(() => {
         // Silent — research is optional; the drawer still renders.
@@ -1234,78 +1274,145 @@ export function ItemDetailDrawer({
                   );
                 })()}
 
-              {/* ── 2. INSPIRATION (per-item research) ── */}
-              <Section
-                icon={<Compass className="h-3 w-3" strokeWidth={1.75} />}
-                title="Inspiration"
-                subtitle={
-                  research?.sources && research.sources.length > 0
-                    ? `${research.sources.length} sources`
-                    : undefined
-                }
-              >
-                {researchLoading && !research?.sources?.length ? (
-                  <SkeletonLines lines={3} />
-                ) : research?.failed ||
-                  !research?.sources ||
-                  research.sources.length === 0 ? (
-                  <p
-                    className="text-[12px] font-light italic"
-                    style={{ color: appleVibe.text.tertiary }}
-                  >
-                    No public sources found for this item. The
-                    domain may be too specific.
-                  </p>
-                ) : (
-                  <ul className="flex flex-col gap-2">
-                    {research.sources.map((s, i) => (
-                      <li key={i}>
-                        <a
-                          href={s.url}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          className="flex flex-col gap-1 rounded-2xl p-3 transition-colors hover:bg-[color:var(--home-chrome-fill,rgba(15,23,42,0.04))]"
-                          style={{
-                            border: `1px solid ${appleVibe.stroke.hairline}`,
-                            background: "rgba(255,255,255,0.6)",
-                            borderRadius: appleVibe.radius.md,
-                          }}
+              {/* ── 2. INSPIRATION (per-item research, two rails) ──
+                  Technical = precedents/case studies/papers (engineering
+                  reference, scoped to github/arxiv/ncbi/etc).
+                  Design = UI patterns/interaction references (experience
+                  reference, scoped to mobbin/dribbble/shadcn/etc).
+                  Each rail renders independently so a missing key or
+                  weak query on one side never hides the other. */}
+              {(() => {
+                const techSources = research?.technical ?? [];
+                const designSources = research?.design ?? [];
+                const bothEmpty =
+                  techSources.length === 0 && designSources.length === 0;
+                const overallFailure =
+                  research?.failed === true && bothEmpty && !researchLoading;
+
+                const renderRow = (
+                  s: ItemSource,
+                  i: number,
+                  informsColor: string,
+                ) => (
+                  <li key={`${s.url}-${i}`}>
+                    <a
+                      href={s.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="flex flex-col gap-1 rounded-2xl p-3 transition-colors hover:bg-[color:var(--home-chrome-fill,rgba(15,23,42,0.04))]"
+                      style={{
+                        border: `1px solid ${appleVibe.stroke.hairline}`,
+                        background: "rgba(255,255,255,0.6)",
+                        borderRadius: appleVibe.radius.md,
+                      }}
+                    >
+                      <div className="flex items-baseline gap-1.5">
+                        <span
+                          className="line-clamp-1 flex-1 text-[12.5px] font-semibold"
+                          style={{ color: appleVibe.text.primary }}
                         >
-                          <div className="flex items-baseline gap-1.5">
-                            <span
-                              className="line-clamp-1 flex-1 text-[12.5px] font-semibold"
-                              style={{ color: appleVibe.text.primary }}
-                            >
-                              {s.title}
-                            </span>
-                            <ExternalLink
-                              className="h-2.5 w-2.5 flex-shrink-0"
-                              strokeWidth={2}
-                              style={{ color: appleVibe.text.tertiary }}
-                            />
-                          </div>
-                          {s.informs && (
-                            <p
-                              className="text-[11px] font-medium leading-snug"
-                              style={{ color: laneColor }}
-                            >
-                              {s.informs}
-                            </p>
-                          )}
-                          {s.snippet && (
-                            <p
-                              className="line-clamp-2 text-[11px] font-light leading-snug"
-                              style={{ color: appleVibe.text.secondary }}
-                            >
-                              {s.snippet}
-                            </p>
-                          )}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </Section>
+                          {s.title}
+                        </span>
+                        <ExternalLink
+                          className="h-2.5 w-2.5 flex-shrink-0"
+                          strokeWidth={2}
+                          style={{ color: appleVibe.text.tertiary }}
+                        />
+                      </div>
+                      {s.informs && (
+                        <p
+                          className="text-[11px] font-medium leading-snug"
+                          style={{ color: informsColor }}
+                        >
+                          {s.informs}
+                        </p>
+                      )}
+                      {s.snippet && (
+                        <p
+                          className="line-clamp-2 text-[11px] font-light leading-snug"
+                          style={{ color: appleVibe.text.secondary }}
+                        >
+                          {s.snippet}
+                        </p>
+                      )}
+                    </a>
+                  </li>
+                );
+
+                const renderBucket = (
+                  sources: ItemSource[],
+                  informsColor: string,
+                  emptyHint: string,
+                ) => {
+                  if (researchLoading && sources.length === 0) {
+                    return <SkeletonLines lines={2} />;
+                  }
+                  if (sources.length === 0) {
+                    return (
+                      <p
+                        className="text-[11.5px] font-light italic"
+                        style={{ color: appleVibe.text.tertiary }}
+                      >
+                        {emptyHint}
+                      </p>
+                    );
+                  }
+                  return (
+                    <ul className="flex flex-col gap-2">
+                      {sources.map((s, i) => renderRow(s, i, informsColor))}
+                    </ul>
+                  );
+                };
+
+                return (
+                  <>
+                    <Section
+                      icon={<Compass className="h-3 w-3" strokeWidth={1.75} />}
+                      title="Technical inspiration"
+                      subtitle={
+                        techSources.length > 0
+                          ? `${techSources.length} sources`
+                          : undefined
+                      }
+                    >
+                      {overallFailure ? (
+                        <p
+                          className="text-[12px] font-light italic"
+                          style={{ color: appleVibe.text.tertiary }}
+                        >
+                          No public sources found for this item. The
+                          domain may be too specific.
+                        </p>
+                      ) : (
+                        renderBucket(
+                          techSources,
+                          laneColor,
+                          "No technical precedents yet.",
+                        )
+                      )}
+                    </Section>
+                    {!overallFailure && (
+                      <Section
+                        icon={
+                          <Palette className="h-3 w-3" strokeWidth={1.75} />
+                        }
+                        title="Design inspiration"
+                        subtitle={
+                          designSources.length > 0
+                            ? `${designSources.length} sources`
+                            : undefined
+                        }
+                      >
+                        {renderBucket(
+                          designSources,
+                          appleVibe.accent.primary,
+                          "No design references yet.",
+                        )}
+                      </Section>
+                    )}
+                  </>
+                );
+              })()}
 
               {/* ── 3. ANALYSIS SIGNALS ──
                   The cross-room findings the workbench has detected

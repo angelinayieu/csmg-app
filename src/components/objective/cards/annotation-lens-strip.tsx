@@ -18,9 +18,7 @@
 // the hover sticky so the user can release the mouse and still
 // inspect the highlight.
 
-import { useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronDown, ChevronUp } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ObjectiveAnnotation } from "@/components/objective/annotated-objective-card";
 
@@ -56,8 +54,6 @@ export function AnnotationLensStrip({
   hoveredIndex,
   onHoverIndex,
 }: Props) {
-  const [expanded, setExpanded] = useState(false);
-
   if (annotations.length === 0) return null;
 
   // Weight-sort matches the order the generator saw — the same
@@ -67,84 +63,68 @@ export function AnnotationLensStrip({
     .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
     .slice(0, 8);
 
-  const totalItemsCovered = new Set<string>();
-  for (const set of coverageByIndex.values()) {
-    for (const id of set) totalItemsCovered.add(id);
-  }
   const orphanCount = ranked.filter(
     (_, i) => (coverageByIndex.get(i + 1)?.size ?? 0) === 0,
   ).length;
 
   return (
-    <div
-      className="mb-3 px-3 py-2.5"
-      style={{
-        background: "transparent",
-        borderRadius: appleVibe.radius.md,
-        fontFamily: appleVibe.font.stack,
-      }}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+    <div style={{ fontFamily: appleVibe.font.stack }}>
+      {/* Header — mirrors HeroProse exactly: a neutral dot (this block is
+          a cross-cutting overview, not a single stage) + the standard
+          label, with quiet count + orphan metadata trailing. */}
+      <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="flex items-center gap-2">
           <span
-            className={appleVibe.label.className}
-            style={{ color: appleVibe.label.color }}
+            className="h-2 w-2 flex-shrink-0 rounded-full"
+            style={{ background: "rgba(15,23,42,0.4)" }}
+            aria-hidden
+          />
+          <span
+            className="text-[15px] font-semibold leading-tight"
+            style={{
+              color: appleVibe.text.primary,
+              letterSpacing: "-0.015em",
+              fontFamily: appleVibe.font.display,
+            }}
           >
             Objective coverage
           </span>
-          <span
-            className="text-[12px] font-light"
-            style={{ color: appleVibe.text.tertiary }}
-          >
-            · {ranked.length} key reading{ranked.length === 1 ? "" : "s"} from
-            your objective
-          </span>
-          {orphanCount > 0 && (
-            <span
-              className="inline-flex items-center gap-1 text-[11px] font-medium"
-              style={{ color: "rgba(146,64,14,0.9)" }}
-              title="Annotations with no derived item in this room — the generator may have missed a load-bearing reading."
-            >
-              <span
-                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                style={{ background: "rgba(245,158,11,0.9)" }}
-                aria-hidden
-              />
-              {orphanCount} orphan{orphanCount === 1 ? "" : "s"}
-            </span>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="inline-flex items-center gap-1 text-[11px] font-medium"
+        </span>
+        <span
+          className="text-[12px] font-light"
           style={{ color: appleVibe.text.tertiary }}
-          aria-label={expanded ? "Collapse lens" : "Expand lens"}
         >
-          {expanded ? (
-            <>
-              hide <ChevronUp className="h-3 w-3" strokeWidth={2} />
-            </>
-          ) : (
-            <>
-              show <ChevronDown className="h-3 w-3" strokeWidth={2} />
-            </>
-          )}
-        </button>
+          · {ranked.length} key reading{ranked.length === 1 ? "" : "s"} from
+          your objective
+        </span>
+        {orphanCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] font-medium"
+            style={{ color: "rgba(146,64,14,0.9)" }}
+            title="Readings with no derived card in this room — a gap the generator may have missed."
+          >
+            <span
+              className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+              style={{ background: "rgba(245,158,11,0.9)" }}
+              aria-hidden
+            />
+            {orphanCount} not yet addressed
+          </span>
+        )}
       </div>
 
-      {expanded && (
-        <p
-          className="mt-2 mb-2 text-[11.5px] font-light leading-snug"
-          style={{ color: appleVibe.text.tertiary }}
-        >
-          Each chip is a reading the AI took from your objective. The number is
-          how many cards in this room build on it — faded chips aren&rsquo;t
-          addressed here yet.
-        </p>
-      )}
-      {expanded && (
-        <div className="flex flex-wrap gap-1.5">
+      {/* Body prose — same type as HeroProse so the three blocks read as
+          one coordinated stack. */}
+      <p
+        className="mb-2.5 max-w-[70ch] text-[13.5px] font-light leading-relaxed"
+        style={{ color: appleVibe.text.secondary }}
+      >
+        Each chip is a reading the AI took from your objective. The number is
+        how many cards in this room build on it — faded chips aren&rsquo;t
+        addressed here yet.
+      </p>
+
+      <div className="flex flex-wrap gap-1.5">
           {ranked.map((a, i) => {
             const idx = i + 1;
             const coverage = coverageByIndex.get(idx)?.size ?? 0;
@@ -211,7 +191,6 @@ export function AnnotationLensStrip({
             );
           })}
         </div>
-      )}
     </div>
   );
 }

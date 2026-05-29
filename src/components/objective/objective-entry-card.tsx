@@ -18,9 +18,14 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowUp, Bot, User } from "lucide-react";
+import { ArrowLeft, ArrowUp, Bot, Target, User } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import {
+  type PreciseFields,
+  EMPTY_PRECISE_FIELDS,
+  buildPreciseSuffix,
+} from "@/components/home/precise-input-form";
 
 type Mode = "autopilot" | "human";
 
@@ -46,6 +51,22 @@ const PLACEHOLDER_EXAMPLES = [
   "Help mid-career engineers transition into AI without quitting their job.",
 ];
 
+// Define-before-generate fields (CROSS_AUDIT P1), rendered inline +
+// appleVibe-styled so they match the entry card. Reuses the PreciseFields
+// contract + the buildPreciseSuffix serializer from the legacy form — no
+// duplicate logic, just canvas-native presentation on the RIGHT path.
+const PRECISE_FIELDS: Array<{
+  key: keyof PreciseFields;
+  label: string;
+  placeholder: string;
+}> = [
+  { key: "outcome", label: "Outcome", placeholder: "What should change?" },
+  { key: "target_delta", label: "Target", placeholder: "By how much? (+25%, 12→18)" },
+  { key: "horizon", label: "Horizon", placeholder: "By when? (12 weeks)" },
+  { key: "subject", label: "Subject", placeholder: "Who? (myself, teams…)" },
+  { key: "constraints", label: "Constraints", placeholder: "Non-negotiables?" },
+];
+
 export function ObjectiveEntryCard({ onCancel }: Props) {
   const router = useRouter();
   const reduce = useReducedMotion();
@@ -55,6 +76,12 @@ export function ObjectiveEntryCard({ onCancel }: Props) {
   const [submitting, startTransition] = useTransition();
   const [exampleIdx, setExampleIdx] = useState(0);
   const [focused, setFocused] = useState(false);
+  // Define-before-generate gate (CROSS_AUDIT P1). Optional structured
+  // framing so downstream generation isn't working from a vague one-liner
+  // (the documented root cause of vague mechanisms). Collapsed by default
+  // to keep entry calm; the affordance below is prominent so it's found.
+  const [precise, setPrecise] = useState<PreciseFields>(EMPTY_PRECISE_FIELDS);
+  const [showPrecise, setShowPrecise] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-focus on mount.
@@ -88,7 +115,15 @@ export function ObjectiveEntryCard({ onCancel }: Props) {
         const res = await fetch("/api/brainstorm/start", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ objective: objective.trim(), mode }),
+          body: JSON.stringify({
+            objective: objective.trim(),
+            mode,
+            // Define-before-generate (CROSS_AUDIT P1): the client builds the
+            // framing block so the server route needs no client import. The
+            // raw fields ride along for persistence.
+            preciseFraming: buildPreciseSuffix(precise),
+            preciseFields: precise,
+          }),
         });
         const json = (await res.json()) as
           | { spaceId: string; goalId: string | null }
@@ -318,6 +353,71 @@ export function ObjectiveEntryCard({ onCancel }: Props) {
           {error}
         </div>
       )}
+
+      {/* Define-before-generate gate (CROSS_AUDIT P1) — optional structured
+          framing. Prominent affordance, collapsed by default; whatever the
+          user fills frames the research seed + persists as the canvas's
+          `define` block. */}
+      <div className="mt-6">
+        <button
+          type="button"
+          onClick={() => setShowPrecise((v) => !v)}
+          className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold transition-opacity hover:opacity-70"
+          style={{ color: appleVibe.text.secondary }}
+        >
+          <Target
+            className="h-3.5 w-3.5"
+            strokeWidth={1.9}
+            style={{ color: appleVibe.accent.primary }}
+          />
+          {showPrecise ? "Hide specifics" : "Sharpen this"}
+          {!showPrecise && (
+            <span className="font-light" style={{ color: appleVibe.text.faint }}>
+              — far less vague results
+            </span>
+          )}
+        </button>
+        <AnimatePresence initial={false}>
+          {showPrecise && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              className="overflow-hidden"
+            >
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {PRECISE_FIELDS.map(({ key, label, placeholder }) => (
+                  <label key={key} className="flex flex-col gap-1">
+                    <span
+                      className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+                      style={{ color: appleVibe.text.tertiary }}
+                    >
+                      {label}
+                    </span>
+                    <input
+                      type="text"
+                      value={precise[key]}
+                      onChange={(e) =>
+                        setPrecise((p) => ({ ...p, [key]: e.target.value }))
+                      }
+                      placeholder={placeholder}
+                      maxLength={400}
+                      className="rounded-lg px-3 py-2 text-[12.5px] outline-none transition-colors"
+                      style={{
+                        background: appleVibe.surface.chip,
+                        border: `1px solid ${appleVibe.stroke.soft}`,
+                        color: appleVibe.text.primary,
+                        fontFamily: appleVibe.font.stack,
+                      }}
+                    />
+                  </label>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
 
       {/* Mode selector — compact icon chips, hint on hover */}
       <div className="mt-7 flex items-center justify-between">

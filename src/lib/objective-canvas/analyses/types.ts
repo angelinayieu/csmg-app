@@ -123,6 +123,10 @@ export interface RoomSnapshot {
   description: string | null;
   top_negative_outcome: string | null;
   generated_at: string | null;
+  /** 1-based ObjectiveStack ordinals this room is tagged to touch
+   *  (improvement_goals.layer_ordinals). Empty when never tagged.
+   *  Drives the layer_coverage analysis (the rooms→layers seam). */
+  layer_ordinals: number[];
 }
 
 /** Everything an analysis module needs. The state loader assembles

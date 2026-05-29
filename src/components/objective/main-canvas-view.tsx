@@ -47,6 +47,7 @@ import {
 } from "@/components/objective/command-deck";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 import { CanvasAutopilotRunner } from "@/components/objective/canvas-autopilot-runner";
+import { RoomFillRunner } from "@/components/objective/room-fill-runner";
 import {
   ObjectiveStackWidget,
   ARCHETYPE_COLOR,
@@ -63,6 +64,7 @@ import { MapInsightsPanel } from "@/components/objective/causal-map/MapInsightsP
 import { LayerShelvesView } from "@/components/objective/layer-shelves-view";
 import { useDecisionLogSignal } from "@/components/objective/causal-map/hooks/useDecisionLogSignal";
 import { useLocalPref } from "@/components/objective/causal-map/hooks/useLocalPref";
+import { SynergismWhiteboardTile } from "@/components/objective/synergism-whiteboard-tile";
 // Phase 11.0b — LabNotebookPanel is mounted at the layout level
 // (app/objective/[spaceId]/layout.tsx) as a persistent right rail.
 // The page-level mount + Notebook button moved out so we don't
@@ -193,6 +195,10 @@ interface Props {
   analysisRoomTitles?: Record<string, string>;
   operations?: DeckOperation[];
   briefHref?: string;
+  /** Set true ONLY on a fresh picker-confirm. When true, the canvas
+   *  auto-generates the internal content (room/generate) of every
+   *  not-yet-started room — the post-approval fill pass. */
+  autoFillRooms?: boolean;
 }
 
 export function MainCanvasView({
@@ -210,6 +216,7 @@ export function MainCanvasView({
   analysisRoomTitles = {},
   operations = [],
   briefHref = "",
+  autoFillRooms = false,
 }: Props) {
   // Themed view state — same pattern as the picker's cluster view.
   // Default to "grid" so existing users see no change unless they
@@ -409,6 +416,23 @@ export function MainCanvasView({
               }}
             />
           )}
+          {/* Post-approval room fill — auto-generates the internal
+              content (room/generate) of every not-yet-started room right
+              after the user confirms their sub-objectives. Renders null
+              when there's nothing to fill / no pass in flight, so it's
+              safe to always mount. */}
+          <RoomFillRunner
+            spaceId={spaceId}
+            rooms={subs
+              .filter((s) => !s.generatedAt)
+              .map((s) => ({ id: s.id, title: s.title }))}
+            autoStart={autoFillRooms}
+            onAllComplete={() => {
+              // Refresh so the freshly-filled rooms (entities + edges)
+              // render in the SubCards + cross-room signals strip.
+              router.refresh();
+            }}
+          />
         </div>
       </div>
 
@@ -625,6 +649,15 @@ export function MainCanvasView({
       {/* Deliverables moved into the CommandDeck beneath the hero — it
           now reads as one coordinated surface with Analysis + Operations
           + Strategy Brief instead of a lone strip at the canvas bottom. */}
+
+      {/* Synergism Whiteboard tile — a free-form brainstorm entry
+          point alongside the structured canvas. Opens a fresh
+          /app/synergy/[id] board seeded with the current objective
+          text. Visible on every canvas (with or without subs) so the
+          user can always step into divergent thinking. */}
+      <div className="mt-8">
+        <SynergismWhiteboardTile objective={objective} />
+      </div>
 
       {/* Post-confirm variant lab — lets the user add another cut
           after seeing the initial rooms. Single-batch quota; the

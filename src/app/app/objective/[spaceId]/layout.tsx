@@ -32,6 +32,7 @@ import { use, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { BookOpen } from "lucide-react";
 import { LabNotebookPanel } from "@/components/objective/lab-notebook-panel";
+import { requestCardFocus } from "@/lib/objective-canvas/notebook-focus";
 import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-shell";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -235,13 +236,18 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
         spaceId={spaceId}
         subObjectiveId={subObjectiveId}
         onNavigate={(target) => {
-          // Tie-back hand-off: from the all-rooms feed, clicking an
-          // event routes to the room it happened in. The rail-card is
-          // non-occluding, so the canvas updates behind the still-open
-          // notebook (which flips to room mode via the pathname effect)
-          // — the "both visible" hand-off, not a step-aside close.
+          // Tie-back hand-off: clicking an event focuses the actual card
+          // it produced. Register the focus request first (the room view
+          // opens that card's detail drawer + scrolls it into view), then
+          // route cross-room when the event happened elsewhere. The
+          // rail-card is non-occluding, so the canvas updates behind the
+          // still-open notebook — the "both visible" hand-off, not a
+          // step-aside close. Same-room clicks skip the router entirely:
+          // the mounted room view reacts to the focus event in place.
+          if (target.entityId) {
+            requestCardFocus(target);
+          }
           if (
-            mode === "space" &&
             target.subObjectiveId &&
             target.subObjectiveId !== subObjectiveId
           ) {

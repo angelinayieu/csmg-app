@@ -20,6 +20,7 @@ import {
   type ObjectiveAnnotation,
 } from "@/lib/objective-canvas/generate-annotations";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -159,6 +160,21 @@ export async function POST(
       { status: 500 },
     );
   }
+
+  // Narrate the sub-objective annotation pass on the Lab Notebook —
+  // previously silent. Scoped to this room (subObjectiveId set). Only
+  // reached on an actual generation (cache hits returned earlier).
+  // Soft-fail via void.
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId: sub.space_id,
+    subObjectiveId,
+    action: "annotations_generated",
+    metadata: {
+      scope: "sub",
+      phrase_count: Array.isArray(annotations) ? annotations.length : 0,
+    },
+  });
 
   return NextResponse.json({ annotations });
 }

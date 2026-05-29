@@ -82,7 +82,21 @@ export type DecisionAction =
   // use_case_mode so the notebook can render "spec'd Pomodoro Timer
   // · 4 active ingredients · evidence: plausible". CHECK constraint
   // extended in 20260903_arc3_1_mechanism_spec_action.sql.
-  | "mechanism_spec_generated";
+  | "mechanism_spec_generated"
+  // Per-sub-objective priority vector edited (or seeded at confirm).
+  // Distinct from constraints_set (space-scoped hard gates): this is
+  // soft-weight preferences per room. Metadata carries the tier per
+  // dimension so the notebook can render "priorities set: speed (high),
+  // durability (low), …". CHECK constraint extended in
+  // 20260904_priority_vector.sql.
+  | "priorities_set"
+  // Annotation lens generated for the core objective or a sub-objective
+  // (POST /api/brainstorm/annotations/generate + .../sub-objectives/[id]/
+  // annotate). Fires once per actual generation (NOT on cache hits).
+  // Metadata: scope ("objective" | "sub") + phrase_count, so the notebook
+  // can render "extracted 14 concepts from your objective". CHECK
+  // constraint extended in 20260905_annotations_generated_action.sql.
+  | "annotations_generated";
 
 export interface LogDecisionArgs {
   userId: string;

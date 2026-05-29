@@ -1,30 +1,30 @@
-// ── Synergy AI rail (right side, 320px) ──
+// ── Synergy AI rail (right side, 320px — Vision Pro chrome) ──
 //
-// Stitches together:
-//   - "Adding to" status (which node a clicked suggestion will attach to)
-//   - Inline "Rank this node's variations" CTA when applicable
-//   - Precision slider
-//   - Recent thoughts timeline (transcripts)
-//   - 3-up mode buttons: Decompose / Questions / Research
-//   - Conditional sections for each mode's last results
-//   - History card (collapsible)
+// Reads as a partner, not a control panel. From top to bottom:
+//   1. AI Companion — context-aware "next move" suggestion that reads
+//      the current board state (selected node, depth, what's been
+//      explored) and proposes the highest-leverage augment to run now
+//   2. Attach-target indicator — where the next idea will land
+//   3. Mode actions — premium tile grid (Decompose, Questions,
+//      Research) with subtle iconography and soft hover
+//   4. Precision slider
+//   5. Recent thoughts timeline
+//   6. Last results per mode (rendered as glass cards, not dashed
+//      borders)
 //
-// All state lives in the parent SynergyWhiteboard — this component is
-// pure presentation + callbacks.
+// All glass surfaces route through the design tokens — no
+// hand-rolled bg-white/80 anywhere.
 
 "use client";
 
 import {
   HelpCircle,
-  Layers,
   Loader2,
-  Mic,
   Network,
   Plus,
   RotateCcw,
   Search,
   Sparkles,
-  Target,
   Trophy,
   Wand2,
 } from "lucide-react";
@@ -51,10 +51,6 @@ interface Props {
   sessionId: string;
 
   selectedNode: ClientNode | null;
-  // The board's "seed" node (kind === "core") — used as the fallback
-  // attach target when nothing is selected. Surfaced in the
-  // "Will attach under" indicator so the user knows where the (+)
-  // suggestion will land without guessing.
   seedNode: ClientNode | null;
   selectedHasVariations: boolean;
   precision: number;
@@ -105,20 +101,34 @@ export function SynergyAIRail({
 }: Props) {
   const showEmpty = !decomp && questions.length === 0 && research.length === 0;
 
+  // Pick the highest-leverage next move based on what the user has
+  // explored so far. The rail's "AI Companion" surface uses this to
+  // recommend, not just list, what to run next.
+  const nextMove = recommendNextMove({
+    selectedNode,
+    seedNode,
+    decomp,
+    questions,
+    research,
+    transcripts,
+  });
+
   return (
     <aside
       className="flex w-80 flex-col gap-4 overflow-y-auto p-4"
       style={{
-        // Apple-style translucent sidebar (NSVisualEffectView analog).
-        // Page content blurred through; subtle hairline left border.
-        background: "rgba(252, 252, 253, 0.78)",
-        backdropFilter: "blur(24px) saturate(180%)",
-        WebkitBackdropFilter: "blur(24px) saturate(180%)",
-        borderLeft: "1px solid rgba(0, 0, 0, 0.06)",
+        background: "var(--glass-plate-bg)",
+        backdropFilter: "blur(var(--blur-float)) saturate(1.6)",
+        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.6)",
+        borderLeft: "1px solid var(--glass-hairline)",
+        boxShadow: "inset 1px 0 0 var(--glass-highlight)",
       }}
     >
-      {/* No "AI augmentation" title bar — the sidebar just IS the AI
-          surface. Apple sidebars don't announce themselves. */}
+      <AICompanionCard
+        nextMove={nextMove}
+        busyMode={aiBusy}
+        onRunMode={onRunMode}
+      />
 
       <AttachTargetIndicator
         selectedNode={selectedNode}
@@ -127,43 +137,39 @@ export function SynergyAIRail({
         onRankSelected={onRankSelected}
       />
 
+      {/* Precision slider — sits between WHERE/WHAT (above) and HOW
+          (mode tiles below) as a calibration knob the user can rest
+          their hand on while they think. */}
       <SynergyPrecisionSlider value={precision} onChange={onPrecisionChange} />
 
-      {/* Thin separator before the action surface */}
-      <div className="h-px w-full bg-black/5" />
-
-      {/* The mode actions: text-link row, not button grid. Apple-style —
-          the command bar (which lives in the parent voice dock) is the
-          primary surface; these are quick shortcuts. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-gray-700">
-        <ModeLink
-          label="Decompose"
-          busy={aiBusy === "decompose"}
-          onClick={() => onRunMode("decompose")}
-        />
-        <span className="text-gray-300" aria-hidden>·</span>
-        <ModeLink
-          label="Questions"
-          busy={aiBusy === "questions"}
-          onClick={() => onRunMode("questions")}
-        />
-        <span className="text-gray-300" aria-hidden>·</span>
-        <ModeLink
-          label="Research"
-          busy={aiBusy === "research"}
-          onClick={() => onRunMode("research")}
-        />
-      </div>
+      {/* Mode tiles — premium replacement for the prior text-link row.
+          Each tile carries an iconography that hints what it does, and
+          the recommended mode lights up so the user's eye lands on it. */}
+      <ModeTileRow
+        busyMode={aiBusy}
+        onRun={onRunMode}
+        recommended={nextMove?.mode ?? null}
+      />
 
       {transcripts.length > 0 && (
         <section>
           <div className="mb-1.5 flex items-center justify-between">
-            <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
+            <span
+              className="text-[11px] font-semibold tracking-[0.02em]"
+              style={{ color: "rgba(15,23,42,0.55)" }}
+            >
               Recent thoughts
             </span>
             <button
               onClick={onClearTranscripts}
-              className="font-mono text-[9px] uppercase tracking-[0.15em] text-gray-400 transition hover:text-gray-700"
+              className="text-[10.5px] font-medium transition"
+              style={{ color: "rgba(15,23,42,0.42)" }}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.color = "rgba(15,23,42,0.72)")
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.color = "rgba(15,23,42,0.42)")
+              }
             >
               clear
             </button>
@@ -175,9 +181,13 @@ export function SynergyAIRail({
               .map((t) => (
                 <li
                   key={t.id}
-                  className="rounded-md bg-white px-2 py-1.5 text-[11px] leading-snug text-gray-700"
+                  className="px-2.5 py-1.5 text-[11.5px] leading-snug"
                   style={{
-                    boxShadow: "0 0 0 1px rgba(0, 0, 0, 0.04)",
+                    background: "rgba(255,255,255,0.7)",
+                    border: "1px solid var(--glass-hairline)",
+                    borderRadius: 10,
+                    color: "rgba(15,23,42,0.78)",
+                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.6)",
                   }}
                 >
                   {t.text}
@@ -201,13 +211,13 @@ export function SynergyAIRail({
           <ClickableBucket
             label="Upstream (needs)"
             items={decomp.upstream.filter((it) => !isPicked("upstream", it))}
-            dot="bg-blue-500"
+            dotColor="#0A84FF"
             onPick={(t) => onPick("upstream", t, "branch")}
           />
           <ClickableBucket
             label="Downstream (produces)"
             items={decomp.downstream.filter((it) => !isPicked("downstream", it))}
-            dot="bg-emerald-500"
+            dotColor="#10B981"
             onPick={(t) => onPick("downstream", t, "action")}
           />
           <ClickableBucket
@@ -215,13 +225,13 @@ export function SynergyAIRail({
             items={decomp.first_principles.filter(
               (it) => !isPicked("first_principles", it),
             )}
-            dot="bg-purple-500"
+            dotColor="#A855F7"
             onPick={(t) => onPick("first_principles", t, "insight")}
           />
           <ClickableBucket
             label="Variations"
             items={decomp.variations.filter((it) => !isPicked("variations", it))}
-            dot="bg-fuchsia-500"
+            dotColor="#D946EF"
             onPick={(t) => onPick("variations", t, "variation")}
           />
         </Section>
@@ -239,22 +249,16 @@ export function SynergyAIRail({
           }
         >
           {questions.filter((q) => !isPicked("question", q)).length === 0 ? (
-            <p className="rounded-md border border-dashed border-gray-300 bg-gray-50/60 p-3 text-center text-[11px] text-gray-500">
-              All questions added — regenerate for fresh ones.
-            </p>
+            <EmptyHint label="All questions added — regenerate for fresh ones." />
           ) : (
-            <ul className="space-y-2">
+            <ul className="space-y-1.5">
               {questions
                 .filter((q) => !isPicked("question", q))
                 .map((q, i) => (
                   <li key={i}>
-                    <button
-                      onClick={() => onPick("question", q, "question")}
-                      className="group flex w-full items-start gap-2 rounded-lg border border-gray-200 bg-white p-3 text-left text-xs leading-relaxed text-gray-900 transition hover:border-blue-400 hover:bg-blue-50/30"
-                    >
-                      <Plus className="mt-0.5 h-3 w-3 shrink-0 text-gray-400 transition group-hover:text-blue-600" />
-                      <span>{q}</span>
-                    </button>
+                    <PickButton onPick={() => onPick("question", q, "question")}>
+                      {q}
+                    </PickButton>
                   </li>
                 ))}
             </ul>
@@ -274,37 +278,71 @@ export function SynergyAIRail({
           }
         >
           {research.filter((r) => !isPicked("research", r.prompt)).length === 0 ? (
-            <p className="rounded-md border border-dashed border-gray-300 bg-gray-50/60 p-3 text-center text-[11px] text-gray-500">
-              All directions added — regenerate for fresh ones.
-            </p>
+            <EmptyHint label="All directions added — regenerate for fresh ones." />
           ) : (
-            <ul className="space-y-2">
+            <ul className="space-y-1.5">
               {research
                 .filter((r) => !isPicked("research", r.prompt))
                 .map((r, i) => (
                   <li
                     key={i}
-                    className="rounded-lg border border-gray-200 bg-white p-3"
+                    className="p-3"
+                    style={{
+                      background: "rgba(255,255,255,0.78)",
+                      border: "1px solid var(--glass-hairline)",
+                      borderRadius: 12,
+                      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.6)",
+                    }}
                   >
-                    <div className="mb-1 inline-block rounded-full bg-blue-100 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-blue-700">
+                    <div
+                      className="mb-1 inline-block rounded-full px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em]"
+                      style={{
+                        background: "rgba(10,132,255,0.10)",
+                        color: "rgba(0,88,184,0.95)",
+                      }}
+                    >
                       {r.angle}
                     </div>
                     <a
                       href={`https://www.google.com/search?q=${encodeURIComponent(r.prompt)}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="block text-xs font-medium text-gray-900 hover:text-blue-700"
+                      className="block text-[12.5px] font-semibold leading-snug transition"
+                      style={{ color: "rgba(15,23,42,0.92)" }}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.color = "rgba(0,88,184,0.95)")
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.color = "rgba(15,23,42,0.92)")
+                      }
                     >
                       {r.prompt}
                     </a>
-                    <p className="mt-1 text-[11px] text-gray-600">{r.why}</p>
+                    <p
+                      className="mt-1 text-[11.5px] leading-snug"
+                      style={{ color: "rgba(15,23,42,0.55)" }}
+                    >
+                      {r.why}
+                    </p>
                     <button
                       onClick={() =>
                         onPick("research", r.prompt, "insight", `[${r.angle}] ${r.why}`)
                       }
-                      className="mt-2 inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-0.5 text-[10px] text-gray-600 hover:border-blue-400 hover:text-gray-900"
+                      className="mt-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold transition"
+                      style={{
+                        background: "rgba(15,23,42,0.04)",
+                        color: "rgba(15,23,42,0.72)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "rgba(15,23,42,0.08)";
+                        e.currentTarget.style.color = "rgba(15,23,42,0.92)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "rgba(15,23,42,0.04)";
+                        e.currentTarget.style.color = "rgba(15,23,42,0.72)";
+                      }}
                     >
-                      <Plus className="h-3 w-3" /> Add to board
+                      <Plus className="h-3 w-3" strokeWidth={2.2} /> Add to board
                     </button>
                   </li>
                 ))}
@@ -313,13 +351,7 @@ export function SynergyAIRail({
         </Section>
       )}
 
-      {showEmpty && (
-        <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-xs text-gray-500">
-          <Wand2 className="mx-auto mb-2 h-5 w-5 text-blue-600" />
-          Speak freely or run a mode above. Then click any generated idea to
-          add it onto the board.
-        </div>
-      )}
+      {showEmpty && <EmptyHero />}
 
       <SynergyHistoryCard
         history={history}
@@ -337,26 +369,206 @@ export function SynergyAIRail({
   );
 }
 
+// ── AI Companion — contextual next-move card ─────────────────────
+//
+// Reads the current board state and proposes the single highest-
+// leverage augment to run right now. Reads as a quiet suggestion from
+// a partner, not a sales banner.
+
+type NextMove = {
+  mode: "decompose" | "questions" | "research";
+  copy: string;
+  reason: string;
+};
+
+function recommendNextMove({
+  selectedNode,
+  seedNode,
+  decomp,
+  questions,
+  research,
+  transcripts,
+}: {
+  selectedNode: ClientNode | null;
+  seedNode: ClientNode | null;
+  decomp: DecomposeResult | null;
+  questions: string[];
+  research: ResearchDirection[];
+  transcripts: Transcript[];
+}): NextMove | null {
+  const target = selectedNode ?? seedNode;
+  if (!target) return null;
+
+  // First-pass logic — heuristic, not ML. Picks the move that adds
+  // the most-missing kind of thinking to the board.
+  if (!decomp) {
+    return {
+      mode: "decompose",
+      copy: `Decompose “${truncate(target.label, 28)}” into its parts`,
+      reason: "You haven't broken this thought apart yet — start there.",
+    };
+  }
+  if (questions.length === 0) {
+    return {
+      mode: "questions",
+      copy: "Pull out sharper questions",
+      reason: "What's still ambiguous? Surfacing questions opens the next layer.",
+    };
+  }
+  if (research.length === 0) {
+    return {
+      mode: "research",
+      copy: "Find directions to research",
+      reason: "Ground the board in evidence — what would you need to look up?",
+    };
+  }
+  // All three have run — recommend regenerating the thinnest area.
+  // If the user has been talking, recommend Decompose on selection.
+  if (transcripts.length > 3 && selectedNode && selectedNode.id !== seedNode?.id) {
+    return {
+      mode: "decompose",
+      copy: `Decompose “${truncate(selectedNode.label, 24)}” specifically`,
+      reason: "You've been speaking around this card — let me unpack it.",
+    };
+  }
+  return null;
+}
+
+function truncate(s: string, n: number) {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function AICompanionCard({
+  nextMove,
+  busyMode,
+  onRunMode,
+}: {
+  nextMove: NextMove | null;
+  busyMode: string | null;
+  onRunMode: (mode: "decompose" | "questions" | "research") => void;
+}) {
+  if (!nextMove) {
+    return (
+      <div
+        className="px-3.5 py-3"
+        style={{
+          background: "var(--glass-card-bg)",
+          border: "1px solid var(--glass-hairline)",
+          borderRadius: 14,
+          boxShadow: "inset 0 1px 0 var(--glass-highlight)",
+        }}
+      >
+        <div className="flex items-center gap-2">
+          <span
+            className="inline-flex h-5 w-5 items-center justify-center rounded-full"
+            style={{
+              background:
+                "radial-gradient(circle at 50% 40%, rgba(10,132,255,0.20), rgba(124,58,237,0.10) 60%, transparent 80%)",
+            }}
+            aria-hidden
+          >
+            <Sparkles
+              className="h-3 w-3"
+              strokeWidth={1.75}
+              style={{ color: "rgba(10,132,255,0.85)" }}
+            />
+          </span>
+          <span
+            className="text-[11px] font-semibold tracking-[0.02em]"
+            style={{ color: "rgba(15,23,42,0.62)" }}
+          >
+            Companion
+          </span>
+        </div>
+        <p
+          className="mt-1.5 text-[12px] leading-snug"
+          style={{ color: "rgba(15,23,42,0.62)" }}
+        >
+          Drop a thought on the board or speak one — I&apos;ll meet you there.
+        </p>
+      </div>
+    );
+  }
+
+  const busy = busyMode === nextMove.mode;
+
+  return (
+    <div
+      className="px-3.5 py-3"
+      style={{
+        background: "var(--glass-card-bg)",
+        border: "1px solid var(--glass-hairline)",
+        borderRadius: 14,
+        boxShadow:
+          "inset 0 1px 0 var(--glass-highlight), 0 8px 22px -14px rgba(10,132,255,0.30)",
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className="inline-flex h-5 w-5 items-center justify-center rounded-full"
+          style={{
+            background:
+              "radial-gradient(circle at 50% 40%, rgba(10,132,255,0.22), rgba(124,58,237,0.10) 60%, transparent 80%)",
+          }}
+          aria-hidden
+        >
+          <Sparkles
+            className="h-3 w-3"
+            strokeWidth={1.75}
+            style={{ color: "rgba(10,132,255,0.92)" }}
+          />
+        </span>
+        <span
+          className="text-[11px] font-semibold tracking-[0.02em]"
+          style={{ color: "rgba(15,23,42,0.62)" }}
+        >
+          Companion · next move
+        </span>
+      </div>
+      <p
+        className="mt-1.5 text-[12.5px] font-semibold leading-snug tracking-tight"
+        style={{ color: "rgba(15,23,42,0.92)" }}
+      >
+        {nextMove.copy}
+      </p>
+      <p
+        className="mt-0.5 text-[11.5px] leading-snug"
+        style={{ color: "rgba(15,23,42,0.55)" }}
+      >
+        {nextMove.reason}
+      </p>
+      <button
+        onClick={() => onRunMode(nextMove.mode)}
+        disabled={busy}
+        className="mt-2.5 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold transition-all duration-[var(--dur-rail-short)] ease-[var(--ease-spring-tight)] active:scale-[0.97] disabled:cursor-wait"
+        style={{
+          background: busy
+            ? "rgba(10,132,255,0.10)"
+            : "linear-gradient(180deg, rgba(10,132,255,1) 0%, rgba(0,111,230,1) 100%)",
+          color: busy ? "rgba(0,88,184,0.85)" : "white",
+          boxShadow: busy
+            ? "none"
+            : "inset 0 1px 0 rgba(255,255,255,0.22), 0 6px 16px -8px rgba(10,132,255,0.55)",
+          letterSpacing: "-0.005em",
+        }}
+      >
+        {busy ? (
+          <>
+            <Loader2 className="h-3 w-3 animate-spin" strokeWidth={2.2} />
+            Running…
+          </>
+        ) : (
+          <>
+            <Wand2 className="h-3 w-3" strokeWidth={2.2} />
+            Run this
+          </>
+        )}
+      </button>
+    </div>
+  );
+}
+
 // ── Attach-target indicator ──
-//
-// Always-visible status line that shows where the (+) suggestions in
-// the rail buckets WILL land if clicked right now. Three cases:
-//   1. A node is selected on the canvas → "Will attach under: [label]"
-//      (the suggestion becomes a child of that card)
-//   2. Nothing selected, seed exists → "Will attach under: [seed label]
-//      (seed)" with a distinct "seed" tag (it's the central node)
-//   3. No nodes at all → "Will create a new seed" (the (+) creates a
-//      fresh core node and attaches the suggestion under it — see
-//      addNodeFromPanel's empty-board branch in synergy-whiteboard.tsx)
-//
-// This replaces the prior bipolar "Adding to: X" / long-paragraph
-// hint that obscured which fallback was in effect.
-// ── Attach-target indicator (Apple-style soft card) ──
-//
-// Replaces the prior dashed-border noisy treatment with a soft white
-// card. No icon color tint, no boxed badges — the source of truth is
-// the label itself, with a mono-cap status line above. Subtle inner
-// shadow for depth (no full border).
 
 function AttachTargetIndicator({
   selectedNode,
@@ -369,51 +581,78 @@ function AttachTargetIndicator({
   selectedHasVariations: boolean;
   onRankSelected: () => void;
 }) {
-  const usingSeed = !selectedNode && !!seedNode;
   const usingSelection = !!selectedNode;
-  const empty = !selectedNode && !seedNode;
-
+  const usingSeed = !selectedNode && !!seedNode;
   const label = usingSelection
     ? selectedNode!.label
     : usingSeed
       ? seedNode!.label
       : "A new seed";
-  const statusKey = usingSelection
-    ? "Selected card"
-    : usingSeed
-      ? "Seed · fallback"
-      : "New";
+  const statusKey = usingSelection ? "Selected" : usingSeed ? "Seed" : "New";
 
   return (
     <div
-      className="rounded-xl bg-white px-3 py-2.5"
+      className="px-3.5 py-2.5"
       style={{
-        boxShadow:
-          "0 0 0 1px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.04)",
+        background: "rgba(255,255,255,0.85)",
+        border: "1px solid var(--glass-hairline)",
+        borderRadius: 12,
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.7)",
       }}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
-          Will attach under
+        <span
+          className="text-[10.5px] font-semibold tracking-[0.02em]"
+          style={{ color: "rgba(15,23,42,0.55)" }}
+        >
+          Attaches under
         </span>
-        <span className="font-mono text-[9px] uppercase tracking-[0.15em] text-gray-400">
+        <span
+          className="rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold tracking-[0.04em]"
+          style={{
+            background: usingSelection
+              ? "rgba(10,132,255,0.10)"
+              : "rgba(15,23,42,0.05)",
+            color: usingSelection
+              ? "rgba(0,88,184,0.95)"
+              : "rgba(15,23,42,0.55)",
+          }}
+        >
           {statusKey}
         </span>
       </div>
-      <div className="mt-1 truncate text-[13px] font-medium text-gray-900">
+      <div
+        className="mt-1 truncate text-[13px] font-semibold tracking-tight"
+        style={{ color: "rgba(15,23,42,0.92)" }}
+      >
         {label}
       </div>
       {usingSeed && (
-        <p className="mt-1 text-[10.5px] leading-snug text-gray-500">
-          Select a card on the canvas to attach under it instead.
+        <p
+          className="mt-1 text-[10.5px] leading-snug"
+          style={{ color: "rgba(15,23,42,0.45)" }}
+        >
+          Tap a card on the canvas to attach under it.
         </p>
       )}
       {selectedHasVariations && (
         <button
           onClick={onRankSelected}
-          className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-gray-700 transition hover:text-gray-900"
+          className="mt-2 inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-semibold transition"
+          style={{
+            background: "rgba(15,23,42,0.04)",
+            color: "rgba(15,23,42,0.78)",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "rgba(15,23,42,0.08)";
+            e.currentTarget.style.color = "rgba(15,23,42,0.92)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "rgba(15,23,42,0.04)";
+            e.currentTarget.style.color = "rgba(15,23,42,0.78)";
+          }}
         >
-          <Trophy className="h-3 w-3" strokeWidth={1.5} />
+          <Trophy className="h-3 w-3" strokeWidth={1.75} />
           Rank this node&apos;s variations
         </button>
       )}
@@ -421,63 +660,99 @@ function AttachTargetIndicator({
   );
 }
 
-// ── ModeLink: text-link AI action ──
-//
-// Apple-style restraint — Decompose / Questions / Research are
-// inline text links, not button cards. Underline on hover, spinner
-// inline when busy. Used in the rail header row above the
-// suggestion buckets.
+// ── Mode tile row ──
+// Premium replacement for the prior text-link "Decompose · Questions ·
+// Research" row. Three pill-shaped tiles with subtle iconography. The
+// recommended one carries a soft accent so the user's eye lands there.
 
-function ModeLink({
-  label,
-  busy,
-  onClick,
+function ModeTileRow({
+  busyMode,
+  onRun,
+  recommended,
 }: {
-  label: string;
-  busy: boolean;
-  onClick: () => void;
+  busyMode: string | null;
+  onRun: (mode: "decompose" | "questions" | "research") => void;
+  recommended: "decompose" | "questions" | "research" | null;
 }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={busy}
-      className="group inline-flex items-center gap-1 font-medium text-gray-700 transition hover:text-gray-900 disabled:opacity-60"
-    >
-      {busy && <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.5} />}
-      <span className="underline-offset-4 group-hover:underline">{label}</span>
-    </button>
+    <div className="grid grid-cols-3 gap-2">
+      <ModeTile
+        label="Decompose"
+        Icon={Network}
+        busy={busyMode === "decompose"}
+        highlighted={recommended === "decompose"}
+        onClick={() => onRun("decompose")}
+      />
+      <ModeTile
+        label="Questions"
+        Icon={HelpCircle}
+        busy={busyMode === "questions"}
+        highlighted={recommended === "questions"}
+        onClick={() => onRun("questions")}
+      />
+      <ModeTile
+        label="Research"
+        Icon={Search}
+        busy={busyMode === "research"}
+        highlighted={recommended === "research"}
+        onClick={() => onRun("research")}
+      />
+    </div>
   );
 }
 
-// Below: AIBtn / Section / RegenerateButton / ClickableBucket helpers
-// used by the main rail above.
-
-function AIBtn({
-  icon: Icon,
+function ModeTile({
   label,
+  Icon,
   busy,
+  highlighted,
   onClick,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
   label: string;
-  busy?: boolean;
+  Icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  busy: boolean;
+  highlighted: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={busy}
-      className="flex flex-col items-center gap-1 rounded-lg border border-gray-200 bg-white p-2.5 text-[10px] font-medium text-gray-700 transition hover:border-blue-400 hover:bg-blue-50/30 hover:text-gray-900 disabled:opacity-50"
+      title={`${label} — scoped to the current attach target`}
+      className="group flex flex-col items-center justify-center gap-1.5 py-2.5 text-[10.5px] font-semibold transition-all duration-[var(--dur-rail-short)] ease-[var(--ease-spring-tight)] active:scale-[0.97] disabled:cursor-wait disabled:opacity-70"
+      style={{
+        background: highlighted
+          ? "linear-gradient(180deg, rgba(10,132,255,0.10) 0%, rgba(10,132,255,0.04) 100%)"
+          : "rgba(255,255,255,0.7)",
+        border: `1px solid ${highlighted ? "rgba(10,132,255,0.22)" : "var(--glass-hairline)"}`,
+        color: highlighted ? "rgba(0,88,184,0.92)" : "rgba(15,23,42,0.72)",
+        borderRadius: 12,
+        boxShadow: highlighted
+          ? "inset 0 1px 0 rgba(255,255,255,0.7), 0 4px 12px -6px rgba(10,132,255,0.35)"
+          : "inset 0 1px 0 rgba(255,255,255,0.6)",
+      }}
+      onMouseEnter={(e) => {
+        if (busy || highlighted) return;
+        e.currentTarget.style.background = "rgba(255,255,255,0.95)";
+        e.currentTarget.style.color = "rgba(15,23,42,0.92)";
+      }}
+      onMouseLeave={(e) => {
+        if (busy || highlighted) return;
+        e.currentTarget.style.background = "rgba(255,255,255,0.7)";
+        e.currentTarget.style.color = "rgba(15,23,42,0.72)";
+      }}
     >
       {busy ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
       ) : (
-        <Icon className="h-4 w-4" />
+        <Icon className="h-4 w-4" strokeWidth={1.75} />
       )}
       {label}
     </button>
   );
 }
+
+// ── Section primitive ──
 
 function Section({
   title,
@@ -486,15 +761,29 @@ function Section({
   children,
 }: {
   title: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
+    <section
+      className="p-3"
+      style={{
+        background: "var(--glass-card-bg)",
+        border: "1px solid var(--glass-hairline)",
+        borderRadius: 14,
+        boxShadow: "inset 0 1px 0 var(--glass-highlight)",
+      }}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs font-semibold text-gray-900">
-          <Icon className="h-3.5 w-3.5 text-blue-600" />
+        <div
+          className="flex items-center gap-1.5 text-[12px] font-semibold tracking-tight"
+          style={{ color: "rgba(15,23,42,0.92)" }}
+        >
+          <Icon
+            className="h-3.5 w-3.5"
+            strokeWidth={1.75}
+          />
           {title}
         </div>
         {action}
@@ -516,12 +805,24 @@ function RegenerateButton({
       onClick={onClick}
       disabled={busy}
       title="Regenerate with a fresh AI call"
-      className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-gray-600 transition hover:border-blue-400 hover:text-gray-900 disabled:opacity-60"
+      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition disabled:opacity-60"
+      style={{
+        background: "rgba(15,23,42,0.04)",
+        color: "rgba(15,23,42,0.62)",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "rgba(15,23,42,0.08)";
+        e.currentTarget.style.color = "rgba(15,23,42,0.92)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "rgba(15,23,42,0.04)";
+        e.currentTarget.style.color = "rgba(15,23,42,0.62)";
+      }}
     >
       {busy ? (
         <Loader2 className="h-2.5 w-2.5 animate-spin" />
       ) : (
-        <RotateCcw className="h-2.5 w-2.5" />
+        <RotateCcw className="h-2.5 w-2.5" strokeWidth={2} />
       )}
       regen
     </button>
@@ -531,34 +832,121 @@ function RegenerateButton({
 function ClickableBucket({
   label,
   items,
-  dot,
+  dotColor,
   onPick,
 }: {
   label: string;
   items: string[];
-  dot: string;
+  dotColor: string;
   onPick: (text: string) => void;
 }) {
   if (!items?.length) return null;
   return (
     <div>
-      <div className="mb-1 flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-gray-500">
-        <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      <div
+        className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold tracking-[0.02em]"
+        style={{ color: "rgba(15,23,42,0.55)" }}
+      >
+        <span
+          className="h-1.5 w-1.5 rounded-full"
+          style={{ background: dotColor }}
+        />
         {label}
       </div>
       <ul className="space-y-1">
         {items.map((it, i) => (
           <li key={i}>
-            <button
-              onClick={() => onPick(it)}
-              className="group flex w-full items-start gap-1.5 rounded-md px-2 py-1 text-left text-[11px] leading-snug text-gray-800 transition hover:bg-white"
-            >
-              <Plus className="mt-0.5 h-3 w-3 shrink-0 text-gray-400 transition group-hover:text-blue-600" />
-              <span>{it}</span>
-            </button>
+            <PickButton onPick={() => onPick(it)}>{it}</PickButton>
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function PickButton({
+  onPick,
+  children,
+}: {
+  onPick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onPick}
+      className="group flex w-full items-start gap-2 px-2.5 py-1.5 text-left text-[12px] leading-snug transition"
+      style={{
+        background: "rgba(255,255,255,0.65)",
+        border: "1px solid var(--glass-hairline)",
+        borderRadius: 10,
+        color: "rgba(15,23,42,0.85)",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "white";
+        e.currentTarget.style.borderColor = "rgba(10,132,255,0.25)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "rgba(255,255,255,0.65)";
+        e.currentTarget.style.borderColor = "var(--glass-hairline)";
+      }}
+    >
+      <Plus
+        className="mt-0.5 h-3 w-3 shrink-0 transition"
+        strokeWidth={2.2}
+        style={{ color: "rgba(15,23,42,0.42)" }}
+      />
+      <span>{children}</span>
+    </button>
+  );
+}
+
+function EmptyHint({ label }: { label: string }) {
+  return (
+    <p
+      className="px-3 py-2.5 text-center text-[11.5px]"
+      style={{
+        background: "rgba(255,255,255,0.5)",
+        border: "1px solid var(--glass-hairline)",
+        borderRadius: 10,
+        color: "rgba(15,23,42,0.55)",
+      }}
+    >
+      {label}
+    </p>
+  );
+}
+
+function EmptyHero() {
+  return (
+    <div
+      className="px-5 py-6 text-center"
+      style={{
+        background: "rgba(255,255,255,0.55)",
+        border: "1px solid var(--glass-hairline)",
+        borderRadius: 16,
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.7)",
+      }}
+    >
+      <span
+        className="mx-auto mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full"
+        style={{
+          background:
+            "radial-gradient(circle at 50% 40%, rgba(10,132,255,0.18), rgba(124,58,237,0.08) 60%, transparent 80%)",
+        }}
+      >
+        <Wand2
+          className="h-4 w-4"
+          strokeWidth={1.75}
+          style={{ color: "rgba(10,132,255,0.92)" }}
+        />
+      </span>
+      <p
+        className="text-[12px] leading-snug"
+        style={{ color: "rgba(15,23,42,0.62)" }}
+      >
+        Speak freely or run a mode above. Then tap any generated idea to
+        land it onto the board.
+      </p>
     </div>
   );
 }

@@ -17,6 +17,7 @@ import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
+import { readPriorityVector } from "@/lib/objective-canvas/priority-vector";
 import {
   computeLayerPositionLabel,
   type ObjectiveStack,
@@ -77,6 +78,12 @@ interface Sub {
    *  can re-trigger via POST /api/brainstorm/sub-objectives/[id]
    *  /annotate?mode=force. Null until generated. */
   annotations: unknown;
+  /** Per-sub-objective priority vector — soft trade-off weights
+   *  (speed/durability/reversibility/certainty/leverage). Distinct
+   *  from space-scoped operational constraints. Column added in
+   *  20260904_priority_vector.sql; null = lazy-infer on first room
+   *  open via the PriorityStrip's GET /priorities. */
+  priority_vector: unknown;
 }
 
 export default async function SubObjectiveRoomPage({
@@ -96,7 +103,7 @@ export default async function SubObjectiveRoomPage({
   const { data: sub } = (await db
     .from("improvement_goals")
     .select(
-      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels, room_categories, annotations, layer_ordinals, layer_position_label",
+      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels, room_categories, annotations, layer_ordinals, layer_position_label, priority_vector",
     )
     .eq("id", subId)
     .maybeSingle()) as { data: Sub | null };
@@ -119,6 +126,10 @@ export default async function SubObjectiveRoomPage({
       ? "review_each"
       : "autopilot";
   const operationalConstraints = readConstraints(spaceModeRow?.synthesis_data);
+  // Per-sub-objective priority vector — null = column unset, the
+  // PriorityStrip lazy-fires GET /priorities on mount which infers
+  // + persists. Same lazy pattern as constraints' auto-infer-on-GET.
+  const priorityVector = readPriorityVector(sub.priority_vector);
 
   // ── Parent annotations — carries the persisted readings the canvas
   //    extracted from the parent objective's text; we surface them as
@@ -150,7 +161,7 @@ export default async function SubObjectiveRoomPage({
   // range so the title h1 carries its own inline underlines and the
   // lens card renders the description without repeating the title.
   const subAnnotations = normalizeAnnotations(sub.annotations);
-  const { titleAnnotations } = splitAnnotationsByTitle(
+  const { titleAnnotations, descriptionAnnotations } = splitAnnotationsByTitle(
     sub.title,
     sub.description,
     subAnnotations,
@@ -389,7 +400,9 @@ export default async function SubObjectiveRoomPage({
             annotations={parentAnnotations}
             crossRoomCoverageByIndex={crossRoomCoverageByIndex}
             constraints={operationalConstraints}
+            priorityVector={priorityVector}
             description={sub.description}
+            descriptionAnnotations={descriptionAnnotations}
             topNegativeOutcome={sub.top_negative_outcome}
           />
         </div>

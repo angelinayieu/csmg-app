@@ -66,6 +66,8 @@ const ALLOWED_ACTIONS: ReadonlyArray<DecisionAction> = [
   "layer_position_set",
   // Arc 3.1 — mechanism technical-depth spec
   "mechanism_spec_generated",
+  // Priority vector — per-sub-objective soft weights edited.
+  "priorities_set",
 ];
 
 const DEFAULT_LIMIT = 30;
