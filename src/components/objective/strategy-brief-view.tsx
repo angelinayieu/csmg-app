@@ -824,6 +824,150 @@ function RoomBlock({
           </div>
         )}
 
+        {/* ── Mechanism specs — the technical depth per feature ── */}
+        {/* Each spec'd feature shows HOW it works (mechanism of action +
+            falsifiable hypothesis), HOW it's built (chosen method) and
+            HOW it'd be validated / killed — the brief is now the
+            strategic AND technical document, not just the strategic one. */}
+        {room.mechanism_specs.length > 0 && (
+          <div className="mb-6">
+            <SubLabel>How each mechanism works</SubLabel>
+            <ul className="mt-3 flex flex-col gap-4">
+              {room.mechanism_specs.map((s) => {
+                const tierColor =
+                  s.evidence_strength === "established"
+                    ? COLOR.elected
+                    : s.evidence_strength === "speculative"
+                      ? COLOR.conflict
+                      : COLOR.inkSoft;
+                return (
+                  <li key={s.item_id}>
+                    {/* Eyebrow: feature name + honesty-tier badge */}
+                    <div className="flex items-baseline gap-2">
+                      <div
+                        className="text-[12px] font-semibold uppercase"
+                        style={{
+                          color: COLOR.accent,
+                          letterSpacing: "0.08em",
+                        }}
+                      >
+                        {s.item_name}
+                      </div>
+                      <span
+                        className="text-[10.5px] font-semibold uppercase"
+                        style={{
+                          color: tierColor,
+                          letterSpacing: "0.1em",
+                        }}
+                      >
+                        {s.evidence_strength}
+                      </span>
+                    </div>
+                    {/* Lead sentence: the causal process. */}
+                    <p
+                      className="mt-1 text-[14px] leading-[1.55]"
+                      style={{ color: COLOR.ink, fontWeight: 500 }}
+                    >
+                      {s.mechanism_of_action}
+                    </p>
+                    {/* Falsifiable hypothesis — woven inline so it reads
+                        as a sentence, not a stack of labels. */}
+                    <p
+                      className="mt-1.5 text-[12.5px] leading-[1.55]"
+                      style={{ color: COLOR.inkSoft }}
+                    >
+                      <span
+                        className="mr-1 font-semibold uppercase"
+                        style={{
+                          color: COLOR.inkFaint,
+                          fontSize: "10px",
+                          letterSpacing: "0.1em",
+                        }}
+                      >
+                        If
+                      </span>
+                      {s.hypothesis.if_do}
+                      <span
+                        className="mx-1 font-semibold uppercase"
+                        style={{
+                          color: COLOR.inkFaint,
+                          fontSize: "10px",
+                          letterSpacing: "0.1em",
+                        }}
+                      >
+                        Then
+                      </span>
+                      {s.hypothesis.then_improves}
+                      <span
+                        className="mx-1 font-semibold uppercase"
+                        style={{
+                          color: COLOR.inkFaint,
+                          fontSize: "10px",
+                          letterSpacing: "0.1em",
+                        }}
+                      >
+                        Because
+                      </span>
+                      {s.hypothesis.because}
+                    </p>
+                    {/* Build + validate meta row. */}
+                    <div
+                      className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[12px]"
+                      style={{ color: COLOR.inkMuted }}
+                    >
+                      <span>
+                        <span
+                          className="mr-1 font-semibold uppercase"
+                          style={{
+                            color: COLOR.inkFaint,
+                            fontSize: "10px",
+                            letterSpacing: "0.1em",
+                          }}
+                        >
+                          Build
+                        </span>
+                        {s.chosen_method}
+                      </span>
+                      <span>
+                        <span
+                          className="mr-1 font-semibold uppercase"
+                          style={{
+                            color: COLOR.inkFaint,
+                            fontSize: "10px",
+                            letterSpacing: "0.1em",
+                          }}
+                        >
+                          Validate
+                        </span>
+                        {s.validation_experiment}
+                      </span>
+                    </div>
+                    {/* Kill criteria — surface candidly, not as a footnote. */}
+                    {s.kill_criteria.length > 0 && (
+                      <div
+                        className="mt-1 text-[12px]"
+                        style={{ color: COLOR.inkMuted }}
+                      >
+                        <span
+                          className="mr-1 font-semibold uppercase"
+                          style={{
+                            color: COLOR.inkFaint,
+                            fontSize: "10px",
+                            letterSpacing: "0.1em",
+                          }}
+                        >
+                          Kill if
+                        </span>
+                        {s.kill_criteria.join(" · ")}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
         {/* ── Experiments planned ── */}
         {room.experiments.length > 0 && (
           <div className="mb-6">
