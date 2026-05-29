@@ -20,7 +20,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronDown, ChevronUp, Sparkles, AlertCircle } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ObjectiveAnnotation } from "@/components/objective/annotated-objective-card";
 
@@ -77,46 +77,39 @@ export function AnnotationLensStrip({
 
   return (
     <div
-      className="mb-3 border px-3 py-2.5"
+      className="mb-3 px-3 py-2.5"
       style={{
-        background: appleVibe.surface.cardElevated,
-        borderColor: appleVibe.stroke.soft,
+        background: "transparent",
         borderRadius: appleVibe.radius.md,
-        boxShadow: appleVibe.shadow.chip,
         fontFamily: appleVibe.font.stack,
       }}
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Sparkles
-            className="h-3 w-3 flex-shrink-0"
-            strokeWidth={2}
-            style={{ color: appleVibe.text.tertiary }}
-          />
           <span
-            className="text-[11px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: appleVibe.text.tertiary }}
+            className={appleVibe.label.className}
+            style={{ color: appleVibe.label.color }}
           >
-            Annotation Lens
+            Objective coverage
           </span>
           <span
-            className="text-[13px] font-light"
+            className="text-[12px] font-light"
             style={{ color: appleVibe.text.tertiary }}
           >
-            · {ranked.length} reading{ranked.length === 1 ? "" : "s"} from the
-            parent objective
+            · {ranked.length} key reading{ranked.length === 1 ? "" : "s"} from
+            your objective
           </span>
           {orphanCount > 0 && (
             <span
-              className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] font-semibold"
-              style={{
-                background: "rgba(245,158,11,0.10)",
-                color: "rgba(146,64,14,0.95)",
-                border: "1px solid rgba(245,158,11,0.22)",
-              }}
+              className="inline-flex items-center gap-1 text-[11px] font-medium"
+              style={{ color: "rgba(146,64,14,0.9)" }}
               title="Annotations with no derived item in this room — the generator may have missed a load-bearing reading."
             >
-              <AlertCircle className="h-2.5 w-2.5" strokeWidth={2.5} />
+              <span
+                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                style={{ background: "rgba(245,158,11,0.9)" }}
+                aria-hidden
+              />
               {orphanCount} orphan{orphanCount === 1 ? "" : "s"}
             </span>
           )}
@@ -141,7 +134,17 @@ export function AnnotationLensStrip({
       </div>
 
       {expanded && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <p
+          className="mt-2 mb-2 text-[11.5px] font-light leading-snug"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          Each chip is a reading the AI took from your objective. The number is
+          how many cards in this room build on it — faded chips aren&rsquo;t
+          addressed here yet.
+        </p>
+      )}
+      {expanded && (
+        <div className="flex flex-wrap gap-1.5">
           {ranked.map((a, i) => {
             const idx = i + 1;
             const coverage = coverageByIndex.get(idx)?.size ?? 0;
@@ -163,28 +166,19 @@ export function AnnotationLensStrip({
                 onClick={() => onHoverIndex(isHovered ? null : idx)}
                 whileHover={{ y: -1, transition: { duration: 0.15, ease: [0.22, 1, 0.36, 1] } }}
                 whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
-                className="inline-flex max-w-[260px] items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition-[background,border-color,box-shadow] duration-200 ease-out"
+                className="inline-flex max-w-[260px] items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition-[background,border-color] duration-200 ease-out"
                 style={{
                   background: isHovered
-                    ? "rgba(15,23,42,0.06)"
-                    : isOrphan
-                      ? "rgba(245,158,11,0.06)"
-                      : "rgba(255,255,255,0.92)",
+                    ? "rgba(15,23,42,0.055)"
+                    : "rgba(15,23,42,0.03)",
                   border: `1px solid ${
-                    isHovered
-                      ? "rgba(15,23,42,0.22)"
-                      : isOrphan
-                        ? "rgba(245,158,11,0.22)"
-                        : appleVibe.stroke.hairline
+                    isHovered ? "rgba(15,23,42,0.12)" : "transparent"
                   }`,
                   color: isOrphan
-                    ? "rgba(146,64,14,0.95)"
+                    ? "rgba(146,64,14,0.9)"
                     : appleVibe.text.secondary,
                   opacity: dimByOtherHover ? 0.4 : 1,
                   cursor: "pointer",
-                  boxShadow: isHovered
-                    ? "0 4px 12px -6px rgba(11,18,40,0.18)"
-                    : "none",
                 }}
                 title={a.reading || a.phrase}
               >
@@ -195,26 +189,19 @@ export function AnnotationLensStrip({
                 />
                 <span className="truncate">{a.phrase}</span>
                 <span
-                  className="ml-0.5 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums"
+                  className="ml-0.5 text-[11px] font-semibold tabular-nums"
                   style={{
-                    background: isOrphan
-                      ? "rgba(245,158,11,0.18)"
-                      : "rgba(15,23,42,0.06)",
                     color: isOrphan
-                      ? "rgba(120,53,15,1)"
-                      : appleVibe.text.tertiary,
+                      ? "rgba(120,53,15,0.9)"
+                      : appleVibe.text.faint,
                   }}
                 >
                   {coverage}
                 </span>
                 {crossRoom > 0 && (
                   <span
-                    className="ml-0.5 inline-flex h-[15px] min-w-[18px] items-center justify-center rounded-full px-1 text-[9.5px] font-semibold tabular-nums"
-                    style={{
-                      background: "rgba(124,58,237,0.10)",
-                      color: "rgba(76,29,149,0.95)",
-                      border: "1px solid rgba(124,58,237,0.16)",
-                    }}
+                    className="text-[10px] font-semibold tabular-nums"
+                    style={{ color: "rgba(124,58,237,0.65)" }}
                     title={`Also derives ${crossRoom} ${crossRoom === 1 ? "item" : "items"} in your other rooms — load-bearing across the space.`}
                   >
                     +{crossRoom}

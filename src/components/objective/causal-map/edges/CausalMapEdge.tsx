@@ -52,16 +52,22 @@ function CausalMapEdgeInner({
   });
 
   const loopActive = d.loopActive === true;
+  const focused = d.focused === true;
   const baseColor = POLARITY_COLORS[d.polarity] ?? POLARITY_COLORS.neutral;
   const stroke = loopActive
     ? d.loopKind
       ? LOOP_COLORS[d.loopKind].ring
       : baseColor
     : baseColor;
-  const width = loopActive
-    ? edgeStrokeWidth(d.strength) + 1.5
-    : edgeStrokeWidth(d.strength);
-  const opacity = d.faded ? 0.12 : loopActive ? 1 : edgeOpacity(d.strength);
+  const width =
+    loopActive || focused
+      ? edgeStrokeWidth(d.strength) + 1.4
+      : edgeStrokeWidth(d.strength);
+  // Resting (room) wires are ghosted to a quiet skeleton so the default web
+  // never shouts; a hovered thread or a highlighted loop overrides back to
+  // full strength, making the focused path pop hard against the calm rest.
+  const restOpacity = edgeOpacity(d.strength) * (d.calmRest ? 0.42 : 1);
+  const opacity = d.faded ? 0.1 : loopActive || focused ? 1 : restOpacity;
   const dashed = d.source === "cross_space" || d.source === "semantic";
 
   return (

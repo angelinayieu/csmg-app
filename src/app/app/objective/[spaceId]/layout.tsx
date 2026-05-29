@@ -32,6 +32,8 @@ import { use, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { BookOpen } from "lucide-react";
 import { LabNotebookPanel } from "@/components/objective/lab-notebook-panel";
+import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-shell";
+import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 interface Props {
@@ -63,6 +65,12 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   const subMatch = pathname?.match(/\/sub\/([^/]+)/);
   const mode: "room" | "space" = subMatch ? "room" : "space";
   const subObjectiveId = subMatch ? subMatch[1] : undefined;
+
+  // The Strategy Brief is a full-page generated DOCUMENT, not a room —
+  // it stays standalone (not wrapped in the whiteboard room-window). Every
+  // other objective route (main canvas, sub-objective rooms, lab) IS a room
+  // / expansion and renders as an overlay over the shared board.
+  const isBrief = Boolean(pathname?.includes("/brief"));
 
   // Default open on first visit per Phase 11+ lock-in M1. State is
   // server-incompatible (localStorage is client-only) so we render
@@ -124,7 +132,12 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   // modal experience there. This avoids breaking small-screen UX
   // while the rail experience is desktop-first.
   if (!isWide) {
-    return <>{children}</>;
+    return (
+      <>
+        <HomeTabNav />
+        {children}
+      </>
+    );
   }
 
   // Phase 11.8b — when open, reserve room for the rail-card's
@@ -147,24 +160,30 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   // disjoint regions, so they're visible side-by-side simultaneously.
   return (
     <>
-      <div
-        className="grid min-h-screen transition-[grid-template-columns] duration-300 ease-out"
-        style={{
-          gridTemplateColumns: `minmax(0, 1fr) ${railWidth}px`,
-        }}
-      >
-        {/* Main content column. minWidth:0 lets the column shrink
-            below its content's intrinsic min-width (default grid
-            behavior is to fit-content, which would let max-w-5xl
-            mx-auto centered cards overflow into the right column —
-            the exact bug being fixed). */}
-        <main style={{ minWidth: 0 }}>{children}</main>
-        {/* Placeholder column — reserves space for the floating
-            notebook card. The card itself uses position:fixed and
-            renders over this column with its rounded-card chrome.
-            Empty div is intentional. */}
-        <div aria-hidden />
-      </div>
+      {/* Primary tab nav lives at the layout level — a sibling ABOVE the
+          shell overlay (z-40) so it anchors to the very top of the
+          viewport instead of being trapped inside the room-window's
+          scroll/overflow/stacking context. Rendered once here; child
+          pages must NOT render their own (would double-stack). Hides
+          itself on ?embed=1. */}
+      <HomeTabNav />
+
+      {/* The whiteboard floor + room-window live HERE, at the layout
+          level — so EVERY route under the objective (main canvas,
+          sub-objective rooms, lab) renders as an overlay over ONE
+          persistent board, and a page.tsx rewrite can't drop it. The
+          shell reserves `railWidth` on its right so the room-window never
+          slides under the Lab Notebook rail. */}
+      {isBrief ? (
+        children
+      ) : (
+        <ObjectiveCanvasShell
+          spaceId={spaceId}
+          rightInset={railWidth + RAIL_MARGIN}
+        >
+          {children}
+        </ObjectiveCanvasShell>
+      )}
 
       {/* Collapsed pill — visible whenever the notebook is closed.
           Render WITHOUT the hydration gate so it's visible on first

@@ -26,7 +26,7 @@
 // /mockup, /export-prompt routes. No new endpoints. The notebook
 // rail above the page captures every event as it happens.
 
-import { useCallback, useMemo, useState, useTransition } from "react";
+import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -40,12 +40,14 @@ import {
   FlaskConical,
   GitBranch,
   Layers,
+  LayoutGrid,
   Loader2,
   RefreshCw,
   Sparkles,
   X,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { sendArtifactToBoard } from "@/components/objective/board-bus";
 import { MethodBadge } from "@/components/objective/method-badge";
 import type {
   EvaluationMethod,
@@ -585,6 +587,22 @@ export function LabPageView({
           onElect={(id) => setDisposition(id, "elected")}
           onReject={(id) => setDisposition(id, "rejected")}
           onClear={(id) => setDisposition(id, null)}
+          onSendToBoard={(v) =>
+            sendArtifactToBoard(spaceId, {
+              kind: "lab",
+              entityId: `${entityId}:${v.id}`,
+              title: v.name,
+              subtitle: `from "${entityName}"${
+                v.tradeoff
+                  ? ` — ${v.tradeoff}`
+                  : v.description
+                    ? ` — ${v.description}`
+                    : ""
+              }`,
+              color: appleVibe.accent.primary,
+              roomId: subObjectiveId,
+            })
+          }
         />
       </Section>
 
@@ -707,13 +725,27 @@ function IndicatorsTable({
   onElect,
   onReject,
   onClear,
+  onSendToBoard,
 }: {
   variations: ItemVariation[];
   onElect: (id: string) => void;
   onReject: (id: string) => void;
   onClear: (id: string) => void;
+  /** Stage this variation on the objective board to brainstorm how to
+   *  enhance its score (Connect/Synthesize it with other cards). */
+  onSendToBoard: (v: ItemVariation) => void;
 }) {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  // Transient "sent to board" confirmation (the board lives on the
+  // objective canvas, not this page, so the user needs feedback).
+  const [lastSent, setLastSent] = useState<string | null>(null);
+  const sentTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendToBoard = (v: ItemVariation) => {
+    onSendToBoard(v);
+    setLastSent(v.name);
+    if (sentTimer.current) clearTimeout(sentTimer.current);
+    sentTimer.current = setTimeout(() => setLastSent(null), 2800);
+  };
 
   return (
     <div
@@ -845,6 +877,13 @@ function IndicatorsTable({
                       >
                         <X className="h-3 w-3" strokeWidth={2.4} />
                       </IconButton>
+                      <IconButton
+                        title="Send to board — brainstorm how to enhance this"
+                        onClick={() => sendToBoard(v)}
+                        color={appleVibe.accent.primary}
+                      >
+                        <LayoutGrid className="h-3 w-3" strokeWidth={2.2} />
+                      </IconButton>
                     </div>
                   </Td>
                 </tr>
@@ -929,6 +968,42 @@ function IndicatorsTable({
             </div>
           );
         })()}
+
+      {/* Sent-to-board confirmation — the board lives on the objective
+          canvas, so the user needs to know the item landed there. */}
+      {lastSent && (
+        <div
+          style={{
+            position: "fixed",
+            left: "50%",
+            bottom: 28,
+            transform: "translateX(-50%)",
+            zIndex: 90,
+            display: "flex",
+            alignItems: "center",
+            gap: 9,
+            maxWidth: 460,
+            padding: "11px 16px",
+            borderRadius: 999,
+            background: "rgba(11,18,40,0.92)",
+            color: "white",
+            boxShadow: "0 16px 44px -14px rgba(11,18,40,0.5)",
+            fontSize: 12.5,
+            fontWeight: 500,
+            fontFamily: appleVibe.font.stack,
+          }}
+        >
+          <LayoutGrid
+            className="h-4 w-4 flex-shrink-0"
+            strokeWidth={2.2}
+            style={{ color: "#C4B5FD" }}
+          />
+          <span>
+            <strong style={{ fontWeight: 650 }}>{lastSent}</strong> sent to your
+            board — open the Objective Canvas to connect it.
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -29,7 +29,7 @@ export type ArtifactCardShape = TLBaseShape<
   {
     w: number;
     h: number;
-    kind: "pain" | "feature" | "outcome";
+    kind: "pain" | "feature" | "outcome" | "lab";
     title: string;
     subtitle: string;
     color: string;
@@ -44,6 +44,7 @@ const KIND_LABEL: Record<ArtifactCardShape["props"]["kind"], string> = {
   pain: "PAIN",
   feature: "FEATURE",
   outcome: "OUTCOME",
+  lab: "LAB",
 };
 
 export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
@@ -51,7 +52,7 @@ export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
   static override props: RecordProps<ArtifactCardShape> = {
     w: T.number,
     h: T.number,
-    kind: T.literalEnum("pain", "feature", "outcome"),
+    kind: T.literalEnum("pain", "feature", "outcome", "lab"),
     title: T.string,
     subtitle: T.string,
     color: T.string,
@@ -93,6 +94,9 @@ export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
 
 function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
   const { kind, title, subtitle, color, roomId } = shape.props;
+  // Compact = an unfurl map node — drop the Open-room button + footer
+  // (flagged via meta, no schema change). Send-to-board leaves it unset.
+  const compact = !!(shape.meta as { compact?: boolean }).compact;
 
   function openRoom(e: React.MouseEvent) {
     e.stopPropagation();
@@ -168,7 +172,7 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
               {KIND_LABEL[kind]}
             </span>
           </div>
-          {roomId && (
+          {roomId && !compact && (
             <button
               type="button"
               onPointerDown={stopEventPropagation}
@@ -233,18 +237,20 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
           </div>
         )}
 
-        <div
-          style={{
-            marginTop: "auto",
-            marginLeft: 6,
-            paddingTop: 8,
-            fontSize: 9.5,
-            fontWeight: 500,
-            color: "rgba(15,23,42,0.4)",
-          }}
-        >
-          Artifact · select with others to Connect
-        </div>
+        {!compact && (
+          <div
+            style={{
+              marginTop: "auto",
+              marginLeft: 6,
+              paddingTop: 8,
+              fontSize: 9.5,
+              fontWeight: 500,
+              color: "rgba(15,23,42,0.4)",
+            }}
+          >
+            Artifact · select with others to Connect
+          </div>
+        )}
       </div>
     </HTMLContainer>
   );

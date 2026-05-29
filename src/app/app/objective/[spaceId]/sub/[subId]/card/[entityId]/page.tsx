@@ -17,7 +17,6 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { CardRoomView } from "@/components/objective/card-room-view";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
@@ -102,8 +101,6 @@ export default async function CardRoomPage({
 
   return (
     <>
-      <HomeTabNav />
-
       <div className="pb-12" style={{ fontFamily: appleVibe.font.stack }}>
         {/* Breadcrumb strip — matches the Lab page's chrome. */}
         <div

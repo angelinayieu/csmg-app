@@ -141,7 +141,11 @@ export function normalizeAnnotation(raw: unknown): ObjectiveAnnotation | null {
     start_offset: asNumber(raw.start_offset, 0),
     end_offset: asNumber(raw.end_offset, phrase.length),
     scope: asScope(raw.scope),
-    reading: asString(raw.reading),
+    // The annotation prompt instructs the LLM to commit each reading as
+    // "Read as: …" — a prompt device, not user copy. Strip the scaffold
+    // prefix here so every render site (heading, body lens, lens strip)
+    // shows the interpretation alone.
+    reading: asString(raw.reading).replace(/^\s*read\s+as\s*:\s*/i, ""),
     weight: asNumber(raw.weight, 0.5),
     dimensions: asDimensions(raw.dimensions),
     inference_chain: asChain(raw.inference_chain),

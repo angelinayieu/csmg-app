@@ -7,9 +7,7 @@
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { ObjectiveCanvasView } from "@/components/objective/objective-canvas-view";
-import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-shell";
 import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import type { MainCanvasSub } from "@/components/objective/main-canvas-view";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
@@ -568,26 +566,8 @@ export default async function ObjectiveCanvasPage({
     description: m.description,
   }));
 
-  // Compact "stat chips" for each room's collapsed whiteboard card — a
-  // snapshot of the room's real content (lane counts + approved chains).
-  const pluralize = (n: number, noun: string) =>
-    `${n} ${noun}${n === 1 ? "" : "s"}`;
-  const subChips = (s: MainCanvasSub): string[] => {
-    const chips: string[] = [];
-    if (s.laneTotalCounts.friction > 0)
-      chips.push(pluralize(s.laneTotalCounts.friction, "friction"));
-    if (s.laneTotalCounts.mechanism > 0)
-      chips.push(pluralize(s.laneTotalCounts.mechanism, "mechanism"));
-    if (s.laneTotalCounts.result > 0)
-      chips.push(pluralize(s.laneTotalCounts.result, "result"));
-    if (s.approvedPlayCount > 0)
-      chips.push(pluralize(s.approvedPlayCount, "chain"));
-    return chips;
-  };
-
   return (
     <>
-      <HomeTabNav />
       <ModePill
         spaceId={spaceId}
         mode={
@@ -597,24 +577,12 @@ export default async function ObjectiveCanvasPage({
         }
       />
 
-      {/* The objective canvas renders as a floating room-window over the
-          interactive whiteboard floor-0. ObjectiveCanvasShell (WhiteboardBase
-          + circular room sidebar + collapse-to-card + AI Connect/Synthesize,
-          persisted via the canvases table) wraps the existing
-          ObjectiveCanvasView untouched as its `children`. */}
-      <ObjectiveCanvasShell
-        spaceId={spaceId}
-        objectiveTitle={objective}
-        subs={initialMainSubs.map((s) => ({
-          id: s.id,
-          title: s.title,
-          // "Ready" = the room's layers have been generated. Drives the
-          // green tick on the sidebar.
-          ready: s.generatedAt != null,
-          // Real content snapshot for the collapsed board card.
-          chips: subChips(s),
-        }))}
-      >
+      {/* Flow content only — the objective LAYOUT now mounts the whiteboard
+          floor + room-window (ObjectiveCanvasShell), so this page renders
+          its content directly into that window. Every objective route
+          (this page, rooms, lab) is therefore a consistent overlay over the
+          same persistent board. */}
+      <div className="mx-auto w-full max-w-5xl px-6 pb-24 pt-6">
         <Link
           href="/app/objective"
           className="inline-flex items-center gap-1.5 text-[12px] font-medium"
@@ -647,7 +615,7 @@ export default async function ObjectiveCanvasPage({
             briefHref={showWorkbench ? `/app/objective/${spaceId}/brief` : ""}
           />
         </div>
-      </ObjectiveCanvasShell>
+      </div>
     </>
   );
 }

@@ -19,8 +19,10 @@ import {
   type SubProgress,
 } from "@/lib/objective-canvas/elected-ready-variations";
 
-const CARD_WIDTH = 300;
-const DELIVERED = SUB_PROGRESS_STAGES.length;
+// Exported so the sibling card-families.tsx exploration reuses the same
+// derivations + sizing rather than duplicating them.
+export const CARD_WIDTH = 300;
+export const DELIVERED = SUB_PROGRESS_STAGES.length;
 
 export interface CardVariantProps {
   sub: MainCanvasSub;
@@ -29,16 +31,16 @@ export interface CardVariantProps {
 }
 
 // ── shared derivations ────────────────────────────────────────────
-function alphaHex(a: number): string {
+export function alphaHex(a: number): string {
   const v = Math.round(Math.max(0, Math.min(1, a)) * 255);
   return v.toString(16).padStart(2, "0");
 }
 
-function sortedResults(sub: MainCanvasSub): LaneBreakdownRow[] {
+export function sortedResults(sub: MainCanvasSub): LaneBreakdownRow[] {
   return [...sub.laneBreakdown.result].sort((a, b) => b.count - a.count);
 }
 
-function stageInfo(progress: SubProgress) {
+export function stageInfo(progress: SubProgress) {
   const delivered = progress.completed >= DELIVERED;
   const label = progress.current
     ? SUB_PROGRESS_STAGES.find((s) => s.key === progress.current)!.short
@@ -46,7 +48,7 @@ function stageInfo(progress: SubProgress) {
   return { delivered, label, completed: progress.completed };
 }
 
-const subtitleOf = (sub: MainCanvasSub) =>
+export const subtitleOf = (sub: MainCanvasSub) =>
   sub.topNegativeOutcome
     ? { kind: "counters" as const, text: sub.topNegativeOutcome }
     : sub.description

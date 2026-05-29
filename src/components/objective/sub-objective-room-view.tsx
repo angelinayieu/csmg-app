@@ -53,6 +53,8 @@ import { RoomEdgesOverlay } from "./room-edges-overlay";
 // Phase 12.A.4 — the room-altitude Causal Loop Diagram. A third room
 // view alongside Categories / Variables; reads the same lanes + edges.
 import { RoomAltitudeMap } from "./causal-map/altitudes/RoomAltitudeMap";
+import { MechanismSubsystemView } from "./mechanism-subsystem-view";
+import { buildMechanismSubsystems } from "@/lib/objective-canvas/build-mechanism-subsystems";
 // Phase 12.A.8 — remember the room's view choice per sub-objective.
 import { useLocalPref } from "./causal-map/hooks/useLocalPref";
 import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
@@ -95,6 +97,12 @@ export interface LayerItem {
    *  Falls through to description-only rendering for legacy
    *  entities that pre-date the migration. */
   causal_chain?: Record<string, unknown> | null;
+  /** Persisted expanded_detail blob (variations[] + effectiveness
+   *  envelope + definition). Only the room loader threads this for
+   *  FEATURE items — it hydrates the CategoryCard mechanism lineup so
+   *  it renders without a /expand round-trip. Absent for pain/outcome
+   *  items (their drawers still lazy-load) to keep the payload lean. */
+  expanded_detail?: Record<string, unknown> | null;
 }
 
 export interface RoomEdge {
@@ -148,6 +156,12 @@ interface Props {
    *  fixed when the R&D engine runs mechanism experiments. Null
    *  hides the strip (no constraints captured yet). */
   constraints?: OperationalConstraints | null;
+  /** Hero prose, relocated from the page header so it shares one
+   *  two-column row with the portfolio (left: Definition + Counters +
+   *  coverage; right: strategic bets). Plain frameless text — the
+   *  title + its inline annotations stay in the header. */
+  description?: string | null;
+  topNegativeOutcome?: string | null;
 }
 
 export function SubObjectiveRoomView({
@@ -161,6 +175,8 @@ export function SubObjectiveRoomView({
   annotations = [],
   crossRoomCoverageByIndex = {},
   constraints = null,
+  description = null,
+  topNegativeOutcome = null,
 }: Props) {
   const roomCategories: RoomCategories = useMemo(
     () => normalizeRoomCategories(roomCategoriesRaw),
@@ -205,7 +221,7 @@ export function SubObjectiveRoomView({
   // the rendering. Default to Map so the room opens on the system view
   // (the clearest "these are distinct stages" communication we have).
   const [roomView, setRoomView] = useLocalPref<
-    "categories" | "variables" | "map"
+    "categories" | "variables" | "map" | "subsystems"
   >(`room:view:${subObjectiveId}`, "map");
   // Phase 9 — Lab Notebook panel open state. The notebook reads the
   // sub_objective_decisions feed for this room and renders the
@@ -423,6 +439,8 @@ export function SubObjectiveRoomView({
               : [],
             sub_category_slug: readSlug(cc),
             citations: readCitations(cc),
+            // Hydrates the CategoryCard mechanism lineup (see LayerItem).
+            expanded_detail: it.expanded_detail ?? null,
           };
         }),
     [lanes],
@@ -713,16 +731,6 @@ export function SubObjectiveRoomView({
     return { linked: isLinked, dim: anyHoverActive && !isLinked };
   }
 
-  // ── Influence-rank → indent bucket for the pain lane ──
-  // Root-tier pains (rank ≥ 4) sit flush at the left. Mid-tier (2-3)
-  // indent 8px. Terminal (<2) indent 16px. Conveys downstream-flow
-  // without losing card width.
-  function indentForRank(rank: number): number {
-    if (rank >= 4) return 0;
-    if (rank >= 2) return 8;
-    return 16;
-  }
-
   // ── Autopilot auto-fire ──
   const autoFiredRef = useRef(false);
   useEffect(() => {
@@ -831,10 +839,14 @@ export function SubObjectiveRoomView({
 
   return (
     <div style={{ fontFamily: appleVibe.font.stack }}>
-      {/* Header bar with Generate / Regenerate */}
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <div>
-          {!generatedAt && (
+      {/* Pre-generation header — the empty-state prompt + Generate CTA.
+          Once the room is generated this whole band collapses; the
+          Regenerate control + approved-count move into the working
+          control row just above the view, so the top of the room
+          isn't an orphan near-empty bar. */}
+      {!generatedAt && (
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <div>
             <p
               className="text-[13px] font-light"
               style={{ color: appleVibe.text.secondary }}
@@ -843,54 +855,29 @@ export function SubObjectiveRoomView({
               the features that bridge them. Cross-layer correlations
               live in the side panel.
             </p>
-          )}
-          {generatedAt && approvedCount > 0 && (
-            <p
-              className="mt-1 text-[13px] font-light"
-              style={{ color: appleVibe.text.secondary }}
-            >
-              {approvedCount} correlation{approvedCount === 1 ? "" : "s"}{" "}
-              approved.
-            </p>
-          )}
-        </div>
-        <div className="flex flex-shrink-0 items-center gap-2">
-          {generatedAt && (
-            <button
-              type="button"
-              onClick={() => generate("regenerate", "define")}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold"
-              style={{
-                background: appleVibe.surface.chip,
-                color: appleVibe.text.secondary,
-                cursor: busy ? "wait" : "pointer",
-              }}
-            >
-              <RefreshCw className="h-3 w-3" strokeWidth={2} />
-              Regenerate
-            </button>
-          )}
-          {!generatedAt && !isCheckpoint && (
-            <button
-              type="button"
-              onClick={() => generate("initial", "define")}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-2xl px-4 py-2 text-[13px] font-semibold"
-              style={{
-                background: appleVibe.accent.primary,
-                color: appleVibe.text.onAccent,
-                borderRadius: appleVibe.radius.md,
-                cursor: busy ? "wait" : "pointer",
-                opacity: busy ? 0.7 : 1,
-              }}
-            >
-              <Sparkle className="h-3.5 w-3.5" />
-              <span>{busy ? "Generating…" : "Generate the room"}</span>
-            </button>
+          </div>
+          {!isCheckpoint && (
+            <div className="flex flex-shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => generate("initial", "define")}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 rounded-2xl px-4 py-2 text-[13px] font-semibold"
+                style={{
+                  background: appleVibe.accent.primary,
+                  color: appleVibe.text.onAccent,
+                  borderRadius: appleVibe.radius.md,
+                  cursor: busy ? "wait" : "pointer",
+                  opacity: busy ? 0.7 : 1,
+                }}
+              >
+                <Sparkle className="h-3.5 w-3.5" />
+                <span>{busy ? "Generating…" : "Generate the room"}</span>
+              </button>
+            </div>
           )}
         </div>
-      </div>
+      )}
 
       {error && (
         <div
@@ -933,52 +920,83 @@ export function SubObjectiveRoomView({
         </div>
       )}
 
-      {/* Annotation Lens strip — surfaces the parent objective's
-          semantic readings that seeded this room's items. Hovering
-          a chip highlights the items it seeded; the "orphan" badge
-          flags annotations the generator missed. Hidden when the
-          room has no annotations (legacy rooms / sub had no parent
-          annotations at generation time). */}
-      {generatedAt && annotations.length > 0 && (
-        <AnnotationLensStrip
-          annotations={annotations}
-          coverageByIndex={itemIdsByAnnotationIndex}
-          crossRoomCoverageByIndex={crossRoomCoverageByIndex}
-          hoveredIndex={hoveredAnnotationIndex}
-          onHoverIndex={setHoveredAnnotationIndex}
-        />
-      )}
-
-      {/* Portfolio strip — Tier 3 macro diagnostic. Compact line
-          always visible; click to expand for coverage + gap warnings.
-          Hidden entirely when this room has no categories. */}
-      <PortfolioStrip
-        categories={roomCategories}
-        painItems={painItems.map((p) => ({
-          id: p.id,
-          subCategorySlug: p.sub_category_slug,
-        }))}
-        featureItems={featureItems.map((f) => ({
-          id: f.id,
-          subCategorySlug: f.sub_category_slug,
-        }))}
-        outcomeItems={outcomeItems.map((o) => ({
-          id: o.id,
-          subCategorySlug: o.sub_category_slug,
-        }))}
-        chains={computeChains(edges, entityIndex)}
-        approvedEdgeIds={approvedEdgeIds}
-        spaceId={spaceId}
-        subObjectiveId={subObjectiveId}
-        onGapsClick={() => {
-          const el = document.getElementById(
-            "correlation-side-panel-anchor",
-          );
-          if (el) {
-            el.scrollIntoView({ behavior: "smooth", block: "start" });
+      {/* Hero row — one two-column band so the upper viewport reads as
+          one composed header instead of a stack of thin full-width bars.
+          LEFT: the context stack (Definition + Counters + objective
+          coverage). RIGHT: the strategic-bets portfolio. The split only
+          engages once the room is generated (the portfolio is
+          meaningless before then); pre-generation the prose flows in a
+          single readable column. */}
+      {(description?.trim() ||
+        topNegativeOutcome ||
+        (generatedAt && annotations.length > 0)) && (
+        <div
+          className={
+            generatedAt
+              ? "mb-4 grid grid-cols-1 items-start gap-x-10 gap-y-6 lg:grid-cols-2"
+              : "mb-4"
           }
-        }}
-      />
+        >
+          {/* Left — context stack */}
+          <div className="flex flex-col gap-5">
+            {description?.trim() && (
+              <HeroProse
+                label="Definition"
+                dotColor={appleVibe.stage.objective}
+                text={description.trim()}
+              />
+            )}
+            {topNegativeOutcome && (
+              <HeroProse
+                label="Counters"
+                dotColor={appleVibe.stage.pain}
+                text={topNegativeOutcome}
+              />
+            )}
+            {generatedAt && annotations.length > 0 && (
+              <AnnotationLensStrip
+                annotations={annotations}
+                coverageByIndex={itemIdsByAnnotationIndex}
+                crossRoomCoverageByIndex={crossRoomCoverageByIndex}
+                hoveredIndex={hoveredAnnotationIndex}
+                onHoverIndex={setHoveredAnnotationIndex}
+              />
+            )}
+          </div>
+
+          {/* Right — strategic bets. Self-hides when the room has no
+              categories, so generated rooms always fill this column. */}
+          {generatedAt && (
+            <PortfolioStrip
+              categories={roomCategories}
+              painItems={painItems.map((p) => ({
+                id: p.id,
+                subCategorySlug: p.sub_category_slug,
+              }))}
+              featureItems={featureItems.map((f) => ({
+                id: f.id,
+                subCategorySlug: f.sub_category_slug,
+              }))}
+              outcomeItems={outcomeItems.map((o) => ({
+                id: o.id,
+                subCategorySlug: o.sub_category_slug,
+              }))}
+              chains={computeChains(edges, entityIndex)}
+              approvedEdgeIds={approvedEdgeIds}
+              spaceId={spaceId}
+              subObjectiveId={subObjectiveId}
+              onGapsClick={() => {
+                const el = document.getElementById(
+                  "correlation-side-panel-anchor",
+                );
+                if (el) {
+                  el.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
+              }}
+            />
+          )}
+        </div>
+      )}
 
       {/* Phase 5a — Control variables strip. Surfaces the user's
           operational constraints between the Portfolio (Tier 3 macro
@@ -1007,20 +1025,52 @@ export function SubObjectiveRoomView({
           chain — CategoryCards observe it as refreshSignal and
           re-fetch their expanded_detail so new candidates appear
           inline without user interaction. */}
-      <div className="mb-3 flex items-center justify-end gap-2">
-        <AutopilotRunner
-          chains={allChains}
-          spaceId={spaceId}
-          subObjectiveId={subObjectiveId}
-          onChainComplete={() =>
-            setAutopilotRefreshKey((k) => k + 1)
-          }
-          onAllComplete={() => setAutopilotRefreshKey((k) => k + 1)}
-        />
-        {/* Phase 11.0b — Notebook button removed. Layout-level rail
-            owns the notebook UI; this room's events stream into it
-            via the URL-detected room mode. */}
-        <ViewToggleInline value={roomView} onChange={setRoomView} />
+      <div className="mb-3 flex items-center justify-between gap-2">
+        {/* Left — room-state controls: approved count + Regenerate.
+            Folded here from the old top header band so the working
+            controls sit together directly above the view. */}
+        <div className="flex min-w-0 items-center gap-3">
+          {generatedAt && approvedCount > 0 && (
+            <span
+              className="truncate text-[12px] font-light"
+              style={{ color: appleVibe.text.secondary }}
+            >
+              {approvedCount} correlation{approvedCount === 1 ? "" : "s"}{" "}
+              approved
+            </span>
+          )}
+          {generatedAt && (
+            <button
+              type="button"
+              onClick={() => generate("regenerate", "define")}
+              disabled={busy}
+              className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold"
+              style={{
+                background: appleVibe.surface.chip,
+                color: appleVibe.text.secondary,
+                cursor: busy ? "wait" : "pointer",
+              }}
+            >
+              <RefreshCw className="h-3 w-3" strokeWidth={2} />
+              Regenerate
+            </button>
+          )}
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <AutopilotRunner
+            chains={allChains}
+            spaceId={spaceId}
+            subObjectiveId={subObjectiveId}
+            onChainComplete={() =>
+              setAutopilotRefreshKey((k) => k + 1)
+            }
+            onAllComplete={() => setAutopilotRefreshKey((k) => k + 1)}
+          />
+          {/* Phase 11.0b — Notebook button removed. Layout-level rail
+              owns the notebook UI; this room's events stream into it
+              via the URL-detected room mode. */}
+          <ViewToggleInline value={roomView} onChange={setRoomView} />
+        </div>
       </div>
 
       {/* Three-column layout — Objective lane removed (it just
@@ -1061,6 +1111,11 @@ export function SubObjectiveRoomView({
           onOpenChainForEdge={handleOpenChainForEdge}
         />
       )}
+      {roomView === "subsystems" && (
+        <MechanismSubsystemView
+          {...buildMechanismSubsystems({ lanes, edges, roomCategories })}
+        />
+      )}
       {roomView === "variables" && (
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="min-w-0 flex-1">
@@ -1099,23 +1154,15 @@ export function SubObjectiveRoomView({
               />
               {painItems.length === 0 && !busy && <EmptyHint />}
               <ul className="flex flex-col gap-2">
-                {painItems.map((p) => {
+                {painItems.map((p, i) => {
                   const { linked, dim } = linkingFor(p.id);
                   return (
-                    <div
+                    <LaneItem
                       key={p.id}
-                      data-entity-id={p.id}
-                      style={{
-                        opacity: dim ? 0.35 : 1,
-                        transition: "opacity 180ms ease-out",
-                        // Phase 6 — stack above the SVG wire overlay
-                        // (which sits at z-index 0 inside the grid
-                        // container). Without this, wires would paint
-                        // OVER cards because absolute elements stack
-                        // above static siblings by default.
-                        position: "relative",
-                        zIndex: 1,
-                      }}
+                      entityId={p.id}
+                      dim={dim}
+                      index={i}
+                      isLast={i === painItems.length - 1}
                     >
                       <PainCard
                         item={p}
@@ -1126,7 +1173,7 @@ export function SubObjectiveRoomView({
                         addressedBy={addressedByMap.get(p.id) ?? []}
                         linked={linked}
                         onHover={setHoveredEntityId}
-                        indent={indentForRank(p.influence_rank)}
+                        indent={0}
                         subCategory={categoryFor("friction", p.sub_category_slug)}
                         citations={p.citations}
                         onSeeAllSources={() => setSourcesOpen(true)}
@@ -1147,7 +1194,7 @@ export function SubObjectiveRoomView({
                           })
                         }
                       />
-                    </div>
+                    </LaneItem>
                   );
                 })}
               </ul>
@@ -1163,23 +1210,15 @@ export function SubObjectiveRoomView({
             >
               {featureItems.length === 0 && !busy && <EmptyHint />}
               <ul className="flex flex-col gap-2">
-                {featureItems.map((f) => {
+                {featureItems.map((f, i) => {
                   const { linked, dim } = linkingFor(f.id);
                   return (
-                    <div
+                    <LaneItem
                       key={f.id}
-                      data-entity-id={f.id}
-                      style={{
-                        opacity: dim ? 0.35 : 1,
-                        transition: "opacity 180ms ease-out",
-                        // Phase 6 — stack above the SVG wire overlay
-                        // (which sits at z-index 0 inside the grid
-                        // container). Without this, wires would paint
-                        // OVER cards because absolute elements stack
-                        // above static siblings by default.
-                        position: "relative",
-                        zIndex: 1,
-                      }}
+                      entityId={f.id}
+                      dim={dim}
+                      index={i}
+                      isLast={i === featureItems.length - 1}
                     >
                       <FeatureCard
                         item={f}
@@ -1217,7 +1256,7 @@ export function SubObjectiveRoomView({
                           })
                         }
                       />
-                    </div>
+                    </LaneItem>
                   );
                 })}
               </ul>
@@ -1233,23 +1272,15 @@ export function SubObjectiveRoomView({
             >
               {outcomeItems.length === 0 && !busy && <EmptyHint />}
               <ul className="flex flex-col gap-2">
-                {outcomeItems.map((o) => {
+                {outcomeItems.map((o, i) => {
                   const { linked, dim } = linkingFor(o.id);
                   return (
-                    <div
+                    <LaneItem
                       key={o.id}
-                      data-entity-id={o.id}
-                      style={{
-                        opacity: dim ? 0.35 : 1,
-                        transition: "opacity 180ms ease-out",
-                        // Phase 6 — stack above the SVG wire overlay
-                        // (which sits at z-index 0 inside the grid
-                        // container). Without this, wires would paint
-                        // OVER cards because absolute elements stack
-                        // above static siblings by default.
-                        position: "relative",
-                        zIndex: 1,
-                      }}
+                      entityId={o.id}
+                      dim={dim}
+                      index={i}
+                      isLast={i === outcomeItems.length - 1}
                     >
                       <OutcomeCard
                         item={o}
@@ -1278,7 +1309,7 @@ export function SubObjectiveRoomView({
                           })
                         }
                       />
-                    </div>
+                    </LaneItem>
                   );
                 })}
               </ul>
@@ -1373,6 +1404,47 @@ export function SubObjectiveRoomView({
           />
         );
       })()}
+    </div>
+  );
+}
+
+// ── Hero prose block ───────────────────────────────────────────────
+//
+// Frameless label + paragraph used for the hero's Definition and
+// Counters columns. No box, no spine — a small lane-colored dot + the
+// standard sentence-case label, then the prose. Mirrors the canvas
+// hero language so the two read as a matched pair.
+
+function HeroProse({
+  label,
+  dotColor,
+  text,
+}: {
+  label: string;
+  dotColor: string;
+  text: string;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <span
+          className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+          style={{ background: dotColor }}
+          aria-hidden
+        />
+        <span
+          className={appleVibe.label.className}
+          style={{ color: appleVibe.label.color }}
+        >
+          {label}
+        </span>
+      </div>
+      <p
+        className="max-w-[54ch] text-[13.5px] font-light leading-relaxed"
+        style={{ color: appleVibe.text.secondary }}
+      >
+        {text}
+      </p>
     </div>
   );
 }
@@ -1525,7 +1597,7 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
                 </span>
               </div>
               <span
-                className="text-[9px] font-semibold uppercase tracking-[0.14em]"
+                className="text-[10px] font-semibold tracking-[0.02em]"
                 style={{ color }}
               >
                 {role.roleLabel} · {role.direction}
@@ -1563,6 +1635,75 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// Tree-fork wrapper for the Variables (Grid) lanes. The first card in a
+// lane is the trunk (flush, full width); every card after it branches
+// beneath with a neutral vertical spine + horizontal elbow and a left
+// indent — the "fork out like a tree" arrangement chosen in
+// /preflight/room-clarity. The connectors are absolutely positioned in
+// the left gutter and anchored to each card so variable card heights
+// stay aligned; the spine stops at the last child's elbow so it never
+// dangles. Preserves the data-entity-id + relative/z-index the SVG edge
+// overlay relies on to anchor cross-lane wires.
+function LaneItem({
+  entityId,
+  dim,
+  index,
+  isLast,
+  children,
+}: {
+  entityId: string;
+  dim: boolean;
+  /** 0-based position in the lane. Index 0 is the trunk. */
+  index: number;
+  /** Last card in the lane — the spine stops at its elbow. */
+  isLast: boolean;
+  children: React.ReactNode;
+}) {
+  const isTrunk = index === 0;
+  return (
+    <div
+      data-entity-id={entityId}
+      style={{
+        opacity: dim ? 0.35 : 1,
+        transition: "opacity 180ms ease-out",
+        // Stack above the SVG wire overlay (z-index 0 in the grid
+        // container), else absolute wires paint over static card siblings.
+        position: "relative",
+        zIndex: 1,
+        marginLeft: isTrunk ? 0 : 28,
+      }}
+    >
+      {!isTrunk && (
+        <>
+          <span
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: -16,
+              top: -10,
+              width: 1,
+              height: isLast ? 36 : "calc(100% + 18px)",
+              background: appleVibe.stroke.medium,
+            }}
+          />
+          <span
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: -16,
+              top: 26,
+              width: 16,
+              height: 1,
+              background: appleVibe.stroke.medium,
+            }}
+          />
+        </>
+      )}
+      {children}
     </div>
   );
 }
@@ -1616,7 +1757,7 @@ function Lane({
               strokeWidth={2}
             />
             <span
-              className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+              className="text-[10px] font-semibold tracking-[0.02em]"
               style={{ color }}
             >
               {role.roleLabel} var · {role.direction}
@@ -1715,14 +1856,14 @@ function ViewToggleInline({
   value,
   onChange,
 }: {
-  value: "categories" | "variables" | "map";
-  onChange: (next: "categories" | "variables" | "map") => void;
+  value: "categories" | "variables" | "map" | "subsystems";
+  onChange: (next: "categories" | "variables" | "map" | "subsystems") => void;
 }) {
   // Ordered as an altitude ladder, left → right: the system overview
   // first (where the room opens), then the per-chain decision frame,
   // then the raw grid as a power-user escape hatch.
   const options: Array<{
-    key: "categories" | "variables" | "map";
+    key: "categories" | "variables" | "map" | "subsystems";
     label: string;
     hint: string;
   }> = [
@@ -1740,6 +1881,11 @@ function ViewToggleInline({
       key: "variables",
       label: "Grid",
       hint: "The raw 3-lane layout + correlations — for the data-rigorous power user",
+    },
+    {
+      key: "subsystems",
+      label: "Subsystems",
+      hint: "How the mechanisms interlock — composition + conflicts grouped into subsystems",
     },
   ];
   return (

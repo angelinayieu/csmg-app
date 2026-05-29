@@ -200,6 +200,76 @@ interface FeatureDetail {
   };
 }
 
+// Parse a persisted expanded_detail blob into the lineup's FeatureDetail
+// shape. Module-level + pure so the SAME logic serves both the initial
+// prop-hydration (useState initializer, which runs before the in-component
+// parseDetail useCallback is defined) and the post-action refetch path.
+function parseFeatureDetail(ed: unknown): FeatureDetail {
+  const eds = ed as
+    | {
+        variations?: LineupVariation[];
+        effectiveness_envelope?: {
+          lift_pct?: number | null;
+          placebo_verdict?: "pass" | "fail" | "skip" | null;
+          target_entity_name?: string | null;
+        };
+      }
+    | null
+    | undefined;
+  if (!eds || !Array.isArray(eds.variations)) {
+    return { variations: [] };
+  }
+  return {
+    variations: eds.variations.map((v: LineupVariation) => ({
+      id: v.id,
+      name: v.name,
+      description: v.description,
+      // Phase 8b — surface tradeoff + open_questions + target_root_cause
+      // so the expanded lineup row can show the full per-candidate
+      // story without the user having to open the drawer.
+      tradeoff: v.tradeoff,
+      open_questions: v.open_questions,
+      target_root_cause: v.target_root_cause,
+      effectiveness_score: v.effectiveness_score,
+      // Phase 11.1 — thread the evaluation method through so the
+      // LineupRow can render <MethodBadge /> beside the score.
+      evaluation_method: v.evaluation_method,
+      disposition: v.disposition,
+      provenance: v.provenance,
+      // Op C — thread the cached thumbnail mockup HTML so the
+      // LineupRow can render it inline without a server round trip
+      // when the user expands an elected variation.
+      mockup_thumbnail_html: v.mockup_thumbnail_html,
+      // Phase 11.2 — thread the per-proxy-indicator breakdown so
+      // the expanded row's IndicatorBreakdown component can render
+      // chips without a separate server round trip.
+      indicator_scores: v.indicator_scores,
+    })),
+    envelope: eds.effectiveness_envelope
+      ? {
+          lift_pct: eds.effectiveness_envelope.lift_pct ?? null,
+          placebo_verdict: eds.effectiveness_envelope.placebo_verdict ?? null,
+          target_entity_name:
+            eds.effectiveness_envelope.target_entity_name ?? null,
+        }
+      : undefined,
+  };
+}
+
+// True when a persisted expanded_detail was actually generated (carries a
+// non-empty definition) — mirrors the server's cache-hit check in
+// /api/brainstorm/item/expand. Only then do we hydrate the lineup from
+// the prop and skip the mount fetch; a feature that has never been
+// expanded still round-trips so /expand can generate it on first view.
+function isGeneratedDetail(ed: unknown): boolean {
+  return (
+    !!ed &&
+    typeof ed === "object" &&
+    typeof (ed as { definition?: unknown }).definition === "string" &&
+    (ed as { definition: string }).definition.length > 0
+  );
+}
+
 interface Props {
   chain: ChainTriple;
   pain: PainCardItem | undefined;
@@ -338,14 +408,25 @@ export function CategoryCard({
   }, [chain.painFeatureEdge.agent_feedback]);
   const [mechanismExpanded, setMechanismExpanded] = useState(false);
 
-  // ── Lazy load the feature's expanded_detail for the lineup ──
+  // ── Hydrate the feature's expanded_detail for the lineup ──
   // The lineup needs the feature's variations[] + effectiveness
-  // scores. These live in expanded_detail (Phase 4c persistence).
-  // We /expand the feature on mount; cache hits return instantly.
+  // scores, which live in expanded_detail (Phase 4c persistence).
+  // When the room loader threaded a generated expanded_detail through
+  // the `feature` prop, we seed `detail` from it synchronously — the
+  // lineup paints fully on first render with no loader flash and no
+  // round-trip. Otherwise `detail` starts null and the mount effect
+  // below /expands the feature (generating it if it never existed).
   //
   // Loading is implied by detail === null — no separate state
   // (avoids the React lint rule against setState directly in effect).
-  const [detail, setDetail] = useState<FeatureDetail | null>(null);
+  const [detail, setDetail] = useState<FeatureDetail | null>(() => {
+    const ed = feature?.expanded_detail;
+    return isGeneratedDetail(ed) ? parseFeatureDetail(ed) : null;
+  });
+  // Captured once at mount: true when the lineup was prop-hydrated, so
+  // the mount fetch can be skipped. The card is keyed by chain.id
+  // upstream, so each chain swap remounts and re-runs this check.
+  const hydratedAtMountRef = useRef(detail !== null);
 
   // ── Phase 7b action state — score / refine / dispatch (elect+reject)
   // status flags. Separate from detail because actions are user-driven
@@ -363,61 +444,13 @@ export function CategoryCard({
   >(new Map());
 
   // Reusable: parse /expand response into FeatureDetail shape.
-  // Extracted so re-fetches after actions share the same parsing
-  // logic as the initial mount load.
-  const parseDetail = useCallback((ed: unknown): FeatureDetail => {
-    const eds = ed as
-      | {
-          variations?: LineupVariation[];
-          effectiveness_envelope?: {
-            lift_pct?: number | null;
-            placebo_verdict?: "pass" | "fail" | "skip" | null;
-            target_entity_name?: string | null;
-          };
-        }
-      | null
-      | undefined;
-    if (!eds || !Array.isArray(eds.variations)) {
-      return { variations: [] };
-    }
-    return {
-      variations: eds.variations.map((v: LineupVariation) => ({
-        id: v.id,
-        name: v.name,
-        description: v.description,
-        // Phase 8b — surface tradeoff + open_questions + target_root_cause
-        // so the expanded lineup row can show the full per-candidate
-        // story without the user having to open the drawer.
-        tradeoff: v.tradeoff,
-        open_questions: v.open_questions,
-        target_root_cause: v.target_root_cause,
-        effectiveness_score: v.effectiveness_score,
-        // Phase 11.1 — thread the evaluation method through so the
-        // LineupRow can render <MethodBadge /> beside the score.
-        evaluation_method: v.evaluation_method,
-        disposition: v.disposition,
-        provenance: v.provenance,
-        // Op C — thread the cached thumbnail mockup HTML so the
-        // LineupRow can render it inline without a server round trip
-        // when the user expands an elected variation.
-        mockup_thumbnail_html: v.mockup_thumbnail_html,
-        // Phase 11.2 — thread the per-proxy-indicator breakdown so
-        // the expanded row's IndicatorBreakdown component can render
-        // chips without a separate server round trip. Empty/undefined
-        // when no indicators were graded.
-        indicator_scores: v.indicator_scores,
-      })),
-      envelope: eds.effectiveness_envelope
-        ? {
-            lift_pct: eds.effectiveness_envelope.lift_pct ?? null,
-            placebo_verdict:
-              eds.effectiveness_envelope.placebo_verdict ?? null,
-            target_entity_name:
-              eds.effectiveness_envelope.target_entity_name ?? null,
-          }
-        : undefined,
-    };
-  }, []);
+  // Delegates to the module-level parseFeatureDetail so re-fetches
+  // after actions share the exact same parsing logic as the initial
+  // prop-hydration in the useState initializer above.
+  const parseDetail = useCallback(
+    (ed: unknown): FeatureDetail => parseFeatureDetail(ed),
+    [],
+  );
 
   // Soft re-fetch: pull fresh /expand without showing a loader.
   // Used after score / refine / disposition actions so the lineup
@@ -444,6 +477,11 @@ export function CategoryCard({
   useEffect(() => {
     let cancelled = false;
     if (!chain.featureId) return;
+    // Prop-hydrated at mount → lineup is already populated; skip the
+    // redundant round-trip. Freshness after user actions is handled by
+    // refetchDetail (score / refine / elect) and the refreshSignal
+    // effect, both of which run independently of this mount fetch.
+    if (hydratedAtMountRef.current) return;
     void fetch("/api/brainstorm/item/expand", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -641,11 +679,18 @@ export function CategoryCard({
       transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
       className="overflow-hidden"
       style={{
-        background: appleVibe.surface.card,
+        // Frosted glass experiment frame — a lit pane over the canvas,
+        // not an opaque card. Approved frames carry a soft outcome-green
+        // bloom (color as light) instead of a flat tint + hard ring.
+        background: approved
+          ? `linear-gradient(180deg, ${OUTCOME_COLOR}10, rgba(255,255,255,0.74))`
+          : "rgba(255,255,255,0.74)",
+        backdropFilter: "blur(20px) saturate(140%)",
+        WebkitBackdropFilter: "blur(20px) saturate(140%)",
         border: `1px solid ${approved ? `${OUTCOME_COLOR}40` : appleVibe.stroke.soft}`,
         borderRadius: appleVibe.radius.xl,
         boxShadow: approved
-          ? `${appleVibe.shadow.card}, 0 0 0 2px ${OUTCOME_COLOR}15`
+          ? `${appleVibe.shadow.card}, 0 0 0 1px ${OUTCOME_COLOR}1a, 0 14px 38px -16px ${OUTCOME_COLOR}55`
           : appleVibe.shadow.card,
         fontFamily: appleVibe.font.stack,
       }}
@@ -1619,8 +1664,27 @@ function LineupRow({
         boxShadow: appleVibe.shadow.chip,
       }}
     >
-      {/* Header — rank pip + name/badges + score module | action cluster */}
-      <div className="flex items-start gap-3">
+      {/* Header — rank pip + name/badges + score module | action cluster.
+          Clicking anywhere on the card header OPENS THE MECHANISM PAGE
+          (the Lab — same destination as the flask icon). That's what
+          "open the card" means here. The action buttons below
+          stopPropagation so they still fire their own thing; the chevron
+          stays for an inline peek. Legacy mounts without a Lab URL fall
+          back to inline expand. */}
+      <div
+        className="flex items-start gap-3"
+        onClick={() => {
+          if (spaceId && subObjectiveId) {
+            window.location.href = `/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${featureId}`;
+          } else if (hasExtras) {
+            setExpanded((p) => !p);
+          }
+        }}
+        style={{
+          cursor:
+            (spaceId && subObjectiveId) || hasExtras ? "pointer" : "default",
+        }}
+      >
         {/* Rank pip */}
         <span
           className="mt-[1px] flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10.5px] font-semibold tabular-nums"
@@ -1735,7 +1799,10 @@ function LineupRow({
           {hasExtras && (
             <button
               type="button"
-              onClick={() => setExpanded((p) => !p)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setExpanded((p) => !p);
+              }}
               aria-label={expanded ? "Collapse details" : "Expand details"}
               aria-expanded={expanded}
               className="flex h-6 w-6 items-center justify-center rounded-full opacity-50 transition-all duration-150 ease-out hover:bg-[rgba(15,23,42,0.06)] group-hover:opacity-100"
@@ -1751,7 +1818,10 @@ function LineupRow({
           )}
           <button
             type="button"
-            onClick={() => v.id && onReject(v.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (v.id) onReject(v.id);
+            }}
             disabled={isRejected || !v.id}
             aria-label="Reject this candidate"
             className="flex h-6 w-6 items-center justify-center rounded-full opacity-0 transition-all duration-150 ease-out hover:bg-[rgba(220,38,38,0.10)] disabled:cursor-not-allowed group-hover:opacity-100"
@@ -1767,7 +1837,10 @@ function LineupRow({
           </button>
           <button
             type="button"
-            onClick={() => v.id && onElect(v.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (v.id) onElect(v.id);
+            }}
             disabled={isElected || !v.id}
             aria-label="Elect this candidate"
             className="flex h-6 w-6 items-center justify-center rounded-full opacity-0 transition-all duration-150 ease-out hover:bg-[rgba(22,163,74,0.10)] disabled:cursor-not-allowed group-hover:opacity-100"

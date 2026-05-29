@@ -99,6 +99,10 @@ function RoomCardRenderer({
 }) {
   const { title, subtitle, color, roomId, chips } = shape.props;
   const editor = util.editor;
+  // In the unfurl, cards are read-only map nodes — drop the action button
+  // + footer chrome (flagged via meta, so no schema change). The collapse-
+  // to-card / send-to-board contexts leave it unset → full chrome.
+  const compact = !!(shape.meta as { compact?: boolean }).compact;
 
   function expand(e: React.MouseEvent) {
     e.stopPropagation();
@@ -176,31 +180,33 @@ function RoomCardRenderer({
             </span>
           </div>
 
-          <button
-            type="button"
-            onPointerDown={stopEventPropagation}
-            onClick={expand}
-            title="Expand back into a window"
-            aria-label="Expand room"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              padding: "5px 9px",
-              borderRadius: 999,
-              border: "none",
-              cursor: "pointer",
-              background: color,
-              color: "white",
-              fontSize: 10.5,
-              fontWeight: 600,
-              letterSpacing: "0.01em",
-              boxShadow: `0 4px 12px -3px ${color}88`,
-            }}
-          >
-            <Maximize2 style={{ width: 11, height: 11 }} strokeWidth={2.4} />
-            Expand
-          </button>
+          {!compact && (
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={expand}
+              title="Expand back into a window"
+              aria-label="Expand room"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "5px 9px",
+                borderRadius: 999,
+                border: "none",
+                cursor: "pointer",
+                background: color,
+                color: "white",
+                fontSize: 10.5,
+                fontWeight: 600,
+                letterSpacing: "0.01em",
+                boxShadow: `0 4px 12px -3px ${color}88`,
+              }}
+            >
+              <Maximize2 style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+              Expand
+            </button>
+          )}
         </div>
 
         {/* Title */}
@@ -277,19 +283,21 @@ function RoomCardRenderer({
           </div>
         )}
 
-        {/* Footer hint — pinned to the bottom. */}
-        <div
-          style={{
-            marginTop: "auto",
-            marginLeft: 6,
-            paddingTop: 8,
-            fontSize: 10,
-            fontWeight: 500,
-            color: "rgba(15,23,42,0.4)",
-          }}
-        >
-          On the board · drag to arrange · Expand to reopen
-        </div>
+        {/* Footer hint — pinned to the bottom. Hidden in the unfurl. */}
+        {!compact && (
+          <div
+            style={{
+              marginTop: "auto",
+              marginLeft: 6,
+              paddingTop: 8,
+              fontSize: 10,
+              fontWeight: 500,
+              color: "rgba(15,23,42,0.4)",
+            }}
+          >
+            On the board · drag to arrange · Expand to reopen
+          </div>
+        )}
       </div>
     </HTMLContainer>
   );

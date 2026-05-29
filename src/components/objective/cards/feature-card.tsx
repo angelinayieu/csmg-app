@@ -29,6 +29,12 @@ export interface FeatureCardItem {
   name: string;
   positive_outcome?: string;
   first_principles: string[];
+  /** Persisted expanded_detail (variations[] + effectiveness envelope),
+   *  threaded from the room loader so the CategoryCard's mechanism
+   *  lineup hydrates on first render instead of round-tripping
+   *  /api/brainstorm/item/expand. Null/absent when the feature has
+   *  never been expanded — the card then lazy-loads it on mount. */
+  expanded_detail?: Record<string, unknown> | null;
 }
 
 interface Props {

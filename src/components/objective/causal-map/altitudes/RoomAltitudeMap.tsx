@@ -42,7 +42,7 @@ import { RoomItemNode } from "../nodes/RoomItemNode";
 import { CausalMapEdge } from "../edges/CausalMapEdge";
 import { LaneColumns } from "../overlays/LaneColumns";
 import { AltitudeBreadcrumb } from "../controls/AltitudeBreadcrumb";
-import { NODE_KIND_ACCENT, LOOP_COLORS } from "../lib/visual-grammar";
+import { NODE_KIND_ACCENT, LOOP_COLORS, POLARITY_COLORS } from "../lib/visual-grammar";
 import type {
   CausalMapNodeData,
   CausalMapEdgeData,
@@ -97,6 +97,9 @@ function RoomAltitudeMapInner({
   );
   const rf = useReactFlow();
   const [initialized, setInitialized] = useState(false);
+  // Hover-to-trace focus: id of the node under the cursor. Hovering lights
+  // that node's whole causal thread and quiets everything else.
+  const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
 
   // ── Reliable initial framing ──
   // RoomItemNode carries a fixed width but a content-driven height (only
@@ -134,6 +137,48 @@ function RoomAltitudeMapInner({
     () => loops.find((l) => l.id === highlightedLoop) ?? null,
     [loops, highlightedLoop],
   );
+
+  // Directed adjacency, built once per graph. A hovered node lights its
+  // WHOLE thread — every ancestor that feeds it + every descendant it
+  // reaches. Following edges only OUTWARD from the hovered node keeps
+  // sibling problems that merely share a mechanism out of the highlight,
+  // which is exactly the "why does everything connect to everything"
+  // confusion we're trying to dissolve.
+  const { fwd, bwd } = useMemo(() => {
+    const fwd = new Map<string, string[]>();
+    const bwd = new Map<string, string[]>();
+    const add = (m: Map<string, string[]>, k: string, v: string) => {
+      const a = m.get(k);
+      if (a) a.push(v);
+      else m.set(k, [v]);
+    };
+    for (const e of graph.edges) {
+      add(fwd, e.source, e.target);
+      add(bwd, e.target, e.source);
+    }
+    return { fwd, bwd };
+  }, [graph.edges]);
+
+  const focusSet = useMemo(() => {
+    if (!focusNodeId) return null;
+    const reach = (adj: Map<string, string[]>): Set<string> => {
+      const seen = new Set<string>([focusNodeId]);
+      const stack = [focusNodeId];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        for (const n of adj.get(cur) ?? []) {
+          if (!seen.has(n)) {
+            seen.add(n);
+            stack.push(n);
+          }
+        }
+      }
+      return seen;
+    };
+    const set = reach(fwd);
+    for (const n of reach(bwd)) set.add(n);
+    return set;
+  }, [focusNodeId, fwd, bwd]);
 
   // Node click → drill to the item altitude. Two modes:
   //   • In-place (preferred): when the room view passes onOpenItem, EVERY
@@ -200,32 +245,55 @@ function RoomAltitudeMapInner({
     const loopNodeSet = new Set(activeLoop?.nodeIds ?? []);
     return graph.nodes.map((n) => {
       const inLoop = loopNodeSet.has(n.id);
+      // Loop highlight wins; otherwise a hovered thread drives the fade.
+      const faded = activeLoop
+        ? !inLoop
+        : focusSet
+          ? !focusSet.has(n.id)
+          : false;
       const data: CausalMapNodeData = {
         ...n.data,
         loopRing: activeLoop && inLoop ? activeLoop.kind : null,
-        faded: activeLoop ? !inLoop : false,
+        faded,
       };
       return { ...n, data } as Node;
     });
-  }, [graph.nodes, activeLoop]);
+  }, [graph.nodes, activeLoop, focusSet]);
 
   const flowEdges = useMemo(() => {
     const loopEdgeSet = new Set(activeLoop?.edgeIds ?? []);
     return graph.edges.map((e) => {
       const inLoop = loopEdgeSet.has(e.id);
+      const ed = e.data as CausalMapEdgeData;
+      // An edge is part of the traced thread when BOTH its endpoints are in
+      // the hovered node's reachable set.
+      const focused =
+        !activeLoop && !!focusSet && focusSet.has(e.source) && focusSet.has(e.target);
+      const faded = activeLoop ? !inLoop : focusSet ? !focused : false;
       const data: CausalMapEdgeData = {
-        ...(e.data as CausalMapEdgeData),
+        ...ed,
         loopActive: activeLoop ? inLoop : false,
         loopKind: activeLoop?.kind ?? null,
-        faded: activeLoop ? !inLoop : false,
+        faded,
+        focused,
       };
+      // Arrowhead tracks the edge's polarity color (not React Flow's default
+      // gray) and fades with the wire so dimmed edges don't keep bright tips.
+      const markerColor = faded
+        ? "rgba(15,23,42,0.10)"
+        : POLARITY_COLORS[ed.polarity] ?? POLARITY_COLORS.neutral;
       return {
         ...e,
         data,
-        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 13,
+          height: 13,
+          color: markerColor,
+        },
       } as Edge;
     });
-  }, [graph.edges, activeLoop]);
+  }, [graph.edges, activeLoop, focusSet]);
 
   // ── Empty state ──
   if (graph.nodes.length === 0) {
@@ -265,6 +333,8 @@ function RoomAltitudeMapInner({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}
+        onNodeMouseEnter={(_, node) => setFocusNodeId(node.id)}
+        onNodeMouseLeave={() => setFocusNodeId(null)}
         onEdgeClick={onEdgeClick}
         onInit={() => setInitialized(true)}
         fitView
@@ -376,18 +446,23 @@ function RoomAltitudeMapInner({
           showInteractive={false}
           className="!bg-white/80 !ring-1 !ring-black/5 !rounded-lg !shadow-sm"
         />
-        <MiniMap
-          position="bottom-left"
-          pannable
-          zoomable
-          nodeStrokeWidth={2}
-          nodeColor={(n) => {
-            const d = n.data as unknown as CausalMapNodeData;
-            return NODE_KIND_ACCENT[d?.kind ?? "feature"];
-          }}
-          maskColor="rgba(15,23,42,0.06)"
-          className="!bg-white/80 !ring-1 !ring-black/5 !rounded-lg !shadow-sm"
-        />
+        {/* The minimap only earns its space when the room is big enough to
+            pan around. For a typical room the whole graph fits on screen, so
+            it was just an empty box in the corner — hide it under that size. */}
+        {graph.nodes.length > 16 ? (
+          <MiniMap
+            position="bottom-left"
+            pannable
+            zoomable
+            nodeStrokeWidth={2}
+            nodeColor={(n) => {
+              const d = n.data as unknown as CausalMapNodeData;
+              return NODE_KIND_ACCENT[d?.kind ?? "feature"];
+            }}
+            maskColor="rgba(15,23,42,0.06)"
+            className="!bg-white/80 !ring-1 !ring-black/5 !rounded-lg !shadow-sm"
+          />
+        ) : null}
       </ReactFlow>
       {zoomOverlay}
     </motion.div>

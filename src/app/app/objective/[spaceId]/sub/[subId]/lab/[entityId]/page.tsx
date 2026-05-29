@@ -30,9 +30,7 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { ArrowLeft, MessageCircle } from "lucide-react";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { LabPageView } from "@/components/objective/lab/lab-page-view";
-import { FloatingCard } from "@/components/ui/floating-card";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
 
@@ -154,20 +152,13 @@ export default async function LabPage({
   const expanded = (entity.expanded_detail as ExpandedItemDetail | null) ?? null;
 
   return (
-    <div
-      className="min-h-screen"
-      style={{ fontFamily: appleVibe.font.stack }}
-    >
-      <HomeTabNav />
-
-      {/* The Lab renders as a single floating room pane over the pearl
-          substrate — the layered-rooms language. The breadcrumb chrome
-          lives inside the card's top strip; the body is the existing
-          LabPageView, which centers its own max-w-5xl column within. */}
-      <div className="mx-auto max-w-6xl px-2 pb-12 pt-16">
-        <FloatingCard tier="float" glow className="overflow-hidden">
-          {/* Breadcrumb strip — transparent (sits on the glass card),
-              hairline divider beneath. */}
+    <>
+      {/* Flow content — the objective layout's ObjectiveCanvasShell wraps
+          this Lab in the room-window over the persistent whiteboard floor,
+          so the Lab is a consistent overlay regardless of entry route.
+          HomeTabNav is rendered once at the layout level (above the shell). */}
+      <div className="pb-12" style={{ fontFamily: appleVibe.font.stack }}>
+          {/* Breadcrumb strip — hairline divider beneath, on the window glass. */}
           <div
             className="border-b"
             style={{ borderColor: appleVibe.stroke.hairline }}
@@ -243,8 +234,7 @@ export default async function LabPage({
             coreObjectiveText={coreObjectiveText}
             subObjectiveTitle={subObjectiveTitle}
           />
-        </FloatingCard>
       </div>
-    </div>
+    </>
   );
 }

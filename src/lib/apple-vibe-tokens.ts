@@ -79,4 +79,17 @@ export const appleVibe = {
     display:
       '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif',
   },
+
+  // Standardized section "overline" — the ONE label treatment for
+  // section headers / eyebrows across the module. Replaces ~6 ad-hoc
+  // variants (9.5–10.5px, 0.1–0.14em tracking, 0.28-alpha all-caps)
+  // that read as "many fonts" + low-contrast cheap. Modern Apple /
+  // visionOS section headers are sentence case at readable contrast —
+  // hierarchy comes from weight + spacing, not from shouting in caps.
+  // Apply `className` + `color` together; pass the raw title in its
+  // natural case (e.g. "Analysis signals", not "ANALYSIS SIGNALS").
+  label: {
+    className: "text-[11px] font-semibold tracking-[0.02em]",
+    color: "rgba(15,23,42,0.62)",
+  },
 } as const;

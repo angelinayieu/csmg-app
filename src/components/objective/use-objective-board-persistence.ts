@@ -29,9 +29,15 @@ export type BoardSaveStatus = "idle" | "saving" | "saved" | "error";
 export function useObjectiveBoardPersistence(
   editor: Editor | null,
   spaceId: string,
+  /** Fired once after the restore attempt settles. Callers can safely add
+   *  to the store here (e.g. drain queued artifacts) without a late
+   *  restore wiping them. */
+  onRestored?: () => void,
 ): { status: BoardSaveStatus } {
   const [status, setStatus] = useState<BoardSaveStatus>("idle");
   const restoredRef = useRef(false);
+  const onRestoredRef = useRef(onRestored);
+  onRestoredRef.current = onRestored;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inflightRef = useRef<AbortController | null>(null);
 
@@ -101,42 +107,46 @@ export function useObjectiveBoardPersistence(
       const localIsNewer =
         local !== null && local.savedAt > 0 && local.savedAt > serverUpdatedAtMs;
 
-      if (localIsNewer) {
-        try {
-          restore(local.snapshot);
-          // Server is behind (e.g. unload keepalive dropped) — catch it up.
-          void fetch(`/api/objective/${spaceId}/board`, {
-            method: "PUT",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              snapshot: local.snapshot,
-              schema_version: SCHEMA_VERSION,
-            }),
-          }).catch(() => {});
-          return;
-        } catch (err) {
-          console.warn("[objective-board] local-preferred restore failed", err);
+      // Apply the best available snapshot (if any), then signal ready so
+      // callers can safely add to the store without a late restore wiping
+      // them.
+      const applyRestore = () => {
+        if (localIsNewer && local) {
+          try {
+            restore(local.snapshot);
+            // Server is behind (e.g. unload keepalive dropped) — catch up.
+            void fetch(`/api/objective/${spaceId}/board`, {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                snapshot: local.snapshot,
+                schema_version: SCHEMA_VERSION,
+              }),
+            }).catch(() => {});
+            return;
+          } catch (err) {
+            console.warn("[objective-board] local-preferred restore failed", err);
+          }
         }
-      }
-
-      if (serverSnapshot) {
-        try {
-          restore(serverSnapshot);
-          return;
-        } catch (err) {
-          console.warn("[objective-board] server restore apply failed", err);
+        if (serverSnapshot) {
+          try {
+            restore(serverSnapshot);
+            return;
+          } catch (err) {
+            console.warn("[objective-board] server restore apply failed", err);
+          }
         }
-      }
-
-      if (local !== null) {
-        try {
-          restore(local.snapshot);
-          return;
-        } catch (err) {
-          console.warn("[objective-board] local fallback restore failed", err);
+        if (local !== null) {
+          try {
+            restore(local.snapshot);
+          } catch (err) {
+            console.warn("[objective-board] local fallback restore failed", err);
+          }
         }
-      }
-      // Nothing to restore — fresh board. Leave status idle.
+        // Else: nothing to restore — fresh board.
+      };
+      applyRestore();
+      onRestoredRef.current?.();
     })();
 
     return () => {

@@ -123,18 +123,27 @@ export function ChainCard({
     <motion.li
       layout
       transition={{ layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] } }}
-      className="rounded-2xl p-4 transition-all"
+      whileHover={{ y: -2 }}
+      className="p-4"
       style={{
+        // Frosted glass, not flat white — the surface reads as a pane
+        // of light over the canvas. Approved chains carry a soft
+        // outcome-green bloom (color as light, not a flat tint + hard
+        // border) so the "this is a live bet" signal feels lit, not painted.
         background: approved
-          ? `${appleVibe.stage.outcomes}08`
-          : appleVibe.surface.card,
+          ? `linear-gradient(180deg, ${appleVibe.stage.outcomes}0e, rgba(255,255,255,0.72))`
+          : "rgba(255,255,255,0.72)",
+        backdropFilter: "blur(16px) saturate(140%)",
+        WebkitBackdropFilter: "blur(16px) saturate(140%)",
         border: `1px solid ${
           approved
-            ? `${appleVibe.stage.outcomes}28`
-            : appleVibe.stroke.hairline
+            ? `${appleVibe.stage.outcomes}33`
+            : appleVibe.stroke.soft
         }`,
         borderRadius: appleVibe.radius.lg,
-        boxShadow: appleVibe.shadow.chip,
+        boxShadow: approved
+          ? `${appleVibe.shadow.card}, 0 0 0 1px ${appleVibe.stage.outcomes}14, 0 10px 30px -14px ${appleVibe.stage.outcomes}55`
+          : appleVibe.shadow.card,
       }}
       onMouseEnter={() => onHover(chain.painId)}
       onMouseLeave={() => onHover(null)}

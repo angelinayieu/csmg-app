@@ -183,9 +183,14 @@ export async function loadRoomData(
   }
 
   // Entities → lanes.
+  // expanded_detail is selected so FEATURE items can hydrate the
+  // CategoryCard mechanism lineup without a /expand round-trip. It's a
+  // bulky blob, so we only ATTACH it to feature-lane items below.
   const { data: entityRows } = await db
     .from("entities")
-    .select("id, name, description, entity_type, layer_ontology_id, causal_chain")
+    .select(
+      "id, name, description, entity_type, layer_ontology_id, causal_chain, expanded_detail",
+    )
     .eq("parent_sub_objective_id", subId);
 
   const lanes: RoomLane[] = LAYER_ORDER.map((slug) => {
@@ -213,6 +218,7 @@ export async function loadRoomData(
     entity_type: string;
     layer_ontology_id: string | null;
     causal_chain: Record<string, unknown> | null;
+    expanded_detail: Record<string, unknown> | null;
   }>) {
     const layer = e.layer_ontology_id ? layerById.get(e.layer_ontology_id) : undefined;
     if (!layer) continue;
@@ -224,6 +230,8 @@ export async function loadRoomData(
       description: e.description,
       entity_type: e.entity_type,
       causal_chain: e.causal_chain,
+      // Only features carry the lineup; keep pain/outcome payloads lean.
+      expanded_detail: layer.slug === "features" ? e.expanded_detail : null,
     });
   }
 

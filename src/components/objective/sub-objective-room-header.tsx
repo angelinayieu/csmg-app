@@ -34,9 +34,6 @@ interface Props {
   /** Annotations whose offsets fall within the title text. Rendered
    *  as inline colored underlines on the h1. */
   titleAnnotations: ObjectiveAnnotation[];
-  /** Room-level pain — the consequence this entire room exists to
-   *  counter. Surfaced as the "Counters" callout. */
-  topNegativeOutcome?: string | null;
   /** Where this room sits on the outer ObjectiveStack, e.g.
    *  "L3 · Goal Conversion". Rendered as an archetype-colored chip in
    *  the breadcrumb so the room's altitude in the macro causal stack
@@ -51,7 +48,6 @@ export function SubObjectiveRoomHeader({
   spaceId,
   title,
   titleAnnotations,
-  topNegativeOutcome,
   placement = null,
 }: Props) {
   const reduce = useReducedMotion();
@@ -107,8 +103,8 @@ export function SubObjectiveRoomHeader({
             /
           </span>
           <span
-            className="text-[11px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: appleVibe.accent.primary }}
+            className="text-[11px] font-semibold tracking-[0.02em]"
+            style={{ color: appleVibe.text.primary }}
           >
             Room
           </span>
@@ -133,84 +129,30 @@ export function SubObjectiveRoomHeader({
         </div>
       </div>
 
-      {/* Page header proper — annotated title + Counters callout. */}
+      {/* Page header proper — just the annotated title. The Definition /
+          Counters prose now lives in the room view's hero row (shared
+          with the strategic-bets portfolio), so the title sits alone as
+          the page's top chrome. */}
       <div className="mx-auto max-w-[1400px] px-8 pb-2 pt-10">
-        <div className="max-w-3xl">
-          <motion.div
-            initial={reduce ? false : { opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.32, ease: EASE }}
-          >
-            <AnnotatedHeading
-              text={title}
-              annotations={titleAnnotations}
-              className="text-[30px] font-semibold leading-[1.15]"
-              style={{
-                color: appleVibe.text.primary,
-                fontFamily: appleVibe.font.display,
-                letterSpacing: "-0.026em",
-              }}
-            />
-          </motion.div>
-
-          {topNegativeOutcome && (
-            <CountersCallout
-              text={topNegativeOutcome}
-              reduce={Boolean(reduce)}
-            />
-          )}
-        </div>
+        <motion.div
+          className="max-w-3xl"
+          initial={reduce ? false : { opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.32, ease: EASE }}
+        >
+          <AnnotatedHeading
+            text={title}
+            annotations={titleAnnotations}
+            className="text-[30px] font-semibold leading-[1.15]"
+            style={{
+              color: appleVibe.text.primary,
+              fontFamily: appleVibe.font.display,
+              letterSpacing: "-0.026em",
+            }}
+          />
+        </motion.div>
       </div>
     </>
   );
 }
 
-// ── Counters note ─────────────────────────────────────────────────
-//
-// Modern + simple: no tinted box, no icon chip. A thin pain-lane left
-// rule + a small dot + sentence-case "Counters" label, with the body
-// sentence as the focus in clean, readable type.
-
-function CountersCallout({
-  text,
-  reduce,
-}: {
-  text: string;
-  reduce: boolean;
-}) {
-  const accent = appleVibe.stage.pain;
-  return (
-    <motion.div
-      initial={reduce ? false : { opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.32, delay: 0.08, ease: EASE }}
-      className="mt-5 max-w-2xl"
-      // No tinted box, no icon chip — just a quiet left rule (the only
-      // whisper of the pain lane) + a sentence-case label + readable text.
-      style={{ paddingLeft: 16, borderLeft: `2px solid ${accent}40` }}
-    >
-      <div className="flex items-center gap-1.5">
-        <span
-          className="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full"
-          style={{ background: accent }}
-          aria-hidden
-        />
-        <span
-          className="text-[10.5px] font-medium tracking-tight"
-          style={{ color: appleVibe.text.tertiary }}
-        >
-          Counters
-        </span>
-      </div>
-      <p
-        className="mt-1.5 text-[15px] font-light leading-[1.5]"
-        style={{
-          color: appleVibe.text.primary,
-          letterSpacing: "-0.01em",
-        }}
-      >
-        {text}
-      </p>
-    </motion.div>
-  );
-}

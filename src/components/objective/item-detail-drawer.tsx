@@ -20,6 +20,7 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -843,7 +844,18 @@ export function ItemDetailDrawer({
 
   const laneColor = LANE_COLORS[itemLayer];
 
-  return (
+  // Portal-mount gate: render the drawer into document.body so its
+  // position:fixed anchors to the VIEWPORT, not to a transformed /
+  // filtered ancestor (the canvas shell's FloatingCard glow, or the
+  // tldraw board camera) that was clipping it off the top of the
+  // screen. Gated on mount so SSR renders nothing (no hydration
+  // mismatch) and document.body is guaranteed to exist on the client.
+  const [drawerMounted, setDrawerMounted] = useState(false);
+  useEffect(() => {
+    setDrawerMounted(true);
+  }, []);
+
+  const drawerTree = (
     <AnimatePresence>
       {open && (
         <>
@@ -1651,6 +1663,9 @@ export function ItemDetailDrawer({
       )}
     </AnimatePresence>
   );
+
+  if (!drawerMounted) return null;
+  return createPortal(drawerTree, document.body);
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -1708,17 +1723,17 @@ function Section({
     <section id={anchorId} style={{ scrollMarginTop: 12 }}>
       <header className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
-          <span style={{ color: appleVibe.text.tertiary }}>{icon}</span>
+          <span style={{ color: appleVibe.label.color }}>{icon}</span>
           <h3
-            className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: appleVibe.text.tertiary }}
+            className={appleVibe.label.className}
+            style={{ color: appleVibe.label.color }}
           >
             {title}
           </h3>
           {subtitle && (
             <span
-              className="text-[10px] font-light"
-              style={{ color: appleVibe.text.faint }}
+              className="text-[11px] font-light"
+              style={{ color: appleVibe.text.tertiary }}
             >
               · {subtitle}
             </span>
@@ -1917,11 +1932,11 @@ const DISPOSITION_HINT: Record<
   DrawerCrossRoomFinding["disposition"],
   string
 > = {
-  open: "Will steer the next regen — surfaces as a counter-variation or conflict_open.",
+  open: "Active — the next time this room regenerates, it will take this into account.",
   acknowledged:
-    "You've seen this; still actively shaping the next regen same as Open.",
+    "You've seen this. It still shapes the next regeneration, same as an active signal.",
   dismissed:
-    "You declared this intentional. The next regen will NOT re-raise it as a conflict.",
+    "You marked this as intentional, so it won't be raised again.",
 };
 
 function AnalysisSignalsList({
@@ -1946,8 +1961,15 @@ function AnalysisSignalsList({
   );
   return (
     <ul className="flex flex-col gap-2">
-      {sorted.map((f) => (
-        <AnalysisSignalCard key={f.id} finding={f} />
+      {sorted.map((f, i) => (
+        <AnalysisSignalCard
+          key={f.id}
+          finding={f}
+          // Group consecutive same-kind signals: only the first of a
+          // run carries the kind eyebrow, so "Shared mechanism" stops
+          // repeating down the list.
+          showKindLabel={i === 0 || sorted[i - 1].kind !== f.kind}
+        />
       ))}
     </ul>
   );
@@ -1955,8 +1977,10 @@ function AnalysisSignalsList({
 
 function AnalysisSignalCard({
   finding,
+  showKindLabel,
 }: {
   finding: DrawerCrossRoomFinding;
+  showKindLabel: boolean;
 }) {
   // Disposition palette — restrained, semantic. Open uses lane-color
   // family (system is "looking at this"), acknowledged uses amber
@@ -1997,14 +2021,18 @@ function AnalysisSignalCard({
           opacity: isDismissed ? 0.7 : 1,
         }}
       >
-        {/* Header row: kind label + disposition pill */}
+        {/* Header row: kind label (first of a run only) + disposition pill */}
         <div className="flex items-center justify-between gap-2">
-          <span
-            className="text-[10px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: appleVibe.text.tertiary }}
-          >
-            {FINDING_KIND_LABEL[finding.kind]}
-          </span>
+          {showKindLabel ? (
+            <span
+              className={appleVibe.label.className}
+              style={{ color: appleVibe.label.color }}
+            >
+              {FINDING_KIND_LABEL[finding.kind]}
+            </span>
+          ) : (
+            <span />
+          )}
           <span
             className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium capitalize"
             style={{
@@ -2040,17 +2068,20 @@ function AnalysisSignalCard({
         >
           {finding.summary}
         </p>
-        {/* Disposition microcopy — load-bearing affordance:
-            tells the user what their stance DOES downstream. */}
-        <p
-          className="border-t pt-1.5 text-[10px] font-light italic leading-snug"
-          style={{
-            borderColor: appleVibe.stroke.hairline,
-            color: appleVibe.text.tertiary,
-          }}
-        >
-          {DISPOSITION_HINT[finding.disposition]}
-        </p>
+        {/* Disposition microcopy — only once the user has acted on the
+            signal. The default "open" hint was identical on every card,
+            so we drop it there and let the "open" pill speak for itself. */}
+        {finding.disposition !== "open" && (
+          <p
+            className="border-t pt-1.5 text-[10.5px] font-light leading-snug"
+            style={{
+              borderColor: appleVibe.stroke.hairline,
+              color: appleVibe.text.tertiary,
+            }}
+          >
+            {DISPOSITION_HINT[finding.disposition]}
+          </p>
+        )}
       </div>
     </li>
   );

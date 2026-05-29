@@ -44,12 +44,29 @@ import {
   ArtifactCardShapeUtil,
   type ArtifactCardShape,
 } from "./shapes/artifact-card-shape";
+import { LayerBandShapeUtil } from "./shapes/layer-band-shape";
 import { BoardSelectionToolbar } from "./board-selection-toolbar";
+import { BoardHint } from "./board-hint";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
 import {
   DEPLOY_ARTIFACT_EVENT,
+  OPEN_UNFURL_EVENT,
+  drainPendingArtifacts,
   type ArtifactCardDetail,
 } from "./board-bus";
+import { useDepthDial } from "./unfurl/use-depth-dial";
+import { DepthScrubber } from "./unfurl/depth-scrubber";
+import {
+  syncUnfurl,
+  clearUnfurl,
+  type UnfurlGraphs,
+} from "./unfurl/render-unfurl";
+import { mockCanvasGraph } from "./unfurl/render-canvas-unfurl";
+import { mockRoomGraph } from "./unfurl/render-room-unfurl";
+import type { UnfurlAnchor } from "./unfurl/anchor-from-path";
+import { buildRoomGraph } from "./causal-map/lib/build-room-graph";
+import type { CanvasGraph } from "./causal-map/lib/types";
+import { X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 /** Detail payload for a collapse-to-card request. */
@@ -112,6 +129,7 @@ const CUSTOM_SHAPE_UTILS = [
   RoomCardShapeUtil,
   InsightCardShapeUtil,
   ArtifactCardShapeUtil,
+  LayerBandShapeUtil,
 ];
 
 export function WhiteboardBase({
@@ -170,7 +188,127 @@ export function WhiteboardBase({
   // Server-backed persistence (canvases table, scope='objective') with a
   // localStorage mirror — replaces tldraw's local-only persistenceKey so
   // the board survives reload AND syncs across devices.
-  useObjectiveBoardPersistence(editor, spaceId);
+  useObjectiveBoardPersistence(editor, spaceId, () => {
+    // Restore settled — now safe to drop in any cross-page queued
+    // artifacts (e.g. sent from the lab) without a late restore wiping them.
+    const ed = editorRef.current;
+    if (!ed) return;
+    for (const d of drainPendingArtifacts(spaceId)) createArtifactCard(ed, d);
+  });
+
+  // ── Unfurl mode ──
+  // "Open on whiteboard" fires OPEN_UNFURL_EVENT; we fetch the chain graph
+  // up to the anchored surface, open the depth scrubber, and render the
+  // unfurl as tldraw shapes (meta.unfurl) on top of the board. Exit clears
+  // just those shapes — the user's collapsed cards stay put.
+  const dial = useDepthDial(0);
+  const [unfurl, setUnfurl] = useState<{
+    anchor: UnfurlAnchor;
+    graphs: UnfurlGraphs;
+  } | null>(null);
+
+  useEffect(() => {
+    function onOpen(e: Event) {
+      const anchor = (e as CustomEvent<UnfurlAnchor>).detail;
+      if (!anchor) return;
+      dial.setDepth(anchor.depth);
+      const qs = anchor.roomId
+        ? `?room=${encodeURIComponent(anchor.roomId)}`
+        : "";
+      fetch(`/api/objective/${spaceId}/unfurl${qs}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+        .then(
+          (d: {
+            objectiveTitle?: string;
+            canvas: CanvasGraph;
+            room: { lanes: unknown; edges: unknown } | null;
+            roomTitle?: string;
+          }) => {
+            // Build the room graph client-side (buildRoomGraph is a client
+            // module) from the raw lanes/edges the endpoint returned.
+            let room: UnfurlGraphs["room"] = null;
+            if (d.room) {
+              const rg = buildRoomGraph({
+                lanes: d.room.lanes,
+                edges: d.room.edges,
+                spaceId,
+                subObjectiveId: anchor.roomId ?? undefined,
+              } as Parameters<typeof buildRoomGraph>[0]);
+              room = { nodes: rg.nodes, edges: rg.edges };
+            }
+            setUnfurl({
+              anchor,
+              graphs: {
+                canvas: d.canvas,
+                room,
+                objectiveTitle: d.objectiveTitle,
+                roomTitle: d.roomTitle,
+                roomId: anchor.roomId ?? undefined,
+              },
+            });
+          },
+        )
+        .catch(() => {
+          // No endpoint yet / unauthenticated preflight → mock so the
+          // mount + scrubber are still exercisable.
+          setUnfurl({
+            anchor,
+            graphs: {
+              canvas: mockCanvasGraph(),
+              room: mockRoomGraph(),
+              objectiveTitle: "Objective",
+              roomTitle: "Room",
+              roomId: anchor.roomId ?? undefined,
+            },
+          });
+        });
+    }
+    window.addEventListener(OPEN_UNFURL_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_UNFURL_EVENT, onOpen);
+    // dial.setDepth is stable for the component's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spaceId]);
+
+  // Reconcile the unfurl on depth / graph change, then frame it.
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed || !unfurl) return;
+    syncUnfurl(ed, unfurl.graphs, dial.depth);
+    // Frame JUST the unfurl (not the user's parked collapsed cards):
+    // select the unfurl shapes, zoom to that selection, then deselect.
+    const t = setTimeout(() => {
+      try {
+        const ids = ed
+          .getCurrentPageShapes()
+          .filter((s) => !!(s.meta as { unfurl?: boolean })?.unfurl)
+          .map((s) => s.id);
+        if (ids.length === 0) {
+          ed.zoomToFit({ animation: { duration: 300 } });
+          return;
+        }
+        ed.select(...ids);
+        ed.zoomToSelection({ animation: { duration: 300 } });
+        ed.selectNone();
+      } catch {
+        /* no shapes */
+      }
+    }, 80);
+    return () => clearTimeout(t);
+  }, [unfurl, dial.depth]);
+
+  // Sweep unfurl shapes on unmount so they never leak into the saved board.
+  useEffect(() => {
+    return () => {
+      const ed = editorRef.current;
+      if (ed) clearUnfurl(ed);
+    };
+  }, []);
+
+  function exitUnfurl() {
+    const ed = editorRef.current;
+    if (ed) clearUnfurl(ed);
+    setUnfurl(null);
+  }
 
   // Collapse-to-card: the shell fires DEPLOY_CARD_EVENT; we materialize
   // a room-card near the current viewport center and select it so the
@@ -259,60 +397,7 @@ export function WhiteboardBase({
     function onArtifact(e: Event) {
       const editor = editorRef.current;
       if (!editor) return;
-      const d = (e as CustomEvent<ArtifactCardDetail>).detail;
-      if (!d?.entityId) return;
-
-      // Dedupe by source entity — don't drop the same item twice.
-      const existing = editor
-        .getCurrentPageShapes()
-        .find(
-          (s): s is ArtifactCardShape =>
-            s.type === "artifact-card" &&
-            (s as ArtifactCardShape).props.entityId === d.entityId,
-        );
-      if (existing) {
-        editor.select(existing.id);
-        editor.centerOnPoint(
-          {
-            x: existing.x + existing.props.w / 2,
-            y: existing.y + existing.props.h / 2,
-          },
-          { animation: { duration: 300 } },
-        );
-        return;
-      }
-
-      const artifactCount = editor
-        .getCurrentPageShapes()
-        .filter((s) => s.type === "artifact-card").length;
-      const center = editor.getViewportPageBounds().center;
-      const w = 240;
-      const h = 150;
-      const cascade = (artifactCount % 6) * 26;
-      const x = center.x - w / 2 + cascade;
-      const y = center.y - h / 2 + cascade;
-      const id = createShapeId();
-      editor.createShape<ArtifactCardShape>({
-        id,
-        type: "artifact-card",
-        x,
-        y,
-        props: {
-          w,
-          h,
-          kind: d.kind,
-          title: d.title || "Item",
-          subtitle: d.subtitle ?? "",
-          color: d.color,
-          entityId: d.entityId,
-          roomId: d.roomId,
-        },
-      });
-      editor.select(id);
-      editor.centerOnPoint(
-        { x: x + w / 2, y: y + h / 2 },
-        { animation: { duration: 300 } },
-      );
+      createArtifactCard(editor, (e as CustomEvent<ArtifactCardDetail>).detail);
     }
 
     window.addEventListener(DEPLOY_CARD_EVENT, onDeploy);
@@ -333,10 +418,42 @@ export function WhiteboardBase({
         inferDarkMode={false}
         hideUi={!showUi}
       />
-      {/* Contextual AI action — only while the board chrome is showing
-          (the user is working on the board, not viewing a room window). */}
-      {editor && showUi && (
+      {/* Contextual AI action — only while the board chrome is showing and
+          we're NOT unfurling (the selection toolbar is for the normal board). */}
+      {editor && showUi && !unfurl && (
         <BoardOverlay editor={editor} runAiLink={runAiLink} />
+      )}
+
+      {/* Unfurl mode — depth scrubber + exit. */}
+      {editor && unfurl && (
+        <>
+          <DepthScrubber
+            depth={dial.depth}
+            onSet={dial.setDepth}
+            onWheel={dial.onWheel}
+          />
+          <button
+            type="button"
+            onClick={exitUnfurl}
+            title="Exit the unfurl"
+            className="fixed left-1/2 top-4 z-[70] inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full transition-all duration-150 ease-out hover:scale-105"
+            style={{
+              background: "rgba(255,255,255,0.92)",
+              border: `1px solid ${appleVibe.stroke.hairline}`,
+              color: appleVibe.text.secondary,
+              padding: "7px 14px",
+              fontSize: 12,
+              fontWeight: 600,
+              boxShadow: "0 10px 28px -10px rgba(11,18,40,0.24)",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+              fontFamily: appleVibe.font.stack,
+            }}
+          >
+            <X className="h-3.5 w-3.5" strokeWidth={2.4} />
+            Exit unfurl
+          </button>
+        </>
       )}
     </div>
   );
@@ -367,6 +484,62 @@ function cardPayload(s: TLShape): BoardCardPayload {
   }
   const p = (s as InsightCardShape).props;
   return { title: p.headline };
+}
+
+/** Drop (or refocus) an artifact card on the board. Deduped by source
+ *  entity so re-sending the same item doesn't stack. Shared by the live
+ *  deploy listener and the cross-page queue drain. */
+function createArtifactCard(editor: Editor, d: ArtifactCardDetail) {
+  if (!d?.entityId) return;
+  const existing = editor
+    .getCurrentPageShapes()
+    .find(
+      (s): s is ArtifactCardShape =>
+        s.type === "artifact-card" &&
+        (s as ArtifactCardShape).props.entityId === d.entityId,
+    );
+  if (existing) {
+    editor.select(existing.id);
+    editor.centerOnPoint(
+      {
+        x: existing.x + existing.props.w / 2,
+        y: existing.y + existing.props.h / 2,
+      },
+      { animation: { duration: 300 } },
+    );
+    return;
+  }
+  const artifactCount = editor
+    .getCurrentPageShapes()
+    .filter((s) => s.type === "artifact-card").length;
+  const center = editor.getViewportPageBounds().center;
+  const w = 240;
+  const h = 150;
+  const cascade = (artifactCount % 6) * 26;
+  const x = center.x - w / 2 + cascade;
+  const y = center.y - h / 2 + cascade;
+  const id = createShapeId();
+  editor.createShape<ArtifactCardShape>({
+    id,
+    type: "artifact-card",
+    x,
+    y,
+    props: {
+      w,
+      h,
+      kind: d.kind,
+      title: d.title || "Item",
+      subtitle: d.subtitle ?? "",
+      color: d.color,
+      entityId: d.entityId,
+      roomId: d.roomId,
+    },
+  });
+  editor.select(id);
+  editor.centerOnPoint(
+    { x: x + w / 2, y: y + h / 2 },
+    { animation: { duration: 300 } },
+  );
 }
 
 /** Drop a proposed insight card at the centroid of its sources and tether
@@ -456,13 +629,26 @@ function BoardOverlay({
   runAiLink: AiLinkFn;
 }) {
   const [busy, setBusy] = useState(false);
+  // Default true so the hint never flashes before the localStorage read;
+  // the effect flips it false for users who haven't dismissed it.
+  const [hintDismissed, setHintDismissed] = useState(true);
 
-  // Reactive selection of *board cards* (rooms + insights) + the screen
-  // position of the selection's top-center, so the toolbar tracks the
-  // selection as it moves / the camera pans.
-  const sel = useValue(
-    "board-card-selection",
+  useEffect(() => {
+    try {
+      setHintDismissed(
+        window.localStorage.getItem("objective-board:hint-dismissed") === "1",
+      );
+    } catch {
+      setHintDismissed(false);
+    }
+  }, []);
+
+  // Reactive board view — selection (for the Connect toolbar) plus the
+  // card/insight counts that gate the teaching hint.
+  const view = useValue(
+    "board-overlay",
     () => {
+      const shapes = editor.getCurrentPageShapes();
       const cards = editor.getSelectedShapes().filter(isBoardCard);
       const bounds = editor.getSelectionRotatedPageBounds();
       const screen = bounds
@@ -472,18 +658,31 @@ function BoardOverlay({
         ids: cards.map((c) => c.id),
         payloads: cards.map(cardPayload),
         screen,
+        boardCardCount: shapes.filter(
+          (s) => s.type === "room-card" || s.type === "artifact-card",
+        ).length,
+        insightCount: shapes.filter((s) => s.type === "insight-card").length,
       };
     },
     [editor],
   );
 
-  const count = sel.ids.length;
+  const count = view.ids.length;
+
+  function dismissHint() {
+    setHintDismissed(true);
+    try {
+      window.localStorage.setItem("objective-board:hint-dismissed", "1");
+    } catch {
+      // non-fatal
+    }
+  }
 
   async function handleRun() {
     if (busy || count < 2) return;
     const mode: AiLinkMode = count === 2 ? "connect" : "synthesize";
-    const ids = sel.ids;
-    const payloads = sel.payloads;
+    const ids = view.ids;
+    const payloads = view.payloads;
     setBusy(true);
     try {
       const { headline, body } = await runAiLink(mode, payloads);
@@ -502,15 +701,26 @@ function BoardOverlay({
     }
   }
 
-  if (count < 2 || !sel.screen) return null;
+  // Teaching nudge: only once the user has cards but hasn't connected
+  // anything yet, and isn't mid-selection (the toolbar guides that).
+  const showHint =
+    !hintDismissed &&
+    view.boardCardCount >= 1 &&
+    view.insightCount === 0 &&
+    count < 2;
 
   return (
-    <BoardSelectionToolbar
-      x={sel.screen.x}
-      y={sel.screen.y}
-      count={count}
-      busy={busy}
-      onRun={handleRun}
-    />
+    <>
+      {showHint && <BoardHint onDismiss={dismissHint} />}
+      {count >= 2 && view.screen && (
+        <BoardSelectionToolbar
+          x={view.screen.x}
+          y={view.screen.y}
+          count={count}
+          busy={busy}
+          onRun={handleRun}
+        />
+      )}
+    </>
   );
 }

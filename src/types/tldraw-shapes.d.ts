@@ -936,12 +936,23 @@ declare module "@tldraw/tlschema" {
     "artifact-card": {
       w: number;
       h: number;
-      kind: "pain" | "feature" | "outcome";
+      kind: "pain" | "feature" | "outcome" | "lab";
       title: string;
       subtitle: string;
       color: string;
       entityId: string;
       roomId: string;
+    };
+    // Objective unfurl — a translucent backdrop band, one per ObjectiveStack
+    // layer. Sub-objective cards sit on top of their layer's band.
+    "layer-band": {
+      w: number;
+      h: number;
+      ordinal: number;
+      name: string;
+      archetype: string;
+      uncovered: boolean;
+      accent: string;
     };
   }
 }

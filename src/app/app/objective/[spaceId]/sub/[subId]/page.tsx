@@ -7,7 +7,6 @@
 
 import { redirect, notFound } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { HomeTabNav } from "@/components/app/home-tab-nav";
 import {
   SubObjectiveRoomView,
   type LayerItem,
@@ -23,7 +22,6 @@ import {
   type ObjectiveStack,
   type LayerArchetype,
 } from "@/lib/objective-canvas/layer-model";
-import { AnnotatedSubObjectiveCard } from "@/components/objective/annotated-sub-objective-card";
 import { SubObjectiveRoomHeader } from "@/components/objective/sub-objective-room-header";
 import { splitAnnotationsByTitle } from "@/lib/objective-canvas/split-annotations";
 
@@ -152,7 +150,7 @@ export default async function SubObjectiveRoomPage({
   // range so the title h1 carries its own inline underlines and the
   // lens card renders the description without repeating the title.
   const subAnnotations = normalizeAnnotations(sub.annotations);
-  const { titleAnnotations, descriptionAnnotations } = splitAnnotationsByTitle(
+  const { titleAnnotations } = splitAnnotationsByTitle(
     sub.title,
     sub.description,
     subAnnotations,
@@ -245,10 +243,13 @@ export default async function SubObjectiveRoomPage({
   }
 
   // ── Entities scoped to this sub-objective ──
+  // expanded_detail is selected so FEATURE items can hydrate the
+  // CategoryCard mechanism lineup without a /expand round-trip. It's a
+  // bulky blob, so we only ATTACH it to feature-lane items below.
   const { data: entityRows } = await db
     .from("entities")
     .select(
-      "id, name, description, entity_type, layer_ontology_id, causal_chain",
+      "id, name, description, entity_type, layer_ontology_id, causal_chain, expanded_detail",
     )
     .eq("parent_sub_objective_id", subId);
 
@@ -287,6 +288,7 @@ export default async function SubObjectiveRoomPage({
     entity_type: string;
     layer_ontology_id: string | null;
     causal_chain: Record<string, unknown> | null;
+    expanded_detail: Record<string, unknown> | null;
   }>) {
     const layer = e.layer_ontology_id
       ? layerById.get(e.layer_ontology_id)
@@ -300,6 +302,8 @@ export default async function SubObjectiveRoomPage({
       description: e.description,
       entity_type: e.entity_type,
       causal_chain: e.causal_chain,
+      // Only features carry the lineup; keep pain/outcome payloads lean.
+      expanded_detail: layer.slug === "features" ? e.expanded_detail : null,
     });
   }
 
@@ -350,52 +354,30 @@ export default async function SubObjectiveRoomPage({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-40 overflow-y-auto"
-      style={{
-        background: "#fafafa",
-        backgroundImage:
-          "radial-gradient(rgba(15,23,42,0.085) 1.1px, transparent 1.1px)",
-        backgroundSize: "22px 22px",
-        backgroundPosition: "0 0",
-        fontFamily: appleVibe.font.stack,
-      }}
-    >
-      <HomeTabNav />
+    <>
       <ModePill spaceId={spaceId} mode={pipelineMode} />
 
-      <div className="relative w-full pb-24 pt-16">
-        {/* Breadcrumb bar + annotated title + Counters callout.
-            The breadcrumb is full-width (lab-style); the header proper
-            is centered to the 1400px column inside the component. */}
+      {/* Flow content — the objective layout's ObjectiveCanvasShell wraps
+          this room in the floating window over the persistent whiteboard
+          floor, so reaching it via a mechanism card / breadcrumb / deep
+          link looks identical to opening it from the main canvas. The
+          shell's window container reserves the top inset for the
+          layout-level HomeTabNav, so this only needs a small inner pad. */}
+      <div
+        className="relative w-full pb-24 pt-6"
+        style={{ fontFamily: appleVibe.font.stack }}
+      >
+        {/* Breadcrumb bar + annotated title only. Definition / Counters
+            prose now lives in the room view's hero row (shared with the
+            strategic-bets portfolio), so the title stands alone here. */}
         <SubObjectiveRoomHeader
           spaceId={spaceId}
           title={sub.title}
           titleAnnotations={titleAnnotations}
-          topNegativeOutcome={sub.top_negative_outcome}
           placement={roomPlacement}
         />
 
-        <div className="mx-auto w-full max-w-[1400px] px-8">
-          {/* ── K1 — Sub-objective description lens ──
-              Renders the description ONLY (the title carries its own
-              inline annotations in the header above, so we don't
-              repeat it here). Hidden when there's no description and
-              no readings. */}
-          {(sub.description?.trim() || descriptionAnnotations.length > 0) && (
-            <div className="mt-5 max-w-2xl">
-              {/* Raw (untrimmed) description — annotation offsets are
-                  relative to the raw string, so trimming here would
-                  shift the underlines. */}
-              <AnnotatedSubObjectiveCard
-                objectiveText={sub.description ?? ""}
-                annotations={descriptionAnnotations}
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="mx-auto mt-10 w-full max-w-[1400px] px-8">
+        <div className="mx-auto mt-6 w-full max-w-[1400px] px-8">
           <SubObjectiveRoomView
             spaceId={spaceId}
             subObjectiveId={subId}
@@ -407,9 +389,11 @@ export default async function SubObjectiveRoomPage({
             annotations={parentAnnotations}
             crossRoomCoverageByIndex={crossRoomCoverageByIndex}
             constraints={operationalConstraints}
+            description={sub.description}
+            topNegativeOutcome={sub.top_negative_outcome}
           />
         </div>
       </div>
-    </div>
+    </>
   );
 }

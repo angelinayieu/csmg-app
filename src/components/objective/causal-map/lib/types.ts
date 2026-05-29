@@ -137,6 +137,11 @@ export interface CausalMapEdgeData extends Record<string, unknown> {
   loopKind?: "reinforcing" | "balancing" | null;
   /** Dimmed because another loop / node is focused. */
   faded?: boolean;
+  /** Part of the hovered node's traced thread → drawn at full strength. */
+  focused?: boolean;
+  /** Room map only — render the resting (unfocused) stroke quieter so the
+   *  default view reads calm; focus + loop emphasis still pop to full. */
+  calmRest?: boolean;
 }
 
 // ── React Flow specializations ──────────────────────────────────────────
