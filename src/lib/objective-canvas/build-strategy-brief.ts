@@ -71,6 +71,31 @@ export interface BriefExperiment {
   learning_target: string;
 }
 
+/** Feature-level technical-depth summary — the per-feature mechanism_spec
+ *  rolled into the brief so the deliverable carries HOW each feature
+ *  actually works, not just WHAT was chosen. One entry per feature in
+ *  the room that has a generated mechanism_spec; absent features are
+ *  simply omitted. Lean projection — full spec lives on
+ *  entities.expanded_detail.mechanism_spec for the Lab. */
+export interface BriefMechanismSpec {
+  item_id: string;
+  item_name: string;
+  /** The causal process — what the mechanism does + which root cause
+   *  it engages + which indicator it moves. */
+  mechanism_of_action: string;
+  /** "if X → then Y because Z" — the falsifiable hypothesis. */
+  hypothesis: { if_do: string; then_improves: string; because: string };
+  /** The chosen build approach (decision_record.chosen). */
+  chosen_method: string;
+  /** Top abandon conditions (≤3). Surfaces "we'd quit if…" so the brief
+   *  reads as a candid plan, not a sales pitch. */
+  kill_criteria: string[];
+  /** The concrete validation experiment that would confirm the mechanism. */
+  validation_experiment: string;
+  /** Honesty signal — well-supported vs plausible vs speculative. */
+  evidence_strength: "established" | "plausible" | "speculative";
+}
+
 /** L1 — A cluster of expansion-tree nodes hanging off one parent
  *  surface in the room, surfaced in the brief so the user's L3+
  *  cognitive work shows up in the read-out. Grouped by attach point
@@ -114,6 +139,11 @@ export interface BriefRoom {
   composed_designs: BriefComposedDesign[];
   elected_variations: BriefElectedVariation[];
   experiments: BriefExperiment[];
+  /** Feature-level technical specs (mechanism_spec rolled in). Empty when
+   *  no feature in this room has been spec'd. This is the DEPTH layer of
+   *  the brief — the per-variation summaries above tell you WHAT was
+   *  chosen; these tell you HOW it works and HOW to validate. */
+  mechanism_specs: BriefMechanismSpec[];
   /** L1 — expansion-tree highlights per item in this room.
    *  Empty when the user hasn't drilled into any variation. */
   expansion_highlights: BriefExpansionHighlight[];
@@ -244,6 +274,34 @@ export function buildStrategyBrief(
       }));
     });
 
+    // Mechanism-spec depth — per-feature technical spec rolled into the
+    // brief so the deliverable carries HOW each feature works + how to
+    // validate it, not just WHAT was chosen. Backward-compatible: empty
+    // array when no feature in this room has been spec'd; existing
+    // consumers don't read the field. Features only — pains/outcomes
+    // don't get a mechanism_spec.
+    const mechanism_specs: BriefMechanismSpec[] = items
+      .filter((i) => i.layer === "features")
+      .map((it) => {
+        const ms = it.expanded_detail?.mechanism_spec;
+        if (!ms) return null;
+        return {
+          item_id: it.id,
+          item_name: it.name,
+          mechanism_of_action: ms.mechanism_of_action,
+          hypothesis: {
+            if_do: ms.mechanism_hypothesis.if_do,
+            then_improves: ms.mechanism_hypothesis.then_improves,
+            because: ms.mechanism_hypothesis.because,
+          },
+          chosen_method: ms.decision_record.chosen,
+          kill_criteria: (ms.kill_criteria ?? []).slice(0, 3),
+          validation_experiment: ms.research_basis.validation_experiment,
+          evidence_strength: ms.research_basis.evidence_strength,
+        } satisfies BriefMechanismSpec;
+      })
+      .filter((s): s is BriefMechanismSpec => s !== null);
+
     // L1 — Expansion highlights per item. Group L3+ nodes by their
     // attach surface (variation / open question / conflict / etc.) so
     // the brief reads "Streak-based → mechanism story + data model +
@@ -351,6 +409,7 @@ export function buildStrategyBrief(
       composed_designs,
       elected_variations,
       experiments,
+      mechanism_specs,
       expansion_highlights,
       lane_counts,
     } satisfies BriefRoom;
