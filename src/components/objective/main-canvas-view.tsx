@@ -25,6 +25,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { ObjectiveCore } from "@/components/objective/icons/objective-core";
 import {
   AnnotatedObjectiveCard,
   type ObjectiveAnnotation,
@@ -35,18 +36,31 @@ import { ConceptMemoryFeedStrip } from "@/components/objective/concept-memory-fe
 import type { SubObjectiveIntent } from "@/lib/objective-canvas/sub-objective-state";
 import type { CrossRoomSignals } from "@/lib/objective-canvas/cross-room-signals";
 import type { ClusterAnalysis } from "@/lib/objective-canvas/cluster-proposals";
+import type { SubProgress } from "@/lib/objective-canvas/elected-ready-variations";
 import type { ConceptMemoryEntry } from "@/lib/objective-canvas/concept-memory-feed";
 import type { RoomDecisionSummary } from "@/lib/objective-canvas/canvas-decisions";
 import { CanvasDecisionSurface } from "@/components/objective/canvas-decision-surface";
 import { HCDToggle } from "@/components/objective/hcd-toggle";
-import { DeliverablesStrip } from "@/components/objective/deliverables-strip";
+import {
+  CommandDeck,
+  type DeckOperation,
+} from "@/components/objective/command-deck";
+import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 import { CanvasAutopilotRunner } from "@/components/objective/canvas-autopilot-runner";
-import { ObjectiveStackWidget } from "@/components/objective/objective-stack";
+import {
+  ObjectiveStackWidget,
+  ARCHETYPE_COLOR,
+} from "@/components/objective/objective-stack";
+import {
+  deriveClusterLayer,
+  type ObjectiveStack,
+} from "@/lib/objective-canvas/layer-model";
 // Phase 12.A — the Causal System Map (opt-in via the Cards/Map toggle;
 // N4: cards view kept indefinitely) + the at-a-glance insights digest
 // beneath it, + the live-refresh & view-persistence hooks.
 import { CausalMap } from "@/components/objective/causal-map/CausalMap";
 import { MapInsightsPanel } from "@/components/objective/causal-map/MapInsightsPanel";
+import { LayerShelvesView } from "@/components/objective/layer-shelves-view";
 import { useDecisionLogSignal } from "@/components/objective/causal-map/hooks/useDecisionLogSignal";
 import { useLocalPref } from "@/components/objective/causal-map/hooks/useLocalPref";
 // Phase 11.0b — LabNotebookPanel is mounted at the layout level
@@ -124,6 +138,10 @@ export interface MainCanvasSub {
    *  "L2→L3 · Bridge"). Set by the proposer's JOB 3 when the stack
    *  was present at generation time. Null for pre-11.A picks. */
   layerPositionLabel?: string | null;
+  /** Pipeline progress (room → expanded → scored → elected → export-
+   *  ready), rolled up from this sub's entities + variations. Drives
+   *  the flashcard progress bar. */
+  progress: SubProgress;
 }
 
 interface Props {
@@ -167,6 +185,14 @@ interface Props {
   objectiveStack?:
     | import("@/lib/objective-canvas/layer-model").ObjectiveStack
     | null;
+  /** CommandDeck inputs — the coordinated control surface that sits
+   *  directly beneath the objective hero (Analysis · Operations ·
+   *  Deliverables · Strategy Brief). Server-rendered + forwarded
+   *  through ObjectiveCanvasView. Deck renders only when subs exist. */
+  analysis?: CrossRoomAnalysisState | null;
+  analysisRoomTitles?: Record<string, string>;
+  operations?: DeckOperation[];
+  briefHref?: string;
 }
 
 export function MainCanvasView({
@@ -180,6 +206,10 @@ export function MainCanvasView({
   conceptMemory = [],
   roomDecisions = [],
   objectiveStack = null,
+  analysis = null,
+  analysisRoomTitles = {},
+  operations = [],
+  briefHref = "",
 }: Props) {
   // Themed view state — same pattern as the picker's cluster view.
   // Default to "grid" so existing users see no change unless they
@@ -279,84 +309,137 @@ export function MainCanvasView({
   // can resolve linked_sub_objective_id → title for hover popovers.
   const subStubs = subs.map((s) => ({ id: s.id, title: s.title }));
 
+  // When a causal stack exists, the layer shelves ARE the canvas: the
+  // stack widget + theme-row gallery + flat grid all collapse into the
+  // single shelf system. Legacy (pre-stack) spaces keep the old grid.
+  const stackPresent =
+    !!objectiveStack && objectiveStack.layers.length > 0;
+
   return (
     <div className="relative mx-auto w-full max-w-5xl">
-      {/* Phase 10b/11 — canvas-level toolbar. Notebook trigger +
-          HCD toggle + Canvas Autopilot sit top-right as a paired
-          cluster so they read as one chrome. HCDToggle self-fetches
-          its state on mount; no prop plumbing required from the
-          parent. CanvasAutopilotRunner triggers the canvas-wide
-          score+refine loop and posts the parent autopilot_run
-          event so the notebook can group every per-chain event
-          under one header. */}
-      <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5">
-        {/* Phase 12.A — Cards / Map segmented toggle. Shown once there's
-            something to lay out; Cards stays the default. */}
-        {subs.length > 0 && (
-          <div
-            className="flex items-center rounded-full p-0.5"
+      {/* Unified objective header — constrained to the card width so the
+          identity label (left) and the view / mode / action controls
+          (right) share one baseline aligned flush to the core-objective
+          card below. Replaces the old toolbar that floated in the 5xl
+          gutter past the card edge + the card's own centered eyebrow.
+          HCDToggle self-fetches its state; CanvasAutopilotRunner drives
+          the canvas-wide score+refine loop and logs one notebook header. */}
+      <div className="mx-auto mb-3 flex w-full max-w-3xl items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          {/* Objective identity — a luminous glass orb (the single core
+              the canvas orbits) resting on a soft glass pedestal. Tied to
+              the objective layer by a violet bloom (glow, never a hard
+              border); the orb carries its own dimensional light. */}
+          <span
+            className="inline-flex h-7 w-7 items-center justify-center rounded-full"
             style={{
-              background: appleVibe.surface.chip,
-              border: `1px solid ${appleVibe.stroke.soft}`,
+              background: "rgba(255,255,255,0.72)",
+              boxShadow:
+                "0 1px 0 rgba(255,255,255,0.9) inset, 0 6px 16px -6px rgba(124,58,237,0.5)",
             }}
+            aria-hidden
           >
-            {(["cards", "map"] as const).map((v) => {
-              const active = canvasView === v;
-              return (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setCanvasView(v)}
-                  className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors"
-                  style={{
-                    background: active ? appleVibe.surface.card : "transparent",
-                    color: active
-                      ? appleVibe.text.primary
-                      : appleVibe.text.tertiary,
-                    boxShadow: active ? appleVibe.shadow.chip : "none",
-                  }}
-                  title={v === "cards" ? "Card grid" : "Causal system map"}
-                  aria-pressed={active}
-                >
-                  {v === "cards" ? (
-                    <LayoutGrid className="h-3.5 w-3.5" strokeWidth={2.2} />
-                  ) : (
-                    <Waypoints className="h-3.5 w-3.5" strokeWidth={2.2} />
-                  )}
-                  {v === "cards" ? "Cards" : "Map"}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        <HCDToggle spaceId={spaceId} />
-        {/* Only render the canvas autopilot button when at least one
-            sub-objective room has been generated. Empty-canvas runs
-            would return zero targets anyway; hiding the button
-            removes a dead affordance. */}
-        {subs.some((s) => s.generatedAt) && (
-          <CanvasAutopilotRunner
-            spaceId={spaceId}
-            onAllComplete={() => {
-              // Refresh the page so the new candidates from refine
-              // appear in the per-room SubCards + the cross-room
-              // signals strip picks up the freshly-rescanned findings.
-              router.refresh();
-            }}
-          />
-        )}
-        {/* Phase 11.0b — Notebook button removed. The Lab Notebook
-            is now a persistent right rail mounted at the layout
-            level, default open, collapse-to-strip when hidden. */}
+            <ObjectiveCore className="h-5 w-5" />
+          </span>
+          <span
+            className="text-[11px] font-semibold uppercase tracking-[0.18em]"
+            style={{ color: "rgba(91,33,182,0.9)" }}
+          >
+            Core Objective
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {/* Phase 12.A — Cards / Map segmented toggle. Shown once there's
+              something to lay out; Cards stays the default. */}
+          {subs.length > 0 && (
+            <div
+              className="flex items-center rounded-full p-0.5"
+              style={{
+                background: appleVibe.surface.chip,
+                border: `1px solid ${appleVibe.stroke.soft}`,
+              }}
+            >
+              {(["cards", "map"] as const).map((v) => {
+                const active = canvasView === v;
+                return (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setCanvasView(v)}
+                    className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                    style={{
+                      background: active
+                        ? appleVibe.surface.card
+                        : "transparent",
+                      color: active
+                        ? appleVibe.text.primary
+                        : appleVibe.text.tertiary,
+                      boxShadow: active ? appleVibe.shadow.chip : "none",
+                    }}
+                    title={v === "cards" ? "Card grid" : "Causal system map"}
+                    aria-pressed={active}
+                  >
+                    {v === "cards" ? (
+                      <LayoutGrid className="h-3.5 w-3.5" strokeWidth={2.2} />
+                    ) : (
+                      <Waypoints className="h-3.5 w-3.5" strokeWidth={2.2} />
+                    )}
+                    {v === "cards" ? "Cards" : "Map"}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <HCDToggle spaceId={spaceId} />
+          {/* Only render the canvas autopilot button when at least one
+              sub-objective room has been generated. Empty-canvas runs
+              would return zero targets anyway; hiding the button removes
+              a dead affordance. */}
+          {subs.some((s) => s.generatedAt) && (
+            <CanvasAutopilotRunner
+              spaceId={spaceId}
+              rooms={subs
+                .filter((s) => s.generatedAt)
+                .map((s) => ({ id: s.id, title: s.title }))}
+              onAllComplete={() => {
+                // Refresh the page so the new candidates from refine
+                // appear in the per-room SubCards + the cross-room
+                // signals strip picks up the freshly-rescanned findings.
+                router.refresh();
+              }}
+            />
+          )}
+        </div>
       </div>
 
-      {/* Annotated core objective — the centerpiece */}
+      {/* Annotated core objective — the centerpiece. Eyebrow suppressed:
+          the unified header above owns the "Core Objective" identity. */}
       <AnnotatedObjectiveCard
         spaceId={spaceId}
         objective={objective}
         initialAnnotations={coreAnnotations}
         subObjectives={subStubs}
+        showEyebrow={false}
       />
+
+      {/* Command Deck — the coordinated control surface. Sits flush
+          beneath the hero (objective-led) and replaces the old
+          scattered strips: cross-room Analysis + Operations, the
+          Deliverables surface, and the Strategy Brief link, all as one
+          gallery of compact tiles that expand in place. Renders only
+          once sub-objective rooms exist (matches the old workbench
+          gate). */}
+      {subs.length > 0 && briefHref && (
+        <div className="mt-6">
+          <CommandDeck
+            spaceId={spaceId}
+            initialAnalysis={analysis}
+            roomTitles={analysisRoomTitles}
+            operations={operations}
+            briefHref={briefHref}
+          />
+        </div>
+      )}
 
       {/* Concept memory feed — ambient KG signal. Top canonical
           concepts the user has been reasoning across (recency ×
@@ -380,7 +463,7 @@ export function MainCanvasView({
           that layer (future). Click a variable chip → popover with
           description. Hidden when no stack exists yet — pre-11.A
           spaces show the rest of the canvas as before. */}
-      {objectiveStack && objectiveStack.layers.length > 0 && (
+      {objectiveStack && objectiveStack.layers.length > 0 && canvasView === "map" && (
         <div className="mx-auto mt-6 w-full max-w-5xl">
           <ObjectiveStackWidget
             stack={objectiveStack}
@@ -397,19 +480,6 @@ export function MainCanvasView({
             // those picks actually touch.
             pickedIds={subs.map((s) => s.id)}
           />
-        </div>
-      )}
-
-      {/* Deliverables strip — the "ready to ship" layer. Lists every
-          elected variation across the space with status dots for the
-          three artifacts (doc / mockup / prompt), per-row Generate-all
-          + Open buttons, and master Generate-everything-pending +
-          Download-bundle buttons. Auto-gen is GATED on the AI having
-          already scored + ranked each variation, so it only fires when
-          the upstream optimization is done. */}
-      {subs.length > 0 && (
-        <div className="mx-auto mt-3 w-full max-w-5xl">
-          <DeliverablesStrip spaceId={spaceId} />
         </div>
       )}
 
@@ -463,7 +533,7 @@ export function MainCanvasView({
           "Detect themes" CTA. Post-themes: a view toggle + refresh
           button (stale-aware). Mounts above the grid so the user
           sees structure before scanning the cards. */}
-      {canvasView === "cards" && subs.length >= 4 && (
+      {canvasView === "cards" && !stackPresent && subs.length >= 4 && (
         <div className="mx-auto mt-6 max-w-5xl">
           <ThemeControlBar
             hasThemes={!!themes && themes.clusters.length > 0}
@@ -479,9 +549,9 @@ export function MainCanvasView({
         </div>
       )}
 
-      {/* Trunk → fork connector (cards view only — the map has its own
-          internal structure, so the trunk would be noise). */}
-      {canvasView === "cards" && (
+      {/* Trunk → fork connector (legacy grid only — the shelves view
+          and the map both have their own internal structure). */}
+      {canvasView === "cards" && !stackPresent && (
         <div
           aria-hidden
           className={
@@ -521,12 +591,20 @@ export function MainCanvasView({
         <div className="relative mx-auto mt-2 grid w-full gap-5">
           <EmptyState />
         </div>
+      ) : stackPresent ? (
+        <LayerShelvesView
+          spaceId={spaceId}
+          subs={subs}
+          stack={objectiveStack!}
+          themes={themes}
+        />
       ) : themeView === "themes" && themes && themes.clusters.length > 0 ? (
         <ThemedSubGallery
           themes={themes}
           subs={subs}
           spaceId={spaceId}
           stale={themesStale}
+          stack={objectiveStack}
         />
       ) : (
         <div
@@ -543,6 +621,10 @@ export function MainCanvasView({
           ))}
         </div>
       )}
+
+      {/* Deliverables moved into the CommandDeck beneath the hero — it
+          now reads as one coordinated surface with Analysis + Operations
+          + Strategy Brief instead of a lone strip at the canvas bottom. */}
 
       {/* Post-confirm variant lab — lets the user add another cut
           after seeing the initial rooms. Single-batch quota; the
@@ -1254,7 +1336,13 @@ function ThemeControlBar({
 // and a horizontal-scroll strip of SubCards. Keeps SubCard render
 // untouched — just rehouses it inside a themed container.
 //
-// Theme ordering: descending member count (most populous theme top).
+// Layer-aware ordering: when the ObjectiveStack exists, each theme is
+// tagged with the layer its members predominantly operate at (derived
+// from the layer_ordinals already on each sub — no extra generation).
+// Rows then sort by altitude, outcome layer (highest ordinal) on top
+// to mirror the Stack widget's top-down reading order, so the two
+// grouping systems visibly reconcile. Without a stack we fall back to
+// the prior member-count ordering.
 // Within a theme: order from the LLM's cluster.proposal_ids
 // (representative first if present).
 
@@ -1263,24 +1351,54 @@ function ThemedSubGallery({
   subs,
   spaceId,
   stale,
+  stack,
 }: {
   themes: ClusterAnalysis;
   subs: MainCanvasSub[];
   spaceId: string;
   stale: boolean;
+  stack: ObjectiveStack | null;
 }) {
   const subsById = new Map(subs.map((s) => [s.id, s] as const));
   const placedIds = new Set<string>();
 
-  // Theme ordering: by member count desc; tie-break on representative
-  // appearing in the live sub set (i.e., real not just-deleted ids).
-  const ordered = [...themes.clusters].sort(
-    (a, b) => b.proposal_ids.length - a.proposal_ids.length,
+  const layerAware = !!stack && stack.layers.length > 0;
+  const layerByOrdinal = new Map(
+    (stack?.layers ?? []).map((l) => [l.ordinal, l] as const),
   );
+
+  // Tag each cluster with the layer its members sit at, then order.
+  // Layer-aware: altitude desc (outcome on top), member count as the
+  // tie-break within a layer, untagged themes last. Otherwise: legacy
+  // member-count desc.
+  const ordered = themes.clusters
+    .map((cluster) => {
+      const memberOrdinals = cluster.proposal_ids
+        .map((id) => subsById.get(id)?.layerOrdinals)
+        .filter((o): o is number[] => Array.isArray(o) && o.length > 0);
+      return { cluster, assignment: deriveClusterLayer(memberOrdinals) };
+    })
+    .sort((a, b) => {
+      if (layerAware) {
+        const ao = a.assignment.primaryOrdinal;
+        const bo = b.assignment.primaryOrdinal;
+        if (ao !== bo) {
+          if (ao === null) return 1;
+          if (bo === null) return -1;
+          return bo - ao;
+        }
+      }
+      return b.cluster.proposal_ids.length - a.cluster.proposal_ids.length;
+    });
 
   return (
     <div className="mx-auto mt-2 flex w-full max-w-5xl flex-col gap-6">
-      {ordered.map((cluster) => {
+      {ordered.map(({ cluster, assignment }) => {
+        const layer =
+          layerAware && assignment.primaryOrdinal !== null
+            ? layerByOrdinal.get(assignment.primaryOrdinal) ?? null
+            : null;
+        const spansMultiple = assignment.ordinalsTouched.length > 1;
         // Reorder members: representative first, others in original
         // cluster order. Drop ids that no longer exist in the live
         // sub set (deleted sub-objectives) — happens when the user
@@ -1302,7 +1420,26 @@ function ThemedSubGallery({
         return (
           <section key={cluster.id}>
             <header className="mb-2">
-              <div className="flex items-baseline gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {layer && (
+                  <span
+                    className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                    style={{
+                      background: `${ARCHETYPE_COLOR[layer.archetype]}14`,
+                      color: ARCHETYPE_COLOR[layer.archetype],
+                    }}
+                    title={`This theme operates mostly at ${layer.id} · ${layer.name} (${layer.archetype})${
+                      spansMultiple
+                        ? ` — members also touch ${assignment.ordinalsTouched
+                            .filter((o) => o !== layer.ordinal)
+                            .map((o) => `L${o}`)
+                            .join(", ")}`
+                        : ""
+                    }`}
+                  >
+                    {layer.id} · {layer.name}
+                  </span>
+                )}
                 <span
                   className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
                   style={{ color: "rgba(91,33,182,0.95)" }}
@@ -1316,6 +1453,15 @@ function ThemedSubGallery({
                   · {memberSubs.length} sub-objective
                   {memberSubs.length === 1 ? "" : "s"}
                 </span>
+                {layer && spansMultiple && (
+                  <span
+                    className="text-[10px] font-light"
+                    style={{ color: appleVibe.text.faint }}
+                  >
+                    · spans{" "}
+                    {assignment.ordinalsTouched.map((o) => `L${o}`).join(", ")}
+                  </span>
+                )}
               </div>
               {cluster.description && (
                 <p

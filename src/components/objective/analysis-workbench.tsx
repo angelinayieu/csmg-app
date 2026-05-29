@@ -22,7 +22,8 @@ import {
   ChevronUp,
   Compass,
   RefreshCw,
-  Sparkles,
+  ScanSearch,
+  Play,
   X,
   Check,
   Pause,
@@ -91,6 +92,16 @@ interface Props {
   roomTitles: Record<string, string>;
   /** Tier 2 operations the user can fire from the workbench. */
   operations: OperationCatalogEntry[];
+  /** Embedded mode — render headerless + always-expanded so the
+   *  CommandDeck can host the panel inside its own card. The deck
+   *  tile owns the title/summary; this just renders the findings +
+   *  operations body. Default false keeps the standalone strip. */
+  embedded?: boolean;
+  /** When embedded, which body to render. The deck mounts ONE
+   *  instance and flips this between its Analysis + Operations tiles
+   *  so findings + runs share a single piece of state. Default
+   *  "both" (standalone shows everything). */
+  section?: "findings" | "operations" | "both";
 }
 
 const CATEGORY_LABEL: Record<AnalysisCategory, string> = {
@@ -128,6 +139,8 @@ export function AnalysisWorkbench({
   initialAnalysis,
   roomTitles,
   operations,
+  embedded = false,
+  section = "both",
 }: Props) {
   const [analysis, setAnalysis] = useState<CrossRoomAnalysisState | null>(
     initialAnalysis,
@@ -276,62 +289,86 @@ export function AnalysisWorkbench({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const stripBg = "rgba(124,58,237,0.05)";
-  const stripBorder = "rgba(124,58,237,0.18)";
-
   return (
     <div
-      className="mb-5 rounded-2xl border"
-      style={{
-        background: stripBg,
-        borderColor: stripBorder,
-        borderRadius: appleVibe.radius.md,
-      }}
+      className={embedded ? "" : "mb-5 overflow-hidden border"}
+      style={
+        embedded
+          ? { fontFamily: appleVibe.font.stack }
+          : {
+              background: appleVibe.surface.cardElevated,
+              backdropFilter: "blur(20px) saturate(180%)",
+              WebkitBackdropFilter: "blur(20px) saturate(180%)",
+              borderColor: appleVibe.stroke.soft,
+              borderRadius: appleVibe.radius.lg,
+              boxShadow: appleVibe.shadow.card,
+            }
+      }
     >
-      {/* ── Strip — single line summary, always visible ── */}
-      <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+      {/* ── Strip — single-line summary. Hidden when embedded: the
+          deck tile owns the header, so we render only the body. ── */}
+      {!embedded && (
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="flex flex-1 items-center gap-2 text-left"
+          className="flex flex-1 items-center gap-2.5 text-left"
         >
-          <Sparkles
-            className="h-3.5 w-3.5 flex-shrink-0"
-            strokeWidth={2}
-            style={{ color: "rgba(124,58,237,0.85)" }}
-          />
           <span
-            className="text-[11px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: "rgba(76,29,149,0.95)" }}
+            className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full"
+            style={{
+              background: "rgba(15,23,42,0.04)",
+              color: appleVibe.text.secondary,
+            }}
+          >
+            <ScanSearch className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </span>
+          <span
+            className="text-[13px] font-semibold tracking-[-0.01em]"
+            style={{ color: appleVibe.text.primary }}
           >
             Analysis
           </span>
           <span
-            className="text-[12.5px] font-medium"
-            style={{ color: appleVibe.text.primary }}
+            className="text-[12.5px] font-light"
+            style={{ color: appleVibe.text.tertiary }}
           >
             {totalLive === 0
-              ? "No findings yet"
+              ? "no findings yet"
               : `${totalLive} finding${totalLive === 1 ? "" : "s"}`}
           </span>
           {totalLive > 0 && (
-            <span
-              className="text-[11px] font-light"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              · {summarizeBreakdown(breakdown)}
+            <span className="ml-1 hidden items-center gap-1.5 sm:flex">
+              {(Object.keys(breakdown) as AnalysisCategory[])
+                .filter((cat) => breakdown[cat] > 0)
+                .slice(0, 4)
+                .map((cat) => (
+                  <span
+                    key={cat}
+                    className="inline-flex items-center gap-1 text-[10.5px] font-light"
+                    style={{ color: appleVibe.text.tertiary }}
+                    title={CATEGORY_LABEL[cat]}
+                  >
+                    <span
+                      className="inline-block h-1.5 w-1.5 rounded-full"
+                      style={{ background: CATEGORY_COLOR[cat] }}
+                      aria-hidden
+                    />
+                    {breakdown[cat]}
+                  </span>
+                ))}
             </span>
           )}
           {lastScanLabel && (
             <span
               className="ml-auto text-[10.5px] font-light"
-              style={{ color: appleVibe.text.tertiary }}
+              style={{ color: appleVibe.text.faint }}
             >
               scanned {lastScanLabel}
             </span>
           )}
         </button>
-        <div className="flex flex-shrink-0 items-center gap-1.5">
+        <div className="flex flex-shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={(e) => {
@@ -340,7 +377,7 @@ export function AnalysisWorkbench({
             }}
             disabled={scanning}
             title="Rescan"
-            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium"
+            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-medium transition-colors"
             style={{
               background: "transparent",
               color: appleVibe.text.tertiary,
@@ -356,28 +393,51 @@ export function AnalysisWorkbench({
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="inline-flex h-5 w-5 items-center justify-center rounded-full"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-full transition-colors"
             style={{
-              background: "rgba(124,58,237,0.10)",
-              color: "rgba(76,29,149,0.95)",
+              background: "rgba(15,23,42,0.04)",
+              color: appleVibe.text.secondary,
             }}
             aria-label={expanded ? "Collapse workbench" : "Expand workbench"}
           >
             {expanded ? (
-              <ChevronUp className="h-3 w-3" strokeWidth={2.5} />
+              <ChevronUp className="h-3.5 w-3.5" strokeWidth={2} />
             ) : (
-              <ChevronDown className="h-3 w-3" strokeWidth={2.5} />
+              <ChevronDown className="h-3.5 w-3.5" strokeWidth={2} />
             )}
           </button>
         </div>
       </div>
+      )}
 
-      {/* ── Panel — expanded view ── */}
-      {expanded && (
+      {/* ── Panel — findings + operations. Always open when embedded
+          (the deck tile is the disclosure control). ── */}
+      {(embedded || expanded) && (
         <div
-          className="border-t px-4 py-3"
-          style={{ borderColor: stripBorder }}
+          className={embedded ? "" : "border-t px-4 py-4"}
+          style={embedded ? undefined : { borderColor: appleVibe.stroke.hairline }}
         >
+          {embedded && (
+            <div className="mb-3 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => void rescan(true)}
+                disabled={scanning}
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-medium transition-colors"
+                style={{
+                  background: "transparent",
+                  color: appleVibe.text.tertiary,
+                  cursor: scanning ? "wait" : "pointer",
+                }}
+              >
+                <RefreshCw
+                  className={`h-3 w-3 ${scanning ? "animate-spin" : ""}`}
+                  strokeWidth={2}
+                />
+                {scanning ? "scanning" : "rescan"}
+              </button>
+            </div>
+          )}
           {scanError && (
             <p
               className="mb-2 text-[11px] font-light"
@@ -388,24 +448,16 @@ export function AnalysisWorkbench({
           )}
 
           {/* Findings */}
-          <div className="mb-4">
-            <div className="mb-2 flex flex-wrap items-center gap-1">
-              <span
-                className="text-[10px] font-semibold uppercase tracking-[0.14em]"
-                style={{ color: appleVibe.text.tertiary }}
-              >
-                Findings
-              </span>
-              <span className="ml-1 mr-2 text-[10.5px] font-light" style={{ color: appleVibe.text.faint }}>
-                ·
-              </span>
-              <TabChip label={`All (${totalLive})`} active={tab === "all"} onClick={() => setTab("all")} />
+          {section !== "operations" && (
+          <div className={embedded ? "" : "mb-5"}>
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              <TabChip label={`All ${totalLive}`} active={tab === "all"} onClick={() => setTab("all")} />
               {(Object.keys(breakdown) as AnalysisCategory[])
                 .filter((cat) => breakdown[cat] > 0)
                 .map((cat) => (
                   <TabChip
                     key={cat}
-                    label={`${CATEGORY_LABEL[cat]} (${breakdown[cat]})`}
+                    label={`${CATEGORY_LABEL[cat]} ${breakdown[cat]}`}
                     active={tab === cat}
                     onClick={() => setTab(cat)}
                     color={CATEGORY_COLOR[cat]}
@@ -440,17 +492,16 @@ export function AnalysisWorkbench({
               </ul>
             )}
           </div>
+          )}
 
           {/* Operations */}
-          {operations.length > 0 && (
+          {section !== "findings" && operations.length > 0 && (
             <div>
-              <div className="mb-2 flex items-center gap-2">
-                <span
-                  className="text-[10px] font-semibold uppercase tracking-[0.14em]"
-                  style={{ color: appleVibe.text.tertiary }}
-                >
-                  Operations · on-demand
-                </span>
+              <div
+                className="mb-2.5 text-[12px] font-semibold tracking-[-0.01em]"
+                style={{ color: appleVibe.text.secondary }}
+              >
+                Operations
               </div>
               {opError && (
                 <p
@@ -460,26 +511,28 @@ export function AnalysisWorkbench({
                   {opError}
                 </p>
               )}
-              <ul className="flex flex-col gap-1.5">
+              <ul className="flex flex-col gap-2">
                 {operations.map((op) => (
                   <li
                     key={op.key}
-                    className="flex items-start justify-between gap-3 rounded-xl px-2.5 py-1.5"
+                    className="group flex items-center justify-between gap-3 px-3 py-2.5 transition-all"
                     style={{
-                      background: "rgba(255,255,255,0.6)",
+                      background: appleVibe.surface.card,
                       border: `1px solid ${appleVibe.stroke.hairline}`,
+                      borderRadius: appleVibe.radius.md,
+                      boxShadow: appleVibe.shadow.chip,
                     }}
                   >
                     <div className="min-w-0 flex-1">
                       <div
-                        className="text-[12px] font-semibold"
+                        className="text-[12.5px] font-semibold tracking-[-0.01em]"
                         style={{ color: appleVibe.text.primary }}
                       >
                         {op.label}
                       </div>
                       <div
-                        className="text-[11px] font-light leading-snug"
-                        style={{ color: appleVibe.text.secondary }}
+                        className="mt-0.5 text-[11px] font-light leading-snug"
+                        style={{ color: appleVibe.text.tertiary }}
                       >
                         {op.description}
                       </div>
@@ -488,17 +541,26 @@ export function AnalysisWorkbench({
                       type="button"
                       onClick={() => void runOp(op.key, false)}
                       disabled={runningOp === op.key}
-                      className="inline-flex flex-shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
+                      className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[10.5px] font-semibold transition-all"
                       style={{
                         background: appleVibe.accent.primary,
                         color: appleVibe.text.onAccent,
                         cursor:
                           runningOp === op.key ? "wait" : "pointer",
                         opacity: runningOp === op.key ? 0.7 : 1,
+                        boxShadow:
+                          "0 6px 18px -8px rgba(11,18,40,0.45)",
                       }}
                     >
-                      <Sparkles className="h-2.5 w-2.5" strokeWidth={2} />
-                      {runningOp === op.key ? "Running…" : "Run"}
+                      {runningOp === op.key ? (
+                        <RefreshCw
+                          className="h-2.5 w-2.5 animate-spin"
+                          strokeWidth={2}
+                        />
+                      ) : (
+                        <Play className="h-2.5 w-2.5" strokeWidth={2} fill="currentColor" />
+                      )}
+                      {runningOp === op.key ? "Running" : "Run"}
                     </button>
                   </li>
                 ))}
@@ -532,13 +594,16 @@ function FindingCard({
   const color = CATEGORY_COLOR[finding.category];
   const ack = finding.disposition === "acknowledged";
   const resolved = finding.disposition === "resolved";
-  const opacity = ack ? 0.65 : 1;
+  const opacity = ack ? 0.6 : 1;
   const isRecommend = finding.analysis_key === "recommend_next_move";
   const isTheme = finding.analysis_key === "distill_concepts";
-  const ringDecor =
-    finding.severity === "critical" || finding.severity === "high"
-      ? `0 0 0 2px ${color}1F`
-      : undefined;
+  const strong =
+    finding.severity === "critical" || finding.severity === "high";
+  // Color ties to the category via a soft drop-shadow glow + faint tint
+  // halo — never a hard spine. High-severity findings glow a touch more.
+  const glow = resolved
+    ? "0 1px 0 rgba(255,255,255,0.9) inset, 0 10px 28px -16px rgba(22,163,74,0.4)"
+    : `0 1px 0 rgba(255,255,255,0.9) inset, 0 ${strong ? "14px 34px -16px" : "10px 26px -18px"} ${color}${strong ? "66" : "3D"}`;
 
   // Sub-branch state — when the user clicks "Distill into sub-objective"
   // on a theme finding. Optimistic: navigate as soon as the route
@@ -606,44 +671,53 @@ function FindingCard({
 
   return (
     <li
-      className="rounded-2xl p-2.5"
+      className="p-3.5"
       style={{
         background: resolved
-          ? "rgba(22,163,74,0.04)"
-          : "rgba(255,255,255,0.7)",
-        border: `1px solid ${resolved ? "rgba(22,163,74,0.22)" : appleVibe.stroke.hairline}`,
-        borderLeft: `3px solid ${color}`,
-        borderRadius: appleVibe.radius.md,
+          ? "rgba(22,163,74,0.05)"
+          : appleVibe.surface.card,
+        border: `1px solid ${resolved ? "rgba(22,163,74,0.18)" : appleVibe.stroke.hairline}`,
+        borderRadius: appleVibe.radius.lg,
         opacity,
-        boxShadow: ringDecor,
+        boxShadow: glow,
       }}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-1.5">
+          <div className="flex items-center gap-1.5">
             <span
-              className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
-              style={{ color }}
+              className="inline-block h-2 w-2 flex-shrink-0 rounded-full"
+              style={{
+                background: color,
+                boxShadow: strong ? `0 0 0 3px ${color}24` : undefined,
+              }}
+              aria-hidden
+            />
+            <span
+              className="text-[11px] font-medium tracking-[-0.01em]"
+              style={{ color: appleVibe.text.secondary }}
             >
               {CATEGORY_LABEL[finding.category]}
             </span>
-            <span
-              className="text-[9.5px] font-semibold uppercase tracking-[0.1em]"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              · {finding.severity}
-            </span>
+            {strong && (
+              <span
+                className="rounded-full px-1.5 py-px text-[9.5px] font-semibold tracking-[0.02em]"
+                style={{ background: `${color}16`, color }}
+              >
+                {finding.severity}
+              </span>
+            )}
             {finding.tier > 1 && (
               <span
-                className="text-[9.5px] font-light italic"
+                className="text-[10px] font-light"
                 style={{ color: appleVibe.text.faint }}
               >
-                · LLM
+                AI
               </span>
             )}
           </div>
           <div
-            className="mt-0.5 text-[12.5px] font-semibold leading-snug"
+            className="mt-1.5 text-[13px] font-semibold leading-snug tracking-[-0.01em]"
             style={{ color: appleVibe.text.primary }}
           >
             {finding.title}
@@ -703,12 +777,12 @@ function FindingCard({
                 (finding.body.next_steps as string[]).length > 0 && (
                   <div>
                     <div
-                      className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
-                      style={{ color: appleVibe.text.tertiary }}
+                      className="text-[11px] font-semibold tracking-[-0.01em]"
+                      style={{ color: appleVibe.text.secondary }}
                     >
                       Next steps
                     </div>
-                    <ol className="mt-0.5 list-decimal space-y-0.5 pl-4">
+                    <ol className="mt-1 list-decimal space-y-0.5 pl-4">
                       {(finding.body.next_steps as string[]).map((s, i) => (
                         <li
                           key={i}
@@ -725,9 +799,7 @@ function FindingCard({
                 {typeof finding.body?.estimated_effort === "string" &&
                   (finding.body.estimated_effort as string).length > 0 && (
                     <span style={{ color: appleVibe.text.tertiary }}>
-                      <span className="font-semibold uppercase tracking-[0.1em]">
-                        Effort:
-                      </span>{" "}
+                      <span className="font-semibold">Effort</span>{" "}
                       {finding.body.estimated_effort as string}
                     </span>
                   )}
@@ -840,21 +912,23 @@ function TabChip({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium"
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10.5px] font-medium transition-all"
       style={{
-        background: active
-          ? "rgba(15,23,42,0.08)"
-          : "rgba(255,255,255,0.6)",
-        color: active
-          ? appleVibe.text.primary
-          : appleVibe.text.secondary,
-        border: `1px solid ${active ? "rgba(15,23,42,0.18)" : appleVibe.stroke.hairline}`,
+        background: active ? appleVibe.text.primary : "rgba(15,23,42,0.04)",
+        color: active ? "white" : appleVibe.text.secondary,
+        border: `1px solid ${active ? "transparent" : appleVibe.stroke.hairline}`,
+        boxShadow: active
+          ? "0 6px 16px -8px rgba(11,18,40,0.4)"
+          : undefined,
       }}
     >
       {color && (
         <span
           className="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full"
-          style={{ background: color }}
+          style={{
+            background: color,
+            opacity: active ? 0.9 : 1,
+          }}
           aria-hidden
         />
       )}

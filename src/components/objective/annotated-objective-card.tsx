@@ -44,7 +44,7 @@ import {
   Target,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
-import { Sparkle } from "@/components/objective/icons/sparkle";
+import { ObjectiveCore } from "@/components/objective/icons/objective-core";
 import {
   AnnotationGlyph,
   type GlyphKind,
@@ -145,6 +145,10 @@ interface Props {
   objective: string;
   initialAnnotations: ObjectiveAnnotation[];
   subObjectives: SubObjectiveStub[];
+  /** When false, the centered "Core Objective" eyebrow is suppressed so
+   *  a host (the main-canvas header) can own the identity label and the
+   *  card aligns flush under a single coordinated toolbar. */
+  showEyebrow?: boolean;
 }
 
 // ── Layer styling ──────────────────────────────────────────────────
@@ -176,6 +180,7 @@ export function AnnotatedObjectiveCard({
   objective,
   initialAnnotations,
   subObjectives,
+  showEyebrow = true,
 }: Props) {
   const reduce = useReducedMotion();
   // Defense-in-depth: normalize on the way in even though the server route
@@ -356,20 +361,32 @@ export function AnnotatedObjectiveCard({
       className="relative mx-auto w-full max-w-3xl"
       style={{ fontFamily: appleVibe.font.stack }}
     >
-      {/* Eyebrow */}
-      <div className="mb-3 flex items-center justify-center gap-2">
-        <span
-          className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
-          style={{
-            background: "rgba(124,58,237,0.08)",
-            color: "rgba(91,33,182,0.95)",
-            border: "1px solid rgba(124,58,237,0.18)",
-          }}
-        >
-          <Sparkle className="h-2.5 w-2.5" />
-          Core Objective
-        </span>
-      </div>
+      {/* Eyebrow — suppressed when the host owns the identity label
+          (e.g. the main-canvas unified header). */}
+      {showEyebrow && (
+        <div className="mb-3 flex items-center justify-center gap-2">
+          {/* Luminous glass orb on a soft pedestal — tied to the objective
+              layer by a violet bloom, not a bordered pill. Mirrors the
+              unified header identity on the main canvas. */}
+          <span
+            className="inline-flex h-6 w-6 items-center justify-center rounded-full"
+            style={{
+              background: "rgba(255,255,255,0.72)",
+              boxShadow:
+                "0 1px 0 rgba(255,255,255,0.9) inset, 0 5px 14px -6px rgba(124,58,237,0.5)",
+            }}
+            aria-hidden
+          >
+            <ObjectiveCore className="h-4 w-4" />
+          </span>
+          <span
+            className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+            style={{ color: "rgba(91,33,182,0.9)" }}
+          >
+            Core Objective
+          </span>
+        </div>
+      )}
 
       {/* Card */}
       <div
@@ -382,34 +399,6 @@ export function AnnotatedObjectiveCard({
           padding: "32px 36px 26px",
         }}
       >
-        {/* AI reading toggle */}
-        <button
-          type="button"
-          onClick={() => setReading((v) => !v)}
-          aria-pressed={reading}
-          className="absolute right-4 top-4 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10.5px] font-semibold transition-colors"
-          style={{
-            background: reading
-              ? "rgba(15,23,42,0.92)"
-              : "rgba(15,23,42,0.04)",
-            color: reading
-              ? appleVibe.text.onAccent
-              : appleVibe.text.secondary,
-            border: reading
-              ? "1px solid rgba(15,23,42,0.92)"
-              : `1px solid ${appleVibe.stroke.hairline}`,
-            cursor: "pointer",
-          }}
-          title={
-            reading
-              ? "Hide margin notes (hover still works)"
-              : "Show all AI annotations as margin notes"
-          }
-        >
-          <Sparkles className="h-2.5 w-2.5" strokeWidth={2.25} />
-          AI reading {reading ? "on" : "off"}
-        </button>
-
         {/* Body */}
         <div
           className={
@@ -556,6 +545,28 @@ export function AnnotatedObjectiveCard({
           </span>
           {annotations.length > 0 && (
             <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setReading((v) => !v)}
+                aria-pressed={reading}
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold transition-colors"
+                style={{
+                  background: reading
+                    ? "rgba(15,23,42,0.92)"
+                    : appleVibe.surface.chip,
+                  color: reading
+                    ? appleVibe.text.onAccent
+                    : appleVibe.text.secondary,
+                }}
+                title={
+                  reading
+                    ? "Hide margin notes (hover a phrase still works)"
+                    : "Show every AI reading as a note in the margin"
+                }
+              >
+                <Sparkles className="h-2.5 w-2.5" strokeWidth={2.25} />
+                {reading ? "Notes on" : "Margin notes"}
+              </button>
               <button
                 type="button"
                 onClick={runDeepen}

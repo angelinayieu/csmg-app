@@ -37,8 +37,9 @@ import {
   Loader2,
   Package,
   RefreshCw,
-  Sparkles,
+  Send,
   Wand2,
+  Zap,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { VariationDeliverablesModal } from "./variation-deliverables-modal";
@@ -75,13 +76,17 @@ interface ReadyRow {
 
 interface Props {
   spaceId: string;
+  /** Embedded mode — render headerless + always-expanded so the
+   *  CommandDeck can host the rows + master actions inside its own
+   *  card. Default false keeps the standalone green strip. */
+  embedded?: boolean;
 }
 
 // Bounded concurrency for the "generate everything" master button.
 // 3 in flight is enough to feel fast without slamming the provider.
 const CONCURRENCY = 3;
 
-export function DeliverablesStrip({ spaceId }: Props) {
+export function DeliverablesStrip({ spaceId, embedded = false }: Props) {
   const [rows, setRows] = useState<ReadyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
@@ -394,15 +399,27 @@ export function DeliverablesStrip({ spaceId }: Props) {
 
   return (
     <div
-      className="mb-5 rounded-2xl border"
-      style={{
-        background: stripBg,
-        borderColor: stripBorder,
-        borderRadius: appleVibe.radius.md,
-      }}
+      className={embedded ? "" : "mb-5 rounded-2xl border"}
+      style={
+        embedded
+          ? { fontFamily: appleVibe.font.stack }
+          : {
+              background: stripBg,
+              borderColor: stripBorder,
+              borderRadius: appleVibe.radius.md,
+            }
+      }
     >
-      {/* ── Strip header — always visible ── */}
-      <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+      {/* ── Strip header. When embedded the deck tile owns the title +
+          disclosure, so we render only the master action buttons. ── */}
+      <div
+        className={
+          embedded
+            ? "mb-3 flex items-center justify-end gap-1.5"
+            : "flex items-center justify-between gap-3 px-4 py-2.5"
+        }
+      >
+        {!embedded && (
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
@@ -435,6 +452,7 @@ export function DeliverablesStrip({ spaceId }: Props) {
             </span>
           )}
         </button>
+        )}
         <div className="flex flex-shrink-0 items-center gap-1.5">
           {/* 🪄 Auto-elect + generate — only shows when there's
               something to auto-process. Hidden once everything is
@@ -475,7 +493,7 @@ export function DeliverablesStrip({ spaceId }: Props) {
               {autoElectBusy ? (
                 <Loader2 className="h-3 w-3 animate-spin" strokeWidth={2.4} />
               ) : (
-                <Sparkles className="h-3 w-3" strokeWidth={2.4} />
+                <Zap className="h-3 w-3" strokeWidth={2.4} fill="currentColor" />
               )}
               {autoElectBusy ? "Planning…" : "Auto-elect + generate"}
             </motion.button>
@@ -549,30 +567,33 @@ export function DeliverablesStrip({ spaceId }: Props) {
               Download .md
             </motion.button>
           )}
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="inline-flex h-5 w-5 items-center justify-center rounded-full"
-            style={{
-              background: "rgba(22,163,74,0.12)",
-              color: "rgba(20,83,45,0.95)",
-            }}
-            aria-label={expanded ? "Collapse deliverables" : "Expand deliverables"}
-          >
-            {expanded ? (
-              <ChevronUp className="h-3 w-3" strokeWidth={2.5} />
-            ) : (
-              <ChevronDown className="h-3 w-3" strokeWidth={2.5} />
-            )}
-          </button>
+          {!embedded && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="inline-flex h-5 w-5 items-center justify-center rounded-full"
+              style={{
+                background: "rgba(22,163,74,0.12)",
+                color: "rgba(20,83,45,0.95)",
+              }}
+              aria-label={expanded ? "Collapse deliverables" : "Expand deliverables"}
+            >
+              {expanded ? (
+                <ChevronUp className="h-3 w-3" strokeWidth={2.5} />
+              ) : (
+                <ChevronDown className="h-3 w-3" strokeWidth={2.5} />
+              )}
+            </button>
+          )}
         </div>
       </div>
 
-      {/* ── Expanded — one row per elected variation ── */}
-      {expanded && (
+      {/* ── Expanded — one row per elected variation. Always shown
+          when embedded (the deck tile is the disclosure control). ── */}
+      {(embedded || expanded) && (
         <div
-          className="border-t"
-          style={{ borderColor: stripBorder }}
+          className={embedded ? "" : "border-t"}
+          style={embedded ? undefined : { borderColor: stripBorder }}
         >
           <ul className="flex flex-col">
             {rows.map((r) => (
@@ -714,7 +735,7 @@ function DeliverableRow({
               ? "Export prompt (tested + judged)"
               : "Export prompt"
           }
-          icon={Sparkles}
+          icon={Send}
           on={row.has_export_prompt}
           accent={row.has_export_prompt_optimized}
         />

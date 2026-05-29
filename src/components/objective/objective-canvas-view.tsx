@@ -116,6 +116,16 @@ interface Props {
   initialObjectiveStack?:
     | import("@/lib/objective-canvas/layer-model").ObjectiveStack
     | null;
+  /** CommandDeck inputs — forwarded straight to MainCanvasView. The
+   *  page server-renders the cross-room analysis snapshot, the ops
+   *  catalog, the room-title map + the brief href; this orchestrator
+   *  just passes them through. */
+  initialAnalysis?:
+    | import("@/lib/objective-canvas/analyses/types").CrossRoomAnalysisState
+    | null;
+  analysisRoomTitles?: Record<string, string>;
+  deckOperations?: import("@/components/objective/command-deck").DeckOperation[];
+  briefHref?: string;
   /** Phase 10 integration contract — host wants to drop this into a
    *  panel. See module header. Defaults to false (standalone). */
   embedded?: boolean;
@@ -141,6 +151,10 @@ export function ObjectiveCanvasView({
   initialConceptMemory = [],
   initialRoomDecisions = [],
   initialObjectiveStack = null,
+  initialAnalysis = null,
+  analysisRoomTitles = {},
+  deckOperations = [],
+  briefHref = "",
   embedded = false,
   // onExit is reserved for the host's chrome; not consumed here.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -261,6 +275,10 @@ export function ObjectiveCanvasView({
             conceptMemory={initialConceptMemory}
             roomDecisions={initialRoomDecisions}
             objectiveStack={initialObjectiveStack}
+            analysis={initialAnalysis}
+            analysisRoomTitles={analysisRoomTitles}
+            operations={deckOperations}
+            briefHref={briefHref}
           />
         )}
         {stage === "done" && <DonePlaceholder />}

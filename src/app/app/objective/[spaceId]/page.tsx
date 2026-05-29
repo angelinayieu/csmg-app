@@ -9,6 +9,7 @@ import { redirect, notFound } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { ObjectiveCanvasView } from "@/components/objective/objective-canvas-view";
+import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-shell";
 import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import type { MainCanvasSub } from "@/components/objective/main-canvas-view";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
@@ -29,14 +30,14 @@ import {
   type ConceptMemoryEntry,
 } from "@/lib/objective-canvas/concept-memory-feed";
 import type { RoomEdge } from "@/components/objective/sub-objective-room-view";
-import { ArrowLeft, FileText } from "lucide-react";
-import { AnalysisWorkbench } from "@/components/objective/analysis-workbench";
+import { ArrowLeft } from "lucide-react";
 import { TIER_2_OPERATIONS } from "@/lib/objective-canvas/analyses";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 import {
   computeRoomDecisionSummaries,
   type RoomDecisionSummary,
 } from "@/lib/objective-canvas/canvas-decisions";
+import { computeSubProgress } from "@/lib/objective-canvas/elected-ready-variations";
 
 export const dynamic = "force-dynamic";
 
@@ -491,6 +492,11 @@ export default async function ObjectiveCanvasPage({
             ? r.layer_ordinals
             : [],
           layerPositionLabel: r.layer_position_label ?? null,
+          // Pipeline readiness (room → expanded → scored → elected →
+          // export-ready), rolled up from this sub's entities. Required
+          // by the LayerShelvesView flashcard progress bar; computed
+          // from data already loaded above (no extra query).
+          progress: computeSubProgress(r.room_layers_generated_at, subEntities),
         };
       });
     }
@@ -562,17 +568,25 @@ export default async function ObjectiveCanvasPage({
     description: m.description,
   }));
 
+  // Compact "stat chips" for each room's collapsed whiteboard card — a
+  // snapshot of the room's real content (lane counts + approved chains).
+  const pluralize = (n: number, noun: string) =>
+    `${n} ${noun}${n === 1 ? "" : "s"}`;
+  const subChips = (s: MainCanvasSub): string[] => {
+    const chips: string[] = [];
+    if (s.laneTotalCounts.friction > 0)
+      chips.push(pluralize(s.laneTotalCounts.friction, "friction"));
+    if (s.laneTotalCounts.mechanism > 0)
+      chips.push(pluralize(s.laneTotalCounts.mechanism, "mechanism"));
+    if (s.laneTotalCounts.result > 0)
+      chips.push(pluralize(s.laneTotalCounts.result, "result"));
+    if (s.approvedPlayCount > 0)
+      chips.push(pluralize(s.approvedPlayCount, "chain"));
+    return chips;
+  };
+
   return (
-    <div
-      className="fixed inset-0 z-40 overflow-y-auto"
-      style={{
-        background: "#fafafa",
-        backgroundImage:
-          "radial-gradient(rgba(15,23,42,0.085) 1.1px, transparent 1.1px)",
-        backgroundSize: "22px 22px",
-        backgroundPosition: "0 0",
-      }}
-    >
+    <>
       <HomeTabNav />
       <ModePill
         spaceId={spaceId}
@@ -583,7 +597,24 @@ export default async function ObjectiveCanvasPage({
         }
       />
 
-      <div className="relative mx-auto w-full max-w-5xl px-6 pb-24 pt-24">
+      {/* The objective canvas renders as a floating room-window over the
+          interactive whiteboard floor-0. ObjectiveCanvasShell (WhiteboardBase
+          + circular room sidebar + collapse-to-card + AI Connect/Synthesize,
+          persisted via the canvases table) wraps the existing
+          ObjectiveCanvasView untouched as its `children`. */}
+      <ObjectiveCanvasShell
+        spaceId={spaceId}
+        objectiveTitle={objective}
+        subs={initialMainSubs.map((s) => ({
+          id: s.id,
+          title: s.title,
+          // "Ready" = the room's layers have been generated. Drives the
+          // green tick on the sidebar.
+          ready: s.generatedAt != null,
+          // Real content snapshot for the collapsed board card.
+          chips: subChips(s),
+        }))}
+      >
         <Link
           href="/app/objective"
           className="inline-flex items-center gap-1.5 text-[12px] font-medium"
@@ -592,30 +623,6 @@ export default async function ObjectiveCanvasPage({
           <ArrowLeft className="h-3 w-3" strokeWidth={2} />
           Back
         </Link>
-
-        {showWorkbench && (
-          <div className="mt-6">
-            <div className="mb-3 flex items-center justify-end">
-              <Link
-                href={`/app/objective/${spaceId}/brief`}
-                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold transition-colors"
-                style={{
-                  background: "rgba(15,23,42,0.92)",
-                  color: "#fff",
-                }}
-              >
-                <FileText className="h-3 w-3" strokeWidth={2} />
-                View Strategy Brief →
-              </Link>
-            </div>
-            <AnalysisWorkbench
-              spaceId={spaceId}
-              initialAnalysis={cachedAnalysis}
-              roomTitles={roomTitles}
-              operations={operationsCatalog}
-            />
-          </div>
-        )}
 
         <div className="mt-6">
           <ObjectiveCanvasView
@@ -634,9 +641,13 @@ export default async function ObjectiveCanvasPage({
             initialConceptMemory={initialConceptMemory}
             initialRoomDecisions={initialRoomDecisions}
             initialObjectiveStack={initialObjectiveStack}
+            initialAnalysis={cachedAnalysis}
+            analysisRoomTitles={roomTitles}
+            deckOperations={operationsCatalog}
+            briefHref={showWorkbench ? `/app/objective/${spaceId}/brief` : ""}
           />
         </div>
-      </div>
-    </div>
+      </ObjectiveCanvasShell>
+    </>
   );
 }
