@@ -42,6 +42,7 @@ import {
   Layers,
   Loader2,
   RefreshCw,
+  Sparkles,
   X,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -154,6 +155,11 @@ export function LabPageView({
   const evalMethod = (envelopeLocal?.evaluation_method ?? topScore.method) as
     | EvaluationMethod
     | undefined;
+
+  // Has any scoring run produced a result yet? Drives the hero button's
+  // label so it never says "re-run" before anything has actually run —
+  // first run reads "Evaluate with AI", subsequent runs "Re-evaluate all".
+  const hasScored = topScore.score > 0 || !!scoredAt;
 
   // ── Action dispatcher ──
   // All buttons funnel through here for consistent status + error
@@ -490,43 +496,81 @@ export function LabPageView({
           )}
         </div>
 
-        {/* Top-level actions */}
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <ActionButton
-            label="Re-run rubric"
-            icon={RefreshCw}
-            onClick={runRubric}
-            primary
-            disabled={actionStatus?.state === "running"}
-          />
-          <ActionButton
-            label="Run ensemble"
-            icon={Layers}
-            onClick={runEnsemble}
-            disabled={actionStatus?.state === "running"}
-            title="5-lens scoring (systems / skeptic / operator / engineer / historian) + Goodhart counter-indicators + Prentice mediation classification. ~5-8s. The strongest read short of an empirical test."
-          />
-          <ActionButton
-            label="Run simulation"
-            icon={Dice5}
-            onClick={runSimulation}
-            disabled={actionStatus?.state === "running"}
-            title="Monte Carlo + placebo refutation. Use when adherence/dose introduces real propagating uncertainty."
-          />
-          <ActionButton
-            label="Enrich chains"
-            icon={GitBranch}
-            onClick={runEnrichChains}
-            disabled={actionStatus?.state === "running"}
-            title="Room-scoped — enriches every chain's narrative and closes orphan gaps via complementary chain proposals."
-          />
-          <ActionButton
-            label="Propose R&D iteration"
-            icon={Beaker}
-            onClick={runRefine}
-            disabled={actionStatus?.state === "running"}
-            title="Proposes 3 new candidate variations targeting the weakest root cause."
-          />
+        {/* Top-level actions — one clear primary, the rest grouped by
+            purpose. The rubric IS the basic AI evaluation and it scores
+            every variation at once, so it doubles as the "run all" hero;
+            the deeper tiers and the generate tools are quietly demoted. */}
+        <div className="mt-4 space-y-3">
+          {/* Hero — the basic AI evaluation across ALL variations. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <ActionButton
+              label={hasScored ? "Re-evaluate all" : "Evaluate with AI"}
+              icon={hasScored ? RefreshCw : Sparkles}
+              onClick={runRubric}
+              primary
+              hero
+              disabled={actionStatus?.state === "running"}
+              title="Scores every variation on the rubric criteria (plausibility · addresses pain · constraint fit · novelty · risk) in ~1s. This is the basic AI evaluation — start here."
+            />
+            <span
+              className="text-[11.5px]"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              {hasScored
+                ? `Re-scores all ${variationsLocal.length} variations on the rubric criteria (~1s).`
+                : `Start here — scores all ${variationsLocal.length} variations on the rubric criteria (~1s).`}
+            </span>
+          </div>
+
+          {/* Deeper analysis — heavier, optional reads on the SAME
+              variations. Reach for these when a call is close. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="mr-0.5 text-[10.5px] font-medium"
+              style={{ color: appleVibe.text.faint }}
+            >
+              Deeper analysis
+            </span>
+            <ActionButton
+              label="5-lens cross-check"
+              icon={Layers}
+              onClick={runEnsemble}
+              disabled={actionStatus?.state === "running"}
+              title="Five lenses (systems / skeptic / operator / engineer / historian) each grade the indicators; their disagreement is the confidence signal, plus Goodhart counter-indicators + Prentice mediation. ~5-8s. The strongest read short of an empirical test."
+            />
+            <ActionButton
+              label="Monte Carlo simulation"
+              icon={Dice5}
+              onClick={runSimulation}
+              disabled={actionStatus?.state === "running"}
+              title="Monte Carlo + placebo refutation. Needs a target pain reachable via an approved chain. Use when adherence/dose introduces real propagating uncertainty."
+            />
+          </div>
+
+          {/* Build on this — these CHANGE the content (new narratives /
+              new candidate variations), they don't just score it. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="mr-0.5 text-[10.5px] font-medium"
+              style={{ color: appleVibe.text.faint }}
+            >
+              Build on this
+            </span>
+            <ActionButton
+              label="Enrich causal chains"
+              icon={GitBranch}
+              onClick={runEnrichChains}
+              disabled={actionStatus?.state === "running"}
+              title="Room-scoped — turns shallow pain→feature→outcome labels into full causal narratives and closes orphan gaps via complementary chain proposals."
+            />
+            <ActionButton
+              label="Propose new variations"
+              icon={Beaker}
+              onClick={runRefine}
+              disabled={actionStatus?.state === "running"}
+              title="The R&D agent proposes 3 new candidate variations targeting the weakest root cause of the target pain."
+            />
+          </div>
         </div>
 
         {actionStatus && (
@@ -2011,6 +2055,7 @@ function ActionButton({
   onClick,
   disabled,
   primary,
+  hero,
   title,
 }: {
   label: string;
@@ -2018,6 +2063,8 @@ function ActionButton({
   onClick: () => void;
   disabled?: boolean;
   primary?: boolean;
+  /** Larger, more prominent variant for the single primary action. */
+  hero?: boolean;
   title?: string;
 }) {
   return (
@@ -2033,8 +2080,8 @@ function ActionButton({
         color: primary ? appleVibe.text.onAccent : appleVibe.text.secondary,
         border: `1px solid ${primary ? appleVibe.accent.primary : appleVibe.stroke.medium}`,
         borderRadius: appleVibe.radius.pill,
-        padding: "5px 12px",
-        fontSize: "11px",
+        padding: hero ? "8px 18px" : "5px 12px",
+        fontSize: hero ? "13px" : "11px",
         fontWeight: 600,
         letterSpacing: "0.02em",
         boxShadow: primary ? appleVibe.shadow.chip : "none",
@@ -2042,7 +2089,7 @@ function ActionButton({
       }}
       title={title}
     >
-      <Icon className="h-3 w-3" strokeWidth={2} />
+      <Icon className={hero ? "h-4 w-4" : "h-3 w-3"} strokeWidth={2} />
       {label}
     </motion.button>
   );
