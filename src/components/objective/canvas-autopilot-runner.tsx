@@ -23,7 +23,7 @@
 
 import { useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, Loader2, Play, Sparkles, X } from "lucide-react";
+import { Check, Loader2, Orbit, Play, X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 type Status =
@@ -40,8 +40,19 @@ interface AutopilotTarget {
   featureIds: string[];
 }
 
+interface RoomOption {
+  id: string;
+  title: string;
+}
+
 interface Props {
   spaceId: string;
+  /** The generated rooms the user can choose to run autopilot on.
+   *  When provided, the confirmation dropdown shows a checklist so the
+   *  user can target a subset; the selected ids are passed to /start.
+   *  When omitted/empty, the run covers every generated room (the
+   *  route's default). */
+  rooms?: RoomOption[];
   /** Bumps a refresh signal each time a room completes so the parent
    *  page can re-fetch + repaint room cards with new candidates. */
   onRoomComplete?: (subObjectiveId: string) => void;
@@ -54,6 +65,7 @@ const FEATURES = appleVibe.stage.features;
 
 export function CanvasAutopilotRunner({
   spaceId,
+  rooms,
   onRoomComplete,
   onAllComplete,
 }: Props) {
@@ -67,6 +79,18 @@ export function CanvasAutopilotRunner({
   const cancelRef = useRef(false);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Inverted selection — track the rooms the user has UNCHECKED. Empty
+  // set ⇒ every room selected (the default). Tracking the negation
+  // keeps newly-generated rooms selected by default without a sync
+  // effect: a room is selected iff it's not in this set.
+  const [deselected, setDeselected] = useState<Set<string>>(new Set());
+
+  const roomOptions = rooms ?? [];
+  const selectedIds = roomOptions
+    .filter((r) => !deselected.has(r.id))
+    .map((r) => r.id);
+  const isSubset =
+    roomOptions.length > 0 && selectedIds.length < roomOptions.length;
 
   async function runCanvasAutopilot(withSpecs: boolean) {
     setOpen(false);
@@ -77,6 +101,15 @@ export function CanvasAutopilotRunner({
     setFeatureIdx(0);
     setStatus("running");
 
+    // Surface the live run in the Lab Notebook — the layout listens for
+    // this and opens the rail so the user watches each room's events
+    // stream in as they're generated (the "see it as it happens" path).
+    try {
+      window.dispatchEvent(new CustomEvent("notebook:open"));
+    } catch {
+      // SSR / no-window — harmless; the notebook just won't auto-open.
+    }
+
     // ── Step 1: fetch the work list + log the canvas autopilot_run header ──
     let workList: AutopilotTarget[];
     try {
@@ -85,7 +118,11 @@ export function CanvasAutopilotRunner({
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({}),
+          // Only send the filter when it's a strict subset — omitting
+          // it preserves the route's "all generated rooms" default.
+          body: JSON.stringify(
+            isSubset ? { subObjectiveIds: selectedIds } : {},
+          ),
         },
       );
       const startJson = (await startRes.json().catch(() => ({}))) as {
@@ -288,15 +325,33 @@ export function CanvasAutopilotRunner({
           }}
           title="Run experiments across every room in this canvas"
         >
-          <Sparkles
-            className="h-3 w-3"
-            strokeWidth={2}
+          <Orbit
+            className="h-3.5 w-3.5"
+            strokeWidth={1.9}
             style={{ color: FEATURES }}
           />
-          Autopilot · all rooms
+          {isSubset
+            ? `Autopilot · ${selectedIds.length} ${
+                selectedIds.length === 1 ? "room" : "rooms"
+              }`
+            : "Autopilot · all rooms"}
         </motion.button>
         {open && (
           <CanvasAutopilotDropdown
+            rooms={roomOptions}
+            selectedIds={selectedIds}
+            onToggleRoom={(id) =>
+              setDeselected((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })
+            }
+            onSelectAll={() => setDeselected(new Set())}
+            onSelectNone={() =>
+              setDeselected(new Set(roomOptions.map((r) => r.id)))
+            }
             onRun={runCanvasAutopilot}
             onClose={() => setOpen(false)}
           />
@@ -563,9 +618,19 @@ export function CanvasAutopilotRunner({
 // ── Confirmation dropdown ─────────────────────────────────────────
 
 function CanvasAutopilotDropdown({
+  rooms,
+  selectedIds,
+  onToggleRoom,
+  onSelectAll,
+  onSelectNone,
   onRun,
   onClose,
 }: {
+  rooms: RoomOption[];
+  selectedIds: string[];
+  onToggleRoom: (id: string) => void;
+  onSelectAll: () => void;
+  onSelectNone: () => void;
   onRun: (withSpecs: boolean) => void;
   onClose: () => void;
 }) {
@@ -578,6 +643,10 @@ function CanvasAutopilotDropdown({
   // Opt-in: also pre-generate the v2 technical mechanism spec for every
   // feature. Default off — it's a heavy extra LLM pass per feature.
   const [withSpecs, setWithSpecs] = useState(false);
+
+  const selectedSet = new Set(selectedIds);
+  const allSelected = rooms.length > 0 && selectedIds.length === rooms.length;
+  const noneSelected = selectedIds.length === 0;
 
   return (
     <>
@@ -597,9 +666,9 @@ function CanvasAutopilotDropdown({
       >
         <div className="px-3.5 py-3">
           <div className="flex items-center gap-1.5">
-            <Sparkles
-              className="h-3 w-3 flex-shrink-0"
-              strokeWidth={2}
+            <Orbit
+              className="h-3.5 w-3.5 flex-shrink-0"
+              strokeWidth={1.9}
               style={{ color: appleVibe.stage.features }}
             />
             <span
@@ -642,6 +711,63 @@ function CanvasAutopilotDropdown({
               estimated ~5-15 min
             </span>
           </div>
+          {/* Room picker — choose which rooms the run covers. Defaults
+              to all selected; deselecting narrows the run to a subset. */}
+          {rooms.length > 0 && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between">
+                <span
+                  className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
+                  style={{ color: appleVibe.text.secondary }}
+                >
+                  Rooms · {selectedIds.length} of {rooms.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={allSelected ? onSelectNone : onSelectAll}
+                  className="text-[10px] font-medium underline-offset-2 hover:underline"
+                  style={{ color: appleVibe.accent.primary }}
+                >
+                  {allSelected ? "Clear all" : "Select all"}
+                </button>
+              </div>
+              <div
+                className="mt-1.5 max-h-44 space-y-0.5 overflow-y-auto rounded-lg p-1"
+                style={{
+                  background: appleVibe.surface.chip,
+                  border: `1px solid ${appleVibe.stroke.hairline}`,
+                }}
+              >
+                {rooms.map((room) => {
+                  const checked = selectedSet.has(room.id);
+                  return (
+                    <label
+                      key={room.id}
+                      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-[rgba(15,23,42,0.04)]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => onToggleRoom(room.id)}
+                        className="h-3 w-3 flex-shrink-0"
+                      />
+                      <span
+                        className="min-w-0 flex-1 truncate text-[11.5px] leading-snug"
+                        style={{
+                          color: checked
+                            ? appleVibe.text.primary
+                            : appleVibe.text.tertiary,
+                        }}
+                        title={room.title}
+                      >
+                        {room.title}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {/* Opt-in — pre-generate the v2 technical mechanism specs. */}
           <label className="mt-2.5 flex cursor-pointer items-start gap-2">
             <input
@@ -674,10 +800,11 @@ function CanvasAutopilotDropdown({
           </button>
           <motion.button
             type="button"
+            disabled={noneSelected}
             onClick={() => onRun(withSpecs)}
-            whileHover={{ y: -1 }}
-            whileTap={{ y: 0.5 }}
-            className="inline-flex items-center gap-1.5 transition-all duration-150 ease-out"
+            whileHover={noneSelected ? undefined : { y: -1 }}
+            whileTap={noneSelected ? undefined : { y: 0.5 }}
+            className="inline-flex items-center gap-1.5 transition-all duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-40"
             style={{
               background: appleVibe.accent.primary,
               color: appleVibe.text.onAccent,

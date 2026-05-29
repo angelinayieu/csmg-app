@@ -655,6 +655,7 @@ export async function generateMultiStepStrategy(
       allSpaces: probabilitySpaces,
       entityCount: params.entities.length,
       graphStructure,
+      guardrailBlock: params.guardrailBlock,
     });
     console.log(`[strategy-engine] Step 4 complete: L4=${preBuiltLayers.l4_insights.length}, L3=${preBuiltLayers.l3_reasoning.length}, L2=${preBuiltLayers.l2_methods.length}, L1=${preBuiltLayers.l1_outcomes.length}`);
   } catch (err) {
@@ -1162,8 +1163,21 @@ async function generateLayersBottomUp(params: {
    * issue for later inclusion in the strategy's validation report.
    */
   stripAudit?: StrategyValidationIssue[];
+  /**
+   * User-set guardrail block, threaded from generateMultiStepStrategy.
+   * Without this the layer prompts referenced an out-of-scope
+   * `withGuardrails` closure → ReferenceError that crashed every layer
+   * (L4/L3/L2/L1) generation and prevented any strategy from forming.
+   */
+  guardrailBlock?: string;
 }): Promise<StrategyLayers> {
   const { layerClassification, diagnosis, hiddenSignals } = params;
+
+  // Same guardrail-suffix helper as generateMultiStepStrategy. Defined
+  // locally here because this is a separate function — the main engine's
+  // closure isn't in scope. Empty block = no-op passthrough.
+  const withGuardrails = (system: string): string =>
+    params.guardrailBlock ? `${system}\n${params.guardrailBlock}` : system;
 
   // ── Step 4a: L4 Insight Extraction ──
   console.log("[strategy-engine] Step 4a: L4 insight extraction...");

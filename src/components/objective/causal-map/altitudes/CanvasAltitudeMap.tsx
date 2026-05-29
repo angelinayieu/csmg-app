@@ -11,7 +11,7 @@
 // This is THE moment the spec calls out (§17.15): "I'm browsing my work"
 // → "I'm looking at the system I'm building."
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ReactFlow,
@@ -23,6 +23,7 @@ import {
   Panel,
   MarkerType,
   useReactFlow,
+  useNodesInitialized,
   type Node,
   type Edge,
   type NodeChange,
@@ -106,6 +107,23 @@ function CanvasAltitudeMapInner({
   );
   const rf = useReactFlow();
   const [initialized, setInitialized] = useState(false);
+
+  // ── Reliable initial framing ──
+  // Custom nodes carry a fixed width but a content-driven height (only
+  // minHeight is set), so React Flow measures their real size AFTER the
+  // first paint. The `fitView` prop runs once on initial render — before
+  // that measurement — so it frames against wrong bounds and lands the
+  // view at the top-left origin. `useNodesInitialized` flips true once
+  // every node has real dimensions; we fit then. Ref-guarded so this
+  // only governs entry framing and never hijacks the view after the user
+  // has panned or zoomed.
+  const nodesInitialized = useNodesInitialized();
+  const didInitialFit = useRef(false);
+  useEffect(() => {
+    if (!nodesInitialized || didInitialFit.current) return;
+    didInitialFit.current = true;
+    rf.fitView({ padding: 0.18, maxZoom: 1.1, minZoom: 0.2, duration: 300 });
+  }, [nodesInitialized, rf]);
 
   // 1. Build the graph (pure) from the data the canvas already has.
   const graph = useMemo(

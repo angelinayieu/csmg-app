@@ -900,6 +900,49 @@ declare module "@tldraw/tlschema" {
       errorMessage: string | null;
       generatedAt: string;
     };
+    // Objective canvas — "collapse-to-card" target. When a room (the
+    // objective itself or a sub-objective) is collapsed out of its
+    // floating window, the shell drops one of these onto the focused
+    // objective whiteboard base. Self-contained (no app context) so it
+    // mounts safely outside SpaceDataProvider. `roomId` is "__obj" for
+    // the objective or a sub-objective id; the Expand button fires
+    // `objective-board:open-room` to re-inflate the window.
+    "room-card": {
+      w: number;
+      h: number;
+      title: string;
+      subtitle: string;
+      color: string;
+      roomId: string;
+      chips: string[];
+    };
+    // Objective board — AI "Connect"/"Synthesize" result. Lands as a
+    // proposed (ghost) card with Keep/Dismiss; accepting persists it as a
+    // first-class board artifact. `sourceIds` are the tldraw ids of the
+    // cards it links to (tethered by arrows tagged meta.proposalFor).
+    "insight-card": {
+      w: number;
+      h: number;
+      status: "proposed" | "accepted";
+      kind: "connect" | "synthesize";
+      headline: string;
+      body: string;
+      color: string;
+      sourceIds: string[];
+    };
+    // Objective board — a single room item (pain/feature/outcome) sent to
+    // the board so it can be Connect/Synthesize'd with items from OTHER
+    // rooms. "Open room" reopens the source room (roomId).
+    "artifact-card": {
+      w: number;
+      h: number;
+      kind: "pain" | "feature" | "outcome";
+      title: string;
+      subtitle: string;
+      color: string;
+      entityId: string;
+      roomId: string;
+    };
   }
 }
 

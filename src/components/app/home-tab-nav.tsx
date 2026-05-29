@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { LayoutGrid } from "lucide-react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { LayoutGrid, FlaskConical } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 
 interface TabDef {
@@ -25,10 +25,24 @@ const TABS: TabDef[] = [
     icon: Sparkle,
     matches: (p) => p === "/app" || p.startsWith("/app?"),
   },
+  {
+    href: "/app/strategy-lab",
+    label: "Strategy Lab",
+    icon: FlaskConical,
+    matches: (p) => p.startsWith("/app/strategy-lab"),
+  },
 ];
 
 export function HomeTabNav() {
   const pathname = usePathname() ?? "/app";
+  const searchParams = useSearchParams();
+
+  // When a route is rendered INSIDE a spatial window (the whiteboard's
+  // CanvasWorkspaceRoomFullscreen iframes it with ?embed=1), the window
+  // supplies its own chrome — so the app's top tab nav would be
+  // redundant/recursive. Hide it. This is the single embed touchpoint;
+  // no content route page needs to change.
+  if (searchParams?.get("embed") === "1") return null;
 
   return (
     <nav

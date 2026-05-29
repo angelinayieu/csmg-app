@@ -760,6 +760,13 @@ body.synergy-scene-active .bg-gradient-page {
   background: transparent;
 }
 
+/* The persistent pearl AmbientBackdrop steps aside when an immersive
+ * SynergyScene is mounted — those pages supply their own backdrop, and
+ * stacking the pearl substrate over them would mute the scene. */
+body.synergy-scene-active .ambient-backdrop {
+  opacity: 0;
+}
+
 /* ── Cinematic Phase 3: chrome dimming during canvas unfurl ──
  * The CanvasActivityTracker sets data-canvas-unfurl-active="true" on
  * the body whenever shapes are being added to the tldraw editor in a

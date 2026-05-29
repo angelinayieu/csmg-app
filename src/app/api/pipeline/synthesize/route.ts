@@ -3110,6 +3110,28 @@ REQUIREMENTS FOR THIS PASS:
         console.warn("[synthesize] cancelReservation threw:", refundErr);
       });
     }
-    return NextResponse.json({ error: "Synthesis failed" }, { status: 500 });
+    // Surface the real cause instead of a bare "Synthesis failed".
+    // The most common hard failure here is an LLM provider quota/billing
+    // limit (synthesize calls OpenAI). Detect it so callers (e.g. the
+    // Strategy Lab live view) can render an actionable "add credits"
+    // banner instead of a generic 500.
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: string } | null)?.code;
+    const status = (err as { status?: number } | null)?.status;
+    const isQuota =
+      code === "insufficient_quota" ||
+      code === "billing_hard_limit_reached" ||
+      status === 429 ||
+      /quota|insufficient_quota|billing|rate.?limit/i.test(rawMsg);
+    return NextResponse.json(
+      {
+        error: isQuota
+          ? "LLM API quota exhausted — add credits to your AI provider and retry."
+          : "Synthesis failed",
+        detail: rawMsg.slice(0, 300),
+        quota: isQuota,
+      },
+      { status: 500 },
+    );
   }
 }

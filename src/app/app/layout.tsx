@@ -3,6 +3,7 @@ import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { AppStoreProvider } from "@/stores/store-provider";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { GlobalToolbox } from "@/components/layout/global-toolbox";
+import { AmbientBackdrop } from "@/components/layout/ambient-backdrop";
 import { PulseStrip } from "@/components/pulse";
 import { PendingIntakeMount } from "@/components/landing/pending-intake-mount";
 import type { Space } from "@/types";
@@ -50,8 +51,14 @@ export default async function AppLayout({
   return (
     <AppStoreProvider initialState={{ spaces }}>
       <ThemeProvider>
+        {/* Persistent pearl substrate — gives every page the Vision-Pro
+            depth that floating cards read against. Sits behind all
+            content; self-hides when a SynergyScene takes over. The body
+            keeps `bg-gradient-page` (pearl) as the base color underneath,
+            so `main` is transparent and lets the backdrop's light show. */}
+        <AmbientBackdrop />
         <div className="flex h-screen overflow-hidden">
-          <main className="flex-1 overflow-y-auto bg-gradient-page">
+          <main className="flex-1 overflow-y-auto">
             {/* Tier 8: persistent Pulse strip — sticky at the top of
                 the main scroll container so it stays visible across
                 every authenticated page. The bar itself renders an

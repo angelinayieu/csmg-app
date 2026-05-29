@@ -1,4 +1,4 @@
-export type ThemeId = "teal" | "blue" | "dark";
+export type ThemeId = "pearl" | "teal" | "blue" | "dark";
 
 export interface ThemeDefinition {
   label: string;
@@ -7,6 +7,29 @@ export interface ThemeDefinition {
 }
 
 export const THEMES: Record<ThemeId, ThemeDefinition> = {
+  // Apple Vision Pro pearl — the default. Mirrors globals.css :root so
+  // the inline vars ThemeProvider writes agree with the stylesheet
+  // default (no chromatic page wash; color is reserved for content +
+  // immersive scenes layered on top). Accent is Apple system blue,
+  // used only for active states / primary actions.
+  pearl: {
+    label: "Pearl",
+    swatch: "#F5F5F7",
+    cssVars: {
+      "--accent-50": "#F0F6FF",
+      "--accent-100": "#DCEAFF",
+      "--accent-200": "#B9D5FF",
+      "--accent-300": "#8AB8FF",
+      "--accent-400": "#5C9CFF",
+      "--accent-500": "#0A84FF",
+      "--accent-600": "#006FE6",
+      "--accent-700": "#0058B8",
+      "--accent-rgb": "10, 132, 255",
+      "--gradient-name-end": "#0058B8",
+      "--gradient-page-start": "#F5F5F7",
+      "--gradient-page-mid": "#FAFAFB",
+    },
+  },
   teal: {
     label: "Teal",
     swatch: "#00BCD4",
@@ -68,5 +91,5 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
   },
 };
 
-export const DEFAULT_THEME: ThemeId = "teal";
+export const DEFAULT_THEME: ThemeId = "pearl";
 export const THEME_STORAGE_KEY = "interaxis-theme";

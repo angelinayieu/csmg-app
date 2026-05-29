@@ -45,15 +45,17 @@ export function LaneColumns({ columns, height }: Props) {
               height: Math.max(height, ROOM_TOP + 80),
             }}
           >
-            {/* Faint column tint */}
+            {/* Column wash — a top-weighted gradient that fades to
+                nothing instead of a hard-bordered rect, so each lane
+                reads as a shaft of light rather than a closed box. */}
             <div
               style={{
                 position: "absolute",
                 inset: 0,
                 top: ROOM_TOP - 12,
-                background: `${col.color}0d`,
-                borderRadius: 16,
-                border: `1px solid ${col.color}1f`,
+                background: `linear-gradient(to bottom, ${col.color}14 0px, ${col.color}0a 120px, ${col.color}00 360px)`,
+                borderRadius: 18,
+                boxShadow: `inset 0 1px 0 ${col.color}1f`,
               }}
             />
             {/* Lane header */}

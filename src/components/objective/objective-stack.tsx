@@ -71,10 +71,10 @@ const VERB_LABEL: Record<LayerInfluenceVerb, string> = {
   aggregates: "aggregates",
 };
 
-const ARCHETYPE_COLOR: Record<ObjectiveLayer["archetype"], string> = {
+export const ARCHETYPE_COLOR: Record<ObjectiveLayer["archetype"], string> = {
   substrate: appleVibe.stage.pain,        // red — foundational, often the constraint
   mechanism: appleVibe.stage.features,    // blue — interventions
-  process: appleVibe.accent.primary,      // accent — workflow / execution
+  process: appleVibe.stage.process,       // teal — workflow / execution
   output: appleVibe.stage.outcomes,       // green — measurable signals
   outcome: appleVibe.stage.objective,     // purple — strategic target
 };

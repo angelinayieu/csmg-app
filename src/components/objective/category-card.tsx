@@ -58,7 +58,7 @@ import type {
 import type { FeatureCardItem } from "./cards/feature-card";
 import type { OutcomeCardItem } from "./cards/outcome-card";
 
-interface LineupVariation {
+export interface LineupVariation {
   id: string;
   name: string;
   description?: string;
@@ -148,8 +148,10 @@ interface LineupVariation {
       relevance: number;
       argument: string;
     }>;
-    /** Phase 11.6 — aggregate 0..1 evidence quality. 0.5 = neutral. */
-    evidence_strength?: number;
+    /** Phase 11.6 — aggregate 0..1 evidence quality. 0.5 = neutral.
+     *  (Renamed from evidence_strength to disambiguate from the
+     *  mechanism-spec ladder + the entity-level evidence_strength.) */
+    evidence_support?: number;
     evidence_supports?: number;
     evidence_refutes?: number;
     evidence_contextual?: number;
@@ -1266,7 +1268,7 @@ function OutcomeHalf({
 
 // ── Mechanism Lineup — the bottom rail ────────────────────────────
 
-function MechanismLineup({
+export function MechanismLineup({
   variations,
   featureId,
   spaceId,
@@ -1521,7 +1523,7 @@ function MechanismLineup({
         </div>
       )}
 
-      <ul className="space-y-1">
+      <ul className="space-y-2.5">
         {variations.slice(0, 6).map((v, i) => (
           <LineupRow
             key={v.id}
@@ -1574,6 +1576,15 @@ function LineupRow({
   onReject: (variationId: string) => void;
 }) {
   const score = v.effectiveness_score ?? 0;
+  const scorePct = score * 100;
+  // Tier color for the score bar + number — green for strong, amber
+  // for middling, faint grey for weak. One quiet signal, no shouting.
+  const scoreColor =
+    scorePct >= 70
+      ? OUTCOME_COLOR
+      : scorePct >= 40
+        ? "#D97706"
+        : appleVibe.text.faint;
   const isElected = v.disposition === "elected";
   const isRejected = v.disposition === "rejected";
   const isRdCandidate = v.provenance === "rd_iteration";
@@ -1590,164 +1601,183 @@ function LineupRow({
   );
 
   return (
-    <li
-      className="group flex flex-col gap-1.5 px-2.5 py-2 transition-colors duration-150 ease-out hover:bg-[rgba(15,23,42,0.025)]"
+    <motion.li
+      whileHover={{ y: -2, boxShadow: appleVibe.shadow.cardHover }}
+      transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+      className="group flex flex-col gap-2"
       style={{
-        borderRadius: appleVibe.radius.sm,
-        opacity: isRejected ? 0.5 : 1,
+        borderRadius: appleVibe.radius.md,
+        padding: "13px 15px",
+        opacity: isRejected ? 0.55 : 1,
+        background: appleVibe.surface.card,
         border: `1px solid ${
-          isElected
-            ? `${OUTCOME_COLOR}33`
-            : appleVibe.stroke.hairline
+          isElected ? `${OUTCOME_COLOR}2E` : appleVibe.stroke.hairline
         }`,
-        background: isElected
-          ? `${OUTCOME_COLOR}06`
-          : appleVibe.surface.cardElevated,
+        borderLeft: isElected
+          ? `2.5px solid ${OUTCOME_COLOR}`
+          : `1px solid ${appleVibe.stroke.hairline}`,
+        boxShadow: appleVibe.shadow.chip,
       }}
     >
-      {/* Header row — rank + name + chips + score + actions. */}
-      <div className="flex items-center gap-2.5">
+      {/* Header — rank pip + name/badges + score module | action cluster */}
+      <div className="flex items-start gap-3">
+        {/* Rank pip */}
         <span
-          className="w-3.5 flex-shrink-0 font-mono text-[10px] font-semibold tabular-nums"
-          style={{ color: appleVibe.text.tertiary }}
+          className="mt-[1px] flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10.5px] font-semibold tabular-nums"
+          style={{
+            background: isElected
+              ? `${OUTCOME_COLOR}14`
+              : appleVibe.surface.chip,
+            color: isElected ? OUTCOME_COLOR : appleVibe.text.tertiary,
+            fontFamily: appleVibe.font.display,
+          }}
         >
-          #{rank}
+          {rank}
         </span>
-        <span
-          className="min-w-0 flex-1 truncate text-[12px] font-semibold"
-          style={{ color: appleVibe.text.primary }}
-          title={v.name}
-        >
-          {v.name}
-        </span>
-        {isElected && (
-          <span
-            className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.10em]"
-            style={{
-              background: `${OUTCOME_COLOR}15`,
-              color: OUTCOME_COLOR,
-            }}
-          >
-            <Check className="h-2 w-2" strokeWidth={2.5} />
-            elected
-          </span>
-        )}
-        {isRdCandidate && !isElected && !isRejected && (
-          <span
-            className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.10em]"
-            style={{
-              background: `${FEATURE_COLOR}15`,
-              color: FEATURE_COLOR,
-            }}
-            title="Candidate from an R&D refinement run"
-          >
-            experiment
-          </span>
-        )}
-        <div className="flex w-24 flex-shrink-0 items-center gap-1.5">
-          <div
-            className="relative h-[5px] flex-1 overflow-hidden"
-            style={{
-              background: `${FEATURE_COLOR}1F`,
-              borderRadius: appleVibe.radius.pill,
-            }}
-          >
-            <div
-              className="absolute inset-y-0 left-0 transition-[width] duration-500 ease-out"
+
+        {/* Name + badges */}
+        <div className="min-w-0 flex-1 pt-0.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="min-w-0 truncate text-[13px] font-semibold"
               style={{
-                width: `${Math.max(3, Math.min(100, score * 100))}%`,
-                background: `linear-gradient(90deg, ${FEATURE_COLOR}D9 0%, ${FEATURE_COLOR} 100%)`,
+                color: appleVibe.text.primary,
+                letterSpacing: "-0.012em",
+                fontFamily: appleVibe.font.display,
+              }}
+              title={v.name}
+            >
+              {v.name}
+            </span>
+            {isElected && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full px-1.5 py-[2px] text-[9.5px] font-medium tracking-tight"
+                style={{ background: `${OUTCOME_COLOR}12`, color: OUTCOME_COLOR }}
+              >
+                <Check className="h-2.5 w-2.5" strokeWidth={2.5} />
+                Elected
+              </span>
+            )}
+            {isRdCandidate && !isElected && !isRejected && (
+              <span
+                className="inline-flex items-center rounded-full px-1.5 py-[2px] text-[9.5px] font-medium tracking-tight"
+                style={{ background: `${FEATURE_COLOR}12`, color: FEATURE_COLOR }}
+                title="Candidate from an R&D refinement run"
+              >
+                Experiment
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Score module — bar + hero number + method badge */}
+        {score > 0 && (
+          <div className="flex flex-shrink-0 items-center gap-2 pt-px">
+            <div
+              className="relative h-1.5 w-11 overflow-hidden"
+              style={{
+                background: appleVibe.stroke.soft,
                 borderRadius: appleVibe.radius.pill,
               }}
-            />
-          </div>
-          <span
-            className="w-6 flex-shrink-0 text-right font-mono text-[10px] font-semibold tabular-nums"
-            style={{ color: appleVibe.text.primary }}
-          >
-            {score > 0 ? (score * 100).toFixed(0) : "—"}
-          </span>
-        </div>
-        {/* Phase 11.1c — method badge alongside the score so the user
-            always sees the evaluation tier that produced the number.
-            Compact mode (no tier label) keeps row chrome tight; the
-            full label surfaces on hover via the title attribute. */}
-        {score > 0 && v.evaluation_method && (
-          <MethodBadge method={v.evaluation_method} compact />
-        )}
-        {/* Phase 11.2 — "Open Lab" deep-link. Small flask icon that
-            routes to the focused evaluation page for this mechanism.
-            Hidden when spaceId/subObjectiveId aren't threaded through
-            (older mount sites). Sits to the LEFT of the expand
-            chevron so it reads as a parallel affordance, not a
-            secondary control. */}
-        {spaceId && subObjectiveId && (
-          <a
-            href={`/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${featureId}`}
-            onClick={(e) => e.stopPropagation()}
-            className="flex h-5 w-5 items-center justify-center rounded-full transition-all duration-150 ease-out hover:bg-[rgba(124,58,237,0.10)]"
-            style={{
-              color: appleVibe.accent.primary,
-              opacity: 0.55,
-            }}
-            title="Open Lab — focused evaluation for this mechanism"
-            aria-label="Open Lab"
-          >
-            <FlaskConical className="h-3 w-3" strokeWidth={2.2} />
-          </a>
-        )}
-        {/* Phase 8b — expand toggle. Always renders when there's
-            extras to show; the chevron itself is the affordance. */}
-        {hasExtras && (
-          <button
-            type="button"
-            onClick={() => setExpanded((p) => !p)}
-            aria-label={expanded ? "Collapse details" : "Expand details"}
-            aria-expanded={expanded}
-            className="flex h-5 w-5 items-center justify-center rounded-full transition-all duration-150 ease-out hover:bg-[rgba(15,23,42,0.06)]"
-            style={{
-              color: appleVibe.text.tertiary,
-              opacity: expanded ? 1 : 0.55,
-            }}
-            title={expanded ? "Hide details" : "Show details"}
-          >
-            {expanded ? (
-              <ChevronUp className="h-3 w-3" strokeWidth={2.4} />
-            ) : (
-              <ChevronDown className="h-3 w-3" strokeWidth={2.4} />
+            >
+              <div
+                className="absolute inset-y-0 left-0 transition-[width] duration-500 ease-out"
+                style={{
+                  width: `${Math.max(4, Math.min(100, scorePct))}%`,
+                  background: scoreColor,
+                  borderRadius: appleVibe.radius.pill,
+                }}
+              />
+            </div>
+            <span
+              className="tabular-nums"
+              style={{
+                color: appleVibe.text.primary,
+                fontFamily: appleVibe.font.display,
+                fontSize: 15,
+                fontWeight: 600,
+                letterSpacing: "-0.02em",
+                lineHeight: 1,
+              }}
+            >
+              {scorePct.toFixed(0)}
+            </span>
+            {v.evaluation_method && (
+              <MethodBadge method={v.evaluation_method} compact />
             )}
-          </button>
+          </div>
         )}
-        {/* Inline elect/reject — at 0.4 opacity at rest, full on
-            row hover, full+active when the disposition is set. */}
-        <div className="flex flex-shrink-0 items-center gap-0.5">
+
+        {/* Hairline divider — separates the score module from actions */}
+        <div
+          className="mt-0.5 h-5 w-px flex-shrink-0 self-start"
+          style={{ background: appleVibe.stroke.hairline }}
+          aria-hidden
+        />
+
+        {/* Action cluster — Open Lab · expand · reject · elect.
+            Hover-revealed for a clean resting state; the expand
+            chevron stays subtly visible, and elected/rejected
+            states persist their colored control. */}
+        <div className="flex flex-shrink-0 items-center gap-0.5 pt-px">
+          {spaceId && subObjectiveId && (
+            <a
+              href={`/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${featureId}`}
+              onClick={(e) => e.stopPropagation()}
+              className="flex h-6 w-6 items-center justify-center rounded-full opacity-0 transition-all duration-150 ease-out hover:bg-[rgba(124,58,237,0.10)] group-hover:opacity-100"
+              style={{ color: appleVibe.accent.primary }}
+              title="Open Lab — focused evaluation for this mechanism"
+              aria-label="Open Lab"
+            >
+              <FlaskConical className="h-3.5 w-3.5" strokeWidth={2.2} />
+            </a>
+          )}
+          {hasExtras && (
+            <button
+              type="button"
+              onClick={() => setExpanded((p) => !p)}
+              aria-label={expanded ? "Collapse details" : "Expand details"}
+              aria-expanded={expanded}
+              className="flex h-6 w-6 items-center justify-center rounded-full opacity-50 transition-all duration-150 ease-out hover:bg-[rgba(15,23,42,0.06)] group-hover:opacity-100"
+              style={{ color: appleVibe.text.tertiary }}
+              title={expanded ? "Hide details" : "Show details"}
+            >
+              {expanded ? (
+                <ChevronUp className="h-3.5 w-3.5" strokeWidth={2.4} />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" strokeWidth={2.4} />
+              )}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => v.id && onReject(v.id)}
             disabled={isRejected || !v.id}
             aria-label="Reject this candidate"
-            className="flex h-5 w-5 items-center justify-center rounded-full transition-all duration-150 ease-out hover:bg-[rgba(220,38,38,0.10)] disabled:cursor-not-allowed disabled:opacity-30 group-hover:opacity-100"
+            className="flex h-6 w-6 items-center justify-center rounded-full opacity-0 transition-all duration-150 ease-out hover:bg-[rgba(220,38,38,0.10)] disabled:cursor-not-allowed group-hover:opacity-100"
             style={{
-              color: isRejected ? "rgba(220,38,38,0.85)" : appleVibe.text.tertiary,
-              opacity: isRejected ? 1 : 0.45,
+              color: isRejected
+                ? "rgba(220,38,38,0.85)"
+                : appleVibe.text.tertiary,
+              opacity: isRejected ? 1 : undefined,
             }}
             title="Reject"
           >
-            <X className="h-3 w-3" strokeWidth={2.4} />
+            <X className="h-3.5 w-3.5" strokeWidth={2.4} />
           </button>
           <button
             type="button"
             onClick={() => v.id && onElect(v.id)}
             disabled={isElected || !v.id}
             aria-label="Elect this candidate"
-            className="flex h-5 w-5 items-center justify-center rounded-full transition-all duration-150 ease-out hover:bg-[rgba(22,163,74,0.10)] disabled:cursor-not-allowed disabled:opacity-30 group-hover:opacity-100"
+            className="flex h-6 w-6 items-center justify-center rounded-full opacity-0 transition-all duration-150 ease-out hover:bg-[rgba(22,163,74,0.10)] disabled:cursor-not-allowed group-hover:opacity-100"
             style={{
               color: isElected ? OUTCOME_COLOR : appleVibe.text.tertiary,
-              opacity: isElected ? 1 : 0.45,
+              opacity: isElected ? 1 : undefined,
             }}
             title="Elect"
           >
-            <Check className="h-3 w-3" strokeWidth={2.4} />
+            <Check className="h-3.5 w-3.5" strokeWidth={2.4} />
           </button>
         </div>
       </div>
@@ -1758,7 +1788,7 @@ function LineupRow({
           substance, not just a name + score. */}
       {v.description && (
         <p
-          className="pl-6 text-[11.5px] leading-snug"
+          className="pl-8 text-[11.5px] leading-snug"
           style={{
             color: appleVibe.text.secondary,
             ...(expanded
@@ -1775,27 +1805,27 @@ function LineupRow({
         </p>
       )}
 
-      {/* Expanded extras — tradeoff + open_questions + target_root_cause. */}
+      {/* Expanded extras — tradeoff + open_questions + target_root_cause.
+          Matches the collapsed card aesthetic: sentence-case labels at
+          low emphasis, no all-caps eyebrows, no heavy colored boxes —
+          the tradeoff gets a quiet amber left-edge instead of a tinted
+          panel, lists drop their bullet dots. */}
       {expanded && (
-        <div className="space-y-2 pl-6">
+        <div className="space-y-3.5 pl-8 pt-1">
           {v.tradeoff && (
             <div
-              className="px-2.5 py-1.5"
-              style={{
-                background: "rgba(217,119,6,0.06)",
-                border: "1px solid rgba(217,119,6,0.18)",
-                borderRadius: appleVibe.radius.sm,
-              }}
+              className="py-0.5 pl-3"
+              style={{ borderLeft: "2px solid rgba(217,119,6,0.5)" }}
             >
               <div
-                className="text-[9px] font-semibold uppercase tracking-[0.12em]"
-                style={{ color: "rgba(146,64,14,0.95)" }}
+                className="text-[9.5px] font-medium tracking-tight"
+                style={{ color: "rgba(180,83,9,0.92)" }}
               >
                 Tradeoff
               </div>
               <p
                 className="mt-0.5 text-[11.5px] leading-snug"
-                style={{ color: "rgba(120,53,15,0.92)" }}
+                style={{ color: appleVibe.text.secondary }}
               >
                 {v.tradeoff}
               </p>
@@ -1804,43 +1834,37 @@ function LineupRow({
           {v.open_questions && v.open_questions.length > 0 && (
             <div>
               <div
-                className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.12em]"
-                style={{ color: appleVibe.text.tertiary }}
+                className="mb-1 text-[9.5px] font-medium tracking-tight"
+                style={{ color: appleVibe.text.faint }}
               >
                 Open questions
               </div>
-              <ul className="space-y-0.5">
+              <ul className="space-y-1">
                 {v.open_questions.slice(0, 3).map((q, i) => (
                   <li
                     key={`${i}-${q}`}
-                    className="flex items-start gap-1.5 text-[11px] leading-snug"
+                    className="text-[11.5px] leading-snug"
                     style={{ color: appleVibe.text.secondary }}
                   >
-                    <span
-                      className="mt-1 inline-block h-1 w-1 flex-shrink-0 rounded-full"
-                      style={{ background: appleVibe.text.faint }}
-                      aria-hidden
-                    />
-                    <span>{q}</span>
+                    {q}
                   </li>
                 ))}
               </ul>
             </div>
           )}
           {v.target_root_cause && (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <span
-                className="text-[9px] font-semibold uppercase tracking-[0.10em]"
-                style={{ color: appleVibe.text.tertiary }}
+                className="text-[9.5px] font-medium tracking-tight"
+                style={{ color: appleVibe.text.faint }}
               >
-                targets
+                Targets
               </span>
               <span
-                className="inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-medium"
+                className="inline-flex items-center rounded-full px-2 py-[3px] text-[10.5px] font-medium"
                 style={{
                   background: appleVibe.surface.chip,
                   color: appleVibe.text.secondary,
-                  border: `1px solid ${appleVibe.stroke.hairline}`,
                 }}
               >
                 {v.target_root_cause}
@@ -1872,7 +1896,7 @@ function LineupRow({
           )}
         </div>
       )}
-    </li>
+    </motion.li>
   );
 }
 
@@ -1909,17 +1933,16 @@ function IndicatorBreakdown({
   return (
     <div>
       <div
-        className="mb-0.5 flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.12em]"
-        style={{ color: appleVibe.text.tertiary }}
+        className="mb-1.5 flex items-center gap-1.5 text-[9.5px] font-medium tracking-tight"
+        style={{ color: appleVibe.text.faint }}
       >
         <span>Proxy indicators</span>
         {isEnsemble && (
           <span
-            className="rounded-full px-1.5 py-0.5 text-[9px] font-medium normal-case"
+            className="rounded-full px-1.5 py-0.5 text-[9px] font-medium"
             style={{
               background: appleVibe.surface.chip,
               color: appleVibe.text.secondary,
-              border: `1px solid ${appleVibe.stroke.hairline}`,
               letterSpacing: "0.01em",
             }}
             title="Each indicator graded from 5 lenses (systems_analyst / skeptic / operator / engineer / historian). Variance across lenses is the confidence signal — when lenses agree the proxy is well-formed; when they diverge it's a Potemkin metric."
@@ -1928,7 +1951,7 @@ function IndicatorBreakdown({
           </span>
         )}
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         {Array.from(grouped.entries()).map(([outcomeName, list]) => (
           <div key={outcomeName} className="space-y-0.5">
             <div
@@ -2083,9 +2106,9 @@ function IndicatorBreakdown({
                       `${tag} ${c.source_title.slice(0, 60)}: ${c.argument}`,
                     );
                   }
-                  if (typeof ind.evidence_strength === "number") {
+                  if (typeof ind.evidence_support === "number") {
                     tooltipParts.push(
-                      `evidence strength: ${ind.evidence_strength.toFixed(2)} (${supports}✓ ${refutes}✗ ${contextual}·)`,
+                      `evidence support: ${ind.evidence_support.toFixed(2)} (${supports}✓ ${refutes}✗ ${contextual}·)`,
                     );
                   }
                 }
@@ -2118,17 +2141,17 @@ function IndicatorBreakdown({
                   <span
                     key={`${ind.indicator_text}-${i}`}
                     title={tooltipParts.join(" | ")}
-                    className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-medium"
+                    className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10.5px] font-medium"
                     style={{
                       background: chipBg,
-                      color: tier,
+                      color: appleVibe.text.secondary,
                       border: chipBorder,
                       fontVariantNumeric: "tabular-nums",
                     }}
                   >
                     {hasEmpirical && <span aria-hidden>🧪</span>}
                     <span>{truncated}</span>
-                    <span style={{ fontWeight: 600 }}>
+                    <span style={{ fontWeight: 600, color: tier }}>
                       {ind.score.toFixed(2)}
                     </span>
                     {/* Phase 11.7 — empirical headline. Renders BEFORE
@@ -2372,11 +2395,11 @@ function InlineMockupPreview({
   }
 
   return (
-    <div className="mt-1.5 flex flex-col gap-1.5">
+    <div className="mt-1 flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
         <span
-          className="text-[9px] font-semibold uppercase tracking-[0.12em]"
-          style={{ color: appleVibe.accent.primary }}
+          className="text-[9.5px] font-medium tracking-tight"
+          style={{ color: appleVibe.text.faint }}
         >
           Interface mockup
         </span>
@@ -2387,7 +2410,7 @@ function InlineMockupPreview({
             void fetchMockup(true);
           }}
           disabled={busy}
-          className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium transition-opacity disabled:opacity-50"
+          className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium transition-colors hover:bg-[rgba(15,23,42,0.04)] disabled:opacity-50"
           style={{
             color: appleVibe.text.tertiary,
             background: "transparent",

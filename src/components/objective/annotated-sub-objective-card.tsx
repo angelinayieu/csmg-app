@@ -14,7 +14,6 @@
 
 import { useMemo, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { Sparkles } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import type {
@@ -91,6 +90,28 @@ export function AnnotatedSubObjectiveCard({
     [objectiveText, safeAnnotations],
   );
   const [hovered, setHovered] = useState<number | null>(null);
+  // K1.b — interactive layer filter. Clicking a lane chip dims all
+  // annotations whose layer_tag doesn't match. Clicking the active
+  // chip again clears the filter. Falls through cleanly when the
+  // annotations don't include a given lane (chip hidden).
+  const [layerFilter, setLayerFilter] = useState<AnnotationLayerTag | null>(
+    null,
+  );
+
+  // Lane counts — drive which filter chips show. Hide a chip whose
+  // count is zero so the filter row stays honest. */
+  const laneCounts = useMemo(() => {
+    const acc: Record<Exclude<AnnotationLayerTag, null>, number> = {
+      pain: 0,
+      features: 0,
+      outcomes: 0,
+      objective: 0,
+    };
+    for (const a of safeAnnotations) {
+      if (a.layer_tag) acc[a.layer_tag] += 1;
+    }
+    return acc;
+  }, [safeAnnotations]);
 
   if (objectiveText.trim().length === 0) return null;
 
@@ -98,30 +119,86 @@ export function AnnotatedSubObjectiveCard({
   const isLoading = safeAnnotations.length === 0;
 
   return (
-    <div
-      className="rounded-2xl px-4 py-3"
+    <motion.div
+      initial={reduce ? false : { opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+      className="px-5 py-4"
       style={{
-        background: "rgba(255,255,255,0.6)",
+        background: appleVibe.surface.card,
         border: `1px solid ${appleVibe.stroke.hairline}`,
-        borderRadius: appleVibe.radius.md,
+        borderRadius: appleVibe.radius.lg,
+        boxShadow: appleVibe.shadow.chip,
       }}
     >
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span
-          className="inline-flex items-center gap-1.5 text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-          style={{ color: appleVibe.text.tertiary }}
-        >
-          <Sparkles className="h-2.5 w-2.5" strokeWidth={2} />
-          Sub-objective lens
-        </span>
-        <span
-          className="text-[10px] font-light"
-          style={{ color: appleVibe.text.faint }}
-        >
-          {isLoading
-            ? "generating…"
-            : `${safeAnnotations.length} reading${safeAnnotations.length === 1 ? "" : "s"}`}
-        </span>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-baseline gap-2.5">
+          <span
+            className="text-[10.5px] font-medium tracking-tight"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Lens
+          </span>
+          <span
+            className="text-[10.5px] font-light tabular-nums"
+            style={{ color: appleVibe.text.faint }}
+          >
+            {isLoading
+              ? "generating…"
+              : `${safeAnnotations.length} reading${safeAnnotations.length === 1 ? "" : "s"}`}
+          </span>
+        </div>
+        {/* Interactive layer filter — sentence-case chips, monochrome
+            outline when inactive, lane-tinted when active. Clicking
+            toggles; clicking the active chip clears the filter. */}
+        {!isLoading && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {(["pain", "features", "outcomes", "objective"] as const).map(
+              (lane) => {
+                const count = laneCounts[lane];
+                if (count === 0) return null;
+                const active = layerFilter === lane;
+                const color = LAYER_COLOR[lane];
+                const labelMap: Record<typeof lane, string> = {
+                  pain: "Pain",
+                  features: "Mechanism",
+                  outcomes: "Outcome",
+                  objective: "Objective",
+                };
+                return (
+                  <button
+                    key={lane}
+                    type="button"
+                    onClick={() => setLayerFilter(active ? null : lane)}
+                    aria-pressed={active}
+                    className="inline-flex items-center gap-1 rounded-full px-2 py-[3px] text-[10px] font-medium tracking-tight transition-colors"
+                    style={{
+                      background: active ? `${color}14` : "transparent",
+                      border: `1px solid ${active ? `${color}44` : appleVibe.stroke.soft}`,
+                      color: active ? color : appleVibe.text.secondary,
+                    }}
+                  >
+                    <span
+                      className="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                      style={{ background: color, opacity: active ? 1 : 0.55 }}
+                      aria-hidden
+                    />
+                    {labelMap[lane]}
+                    <span
+                      className="tabular-nums"
+                      style={{
+                        color: active ? color : appleVibe.text.faint,
+                        opacity: 0.75,
+                      }}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              },
+            )}
+          </div>
+        )}
       </div>
       <p
         className="text-[14.5px] font-light leading-[1.55]"
@@ -138,15 +215,21 @@ export function AnnotatedSubObjectiveCard({
             1,
             Math.min(2.4, 0.8 + (ann.weight ?? 0.5) * 1.6),
           );
+          // K1.b — when a layer filter is active, dim phrases whose
+          // layer_tag doesn't match. Matching phrases stay full color;
+          // non-matching ones fade their underline + text to faint
+          // tertiary so the user's eye is pulled to the active lane.
+          const dimmed = layerFilter !== null && ann.layer_tag !== layerFilter;
           return (
             <span
               key={i}
               onMouseEnter={() => setHovered(seg.annotationIndex)}
               onMouseLeave={() => setHovered(null)}
-              className="relative inline-block cursor-default"
+              className="relative inline-block cursor-default transition-[opacity,color] duration-200 ease-out"
               style={{
                 borderBottom: `${thickness}px solid ${color}`,
                 paddingBottom: 1,
+                opacity: dimmed ? 0.35 : 1,
               }}
             >
               {seg.value}
@@ -234,6 +317,6 @@ export function AnnotatedSubObjectiveCard({
           );
         })}
       </p>
-    </div>
+    </motion.div>
   );
 }

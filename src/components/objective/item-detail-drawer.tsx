@@ -521,10 +521,11 @@ export function ItemDetailDrawer({
   const [highlightsError, setHighlightsError] = useState<string | null>(null);
 
   // ── Arc 3.5 — context glossary (space-level). Fetched once on open
-  // so the Definition + the Glossary section can hover-define the
-  // project's key terms. Soft — empty until generated for this space. ──
+  // so the Definition hover-defs + the "Terms used here" section can
+  // resolve the project's key terms. Generation/edit live in the
+  // notebook rail's Glossary view; here it's read-only + contextual.
+  // Soft — empty until built for this space. ──
   const [glossaryTerms, setGlossaryTerms] = useState<GlossaryTerm[]>([]);
-  const [glossaryBusy, setGlossaryBusy] = useState(false);
   useEffect(() => {
     if (!entityId || !spaceId) return;
     let cancelled = false;
@@ -543,24 +544,6 @@ export function ItemDetailDrawer({
       cancelled = true;
     };
   }, [entityId, spaceId]);
-
-  const regenerateGlossary = useCallback(async () => {
-    if (!spaceId || glossaryBusy) return;
-    setGlossaryBusy(true);
-    try {
-      const res = await fetch(`/api/brainstorm/space/${spaceId}/glossary`, {
-        method: "POST",
-      });
-      const json = await res.json().catch(() => null);
-      if (res.ok && Array.isArray(json?.glossary)) {
-        setGlossaryTerms(json.glossary as GlossaryTerm[]);
-      }
-    } catch {
-      /* soft */
-    } finally {
-      setGlossaryBusy(false);
-    }
-  }, [spaceId, glossaryBusy]);
 
   const [research, setResearch] = useState<ItemResearchBundle | null>(
     initialDetailResearch ?? null,
@@ -1185,87 +1168,59 @@ export function ItemDetailDrawer({
                 />
               )}
 
-              {/* ── GLOSSARY (Arc 3.5 — space-level definition page) ──
-                  Context-specific definitions of the project's key
-                  terms. Also drives the hover-definitions on the
-                  Definition paragraph above. Space-scoped, so it reads
-                  the same in every item drawer; collapsed-friendly. */}
-              {spaceId && (
-                <Section
-                  icon={<BookOpen className="h-3 w-3" strokeWidth={1.75} />}
-                  title="Glossary"
-                  subtitle={
-                    glossaryTerms.length > 0
-                      ? `${glossaryTerms.length} terms`
-                      : undefined
-                  }
-                  action={
-                    <button
-                      type="button"
-                      onClick={regenerateGlossary}
-                      disabled={glossaryBusy}
-                      className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[9.5px] font-semibold"
-                      style={{
-                        background: appleVibe.surface.chip,
-                        color: appleVibe.text.tertiary,
-                        cursor: glossaryBusy ? "wait" : "pointer",
-                      }}
-                      title={
-                        glossaryTerms.length > 0
-                          ? "Regenerate the project glossary"
-                          : "Generate the project glossary"
-                      }
+              {/* ── TERMS USED HERE (Arc 3.5) — contextual glossary ──
+                  Only the project terms that actually appear in THIS
+                  item's text. The full glossary + generate/edit/pin live
+                  in the notebook rail's Glossary view (space-level), so
+                  this stays a lightweight reading aid, not a repeated
+                  full list. Hover-defs on the Definition use the same
+                  terms. */}
+              {spaceId &&
+                glossaryTerms.length > 0 &&
+                (() => {
+                  const haystack = `${itemName} ${expanded?.definition ?? ""} ${
+                    expanded?.mechanism_spec?.mechanism_of_action ?? ""
+                  }`.toLowerCase();
+                  const here = glossaryTerms.filter((t) =>
+                    [t.term, ...(t.aliases ?? [])].some(
+                      (s) => s && haystack.includes(s.toLowerCase()),
+                    ),
+                  );
+                  if (here.length === 0) return null;
+                  return (
+                    <Section
+                      icon={<BookOpen className="h-3 w-3" strokeWidth={1.75} />}
+                      title="Terms used here"
+                      subtitle={`${here.length}`}
                     >
-                      <RefreshCw
-                        className={`h-2.5 w-2.5 ${glossaryBusy ? "animate-spin" : ""}`}
-                        strokeWidth={2}
-                      />
-                      {glossaryBusy
-                        ? "Working…"
-                        : glossaryTerms.length > 0
-                          ? "Regenerate"
-                          : "Generate"}
-                    </button>
-                  }
-                >
-                  {glossaryTerms.length === 0 ? (
-                    <p
-                      className="text-[12px] font-light leading-snug"
-                      style={{ color: appleVibe.text.tertiary }}
-                    >
-                      No glossary yet. Generate one to hover-define this
-                      project&apos;s key terms — it also annotates the
-                      definitions throughout the drawer.
-                    </p>
-                  ) : (
-                    <ul className="flex flex-col gap-1.5">
-                      {glossaryTerms.map((t, i) => (
-                        <li
-                          key={i}
-                          className="rounded-xl px-2.5 py-1.5"
-                          style={{
-                            background: "rgba(255,255,255,0.6)",
-                            border: `1px solid ${appleVibe.stroke.hairline}`,
-                          }}
-                        >
-                          <span
-                            className="text-[12px] font-semibold"
-                            style={{ color: appleVibe.text.primary }}
+                      <ul className="flex flex-col gap-1.5">
+                        {here.map((t, i) => (
+                          <li
+                            key={i}
+                            className="rounded-xl px-2.5 py-1.5"
+                            style={{
+                              background: "rgba(255,255,255,0.6)",
+                              border: `1px solid ${appleVibe.stroke.hairline}`,
+                            }}
                           >
-                            {t.term}
-                          </span>
-                          <p
-                            className="mt-0.5 text-[11.5px] font-light leading-snug"
-                            style={{ color: appleVibe.text.secondary }}
-                          >
-                            {t.definition}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </Section>
-              )}
+                            <span
+                              className="text-[12px] font-semibold"
+                              style={{ color: appleVibe.text.primary }}
+                            >
+                              {t.term}
+                            </span>
+                            <p
+                              className="mt-0.5 text-[11.5px] font-light leading-snug"
+                              style={{ color: appleVibe.text.secondary }}
+                            >
+                              {t.definition}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    </Section>
+                  );
+                })()}
 
               {/* ── 2. INSPIRATION (per-item research) ── */}
               <Section

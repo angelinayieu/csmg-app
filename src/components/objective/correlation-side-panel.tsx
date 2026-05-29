@@ -384,44 +384,12 @@ export function CorrelationSidePanel({
               : `${filteredEdges.length} of ${edges.length} edges`}
         </h3>
         <p
-          className="mt-0.5 text-[11px] font-light leading-snug"
+          className="mt-1 text-[11.5px] font-light leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
-          {edges.length === 0 ? (
-            <>
-              The room has items but they aren&rsquo;t linked yet. Each
-              correlation forms one complete{" "}
-              <span style={{ color: appleVibe.stage.pain }}>
-                {laneLabels.pain.toLowerCase()}
-              </span>{" "}
-              →{" "}
-              <span style={{ color: appleVibe.stage.features }}>
-                {laneLabels.features.toLowerCase()}
-              </span>{" "}
-              →{" "}
-              <span style={{ color: appleVibe.stage.outcomes }}>
-                {laneLabels.outcomes.toLowerCase()}
-              </span>{" "}
-              chain — the strategic bet you&rsquo;ll approve. Run the
-              correlation step to populate.
-            </>
-          ) : (
-            <>
-              Each chain is a complete{" "}
-              <span style={{ color: appleVibe.stage.pain }}>
-                {laneLabels.pain.toLowerCase()}
-              </span>{" "}
-              →{" "}
-              <span style={{ color: appleVibe.stage.features }}>
-                {laneLabels.features.toLowerCase()}
-              </span>{" "}
-              →{" "}
-              <span style={{ color: appleVibe.stage.outcomes }}>
-                {laneLabels.outcomes.toLowerCase()}
-              </span>{" "}
-              bet. Approve the ones you want promoted to the main canvas.
-            </>
-          )}
+          {edges.length === 0
+            ? `The room has items but they aren't linked yet. Each correlation forms one complete ${laneLabels.pain.toLowerCase()} → ${laneLabels.features.toLowerCase()} → ${laneLabels.outcomes.toLowerCase()} chain — the strategic bet you'll approve. Run the correlation step to populate.`
+            : `Each chain is a complete ${laneLabels.pain.toLowerCase()} → ${laneLabels.features.toLowerCase()} → ${laneLabels.outcomes.toLowerCase()} bet. Approve the ones you want promoted to the main canvas.`}
         </p>
       </header>
 
@@ -532,7 +500,7 @@ export function CorrelationSidePanel({
               className="text-[10px] font-semibold uppercase tracking-wider"
               style={{ color: appleVibe.text.tertiary }}
             >
-              Layer pair
+              Stage pair
             </span>
           </div>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -578,46 +546,47 @@ export function CorrelationSidePanel({
       )}
 
       {/* Strength threshold (applies to both views) — hidden in
-          empty state since there's nothing to threshold. */}
+          empty state since there's nothing to threshold. The eyebrow
+          row is dropped — the inline "Strength" label sits with the
+          chips as a single quiet filter row. */}
       {edges.length > 0 && (
-        <>
-          <div className="mt-3 flex items-center gap-1.5">
-            <span
-              className="text-[10px] font-semibold uppercase tracking-wider"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              Strength
-            </span>
-          </div>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {THRESHOLD_MODES.map((m) => {
-              const active = threshold === m.id;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => setThreshold(m.id)}
-                  className="inline-flex items-center rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
-                  style={{
-                    background: active
-                      ? appleVibe.accent.primary
-                      : appleVibe.surface.chip,
-                    color: active
-                      ? appleVibe.text.onAccent
-                      : appleVibe.text.secondary,
-                  }}
-                >
-                  {m.label}
-                </button>
-              );
-            })}
-          </div>
-        </>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span
+            className="text-[10.5px] font-medium tracking-tight"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Strength
+          </span>
+          {THRESHOLD_MODES.map((m) => {
+            const active = threshold === m.id;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => setThreshold(m.id)}
+                className="inline-flex items-center rounded-full px-2.5 py-1 text-[10.5px] font-medium tracking-tight transition-colors"
+                style={{
+                  background: active
+                    ? appleVibe.accent.primary
+                    : "transparent",
+                  color: active
+                    ? appleVibe.text.onAccent
+                    : appleVibe.text.secondary,
+                  border: active
+                    ? "1px solid transparent"
+                    : `1px solid ${appleVibe.stroke.soft}`,
+                }}
+              >
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
       )}
 
       {/* Rows */}
       <ul
-        className="mt-3 flex max-h-[70vh] flex-col gap-2 overflow-y-auto pr-0.5"
+        className="mt-4 flex max-h-[70vh] flex-col gap-3 overflow-y-auto pr-0.5"
         onMouseLeave={() => onHoverEntity(null)}
       >
         {viewMode === "chains" && (

@@ -162,6 +162,55 @@ export function computeLayerPositionShape(
   return "cross_stack";
 }
 
+/** A theme cluster's position on the stack, derived from the layer
+ *  tagging its member sub-objectives already carry (layer_ordinals).
+ *  Lets the theme gallery reconcile with the ObjectiveStack without a
+ *  second generation pass — the layer assignment is just an
+ *  aggregation of where the members actually sit. */
+export interface ClusterLayerAssignment {
+  /** Most-representative layer ordinal for the cluster — the ordinal
+   *  the most members touch (modal). Ties break toward the lower /
+   *  more foundational ordinal. null when no member is layer-tagged
+   *  (pre-11.A subs or stack not yet generated). */
+  primaryOrdinal: number | null;
+  /** Every distinct ordinal any member touches, sorted ascending —
+   *  drives the "spans L1→L4" hint when a theme straddles altitudes. */
+  ordinalsTouched: number[];
+}
+
+/** Derive a cluster's representative layer from its members' ordinals.
+ *  Pure aggregation — `memberOrdinals` is one entry per member
+ *  sub-objective (each a list of the layers that sub touches). */
+export function deriveClusterLayer(
+  memberOrdinals: number[][],
+): ClusterLayerAssignment {
+  const freq = new Map<number, number>();
+  for (const ords of memberOrdinals) {
+    // Dedupe within a member so a sub tagged with a repeated ordinal
+    // doesn't skew the modal count.
+    for (const o of new Set(ords)) {
+      if (!Number.isFinite(o)) continue;
+      freq.set(o, (freq.get(o) ?? 0) + 1);
+    }
+  }
+  if (freq.size === 0) return { primaryOrdinal: null, ordinalsTouched: [] };
+
+  let primaryOrdinal: number | null = null;
+  let bestCount = -1;
+  for (const [ord, count] of freq) {
+    if (
+      count > bestCount ||
+      (count === bestCount &&
+        (primaryOrdinal === null || ord < primaryOrdinal))
+    ) {
+      bestCount = count;
+      primaryOrdinal = ord;
+    }
+  }
+  const ordinalsTouched = [...freq.keys()].sort((a, b) => a - b);
+  return { primaryOrdinal, ordinalsTouched };
+}
+
 /** Validate raw LLM output into a typed ObjectiveStack. Soft-fails to
  *  null when the structure is too broken to use; lossy-cleans common
  *  edge cases (out-of-range ordinals, missing rationale, dupe variables)

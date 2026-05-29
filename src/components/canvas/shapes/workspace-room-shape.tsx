@@ -346,6 +346,9 @@ function BrainstormRoomBody({
   const handleFullscreen = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!openHref) return;
+    // Magic-move origin: the clicked control's screen rect, so the
+    // window appears to grow out of where the user clicked.
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     window.dispatchEvent(
       new CustomEvent("canvas-workspace:open-fullscreen", {
         detail: {
@@ -353,6 +356,11 @@ function BrainstormRoomBody({
           artifactId,
           title,
           href: openHref,
+          originRect: {
+            cx: r.left + r.width / 2,
+            cy: r.top + r.height / 2,
+            width: r.width,
+          },
         },
       }),
     );
@@ -555,6 +563,7 @@ function StrategyRoomBody({
   const handleFullscreen = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!openHref) return;
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     window.dispatchEvent(
       new CustomEvent("canvas-workspace:open-fullscreen", {
         detail: {
@@ -562,6 +571,11 @@ function StrategyRoomBody({
           artifactId,
           title: statement,
           href: openHref,
+          originRect: {
+            cx: r.left + r.width / 2,
+            cy: r.top + r.height / 2,
+            width: r.width,
+          },
         },
       }),
     );
@@ -859,9 +873,20 @@ function SpaceRoomBody({
   const handleFullscreen = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!artifactId) return;
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     window.dispatchEvent(
       new CustomEvent("canvas-workspace:open-fullscreen", {
-        detail: { kind: mode, artifactId, title: name, href: openHref },
+        detail: {
+          kind: mode,
+          artifactId,
+          title: name,
+          href: openHref,
+          originRect: {
+            cx: r.left + r.width / 2,
+            cy: r.top + r.height / 2,
+            width: r.width,
+          },
+        },
       }),
     );
   };

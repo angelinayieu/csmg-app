@@ -29,7 +29,7 @@
 // fold the rail chrome into the panel itself.
 
 import { use, useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { BookOpen } from "lucide-react";
 import { LabNotebookPanel } from "@/components/objective/lab-notebook-panel";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -55,6 +55,7 @@ const MOBILE_BREAKPOINT = 1100;
 export default function ObjectiveCanvasLayout({ children, params }: Props) {
   const { spaceId } = use(params);
   const pathname = usePathname();
+  const router = useRouter();
 
   // Auto-detect mode from URL. `/sub/[subId]` → room mode (panel
   // reads the per-sub-objective decisions feed). Else space mode
@@ -90,6 +91,20 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
     update();
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
+  }, []);
+
+  // Open the rail on demand — Canvas Autopilot fires "notebook:open"
+  // when a run starts so the user watches each room's events stream in
+  // live (the panel's own liveness poll then keeps the feed ticking).
+  useEffect(() => {
+    function openNotebook() {
+      persistOpen(true);
+    }
+    window.addEventListener("notebook:open", openNotebook);
+    return () => window.removeEventListener("notebook:open", openNotebook);
+    // persistOpen is stable for this component's lifetime (only closes
+    // over spaceId, which doesn't change after mount).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function persistOpen(next: boolean) {
@@ -200,6 +215,22 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
         mode={mode}
         spaceId={spaceId}
         subObjectiveId={subObjectiveId}
+        onNavigate={(target) => {
+          // Tie-back hand-off: from the all-rooms feed, clicking an
+          // event routes to the room it happened in. The rail-card is
+          // non-occluding, so the canvas updates behind the still-open
+          // notebook (which flips to room mode via the pathname effect)
+          // — the "both visible" hand-off, not a step-aside close.
+          if (
+            mode === "space" &&
+            target.subObjectiveId &&
+            target.subObjectiveId !== subObjectiveId
+          ) {
+            router.push(
+              `/app/objective/${spaceId}/sub/${target.subObjectiveId}`,
+            );
+          }
+        }}
       />
     </>
   );

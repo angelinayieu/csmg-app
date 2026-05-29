@@ -1106,9 +1106,18 @@ ${enrichedPrompt}`;
         // The zero-original fallback override fixes the pathological case.
         const originalHadEntities = dedupedEntities.length > 0;
         const retryHasEntities = retryDeduped.entities.length > 0;
+        // HARD GATE: never accept a retry that produced ZERO entities.
+        // A 0-entity KG is useless downstream (synthesize/strategy have
+        // nothing to work with → the whole chain fails). The quality
+        // scorer can rank an empty decomposition ABOVE a populated one
+        // (it rewards "correctness of emptiness" / not missing density
+        // targets) — observed live: "Retry quality: 0.54, entities: 0
+        // (was 20) → Using retry result", which silently discarded a
+        // good 20-entity graph for an empty one. The prior guard only
+        // covered the original-empty case; this also covers retry-empty.
         const shouldUseRetry =
-          retryQuality.overall > qualityReport.overall ||
-          (!originalHadEntities && retryHasEntities);
+          retryHasEntities &&
+          (retryQuality.overall > qualityReport.overall || !originalHadEntities);
         if (shouldUseRetry) {
           retryImproved = true;
           qualityReport = retryQuality;

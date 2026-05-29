@@ -72,6 +72,12 @@ interface Props {
    *  CategoryCard re-fetches its feature's expanded_detail so the
    *  lineups pick up new candidates / scores that autopilot wrote. */
   refreshSignal?: number;
+  /** Altitude 2 — externally-driven focus. When the user clicks a
+   *  chain edge on the Map, the room view sets this to that chain's
+   *  id and switches to this view; we sync the focused card to it.
+   *  Bumps via a {id, nonce} token so re-clicking the SAME chain
+   *  (after the user navigated away with arrows) re-focuses it. */
+  focusChain?: { id: string; nonce: number } | null;
 }
 
 /** Phase 8b — given a chain + all room edges + all chains, find
@@ -159,6 +165,7 @@ export function CategoryCardsView({
   onApprovalChange,
   onOpenItemDetail,
   refreshSignal,
+  focusChain,
 }: Props) {
   const [, startTransition] = useTransition();
 
@@ -184,6 +191,18 @@ export function CategoryCardsView({
       chains.length === 0 ? 0 : (i - 1 + chains.length) % chains.length,
     );
   }, [chains.length]);
+
+  // Altitude 2 — sync the focused card to an externally-clicked chain
+  // (a Map edge click). Keyed on the nonce so re-clicking the same
+  // chain re-focuses even when the id is unchanged. Silently ignores
+  // ids that don't resolve (e.g. an edge whose chain was filtered out).
+  const focusNonce = focusChain?.nonce;
+  const focusId = focusChain?.id;
+  useEffect(() => {
+    if (focusId == null) return;
+    const idx = chains.findIndex((c) => c.id === focusId);
+    if (idx >= 0) setActiveIndex(idx);
+  }, [focusNonce, focusId, chains]);
 
   // Phase 7d — arrow key keyboard shortcuts. Active when focus is
   // on body (not in inputs / textareas / contenteditable surfaces)

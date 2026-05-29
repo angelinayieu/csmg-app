@@ -123,24 +123,29 @@ export function ChainCard({
     <motion.li
       layout
       transition={{ layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] } }}
-      className="rounded-2xl p-3 transition-all"
+      className="rounded-2xl p-4 transition-all"
       style={{
         background: approved
-          ? "rgba(22,163,74,0.04)"
-          : appleVibe.surface.base,
+          ? `${appleVibe.stage.outcomes}08`
+          : appleVibe.surface.card,
         border: `1px solid ${
-          approved ? "rgba(22,163,74,0.28)" : appleVibe.stroke.hairline
+          approved
+            ? `${appleVibe.stage.outcomes}28`
+            : appleVibe.stroke.hairline
         }`,
-        borderRadius: appleVibe.radius.md,
+        borderRadius: appleVibe.radius.lg,
+        boxShadow: appleVibe.shadow.chip,
       }}
       onMouseEnter={() => onHover(chain.painId)}
       onMouseLeave={() => onHover(null)}
     >
       {/* ── Archetype label (the cross-category triple) ──
-          The category triple IS the strategic-bet archetype.
-          Renders as 3 colored chips with ×. Quiet but expressive. */}
+          The category triple IS the strategic-bet archetype. Renders
+          as 3 quiet outline chips with a hairline middot separator —
+          monochrome chrome so the colored dots inside each chip carry
+          the lane identity without screaming. */}
       {(archetype.pain || archetype.feature || archetype.result) && (
-        <div className="mb-2 flex items-center gap-1">
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
           {archetype.pain && (
             <CategoryPip
               label={archetype.pain.label}
@@ -149,10 +154,11 @@ export function ChainCard({
           )}
           {archetype.pain && archetype.feature && (
             <span
-              className="text-[9.5px] font-light"
+              className="text-[10px] font-light"
               style={{ color: appleVibe.text.faint }}
+              aria-hidden
             >
-              ×
+              ·
             </span>
           )}
           {archetype.feature && (
@@ -163,10 +169,11 @@ export function ChainCard({
           )}
           {archetype.feature && archetype.result && (
             <span
-              className="text-[9.5px] font-light"
+              className="text-[10px] font-light"
               style={{ color: appleVibe.text.faint }}
+              aria-hidden
             >
-              ×
+              ·
             </span>
           )}
           {archetype.result && (
@@ -179,7 +186,7 @@ export function ChainCard({
       )}
 
       {/* ── Compact chain (3 nodes + 2 bridges) ── */}
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1.5">
         <ChainNode
           color={appleVibe.stage.pain}
           label={laneLabels.pain}
@@ -205,9 +212,13 @@ export function ChainCard({
         />
       </div>
 
-      {/* ── Composite strength + expand + approve ── */}
+      {/* ── Composite strength + expand + approve ──
+          Composite is the metric anchor (left-anchored SF Display
+          numeric + tiny tertiary label). Expand chevron sits next to
+          it as a quiet affordance. Approve bet stays as the dominant
+          dark CTA on the right. */}
       <div
-        className="mt-2.5 flex items-center justify-between border-t pt-2"
+        className="mt-3 flex items-center justify-between gap-3 border-t pt-2.5"
         style={{ borderColor: appleVibe.stroke.hairline }}
       >
         <button
@@ -216,25 +227,50 @@ export function ChainCard({
             e.stopPropagation();
             setExpanded((v) => !v);
           }}
-          className="inline-flex items-center gap-1.5 text-[10.5px] font-semibold"
-          style={{ color: appleVibe.text.tertiary }}
+          className="inline-flex items-baseline gap-1.5"
+          title="Expand chain detail"
         >
           <span
-            className="block h-1.5 w-1.5 flex-shrink-0 rounded-full"
-            style={{ background: compositeColor }}
-          />
-          <span className="font-mono">{pct}% composite</span>
+            className="tabular-nums"
+            style={{
+              color: appleVibe.text.primary,
+              fontFamily: appleVibe.font.display,
+              fontSize: 16,
+              fontWeight: 600,
+              letterSpacing: "-0.02em",
+              lineHeight: 1,
+            }}
+          >
+            {pct}
+            <span
+              style={{
+                color: appleVibe.text.tertiary,
+                fontSize: 11,
+                fontWeight: 500,
+                marginLeft: 1,
+              }}
+            >
+              %
+            </span>
+          </span>
+          <span
+            className="text-[9.5px] font-medium uppercase tracking-[0.16em]"
+            style={{ color: appleVibe.text.faint }}
+          >
+            Composite
+          </span>
           <ChevronDown
-            className="h-3 w-3"
+            className="ml-0.5 h-3 w-3 translate-y-[1px]"
             strokeWidth={2}
             style={{
+              color: appleVibe.text.faint,
               transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
               transition: "transform 180ms ease-out",
             }}
           />
         </button>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           {approved && (
             <button
               type="button"
@@ -243,9 +279,9 @@ export function ChainCard({
                 onReject();
               }}
               disabled={busy}
-              className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+              className="inline-flex items-center gap-1 rounded-full px-2 py-[3px] text-[10.5px] font-medium tracking-tight transition-colors"
               style={{
-                background: appleVibe.surface.chip,
+                background: "transparent",
                 color: appleVibe.text.tertiary,
                 cursor: busy ? "default" : "pointer",
               }}
@@ -261,18 +297,18 @@ export function ChainCard({
               if (!approved) onApprove();
             }}
             disabled={busy || approved}
-            className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+            className="inline-flex items-center gap-1 rounded-full px-2.5 py-[4px] text-[10.5px] font-medium tracking-tight transition-colors"
             style={{
               background: approved
-                ? "rgba(22,163,74,0.14)"
+                ? `${appleVibe.stage.outcomes}12`
                 : appleVibe.accent.primary,
               color: approved
-                ? "rgba(20,83,45,0.95)"
+                ? appleVibe.stage.outcomes
                 : appleVibe.text.onAccent,
               cursor: busy || approved ? "default" : "pointer",
             }}
           >
-            <Check className="h-2.5 w-2.5" strokeWidth={3} />
+            <Check className="h-2.5 w-2.5" strokeWidth={2.5} />
             {approved ? "Approved" : "Approve bet"}
           </button>
         </div>
@@ -447,31 +483,40 @@ function ChainNode({
   name: string;
   subtitle?: string;
 }) {
+  // Sentence-case the lane label so it reads as a tight inline tag,
+  // not an all-caps category header. The colored dot carries lane
+  // identity — the label itself stays in tertiary text.
+  const sentenceLabel =
+    label.length > 0 ? label[0]?.toUpperCase() + label.slice(1).toLowerCase() : label;
   return (
     <div className="flex items-start gap-2">
       <span
-        className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full"
+        className="mt-[7px] h-1.5 w-1.5 flex-shrink-0 rounded-full"
         style={{ background: color }}
         aria-hidden
       />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-1.5">
           <span
-            className="text-[9px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color }}
+            className="text-[10px] font-medium tracking-tight"
+            style={{ color: appleVibe.text.tertiary }}
           >
-            {label}
+            {sentenceLabel}
           </span>
           <span
-            className="text-[12px] font-semibold leading-tight"
-            style={{ color: appleVibe.text.primary }}
+            className="text-[13px] font-semibold leading-tight"
+            style={{
+              color: appleVibe.text.primary,
+              letterSpacing: "-0.015em",
+              fontFamily: appleVibe.font.display,
+            }}
           >
             {name}
           </span>
         </div>
         {subtitle && (
           <p
-            className="mt-0.5 text-[10.5px] font-light italic leading-snug"
+            className="mt-1 text-[11px] font-light italic leading-snug"
             style={{ color: appleVibe.text.tertiary }}
           >
             {subtitle}
@@ -489,30 +534,24 @@ function BridgeRow({
   verb: string;
   mechanism?: string | null;
 }) {
+  // No vertical pipe, no caps mechanism pill. Sits indented under
+  // the dot column so the chain reads top-to-bottom as a thin
+  // editorial flow: verb in tertiary, mechanism italic, no chrome.
   return (
-    <div className="ml-[2px] flex items-center gap-1.5 pl-1">
+    <div className="ml-[14px] flex items-baseline gap-1">
       <span
-        className="block h-3 w-px"
-        style={{ background: appleVibe.stroke.medium }}
-        aria-hidden
-      />
-      <span
-        className="text-[9.5px] font-medium italic lowercase"
+        className="text-[10.5px] font-light italic lowercase"
         style={{ color: appleVibe.text.tertiary }}
       >
-        ↓ {verb}
+        {verb}
       </span>
       {mechanism && (
         <span
-          className="inline-flex items-center rounded-full px-1.5 py-0 text-[9px] font-semibold uppercase tracking-[0.06em]"
-          style={{
-            background: "rgba(15,23,42,0.05)",
-            color: appleVibe.text.secondary,
-            border: `1px solid ${appleVibe.stroke.hairline}`,
-          }}
+          className="min-w-0 truncate text-[10.5px] font-light italic"
+          style={{ color: appleVibe.text.faint }}
           title="Mechanism — the lever this hop pulls"
         >
-          via {mechanism}
+          · via &ldquo;{mechanism}&rdquo;
         </span>
       )}
     </div>
@@ -522,13 +561,18 @@ function BridgeRow({
 function CategoryPip({ label, color }: { label: string; color: string }) {
   return (
     <span
-      className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+      className="inline-flex items-center gap-1 rounded-full px-2 py-[3px] text-[10px] font-medium tracking-tight"
       style={{
-        background: `${color}14`,
-        color,
-        border: `1px solid ${color}33`,
+        background: "transparent",
+        color: appleVibe.text.secondary,
+        border: `1px solid ${appleVibe.stroke.soft}`,
       }}
     >
+      <span
+        className="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full"
+        style={{ background: color }}
+        aria-hidden
+      />
       {label}
     </span>
   );

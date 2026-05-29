@@ -1139,6 +1139,128 @@ The central design principle: **the canvas IS a causal system map.** Once shippe
 
 The map becomes the single VISUAL truth. Other surfaces feed it. Nothing competes for "the main view" anymore.
 
+### 17.17 KG-native enhancements (build MVP first, layer these on)
+
+The Causal System Map MVP (§17.1–17.16) renders the **within-space entity-edge graph** — which IS a knowledge graph (typed nodes + typed edges). But the codebase has KG infrastructure the MVP spec doesn't yet wire in:
+
+| KG component | File | Currently used by map? |
+|---|---|---|
+| Property graph (entities + edges) | `entities` + `edges` tables | ✅ Yes — it's what the map renders |
+| Canonical concept resolution | `src/lib/kg/canonical-concept-matcher.ts`, `canonical-code.ts` | ❌ No |
+| Concept lookup (semantic retrieval) | `src/lib/objective-canvas/canonical-concept-lookup.ts` | ❌ No |
+| Path-aware calibration | `src/lib/kg/path-aware-calibration.ts` | ⚠️ Indirect (writes `edges.strength`) |
+| pgvector embeddings | (entity embeddings) | ❌ No |
+
+**Decision: build the MVP first, layer KG features on after. It's additive, not a restructure — PROVIDED 3 extension seams are baked into the MVP.**
+
+#### The 3 extension seams (cost ~10 lines in MVP, save a refactor later)
+
+1. **`canonicalConceptId` on the node data model** — populate from `entities.canonical_concept_id` even though MVP doesn't render it. When the overlay ships, data already flows.
+2. **`source: "local" | "cross_space" | "semantic"` discriminator on the edge data model** — always `"local"` in MVP. Cross-space + semantic edges tag differently later; renderer branches on it.
+3. **Open layout registry** — `useLayoutAlgorithm` returns from a named map (`{ layered: elk, force: dagre }`), NOT a hardcoded if/else. Adding `semantic` later = one entry.
+
+#### The 4 KG layers (each a distinct user "aha")
+
+| Layer | Looks like | Makes framework better | Lines |
+|---|---|---|---|
+| **KG-1 Canonical overlay** | Faint "echo" links between nodes sharing a `canonical_concept_id` + "appears in N rooms" badge. Toggleable. | Surfaces UNINTENTIONAL repetition — user solving same problem in 3 places → consolidate. `canonical-concept-matcher.ts` already computes the matching. | ~120 |
+| **KG-2 Cross-space bridges** | Ghost-edges to a "cross-space" cluster at the canvas margin when a sub-obj's concepts match prior work in other spaces. Click → existing CanonicalConceptDrawer. | Turns each canvas from an island into a node in the user's lifetime KG. "You built this mechanism in another space — reuse?" | ~150 |
+| **KG-3 Semantic layout** | Third layout option (alongside Layered + Force) positioning nodes by pgvector cosine distance. | Catches semantic duplication LLM theme-labels miss. Embeddings = geometric truth vs LLM judgment. "These 3 cluster within 0.05 cosine — same idea, different words." | ~200 |
+| **KG-4 Calibration-weighted edges** | Edge thickness reads `max(chain_strength, calibrated_edge_strength)`. Edges visibly thicken/thin as real outcomes land. | Map evolves from "what the LLM thinks is strong" → "what real outcomes PROVED is strong." Closes prediction→reality loop visually. | ~50 |
+
+#### The compounding insight
+
+The current framework is a single-canvas, single-moment snapshot. KG incorporation makes it: **cross-canvas** (canonical concepts unify across spaces), **temporal** (calibration accumulates outcomes), **semantically grounded** (embeddings beat LLM-label clustering), **self-correcting** (calibration feedback loop).
+
+The flywheel: the canonical-concept KG already feeds `loadRelevantCanonicalConcepts` → which informs sub-objective proposals + layer decomposition + chain enrichment. Every canvas the user builds enriches the KG → makes the NEXT canvas smarter. The KG is the substrate that makes the whole system learn with use. The map just makes it visible.
+
+#### Recommended build order
+
+1. **Phase 12.A MVP** (local entity-edge map) — with the 3 extension seams baked in
+2. **KG-1** (canonical overlay) — cheapest, highest aha
+3. **KG-4** (calibration edges) — the credibility loop
+4. **KG-3** (semantic layout) — needs embedding plumbing in the graph loader
+5. **KG-2** (cross-space bridges) — the lifetime-KG moonshot, build once the rest is proven
+
+---
+
+## 18. Knowledge-Graph consolidation plan (deferred — weave in later) (investigated 2026-05-28)
+
+> **Status: PLAN ONLY. No code changes. Deferred until current in-flight work settles.**
+> This section is the *infrastructure* layer beneath §17.17. §17.17 = "make the
+> Causal Map richer using KG data." §18 = "consolidate the KG infrastructure itself
+> into a reusable core + decide the paradigm fork." §18 Track B is the prerequisite
+> that gives §17.17's KG-1/KG-3/KG-4 features real data to render.
+
+### 18.0 What triggered this — and the headline finding
+
+Deep read-only audit: ~30 files read **in full** across `lib/{graph, kg, causal-chains, kg-context, entities, weaving, systems, subsystems}` + the objective-canvas KG surface. The audit was prompted by a hypothesis that objective-canvas had *reinvented* the shared KG.
+
+**Headline: that hypothesis is FALSE. Zero true duplicates found.** Four separate "looks like a duplicate" pairs (compute-chains vs propagate; canonical-lookup vs canonical-matcher; cross-room-signals vs community-detection; domain-signature vs domain-detector) ALL turned out to be **different operations on different data contracts** once read. Structural signals (file names, line counts) produced 4/4 false positives. **Lesson baked into the guardrails below: names lie; verify data contracts before ever merging.**
+
+### 18.1 Current-state snapshot (what we're doing right now)
+
+- **In flight / HOT (do not disturb):** Phase 12.A Causal Map (MVP + A.9 live-refresh shipped; **A.4 room CLD + A.7 zoom still remaining**), the new **Strategy Lab** module (`api/strategy-lab`, `app/strategy-lab`, `components/strategy-lab`), and modified objective-canvas surfaces (`chain-card`, `correlation-side-panel`, `main-canvas-view`, `annotated-sub-objective-card`).
+- **Genuine redundancies INSIDE the shared KG** (intra-paradigm, real targets): degree-centrality is computed **4 ways** (`hub-discovery`, `preliminary-insights`, `compute-entity-scores`, `force-layout`); there are **two** `community-detection.ts` files (`lib/graph` = label-propagation for viz vs `lib/pipeline` = Newman modularity for GraphRAG).
+- **Hygiene bug:** `src/types/database.types.ts` is **stale** — missing `canonical_concept_id`, `causal_chain`, `expanded_detail`, `agent_feedback`, `parent_sub_objective_id` on entities/edges, and the `canonical_concepts` table is absent entirely. Code currently compensates with `unknown` casts.
+
+### 18.2 The two KG paradigms (the core mental model)
+
+| | **Paradigm 1 — space typed graph** | **Paradigm 2 — objective-canvas room graph** |
+|---|---|---|
+| Tables | `entities` + `edges` | same tables |
+| Columns used | typed: `dimension`, `polarity`, `strength`, `confidence`, `centrality_rank` | room-scoped: `parent_sub_objective_id` + JSONB (`causal_chain`, `agent_feedback.mechanism`, `expanded_detail`) |
+| Operations | graph algorithms (cascade, community, centrality, layout, calibration) | string/LLM ops (chain composition, enrichment, signal bucketing) |
+| Homes | `lib/{graph, kg, causal-chains, kg-context, systems, subsystems, weaving}` | `lib/objective-canvas/*` |
+| Consumers | pipeline, twin, canvas, synthesis, predictions, systems | objective-canvas only |
+| Imports Paradigm 1? | — | **Zero times** |
+
+Paradigm 1 IS already the de-facto cross-cutting KG base — it's just scattered across 8 folders with **no single front door**. Paradigm 2 is off it **by data-model divergence, not laziness** — its edges carry prose JSONB, not typed `dimension`/`strength`, so `lib/graph` algorithms can't consume them as-is.
+
+### 18.3 The fork decision (OPEN — needs a product call before Track B)
+
+- **Converge:** objective-canvas room entities/edges ALSO populate typed columns + run the canonical write path → inherits all `lib/graph` algorithms for free + feeds §17.17's KG features. High value, data-model change.
+- **Stay parallel:** keep objective-canvas a deliberate parallel paradigm; share only read-side infra via the front door. Lower risk, but §17.17 KG-1/3/4 stay **data-starved** (overlays render empty).
+- **Recommendation:** converge *incrementally* (Track B) — but only after Tracks A + C, and only after the hot files settle.
+
+### 18.4 Track A — Unify the shared KG behind one front door (SAFE, do soon)
+
+1. Add `src/lib/kg/index.ts` as a **public API that re-exports** existing functions (graph algorithms, canonical resolve, calibration, kg-context, chains). No files move. Additive, reversible.
+2. Reconcile the genuine redundancies: 4 centrality copies → one canonical scorer; disambiguate the two `community-detection.ts` (viz vs GraphRAG) by name.
+3. Make new modules (**Strategy Lab**) import from the front door instead of forking — this is *why Track A should land before Strategy Lab hardens.*
+- **Risk: low.** These are cold files relative to the hot objective-canvas/causal-map area. 30+ consumers of `entities`/`edges` → keep all signatures; additive only.
+
+### 18.5 Track B — Bridge objective-canvas onto the typed graph (HIGH VALUE, STAGED, fork-gated)
+
+At room entity/edge creation, ALSO: (1) run `findOrCreateCanonicalConcept` to link `canonical_concept_id`; (2) populate typed edge columns (`dimension="causal"`, `polarity`, `strength`) alongside the existing `agent_feedback` JSONB. Then the **existing** `lib/graph` algorithms (community detection, centrality, cascade) run over objective-canvas data → the leverage-point + sophisticated-chain quality the user has been asking for.
+
+- **This is the prerequisite that gives §17.17's KG-1 / KG-3 / KG-4 real data** (canonical overlay, semantic layout, calibration edges are empty without it).
+- **Touches HOT files** (`enrich-chain`, `room/generate`, `compute-chains`). Must wait for: parallel chat to settle + Phase 11.A migration applied + Track C done + Track A front door existing.
+- **Gated on the fork decision (converge).**
+
+### 18.6 Track C — Hygiene: regenerate `database.types.ts` (DO FIRST, anytime)
+
+Regenerate types from the live schema. Removes the `unknown` casts (e.g. `layer-coverage` reading `layer_ordinals`). Low collision (generated file), high safety dividend, unblocks A + B.
+
+### 18.7 Weave-in sequencing (the actual "later" plan)
+
+A timeline that does **not** disrupt current work:
+
+1. **NOW** — no KG-infra changes. Let Phase 12.A (A.4, A.7) + Strategy Lab land. **Apply the Phase 11.A migration to live Supabase** (still pending).
+2. **Track C** (regenerate types) — safe, anytime; ideally before A/B so casts disappear.
+3. **Track A** (front door + dedupe) — cold-file area, can run *in parallel* with objective-canvas work; land it **before Strategy Lab hardens** so the new module consumes the door.
+4. **Fork decision** (user) — converge vs parallel.
+5. **If converge → Track B**, staged, AFTER 12.A is stable and the hot files have settled. Then §17.17 KG-1 → KG-4 → KG-3 → KG-2 light up with real data.
+
+### 18.8 Guardrails (carried from the audit)
+
+- **Read-before-merge:** every suspected duplicate gets a full read + a written *same / different / relocate* verdict. (4/4 so far = "different.")
+- **Names lie:** shared vocabulary ≠ shared operation. Verify the data contract.
+- **Additive front door, zero forced migration, reversible steps.** Never a big-bang.
+- **Preserve load-bearing contracts verbatim:** soft-fail (`return []`/`null` on error), concurrency (`INSERT … ON CONFLICT DO NOTHING`), cache invalidation (`state_hash`).
+- **Avoid hot files; coordinate with parallel chats.**
+- **Full-repo `tsc --noEmit` after each step**, not just touched files.
+
 ---
 
 ## 14. Changelog
@@ -1147,3 +1269,14 @@ The map becomes the single VISUAL truth. Other surfaces feed it. Nothing compete
 - **2026-05-27 (later same session)** Folded in: experiments-library-view (cross-workspace prototype browser), concept-memory-feed-strip, both decision surfaces (item + canvas altitudes), incremental-cut-lab, prototype/status PATCH lifecycle (4 statuses + null), verified `sub-objectives/add` logs `confirm`, verified pipeline-tier research emits `pipeline_run_events` while brainstorm-tier doesn't.
 - **2026-05-27 (session end)** Phase 11.A foundation through chip integration shipped (commits 002e01f, e29c2c8, 0c655d1, 00c953e, e4452b3). 9 of 12 sub-phases (75%): migration + types + decompose-into-layers LLM + endpoints + ObjectiveStack widget + LayerPositionChip + proposer extension + auto-fire trigger + layer_coverage analysis + notebook event wiring. Critical path to "user sees the stack on the picker" complete; A.8/A.9/A.12 deferred (hot files).
 - **2026-05-27 (session end)** Added §17 — Phase 12.A Causal System Map spec. Locks the pivot from "grid of cards" to "multi-altitude causal system visualization." 16 sub-decisions (N1-N10 + architecture) + migration + 30 new files spec + critical path (12.A.1→A.2→A.3→A.4→A.7→A.9 = ~2080 lines). React Flow + ELK.js + Dagre + framer-motion. Reuses all existing data substrate (layers, chains, mediators, indicators, mockups) — pure visualization layer over what already exists.
+- **2026-05-27 (session end)** Added §17.17 — KG-native enhancements. MVP-first, then layer 4 KG features (canonical overlay / cross-space bridges / semantic layout / calibration-weighted edges) on top via 3 cheap extension seams baked into the MVP data model. Recommended build order MVP → KG-1 → KG-4 → KG-3 → KG-2.
+- **2026-05-27 (continued)** Phase 12.A MVP BUILT — the canvas-altitude Causal System Map ships behind a Cards/Map toggle (N4). Decision adjustments vs spec: (a) used installed `@xyflow/react@12` (not `reactflow@11`) + `@dagrejs/dagre` — matches the existing `causal-chains/` React Flow code; (b) deferred ELK.js — dagre covers layered layout, wrapped behind `useLayoutAlgorithm`'s named registry so ELK/semantic drop in later (seam #3); (c) all 3 KG seams baked in (canonicalConceptId on node data, source discriminator on edge data, open layout registry). Files (all NEW, zero collision with the parallel chat): `causal-map/lib/{types,visual-grammar,tarjan-scc,loop-classify,graph-build}.ts`, `causal-map/hooks/{useLayoutAlgorithm,useLoopDetection}.ts`, `causal-map/nodes/SubObjectiveNode.tsx`, `causal-map/edges/CausalMapEdge.tsx`, `causal-map/overlays/LayerBands.tsx`, `causal-map/altitudes/CanvasAltitudeMap.tsx`, `causal-map/CausalMap.tsx`. Modified: `main-canvas-view.tsx` (Cards/Map toggle). Migration `20260902_phase_12a_causal_map.sql` written — PENDING, not applied (map MVP renders from props, doesn't need it). Covers critical path 12.A.1 + A.2 + A.3. Verified: 0 tsc errors + 0 eslint errors in all new/touched files. DEFERRED: A.4 (room CLD), A.7 (framer-motion zoom transitions), A.10 (agent map tools), A.11 (notebook wiring of the 4 new actions).
+- **2026-05-28** Phase 12.A.9 BUILT — live refresh. New zero-collision hook `causal-map/hooks/useDecisionLogSignal.ts` polls the EXISTING decision-log feed (`GET .../decisions?limit=1`, watches exact `total` + newest event id) and bumps a monotonic `signal` when a new decision lands. Baseline-on-mount (no spurious refresh), visibility-aware (pauses on hidden tab, re-polls on return), burst-debounced by cadence, soft-fail. Wired into `main-canvas-view.tsx`: enabled only while Map view is active → `router.refresh()` on bump (Cards-view users uninterrupted; no refresh loop since refresh emits no decision). Reusable for the room altitude (pass `subObjectiveId`). 0 tsc + 0 eslint errors. Critical-path MVP now A.1–A.3 + A.9; remaining: A.4 (room CLD) then A.7 (zoom).
+- **2026-05-28** Phase 12.A.4 BUILT — room-altitude Causal Loop Diagram. New "Map" view alongside the room's existing Categories / Variables toggle (mounted in `sub-objective-room-view.tsx`, which the parallel session is NOT editing — its room page / lab page avoided to dodge collision). Reads the SAME `lanes` + `edges` props the room already has; checked `room-edges-overlay.tsx` first (an SVG-over-cards layer for the Categories view, NOT a graph — so the CLD is complementary, not a duplicate). Lane-column layout (pain → mechanism → outcome, matching the §17.4 L1 mockup), edges carry polarity + strength + a mediator pill from `agent_feedback.mechanism`, feedback loops detected live (reuses `useLoopDetection`) with a balancing/reinforcing sidebar. New files: `causal-map/lib/build-room-graph.ts`, `causal-map/nodes/RoomItemNode.tsx`, `causal-map/overlays/LaneColumns.tsx`, `causal-map/altitudes/RoomAltitudeMap.tsx` (+ room dims in `visual-grammar.ts`); reused `CausalMapEdge`. 0 tsc + 0 eslint errors (5 room-view warnings are pre-existing). Critical-path MVP now A.1–A.4 + A.9; only A.7 (framer-motion canvas⇄room zoom) remains.
+- **2026-05-28** Phase 12.A.7 BUILT — zoom transitions + breadcrumb. **The MVP critical path (A.1→A.2→A.3→A.4→A.7→A.9) is now COMPLETE.** Since framer-motion `layoutId` can't span a Next App-Router navigation (source tree unmounts, server round-trip), implemented a coordinated two-sided zoom instead: (a) `causal-map/hooks/useZoomTransition.tsx` blooms an accent veil out of the clicked sub-objective node (GPU transform scale + opacity flash) then runs the nav; (b) both the canvas + room maps play a scale/opacity landing animation on mount → the canvas→room hop reads as one continuous zoom; (c) `causal-map/controls/AltitudeBreadcrumb.tsx` renders "Canvas › Room" in the room map (Canvas segment pops back). Honors `prefers-reduced-motion` (skips bloom, navigates immediately). Threaded `spaceId` into `RoomAltitudeMap` for the back link; NO room-page edit (collision-safe — the room title isn't a room-view prop, so the breadcrumb stays generic rather than touching the other session's page). New files: useZoomTransition.tsx, AltitudeBreadcrumb.tsx; modified: CanvasAltitudeMap + RoomAltitudeMap. 0 tsc + 0 eslint errors. Phase 12.A status: critical path DONE; deferred non-critical = A.5 (room view-toggle polish — effectively done via the Map option), A.6 (item-altitude matrix), A.8 (persist map state), A.10 (agent map tools), A.11 (notebook wiring of map actions), A.12 (Realtime).
+- **2026-05-28** Phase 12.A.8 (client slice) BUILT — view persistence. New SSR-safe `causal-map/hooks/useLocalPref.ts` (renders `initial` on server + first paint, flips to stored value in an effect → no hydration mismatch; mirrors the layout.tsx notebook-rail pattern). Wired: Cards/Map choice per space (`causalmap:view:${spaceId}` in main-canvas-view), health overlay per space (`causalmap:health:${spaceId}` in CanvasAltitudeMap), room view per sub-objective (`room:view:${subObjectiveId}` in sub-objective-room-view). No migration (the server-backed `causal_map_state` table + cross-device sync + pinned node positions wait on the pending migration + interactive drag testing). 0 tsc + 0 eslint errors. NOTE: another session is now co-developing in `causal-map/` — added `MapInsightsPanel.tsx` + `lib/summarize-map.ts` (a synthesis panel reading this phase's graph/types) and imports it in main-canvas-view; verified the COMBINED state (their files + mine) compiles + lints clean (0 errors). The dir is no longer single-owner.
+- **2026-05-28** Phase 12.A.10 (foundation) BUILT — URL focus/highlight (the collision-free half of agent map tools). Both altitudes now read `?focus=<nodeId>` (fitView to it once the flow inits, via `useReactFlow().fitView({nodes:[{id}]})`) and `?loop=<loopId>` (applied as the initial highlight) and WRITE the active loop back to the URL via `window.history.replaceState` (pure client update, no nav/refetch) → shareable/bookmarkable focused views, completing the N3 URL-state contract (read + write). Params read from `window.location` (not `useSearchParams`) — safe + lint-clean because both maps mount client-side only (view toggles resolve post-hydration), so `?loop=` is a lazy `useState` initializer (no setState-in-effect, which the repo's `react-hooks/set-state-in-effect` rule errors on). This makes the agent's future `focus_node`/`highlight_loop` tools a plain deep-link — NO chat/notebook-file edits needed now (those are hot + co-owned). Files: CanvasAltitudeMap + RoomAltitudeMap. 0 tsc + 0 eslint. **GATED BOUNDARY REACHED:** remaining Phase 12.A items all need either (a) the pending migration applied to live Supabase — A.8-server (causal_map_state, pinned positions), event emission (the 4 map actions need the CHECK constraint), A.11 notebook wiring; or (b) edits to hot co-owned files (lab page for A.6 item matrix; notebook-chat/route for A.10 agent tools). No safe+unblocked work remains without user authorization (apply migration / commit / coordinate on hot files).
+- **2026-05-28** Phase 12.A migration APPLIED to live Supabase (user authorized "apply"). Applied via `apply_migration` (name: phase_12a_causal_map). **Pre-apply reconciliation caught a clobber hazard:** the remote already had the parallel `arc3_1_mechanism_spec_action` migration, which had added `mechanism_spec_generated` to `sub_objective_decisions_action_check`. My `20260902` file (written earlier) omitted it, so a naive apply would have DROPped+re-ADDed the constraint WITHOUT it → breaking the other session's mechanism-spec inserts. Fixed by re-asserting it: the applied constraint is a strict SUPERSET (33 actions = 28 prior + `mechanism_spec_generated` + the 4 map actions). Verified on the remote: constraint contains all 33, `improvement_goals.canvas_position` column present, `causal_map_state` table present with RLS. UNBLOCKS: server-backed A.8 (pinned positions, cross-device state), emission of the 4 map decision events, A.11 notebook wiring. Coordination note for both sessions: the action list lives in 3 places that must stay in sync — the live constraint, `lib/objective-canvas/decision-log.ts` (DecisionAction union), and each decisions GET route's ALLOWED_ACTIONS; future constraint-touching migrations from EITHER session must re-assert the full superset (incl. map actions) or they'll clobber.
+- **2026-05-28** Phase 12.A.8-server BUILT — pinned canvas layout (advances the Miro/Figma north star). Drag a sub-objective node to arrange the map; positions persist PER-USER in `causal_map_state.state.pins` (now that the table exists). Chose per-user (N5) over `improvement_goals.canvas_position` (per-goal/shared, N6) specifically to avoid editing the shared `MainCanvasSub`/main page (collision-safe). New files: `api/brainstorm/space/[spaceId]/causal-map/state/route.ts` (GET+PUT, safeAuth + space-ownership + 100KB cap, supabase upsert onConflict user_id,space_id), `causal-map/hooks/useMapState.ts` (async load = lint-clean, debounced 600ms PUT, latestRef mirror). Edited CanvasAltitudeMap (mine): `nodesDraggable`, merge `pins[id] ?? autoLayoutPos` into node positions, `onNodesChange`→`setPin` (position-only; the handler is what makes controlled nodes draggable), "Reset layout" button when pins exist. Scoping decision re: agent work — the other session's `summarize-map.ts` explicitly targets A.10 (agent map-awareness) + powers their `MapInsightsPanel`, so they OWN the agent/insights trajectory; this pinning work is deliberately non-overlapping. 0 tsc + 0 eslint errors. CAVEAT: the drag UX itself (edge rendering mid-drag, snap behavior, per-mousemove re-render cost at >30 nodes) needs an interactive browser smoke-test I couldn't run here — logic + types are verified, runtime feel is not.
+- **2026-05-28** Map Insights digest BUILT (zero-collision, while another session shipped A.7 zoom + A.8 view-persistence). New pure `causal-map/lib/summarize-map.ts` (uncovered layers · health distribution · R/B loop counts · strongest cross-room links · one headline recommendation) + `causal-map/MapInsightsPanel.tsx` rendering it beneath the canvas map (mounted via ONE additive line in `main-canvas-view.tsx` — deliberately avoided every zoom-owned file: CanvasAltitudeMap, RoomAltitudeMap, sub-objective-room-view, useZoomTransition, AltitudeBreadcrumb). Self-contained: rebuilds the graph + re-detects loops from the same props the map uses, so it can't disagree with the render. Also the read-substrate for future agent map-awareness (A.10). Verified in-browser via a new `/preflight/map-insights-preview` harness (live canvas is auth-gated): headline correctly flagged L1+L2 uncovered, health 2 strong / 1 weak / 1 unscored, coverage chips L1·L2, 3 entangled-room links correctly directed substrate→outcome. 0 tsc + 0 eslint errors (new files + mount + harness).
+- **2026-05-28** Added §18 — KG consolidation plan (DEFERRED, plan-only). Followed a deep read-only audit (~30 files across `lib/{graph,kg,causal-chains,kg-context,entities,weaving,systems,subsystems}` + objective-canvas KG surface). Key finding: **zero true duplicates** — 4/4 suspected duplications were different operations on different data contracts (structural signals gave 4/4 false positives). Codebase has **two KG paradigms**: (1) space-level *typed* graph (entities/edges typed columns + `lib/graph` algorithms, used by pipeline/twin/canvas/synthesis) and (2) objective-canvas *room* graph (same tables, room-scoped JSONB, string/LLM ops, imports paradigm 1 zero times). Plan = 3 tracks sequenced to NOT disturb in-flight Phase 12.A + Strategy Lab: **Track C** regenerate stale `database.types.ts` (do first); **Track A** unify shared KG behind one `lib/kg/index.ts` front door + dedupe genuine redundancies (4 centrality copies, 2 community-detection files) — land before Strategy Lab hardens; **Track B** (fork-gated, high value, hot files) bridge objective-canvas onto the typed-edge contract so existing graph algorithms run on it + §17.17 KG features get real data. Open decision: converge objective-canvas onto the shared graph vs keep parallel.

@@ -206,3 +206,167 @@ export async function getElectedReadyVariations(
 
   return out;
 }
+
+// ── Per-sub progress (the canvas flashcard progress bar) ────────────
+//
+// Collapses the same 5-gate pipeline above into a single 0–5 readiness
+// signal for ONE sub-objective, so a card can show "how far this
+// feature is from being export-ready" at a glance. Reuses the exact
+// gate semantics (single source of truth) but rolls them up to the sub
+// level: a stage is "reached" if ANY entity / variation under the sub
+// satisfies it.
+
+export type SubProgressStage =
+  | "generated"
+  | "expanded"
+  | "scored"
+  | "elected"
+  | "delivered";
+
+export interface SubProgressStageDef {
+  key: SubProgressStage;
+  /** Full label for the tooltip. */
+  label: string;
+  /** Short caption shown inline next to the bar. */
+  short: string;
+}
+
+// Ordered low→high. The bar fills cumulatively up to the highest stage
+// reached, so a sub that's "elected" still reads as having cleared
+// "scored" even if score data was backfilled out of order — the
+// product flow only reaches election THROUGH experimentation.
+export const SUB_PROGRESS_STAGES: SubProgressStageDef[] = [
+  { key: "generated", label: "Function analyzed — room generated", short: "Analyzed" },
+  { key: "expanded", label: "Items deepened — causal detail expanded", short: "Deepened" },
+  { key: "scored", label: "Variations experimented — scored", short: "Tested" },
+  { key: "elected", label: "Direction confirmed — variation elected", short: "Confirmed" },
+  { key: "delivered", label: "Export-ready — deliverables generated", short: "Ready" },
+];
+
+export interface SubProgress {
+  /** Cumulative fill per stage (true up to the highest reached). */
+  stages: Record<SubProgressStage, boolean>;
+  /** Count of filled stages, 0–5. */
+  completed: number;
+  /** Highest stage reached; null before anything starts. */
+  current: SubProgressStage | null;
+  /** Supporting counts for the tooltip. */
+  counts: {
+    entities: number;
+    expandedEntities: number;
+    scoredVariations: number;
+    electedVariations: number;
+    deliveredVariations: number;
+  };
+}
+
+function rollUp(reached: Record<SubProgressStage, boolean>): {
+  stages: Record<SubProgressStage, boolean>;
+  completed: number;
+  current: SubProgressStage | null;
+} {
+  let maxIdx = -1;
+  SUB_PROGRESS_STAGES.forEach((s, i) => {
+    if (reached[s.key]) maxIdx = i;
+  });
+  const stages = {
+    generated: false,
+    expanded: false,
+    scored: false,
+    elected: false,
+    delivered: false,
+  } as Record<SubProgressStage, boolean>;
+  SUB_PROGRESS_STAGES.forEach((s, i) => {
+    stages[s.key] = i <= maxIdx;
+  });
+  return {
+    stages,
+    completed: maxIdx + 1,
+    current: maxIdx >= 0 ? SUB_PROGRESS_STAGES[maxIdx]!.key : null,
+  };
+}
+
+/** Compute a sub-objective's pipeline progress from data already
+ *  loaded on the canvas (room timestamp + its entities' expanded
+ *  detail). Pure — no DB. */
+export function computeSubProgress(
+  generatedAt: string | null,
+  entities: Array<{ expanded_detail: unknown }>,
+): SubProgress {
+  let expandedEntities = 0;
+  let scoredVariations = 0;
+  let electedVariations = 0;
+  let deliveredVariations = 0;
+
+  for (const e of entities) {
+    const detail = e.expanded_detail as ExpandedItemDetail | null;
+    if (!detail || typeof detail !== "object" || !Array.isArray(detail.variations)) {
+      continue;
+    }
+    if (detail.generated_at) expandedEntities += 1;
+    for (const v of detail.variations as ItemVariation[]) {
+      const scored =
+        typeof v.effectiveness_score === "number" &&
+        Number.isFinite(v.effectiveness_score) &&
+        !!v.evaluation_method;
+      if (scored) scoredVariations += 1;
+      const elected = v.disposition === "elected";
+      if (elected) electedVariations += 1;
+      if (
+        elected &&
+        typeof v.description_doc === "string" && v.description_doc.length > 0 &&
+        typeof v.mockup_html === "string" && v.mockup_html.length > 0 &&
+        typeof v.export_prompt === "string" && v.export_prompt.length > 0
+      ) {
+        deliveredVariations += 1;
+      }
+    }
+  }
+
+  const { stages, completed, current } = rollUp({
+    generated: !!generatedAt,
+    expanded: expandedEntities > 0,
+    scored: scoredVariations > 0,
+    elected: electedVariations > 0,
+    delivered: deliveredVariations > 0,
+  });
+
+  return {
+    stages,
+    completed,
+    current,
+    counts: {
+      entities: entities.length,
+      expandedEntities,
+      scoredVariations,
+      electedVariations,
+      deliveredVariations,
+    },
+  };
+}
+
+/** Lightweight builder for previews / tests — fills the first `n`
+ *  stages. Real callers should use computeSubProgress. */
+export function subProgressFromCompleted(n: number): SubProgress {
+  const clamped = Math.max(0, Math.min(SUB_PROGRESS_STAGES.length, Math.round(n)));
+  const reached = {
+    generated: clamped >= 1,
+    expanded: clamped >= 2,
+    scored: clamped >= 3,
+    elected: clamped >= 4,
+    delivered: clamped >= 5,
+  } as Record<SubProgressStage, boolean>;
+  const { stages, completed, current } = rollUp(reached);
+  return {
+    stages,
+    completed,
+    current,
+    counts: {
+      entities: 0,
+      expandedEntities: 0,
+      scoredVariations: 0,
+      electedVariations: 0,
+      deliveredVariations: 0,
+    },
+  };
+}

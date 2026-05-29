@@ -26,6 +26,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   ChevronDown,
+  ArrowRight,
   AlertTriangle,
   Pencil,
   Check,
@@ -102,6 +103,9 @@ export function PortfolioStrip({
 }: Props) {
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
+  // Coverage detail is a power-user sub-panel inside the expanded
+  // body — collapsed by default so the bets list stays the focus.
+  const [coverageOpen, setCoverageOpen] = useState(false);
   // Local optimistic mirror of categories — lets renames render
   // instantly while the PATCH is in flight. Reverts on failure.
   const [localCategories, setLocalCategories] = useState(categories);
@@ -309,147 +313,125 @@ export function PortfolioStrip({
   if (!hasAnyCategories) return null;
 
   const totalChains = chains.length;
+  const approvedChains = archetypeRows.reduce((s, r) => s + r.approved, 0);
+  const totalProblems = painItems.length;
+  const totalMechanisms = featureItems.length;
+  const totalResults = outcomeItems.length;
+  // One-line summary shown when the strip is collapsed.
+  const collapsedSummary = [
+    `${totalChains} bet${totalChains === 1 ? "" : "s"}`,
+    `${approvedChains} approved`,
+    gapWarnings.length > 0
+      ? `${gapWarnings.length} unaddressed`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <motion.div
       layout
       transition={{ layout: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } }}
-      className="mb-4 overflow-hidden rounded-2xl p-3"
+      className="mb-4 overflow-hidden"
       style={{
-        background: "rgba(255,255,255,0.7)",
+        background: appleVibe.surface.card,
         border: `1px solid ${appleVibe.stroke.hairline}`,
-        borderRadius: appleVibe.radius.lg,
+        borderRadius: appleVibe.radius.xl,
+        boxShadow: appleVibe.shadow.chip,
         fontFamily: appleVibe.font.stack,
       }}
     >
-      {/* Compact header (always visible) */}
-      <button
-        type="button"
+      {/* Header — eyebrow + (collapsed) summary on the left, hero
+          diversity metric + chevron on the right. One eyebrow only. */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between gap-3"
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }
+        }}
+        className="flex w-full items-center justify-between gap-4 px-6 py-4"
         style={{ cursor: "pointer" }}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span
-            className="text-[10px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: appleVibe.text.tertiary }}
+        <div className="min-w-0 flex-1">
+          <div
+            className="text-[9.5px] font-medium uppercase tracking-[0.18em]"
+            style={{ color: appleVibe.text.faint }}
           >
             Portfolio
-          </span>
-          {totalChains > 0 ? (
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-              {archetypeRows.slice(0, 3).map((row) => (
-                <div
-                  key={row.key}
-                  className="inline-flex items-center gap-1.5 rounded-full px-2 py-1"
-                  style={{
-                    background: appleVibe.surface.chip,
-                    border: `1px solid ${appleVibe.stroke.hairline}`,
-                  }}
-                  title={
-                    row.triple
-                      .filter((x): x is { label: string; color: string } => !!x)
-                      .map((x) => x.label)
-                      .join(" × ")
-                  }
-                >
-                  <span
-                    className="font-mono text-[11px] font-semibold"
-                    style={{ color: appleVibe.text.primary }}
-                  >
-                    {row.count}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    {row.triple.map((t, i) =>
-                      t ? (
-                        <span
-                          key={i}
-                          className="inline-flex items-center gap-1 text-[11px] font-medium"
-                          style={{ color: appleVibe.text.secondary }}
-                        >
-                          <span
-                            className="h-1 w-1 flex-shrink-0 rounded-full"
-                            style={{ background: t.color }}
-                            aria-hidden
-                          />
-                          {t.label}
-                          {i < row.triple.length - 1 &&
-                            row.triple[i + 1] && (
-                              <span
-                                className="ml-0.5"
-                                style={{ color: appleVibe.text.faint }}
-                              >
-                                ×
-                              </span>
-                            )}
-                        </span>
-                      ) : null,
-                    )}
-                  </div>
-                </div>
-              ))}
-              {archetypeRows.length > 3 && (
-                <span
-                  className="text-[11px] font-light"
-                  style={{ color: appleVibe.text.tertiary }}
-                >
-                  +{archetypeRows.length - 3} more
-                </span>
-              )}
-            </div>
-          ) : (
-            <span
-              className="text-[12px] font-light"
+          </div>
+          <div
+            className="mt-1 truncate text-[15px] font-semibold leading-tight"
+            style={{
+              color: appleVibe.text.primary,
+              letterSpacing: "-0.015em",
+              fontFamily: appleVibe.font.display,
+            }}
+          >
+            {totalChains > 0
+              ? `${totalChains} strategic bet${totalChains === 1 ? "" : "s"}`
+              : "No bets yet"}
+          </div>
+          {!expanded && (
+            <div
+              className="mt-0.5 truncate text-[11.5px] font-light"
               style={{ color: appleVibe.text.tertiary }}
             >
-              No chains formed yet — approve correlations to populate.
-            </span>
+              {totalChains > 0
+                ? collapsedSummary
+                : "Approve correlations to populate the portfolio."}
+            </div>
           )}
         </div>
 
-        <div className="flex flex-shrink-0 items-center gap-2">
-          {gapWarnings.length > 0 && !expanded && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onGapsClick?.();
-              }}
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors"
-              style={{
-                background: "rgba(217,119,6,0.10)",
-                color: "rgba(146,64,14,0.95)",
-                border: "1px solid rgba(217,119,6,0.22)",
-                cursor: onGapsClick ? "pointer" : "default",
-              }}
-              title={`${gapWarnings.length} sub-categories with items but no chains touching them. Click to open the correlation panel.`}
-            >
-              <AlertTriangle className="h-2.5 w-2.5" strokeWidth={2.5} />
-              {gapWarnings.length} gap{gapWarnings.length === 1 ? "" : "s"}
-            </button>
-          )}
+        <div className="flex flex-shrink-0 items-center gap-3">
           {diversity && (
-            <span
-              className="text-[11px] font-light"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              <span className="font-mono font-semibold">
-                {diversity.n}/{diversity.of}
-              </span>{" "}
-              diversity
-            </span>
+            <div className="text-right leading-none">
+              <div
+                className="tabular-nums"
+                style={{
+                  color: appleVibe.text.primary,
+                  fontFamily: appleVibe.font.display,
+                  fontSize: 22,
+                  fontWeight: 600,
+                  letterSpacing: "-0.025em",
+                }}
+              >
+                {diversity.n}
+                <span
+                  style={{
+                    color: appleVibe.text.tertiary,
+                    fontSize: 14,
+                    fontWeight: 500,
+                  }}
+                >
+                  /{diversity.of}
+                </span>
+              </div>
+              <div
+                className="mt-1 text-[8.5px] font-medium uppercase tracking-[0.2em]"
+                style={{ color: appleVibe.text.faint }}
+              >
+                Diversity
+              </div>
+            </div>
           )}
           <ChevronDown
-            className="h-3.5 w-3.5"
+            className="h-4 w-4"
             strokeWidth={2}
             style={{
-              color: appleVibe.text.tertiary,
+              color: appleVibe.text.faint,
               transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
               transition: "transform 200ms ease-out",
             }}
           />
         </div>
-      </button>
+      </div>
 
       {/* Expanded body */}
       {expanded && (
@@ -457,192 +439,245 @@ export function PortfolioStrip({
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease: "easeOut" }}
-          className="mt-3 space-y-3 border-t pt-3"
-          style={{ borderColor: appleVibe.stroke.hairline }}
+          className="px-6 pb-5"
         >
-          {/* Lane coverage */}
-          <div>
-            <div
-              className="text-[11px] font-semibold uppercase tracking-[0.12em]"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              Lane coverage
-            </div>
-            <div className="mt-1.5 grid gap-2 sm:grid-cols-3">
-              <CoverageColumn
-                lane="Problems"
-                laneKey="friction"
-                color={appleVibe.stage.pain}
-                rows={laneCoverage.friction.rows}
-                untagged={laneCoverage.friction.untagged}
-                editEnabled={editEnabled}
-                editing={editing}
-                draft={draft}
-                onStartEdit={(slug) => {
-                  const cat = localCategories.friction.find(
-                    (c) => c.slug === slug,
-                  );
-                  if (cat) startEdit("friction", cat);
-                }}
-                onDraftChange={setDraft}
-                onCommit={(slug) => commitEdit("friction", slug)}
-                onCancel={() => {
-                  setEditing(null);
-                  setEditError(null);
-                }}
-              />
-              <CoverageColumn
-                lane="Mechanisms"
-                laneKey="mechanism"
-                color={appleVibe.stage.features}
-                rows={laneCoverage.mechanism.rows}
-                untagged={laneCoverage.mechanism.untagged}
-                editEnabled={editEnabled}
-                editing={editing}
-                draft={draft}
-                onStartEdit={(slug) => {
-                  const cat = localCategories.mechanism.find(
-                    (c) => c.slug === slug,
-                  );
-                  if (cat) startEdit("mechanism", cat);
-                }}
-                onDraftChange={setDraft}
-                onCommit={(slug) => commitEdit("mechanism", slug)}
-                onCancel={() => {
-                  setEditing(null);
-                  setEditError(null);
-                }}
-              />
-              <CoverageColumn
-                lane="Results"
-                laneKey="result"
-                color={appleVibe.stage.outcomes}
-                rows={laneCoverage.result.rows}
-                untagged={laneCoverage.result.untagged}
-                editEnabled={editEnabled}
-                editing={editing}
-                draft={draft}
-                onStartEdit={(slug) => {
-                  const cat = localCategories.result.find(
-                    (c) => c.slug === slug,
-                  );
-                  if (cat) startEdit("result", cat);
-                }}
-                onDraftChange={setDraft}
-                onCommit={(slug) => commitEdit("result", slug)}
-                onCancel={() => {
-                  setEditing(null);
-                  setEditError(null);
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Gap warnings */}
+          {/* Gap callout — the single most actionable insight, surfaced
+              FIRST. Quiet amber, clickable to open the correlation
+              panel where the user can add a complementary bet. */}
           {gapWarnings.length > 0 && (
-            <div>
-              <div
-                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
-                style={{ color: appleVibe.text.tertiary }}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onGapsClick?.();
+              }}
+              className="mb-4 flex w-full items-start gap-2.5 px-3.5 py-3 text-left transition-opacity hover:opacity-80"
+              style={{
+                background: "rgba(217,119,6,0.06)",
+                border: "1px solid rgba(217,119,6,0.16)",
+                borderRadius: appleVibe.radius.md,
+                cursor: onGapsClick ? "pointer" : "default",
+              }}
+            >
+              <AlertTriangle
+                className="mt-[1px] h-3.5 w-3.5 flex-shrink-0"
+                strokeWidth={2}
+                style={{ color: "rgba(217,119,6,0.95)" }}
+              />
+              <span
+                className="text-[12px] leading-snug"
+                style={{ color: appleVibe.text.secondary }}
               >
-                Unaddressed dimensions
-              </div>
-              <ul className="mt-1.5 space-y-1">
-                {gapWarnings.map((g, i) => (
-                  <li
-                    key={i}
-                    className="flex items-center gap-2 text-[13px] font-light"
-                    style={{ color: appleVibe.text.secondary }}
-                  >
-                    <AlertTriangle
-                      className="h-3 w-3 flex-shrink-0"
-                      strokeWidth={2}
-                      style={{ color: "rgba(217,119,6,0.95)" }}
-                    />
-                    <span className="inline-flex items-center gap-1">
-                      <span
-                        className="h-1 w-1 flex-shrink-0 rounded-full"
-                        style={{ background: g.color }}
-                        aria-hidden
-                      />
-                      <span
-                        style={{
-                          color: appleVibe.text.primary,
-                          fontWeight: 600,
-                        }}
-                      >
-                        {g.lane} · {g.label}
-                      </span>
-                    </span>
-                    <span style={{ color: appleVibe.text.tertiary }}>
-                      has items but no chains touch it — consider a
-                      complementary bet.
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+                <span style={{ color: appleVibe.text.primary, fontWeight: 600 }}>
+                  {gapWarnings[0]!.label}
+                </span>
+                {gapWarnings.length > 1
+                  ? ` and ${gapWarnings.length - 1} more dimension${gapWarnings.length - 1 === 1 ? "" : "s"} have`
+                  : " has"}{" "}
+                items but no bet yet. Consider a complementary bet to cover{" "}
+                {gapWarnings.length > 1 ? "them" : "it"}.
+              </span>
+            </button>
           )}
 
-          {/* Full archetype list */}
+          {/* Bets list — the canonical portfolio view. One row per
+              archetype, sentence-case names joined by → arrows, with
+              approval status on the right. Hairline separators. */}
           {archetypeRows.length > 0 && (
             <div>
-              <div
-                className="text-[11px] font-semibold uppercase tracking-[0.12em]"
-                style={{ color: appleVibe.text.tertiary }}
-              >
-                All archetypes
+              <div className="mb-1 flex items-baseline justify-between">
+                <span
+                  className="text-[11px] font-medium tracking-tight"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  Your bets
+                </span>
+                <span
+                  className="text-[11px] font-light tabular-nums"
+                  style={{ color: appleVibe.text.faint }}
+                >
+                  {approvedChains}/{totalChains} approved
+                </span>
               </div>
-              <ul className="mt-1.5 space-y-1">
+              <ul>
                 {archetypeRows.map((row) => (
-                  <li
-                    key={row.key}
-                    className="flex items-center justify-between gap-2 text-[13px]"
-                  >
-                    <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                      {row.triple.map((t, i) =>
-                        t ? (
-                          <span key={i} className="flex items-center gap-1">
-                            <span
-                              className="h-1 w-1 flex-shrink-0 rounded-full"
-                              style={{ background: t.color }}
-                              aria-hidden
-                            />
-                            <span
-                              className="font-medium"
-                              style={{ color: appleVibe.text.primary }}
-                            >
-                              {t.label}
-                            </span>
-                            {i < row.triple.length - 1 &&
-                              row.triple[i + 1] && (
-                                <span
-                                  className="ml-0.5"
-                                  style={{ color: appleVibe.text.faint }}
-                                >
-                                  ×
-                                </span>
-                              )}
-                          </span>
-                        ) : null,
-                      )}
-                    </div>
-                    <div className="flex flex-shrink-0 items-center gap-2">
-                      <span
-                        className="font-mono text-[11px]"
-                        style={{ color: appleVibe.text.tertiary }}
-                      >
-                        {row.approved}/{row.count} approved
-                      </span>
-                    </div>
-                  </li>
+                  <BetRow key={row.key} row={row} />
                 ))}
               </ul>
             </div>
           )}
+
+          {/* Coverage details — power-user sub-panel, collapsed by
+              default. The one-line summary always shows; the 3-col
+              matrix (with inline rename) opens on demand. */}
+          <div
+            className="mt-4 border-t pt-3"
+            style={{ borderColor: appleVibe.stroke.hairline }}
+          >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setCoverageOpen((v) => !v);
+              }}
+              className="flex w-full items-center justify-between gap-2 text-left"
+            >
+              <span
+                className="truncate text-[11.5px] font-light"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                Coverage · {totalProblems} problem
+                {totalProblems === 1 ? "" : "s"} · {totalMechanisms} mechanism
+                {totalMechanisms === 1 ? "" : "s"} · {totalResults} result
+                {totalResults === 1 ? "" : "s"}
+              </span>
+              <ChevronDown
+                className="h-3.5 w-3.5 flex-shrink-0"
+                strokeWidth={2}
+                style={{
+                  color: appleVibe.text.faint,
+                  transform: coverageOpen ? "rotate(180deg)" : "rotate(0deg)",
+                  transition: "transform 200ms ease-out",
+                }}
+              />
+            </button>
+            {coverageOpen && (
+              <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                <CoverageColumn
+                  lane="Problems"
+                  laneKey="friction"
+                  color={appleVibe.stage.pain}
+                  rows={laneCoverage.friction.rows}
+                  untagged={laneCoverage.friction.untagged}
+                  editEnabled={editEnabled}
+                  editing={editing}
+                  draft={draft}
+                  onStartEdit={(slug) => {
+                    const cat = localCategories.friction.find(
+                      (c) => c.slug === slug,
+                    );
+                    if (cat) startEdit("friction", cat);
+                  }}
+                  onDraftChange={setDraft}
+                  onCommit={(slug) => commitEdit("friction", slug)}
+                  onCancel={() => {
+                    setEditing(null);
+                    setEditError(null);
+                  }}
+                />
+                <CoverageColumn
+                  lane="Mechanisms"
+                  laneKey="mechanism"
+                  color={appleVibe.stage.features}
+                  rows={laneCoverage.mechanism.rows}
+                  untagged={laneCoverage.mechanism.untagged}
+                  editEnabled={editEnabled}
+                  editing={editing}
+                  draft={draft}
+                  onStartEdit={(slug) => {
+                    const cat = localCategories.mechanism.find(
+                      (c) => c.slug === slug,
+                    );
+                    if (cat) startEdit("mechanism", cat);
+                  }}
+                  onDraftChange={setDraft}
+                  onCommit={(slug) => commitEdit("mechanism", slug)}
+                  onCancel={() => {
+                    setEditing(null);
+                    setEditError(null);
+                  }}
+                />
+                <CoverageColumn
+                  lane="Results"
+                  laneKey="result"
+                  color={appleVibe.stage.outcomes}
+                  rows={laneCoverage.result.rows}
+                  untagged={laneCoverage.result.untagged}
+                  editEnabled={editEnabled}
+                  editing={editing}
+                  draft={draft}
+                  onStartEdit={(slug) => {
+                    const cat = localCategories.result.find(
+                      (c) => c.slug === slug,
+                    );
+                    if (cat) startEdit("result", cat);
+                  }}
+                  onDraftChange={setDraft}
+                  onCommit={(slug) => commitEdit("result", slug)}
+                  onCancel={() => {
+                    setEditing(null);
+                    setEditError(null);
+                  }}
+                />
+              </div>
+            )}
+          </div>
         </motion.div>
       )}
     </motion.div>
+  );
+}
+
+// ── Bet row — one archetype as a single editorial line ──
+// Lane-color dots + sentence-case names joined by → arrows (a chain,
+// not a multiplication). Approval status sits on the right: a quiet
+// "n/m" when pending, a green check when fully approved.
+function BetRow({ row }: { row: ArchetypeRow }) {
+  const parts = row.triple.filter(
+    (t): t is { label: string; color: string } => !!t,
+  );
+  const fullyApproved = row.count > 0 && row.approved === row.count;
+  return (
+    <li
+      className="flex items-start justify-between gap-3 border-b py-2.5 last:border-b-0"
+      style={{ borderColor: appleVibe.stroke.hairline }}
+    >
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1">
+        {parts.map((t, i) => (
+          <span key={i} className="inline-flex items-center gap-1.5">
+            <span
+              className="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full"
+              style={{ background: t.color }}
+              aria-hidden
+            />
+            <span
+              className="text-[12.5px] font-medium"
+              style={{
+                color: appleVibe.text.primary,
+                letterSpacing: "-0.01em",
+              }}
+            >
+              {t.label}
+            </span>
+            {i < parts.length - 1 && (
+              <ArrowRight
+                className="h-3 w-3 flex-shrink-0"
+                strokeWidth={2}
+                style={{ color: appleVibe.text.faint }}
+                aria-hidden
+              />
+            )}
+          </span>
+        ))}
+      </div>
+      <span
+        className="mt-[1px] inline-flex flex-shrink-0 items-center gap-1 text-[11px] font-medium tabular-nums tracking-tight"
+        style={{
+          color: fullyApproved
+            ? appleVibe.stage.outcomes
+            : appleVibe.text.tertiary,
+        }}
+      >
+        {fullyApproved ? (
+          <>
+            <Check className="h-2.5 w-2.5" strokeWidth={2.5} />
+            Approved
+          </>
+        ) : (
+          `${row.approved}/${row.count}`
+        )}
+      </span>
+    </li>
   );
 }
 
@@ -676,8 +711,8 @@ function CoverageColumn({
   return (
     <div>
       <div
-        className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em]"
-        style={{ color: appleVibe.text.secondary }}
+        className="mb-1.5 flex items-center gap-1.5 text-[10.5px] font-medium tracking-tight"
+        style={{ color: appleVibe.text.tertiary }}
       >
         <span
           className="h-1.5 w-1.5 rounded-full"
@@ -686,7 +721,7 @@ function CoverageColumn({
         />
         {lane}
       </div>
-      <ul className="space-y-0.5">
+      <ul className="space-y-1">
         {rows.map((r) => {
           const isEditing =
             editing !== null &&
@@ -777,7 +812,7 @@ function CoverageColumn({
                   </button>
                 )}
                 <span
-                  className="font-mono text-[10px]"
+                  className="text-[10.5px] tabular-nums"
                   style={{
                     color:
                       r.count === 0
@@ -797,7 +832,7 @@ function CoverageColumn({
               uncategorized
             </span>
             <span
-              className="ml-1 font-mono text-[10px]"
+              className="ml-1 text-[10.5px] tabular-nums"
               style={{ color: appleVibe.text.tertiary }}
             >
               {untagged}

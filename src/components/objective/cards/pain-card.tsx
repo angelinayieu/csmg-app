@@ -26,6 +26,7 @@ import {
   AnnotationChipRow,
   type AnnotationChipRowItem,
 } from "./annotation-chip-row";
+import { SendToBoardButton } from "./send-to-board-button";
 
 export interface PainCardItem {
   id: string;
@@ -78,6 +79,9 @@ interface Props {
    *  card shows an "Open detail" link at the bottom that opens
    *  the full <ItemDetailDrawer /> for this entity. */
   onOpenDetail?: () => void;
+  /** Send this item to the objective whiteboard as a draggable artifact
+   *  card (then Connect/Synthesize it with cards from other rooms). */
+  onSendToBoard?: () => void;
   /** Annotation Lens — resolved provenance entries the LLM tagged
    *  this pain with at generation time. Each entry renders as a
    *  small chip below the negative_outcome row; hovering lifts the
@@ -109,6 +113,7 @@ export function PainCard({
   citations,
   onSeeAllSources,
   onOpenDetail,
+  onSendToBoard,
   derivedFromAnnotations,
   hoveredAnnotationIndex,
   onHoverAnnotation,
@@ -149,7 +154,7 @@ export function PainCard({
       transition={{
         layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] },
       }}
-      className="rounded-2xl px-4 py-3"
+      className="group rounded-2xl px-4 py-3"
       style={{
         background: expanded
           ? "rgba(255,255,255,0.98)"
@@ -181,6 +186,9 @@ export function PainCard({
           {item.name}
         </h4>
         <div className="flex flex-shrink-0 items-center gap-1">
+          {onSendToBoard && (
+            <SendToBoardButton onSend={onSendToBoard} color={PAIN_COLOR} />
+          )}
           {citations && citations.length > 0 && (
             <CitationBadge
               citations={citations}

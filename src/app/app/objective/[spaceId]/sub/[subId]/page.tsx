@@ -5,9 +5,7 @@
 // state shows a "Generate the room" CTA; populated state shows the
 // 4 lanes with items and the ranked correlation list.
 
-import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
-import { ArrowLeft, Layers } from "lucide-react";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
 import {
@@ -20,7 +18,14 @@ import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
+import {
+  computeLayerPositionLabel,
+  type ObjectiveStack,
+  type LayerArchetype,
+} from "@/lib/objective-canvas/layer-model";
 import { AnnotatedSubObjectiveCard } from "@/components/objective/annotated-sub-objective-card";
+import { SubObjectiveRoomHeader } from "@/components/objective/sub-objective-room-header";
+import { splitAnnotationsByTitle } from "@/lib/objective-canvas/split-annotations";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +60,12 @@ interface Sub {
   parent_goal_id: string | null;
   room_layers_generated_at: string | null;
   top_negative_outcome: string | null;
+  /** Phase 11.A — which ObjectiveStack layer(s) this room sits at,
+   *  tagged by the proposer. Resolves against the space's stack to
+   *  show "operates at L3 · Goal Conversion" in the room header so the
+   *  room's altitude in the OUTER canvas stack is visible from inside. */
+  layer_ordinals: number[] | null;
+  layer_position_label: string | null;
   /** LLM-picked domain-specific lane labels — overrides the
    *  canonical names when present. Shape:
    *  { pain, features, outcomes, objective }. */
@@ -87,7 +98,7 @@ export default async function SubObjectiveRoomPage({
   const { data: sub } = (await db
     .from("improvement_goals")
     .select(
-      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels, room_categories, annotations",
+      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels, room_categories, annotations, layer_ordinals, layer_position_label",
     )
     .eq("id", subId)
     .maybeSingle()) as { data: Sub | null };
@@ -111,28 +122,19 @@ export default async function SubObjectiveRoomPage({
       : "autopilot";
   const operationalConstraints = readConstraints(spaceModeRow?.synthesis_data);
 
-  // ── Parent core objective — drives the "rolls up to" rollup
-  //    banner so the user sees this room's place in the broader
-  //    canvas. Also carries the persisted annotations the canvas
-  //    extracted from the objective text; we surface them as the
-  //    Annotation Lens header inside the room so the user can see
+  // ── Parent annotations — carries the persisted readings the canvas
+  //    extracted from the parent objective's text; we surface them as
+  //    the Annotation Lens header inside the room so the user can see
   //    which semantic readings seeded each generated item. Falls
   //    through to the space-level root goal if no parent row exists. ──
-  let parentObjectiveText: string | null = null;
   let parentAnnotationsRaw: unknown = null;
   if (sub.parent_goal_id) {
     const { data: parent } = await db
       .from("improvement_goals")
-      .select("title, description, annotations")
+      .select("annotations")
       .eq("id", sub.parent_goal_id)
       .maybeSingle();
-    if (parent) {
-      parentObjectiveText =
-        (typeof parent.description === "string" && parent.description.trim()) ||
-        (typeof parent.title === "string" && parent.title.trim()) ||
-        null;
-      parentAnnotationsRaw = parent.annotations ?? null;
-    }
+    parentAnnotationsRaw = parent?.annotations ?? null;
   } else {
     // Sub IS the root — fetch the space's root improvement_goal
     // (parent_goal_id IS NULL) for annotations.
@@ -144,22 +146,17 @@ export default async function SubObjectiveRoomPage({
       .maybeSingle();
     parentAnnotationsRaw = rootGoal?.annotations ?? null;
   }
-  if (!parentObjectiveText) {
-    const { data: spaceRow } = await db
-      .from("spaces")
-      .select("description, input_text")
-      .eq("id", spaceId)
-      .maybeSingle();
-    parentObjectiveText =
-      (typeof spaceRow?.description === "string" && spaceRow.description.trim()) ||
-      (typeof spaceRow?.input_text === "string" && spaceRow.input_text.trim()) ||
-      null;
-  }
   const parentAnnotations = normalizeAnnotations(parentAnnotationsRaw);
   // K1 — sub-objective's own annotations. Parallel lens, scoped to
-  // this sub-objective's text. Renders as an AnnotatedObjectiveCard
-  // below the title.
+  // this sub-objective's text. Split into title-range vs description-
+  // range so the title h1 carries its own inline underlines and the
+  // lens card renders the description without repeating the title.
   const subAnnotations = normalizeAnnotations(sub.annotations);
+  const { titleAnnotations, descriptionAnnotations } = splitAnnotationsByTitle(
+    sub.title,
+    sub.description,
+    subAnnotations,
+  );
 
   // ── O3 — Cross-room annotation coverage ──
   // Same parent annotations seed every sibling room in the space.
@@ -317,6 +314,41 @@ export default async function SubObjectiveRoomPage({
     .eq("parent_sub_objective_id", subId);
   const edges: RoomEdge[] = ((edgeRows ?? []) as RoomEdge[]) ?? [];
 
+  // ── Room placement on the outer ObjectiveStack ──
+  // Resolve which canvas-stack layer(s) this room operates at so the
+  // header can show "operates at L3 · Goal Conversion" — the literal
+  // tie-back from inside the room up to the macro causal stack. The
+  // sub carries layer_ordinals (tagged by the proposer); we resolve
+  // those against the space's stack to name the layer + archetype.
+  const objectiveStack =
+    (spaceModeRow?.synthesis_data?.objective_canvas?.layers as
+      | ObjectiveStack
+      | null
+      | undefined) ?? null;
+  let roomPlacement: { label: string; archetype: LayerArchetype } | null =
+    null;
+  if (
+    objectiveStack &&
+    Array.isArray(sub.layer_ordinals) &&
+    sub.layer_ordinals.length > 0
+  ) {
+    const ordinals = sub.layer_ordinals;
+    const touched = objectiveStack.layers
+      .filter((l) => ordinals.includes(l.ordinal))
+      .sort((a, b) => a.ordinal - b.ordinal);
+    if (touched.length > 0) {
+      // Peak altitude — the highest layer this room reaches names it.
+      const primary = touched[touched.length - 1];
+      const posLabel =
+        sub.layer_position_label ?? computeLayerPositionLabel(ordinals);
+      const prefix = posLabel.split(" · ")[0];
+      roomPlacement = {
+        label: `${prefix} · ${primary.name}`,
+        archetype: primary.archetype,
+      };
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-40 overflow-y-auto"
@@ -332,117 +364,38 @@ export default async function SubObjectiveRoomPage({
       <HomeTabNav />
       <ModePill spaceId={spaceId} mode={pipelineMode} />
 
-      <div className="relative mx-auto w-full max-w-[1400px] px-8 pb-24 pt-24">
-        <Link
-          href={`/app/objective/${spaceId}`}
-          className="inline-flex items-center gap-1.5 text-[12px] font-medium"
-          style={{ color: appleVibe.text.secondary }}
-        >
-          <ArrowLeft className="h-3 w-3" strokeWidth={2} />
-          Back to canvas
-        </Link>
+      <div className="relative w-full pb-24 pt-16">
+        {/* Breadcrumb bar + annotated title + Counters callout.
+            The breadcrumb is full-width (lab-style); the header proper
+            is centered to the 1400px column inside the component. */}
+        <SubObjectiveRoomHeader
+          spaceId={spaceId}
+          title={sub.title}
+          titleAnnotations={titleAnnotations}
+          topNegativeOutcome={sub.top_negative_outcome}
+          placement={roomPlacement}
+        />
 
-        <div className="mt-6 max-w-3xl">
-          <div
-            className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]"
-            style={{
-              background: appleVibe.surface.chip,
-              color: appleVibe.text.tertiary,
-            }}
-          >
-            <Layers className="h-3 w-3" strokeWidth={2} />
-            Sub-objective room
-          </div>
-          <h1
-            className="mt-2 text-[26px] font-semibold leading-tight tracking-tight"
-            style={{
-              color: appleVibe.text.primary,
-              fontFamily: appleVibe.font.display,
-              letterSpacing: "-0.02em",
-            }}
-          >
-            {sub.title}
-          </h1>
-
-          {/* ── Room anchor (top_negative_outcome) ──
-              Distinct treatment from the per-pain "leads to →" so
-              the user reads it as the ROOM-LEVEL synthesis: a
-              colored dot in the pain-lane color + non-italic label
-              + heavier weight. This is the macro-scale consequence
-              the entire room exists to counter. */}
-          {sub.top_negative_outcome && (
-            <div
-              className="mt-3 inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5"
-              style={{
-                background: `${appleVibe.stage.pain}0F`,
-                border: `1px solid ${appleVibe.stage.pain}33`,
-              }}
-            >
-              <span
-                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                style={{ background: appleVibe.stage.pain }}
-                aria-hidden
-              />
-              <span
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-                style={{ color: appleVibe.stage.pain }}
-              >
-                Counters
-              </span>
-              <span
-                className="text-[12.5px] font-medium leading-tight"
-                style={{ color: appleVibe.text.primary }}
-              >
-                {sub.top_negative_outcome}
-              </span>
-            </div>
-          )}
-
-          {/* ── Rollup banner ──
-              Replaces the dead "Objective" lane. Shows the parent
-              core objective with a left-arrow so the user sees how
-              this room ladders up to the bigger ask. Truncated
-              with a full text title-attribute on hover. */}
-          {parentObjectiveText && (
-            <p
-              className="mt-3 line-clamp-2 max-w-2xl text-[12px] font-light leading-snug"
-              style={{ color: appleVibe.text.tertiary }}
-              title={parentObjectiveText}
-            >
-              <span
-                className="font-semibold uppercase tracking-[0.12em]"
-                style={{
-                  color: appleVibe.text.tertiary,
-                  fontSize: "9.5px",
-                }}
-              >
-                ← rolls up to:
-              </span>{" "}
-              {parentObjectiveText.length > 220
-                ? parentObjectiveText.slice(0, 218).trimEnd() + "…"
-                : parentObjectiveText}
-            </p>
-          )}
-
-          {/* ── K1 — Sub-objective Annotation Lens ──
-              Parallel to the parent objective's annotation lens.
-              Renders the sub-objective's own title + description
-              with annotation chips inline. Auto-generated after
-              first room/generate; loaded by the page server-side.
-              Hidden when generation hasn't run (gracefully empty). */}
-          {(sub.description?.trim() || subAnnotations.length > 0) && (
-            <div className="mt-4 max-w-2xl">
+        <div className="mx-auto w-full max-w-[1400px] px-8">
+          {/* ── K1 — Sub-objective description lens ──
+              Renders the description ONLY (the title carries its own
+              inline annotations in the header above, so we don't
+              repeat it here). Hidden when there's no description and
+              no readings. */}
+          {(sub.description?.trim() || descriptionAnnotations.length > 0) && (
+            <div className="mt-5 max-w-2xl">
+              {/* Raw (untrimmed) description — annotation offsets are
+                  relative to the raw string, so trimming here would
+                  shift the underlines. */}
               <AnnotatedSubObjectiveCard
-                objectiveText={[sub.title, sub.description ?? ""]
-                  .filter((s) => s && s.trim().length > 0)
-                  .join("\n\n")}
-                annotations={subAnnotations}
+                objectiveText={sub.description ?? ""}
+                annotations={descriptionAnnotations}
               />
             </div>
           )}
         </div>
 
-        <div className="mt-10">
+        <div className="mx-auto mt-10 w-full max-w-[1400px] px-8">
           <SubObjectiveRoomView
             spaceId={spaceId}
             subObjectiveId={subId}

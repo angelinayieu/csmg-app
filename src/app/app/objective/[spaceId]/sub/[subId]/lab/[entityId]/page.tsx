@@ -32,6 +32,7 @@ import { ArrowLeft, MessageCircle } from "lucide-react";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { LabPageView } from "@/components/objective/lab/lab-page-view";
+import { FloatingCard } from "@/components/ui/floating-card";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
 
@@ -155,25 +156,24 @@ export default async function LabPage({
   return (
     <div
       className="min-h-screen"
-      style={{
-        background: appleVibe.surface.base,
-        fontFamily: appleVibe.font.stack,
-      }}
+      style={{ fontFamily: appleVibe.font.stack }}
     >
       <HomeTabNav />
 
-      {/* Header chrome — back to room + breadcrumbs + "discuss" hook
-          into the notebook rail's chat. Restrained, sits on top of
-          the page-level padding the layout reserves for the rail. */}
-      <div
-        className="border-b"
-        style={{
-          background: appleVibe.surface.card,
-          borderColor: appleVibe.stroke.hairline,
-        }}
-      >
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-6 py-3">
-          <div className="flex min-w-0 items-center gap-3">
+      {/* The Lab renders as a single floating room pane over the pearl
+          substrate — the layered-rooms language. The breadcrumb chrome
+          lives inside the card's top strip; the body is the existing
+          LabPageView, which centers its own max-w-5xl column within. */}
+      <div className="mx-auto max-w-6xl px-2 pb-12 pt-16">
+        <FloatingCard tier="float" glow className="overflow-hidden">
+          {/* Breadcrumb strip — transparent (sits on the glass card),
+              hairline divider beneath. */}
+          <div
+            className="border-b"
+            style={{ borderColor: appleVibe.stroke.hairline }}
+          >
+            <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-6 py-3">
+              <div className="flex min-w-0 items-center gap-3">
             <Link
               href={`/app/objective/${spaceId}/sub/${subId}`}
               className="inline-flex items-center gap-1.5 text-[11px] font-medium transition-colors hover:text-[rgba(15,23,42,0.92)]"
@@ -227,22 +227,24 @@ export default async function LabPage({
         </div>
       </div>
 
-      {/* Page body — the Lab itself. Client orchestrator owns state
-          for diff picker + action dispatch. Server-rendered data is
-          the source of truth on first load; re-runs replace it. */}
-      <LabPageView
-        spaceId={spaceId}
-        subObjectiveId={subId}
-        entityId={entityId}
-        entityName={entity.name}
-        entityType={entity.entity_type}
-        causalChain={entity.causal_chain ?? null}
-        expandedDetail={expanded}
-        detailResearch={entity.detail_research ?? null}
-        peerOutcomes={peerOutcomes}
-        coreObjectiveText={coreObjectiveText}
-        subObjectiveTitle={subObjectiveTitle}
-      />
+          {/* Page body — the Lab itself. Client orchestrator owns state
+              for diff picker + action dispatch. Server-rendered data is
+              the source of truth on first load; re-runs replace it. */}
+          <LabPageView
+            spaceId={spaceId}
+            subObjectiveId={subId}
+            entityId={entityId}
+            entityName={entity.name}
+            entityType={entity.entity_type}
+            causalChain={entity.causal_chain ?? null}
+            expandedDetail={expanded}
+            detailResearch={entity.detail_research ?? null}
+            peerOutcomes={peerOutcomes}
+            coreObjectiveText={coreObjectiveText}
+            subObjectiveTitle={subObjectiveTitle}
+          />
+        </FloatingCard>
+      </div>
     </div>
   );
 }

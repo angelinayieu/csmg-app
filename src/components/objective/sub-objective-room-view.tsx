@@ -15,9 +15,12 @@
 // the "addressed by" / "counters pains" lists inside expanded cards.
 
 import { useRouter } from "next/navigation";
+import { ProblemResultReview } from "./problem-result-review";
+import { useBackgroundDeepen } from "./use-background-deepen";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   ArrowLeftRight,
+  ArrowRight,
   RefreshCw,
   Target,
   TrendingDown,
@@ -25,6 +28,7 @@ import {
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { deployArtifactCard } from "@/components/objective/board-bus";
 import { CorrelationSidePanel } from "./correlation-side-panel";
 import { PainCard, type PainCardItem } from "./cards/pain-card";
 import { FeatureCard, type FeatureCardItem } from "./cards/feature-card";
@@ -46,6 +50,11 @@ import { AutopilotRunner } from "./autopilot-runner";
 // renders once. Room-scoped events surface there in room mode
 // (detected from the URL by the layout).
 import { RoomEdgesOverlay } from "./room-edges-overlay";
+// Phase 12.A.4 — the room-altitude Causal Loop Diagram. A third room
+// view alongside Categories / Variables; reads the same lanes + edges.
+import { RoomAltitudeMap } from "./causal-map/altitudes/RoomAltitudeMap";
+// Phase 12.A.8 — remember the room's view choice per sub-objective.
+import { useLocalPref } from "./causal-map/hooks/useLocalPref";
 import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
 import {
@@ -183,14 +192,21 @@ export function SubObjectiveRoomView({
   // (the grid) so the rect math + selector queries see the right
   // bounding box.
   const lanesContainerRef = useRef<HTMLDivElement | null>(null);
-  // Phase 7a — room view mode. Categories = chain-centric experiment
-  // frame view (default). Variables = the legacy 3-lane variable
-  // view. Both share the same underlying data; the toggle just
-  // re-groups the rendering. Default to Categories since it's the
-  // clearer scientific frame.
-  const [roomView, setRoomView] = useState<"categories" | "variables">(
-    "categories",
-  );
+  // Room view mode — read as an altitude ladder, not three peer tabs:
+  //   map        → SYSTEM (default). Orient: every stage, item, and
+  //                feedback loop in one causal-loop diagram. The
+  //                "what am I looking at" surface.
+  //   categories → CHAINS. Decide: one (Problem × Mechanism × Result)
+  //                experiment frame at a time; approve happens here.
+  //   variables  → GRID (escape hatch). The legacy 3-lane layout +
+  //                correlation side panel — kept for the data-rigorous
+  //                power user, not the default.
+  // All three read the same lanes + edges; the toggle only re-groups
+  // the rendering. Default to Map so the room opens on the system view
+  // (the clearest "these are distinct stages" communication we have).
+  const [roomView, setRoomView] = useLocalPref<
+    "categories" | "variables" | "map"
+  >(`room:view:${subObjectiveId}`, "map");
   // Phase 9 — Lab Notebook panel open state. The notebook reads the
   // sub_objective_decisions feed for this room and renders the
   // decision timeline (elections / experiments / approvals /
@@ -207,6 +223,13 @@ export function SubObjectiveRoomView({
   // Layer 2 — currently-open item detail drawer entity id. Null
   // means closed.
   const [detailEntityId, setDetailEntityId] = useState<string | null>(null);
+  // Altitude 2 — chain focus token. Set when the user clicks a chain
+  // edge on the Map; switches to the Chains view focused on that bet.
+  // The nonce lets re-clicking the same chain re-focus it.
+  const [chainFocus, setChainFocus] = useState<{
+    id: string;
+    nonce: number;
+  } | null>(null);
   // Sources sheet — opened by CitationBadge's "See all sources"
   // footer and any future "Open research" affordances.
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -711,14 +734,20 @@ export function SubObjectiveRoomView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipelineMode, generatedAt]);
 
-  function generate(mode: "initial" | "regenerate") {
+  // Arc 3.6 — phase defaults to "all" (one-shot) so the autopilot
+  // auto-fire stays unchanged. Manual Generate / Regenerate pass
+  // "define" so the room stops at the problem/result checkpoint.
+  function generate(
+    mode: "initial" | "regenerate",
+    phase: "define" | "all" = "all",
+  ) {
     setError(null);
     startTransition(async () => {
       try {
         const res = await fetch("/api/brainstorm/room/generate", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ spaceId, subObjectiveId, mode }),
+          body: JSON.stringify({ spaceId, subObjectiveId, mode, phase }),
         });
         const json = await res.json();
         if (!res.ok) {
@@ -754,8 +783,51 @@ export function SubObjectiveRoomView({
     setHighlightedCauses(cause ? new Set([cause]) : new Set());
   }
 
+  // Altitude 2 — a Map edge was clicked. An edge is one chain hop, so
+  // resolve it to the chain that owns it (either the pain→mechanism or
+  // mechanism→result edge), then zoom into the Chains frame focused on
+  // that bet. No-op if the edge isn't part of a complete chain (a lone
+  // half-edge); the user stays on the Map.
+  function handleOpenChainForEdge(edgeId: string) {
+    const chain = allChains.find(
+      (c) =>
+        c.painFeatureEdge.id === edgeId || c.featureOutcomeEdge.id === edgeId,
+    );
+    if (!chain) return;
+    setChainFocus({ id: chain.id, nonce: Date.now() });
+    setRoomView("categories");
+  }
+
   const hasEdges = edges.length > 0;
   const approvedCount = approvedEdgeIds.size;
+
+  // Arc 3.6 — checkpoint state: problems (pain) + results (outcome)
+  // have been generated, but mechanisms (features) have NOT, and the
+  // room isn't marked complete. Derived purely from props — no new
+  // prop / schema. When true the review surface renders so the user
+  // can edit / sharpen before generating mechanisms.
+  const isCheckpoint =
+    !generatedAt &&
+    painItems.length > 0 &&
+    outcomeItems.length > 0 &&
+    featureItems.length === 0;
+
+  // Arc 3.3 — fast shell + background deepen. Once the room is fully
+  // generated, pre-warm every card's deep detail (definition /
+  // variations / planning) via /item/expand in the background so
+  // opening a card is instant instead of spinning on first open.
+  // /item/expand short-circuits already-deep cards, so this is cheap
+  // on repeat visits. Gated on generatedAt so it never runs at the
+  // checkpoint (mechanisms don't exist yet there).
+  const allCardIds = useMemo(
+    () => [
+      ...painItems.map((p) => p.id),
+      ...featureItems.map((f) => f.id),
+      ...outcomeItems.map((o) => o.id),
+    ],
+    [painItems, featureItems, outcomeItems],
+  );
+  useBackgroundDeepen(allCardIds, Boolean(generatedAt));
 
   return (
     <div style={{ fontFamily: appleVibe.font.stack }}>
@@ -786,7 +858,7 @@ export function SubObjectiveRoomView({
           {generatedAt && (
             <button
               type="button"
-              onClick={() => generate("regenerate")}
+              onClick={() => generate("regenerate", "define")}
               disabled={busy}
               className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold"
               style={{
@@ -799,10 +871,10 @@ export function SubObjectiveRoomView({
               Regenerate
             </button>
           )}
-          {!generatedAt && (
+          {!generatedAt && !isCheckpoint && (
             <button
               type="button"
-              onClick={() => generate("initial")}
+              onClick={() => generate("initial", "define")}
               disabled={busy}
               className="inline-flex items-center gap-1.5 rounded-2xl px-4 py-2 text-[13px] font-semibold"
               style={{
@@ -831,6 +903,33 @@ export function SubObjectiveRoomView({
           }}
         >
           {error}
+        </div>
+      )}
+
+      {/* Arc 3.6 — problem/result checkpoint. When the room has been
+          DEFINED (problems + results) but mechanisms aren't generated
+          yet, the review surface lets the user edit / sharpen the
+          problems + results, then generate mechanisms against them —
+          the declared-primary chains reflect those edits. */}
+      {isCheckpoint && (
+        <div className="mb-6">
+          <ProblemResultReview
+            spaceId={spaceId}
+            subObjectiveId={subObjectiveId}
+            pains={painItems.map((p) => ({
+              id: p.id,
+              name: p.name,
+              negative_outcome: p.negative_outcome ?? "",
+              root_causes: p.root_causes,
+            }))}
+            outcomes={outcomeItems.map((o) => ({
+              id: o.id,
+              name: o.name,
+              measured_by: o.measured_by ?? "",
+              indicators: o.indicators,
+            }))}
+            onComplete={() => router.refresh()}
+          />
         </div>
       )}
 
@@ -889,6 +988,14 @@ export function SubObjectiveRoomView({
           when an inline constraints editor lands. */}
       <ConstraintsStrip constraints={constraints} spaceId={spaceId} />
 
+      {/* Always-on instrument legend — orients the user to the room's
+          4 causal stages + their variable roles, above every view
+          (Categories / Variables / Map). Only meaningful once the room
+          has generated items. */}
+      {generatedAt && (
+        <RoomInstrumentLegend lanes={lanes} />
+      )}
+
       {/* Phase 7a + 7c — top-right chrome: view toggle + autopilot.
           Both align right so the eye reads them as room-level controls
           rather than canvas content. ViewToggle is structural (which
@@ -942,6 +1049,16 @@ export function SubObjectiveRoomView({
           onApprovalChange={handleApprovalChange}
           onOpenItemDetail={setDetailEntityId}
           refreshSignal={autopilotRefreshKey}
+          focusChain={chainFocus}
+        />
+      )}
+      {roomView === "map" && (
+        <RoomAltitudeMap
+          spaceId={spaceId}
+          lanes={lanes}
+          edges={edges}
+          onOpenItem={setDetailEntityId}
+          onOpenChainForEdge={handleOpenChainForEdge}
         />
       )}
       {roomView === "variables" && (
@@ -1019,6 +1136,16 @@ export function SubObjectiveRoomView({
                         hoveredAnnotationIndex={hoveredAnnotationIndex}
                         onHoverAnnotation={setHoveredAnnotationIndex}
                         onOpenDetail={() => setDetailEntityId(p.id)}
+                        onSendToBoard={() =>
+                          deployArtifactCard({
+                            kind: "pain",
+                            entityId: p.id,
+                            title: p.name,
+                            subtitle: p.negative_outcome ?? "",
+                            color: appleVibe.stage.pain,
+                            roomId: subObjectiveId,
+                          })
+                        }
                       />
                     </div>
                   );
@@ -1079,6 +1206,16 @@ export function SubObjectiveRoomView({
                         hoveredAnnotationIndex={hoveredAnnotationIndex}
                         onHoverAnnotation={setHoveredAnnotationIndex}
                         onOpenDetail={() => setDetailEntityId(f.id)}
+                        onSendToBoard={() =>
+                          deployArtifactCard({
+                            kind: "feature",
+                            entityId: f.id,
+                            title: f.name,
+                            subtitle: f.positive_outcome ?? "",
+                            color: appleVibe.stage.features,
+                            roomId: subObjectiveId,
+                          })
+                        }
                       />
                     </div>
                   );
@@ -1130,6 +1267,16 @@ export function SubObjectiveRoomView({
                         hoveredAnnotationIndex={hoveredAnnotationIndex}
                         onHoverAnnotation={setHoveredAnnotationIndex}
                         onOpenDetail={() => setDetailEntityId(o.id)}
+                        onSendToBoard={() =>
+                          deployArtifactCard({
+                            kind: "outcome",
+                            entityId: o.id,
+                            title: o.name,
+                            subtitle: o.measured_by ?? "",
+                            color: appleVibe.stage.outcomes,
+                            roomId: subObjectiveId,
+                          })
+                        }
                       />
                     </div>
                   );
@@ -1274,6 +1421,151 @@ const LANE_ROLE: Record<
     direction: "roll-up",
   },
 };
+
+// ── Room instrument legend ─────────────────────────────────────────
+//
+// Always-on orientation strip rendered above every room view
+// (Categories / Variables / Map). Lifts the per-lane LANE_ROLE framing
+// — previously only visible inside the Variables view — to a
+// persistent header so the room's experiment-instrument structure is
+// communicated no matter which view is active.
+//
+// Reads left-to-right as the causal chain itself:
+//   Problems ─addressed by→ Mechanisms ─produce→ Results ··roll up·· Objective
+// The connector verbs are what tell the user these are sequential
+// STAGES of one chain, not four parallel buckets — the "layers aren't
+// communicated" gap. We reserve the word "layer" for the canvas
+// altitude stack; in the room the strata are causal STAGES.
+
+const FLOW_VERB: Partial<
+  Record<"pain" | "features" | "outcomes" | "objective", string>
+> = {
+  pain: "addressed by",
+  features: "produce",
+  outcomes: "roll up",
+};
+
+export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
+  const order: Array<"pain" | "features" | "outcomes" | "objective"> = [
+    "pain",
+    "features",
+    "outcomes",
+    "objective",
+  ];
+  const bySlug = new Map(lanes.map((l) => [l.slug, l] as const));
+
+  return (
+    <div
+      className="mb-3 flex items-center gap-1 overflow-x-auto px-4 py-3"
+      style={{
+        background: appleVibe.surface.cardElevated,
+        border: `1px solid ${appleVibe.stroke.hairline}`,
+        borderRadius: appleVibe.radius.lg,
+        boxShadow: appleVibe.shadow.card,
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+        fontFamily: appleVibe.font.stack,
+      }}
+      aria-label="Causal stages in this room"
+    >
+      {order.map((slug, i) => {
+        const lane = bySlug.get(slug);
+        if (!lane) return null;
+        const role = LANE_ROLE[slug];
+        const RoleIcon = role.icon;
+        const color = lane.color;
+        const next = order[i + 1];
+        const verb = next ? FLOW_VERB[slug] : null;
+        // The objective is the anchor — not part of the IV/DV flow, so
+        // its lead-in connector is a faint "roll up" rather than a
+        // solid causal arrow.
+        const isAnchorHop = next === "objective";
+        return (
+          <div
+            key={slug}
+            className={
+              next
+                ? "flex flex-1 items-center gap-1"
+                : "flex flex-shrink-0 items-center gap-1"
+            }
+          >
+            <div className="flex min-w-0 flex-col items-center gap-1 px-1 text-center">
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="grid flex-shrink-0 place-items-center rounded-full"
+                  style={{
+                    width: 22,
+                    height: 22,
+                    background: `${color}14`,
+                    color,
+                    boxShadow: `0 0 0 1px ${color}24, 0 4px 12px -6px ${color}66`,
+                  }}
+                  aria-hidden
+                >
+                  <RoleIcon className="h-3 w-3" strokeWidth={2.2} />
+                </span>
+                <span
+                  className="truncate text-[13px] font-semibold tracking-tight"
+                  style={{
+                    color: appleVibe.text.primary,
+                    fontFamily: appleVibe.font.display,
+                    letterSpacing: "-0.01em",
+                  }}
+                >
+                  {lane.label}
+                </span>
+                <span
+                  className="flex-shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+                  style={{
+                    background: appleVibe.surface.chip,
+                    color: appleVibe.text.tertiary,
+                  }}
+                >
+                  {lane.items.length}
+                </span>
+              </div>
+              <span
+                className="text-[9px] font-semibold uppercase tracking-[0.14em]"
+                style={{ color }}
+              >
+                {role.roleLabel} · {role.direction}
+              </span>
+            </div>
+
+            {verb && (
+              <div className="flex min-w-[44px] flex-1 flex-col items-center gap-0.5 px-1">
+                <span
+                  className="whitespace-nowrap text-[8.5px] font-medium lowercase tracking-wide"
+                  style={{ color: appleVibe.text.faint }}
+                >
+                  {verb}
+                </span>
+                <div className="flex w-full items-center">
+                  <div
+                    className="h-px flex-1"
+                    style={{
+                      background: isAnchorHop
+                        ? `${appleVibe.text.faint}`
+                        : `linear-gradient(90deg, ${color}55, ${
+                            bySlug.get(next!)?.color ?? color
+                          }55)`,
+                      opacity: isAnchorHop ? 0.4 : 1,
+                    }}
+                  />
+                  <ArrowRight
+                    className="-ml-0.5 h-2.5 w-2.5 flex-shrink-0"
+                    style={{ color: appleVibe.text.faint }}
+                    strokeWidth={2.4}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function Lane({
   slug,
@@ -1423,19 +1715,31 @@ function ViewToggleInline({
   value,
   onChange,
 }: {
-  value: "categories" | "variables";
-  onChange: (next: "categories" | "variables") => void;
+  value: "categories" | "variables" | "map";
+  onChange: (next: "categories" | "variables" | "map") => void;
 }) {
-  const options: Array<{ key: "categories" | "variables"; label: string; hint: string }> = [
+  // Ordered as an altitude ladder, left → right: the system overview
+  // first (where the room opens), then the per-chain decision frame,
+  // then the raw grid as a power-user escape hatch.
+  const options: Array<{
+    key: "categories" | "variables" | "map";
+    label: string;
+    hint: string;
+  }> = [
+    {
+      key: "map",
+      label: "Map",
+      hint: "The system — every stage, item, and feedback loop in one causal-loop diagram",
+    },
     {
       key: "categories",
-      label: "Categories",
-      hint: "Each chain as one experiment frame — recommended",
+      label: "Chains",
+      hint: "One Problem → Mechanism → Result experiment frame at a time — approve here",
     },
     {
       key: "variables",
-      label: "Variables",
-      hint: "3-lane view — pain · mechanism · result",
+      label: "Grid",
+      hint: "The raw 3-lane layout + correlations — for the data-rigorous power user",
     },
   ];
   return (

@@ -66,6 +66,7 @@ export const appleVibe = {
   stage: {
     pain: "#DC2626",
     features: "#2563EB",
+    process: "#0D9488",
     outcomes: "#16A34A",
     objective: "#7C3AED",
   },

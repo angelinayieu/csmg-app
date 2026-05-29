@@ -20,6 +20,7 @@ import {
   type AnnotationChipRowItem,
 } from "./annotation-chip-row";
 import { BaselineEditor } from "@/components/objective/baseline-editor";
+import { SendToBoardButton } from "./send-to-board-button";
 
 export interface OutcomeCardItem {
   id: string;
@@ -70,6 +71,9 @@ interface Props {
   /** Layer-2 detail drawer trigger. Renders an "Open detail" link
    *  at the bottom of the expanded card. */
   onOpenDetail?: () => void;
+  /** Send this item to the objective whiteboard as a draggable artifact
+   *  card (then Connect/Synthesize it with cards from other rooms). */
+  onSendToBoard?: () => void;
   /** Annotation Lens — resolved provenance entries (dimension /
    *  inference facets dominate the result lane). */
   derivedFromAnnotations?: AnnotationChipRowItem[];
@@ -90,6 +94,7 @@ export function OutcomeCard({
   citations,
   onSeeAllSources,
   onOpenDetail,
+  onSendToBoard,
   derivedFromAnnotations,
   hoveredAnnotationIndex,
   onHoverAnnotation,
@@ -143,7 +148,7 @@ export function OutcomeCard({
       transition={{
         layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] },
       }}
-      className="rounded-2xl px-4 py-3"
+      className="group rounded-2xl px-4 py-3"
       style={{
         background: expanded
           ? "rgba(255,255,255,0.98)"
@@ -171,6 +176,9 @@ export function OutcomeCard({
           {item.name}
         </h4>
         <div className="flex flex-shrink-0 items-center gap-1">
+          {onSendToBoard && (
+            <SendToBoardButton onSend={onSendToBoard} color={OUTCOME_COLOR} />
+          )}
           {citations && citations.length > 0 && (
             <CitationBadge
               citations={citations}

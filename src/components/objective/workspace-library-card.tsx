@@ -15,6 +15,7 @@
 // attends to the card.
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   FileText,
@@ -69,14 +70,24 @@ export function WorkspaceLibraryCard({
 }: {
   card: WorkspaceCardData;
 }) {
+  const router = useRouter();
   const stageTone = STAGE_TONE[card.stage];
   const hasAttention = card.totals.open_conflicts > 0;
+  const href = `/app/objective/${card.id}`;
 
   return (
-    <Link
-      href={`/app/objective/${card.id}`}
-      className="group block"
-      style={{ textDecoration: "none" }}
+    <div
+      role="link"
+      tabIndex={0}
+      aria-label={card.display_title}
+      onClick={() => router.push(href)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          router.push(href);
+        }
+      }}
+      className="group block cursor-pointer"
     >
       <article
         className="relative flex flex-col gap-3.5 rounded-2xl px-5 py-4 transition-all"
@@ -244,7 +255,7 @@ export function WorkspaceLibraryCard({
           </div>
         )}
       </article>
-    </Link>
+    </div>
   );
 }
 

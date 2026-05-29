@@ -9,7 +9,7 @@
 // sidebar. The "Map" option alongside the room's Categories / Variables
 // views — it reads the SAME lanes + edges, just as a graph.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ReactFlow,
@@ -21,6 +21,7 @@ import {
   Panel,
   MarkerType,
   useReactFlow,
+  useNodesInitialized,
   type Node,
   type Edge,
   type NodeTypes,
@@ -56,6 +57,17 @@ interface Props {
   lanes: RoomLane[];
   edges: RoomEdge[];
   height?: number;
+  /** Altitude 3 — open the item drawer in place for a clicked node.
+   *  When provided, a node click opens this entity's detail drawer
+   *  (keeping the user inside the system view) instead of navigating
+   *  away to the Lab route. Omit → legacy L1→L2 route navigation. */
+  onOpenItem?: (entityId: string) => void;
+  /** Altitude 2 — open the focused chain frame for a clicked edge.
+   *  Edges in the room map ARE chain hops (problem→mechanism or
+   *  mechanism→result), so clicking one is the natural "show me this
+   *  bet" gesture. The room view resolves the edge id to its chain
+   *  (it owns `allChains`) and zooms into the Chains frame to approve. */
+  onOpenChainForEdge?: (edgeId: string) => void;
 }
 
 export function RoomAltitudeMap(props: Props) {
@@ -71,6 +83,8 @@ function RoomAltitudeMapInner({
   lanes,
   edges,
   height = 560,
+  onOpenItem,
+  onOpenChainForEdge,
 }: Props) {
   const reduce = useReducedMotion();
   // Initial highlight can come from a ?loop= deep-link (12.A.10). Lazy
@@ -83,6 +97,26 @@ function RoomAltitudeMapInner({
   );
   const rf = useReactFlow();
   const [initialized, setInitialized] = useState(false);
+
+  // ── Reliable initial framing ──
+  // RoomItemNode carries a fixed width but a content-driven height (only
+  // minHeight is set), so React Flow measures its real size AFTER the
+  // first paint. The declarative `fitView` prop runs once on initial
+  // render — before that measurement — so it frames against wrong bounds
+  // and strands the nodes outside the viewport (the lane overlays still
+  // paint because they redraw purely from the viewport transform, which
+  // is the "empty colored columns, no nodes" symptom). `useNodesInitialized`
+  // flips true once every node has real dimensions; we fit then. Ref-guarded
+  // so this only governs entry framing and never hijacks the view after the
+  // user has panned or zoomed. (Ported from CanvasAltitudeMap.)
+  const nodesInitialized = useNodesInitialized();
+  const didInitialFit = useRef(false);
+  useEffect(() => {
+    if (!nodesInitialized || didInitialFit.current) return;
+    didInitialFit.current = true;
+    rf.fitView({ padding: 0.2, maxZoom: 1.2, minZoom: 0.25, duration: 300 });
+  }, [nodesInitialized, rf]);
+
   const router = useRouter();
   // subId comes from the route (/app/objective/[spaceId]/sub/[subId]) so
   // we don't have to thread a prop through the (other-session) room view.
@@ -101,11 +135,19 @@ function RoomAltitudeMapInner({
     [loops, highlightedLoop],
   );
 
-  // L1→L2 drill-down: clicking a mechanism node blooms + opens its Lab
-  // page (the existing item altitude). Only feature nodes carry an href.
+  // Node click → drill to the item altitude. Two modes:
+  //   • In-place (preferred): when the room view passes onOpenItem, EVERY
+  //     node opens its detail drawer (Altitude 3) without leaving the
+  //     system view. The drawer links onward to the deeper Lab.
+  //   • Legacy route nav: with no in-place host, only mechanism nodes
+  //     (which carry an href) bloom + navigate to their Lab page.
   const onNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
       const d = node.data as unknown as CausalMapNodeData;
+      if (onOpenItem) {
+        onOpenItem(node.id);
+        return;
+      }
       if (!d.href) return;
       const href = d.href;
       const r = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -116,7 +158,17 @@ function RoomAltitudeMapInner({
         () => router.push(href),
       );
     },
-    [router, triggerZoom],
+    [router, triggerZoom, onOpenItem],
+  );
+
+  // Edge click → Altitude 2 (the focused chain frame). The edge id is
+  // the room edge id (build-room-graph passes it through verbatim), so
+  // the room view can map it to the chain that owns this hop.
+  const onEdgeClick = useCallback(
+    (_event: React.MouseEvent, edge: Edge) => {
+      onOpenChainForEdge?.(edge.id);
+    },
+    [onOpenChainForEdge],
   );
 
   // URL-driven focus (?focus=<entityId>) — a deep-link / the chat agent
@@ -213,6 +265,7 @@ function RoomAltitudeMapInner({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}
+        onEdgeClick={onEdgeClick}
         onInit={() => setInitialized(true)}
         fitView
         fitViewOptions={{ padding: 0.2, maxZoom: 1.2, minZoom: 0.25 }}

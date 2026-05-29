@@ -7,9 +7,10 @@
 // score / rd_iterate events fired by the existing routes during the
 // loop get visually grouped under this parent by timestamp.
 //
-// Body: {} — no inputs needed; targets all rooms in the space that
-//            have generated entities. (Could later accept a filter
-//            { subObjectiveIds?: string[] } if we want partial runs.)
+// Body: { subObjectiveIds?: string[] } — optional partial-run filter.
+//        When omitted (or empty), targets ALL rooms in the space that
+//        have generated entities. When provided, intersects with the
+//        generated rooms so the run only covers the picked subset.
 //
 // Returns: {
 //   targets: Array<{
@@ -42,6 +43,15 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     return NextResponse.json({ error: "spaceId required" }, { status: 400 });
   }
 
+  // Optional partial-run filter. Parse defensively — a malformed body
+  // falls back to "all rooms" rather than erroring the run.
+  const body = (await req.json().catch(() => ({}))) as {
+    subObjectiveIds?: unknown;
+  };
+  const filterIds = Array.isArray(body.subObjectiveIds)
+    ? body.subObjectiveIds.filter((v): v is string => typeof v === "string")
+    : null;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = auth.supabase as any;
 
@@ -66,17 +76,32 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     .eq("user_id", auth.user.id)
     .not("parent_goal_id", "is", null)
     .not("room_layers_generated_at", "is", null);
-  const subRows = (subs ?? []) as Array<{
+  const allGeneratedRows = (subs ?? []) as Array<{
     id: string;
     title: string;
     room_layers_generated_at: string | null;
   }>;
 
-  if (subRows.length === 0) {
+  if (allGeneratedRows.length === 0) {
     return NextResponse.json({
       targets: [],
       totalChainCount: 0,
       message: "No generated rooms yet — generate a room first.",
+    });
+  }
+
+  // Intersect the generated rooms with the optional picker selection.
+  // An empty/absent filter means "all generated rooms" (default).
+  const subRows =
+    filterIds && filterIds.length > 0
+      ? allGeneratedRows.filter((s) => filterIds.includes(s.id))
+      : allGeneratedRows;
+
+  if (subRows.length === 0) {
+    return NextResponse.json({
+      targets: [],
+      totalChainCount: 0,
+      message: "None of the selected rooms have been generated yet.",
     });
   }
 
@@ -132,6 +157,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     action: "autopilot_run",
     metadata: {
       scope: "canvas",
+      partial: subRows.length < allGeneratedRows.length,
       sub_objective_ids: subIds,
       sub_objective_count: subRows.length,
       chain_count: totalChainCount,

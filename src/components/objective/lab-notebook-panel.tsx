@@ -32,20 +32,29 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ArrowRight,
+  BookText,
   Check,
   ChevronDown,
+  Combine,
   FileCode,
+  FlaskConical,
+  Gauge,
+  History,
   Layers,
+  LayoutGrid,
   Loader2,
+  Maximize2,
   MessageCircle,
+  Play,
   Plus,
   RefreshCw,
   Send,
-  Sparkles,
   X,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { NotebookGlossaryView } from "./notebook-glossary-view";
 import type {
+  NotebookAction,
   NotebookEvent,
   NotebookEventPage,
 } from "@/lib/objective-canvas/notebook-events";
@@ -101,8 +110,13 @@ export interface NotebookNavigateTarget {
 const FILTERS: ReadonlyArray<{
   label: string;
   actions: NotebookEvent["action"][] | null;
+  /** When set, the lens shows only headline-weight events (decisions +
+   *  surprising results) client-side — the "see the most important
+   *  things" view. Server still returns everything; we filter here. */
+  headlinesOnly?: boolean;
 }> = [
   { label: "All", actions: null },
+  { label: "Key", actions: null, headlinesOnly: true },
   {
     label: "Experiments",
     actions: ["rd_iterate", "score", "autopilot_run", "autopilot_iteration"],
@@ -161,6 +175,10 @@ export function LabNotebookPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterIdx, setFilterIdx] = useState(0);
+  // Arc 3.5 — the rail hosts two views: the activity log (timeline +
+  // chat) and the space Glossary (the definition page). Glossary only
+  // offered when we have a spaceId to load it from.
+  const [bodyView, setBodyView] = useState<"activity" | "glossary">("activity");
   // Phase 10c — chat thread state. Sticky input at bottom + message
   // bubbles at the top of the scrollable body. Loads on open + after
   // every send so the thread stays in sync without polling.
@@ -231,6 +249,50 @@ export function LabNotebookPanel({
     setNextCursor(null);
     void fetchPage({ reset: true });
   }, [open, fetchPage]);
+
+  // Keep a ref to the latest events so the liveness poll can read them
+  // without re-subscribing the interval every time the feed changes.
+  const eventsRef = useRef<NotebookEvent[]>([]);
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
+
+  // Silent first-page refetch (no spinner) — used by the liveness poll.
+  const silentRefresh = useCallback(async () => {
+    if (!feedUrl) return;
+    const filter = FILTERS[filterIdx];
+    const qs = new URLSearchParams();
+    if (filter.actions) qs.set("actions", filter.actions.join(","));
+    try {
+      const res = await fetch(`${feedUrl}?${qs.toString()}`);
+      if (!res.ok) return;
+      const page = (await res.json()) as NotebookEventPage;
+      setEvents(page.events);
+      setTotal(page.total);
+      setNextCursor(page.next_cursor);
+    } catch {
+      // Soft-fail — a dropped poll is harmless; the next tick retries.
+    }
+  }, [feedUrl, filterIdx]);
+
+  // Liveness — there is no realtime path to this data (the SSE bus is a
+  // different subsystem that never touches the decision log), so while a
+  // run is plausibly active we lightly poll the first page. Gated to
+  // avoid waste + disruption: only when the tab is visible, only when
+  // the newest event is recent (≤90s — a run is plausibly mid-flight),
+  // and only while the user is still on the first page of history.
+  useEffect(() => {
+    if (!open) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      const evs = eventsRef.current;
+      if (evs.length === 0 || evs.length > 40) return;
+      const newestTs = new Date(evs[0].created_at).getTime();
+      if (Date.now() - newestTs > 90_000) return;
+      void silentRefresh();
+    }, 4000);
+    return () => window.clearInterval(id);
+  }, [open, silentRefresh]);
 
   // Phase 10c — load chat thread on open. Thread is keyed by
   // (space_id, sub_objective_id) — null sub_objective_id = canvas-
@@ -364,8 +426,32 @@ export function LabNotebookPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // The "Key" lens filters to headline-weight events client-side (the
+  // server still returns everything). Other lenses already filter by
+  // action server-side via fetchPage.
+  const headlinesOnly = FILTERS[filterIdx]?.headlinesOnly ?? false;
+
   // Group events by day for the timeline display.
-  const grouped = useMemo(() => groupByDay(events), [events]);
+  const grouped = useMemo(
+    () => groupByDay(headlinesOnly ? events.filter(isHeadlineEvent) : events),
+    [events, headlinesOnly],
+  );
+
+  // Header breakdown — a quick sense of what the loaded window holds.
+  const counts = useMemo(() => {
+    let experiments = 0;
+    let decisions = 0;
+    for (const e of events) {
+      if (e.action === "score" || e.action === "rd_iterate") experiments += 1;
+      else if (
+        e.action === "elect" ||
+        e.action === "approve_bet" ||
+        e.action === "compose"
+      )
+        decisions += 1;
+    }
+    return { experiments, decisions };
+  }, [events]);
 
   // Phase 10c-polish — auto-scroll the chat to the newest message
   // whenever a turn lands. Without this, long conversations stay
@@ -476,6 +562,26 @@ export function LabNotebookPanel({
                 >
                   {total} {total === 1 ? "event" : "events"}
                 </h2>
+                {(counts.experiments > 0 || counts.decisions > 0) && (
+                  <div
+                    className="mt-0.5 text-[11px] font-medium"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    {counts.experiments > 0 && (
+                      <span>
+                        {counts.experiments} experiment
+                        {counts.experiments === 1 ? "" : "s"}
+                      </span>
+                    )}
+                    {counts.experiments > 0 && counts.decisions > 0 && " · "}
+                    {counts.decisions > 0 && (
+                      <span>
+                        {counts.decisions} decision
+                        {counts.decisions === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <button
                 type="button"
@@ -488,7 +594,45 @@ export function LabNotebookPanel({
               </button>
             </header>
 
-            {/* Filter chips */}
+            {/* Arc 3.5 — Activity / Glossary view toggle (Glossary only
+                when we have a spaceId to load the project dictionary). */}
+            {spaceId && (
+              <div className="flex items-center gap-1 px-5 pt-3">
+                {(["activity", "glossary"] as const).map((v) => {
+                  const active = bodyView === v;
+                  return (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setBodyView(v)}
+                      className="inline-flex items-center gap-1 transition-[background,color] duration-150 ease-out"
+                      style={{
+                        background: active
+                          ? appleVibe.accent.primary
+                          : "transparent",
+                        color: active
+                          ? appleVibe.text.onAccent
+                          : appleVibe.text.secondary,
+                        border: `1px solid ${active ? appleVibe.accent.primary : appleVibe.stroke.medium}`,
+                        borderRadius: appleVibe.radius.pill,
+                        padding: "3px 12px",
+                        fontSize: "10.5px",
+                        fontWeight: 600,
+                        letterSpacing: "0.02em",
+                      }}
+                    >
+                      {v === "glossary" && (
+                        <BookText className="h-3 w-3" strokeWidth={2} />
+                      )}
+                      {v === "activity" ? "Activity" : "Glossary"}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Filter chips (activity view only) */}
+            {bodyView === "activity" && (
             <div
               className="flex flex-wrap items-center gap-1.5 px-5 py-3"
               style={{ borderBottom: `1px solid ${appleVibe.stroke.hairline}` }}
@@ -523,8 +667,15 @@ export function LabNotebookPanel({
                 );
               })}
             </div>
+            )}
 
-            {/* Scrollable body */}
+            {/* Scrollable body — Glossary view OR the activity log
+                (chat + timeline). */}
+            {bodyView === "glossary" && spaceId ? (
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                <NotebookGlossaryView spaceId={spaceId} />
+              </div>
+            ) : (
             <div className="flex-1 overflow-y-auto px-5 py-4">
               {/* Phase 10c — Chat thread. Renders above the timeline
                   so the user reads recent conversation in context
@@ -602,12 +753,10 @@ export function LabNotebookPanel({
               )}
 
               {grouped.map(({ label, events: dayEvents }) => {
-                // Phase 10c-polish — autopilot grouping. Inside each
-                // day section, fold score/rd_iterate events that fired
-                // within 5 minutes AFTER an autopilot_run into the
-                // parent row so the timeline tells the autopilot story
-                // as one unit instead of a scattered burst.
-                const items = groupAutopilotChildren(dayEvents);
+                // Fold bursts of work into collapsible chapters (autopilot
+                // sessions + same-room process bursts) so each day reads as
+                // a fork-tree of micro-processes, not a flat wall of rows.
+                const items = buildChapters(dayEvents);
                 return (
                   <section key={label} className="mb-5">
                     <div
@@ -625,35 +774,46 @@ export function LabNotebookPanel({
                         style={{ background: appleVibe.stroke.hairline }}
                       />
                     </div>
-                    <ul className="space-y-1.5">
-                      {items.map((item) => {
-                        if (item.kind === "autopilot_group") {
+                    {/* The spine — a hairline rail the row nodes sit on. */}
+                    <div className="relative">
+                      <span
+                        aria-hidden
+                        className="pointer-events-none absolute bottom-1 top-1 w-px"
+                        style={{
+                          left: 22,
+                          background: appleVibe.stroke.hairline,
+                        }}
+                      />
+                      <ul className="relative space-y-1.5">
+                        {items.map((item) => {
+                          if (item.kind === "chapter") {
+                            return (
+                              <ChapterRow
+                                key={item.chapter.id}
+                                chapter={item.chapter}
+                                onNavigate={(target) => onNavigate?.(target)}
+                              />
+                            );
+                          }
+                          const ev = item.event;
                           return (
-                            <AutopilotGroupRow
-                              key={item.parent.id}
-                              parent={item.parent}
-                              children={item.children}
-                              onClick={(target) => onNavigate?.(target)}
+                            <NotebookRow
+                              key={ev.id}
+                              event={ev}
+                              weight={weightFor(ev)}
+                              onClick={() =>
+                                onNavigate?.({
+                                  entityId: ev.subject.entity_id ?? null,
+                                  variationId: ev.subject.variation_id ?? null,
+                                  subObjectiveId:
+                                    ev.subject.sub_objective_id ?? null,
+                                })
+                              }
                             />
                           );
-                        }
-                        const ev = item.event;
-                        return (
-                          <NotebookRow
-                            key={ev.id}
-                            event={ev}
-                            onClick={() =>
-                              onNavigate?.({
-                                entityId: ev.subject.entity_id ?? null,
-                                variationId: ev.subject.variation_id ?? null,
-                                subObjectiveId:
-                                  ev.subject.sub_objective_id ?? null,
-                              })
-                            }
-                          />
-                        );
-                      })}
-                    </ul>
+                        })}
+                      </ul>
+                    </div>
                   </section>
                 );
               })}
@@ -710,6 +870,7 @@ export function LabNotebookPanel({
                 </div>
               )}
             </div>
+            )}
 
             {/* Phase 10c — sticky chat input bar. Sits in the panel
                 chrome (per L3 lock-in: timeline-first, chat as side
@@ -871,7 +1032,7 @@ function ChatBubble({
               ) : dispatchStatus === "done" ? (
                 <Check className="h-2.5 w-2.5" strokeWidth={2.4} />
               ) : (
-                <Sparkles className="h-2.5 w-2.5" strokeWidth={2.4} />
+                <Play className="h-2.5 w-2.5" strokeWidth={2.4} />
               )}
               {dispatchStatus === "done"
                 ? "Ran"
@@ -942,7 +1103,7 @@ function EmptyState() {
           color: appleVibe.text.tertiary,
         }}
       >
-        <Sparkles className="h-3.5 w-3.5" strokeWidth={2} />
+        <History className="h-3.5 w-3.5" strokeWidth={2} />
       </div>
       <p
         className="text-[12.5px] font-medium"
@@ -966,9 +1127,12 @@ function EmptyState() {
 function NotebookRow({
   event: ev,
   onClick,
+  weight = "routine",
 }: {
   event: NotebookEvent;
   onClick?: () => void;
+  /** Priority weight — muted rows rest dimmed so headlines lead. */
+  weight?: EventWeight;
 }) {
   // Phase 10b — visualFor is action-driven; the row click handler
   // now forwards sub_objective_id too so the host can route to the
@@ -982,12 +1146,12 @@ function NotebookRow({
       whileHover={{ y: -0.5, transition: { duration: 0.15 } }}
       whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
       onClick={onClick}
-      className="cursor-pointer transition-colors duration-150 ease-out"
+      className="cursor-pointer transition-colors duration-150 ease-out hover:bg-[rgba(15,23,42,0.04)]"
       style={{
-        background: appleVibe.surface.cardElevated,
-        border: `1px solid ${appleVibe.stroke.hairline}`,
+        background: "transparent",
         borderRadius: appleVibe.radius.sm,
-        padding: "10px 12px",
+        padding: "9px 12px",
+        opacity: weight === "muted" ? 0.55 : 1,
       }}
     >
       <div className="flex items-start gap-2.5">
@@ -1363,9 +1527,6 @@ function MetadataChips({ event: ev }: { event: NotebookEvent }) {
           style={{
             background: c.color ? `${c.color}10` : appleVibe.surface.chip,
             color: c.color ?? appleVibe.text.tertiary,
-            border: c.color
-              ? `1px solid ${c.color}26`
-              : `1px solid ${appleVibe.stroke.hairline}`,
           }}
         >
           {c.label}
@@ -1403,7 +1564,7 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
       };
     case "rd_iterate":
       return {
-        icon: Sparkles,
+        icon: FlaskConical,
         label: "Ran experiment",
         color: appleVibe.stage.features,
       };
@@ -1421,13 +1582,13 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
       };
     case "compose":
       return {
-        icon: Sparkles,
+        icon: Combine,
         label: "Composed design",
         color: appleVibe.accent.primary,
       };
     case "generate_batch":
       return {
-        icon: Sparkles,
+        icon: LayoutGrid,
         label: "Generated batch",
         color: appleVibe.text.tertiary,
       };
@@ -1439,13 +1600,13 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
       };
     case "autopilot_run":
       return {
-        icon: Sparkles,
+        icon: Gauge,
         label: "Autopilot started",
         color: appleVibe.stage.features,
       };
     case "autopilot_iteration":
       return {
-        icon: Sparkles,
+        icon: Gauge,
         label: "Autopilot iteration",
         color: appleVibe.stage.features,
       };
@@ -1458,7 +1619,7 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
       };
     case "item_expanded":
       return {
-        icon: Sparkles,
+        icon: Maximize2,
         label: "Expanded item",
         color: appleVibe.stage.features,
       };
@@ -1622,44 +1783,197 @@ function formatTime(iso: string): string {
 // pragmatic MVP. False positives are rare in single-user workflows.
 
 const AUTOPILOT_WINDOW_MS = 5 * 60 * 1000;
+// A run of low-signal "process" steps in the SAME room within this
+// window collapses into one chapter, so the timeline reads "Spec'd 7
+// mechanisms" instead of 7 identical rows (the screenshot's noise).
+const CLUSTER_WINDOW_MS = 12 * 60 * 1000;
+const CLUSTER_MIN = 3;
+
+// Individually low-signal steps an orchestrator (room birth, deepen,
+// autopilot) fires in bursts. Headline/decision actions are never
+// clustered — they always stand alone on the spine.
+const CLUSTERABLE_ACTIONS = new Set<NotebookAction>([
+  "mechanism_spec_generated",
+  "item_expanded",
+  "expansion_spawned",
+  "score",
+  "rd_iterate",
+]);
+
+// ── Priority model — what the timeline leads with vs. dims ──────────
+// Headline = irreversible / high-meaning moments (decisions, surprising
+// results). Muted = pure churn. Everything else is routine. Drives the
+// "Key" lens and the resting opacity of standalone rows. This is visual
+// weighting of the RECORD only — standing "what to do next" judgments
+// live in the Analysis Workbench, not here.
+type EventWeight = "headline" | "routine" | "muted";
+
+const HEADLINE_ACTIONS = new Set<NotebookAction>([
+  "approve_bet",
+  "compose",
+  "elect",
+  "theme_distilled",
+  "concept_branched",
+  "baseline_set",
+  "layers_generated",
+  "layers_regenerated",
+]);
+
+const MUTED_ACTIONS = new Set<NotebookAction>([
+  "confirm",
+  "clear",
+  "generate_batch",
+  "finding_acknowledged",
+  "finding_dismissed",
+  "layer_position_set",
+  "constraints_set",
+  "prototype_status_changed",
+]);
+
+function weightFor(ev: NotebookEvent): EventWeight {
+  if (HEADLINE_ACTIONS.has(ev.action)) return "headline";
+  // A score that beat baseline is a surprising result → headline.
+  if (
+    ev.action === "score" &&
+    typeof ev.meta.lift_pct === "number" &&
+    ev.meta.lift_pct > 0
+  )
+    return "headline";
+  if (MUTED_ACTIONS.has(ev.action)) return "muted";
+  return "routine";
+}
+
+function isHeadlineEvent(ev: NotebookEvent): boolean {
+  return weightFor(ev) === "headline";
+}
+
+interface Chapter {
+  id: string;
+  kind: "autopilot" | "process";
+  /** The anchor event (autopilot_run, or the newest step in a process
+   *  burst) — drives time, room context, and the headline. */
+  anchor: NotebookEvent;
+  /** Child operations, ordered oldest→newest (read like a transcript). */
+  children: NotebookEvent[];
+}
 
 type DisplayItem =
   | { kind: "event"; event: NotebookEvent }
-  | { kind: "autopilot_group"; parent: NotebookEvent; children: NotebookEvent[] };
+  | { kind: "chapter"; chapter: Chapter };
 
-function groupAutopilotChildren(events: NotebookEvent[]): DisplayItem[] {
-  // events arrive sorted DESC by created_at (newest first).
+/** Generalized fork-tree builder (replaces the autopilot-only grouper).
+ *  Two chapter kinds:
+ *    • autopilot — an autopilot_run parent + the score/rd_iterate it
+ *      spawned within AUTOPILOT_WINDOW_MS.
+ *    • process   — a run of ≥CLUSTER_MIN consecutive clusterable steps
+ *      in the same room within CLUSTER_WINDOW_MS (room births, deepen
+ *      bursts). Everything else stays a standalone node.
+ *  events arrive sorted DESC by created_at (newest first). */
+function buildChapters(events: NotebookEvent[]): DisplayItem[] {
   const consumed = new Set<string>();
   const out: DisplayItem[] = [];
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     if (consumed.has(ev.id)) continue;
-    if (ev.action !== "autopilot_run") {
-      out.push({ kind: "event", event: ev });
+
+    // 1) Autopilot session.
+    if (ev.action === "autopilot_run") {
+      const parentTime = new Date(ev.created_at).getTime();
+      const children: NotebookEvent[] = [];
+      // Walk toward newer events (they came AFTER the run in real time).
+      for (let j = i - 1; j >= 0; j--) {
+        const cand = events[j];
+        if (consumed.has(cand.id)) continue;
+        const delta = new Date(cand.created_at).getTime() - parentTime;
+        if (delta < 0) continue;
+        if (delta > AUTOPILOT_WINDOW_MS) break;
+        if (cand.action === "score" || cand.action === "rd_iterate") {
+          children.push(cand);
+          consumed.add(cand.id);
+        }
+      }
+      consumed.add(ev.id);
+      children.reverse();
+      out.push({
+        kind: "chapter",
+        chapter: { id: ev.id, kind: "autopilot", anchor: ev, children },
+      });
       continue;
     }
-    const parentTime = new Date(ev.created_at).getTime();
-    const children: NotebookEvent[] = [];
-    // Walk BACKWARD (toward newer events in DESC order = events with
-    // larger timestamps that came AFTER this autopilot_run in real time).
-    for (let j = i - 1; j >= 0; j--) {
-      const cand = events[j];
-      if (consumed.has(cand.id)) continue;
-      const candTime = new Date(cand.created_at).getTime();
-      const delta = candTime - parentTime;
-      if (delta < 0) continue; // older than the parent — skip
-      if (delta > AUTOPILOT_WINDOW_MS) break;
-      if (cand.action === "score" || cand.action === "rd_iterate") {
-        children.push(cand);
-        consumed.add(cand.id);
+
+    // 2) Process burst — consecutive same-room clusterable steps.
+    if (CLUSTERABLE_ACTIONS.has(ev.action)) {
+      const room = ev.subject.sub_objective_id ?? null;
+      const anchorTime = new Date(ev.created_at).getTime();
+      const run: NotebookEvent[] = [ev];
+      for (let j = i + 1; j < events.length; j++) {
+        const cand = events[j];
+        if (consumed.has(cand.id)) break;
+        if (!CLUSTERABLE_ACTIONS.has(cand.action)) break;
+        if ((cand.subject.sub_objective_id ?? null) !== room) break;
+        const delta = anchorTime - new Date(cand.created_at).getTime();
+        if (delta < 0 || delta > CLUSTER_WINDOW_MS) break;
+        run.push(cand);
       }
+      if (run.length >= CLUSTER_MIN) {
+        for (const r of run) consumed.add(r.id);
+        out.push({
+          kind: "chapter",
+          chapter: {
+            id: ev.id,
+            kind: "process",
+            anchor: ev,
+            children: [...run].reverse(),
+          },
+        });
+        continue;
+      }
+      // Too small to be a chapter — fall through as a standalone node.
     }
+
+    out.push({ kind: "event", event: ev });
     consumed.add(ev.id);
-    // Restore chronological order within children (oldest first).
-    children.reverse();
-    out.push({ kind: "autopilot_group", parent: ev, children });
   }
   return out;
+}
+
+/** Dominant action across a chapter's children (most frequent). */
+function dominantAction(children: NotebookEvent[]): NotebookAction {
+  const counts = new Map<NotebookAction, number>();
+  for (const c of children)
+    counts.set(c.action, (counts.get(c.action) ?? 0) + 1);
+  let best: NotebookAction = children[0]?.action ?? "score";
+  let bestN = 0;
+  for (const [a, n] of counts)
+    if (n > bestN) {
+      bestN = n;
+      best = a;
+    }
+  return best;
+}
+
+/** Synthesized one-line headline for a process chapter. */
+function clusterHeadline(children: NotebookEvent[]): string {
+  const total = children.length;
+  const distinct = new Set(children.map((c) => c.action));
+  if (distinct.size === 1) {
+    const plural = total === 1 ? "" : "s";
+    switch (children[0].action) {
+      case "mechanism_spec_generated":
+        return `Spec'd ${total} mechanism${plural}`;
+      case "item_expanded":
+        return `Expanded ${total} item${plural}`;
+      case "expansion_spawned":
+        return `Spawned ${total} deeper node${plural}`;
+      case "score":
+        return `Scored ${total} chain${plural}`;
+      case "rd_iterate":
+        return `Ran ${total} experiment${plural}`;
+      default:
+        break;
+    }
+  }
+  return `${total} operations`;
 }
 
 // Empty-state welcome bubble shown when no chat messages exist yet —
@@ -1694,108 +2008,145 @@ function ChatWelcome({ mode }: { mode: "room" | "space" }) {
   );
 }
 
-// Autopilot group row — renders the parent autopilot_run prominently
-// with its score/rd_iterate children listed underneath as a compact
-// summary instead of separate full-height rows.
-function AutopilotGroupRow({
-  parent,
-  children,
-  onClick,
+// Chapter row — a collapsible fork-tree node. One synthesized headline
+// for a burst of work (autopilot session or a same-room process burst)
+// with its child operations folded underneath. Default-collapsed so the
+// timeline stays calm; expanding reveals the steps oldest→newest, like
+// reading a transcript segment. Generalizes the old AutopilotGroupRow.
+function ChapterRow({
+  chapter,
+  onNavigate,
 }: {
-  parent: NotebookEvent;
-  children: NotebookEvent[];
-  onClick: (target: NotebookNavigateTarget) => void;
+  chapter: Chapter;
+  onNavigate: (target: NotebookNavigateTarget) => void;
 }) {
-  const time = formatTime(parent.created_at);
+  const [expanded, setExpanded] = useState(false);
+  const { anchor, children } = chapter;
+  const isAuto = chapter.kind === "autopilot";
+  const lead = isAuto
+    ? { icon: Gauge, color: appleVibe.stage.features }
+    : visualFor(dominantAction(children));
+  const Icon = lead.icon;
+  const time = formatTime(anchor.created_at);
+  const room = anchor.subject.sub_objective_title;
+  const headline = isAuto ? "Autopilot run" : clusterHeadline(children);
+
   const scoreCount = children.filter((c) => c.action === "score").length;
   const refineCount = children.filter((c) => c.action === "rd_iterate").length;
+  const sub = isAuto
+    ? `${
+        anchor.meta.chain_count
+          ? `${anchor.meta.chain_count} chain${anchor.meta.chain_count === 1 ? "" : "s"}`
+          : "Started"
+      }${
+        children.length > 0
+          ? ` · ${scoreCount} scored · ${refineCount} refined`
+          : " · no work captured in window"
+      }`
+    : (room ?? null);
+
   return (
     <motion.li
       whileHover={{ y: -0.5, transition: { duration: 0.15 } }}
-      className="cursor-default"
+      className="overflow-hidden"
       style={{
-        background: appleVibe.surface.cardElevated,
-        border: `1px solid ${appleVibe.stage.features}26`,
-        borderLeft: `3px solid ${appleVibe.stage.features}`,
+        background: `${lead.color}08`,
         borderRadius: appleVibe.radius.sm,
-        padding: "10px 12px",
+        boxShadow: `0 0 0 1px ${lead.color}1f, 0 6px 18px -12px ${lead.color}66`,
       }}
     >
-      <div className="flex items-start gap-2.5">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="flex w-full items-start gap-2.5 text-left"
+        style={{ padding: "10px 12px" }}
+      >
         <div
           className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full"
-          style={{
-            background: `${appleVibe.stage.features}14`,
-            color: appleVibe.stage.features,
-          }}
+          style={{ background: `${lead.color}14`, color: lead.color }}
           aria-hidden
         >
-          <Sparkles className="h-3 w-3" strokeWidth={2.4} />
+          <Icon className="h-3 w-3" strokeWidth={2.4} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
             <span
-              className="text-[11.5px] font-semibold"
+              className="truncate text-[11.5px] font-semibold"
               style={{ color: appleVibe.text.primary }}
             >
-              Autopilot run
+              {headline}
             </span>
-            <span
-              className="flex-shrink-0 font-mono text-[10px] tabular-nums"
-              style={{ color: appleVibe.text.tertiary }}
-              title={new Date(parent.created_at).toLocaleString()}
-            >
-              {time}
+            <span className="flex flex-shrink-0 items-center gap-1.5">
+              <span
+                className="rounded-full px-1.5 text-[9.5px] font-semibold tabular-nums"
+                style={{ background: `${lead.color}1a`, color: lead.color }}
+              >
+                {children.length}
+              </span>
+              <span
+                className="font-mono text-[10px] tabular-nums"
+                style={{ color: appleVibe.text.tertiary }}
+                title={new Date(anchor.created_at).toLocaleString()}
+              >
+                {time}
+              </span>
+              <ChevronDown
+                className="h-3 w-3 transition-transform duration-150"
+                strokeWidth={2.4}
+                style={{
+                  color: appleVibe.text.tertiary,
+                  transform: expanded ? "rotate(180deg)" : "none",
+                }}
+              />
             </span>
           </div>
-          <p
-            className="mt-0.5 text-[11.5px] leading-snug"
-            style={{ color: appleVibe.text.secondary }}
-          >
-            {parent.meta.chain_count
-              ? `${parent.meta.chain_count} chain${parent.meta.chain_count === 1 ? "" : "s"}`
-              : "Started"}
-            {children.length > 0
-              ? ` · ${scoreCount} scored · ${refineCount} refined`
-              : children.length === 0
-                ? " · no work captured in window"
-                : ""}
-          </p>
-          {children.length > 0 && (
-            <ul className="mt-2 space-y-1 border-l pl-3" style={{ borderColor: appleVibe.stroke.hairline }}>
-              {children.map((c) => {
-                const v = visualFor(c.action);
-                const subject = formatSubject(c);
-                return (
-                  <li
-                    key={c.id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onClick({
-                        entityId: c.subject.entity_id ?? null,
-                        variationId: c.subject.variation_id ?? null,
-                        subObjectiveId: c.subject.sub_objective_id ?? null,
-                      });
-                    }}
-                    className="cursor-pointer text-[11px] leading-snug"
-                    style={{ color: appleVibe.text.secondary }}
-                  >
-                    <span style={{ color: v.color }}>{v.label}</span>
-                    {subject ? (
-                      <>
-                        <span style={{ color: appleVibe.text.tertiary }}>
-                          {" — "}
-                        </span>
-                        <span>{subject}</span>
-                      </>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
+          {sub && (
+            <p
+              className="mt-0.5 truncate text-[11.5px] leading-snug"
+              style={{ color: appleVibe.text.secondary }}
+            >
+              {sub}
+            </p>
           )}
         </div>
-      </div>
+      </button>
+      {expanded && children.length > 0 && (
+        <ul
+          className="ml-[22px] mr-3 space-y-1 border-l pb-2.5 pl-3"
+          style={{ borderColor: appleVibe.stroke.hairline }}
+        >
+          {children.map((c) => {
+            const v = visualFor(c.action);
+            const subject = formatSubject(c);
+            return (
+              <li
+                key={c.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNavigate({
+                    entityId: c.subject.entity_id ?? null,
+                    variationId: c.subject.variation_id ?? null,
+                    subObjectiveId: c.subject.sub_objective_id ?? null,
+                  });
+                }}
+                className="cursor-pointer text-[11px] leading-snug"
+                style={{ color: appleVibe.text.secondary }}
+              >
+                <span style={{ color: v.color }}>{v.label}</span>
+                {subject ? (
+                  <>
+                    <span style={{ color: appleVibe.text.tertiary }}>
+                      {" — "}
+                    </span>
+                    <span>{subject}</span>
+                  </>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </motion.li>
   );
 }
