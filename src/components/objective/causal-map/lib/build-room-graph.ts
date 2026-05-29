@@ -73,18 +73,6 @@ function polarityOf(p: string | null | undefined): EdgePolarity {
   return "neutral"; // conditional / null / unknown
 }
 
-/** The LLM-named mechanism (specific lever) lives on
- *  agent_feedback.mechanism — render it as the edge's mediator pill. */
-function readMechanism(
-  agentFeedback: Record<string, unknown> | null | undefined,
-): string | null {
-  if (!agentFeedback || typeof agentFeedback !== "object") return null;
-  const m = (agentFeedback as Record<string, unknown>).mechanism;
-  return typeof m === "string" && m.trim().length > 0
-    ? m.trim().slice(0, 60)
-    : null;
-}
-
 /** Short descriptor for a lane item — pulls the lane-appropriate field
  *  out of causal_chain, falling back to the description. */
 function itemSubtitle(
@@ -183,15 +171,15 @@ export function buildRoomGraph(input: {
         kind: "causal_chain" as const,
         polarity: polarityOf(e.polarity),
         strength: clamp01(e.strength),
-        // De-noise: the relationship verb ("addressed by" / "produces" /
-        // "rolls up to" / "composes with") is redundant — the lane columns
-        // AND the top legend banner already state the chain direction, so
-        // repeating it on every edge is pure clutter. Drop it. The
-        // mechanism content (mediator) carries the real signal and stays;
-        // the raw verb still lives on e.relationship_type for any consumer
-        // that needs the slug.
+        // De-noise: render room edges as PURE WIRES — no label pills at
+        // all. The relationship verb is already stated by the lane columns
+        // + the top legend banner, and the mechanism/content detail lives
+        // in the card's "Causal Mechanism" panel — so per-edge pills were
+        // clutter. Drop both the verb (label) and the mechanism (mediator).
+        // The raw data still lives on e.relationship_type / e.agent_feedback
+        // for any consumer that needs it.
         label: null,
-        mediator: readMechanism(e.agent_feedback),
+        mediator: null,
         delayed: false,
         source: "local" as const,
         loopId: null,
