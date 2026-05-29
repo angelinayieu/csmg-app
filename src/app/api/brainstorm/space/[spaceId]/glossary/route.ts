@@ -163,12 +163,30 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
 
   const { data: ents } = await db
     .from("entities")
-    .select("name, entity_type")
+    .select("name, entity_type, expanded_detail")
     .eq("space_id", spaceId);
-  const entityNames = ((ents ?? []) as Array<{ name?: unknown; entity_type?: unknown }>)
+  const entityRows = (ents ?? []) as Array<{
+    name?: unknown;
+    entity_type?: unknown;
+    expanded_detail?: unknown;
+  }>;
+  const entityNames = entityRows
     .filter((e) => e.entity_type !== "objective_anchor")
     .map((e) => (typeof e.name === "string" ? e.name : ""))
     .filter((s) => s.length > 0);
+  // Item definitions (expanded_detail.definition) so the glossary stays
+  // consistent with the canonical item definition for terms that name an
+  // entity — the glossary's link into the single-source-of-truth DAG.
+  const entityDefinitions = entityRows
+    .filter((e) => e.entity_type !== "objective_anchor")
+    .map((e) => {
+      const name = typeof e.name === "string" ? e.name : "";
+      const ed = e.expanded_detail as Record<string, unknown> | null;
+      const definition =
+        ed && typeof ed.definition === "string" ? ed.definition : "";
+      return { name, definition };
+    })
+    .filter((e) => e.name.length > 0 && e.definition.trim().length > 0);
 
   if (
     !coreObjectiveText &&
@@ -188,6 +206,7 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
     coreObjectiveText,
     subObjectiveTitles,
     entityNames,
+    entityDefinitions,
     annotations: annotationSeeds,
     existing: readGlossary(space.synthesis_data),
   });

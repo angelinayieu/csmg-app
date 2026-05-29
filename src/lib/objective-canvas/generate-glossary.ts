@@ -64,6 +64,15 @@ export interface GenerateGlossaryInput {
   annotations: AnnotationSeed[];
   /** The current persisted glossary — merged into, not replaced. */
   existing: GlossaryTerm[];
+  /** Item definitions for entities that have one
+   *  (expanded_detail.definition). When a mined term NAMES one of these
+   *  entities, its glossary definition must stay CONSISTENT with the
+   *  item's canonical definition — the glossary adds project-context
+   *  framing without contradicting it. Optional; the entity pass falls
+   *  back to name-only mining when absent. This is the glossary's link
+   *  into the single-source-of-truth DAG (item definition is canonical;
+   *  the glossary references it for coincident terms). */
+  entityDefinitions?: Array<{ name: string; definition: string }>;
 }
 
 const AUTHORITY: Record<GlossarySource, number> = {
@@ -89,6 +98,7 @@ Rules:
 - Pick domain jargon, acronyms, metrics, mechanism names, terms used in a non-obvious way. Skip common English ("user", "increase").
 - DEDUPE: never emit two entries for the same concept.
 - Be specific to the objective. ≤5 words per term. Emit 0 if everything important is already covered.
+- CONSISTENCY WITH ITEM DEFINITIONS: some terms name a project ENTITY that already has a canonical item definition (shown under ENTITY DEFINITIONS, when provided). If you define such a term, your definition MUST be consistent with that item definition — add the cross-cutting / project-context angle, never contradict or override what the item says it is. Terms that are NOT entities (cross-cutting jargon, metrics, acronyms) you define freely as usual.
 
 Return strict JSON. No prose outside the JSON.`;
 
@@ -239,7 +249,19 @@ export async function generateGlossary(
           .join("\n")}`
       : "";
 
-  const user = `OBJECTIVE:\n"""\n${input.coreObjectiveText.slice(0, 1200)}\n"""${subs}${ents}${covered}\n\nAdd ONLY new terms not already defined. Dedupe aggressively. Emit 0 if everything important is covered.`;
+  // Item definitions for entity-coincident terms — the glossary stays
+  // consistent with the canonical item definition (references it, adds
+  // project context) rather than minting an independent one.
+  const defs =
+    input.entityDefinitions && input.entityDefinitions.length > 0
+      ? `\n\nENTITY DEFINITIONS (if you define a term that NAMES one of these entities, stay consistent with its definition — add project context, don't contradict):\n${input.entityDefinitions
+          .filter((e) => e.name?.trim() && e.definition?.trim())
+          .slice(0, 30)
+          .map((e) => `  • ${e.name}: ${e.definition.slice(0, 200)}`)
+          .join("\n")}`
+      : "";
+
+  const user = `OBJECTIVE:\n"""\n${input.coreObjectiveText.slice(0, 1200)}\n"""${subs}${ents}${defs}${covered}\n\nAdd ONLY new terms not already defined. Dedupe aggressively. Emit 0 if everything important is covered.`;
 
   const entityTerms: GlossaryTerm[] = [];
   try {
