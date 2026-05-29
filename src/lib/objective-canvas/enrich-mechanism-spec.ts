@@ -285,6 +285,24 @@ export interface EnrichMechanismSpecInput {
   sub_objective_title: string;
   core_objective_text: string;
   constraints: OperationalConstraints | null;
+  /** Phase B — the chain enrichment already authored by enrich-chain
+   *  (read from the feature's edges' agent_feedback). The chain owns the
+   *  COARSE edge-level causal story — which root cause is engaged, the
+   *  mediators, where the path is weak. The spec's mechanism_of_action
+   *  must DEEPEN this into the fine feature-internal mechanism, not
+   *  re-derive a parallel (possibly contradicting) story. This kills the
+   *  highest-drift redundancy: two stages authoring the same mechanism
+   *  narrative blind to each other. Undefined when chains aren't
+   *  enriched yet (chain enrichment runs at room-gen; the spec runs
+   *  post-election, so the narrative usually already exists). */
+  chain_context?: {
+    narrative?: string;
+    causal_flow_rationale?: string;
+    outcome_closes_loop?: string;
+    mediators?: Array<{ name: string; assumption: string; effect: string }>;
+    weak_points?: string[];
+    chain_strength?: number;
+  } | null;
 }
 
 // ── Use-case-adaptive framing — same template, different vocabulary ──
@@ -482,6 +500,44 @@ function buildUserPrompt(ctx: EnrichMechanismSpecInput, mode: UseCaseMode): stri
           .join("\n")}`
       : "";
 
+  // Phase B — chain context. The chain analyst already authored the
+  // COARSE edge-level causal story (which root cause → which outcome,
+  // mediators, weak points). The spec must DEEPEN it, not re-derive a
+  // parallel one. This is the single source of truth for the chain-level
+  // narrative; the spec owns only the feature-internal mechanism.
+  const cc = ctx.chain_context;
+  const hasChain =
+    !!cc &&
+    (!!cc.narrative ||
+      !!cc.causal_flow_rationale ||
+      (Array.isArray(cc.weak_points) && cc.weak_points.length > 0) ||
+      (Array.isArray(cc.mediators) && cc.mediators.length > 0));
+  const chainBlock = hasChain
+    ? `\n\nCHAIN ANALYSIS — the COARSE causal story is ALREADY established (by the chain analyst, at the edge level). Go DEEPER; do NOT re-derive it:${
+        cc!.narrative ? `\n  Edge narrative: ${cc!.narrative.slice(0, 500)}` : ""
+      }${
+        cc!.causal_flow_rationale
+          ? `\n  Why this path (not direct): ${cc!.causal_flow_rationale.slice(0, 240)}`
+          : ""
+      }${
+        cc!.outcome_closes_loop
+          ? `\n  How the outcome closes the loop: ${cc!.outcome_closes_loop.slice(0, 200)}`
+          : ""
+      }${
+        cc!.mediators && cc!.mediators.length > 0
+          ? `\n  Mediators (variables that moderate the chain): ${cc!.mediators
+              .slice(0, 5)
+              .map((m) => `${m.name} (${m.effect})`)
+              .join(" · ")}`
+          : ""
+      }${
+        cc!.weak_points && cc!.weak_points.length > 0
+          ? `\n  Known WEAK POINTS in the chain: ${cc!.weak_points.slice(0, 3).join("; ")}`
+          : ""
+      }
+  COARSE→FINE RULE: the narrative above is the EDGE-LEVEL story — which root cause connects to which outcome, and where the path is fragile. Your mechanism_of_action must stay CONSISTENT with it and go FINER: explain HOW the feature INTERNALLY produces the effect the chain claims, naming the SAME root cause + indicator. Do NOT restate the narrative. Fold the chain's mediators into runtime_flow / fidelity_signals where they're load-bearing, and make your kill_criteria + fidelity_signals directly address the chain's named weak points.`
+    : "";
+
   return `${MODE_FRAMING[mode]}
 
 PARENT OBJECTIVE:
@@ -496,7 +552,7 @@ ${ctx.sub_objective_title}
 
 THE MECHANISM TO SPEC:
 
-[FEATURE / MECHANISM] ${ctx.feature.name}${positive}${fp}${def}${electedBlock}${painsBlock}${outcomesBlock}
+[FEATURE / MECHANISM] ${ctx.feature.name}${positive}${fp}${def}${electedBlock}${painsBlock}${outcomesBlock}${chainBlock}
 ${constraintsBlock}
 Produce the technical mechanism spec per the system instructions. Be specific, be honest about evidence, and make mechanism_of_action name the root cause engaged + the indicator moved.`;
 }

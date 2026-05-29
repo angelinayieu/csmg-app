@@ -214,6 +214,81 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     }
   }
 
+  // ── Phase B — chain context from the feature's edges' agent_feedback.
+  //    enrich-chains writes the SAME ChainEnrichment onto BOTH edges of a
+  //    chain (pain→feature AND feature→outcome), so any edge touching
+  //    this feature with a `narrative` gives us the coarse causal story.
+  //    The spec DEEPENS that story instead of re-deriving a parallel one
+  //    (the single highest-drift redundancy in the pipeline). When the
+  //    feature sits in several chains we prefer the feature→outcome edge
+  //    (source = this feature) and, within that, the strongest chain.
+  let chainContext: EnrichMechanismSpecInput["chain_context"] = null;
+  try {
+    const { data: edgeRows } = await db
+      .from("edges")
+      .select("source_entity_id, target_entity_id, agent_feedback")
+      .or(`source_entity_id.eq.${entityId},target_entity_id.eq.${entityId}`);
+    let bestIsFeatureSource = false;
+    let bestStrength = -1;
+    for (const e of (edgeRows ?? []) as Array<{
+      source_entity_id: string;
+      target_entity_id: string;
+      agent_feedback: Record<string, unknown> | null;
+    }>) {
+      const fb = e.agent_feedback;
+      if (!fb || typeof fb.narrative !== "string" || fb.narrative.length === 0) {
+        continue;
+      }
+      const isFeatureSource = e.source_entity_id === entityId;
+      const strength =
+        typeof fb.chain_strength === "number" ? fb.chain_strength : 0;
+      // Prefer feature→outcome edges; within the same class, the stronger
+      // chain wins. First qualifying edge always beats null.
+      const better =
+        chainContext === null ||
+        (isFeatureSource && !bestIsFeatureSource) ||
+        (isFeatureSource === bestIsFeatureSource && strength > bestStrength);
+      if (!better) continue;
+      chainContext = {
+        narrative: fb.narrative,
+        causal_flow_rationale:
+          typeof fb.causal_flow_rationale === "string"
+            ? fb.causal_flow_rationale
+            : undefined,
+        outcome_closes_loop:
+          typeof fb.outcome_closes_loop === "string"
+            ? fb.outcome_closes_loop
+            : undefined,
+        mediators: Array.isArray(fb.mediators)
+          ? (fb.mediators as unknown[])
+              .filter(
+                (m): m is Record<string, unknown> =>
+                  typeof m === "object" &&
+                  m !== null &&
+                  typeof (m as { name?: unknown }).name === "string",
+              )
+              .map((m) => ({
+                name: String(m.name),
+                assumption:
+                  typeof m.assumption === "string" ? m.assumption : "",
+                effect: typeof m.effect === "string" ? m.effect : "conditional",
+              }))
+          : undefined,
+        weak_points: Array.isArray(fb.weak_points)
+          ? (fb.weak_points as unknown[]).filter(
+              (s): s is string => typeof s === "string" && s.length > 0,
+            )
+          : undefined,
+        chain_strength:
+          typeof fb.chain_strength === "number" ? fb.chain_strength : undefined,
+      };
+      bestIsFeatureSource = isFeatureSource;
+      bestStrength = strength;
+    }
+  } catch {
+    // Soft-fail — chain context is optional grounding for the spec.
+  }
+
   // ── Generate the spec ──
   const spec = await enrichMechanismSpec({
     feature: {
@@ -231,6 +306,9 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     sub_objective_title: subObjectiveTitle,
     core_objective_text: coreObjectiveText,
     constraints,
+    // Phase B — feed the chain analyst's coarse causal story so the spec
+    // deepens it (coarse→fine) instead of authoring a parallel narrative.
+    chain_context: chainContext,
   });
 
   if (!spec) {
