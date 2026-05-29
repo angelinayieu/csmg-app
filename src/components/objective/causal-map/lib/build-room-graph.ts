@@ -73,12 +73,6 @@ function polarityOf(p: string | null | undefined): EdgePolarity {
   return "neutral"; // conditional / null / unknown
 }
 
-/** Humanize a relationship_type slug into an edge verb. */
-function humanizeRel(rel: string | null | undefined): string | null {
-  if (!rel) return null;
-  return rel.replace(/_/g, " ");
-}
-
 /** The LLM-named mechanism (specific lever) lives on
  *  agent_feedback.mechanism — render it as the edge's mediator pill. */
 function readMechanism(
@@ -189,7 +183,14 @@ export function buildRoomGraph(input: {
         kind: "causal_chain" as const,
         polarity: polarityOf(e.polarity),
         strength: clamp01(e.strength),
-        label: humanizeRel(e.relationship_type),
+        // De-noise: the relationship verb ("addressed by" / "produces" /
+        // "rolls up to" / "composes with") is redundant — the lane columns
+        // AND the top legend banner already state the chain direction, so
+        // repeating it on every edge is pure clutter. Drop it. The
+        // mechanism content (mediator) carries the real signal and stays;
+        // the raw verb still lives on e.relationship_type for any consumer
+        // that needs the slug.
+        label: null,
         mediator: readMechanism(e.agent_feedback),
         delayed: false,
         source: "local" as const,
