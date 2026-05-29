@@ -361,6 +361,10 @@ export async function POST(req: NextRequest) {
           crossRoomFindings:
             crossRoomFindings.length > 0 ? crossRoomFindings : undefined,
           learningsBlock,
+          // Phase A — feed the feature's canonical mechanism spec so
+          // integration_points reference its named components/data
+          // handoffs instead of inferring abstract interlocks.
+          mechanismSpec: detail.mechanism_spec ?? null,
         });
       },
     );

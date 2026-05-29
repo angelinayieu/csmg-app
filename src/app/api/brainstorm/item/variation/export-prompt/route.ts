@@ -134,6 +134,10 @@ export async function POST(req: NextRequest) {
     painText,
     constraints: readConstraints(space.synthesis_data),
     framing,
+    // Phase A — feed the parent feature's v2 mechanism spec (when one
+    // exists) so the exported prompt's ## Mechanism section carries real
+    // technical depth instead of re-deriving from the 1-line description.
+    mechanismSpec: detail.mechanism_spec ?? null,
   };
 
   // Op B — two paths:

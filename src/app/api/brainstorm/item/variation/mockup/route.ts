@@ -151,6 +151,9 @@ export async function POST(req: NextRequest) {
       roomTitle,
       constraints: readConstraints(space.synthesis_data),
       format,
+      // Phase A — feed the parent feature's mechanism spec so the mockup
+      // renders what the spec says the user sees, not a reimagined UI.
+      mechanismSpec: detail.mechanism_spec ?? null,
     });
   } catch (err) {
     return NextResponse.json(

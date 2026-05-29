@@ -24,6 +24,7 @@ import type {
   ComposedDesign,
   ItemVariation,
 } from "./expand-item-detail";
+import type { MechanismSpec } from "./enrich-mechanism-spec";
 import type { ObjectiveAnnotation } from "./generate-annotations";
 import {
   buildConstraintsBlock,
@@ -88,6 +89,13 @@ export interface ComposeContext {
    *  already concluded didn't work. Optional — empty when no
    *  experiments have terminal status. */
   learningsBlock?: string;
+  /** Phase A — the feature's canonical v2 mechanism spec, when one has
+   *  been generated. When present, integration_points are grounded in
+   *  the spec's concrete system_components + input_data + runtime data
+   *  handoffs — the composition shows where the elected variations share
+   *  or hand off these named parts, instead of inferring abstract
+   *  interlocks from 1-sentence descriptions. Optional. */
+  mechanismSpec?: MechanismSpec | null;
 }
 
 const LAYER_FRAMING: Record<ComposeContext["itemLayer"], string> = {
@@ -274,6 +282,21 @@ export async function composeVariations(
       ? `\n\nR&D-ITERATED VARIATIONS (these came from the refinement engine — keep them ON-TARGET):\n${rdRows.join("\n")}\n  R&D RULE for composition:\n    • The target_root_cause is the load-bearing reason the iteration was generated. The unified design must STILL clearly attack that root cause — if your description drifts into addressing a different pain, the iteration was wasted.\n    • Low constraint_compliance (<0.6) is a yellow flag: the iteration scored well on mechanism but barely fits the user's operational reality. Either name how the composition CLAWS BACK fit, or surface it in conflicts_open ("R&D candidate X scored 0.45 on constraint fit — keeping it requires loosening constraint Y, the user should confirm").`
       : "";
 
+  // Phase A — mechanism-spec grounding. When the feature has a canonical
+  // spec, integration_points reference its named components / data
+  // handoffs instead of inferring abstract interlocks from descriptions.
+  const ms = ctx.mechanismSpec;
+  const hasSpec = !!ms;
+  const specBlock = ms
+    ? `\n\nMECHANISM SPEC (the feature's canonical build — ground integration_points in these concrete parts):\n- Components to build: ${ms.system_components.map((c) => `${c.name} (${c.category})`).slice(0, 8).join(" · ") || "—"}\n- Input data: ${ms.input_data.slice(0, 6).join(" · ") || "—"}\n- Runtime data handoffs: ${
+        ms.runtime_flow
+          .filter((r) => r.data && r.data !== "—")
+          .map((r) => `${r.component}: ${r.data}`)
+          .slice(0, 6)
+          .join("  →  ") || "—"
+      }\n  SPEC RULE for composition: when components/data are named above, integration_points MUST reference where the elected variations share or hand off these concrete parts (e.g. "[1] and [2] both write to <component>", "[2] consumes the <data> [1] produces") — not abstract "they work together" interlocks. The composed design is built from these components; show the seams.`
+    : "";
+
   const system = `You synthesize multiple elected variations of a strategy-room item into a SINGLE coherent design.
 
 ${framing}
@@ -288,7 +311,11 @@ OUTPUT:
       : ""
   }
 
-2) INTEGRATION_POINTS — 2-4 concrete interlocks. Where do these variations TOUCH each other in practice? What's the data flow / UX path / dependency that ties them?
+2) INTEGRATION_POINTS — 2-4 concrete interlocks. Where do these variations TOUCH each other in practice? What's the data flow / UX path / dependency that ties them?${
+    hasSpec
+      ? " When a MECHANISM SPEC is provided, anchor each interlock on its named components / data handoffs — show which shared component or data flow ties the variations together."
+      : ""
+  }
 
 3) CONFLICTS_RESOLVED — 0-3 tensions the composition reconciled. "Variation A wants X; Variation B wants Y; the design handles this by …". Be specific — not "we resolved the tension by being thoughtful."
 
@@ -304,7 +331,7 @@ Return strict JSON.`;
 
   const constraintsBlock = buildConstraintsBlock(ctx.constraints ?? null);
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${effectivenessBlock}${rdBlock}${lensBlock}${findingsBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\n\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}\n\nELECTED VARIATIONS (${ctx.electedVariations.length}):\n${variationsBlock}${effectivenessBlock}${rdBlock}${lensBlock}${findingsBlock}${specBlock}\n\nCompose these per the system instructions. The composed design must respect the operational constraints — if integrating the elected variations would exceed budget/time/team, that's a conflict_open, not a conflict_resolved.`;
 
   const raw = await llmJSON<{
     description?: unknown;

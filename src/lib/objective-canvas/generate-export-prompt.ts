@@ -18,6 +18,7 @@
 import { llmGenerate, llmJSON } from "@/lib/llm";
 import type { ItemVariation } from "./expand-item-detail";
 import type { OperationalConstraints } from "./constraints";
+import type { MechanismSpec } from "./enrich-mechanism-spec";
 
 export interface ExportPromptResult {
   prompt: string;
@@ -337,6 +338,13 @@ export interface GenerateExportPromptArgs {
    *  which asks the downstream LLM to produce code/spec; "research"
    *  asks for an evidence pass instead. */
   framing?: "implementation" | "research" | "design";
+  /** The parent feature's v2 technical mechanism spec, when one has been
+   *  generated. When present, the ## Mechanism section is GROUNDED in it
+   *  (mechanism of action, runtime flow, components to build, chosen
+   *  build method, validation experiment) so the exported prompt carries
+   *  real technical depth — the downstream model implements THIS
+   *  mechanism, not a generic re-reading of the one-line description. */
+  mechanismSpec?: MechanismSpec | null;
 }
 
 export async function generateVariationExportPrompt(
@@ -355,16 +363,17 @@ export async function generateVariationExportPrompt(
 PROMPT SHAPE (use markdown headings + bullets):
 1. # Context — one paragraph framing what the user is doing.
 2. ## Objective — the parent objective text verbatim.
-3. ## Mechanism — the variation's name + description + tradeoff.
+3. ## Mechanism — the variation's name + description + tradeoff. When a TECHNICAL SPEC is provided below, this section MUST encode its substance: the mechanism of action, the active ingredients (the parts that carry the effect), the runtime flow (what happens step by step + which component does it), and what to build. Don't just restate the one-line description — the downstream model needs enough to implement THIS mechanism, not a generic interpretation.
 4. ## Pain it addresses — one sentence on the negative outcome being countered.
 5. ## Operational constraints — bulleted list of the user's constraints (time/budget/team/risk).
 6. ## Open questions — bulleted list of the variation's open_questions.
-7. ## Your task — clear, single-paragraph ASK at the end. Must match the framing: ${framingHint}
+7. ## Your task — clear, single-paragraph ASK at the end. Must match the framing: ${framingHint} When a spec is provided, fold its chosen build method + validation experiment into the ASK so the downstream model builds and tests the right thing.
 
 RULES:
 - Output PLAIN MARKDOWN that the user can paste into another chat. No JSON-formatted scaffolding.
-- 250-450 words total. Tight. The user is going to paste this directly.
+- 250-450 words total (up to 650 when a TECHNICAL SPEC is provided — spend the extra budget on ## Mechanism). Tight. The user is going to paste this directly.
 - The "Your task" closing paragraph is the most important — make it a specific, scoped ask the downstream model can act on in one response.
+- GROUNDING (when a TECHNICAL SPEC is provided): reuse its mechanism-of-action, runtime flow, components, chosen build method, and validation experiment verbatim-in-spirit. Never invent technical claims that contradict the spec.
 - Don't reference the Objective Canvas or this internal system — the downstream model has no context for that.
 
 Return JSON: { "prompt": "<the full markdown text>" }`;
@@ -377,6 +386,30 @@ Return JSON: { "prompt": "<the full markdown text>" }`;
     ? args.variation.open_questions.join("; ")
     : "(none specified)";
 
+  const ms = args.mechanismSpec;
+  const specBlock = ms
+    ? `
+
+TECHNICAL SPEC (ground the ## Mechanism section in this — reuse, don't contradict):
+- Mechanism of action: ${ms.mechanism_of_action.slice(0, 400)}
+- Hypothesis: if ${ms.mechanism_hypothesis.if_do} → then ${ms.mechanism_hypothesis.then_improves} (because ${ms.mechanism_hypothesis.because})
+- Active ingredients: ${ms.active_ingredients.map((a) => `${a.name} (${a.role})`).slice(0, 5).join(" · ") || "—"}
+- Runtime flow: ${
+        ms.runtime_flow
+          .map(
+            (r, i) =>
+              `${i + 1}) ${r.step}${r.component && r.component !== "—" ? ` [${r.component}]` : ""}${r.data && r.data !== "—" ? ` {${r.data}}` : ""}`,
+          )
+          .slice(0, 7)
+          .join("  →  ") || "—"
+      }
+- What to build: ${ms.system_components.map((c) => `${c.name} (${c.category})`).slice(0, 6).join(" · ") || "—"}
+- Input data: ${ms.input_data.slice(0, 6).join(" · ") || "—"}
+- Chosen build method: ${ms.decision_record.chosen || "—"}${ms.decision_record.alternatives_rejected.length > 0 ? ` (rejected: ${ms.decision_record.alternatives_rejected.map((a) => a.name).slice(0, 3).join(", ")})` : ""}
+- Validation experiment: ${ms.research_basis.validation_experiment.slice(0, 240) || "—"}
+- Abandon if (kill criteria): ${ms.kill_criteria.slice(0, 3).join("; ") || "—"}`
+    : "";
+
   const user = `Compose an exportable prompt for this variation.
 
 PARENT OBJECTIVE:
@@ -387,7 +420,7 @@ VARIATION:
 - Name: ${args.variation.name}
 - Description: ${args.variation.description}
 - Tradeoff: ${args.variation.tradeoff}
-${args.painText ? `- Pain addressed: ${args.painText}\n` : ""}- Open questions: ${openQ}
+${args.painText ? `- Pain addressed: ${args.painText}\n` : ""}- Open questions: ${openQ}${specBlock}
 ${constraintsBlock}
 
 Framing for the closing ASK: ${framing}.`;

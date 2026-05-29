@@ -20,6 +20,7 @@
 
 import { llmJSON } from "@/lib/llm";
 import type { ItemVariation } from "./expand-item-detail";
+import type { MechanismSpec } from "./enrich-mechanism-spec";
 import {
   buildConstraintsBlock,
   type OperationalConstraints,
@@ -139,6 +140,13 @@ export interface PrototypeBriefContext {
    *  rather than re-derive it. Optional — empty when no experiments
    *  in this space have reached a terminal status. */
   learningsBlock?: string;
+  /** Phase A — the parent feature's canonical v2 mechanism spec, when
+   *  one has been generated. The brief is the cheap experiment that
+   *  TESTS the spec's claim, so it must SPECIALIZE the spec's canonical
+   *  hypothesis / kill_criteria / validation_experiment for this single
+   *  open question — not reinvent a parallel (and possibly contradicting)
+   *  hypothesis. Optional — null when the feature has no spec yet. */
+  mechanismSpec?: MechanismSpec | null;
 }
 
 const DOMAIN_TEMPLATES: Record<DomainKind, string> = {
@@ -305,7 +313,25 @@ Return strict JSON.`;
       ? `\n\nLEARNINGS RULE: When prior briefs above conclude a mechanism didn't work, the new brief MUST NOT re-test that same mechanism — surface the prior finding in the hypothesis and pivot to an untested angle of the open question. When a learning shows a mechanism worked, build the new experiment on top of it rather than re-deriving the same signal.`
       : "";
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1000)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}${learningsRule}\n\n${variationContext}${upstreamBlock}${upstreamBriefRule}${compositionBlock}${siblingBlock}\n\nOPEN QUESTION (the binary target):\n"""\n${ctx.open_question}\n"""\n\nDesign the prototype brief per the system instructions.`;
+  // Phase A — spec grounding. When the parent feature has a canonical
+  // mechanism spec, the brief SPECIALIZES it rather than re-deriving a
+  // parallel (possibly contradicting) hypothesis / kill-criteria /
+  // validation. Single source of truth: the spec owns the mechanism's
+  // claim; the brief is the cheap experiment that tests it.
+  const ms = ctx.mechanismSpec;
+  const specBlock = ms
+    ? `\n\nMECHANISM SPEC (the parent feature's canonical technical spec — specialize this, don't reinvent it):
+  Mechanism of action: ${ms.mechanism_of_action.slice(0, 280)}
+  Canonical hypothesis: if ${ms.mechanism_hypothesis.if_do} → then ${ms.mechanism_hypothesis.then_improves} (because ${ms.mechanism_hypothesis.because})
+  Spec validation experiment: ${ms.research_basis.validation_experiment.slice(0, 260) || "—"}
+  Fidelity signals (delivered correctly?): ${ms.fidelity_signals.slice(0, 4).join("; ") || "—"}
+  Spec kill criteria (abandon the mechanism if): ${ms.kill_criteria.slice(0, 4).join("; ") || "—"}`
+    : "";
+  const specRule = ms
+    ? `\n\nSPEC-GROUNDING RULE: A canonical MECHANISM SPEC is provided above. Your HYPOTHESIS must be a testable SPECIALIZATION of the spec's canonical hypothesis, scoped to THIS open question — never a contradicting one. Draw SIGNAL_TO_WATCH from the spec's fidelity signals + validation experiment, sharpened into one observable for this experiment. Your KILL_CRITERIA must be a numeric, experiment-scoped version consistent with the spec's kill criteria — not a different abandon condition. The brief inherits the spec's logic; it doesn't restate or override it.`
+    : "";
+
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText.slice(0, 1000)}\n"""\n\nSUB-OBJECTIVE: ${ctx.subObjectiveTitle}\nITEM: ${ctx.itemName} (layer: ${ctx.itemLayer})${constraintsBlock}${ctx.learningsBlock ?? ""}${learningsRule}\n\n${variationContext}${upstreamBlock}${upstreamBriefRule}${compositionBlock}${siblingBlock}${specBlock}${specRule}\n\nOPEN QUESTION (the binary target):\n"""\n${ctx.open_question}\n"""\n\nDesign the prototype brief per the system instructions.`;
 
   const raw = await llmJSON<{
     domain?: unknown;

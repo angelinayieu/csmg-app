@@ -322,6 +322,10 @@ export async function POST(req: NextRequest) {
       sub_objective_title,
       constraints,
       candidate_count: 3,
+      // Phase A — feed the feature's existing mechanism spec so the R&D
+      // agent doesn't re-propose build approaches the spec already
+      // rejected (and can turn a "test_later" method into a candidate).
+      mechanismSpec: detail.mechanism_spec ?? null,
     });
   } catch (err) {
     return NextResponse.json(

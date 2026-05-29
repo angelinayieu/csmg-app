@@ -17,6 +17,7 @@
 import { llmJSON } from "@/lib/llm";
 import type { ItemVariation } from "./expand-item-detail";
 import type { OperationalConstraints } from "./constraints";
+import type { MechanismSpec } from "./enrich-mechanism-spec";
 
 export interface MockupResult {
   title: string;
@@ -58,6 +59,12 @@ export interface GenerateMockupArgs {
    *  separate fields so the user can flip between them without
    *  re-spending an LLM call. */
   format?: "fullscreen" | "thumbnail";
+  /** Phase A — the parent feature's v2 mechanism spec, when generated.
+   *  When present, the mockup RENDERS what the spec says the user sees
+   *  (user_visible_behavior + runtime_flow[].user_sees + the UI
+   *  components) rather than re-imagining an interface from the 1-line
+   *  description. Optional — null when no spec exists. */
+  mechanismSpec?: MechanismSpec | null;
 }
 
 export async function generateVariationMockup(
@@ -82,7 +89,8 @@ DESIGN BIAS:
 - Apple-tier visual restraint: lots of whitespace, soft shadows, hairline borders, rounded corners (12-20px), muted palette, generous line height (1.5+).
 - ${format === "thumbnail" ? "480×320 viewport — see THUMBNAIL FORMAT below" : "1200px max content width, centered."}
 - Show CONCRETE sample content matching the variation's domain. Avoid lorem ipsum.
-- Mockup is one screen / one moment — primary affordance + supporting context. Not a full app.${formatBlock}
+- Mockup is one screen / one moment — primary affordance + supporting context. Not a full app.
+- GROUNDING: when a "WHAT THE USER SEES" block is provided below, the mockup MUST depict those exact moments + affordances — it is a visual of THIS mechanism's real interface (per its spec), not a reimagined one. Render the named UI components; show the user-visible runtime moment.${formatBlock}
 
 OUTPUT JSON:
 {
@@ -95,6 +103,27 @@ OUTPUT JSON:
     ? `\n\nOPERATIONAL CONSTRAINTS the user is working under:\n- Time horizon: ${ct.time_horizon}\n- Budget tier: ${ct.budget_tier}\n- Team size: ${ct.team_size}\n- Risk tolerance: ${ct.risk_tolerance}${ct.compliance_requirements && ct.compliance_requirements.length > 0 ? `\n- Compliance: ${ct.compliance_requirements.join(", ")}` : ""}\n\nLet these shape the mockup's depth (fewer details for short time horizon, simpler UI for solo team, etc.).`
     : "";
 
+  const ms = args.mechanismSpec;
+  const specBlock = ms
+    ? `\n\nWHAT THE USER SEES (from the mechanism spec — render THIS, don't invent a different interface):\n- User-visible behavior: ${ms.user_visible_behavior.slice(0, 300)}\n- Moments the user sees (runtime): ${
+        ms.runtime_flow
+          .filter((r) => r.user_sees && r.user_sees !== "—")
+          .map((r) => r.user_sees)
+          .slice(0, 6)
+          .join("  →  ") || "—"
+      }\n- Interface components to show: ${
+        (ms.system_components.some((c) => c.category.toLowerCase() === "ui")
+          ? ms.system_components.filter(
+              (c) => c.category.toLowerCase() === "ui",
+            )
+          : ms.system_components
+        )
+          .map((c) => c.name)
+          .slice(0, 6)
+          .join(" · ") || "—"
+      }`
+    : "";
+
   const user = `Design a static HTML mockup for this variation:
 
 VARIATION
@@ -103,7 +132,7 @@ VARIATION
 - Tradeoff: ${args.variation.tradeoff}
 
 CONTEXT
-- Mechanism (entity): ${args.entityName}${args.roomTitle ? `\n- Room: ${args.roomTitle}` : ""}${args.painText ? `\n- Pain it addresses: ${args.painText}` : ""}${constraintsBlock}
+- Mechanism (entity): ${args.entityName}${args.roomTitle ? `\n- Room: ${args.roomTitle}` : ""}${args.painText ? `\n- Pain it addresses: ${args.painText}` : ""}${constraintsBlock}${specBlock}
 
 Produce one complete HTML document showing the most representative screen of this variation's interface — what a user would see at the key moment of interacting with it.`;
 

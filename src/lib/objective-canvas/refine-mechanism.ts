@@ -25,6 +25,7 @@ import {
   type OperationalConstraints,
 } from "./constraints";
 import type { ItemVariation, VariationKind } from "./expand-item-detail";
+import type { MechanismSpec } from "./enrich-mechanism-spec";
 
 /** Inputs the refine bridge needs to compose a tight, well-grounded
  *  proposal. Caller is responsible for resolving these from the
@@ -74,6 +75,14 @@ export interface RefineMechanismContext {
   /** How many candidates to produce. MVP defaults to 3 — few enough
    *  to read at a glance, enough to compare. */
   candidate_count?: number;
+  /** Phase A — the feature's existing v2 mechanism spec, when one has
+   *  been generated. The new candidates are PRE-spec (they have no spec
+   *  of their own yet), but the spec's implementation_methods already
+   *  enumerate build approaches WITH use/test_later/reject decisions.
+   *  Feeding them in stops the R&D agent from re-proposing an
+   *  already-rejected approach as if it were fresh — the source of
+   *  truth for "what's already been ruled out." Optional. */
+  mechanismSpec?: MechanismSpec | null;
 }
 
 export interface ProposedMechanismCandidate {
@@ -101,6 +110,7 @@ CRITICAL CONSTRAINTS:
 3. Each candidate is an INDEPENDENT VARIABLE the user could set the feature to — a concrete implementation choice, not a description of what the feature does generally.
 4. Respect the user's operational constraints. A candidate that violates time/budget/team/risk/compliance limits is wasted — the user can't run it.
 5. Compose with sibling-feature elections when relevant. If a sibling has elected X, your candidate should either build on X, work around X, or explicitly mark its tension with X in the tradeoff.
+6. When PRIOR BUILD METHODS are listed (from the feature's mechanism spec), DO NOT re-propose a REJECTED approach as if it were new. If you genuinely want to revisit one, the tradeoff MUST state what has changed to make it worth reconsidering. Prefer levers NOT in the prior-methods list; a "test_later" method is high-value to turn into a concrete candidate.
 
 OUTPUT FOR EACH CANDIDATE:
 - name: 3-6 words, noun phrase, names the IMPLEMENTATION CHOICE (e.g. "Session-aware decay weighting", "Implicit signal fusion", "Hybrid retrieval cascade"). NOT generic ("Better personalization") and NOT a restatement of the feature ("Personalization Engine v2").
@@ -141,7 +151,33 @@ function buildUserPrompt(ctx: RefineMechanismContext): string {
     ? `\n${buildConstraintsBlock(ctx.constraints)}\n`
     : "";
 
-  return `PARENT OBJECTIVE:\n"""\n${ctx.core_objective_text.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.sub_objective_title}\n"""\n\nFEATURE BEING REFINED (this is the IV the user is testing):\n  Name: ${ctx.feature.name}\n  positive_outcome: ${ctx.feature.positive_outcome}\n  first_principles: ${ctx.feature.first_principles.slice(0, 5).join(" · ")}\n\nTARGET PAIN (the DV this feature is supposed to minimize):\n  Name: ${ctx.target_pain.name}\n  negative_outcome: ${ctx.target_pain.negative_outcome}\n  root_causes: ${ctx.target_pain.root_causes.slice(0, 6).join(" · ")}\n\nGAP TO TARGET (the specific root_cause current variations don't address):\n  "${ctx.gap_root_cause}"\n${existingBlock}${siblingBlock}${constraintsBlock}\nGenerate ${N} new variation candidates per the system instructions. Each must specifically target "${ctx.gap_root_cause}".`;
+  // Phase A — prior build methods from the feature's mechanism spec.
+  // The R&D agent proposes NEW variations; feeding the already-evaluated
+  // methods stops it from re-proposing an approach the spec rejected.
+  const ms = ctx.mechanismSpec;
+  const rejectedFromMethods = ms
+    ? ms.implementation_methods.filter((m) => m.decision === "reject")
+    : [];
+  const deferredFromMethods = ms
+    ? ms.implementation_methods.filter((m) => m.decision === "test_later")
+    : [];
+  const priorMethodsBlock = ms
+    ? `\nPRIOR BUILD METHODS already evaluated for this feature (from its mechanism spec — the source of truth for what's been ruled out):\n  Chosen: ${ms.decision_record.chosen || "—"}${
+        rejectedFromMethods.length > 0
+          ? `\n  REJECTED (do NOT re-propose as new): ${rejectedFromMethods.map((m) => `${m.name} — ${(m.weakness || m.risk || "ruled out").slice(0, 90)}`).join("; ")}`
+          : ""
+      }${
+        ms.decision_record.alternatives_rejected.length > 0
+          ? `\n  Alternatives ruled out: ${ms.decision_record.alternatives_rejected.map((a) => `${a.name} (${a.why_not.slice(0, 70)})`).slice(0, 4).join("; ")}`
+          : ""
+      }${
+        deferredFromMethods.length > 0
+          ? `\n  DEFERRED (test_later — fair game to make concrete): ${deferredFromMethods.map((m) => m.name).join("; ")}`
+          : ""
+      }\n`
+    : "";
+
+  return `PARENT OBJECTIVE:\n"""\n${ctx.core_objective_text.slice(0, 1200)}\n"""\n\nSUB-OBJECTIVE (room scope):\n"""\n${ctx.sub_objective_title}\n"""\n\nFEATURE BEING REFINED (this is the IV the user is testing):\n  Name: ${ctx.feature.name}\n  positive_outcome: ${ctx.feature.positive_outcome}\n  first_principles: ${ctx.feature.first_principles.slice(0, 5).join(" · ")}\n\nTARGET PAIN (the DV this feature is supposed to minimize):\n  Name: ${ctx.target_pain.name}\n  negative_outcome: ${ctx.target_pain.negative_outcome}\n  root_causes: ${ctx.target_pain.root_causes.slice(0, 6).join(" · ")}\n\nGAP TO TARGET (the specific root_cause current variations don't address):\n  "${ctx.gap_root_cause}"\n${existingBlock}${siblingBlock}${constraintsBlock}${priorMethodsBlock}\nGenerate ${N} new variation candidates per the system instructions. Each must specifically target "${ctx.gap_root_cause}".`;
 }
 
 export async function proposeMechanismCandidates(

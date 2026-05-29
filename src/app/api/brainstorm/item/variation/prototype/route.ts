@@ -278,6 +278,10 @@ export async function POST(req: NextRequest) {
           siblingBriefs,
           upstreamContext,
           learningsBlock,
+          // Phase A — feed the parent feature's canonical mechanism spec
+          // so the brief specializes its hypothesis / kill_criteria /
+          // validation rather than re-deriving a parallel one.
+          mechanismSpec: detail.mechanism_spec ?? null,
         });
       },
     );
