@@ -43,6 +43,10 @@ next-env.d.ts
 # typically hundreds of MB. Never commit these to source control.
 .claude/worktrees/
 
+# Throwaway scratch sub-project from a background agent run — a separate
+# standalone app, not part of this repo. Keep it off `git add -A`.
+idea-synthesizer-claude-add-precision-control-slider-QC8rq/
+
 # Personal MCP server config — points at the developer's own Supabase
 # project ref. OAuth is per-user, so each contributor adds their own.
 .mcp.json
