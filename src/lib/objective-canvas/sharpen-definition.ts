@@ -58,9 +58,10 @@ const PAIN_SYSTEM = `You sharpen a vague PROBLEM (pain point) so that any soluti
 
 Rules:
 - KEEP the core meaning. You are tightening, not replacing. Don't drift to a different problem.
+- PRESERVE ROOT-CAUSE IDENTITY: each CURRENT root_cause that is already specific MUST be carried forward with its EXACT wording (verbatim). Only reword a root_cause that is genuinely vague. Features may already DECLARE bindings against a root_cause by its text (addresses {root_cause}); needless paraphrase of an unchanged root_cause breaks those links. A genuinely sharper/new root_cause is fine; gratuitous rewording of an unchanged one is not.
 - name: a precise problem title (≤12 words). No filler.
 - negative_outcome: the concrete downstream consequence if unsolved — specific, observable.
-- root_causes: 2-5 SPECIFIC underlying causes (≤8 words each). Each must be something a mechanism could actually attack — not "lack of motivation" but "no cue that triggers the behavior at the decision moment". The sharper these are, the sharper the mechanisms that target them.
+- root_causes: 2-5 SPECIFIC underlying causes (≤8 words each). Each must be something a mechanism could actually attack — not "lack of motivation" but "no cue that triggers the behavior at the decision moment". The sharper these are, the sharper the mechanisms that target them. Carry unchanged ones forward verbatim (see PRESERVE ROOT-CAUSE IDENTITY).
 
 Return strict JSON.`;
 
@@ -68,9 +69,10 @@ const OUTCOME_SYSTEM = `You sharpen a vague RESULT (desired outcome) so it is me
 
 Rules:
 - KEEP the core meaning. Tighten, don't replace.
+- PRESERVE INDICATOR IDENTITY: each CURRENT indicator that is already specific + measurable MUST be carried forward with its EXACT wording (verbatim) in both \`indicators\` and \`indicator_specs.indicator\`. Only reword an indicator when it is genuinely vague, or split/replace it when you are materially changing WHAT it measures. Reusing the exact text keeps the user's baselines AND the mechanism scores already attached to that indicator intact — needless paraphrase of an unchanged indicator silently orphans them. A genuinely new/changed indicator is fine; gratuitous rewording of an unchanged one is not.
 - name: a precise user-state title (≤12 words). A STATE/behavior, not a feature.
 - measured_by: the single headline signal that says "yes this happened".
-- indicators: 2-5 SPECIFIC observable criteria (≤8 words each). Concrete and verifiable.
+- indicators: 2-5 SPECIFIC observable criteria (≤8 words each). Concrete and verifiable. Carry unchanged ones forward verbatim (see PRESERVE INDICATOR IDENTITY).
 - indicator_specs: ONE per indicator — { indicator (verbatim), unit (e.g. "min/session", "% of sessions", "score 1-10"), measurement_method (how it's captured — "session analytics", "daily self-report", validated instrument name), direction ("increase" | "decrease" — which way is good) }. This makes the result measurable from the start.
 
 Return strict JSON.`;
@@ -185,12 +187,25 @@ export async function sharpenDefinition(
       const name =
         typeof raw?.name === "string" ? raw.name.trim().slice(0, 200) : "";
       if (!name) return null;
+      // Verbatim snap-back — when a sharpened indicator is only a case /
+      // whitespace variant of an existing one, restore the EXACT original
+      // text so the indicator's identity (and the baselines + mechanism
+      // scores keyed to `${outcome_id}::${indicator_text}`) survive.
+      // Genuine rewordings (materially different text) pass through
+      // unchanged and correctly invalidate their now-stale scores. This
+      // is the deterministic complement to the prompt's PRESERVE
+      // INDICATOR IDENTITY rule.
+      const priorByLower = new Map(
+        (input.indicators ?? []).map((p) => [p.trim().toLowerCase(), p.trim()]),
+      );
+      const snapBack = (text: string): string =>
+        priorByLower.get(text.trim().toLowerCase()) ?? text;
       const indicator_specs = Array.isArray(raw?.indicator_specs)
         ? raw.indicator_specs
             .map((s) => {
               const indicator =
                 typeof s?.indicator === "string"
-                  ? s.indicator.trim().slice(0, 100)
+                  ? snapBack(s.indicator.trim().slice(0, 100))
                   : "";
               if (!indicator) return null;
               return {
@@ -220,7 +235,7 @@ export async function sharpenDefinition(
           typeof raw?.measured_by === "string"
             ? raw.measured_by.trim().slice(0, 150)
             : input.measured_by ?? "",
-        indicators: cleanArr(raw?.indicators, 5, 100),
+        indicators: cleanArr(raw?.indicators, 5, 100).map(snapBack),
         indicator_specs,
       };
     }
