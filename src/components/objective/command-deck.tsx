@@ -21,9 +21,7 @@
 // duplicates either surface's data logic.
 
 import { useState, type ReactNode } from "react";
-import Link from "next/link";
 import {
-  ArrowUpRight,
   ChevronDown,
   FileText,
   Package,
@@ -33,6 +31,7 @@ import {
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { AnalysisWorkbench } from "@/components/objective/analysis-workbench";
 import { DeliverablesStrip } from "@/components/objective/deliverables-strip";
+import { StrategyBriefPanel } from "@/components/objective/strategy-brief-panel";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 
 export interface DeckOperation {
@@ -52,7 +51,9 @@ interface Props {
   roomTitles: Record<string, string>;
   /** Tier-2 operations catalog (Distill / Recommend / Contradictions). */
   operations: DeckOperation[];
-  /** Route to the synthesized strategy brief. */
+  /** Route to the synthesized strategy brief. Used as the "Open page"
+   *  deep-link inside the side-popup panel. The tile itself now
+   *  opens an inline popup instead of navigating. */
   briefHref: string;
 }
 
@@ -97,6 +98,10 @@ export function CommandDeck({
   briefHref,
 }: Props) {
   const [open, setOpen] = useState<DeckCard | null>(null);
+  // Strategy Brief popup lives in its own state so it can overlay the
+  // canvas without clashing with the inline expansion panel below the
+  // tile row.
+  const [briefOpen, setBriefOpen] = useState(false);
 
   // Analysis summary — from the server-cached snapshot. Live counts
   // refresh inside the panel on open; the tile reflects the last scan.
@@ -146,12 +151,13 @@ export function CommandDeck({
           active={open === "deliverables"}
           onClick={() => toggle("deliverables")}
         />
-        <TileLink
+        <Tile
           accent={ACCENT.brief}
           icon={<FileText className="h-4 w-4" strokeWidth={2} />}
           title="Strategy Brief"
-          summary="Synthesized →"
-          href={briefHref}
+          summary={briefOpen ? "Open ↗" : "Synthesized →"}
+          active={briefOpen}
+          onClick={() => setBriefOpen((v) => !v)}
         />
       </div>
 
@@ -187,6 +193,12 @@ export function CommandDeck({
           )}
         </div>
       )}
+      <StrategyBriefPanel
+        open={briefOpen}
+        onClose={() => setBriefOpen(false)}
+        spaceId={spaceId}
+        deepLinkHref={briefHref}
+      />
     </section>
   );
 }
@@ -311,43 +323,3 @@ function Tile({
   );
 }
 
-function TileLink({
-  accent,
-  icon,
-  title,
-  summary,
-  href,
-}: {
-  accent: string;
-  icon: ReactNode;
-  title: string;
-  summary: string;
-  href: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="flex flex-col gap-2.5 border p-3 transition-all"
-      style={tileStyle(accent, false)}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.boxShadow = appleVibe.shadow.cardHover;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.boxShadow = appleVibe.shadow.chip;
-      }}
-    >
-      <TileHead
-        accent={accent}
-        icon={icon}
-        trailing={
-          <ArrowUpRight
-            className="h-3.5 w-3.5"
-            strokeWidth={2.2}
-            style={{ color: appleVibe.text.faint }}
-          />
-        }
-      />
-      <TileBody title={title} summary={summary} />
-    </Link>
-  );
-}

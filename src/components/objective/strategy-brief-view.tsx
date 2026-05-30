@@ -76,9 +76,21 @@ interface Props {
   /** Polish exists but is stale (state_hash drifted). UI surfaces
    *  this as a soft hint so the user knows to re-polish. */
   polishStale: boolean;
+  /** When true, render inside a side panel host: drop full-viewport
+   *  min-height and reduce article margins so it scrolls within the
+   *  panel's body, and hide the "Back to canvas" link (the panel
+   *  chrome already provides close + maximize). The action bar
+   *  (Copy / Polish / Print / Agent build spec) stays — they ARE
+   *  the brief's actions. */
+  embedded?: boolean;
 }
 
-export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
+export function StrategyBriefView({
+  spaceId,
+  brief,
+  polishStale,
+  embedded = false,
+}: Props) {
   const router = useRouter();
   const [localTldr, setLocalTldr] = useState<string | null>(brief.ai_tldr);
   const [polishing, setPolishing] = useState(false);
@@ -195,8 +207,8 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
     <div
       className="brief-root"
       style={{
-        minHeight: "100vh",
-        background: COLOR.bg,
+        minHeight: embedded ? undefined : "100vh",
+        background: embedded ? "transparent" : COLOR.bg,
         fontFamily: FONT.body,
       }}
     >
@@ -239,14 +251,26 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
           className="mx-auto flex items-center justify-between gap-4 px-6 py-3"
           style={{ maxWidth: 940 }}
         >
-          <Link
-            href={`/app/objective/${spaceId}`}
-            className="inline-flex items-center gap-1.5 text-[12px] font-medium"
-            style={{ color: COLOR.inkMuted }}
-          >
-            <ArrowLeft className="h-3 w-3" strokeWidth={2} />
-            Back to canvas
-          </Link>
+          {embedded ? (
+            <span
+              className="text-[10.5px] font-semibold uppercase"
+              style={{
+                color: COLOR.inkFaint,
+                letterSpacing: "0.16em",
+              }}
+            >
+              Strategy Brief
+            </span>
+          ) : (
+            <Link
+              href={`/app/objective/${spaceId}`}
+              className="inline-flex items-center gap-1.5 text-[12px] font-medium"
+              style={{ color: COLOR.inkMuted }}
+            >
+              <ArrowLeft className="h-3 w-3" strokeWidth={2} />
+              Back to canvas
+            </Link>
+          )}
           <div className="flex items-center gap-2">
             <ActionBtn
               onClick={handleCopy}
@@ -296,15 +320,19 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
 
       {/* ── Document body ── */}
       <article
-        className="brief-article mx-auto px-8 pb-32 pt-16"
+        className={
+          embedded
+            ? "brief-article mx-auto px-7 pb-20 pt-10"
+            : "brief-article mx-auto px-8 pb-32 pt-16"
+        }
         style={{
           maxWidth: 680,
           color: COLOR.ink,
-          background: COLOR.paper,
-          boxShadow: "0 1px 0 rgba(15,23,42,0.04)",
-          marginTop: 32,
-          marginBottom: 64,
-          borderRadius: 12,
+          background: embedded ? "transparent" : COLOR.paper,
+          boxShadow: embedded ? "none" : "0 1px 0 rgba(15,23,42,0.04)",
+          marginTop: embedded ? 0 : 32,
+          marginBottom: embedded ? 0 : 64,
+          borderRadius: embedded ? 0 : 12,
         }}
       >
         {/* ── Title block ── */}
@@ -680,13 +708,21 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
             letterSpacing: "0.04em",
           }}
         >
-          Generated {formatDate(brief.generated_at)} ·{" "}
-          <Link
-            href={`/app/objective/${spaceId}`}
-            style={{ color: COLOR.inkMuted, textDecoration: "underline" }}
-          >
-            return to canvas
-          </Link>
+          Generated {formatDate(brief.generated_at)}
+          {!embedded && (
+            <>
+              {" · "}
+              <Link
+                href={`/app/objective/${spaceId}`}
+                style={{
+                  color: COLOR.inkMuted,
+                  textDecoration: "underline",
+                }}
+              >
+                return to canvas
+              </Link>
+            </>
+          )}
         </div>
       </article>
     </div>
