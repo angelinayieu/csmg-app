@@ -59,6 +59,9 @@ export interface CanvasOperation {
   /** How the executor lays out result cards (default grid). Ordered ops
    *  (e.g. layers) read better as a vertical column. */
   resultLayout?: "grid" | "column";
+  /** Override endpoint for non-augment text ops (default /api/canvas/idea-op).
+   *  e.g. make_technical → the full mechanism-spec generator. */
+  endpoint?: string;
 }
 
 /** THE CATALOG. Grounded in src/lib/objective-canvas/* + the routes that invoke
@@ -104,10 +107,11 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
   {
     id: "make_technical",
     label: "Make it more technical",
-    intent: "Refine this into concrete technical components",
+    intent: "Generate the mechanism: data-flow, components, methods",
     contract: "text",
     requiresLlm: true,
     wired: true,
+    endpoint: "/api/canvas/idea-mechanism",
   },
   {
     id: "layers",
@@ -259,7 +263,7 @@ async function runIdeaOp(
 ): Promise<OperationResultItem[]> {
   if (!target.text.trim()) return [];
   try {
-    const res = await fetch("/api/canvas/idea-op", {
+    const res = await fetch(op.endpoint ?? "/api/canvas/idea-op", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text: target.text.slice(0, 4000), kind: op.id }),

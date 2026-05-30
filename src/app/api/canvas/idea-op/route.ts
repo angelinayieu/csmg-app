@@ -4,9 +4,9 @@
 // note's text) — the ones the AI scanner offers beyond the synergy/augment
 // modes. One endpoint, `kind`-dispatched, each returning a flat list of result
 // rows the board renders as cards (CANVAS_AI_SCANNER_PLAN.md §2):
-//   layers        — the causal-altitude stack (substrate → outcome)
-//   make_technical — concrete technical components (the light, entity-free
-//                    cousin of the full MechanismSpec, which stays room-scoped)
+//   layers — the causal-altitude stack (substrate → outcome). "make_technical"
+//   used to live here too but now routes to /api/canvas/idea-mechanism (the
+//   full MechanismSpec generator), so idea-op is layers-only for now.
 
 import { NextResponse } from "next/server";
 import { llmJSON, detectCreditError } from "@/lib/llm";
@@ -14,8 +14,8 @@ import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers
 
 export const maxDuration = 30;
 
-type IdeaOpKind = "layers" | "make_technical";
-const VALID_KINDS: IdeaOpKind[] = ["layers", "make_technical"];
+type IdeaOpKind = "layers";
+const VALID_KINDS: IdeaOpKind[] = ["layers"];
 
 interface Body {
   text?: unknown;
@@ -28,11 +28,6 @@ const SYSTEM: Record<IdeaOpKind, string> = {
     "from the lowest substrate (raw inputs / data) UP to the highest outcome " +
     "(the change the user feels). Each layer: a short title (2-4 words) and a " +
     "one-sentence description of what lives at that altitude for THIS idea.",
-  make_technical:
-    "You make a vague idea concrete and technical. Return 4-6 specific " +
-    "technical components this idea needs — data structures, algorithms, " +
-    "interfaces, services, or methods. Each: a short title (2-5 words) and a " +
-    "one-sentence detail grounded in THIS idea (no generic boilerplate).",
 };
 
 export async function POST(request: Request) {
