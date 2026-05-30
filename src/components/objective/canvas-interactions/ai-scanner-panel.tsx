@@ -3,11 +3,11 @@
 // ── Ai Scanner Panel (canvas-AI-scanner Phase 2) ──
 //
 // The minimalist floating "what could the AI do with this idea?" plate. Reveals
-// off a selected sticky note / text shape (cards already carry their own hover
-// menu). Renders as a Vision-Pro glass-float plate (CANVAS_VISIONPRO_UI_PLAN.md
-// §3 Phase D + synergy-node-action-popover's chrome): --glass-float material,
-// --blur-float, soft top highlight, sentence-case header, spring motion,
-// reduced-motion-safe.
+// off a selected sticky note / text shape (cards carry their own hover menu).
+// Vision-Pro glass-float chrome (CANVAS_VISIONPRO_UI_PLAN.md §3 Phase D +
+// synergy-node-action-popover): --glass-float material, --blur-float, soft top
+// highlight, spring entrance that grows from the source corner, appleVibe
+// typography tokens, reduced-motion-safe.
 //
 // Hybrid recommendations: heuristic ranking shows instantly, then an LLM pass
 // patches it (scan-recommendations.ts). Clicking a row runs the operation via
@@ -19,6 +19,8 @@ import {
   Shuffle,
   HelpCircle,
   ListChecks,
+  Wrench,
+  Layers3,
   Sparkles,
   Loader2,
   Check,
@@ -29,15 +31,18 @@ import {
   type ScoredOperation,
 } from "@/lib/objective-canvas/scan-recommendations";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
+import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 const ICONS: Record<string, typeof Split> = {
   decompose: Split,
   variations: Shuffle,
   questions: HelpCircle,
   make_plan: ListChecks,
+  make_technical: Wrench,
+  layers: Layers3,
 };
 
-const PANEL_W = 296;
+const PANEL_W = 300;
 
 export function AiScannerPanel({
   target,
@@ -50,18 +55,26 @@ export function AiScannerPanel({
   y: number;
   onRun: (opId: string) => void;
 }) {
-  const [recs, setRecs] = useState<ScoredOperation[]>(() =>
-    heuristicScan(target),
-  );
-  const [refining, setRefining] = useState(true);
-  const [ranId, setRanId] = useState<string | null>(null);
-
   const reduceMotion = useMemo(
     () =>
       typeof window !== "undefined" &&
       !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
     [],
   );
+
+  const [recs, setRecs] = useState<ScoredOperation[]>(() =>
+    heuristicScan(target),
+  );
+  const [refining, setRefining] = useState(true);
+  const [ranId, setRanId] = useState<string | null>(null);
+  // Entrance — grow + fade from the anchored corner on mount.
+  const [shown, setShown] = useState(reduceMotion);
+
+  useEffect(() => {
+    if (reduceMotion) return;
+    const r = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(r);
+  }, [reduceMotion]);
 
   useEffect(() => {
     setRecs(heuristicScan(target));
@@ -92,9 +105,12 @@ export function AiScannerPanel({
     typeof window !== "undefined" && x + 12 + PANEL_W > window.innerWidth - 12;
   const left = flip ? Math.max(12, x - PANEL_W - 12) : x + 12;
 
-  const transition = reduceMotion
+  const rowTransition = reduceMotion
     ? undefined
     : "background var(--dur-quick) var(--ease-spring-tight), color var(--dur-quick) var(--ease-spring-tight)";
+
+  const idea = target.text.replace(/\s+/g, " ").trim();
+  const ideaShort = idea.length > 76 ? `${idea.slice(0, 76)}…` : idea;
 
   return (
     <div
@@ -105,50 +121,73 @@ export function AiScannerPanel({
         top: Math.max(12, y),
         width: PANEL_W,
         zIndex: 70,
-        padding: 10,
-        borderRadius: 18,
+        padding: 11,
+        borderRadius: appleVibe.radius.lg,
         background: "var(--glass-float-bg)",
-        backdropFilter: "blur(var(--blur-float)) saturate(1.6)",
-        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.6)",
+        backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
         border: "1px solid var(--glass-border)",
         boxShadow:
-          "inset 0 1px 0 var(--glass-highlight), 0 2px 4px rgba(15,23,42,0.04), 0 18px 40px -16px rgba(15,23,42,0.22)",
-        fontFamily: '-apple-system, "SF Pro Text", system-ui, sans-serif',
+          "inset 0 1px 0 var(--glass-highlight), 0 2px 6px rgba(11,18,40,0.05), 0 22px 48px -20px rgba(11,18,40,0.30)",
+        fontFamily: appleVibe.font.stack,
+        // Spring entrance — grow from the corner nearest the source.
+        transformOrigin: flip ? "top right" : "top left",
+        opacity: shown ? 1 : 0,
+        transform: shown
+          ? "translateY(0) scale(1)"
+          : "translateY(6px) scale(0.97)",
+        transition: reduceMotion
+          ? undefined
+          : "opacity var(--dur-normal) var(--ease-spring-soft), transform var(--dur-normal) var(--ease-spring-soft)",
       }}
     >
-      {/* Header — sentence case, no all-caps eyebrow (Vision Pro plan §2). */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "2px 4px 8px",
-        }}
-      >
-        <Sparkles
-          style={{ width: 13, height: 13, color: "rgba(15,23,42,0.6)" }}
-          strokeWidth={2}
-        />
-        <span
-          style={{
-            fontSize: 12.5,
-            fontWeight: 600,
-            color: "rgba(15,23,42,0.82)",
-            letterSpacing: "-0.01em",
-          }}
-        >
-          What could the AI do here?
-        </span>
-        {refining && (
-          <Loader2
-            className={reduceMotion ? undefined : "animate-spin"}
-            style={{
-              marginLeft: "auto",
-              width: 12,
-              height: 12,
-              color: "rgba(15,23,42,0.4)",
-            }}
+      {/* Header: sentence-case overline + the idea being scanned. */}
+      <div style={{ padding: "1px 3px 9px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Sparkles
+            style={{ width: 13, height: 13, color: appleVibe.text.tertiary }}
+            strokeWidth={2}
           />
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: "0.01em",
+              color: appleVibe.text.secondary,
+            }}
+          >
+            What could the AI do here?
+          </span>
+          {refining && (
+            <Loader2
+              className={reduceMotion ? undefined : "animate-spin"}
+              style={{
+                marginLeft: "auto",
+                width: 12,
+                height: 12,
+                color: appleVibe.text.faint,
+              }}
+            />
+          )}
+        </div>
+        {ideaShort && (
+          <div
+            style={{
+              marginTop: 4,
+              marginLeft: 19,
+              fontSize: 12,
+              fontWeight: 550,
+              lineHeight: 1.3,
+              color: appleVibe.text.primary,
+              letterSpacing: "-0.01em",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {ideaShort}
+          </div>
         )}
       </div>
 
@@ -174,33 +213,34 @@ export function AiScannerPanel({
                 width: "100%",
                 textAlign: "left",
                 padding: "8px 9px",
-                borderRadius: 12,
+                borderRadius: appleVibe.radius.sm,
                 border: "1px solid transparent",
                 cursor: "pointer",
-                background: recommended ? "rgba(15,23,42,0.045)" : "transparent",
-                transition,
+                background: recommended ? appleVibe.surface.chip : "transparent",
+                transition: rowTransition,
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(15,23,42,0.07)";
+                e.currentTarget.style.background = appleVibe.surface.chipHover;
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = recommended
-                  ? "rgba(15,23,42,0.045)"
+                  ? appleVibe.surface.chip
                   : "transparent";
               }}
             >
               <span
                 style={{
                   display: "inline-flex",
-                  marginTop: 1,
-                  width: 22,
-                  height: 22,
+                  marginTop: 0.5,
+                  width: 23,
+                  height: 23,
                   flexShrink: 0,
                   alignItems: "center",
                   justifyContent: "center",
-                  borderRadius: 7,
-                  background: "rgba(15,23,42,0.05)",
-                  color: "rgba(15,23,42,0.72)",
+                  borderRadius: 8,
+                  background: ran ? appleVibe.accent.primary : appleVibe.surface.chip,
+                  color: ran ? appleVibe.text.onAccent : appleVibe.text.secondary,
+                  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.6)",
                 }}
               >
                 {ran ? (
@@ -217,29 +257,37 @@ export function AiScannerPanel({
                     gap: 6,
                     fontSize: 12.5,
                     fontWeight: 600,
-                    color: "rgba(15,23,42,0.9)",
+                    color: appleVibe.text.primary,
+                    letterSpacing: "-0.01em",
                   }}
                 >
                   {op.label}
                   {recommended && (
                     <span
                       style={{
-                        fontSize: 9.5,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        height: 15,
+                        padding: "0 6px",
+                        borderRadius: appleVibe.radius.pill,
+                        background: appleVibe.surface.chip,
+                        fontSize: 9,
                         fontWeight: 600,
-                        color: "rgba(15,23,42,0.4)",
+                        letterSpacing: "0.01em",
+                        color: appleVibe.text.tertiary,
                       }}
                     >
-                      · suggested
+                      Suggested
                     </span>
                   )}
                 </span>
                 <span
                   style={{
                     display: "block",
-                    marginTop: 1,
+                    marginTop: 1.5,
                     fontSize: 11,
                     lineHeight: 1.32,
-                    color: "rgba(15,23,42,0.52)",
+                    color: appleVibe.text.tertiary,
                   }}
                 >
                   {ran ? "Working…" : op.reason}
