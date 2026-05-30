@@ -104,6 +104,26 @@ export function dispatchCardAction(detail: CardActionDetail) {
   window.dispatchEvent(new CustomEvent(CARD_ACTION_EVENT, { detail }));
 }
 
+// ── Card-saved confirmation ───────────────────────────────────────
+// WhiteboardBase fires this back AFTER a "save" CardAction lands in the
+// Library, so the originating card can flip its Save tile to a confirmed
+// "Saved ✓" state. Keyed by entityId — every card referencing that item
+// reflects the save. Closes the feedback loop the hover-menu Save opened.
+
+export interface CardSavedDetail {
+  entityId: string;
+}
+
+export const CARD_SAVED_EVENT = "objective-board:card-saved";
+
+/** Fire from WhiteboardBase once a card's item is persisted to Library. */
+export function dispatchCardSaved(entityId: string) {
+  if (!entityId) return;
+  window.dispatchEvent(
+    new CustomEvent(CARD_SAVED_EVENT, { detail: { entityId } }),
+  );
+}
+
 /** Read + clear the pending-artifact queue for this space. */
 export function drainPendingArtifacts(spaceId: string): ArtifactCardDetail[] {
   try {

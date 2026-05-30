@@ -57,6 +57,7 @@ import {
   OPEN_UNFURL_EVENT,
   CARD_ACTION_EVENT,
   type CardActionDetail,
+  dispatchCardSaved,
   drainPendingArtifacts,
   type ArtifactCardDetail,
 } from "./board-bus";
@@ -412,14 +413,18 @@ export function WhiteboardBase({
     function onCardAction(e: Event) {
       const d = (e as CustomEvent<CardActionDetail>).detail;
       if (!d || d.action !== "save") return;
-      void saveCardsToLibrary(spaceId, [
-        {
-          objectType: "feature",
-          title: d.title,
-          sourceEntityId: d.entityId,
-          sourceSubObjectiveId: d.roomId ?? null,
-        },
-      ]);
+      void (async () => {
+        const { saved: n } = await saveCardsToLibrary(spaceId, [
+          {
+            objectType: "feature",
+            title: d.title,
+            sourceEntityId: d.entityId,
+            sourceSubObjectiveId: d.roomId ?? null,
+          },
+        ]);
+        // Confirm back to the card so its Save tile shows "Saved ✓".
+        if (n >= 1) dispatchCardSaved(d.entityId);
+      })();
     }
 
     window.addEventListener(DEPLOY_CARD_EVENT, onDeploy);

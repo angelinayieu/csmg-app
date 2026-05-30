@@ -21,11 +21,15 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ArrowUpRight, GripVertical } from "lucide-react";
 import { OPEN_ROOM_EVENT } from "./room-card-shape";
 import { CardHoverActions } from "../canvas-interactions/card-hover-actions";
-import { dispatchCardAction } from "../board-bus";
+import {
+  dispatchCardAction,
+  CARD_SAVED_EVENT,
+  type CardSavedDetail,
+} from "../board-bus";
 
 export type ArtifactCardShape = TLBaseShape<
   "artifact-card",
@@ -105,6 +109,20 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
   // (even though positioned below the card), so mouseleave only fires when
   // the pointer leaves BOTH — no flicker as the pointer crosses to it.
   const [hovered, setHovered] = useState(false);
+
+  // Library save confirmation. The hover-menu "Save" fires a CardAction that
+  // WhiteboardBase persists; it echoes CARD_SAVED_EVENT back so this card's
+  // Save tile can flip to "Saved ✓". Match on entityId.
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    if (!entityId) return;
+    function onSaved(e: Event) {
+      const d = (e as CustomEvent<CardSavedDetail>).detail;
+      if (d?.entityId === entityId) setSaved(true);
+    }
+    window.addEventListener(CARD_SAVED_EVENT, onSaved);
+    return () => window.removeEventListener(CARD_SAVED_EVENT, onSaved);
+  }, [entityId]);
 
   function openRoom(e: React.MouseEvent) {
     e.stopPropagation();
@@ -282,6 +300,7 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
           >
             <CardHoverActions
               accent={color}
+              saved={saved}
               onAction={(action) =>
                 dispatchCardAction({ action, entityId, title, roomId })
               }

@@ -17,6 +17,7 @@ import {
   HelpCircle,
   ListChecks,
   BookmarkPlus,
+  BookmarkCheck,
 } from "lucide-react";
 import type { CardAction } from "../board-bus";
 
@@ -35,10 +36,14 @@ const ACTIONS: {
 export function CardHoverActions({
   onAction,
   accent = "#7C3AED",
+  saved = false,
 }: {
   onAction: (action: CardAction) => void;
   /** Card's lane accent — tints the icon on hover. */
   accent?: string;
+  /** True once the card's item is persisted to Library — the Save tile
+   *  then shows a confirmed "Saved ✓" state in the accent color. */
+  saved?: boolean;
 }) {
   return (
     <div
@@ -53,41 +58,49 @@ export function CardHoverActions({
         backdropFilter: "blur(8px)",
       }}
     >
-      {ACTIONS.map(({ key, label, Icon }) => (
-        <button
-          key={key}
-          type="button"
-          title={label}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onAction(key);
-          }}
-          className="group flex items-center gap-1 rounded-lg transition-colors"
-          style={{
-            padding: "5px 8px",
-            fontSize: 11,
-            fontWeight: 600,
-            color: "rgba(15,23,42,0.66)",
-            cursor: "pointer",
-            background: "transparent",
-            border: "1px solid transparent",
-            fontFamily:
-              '-apple-system, "SF Pro Text", system-ui, sans-serif',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(15,23,42,0.045)";
-            e.currentTarget.style.color = accent;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = "rgba(15,23,42,0.66)";
-          }}
-        >
-          <Icon style={{ width: 12, height: 12 }} strokeWidth={2.2} />
-          {label}
-        </button>
-      ))}
+      {ACTIONS.map(({ key, label, Icon }) => {
+        const isSaved = saved && key === "save";
+        const TileIcon = isSaved ? BookmarkCheck : Icon;
+        const restColor = isSaved ? accent : "rgba(15,23,42,0.66)";
+        const restBg = isSaved ? `${accent}14` : "transparent";
+        return (
+          <button
+            key={key}
+            type="button"
+            title={isSaved ? "Saved to your Library" : label}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAction(key);
+            }}
+            className="group flex items-center gap-1 rounded-lg transition-colors"
+            style={{
+              padding: "5px 8px",
+              fontSize: 11,
+              fontWeight: 600,
+              color: restColor,
+              cursor: "pointer",
+              background: restBg,
+              border: "1px solid transparent",
+              fontFamily:
+                '-apple-system, "SF Pro Text", system-ui, sans-serif',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = isSaved
+                ? `${accent}1F`
+                : "rgba(15,23,42,0.045)";
+              e.currentTarget.style.color = accent;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = restBg;
+              e.currentTarget.style.color = restColor;
+            }}
+          >
+            <TileIcon style={{ width: 12, height: 12 }} strokeWidth={2.2} />
+            {isSaved ? "Saved" : label}
+          </button>
+        );
+      })}
     </div>
   );
 }
