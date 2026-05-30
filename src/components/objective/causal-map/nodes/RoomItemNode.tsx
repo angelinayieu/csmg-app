@@ -81,28 +81,20 @@ function RoomItemNodeInner({ data, selected }: NodeProps) {
       style={{
         width: ROOM_NODE_W,
         minHeight: ROOM_NODE_H,
-        // Fully opaque card body — faded peers must stay readable above the
-        // lane-wash gradient, so the card can't double as a translucent layer
-        // (was 0.74 white + blur, which compounded with the 0.35 fade into
-        // near-invisibility — the "cards disappear on hover" glitch).
-        background: "#ffffff",
+        background: "rgba(255,255,255,0.74)",
+        backdropFilter: "blur(16px) saturate(140%)",
+        WebkitBackdropFilter: "blur(16px) saturate(140%)",
         borderColor,
         borderWidth: loop ? 2 : 1,
         borderStyle: "solid",
         borderRadius: appleVibe.radius.lg,
-        // Gentler dim so dim cards keep their silhouette against the lane
-        // wash. The earlier 0.35 swallowed the title text entirely.
-        opacity: d.faded ? 0.55 : 1,
+        opacity: d.faded ? 0.35 : 1,
         boxShadow,
-        // No translateY lift: the +2px shift combined with the shadow swap
-        // jittered cards along their edges as the cursor crossed between
-        // siblings (React Flow re-measures on dimension hints + the
-        // onMouseEnter/Leave handlers fought across the moving edge). The
-        // shadow bloom alone is the hover affordance.
+        transform: !loop && (selected || hover) ? "translateY(-2px)" : "none",
         fontFamily: appleVibe.font.stack,
         cursor: d.href ? "pointer" : "default",
         transition:
-          "box-shadow 180ms ease, opacity 240ms ease, border-color 180ms ease",
+          "box-shadow 180ms ease, opacity 180ms ease, border-color 180ms ease, transform 180ms ease",
       }}
       className="relative flex flex-col gap-1 px-3.5 py-2.5"
     >

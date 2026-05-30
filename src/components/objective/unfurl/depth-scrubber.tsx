@@ -8,7 +8,7 @@
 // clicking any notch jumps there. Pairs with useDepthDial (wheel/keys);
 // this is the visible, clickable surface. Non-blocking floating control.
 
-import { DEPTH_LEVELS, MAX_DEPTH } from "./use-depth-dial";
+import { DEPTH_LEVELS } from "./use-depth-dial";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export function DepthScrubber({
@@ -51,22 +51,6 @@ export function DepthScrubber({
         fontFamily: appleVibe.font.stack,
       }}
     >
-      {/* Eyebrow — announces this as a scrubber + the current stop, so
-          it doesn't read as a static label. */}
-      <div
-        style={{
-          fontSize: 8.5,
-          fontWeight: 700,
-          letterSpacing: "0.16em",
-          textTransform: "uppercase",
-          color: appleVibe.text.faint,
-          marginBottom: 4,
-          paddingRight: 2,
-        }}
-      >
-        Depth · {depth + 1}/{MAX_DEPTH + 1}
-      </div>
-
       {DEPTH_LEVELS.map((level) => {
         const active = level.d === depth;
         const reached = level.d <= depth;
@@ -84,13 +68,12 @@ export function DepthScrubber({
               padding: "2px 0",
             }}
           >
-            {/* Label — all 6 visible at low opacity so the scrubber reads
-                as a 6-stop list, active highlighted. Brightens on hover so
-                you can still tell which one you'll land on. */}
+            {/* Label — always visible for the active level; dim + reveal
+                on hover for the others. */}
             <span
-              className="transition-opacity duration-150 group-hover/notch:!opacity-100"
+              className="opacity-0 transition-opacity duration-150 group-hover/notch:opacity-100"
               style={{
-                opacity: active ? 1 : 0.45,
+                opacity: active ? 1 : undefined,
                 fontSize: 10.5,
                 fontWeight: active ? 700 : 600,
                 letterSpacing: "0.02em",
