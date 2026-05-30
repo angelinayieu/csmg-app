@@ -170,6 +170,24 @@ export function CanvasAutopilotRunner({
     }
     setTargets(workList);
 
+    // ── Step 1.5: ensure the core objective + sub-objectives are
+    // annotated. The annotations endpoint is idempotent — mode:
+    // "initial" short-circuits to cached when annotations already
+    // exist, so re-firing on every autopilot run is safe + free
+    // when nothing's changed. Reference:
+    // INTAKE_TO_BRIEF_SURFACING_PLAN.md §3.5(a). Soft-fail — the
+    // pipeline still works without annotations, just with weaker
+    // concept threading.
+    try {
+      await fetchWithTimeout("/api/brainstorm/annotations/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ spaceId, mode: "initial" }),
+      });
+    } catch {
+      // Soft-fail — annotations are enrichment, not a blocker.
+    }
+
     // ── Step 2: outer loop over rooms, inner loop over features ──
     for (let i = 0; i < workList.length; i++) {
       if (cancelRef.current) {
@@ -188,6 +206,19 @@ export function CanvasAutopilotRunner({
         }
         setFeatureIdx(j);
         const entityId = room.featureIds[j];
+        // Generate the feature's variations FIRST. score gates on
+        // expanded_detail.variations — a feature that was never expanded
+        // returns no_variations + skips refine, so autopilot "runs" but
+        // writes ZERO notebook rows for that room (the "autopilot runs
+        // but nothing shows" root cause). expand is idempotent (cached
+        // short-circuit, expand/route.ts), so re-firing is free once
+        // variations exist; a failure here just falls through to the
+        // same no_variations score as before.
+        await fetchWithTimeout("/api/brainstorm/item/expand", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ entityId }),
+        }).catch(() => undefined);
         try {
           // Score is cache-aware — if the feature has an existing
           // envelope, it cheaply re-confirms. Refine ONLY fires if
@@ -304,6 +335,54 @@ export function CanvasAutopilotRunner({
       });
     } catch {
       // Soft-fail — analysis refresh is a nice-to-have, not a blocker.
+    }
+
+    // ── Step 3.5: macro rollup — distill themes + macro sub-problems
+    // so the brief's macro_architecture surfaces real cross-room
+    // pattern instead of an empty stub. Two Tier-2 operations fired
+    // in sequence: distill_concepts first (gives the themes), then
+    // distill_macro_problems (groups room pains into per-layer
+    // macro problems). Reference: MACRO_ROLLUP_AND_COORDINATION_SPEC.md
+    // + INTAKE_TO_BRIEF_SURFACING_PLAN.md §3.5(c). Soft-fail per op.
+    for (const operationKey of [
+      "distill_concepts",
+      "distill_macro_problems",
+    ]) {
+      try {
+        await fetchWithTimeout("/api/brainstorm/space/analysis/run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            spaceId,
+            operationKey,
+            mode: "force",
+          }),
+        });
+      } catch {
+        // Soft-fail — macro rollup is enrichment. The brief
+        // gracefully degrades to [NEEDS CLARIFICATION] markers
+        // when the rollup hasn't run.
+      }
+    }
+
+    // ── Step 4: auto-fire the strategy brief's executive summary ──
+    // The brief itself is built on read (no LLM); polish is the LLM
+    // step that adds the 2-3 sentence tldr at the top. Firing it
+    // here closes the loop the user demanded: "no manual clicks —
+    // autopilot runs end-to-end to the polished deliverable."
+    // Logs `brief_polished` via the route's internal logDecision,
+    // which the lab notebook surfaces as the terminal autopilot
+    // event ("Your strategy brief is ready"). Soft-fail — the brief
+    // still renders without polish, just with the raw lead instead.
+    // Reference: INTAKE_TO_BRIEF_SURFACING_PLAN.md §3.5(d).
+    try {
+      await fetchWithTimeout("/api/brainstorm/space/brief/polish", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ spaceId, mode: "force" }),
+      });
+    } catch {
+      // Soft-fail — brief polish is enrichment, not a blocker.
     }
 
     setStatus("done");
@@ -662,9 +741,15 @@ function CanvasAutopilotDropdown({
   // We can't know totalFeatures without calling /start, so show a
   // rough "~3-10 min" placeholder. Refined once the run kicks off.
 
-  // Opt-in: also pre-generate the v2 technical mechanism spec for every
-  // feature. Default off — it's a heavy extra LLM pass per feature.
-  const [withSpecs, setWithSpecs] = useState(false);
+  // v3 — mechanism specs default ON. Per
+  // INTAKE_TO_BRIEF_SURFACING_PLAN.md §3.5(b): the user lives in the
+  // chatbox + brief and expects depth without checking a box. The
+  // spec compiler (compile-agent-build-spec.ts, post-Step-6) reads
+  // every spec's v3 fields into the brief — turning specs off
+  // strips the brief of its mechanism layer. Box remains for users
+  // who want a fast scan-only run; default reflects the right
+  // expectation.
+  const [withSpecs, setWithSpecs] = useState(true);
 
   const selectedSet = new Set(selectedIds);
   const allSelected = rooms.length > 0 && selectedIds.length === rooms.length;
