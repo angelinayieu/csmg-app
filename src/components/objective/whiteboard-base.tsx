@@ -46,6 +46,10 @@ import {
 } from "./shapes/artifact-card-shape";
 import { LayerBandShapeUtil } from "./shapes/layer-band-shape";
 import { BoardSelectionToolbar } from "./board-selection-toolbar";
+import {
+  saveCardsToLibrary,
+  type SaveableCard,
+} from "./canvas-interactions/save-to-library";
 import { BoardHint } from "./board-hint";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
 import {
@@ -421,7 +425,7 @@ export function WhiteboardBase({
       {/* Contextual AI action — only while the board chrome is showing and
           we're NOT unfurling (the selection toolbar is for the normal board). */}
       {editor && showUi && !unfurl && (
-        <BoardOverlay editor={editor} runAiLink={runAiLink} />
+        <BoardOverlay editor={editor} runAiLink={runAiLink} spaceId={spaceId} />
       )}
 
       {/* Unfurl mode — depth scrubber + exit. */}
@@ -484,6 +488,27 @@ function cardPayload(s: TLShape): BoardCardPayload {
   }
   const p = (s as InsightCardShape).props;
   return { title: p.headline };
+}
+
+/** Project a board card into a library-saveable descriptor, or null when
+ *  it isn't a savable object (room cards represent rooms, already
+ *  first-class). Drives the "Save to Library" canvas interaction
+ *  (canvas → object → Library, per OBJECT_FLOW_ARCHITECTURE.md). */
+function cardSaveable(s: TLShape): SaveableCard | null {
+  if (s.type === "artifact-card") {
+    const p = (s as ArtifactCardShape).props;
+    return {
+      objectType: "feature",
+      title: p.title,
+      sourceEntityId: p.entityId ?? null,
+      sourceSubObjectiveId: p.roomId ?? null,
+    };
+  }
+  if (s.type === "insight-card") {
+    const p = (s as InsightCardShape).props;
+    return { objectType: "insight", title: p.headline };
+  }
+  return null;
 }
 
 /** Drop (or refocus) an artifact card on the board. Deduped by source
@@ -624,11 +649,14 @@ function createInsightWithLinks(
 function BoardOverlay({
   editor,
   runAiLink,
+  spaceId,
 }: {
   editor: Editor;
   runAiLink: AiLinkFn;
+  spaceId: string;
 }) {
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
   // Default true so the hint never flashes before the localStorage read;
   // the effect flips it false for users who haven't dismissed it.
   const [hintDismissed, setHintDismissed] = useState(true);
@@ -657,6 +685,9 @@ function BoardOverlay({
       return {
         ids: cards.map((c) => c.id),
         payloads: cards.map(cardPayload),
+        saveables: cards
+          .map(cardSaveable)
+          .filter((c): c is SaveableCard => c !== null),
         screen,
         boardCardCount: shapes.filter(
           (s) => s.type === "room-card" || s.type === "artifact-card",
@@ -701,6 +732,24 @@ function BoardOverlay({
     }
   }
 
+  // Canvas interaction: save the selected card(s) to the Library as
+  // objects (canvas → object → Library bridge). Soft-fails per card.
+  async function handleSaveToLibrary() {
+    if (busy || view.saveables.length === 0) return;
+    setBusy(true);
+    try {
+      const { saved: n } = await saveCardsToLibrary(spaceId, view.saveables);
+      if (n > 0) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+    } catch (err) {
+      console.warn("[board] save to library failed:", err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Teaching nudge: only once the user has cards but hasn't connected
   // anything yet, and isn't mid-selection (the toolbar guides that).
   const showHint =
@@ -712,13 +761,17 @@ function BoardOverlay({
   return (
     <>
       {showHint && <BoardHint onDismiss={dismissHint} />}
-      {count >= 2 && view.screen && (
+      {view.screen && (count >= 2 || view.saveables.length >= 1) && (
         <BoardSelectionToolbar
           x={view.screen.x}
           y={view.screen.y}
           count={count}
           busy={busy}
-          onRun={handleRun}
+          onRun={count >= 2 ? handleRun : undefined}
+          onSaveToLibrary={
+            view.saveables.length >= 1 ? handleSaveToLibrary : undefined
+          }
+          saved={saved}
         />
       )}
     </>
