@@ -15,6 +15,7 @@ import {
   type RecordProps,
   type TLBaseShape,
 } from "tldraw";
+import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export type LayerBandShape = TLBaseShape<
   "layer-band",
@@ -92,10 +93,13 @@ export class LayerBandShapeUtil extends BaseBoxShapeUtil<LayerBandShape> {
             borderRadius: 22,
             background: uncovered
               ? `repeating-linear-gradient(135deg, ${accent}08, ${accent}08 10px, transparent 10px, transparent 20px)`
-              : `linear-gradient(180deg, ${accent}0E 0%, ${accent}06 100%)`,
+              : "linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.12) 100%)",
             border: uncovered
               ? `1.5px dashed ${accent}55`
-              : `1px solid ${accent}24`,
+              : `1px solid ${accent}1F`,
+            boxShadow: uncovered
+              ? "none"
+              : "inset 0 1px 0 rgba(255,255,255,0.55)",
             overflow: "hidden",
             fontFamily:
               '-apple-system, "SF Pro Text", "SF Pro Display", system-ui, sans-serif',
@@ -133,7 +137,7 @@ export class LayerBandShapeUtil extends BaseBoxShapeUtil<LayerBandShape> {
               style={{
                 fontSize: 13,
                 fontWeight: 650,
-                color: "#0B1228",
+                color: appleVibe.text.primary,
                 letterSpacing: "-0.01em",
               }}
             >
@@ -141,12 +145,11 @@ export class LayerBandShapeUtil extends BaseBoxShapeUtil<LayerBandShape> {
             </span>
             <span
               style={{
-                fontSize: 9.5,
-                fontWeight: 700,
-                letterSpacing: "0.12em",
-                textTransform: "uppercase",
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: "0.02em",
                 color: accent,
-                opacity: 0.8,
+                opacity: 0.75,
               }}
             >
               {archetype}

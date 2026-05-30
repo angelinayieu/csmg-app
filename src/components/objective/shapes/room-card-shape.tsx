@@ -31,6 +31,7 @@ import { useState } from "react";
 import { Maximize2, GripVertical } from "lucide-react";
 import { CardHoverActions } from "../canvas-interactions/card-hover-actions";
 import { dispatchCardAction } from "../board-bus";
+import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export type RoomCardShape = TLBaseShape<
   "room-card",
@@ -154,20 +155,6 @@ function RoomCardRenderer({
             '-apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif',
         }}
       >
-        {/* Accent rail down the left edge — reads as the room's color. */}
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 5,
-            background: color,
-            borderTopLeftRadius: 20,
-            borderBottomLeftRadius: 20,
-          }}
-        />
-
         {/* Header row: drag affordance + "Room" eyebrow + expand button. */}
         <div
           style={{
@@ -183,10 +170,9 @@ function RoomCardRenderer({
             />
             <span
               style={{
-                fontSize: 9,
-                fontWeight: 700,
-                letterSpacing: "0.14em",
-                textTransform: "uppercase",
+                fontSize: 10.5,
+                fontWeight: 600,
+                letterSpacing: "0.02em",
                 color,
               }}
             >
@@ -231,7 +217,7 @@ function RoomCardRenderer({
             fontSize: 16,
             fontWeight: 650,
             lineHeight: 1.25,
-            color: "#0B1228",
+            color: appleVibe.text.primary,
             display: "-webkit-box",
             WebkitLineClamp: 2,
             WebkitBoxOrient: "vertical",
@@ -250,7 +236,7 @@ function RoomCardRenderer({
               fontSize: 12,
               fontWeight: 450,
               lineHeight: 1.4,
-              color: "rgba(15,23,42,0.58)",
+              color: appleVibe.text.secondary,
               display: "-webkit-box",
               WebkitLineClamp: 2,
               WebkitBoxOrient: "vertical",
@@ -297,21 +283,6 @@ function RoomCardRenderer({
           </div>
         )}
 
-        {/* Footer hint — pinned to the bottom. Hidden in the unfurl. */}
-        {!compact && (
-          <div
-            style={{
-              marginTop: "auto",
-              marginLeft: 6,
-              paddingTop: 8,
-              fontSize: 10,
-              fontWeight: 500,
-              color: "rgba(15,23,42,0.4)",
-            }}
-          >
-            On the board · drag to arrange · Expand to reopen
-          </div>
-        )}
       </div>
 
         {/* Hover action bar — reveals just below the card (Synergism

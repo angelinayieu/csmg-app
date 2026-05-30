@@ -105,6 +105,12 @@ function CanvasAltitudeMapInner({
       ? null
       : new URLSearchParams(window.location.search).get("loop"),
   );
+  // Hover-to-trace: when a card is hovered, only that card's incident
+  // edges (and their endpoint cards) stay full-strength; everything else
+  // fades. This is what stops the resting web from reading as a mesh —
+  // the user surfaces relationships by attending to a card rather than
+  // being shown every association at once.
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const rf = useReactFlow();
   const [initialized, setInitialized] = useState(false);
 
@@ -183,32 +189,61 @@ function CanvasAltitudeMapInner({
     window.history.replaceState(null, "", url.toString());
   }, [highlightedLoop]);
 
+  // Edges incident to the hovered card. Computed once per (edges, hover)
+  // tuple so both memos below share the same incidence judgment without
+  // recomputing inside their loops.
+  const hoverIncidence = useMemo(() => {
+    if (!hoveredNodeId) return null;
+    const nodeIds = new Set<string>([hoveredNodeId]);
+    const edgeIds = new Set<string>();
+    for (const e of graph.edges) {
+      if (e.source === hoveredNodeId || e.target === hoveredNodeId) {
+        edgeIds.add(e.id);
+        nodeIds.add(e.source);
+        nodeIds.add(e.target);
+      }
+    }
+    return { nodeIds, edgeIds };
+  }, [graph.edges, hoveredNodeId]);
+
   // 4. Annotate nodes/edges with transient view flags (health overlay +
   //    loop highlight + fade). New objects so React Flow re-renders.
   const flowNodes = useMemo(() => {
     const loopNodeSet = new Set(activeLoop?.nodeIds ?? []);
     return layout.nodes.map((n) => {
       const inLoop = loopNodeSet.has(n.id);
+      // Loop highlight wins; otherwise hover-trace governs fade. At rest
+      // (no loop, no hover) nothing fades.
+      const fadedByLoop = activeLoop ? !inLoop : false;
+      const fadedByHover = hoverIncidence ? !hoverIncidence.nodeIds.has(n.id) : false;
       const data: CausalMapNodeData = {
         ...n.data,
         showHealth,
         loopRing: activeLoop && inLoop ? activeLoop.kind : null,
-        faded: activeLoop ? !inLoop : false,
+        faded: fadedByLoop || fadedByHover,
       };
       // A user-pinned position overrides the auto-layout for that node.
       return { ...n, position: pins[n.id] ?? n.position, data } as Node;
     });
-  }, [layout.nodes, showHealth, activeLoop, pins]);
+  }, [layout.nodes, showHealth, activeLoop, pins, hoverIncidence]);
 
   const flowEdges = useMemo(() => {
     const loopEdgeSet = new Set(activeLoop?.edgeIds ?? []);
     return graph.edges.map((e) => {
       const inLoop = loopEdgeSet.has(e.id);
+      const incidentToHover = hoverIncidence?.edgeIds.has(e.id) ?? false;
       const data: CausalMapEdgeData = {
         ...(e.data as CausalMapEdgeData),
         loopActive: activeLoop ? inLoop : false,
         loopKind: activeLoop?.kind ?? null,
-        faded: activeLoop ? !inLoop : false,
+        // Loop wins; outside a loop, hover-incident edges focus and the
+        // rest fade. At rest, calmRest ghosts the resting web so the
+        // canvas reads as a quiet substrate, not a tangled mesh.
+        faded:
+          (activeLoop ? !inLoop : false) ||
+          (hoverIncidence ? !incidentToHover : false),
+        focused: incidentToHover,
+        calmRest: true,
       };
       return {
         ...e,
@@ -216,7 +251,7 @@ function CanvasAltitudeMapInner({
         markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
       } as Edge;
     });
-  }, [graph.edges, activeLoop]);
+  }, [graph.edges, activeLoop, hoverIncidence]);
 
   // Zoom-into-room: bloom an accent veil out of the clicked node, then
   // navigate. The room map plays a matching scale-in on mount, so the
@@ -252,6 +287,15 @@ function CanvasAltitudeMapInner({
     },
     [setPin],
   );
+
+  // Hover-to-trace handlers. React Flow fires these on the wrapper
+  // element so they're cheap and don't need to be debounced.
+  const onNodeMouseEnter = useCallback((_e: React.MouseEvent, node: Node) => {
+    setHoveredNodeId(node.id);
+  }, []);
+  const onNodeMouseLeave = useCallback(() => {
+    setHoveredNodeId(null);
+  }, []);
 
   // ── Empty state ──
   if (subs.length === 0) {
@@ -294,6 +338,8 @@ function CanvasAltitudeMapInner({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}
+        onNodeMouseEnter={onNodeMouseEnter}
+        onNodeMouseLeave={onNodeMouseLeave}
         onNodesChange={onNodesChange}
         onInit={() => setInitialized(true)}
         fitView

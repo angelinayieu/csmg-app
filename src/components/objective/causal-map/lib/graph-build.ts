@@ -70,7 +70,12 @@ interface BuildInput {
 
 export function buildCanvasGraph(input: BuildInput): CanvasGraph {
   const { spaceId, subs, objectiveStack, crossRoomSignals } = input;
-  const maxEdges = input.maxEdges ?? 24;
+  // De-noise default: the prior 24-edge ceiling let a 10-card canvas
+  // approach bipartite-complete (every L_n card wired to every L_{n+1}
+  // card), which reads as a mesh. 14 keeps the load-bearing thread visible
+  // and trims the long tail of weak co-occurrences. Hover-to-trace
+  // surfaces the rest on demand.
+  const maxEdges = input.maxEdges ?? 14;
   const hasLayerStack = !!objectiveStack && objectiveStack.layers.length > 0;
 
   // ── Nodes ──────────────────────────────────────────────────────────
@@ -199,7 +204,13 @@ function buildCrossRoomEdges(
     }
   }
 
+  // Strength floor (0.18) drops the long tail of single-overlap
+  // associations — those add visual edges without adding signal. The
+  // top-N cap then enforces a hard readability ceiling. Together they
+  // turn "every pairing that ever co-occurred" into "the load-bearing
+  // few"; the rest are still discoverable via hover-to-trace.
   const ranked = [...pairs.values()]
+    .filter((p) => p.strength >= 0.18)
     .sort((p, q) => q.strength - p.strength)
     .slice(0, maxEdges);
 

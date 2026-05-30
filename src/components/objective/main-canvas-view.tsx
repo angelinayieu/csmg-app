@@ -50,10 +50,7 @@ import {
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 import { CanvasAutopilotRunner } from "@/components/objective/canvas-autopilot-runner";
 import { RoomFillRunner } from "@/components/objective/room-fill-runner";
-import {
-  ObjectiveStackWidget,
-  ARCHETYPE_COLOR,
-} from "@/components/objective/objective-stack";
+import { ARCHETYPE_COLOR } from "@/components/objective/objective-stack";
 import {
   deriveClusterLayer,
   type ObjectiveStack,
@@ -192,10 +189,11 @@ interface Props {
    *  hides the surface. Server-aggregated in page.tsx via
    *  computeRoomDecisionSummaries — no client-side fetches. */
   roomDecisions?: RoomDecisionSummary[];
-  /** Phase 11.A — the canvas's ObjectiveStack. When present, renders
-   *  the ObjectiveStackWidget above the sub-objective grid so the
-   *  user sees structural coverage + which layers their picks
-   *  touch. Null for pre-11.A spaces; the widget's slot collapses. */
+  /** Phase 11.A — the canvas's ObjectiveStack. Still used by the
+   *  Overview / Map / Data flow views and the layer-shelves grid to
+   *  position sub-objectives by layer_ordinals + score coverage.
+   *  Null for pre-11.A spaces. The standalone stack widget that
+   *  used to render above the grid has been removed. */
   objectiveStack?:
     | import("@/lib/objective-canvas/layer-model").ObjectiveStack
     | null;
@@ -482,34 +480,6 @@ export function MainCanvasView({
           <ConceptMemoryFeedStrip
             concepts={conceptMemory}
             currentSpaceId={spaceId}
-          />
-        </div>
-      )}
-
-      {/* Phase 11.A.6 — ObjectiveStack widget. Renders the canvas's
-          causal-stack decomposition (4-6 layers from substrate to
-          outcome) with sub-objectives positioned by layer_ordinals.
-          Coverage chip shows which layers user picks touch + which
-          are uncovered. Click a layer name → filter proposals to
-          that layer (future). Click a variable chip → popover with
-          description. Hidden when no stack exists yet — pre-11.A
-          spaces show the rest of the canvas as before. */}
-      {objectiveStack && objectiveStack.layers.length > 0 && canvasView === "map" && (
-        <div className="mx-auto mt-6 w-full max-w-5xl">
-          <ObjectiveStackWidget
-            stack={objectiveStack}
-            taggedProposals={subs
-              .filter(
-                (s) => Array.isArray(s.layerOrdinals) && s.layerOrdinals.length > 0,
-              )
-              .map((s) => ({
-                id: s.id,
-                layer_ordinals: s.layerOrdinals!,
-              }))}
-            // Every sub on the main canvas is already picked
-            // (confirmed). The coverage chip shows which layers
-            // those picks actually touch.
-            pickedIds={subs.map((s) => s.id)}
           />
         </div>
       )}

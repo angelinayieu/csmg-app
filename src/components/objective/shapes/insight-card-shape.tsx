@@ -27,6 +27,7 @@ import {
 } from "tldraw";
 import { Check, X } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
+import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export type InsightCardShape = TLBaseShape<
   "insight-card",
@@ -132,7 +133,7 @@ function InsightCardRenderer({
     editor.deleteShapes([shape.id, ...linkedArrowIds()]);
   }
 
-  const eyebrow = kind === "connect" ? "AI · CONNECTION" : "AI · SYNTHESIS";
+  const eyebrow = kind === "connect" ? "Connection" : "Synthesis";
 
   return (
     <HTMLContainer
@@ -170,9 +171,9 @@ function InsightCardRenderer({
           <Sparkle style={{ width: 12, height: 12, color }} strokeWidth={2.4} />
           <span
             style={{
-              fontSize: 9,
-              fontWeight: 700,
-              letterSpacing: "0.14em",
+              fontSize: 10.5,
+              fontWeight: 600,
+              letterSpacing: "0.02em",
               color,
             }}
           >
@@ -182,11 +183,10 @@ function InsightCardRenderer({
             <span
               style={{
                 marginLeft: "auto",
-                fontSize: 9,
+                fontSize: 10,
                 fontWeight: 600,
-                letterSpacing: "0.1em",
-                textTransform: "uppercase",
-                color: "rgba(15,23,42,0.34)",
+                letterSpacing: "0.02em",
+                color: appleVibe.text.tertiary,
               }}
             >
               Proposed
@@ -201,7 +201,7 @@ function InsightCardRenderer({
             fontSize: kind === "connect" ? 17 : 15.5,
             fontWeight: 650,
             lineHeight: 1.2,
-            color: "#0B1228",
+            color: appleVibe.text.primary,
             display: "-webkit-box",
             WebkitLineClamp: 2,
             WebkitBoxOrient: "vertical",
@@ -219,7 +219,7 @@ function InsightCardRenderer({
               fontSize: 11.5,
               fontWeight: 450,
               lineHeight: 1.42,
-              color: "rgba(15,23,42,0.62)",
+              color: appleVibe.text.secondary,
               display: "-webkit-box",
               WebkitLineClamp: proposed ? 3 : 4,
               WebkitBoxOrient: "vertical",
@@ -231,7 +231,7 @@ function InsightCardRenderer({
         )}
 
         {/* Footer: Keep / Dismiss while proposed; quiet tag once kept. */}
-        {proposed ? (
+        {proposed && (
           <div
             style={{
               marginTop: "auto",
@@ -283,18 +283,6 @@ function InsightCardRenderer({
               <X style={{ width: 12, height: 12 }} strokeWidth={2.6} />
               Dismiss
             </button>
-          </div>
-        ) : (
-          <div
-            style={{
-              marginTop: "auto",
-              paddingTop: 8,
-              fontSize: 10,
-              fontWeight: 500,
-              color: "rgba(15,23,42,0.38)",
-            }}
-          >
-            Kept · drag to arrange · connect further
           </div>
         )}
       </div>

@@ -30,6 +30,7 @@ import {
   CARD_SAVED_EVENT,
   type CardSavedDetail,
 } from "../board-bus";
+import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export type ArtifactCardShape = TLBaseShape<
   "artifact-card",
@@ -48,10 +49,10 @@ export type ArtifactCardShape = TLBaseShape<
 >;
 
 const KIND_LABEL: Record<ArtifactCardShape["props"]["kind"], string> = {
-  pain: "PAIN",
-  feature: "FEATURE",
-  outcome: "OUTCOME",
-  lab: "LAB",
+  pain: "Pain",
+  feature: "Feature",
+  outcome: "Outcome",
+  lab: "Lab",
 };
 
 export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
@@ -165,20 +166,6 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
             '-apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif',
         }}
       >
-        {/* Accent rail — the lane color. */}
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 4,
-            background: color,
-            borderTopLeftRadius: 18,
-            borderBottomLeftRadius: 18,
-          }}
-        />
-
         {/* Header: grip + kind eyebrow + Open-room. */}
         <div
           style={{
@@ -194,9 +181,9 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
             />
             <span
               style={{
-                fontSize: 8.5,
-                fontWeight: 700,
-                letterSpacing: "0.14em",
+                fontSize: 10.5,
+                fontWeight: 600,
+                letterSpacing: "0.02em",
                 color,
               }}
             >
@@ -238,7 +225,7 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
             fontSize: 14.5,
             fontWeight: 600,
             lineHeight: 1.22,
-            color: "#0B1228",
+            color: appleVibe.text.primary,
             display: "-webkit-box",
             WebkitLineClamp: 2,
             WebkitBoxOrient: "vertical",
@@ -257,7 +244,7 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
               fontSize: 11.5,
               fontWeight: 450,
               lineHeight: 1.4,
-              color: "rgba(15,23,42,0.58)",
+              color: appleVibe.text.secondary,
               display: "-webkit-box",
               WebkitLineClamp: 2,
               WebkitBoxOrient: "vertical",
@@ -268,20 +255,6 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
           </div>
         )}
 
-        {!compact && (
-          <div
-            style={{
-              marginTop: "auto",
-              marginLeft: 6,
-              paddingTop: 8,
-              fontSize: 9.5,
-              fontWeight: 500,
-              color: "rgba(15,23,42,0.4)",
-            }}
-          >
-            Artifact · select with others to Connect
-          </div>
-        )}
       </div>
 
         {/* Per-card hover action bar — pops up just below the card. */}
