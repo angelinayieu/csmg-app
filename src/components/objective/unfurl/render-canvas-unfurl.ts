@@ -67,9 +67,39 @@ function polarityColor(p: EdgePolarity): TLDefaultColorStyle {
   return p === "positive" ? "green" : p === "negative" ? "red" : "grey";
 }
 
+/** Pick the facing edge-anchors for an arrow between two shapes so it flows
+ *  along the dominant axis — top↔bottom for a vertical (up-the-stack)
+ *  relationship, left↔right for a horizontal (pain→mechanism→outcome) one —
+ *  instead of stabbing card centers. This is what makes the unfurl read as a
+ *  sequential causal cascade rather than a hairball. */
+function facingAnchors(
+  editor: Editor,
+  fromId: TLShapeId,
+  toId: TLShapeId,
+): { start: { x: number; y: number }; end: { x: number; y: number } } {
+  const fb = editor.getShapePageBounds(fromId);
+  const tb = editor.getShapePageBounds(toId);
+  if (!fb || !tb) {
+    return { start: { x: 0.5, y: 0.5 }, end: { x: 0.5, y: 0.5 } };
+  }
+  const dx = tb.x + tb.w / 2 - (fb.x + fb.w / 2);
+  const dy = tb.y + tb.h / 2 - (fb.y + fb.h / 2);
+  if (Math.abs(dy) >= Math.abs(dx)) {
+    // Vertical relationship — dock at the top & bottom edges.
+    return dy < 0
+      ? { start: { x: 0.5, y: 0 }, end: { x: 0.5, y: 1 } } // target above
+      : { start: { x: 0.5, y: 1 }, end: { x: 0.5, y: 0 } }; // target below
+  }
+  // Horizontal relationship — dock at the left & right edges.
+  return dx > 0
+    ? { start: { x: 1, y: 0.5 }, end: { x: 0, y: 0.5 } } // target to the right
+    : { start: { x: 0, y: 0.5 }, end: { x: 1, y: 0.5 } }; // target to the left
+}
+
 /** Create a polarity-colored arrow bound between two existing unfurl
  *  shapes. Shared by the canvas + room phases. The endpoints must already
- *  exist on the board (bindings resolve against them). */
+ *  exist on the board (bindings resolve against them). Docks at the facing
+ *  edges (see facingAnchors) so edges flow in sequence, not center-to-center. */
 export function createUnfurlArrow(
   editor: Editor,
   id: TLShapeId,
@@ -77,6 +107,7 @@ export function createUnfurlArrow(
   toId: TLShapeId,
   polarity: EdgePolarity,
 ): void {
+  const { start, end } = facingAnchors(editor, fromId, toId);
   const arrow: TLShapePartial<TLArrowShape> = {
     id,
     type: "arrow",
@@ -96,9 +127,9 @@ export function createUnfurlArrow(
       type: "arrow",
       props: {
         terminal: "start",
-        normalizedAnchor: { x: 0.5, y: 0.5 },
+        normalizedAnchor: start,
         isExact: false,
-        isPrecise: false,
+        isPrecise: true,
       },
       meta: {},
     },
@@ -108,9 +139,9 @@ export function createUnfurlArrow(
       type: "arrow",
       props: {
         terminal: "end",
-        normalizedAnchor: { x: 0.5, y: 0.5 },
+        normalizedAnchor: end,
         isExact: false,
-        isPrecise: false,
+        isPrecise: true,
       },
       meta: {},
     },
@@ -146,7 +177,7 @@ export function syncCanvasUnfurl(
   const bandTopY = (ord: number) =>
     BANDS_TOP + (bandIndex.get(ord) ?? 0) * (BAND_H + BAND_GAP);
 
-  // Group nodes by their primary layer + compute positions.
+  // Group nodes by their primary layer.
   const byOrd = new Map<number, CausalMapNode[]>();
   for (const n of graph.nodes) {
     const o = primaryOrdinal(n, lowestOrdinal);
@@ -154,14 +185,55 @@ export function syncCanvasUnfurl(
     arr.push(n);
     byOrd.set(o, arr);
   }
+
+  // ── Crossing-minimization (barycenter sweeps). Order each band's nodes by
+  //    the mean x of their graph neighbors so connected cards line up across
+  //    layers and the arrows read as a sequence, not a hairball. A few passes
+  //    converge for the small graphs here; bands are laid out centered.
+  const adj = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    if (!adj.has(a)) adj.set(a, new Set());
+    adj.get(a)!.add(b);
+  };
+  for (const e of graph.edges) {
+    link(e.source, e.target);
+    link(e.target, e.source);
+  }
+  const provX = new Map<string, number>();
+  const layoutBand = (ns: CausalMapNode[]) => {
+    const totalW = ns.length * CARD_W + (ns.length - 1) * NODE_GAP;
+    const startX = Math.max(24, (BOARD_W - totalW) / 2);
+    ns.forEach((n, j) => provX.set(n.id, startX + j * (CARD_W + NODE_GAP)));
+  };
+  for (const ns of byOrd.values()) layoutBand(ns);
+  for (let pass = 0; pass < 4; pass++) {
+    for (const ns of byOrd.values()) {
+      const bary = new Map<string, number>();
+      for (const n of ns) {
+        const xs = [...(adj.get(n.id) ?? [])]
+          .map((m) => provX.get(m))
+          .filter((v): v is number => v !== undefined);
+        bary.set(
+          n.id,
+          xs.length
+            ? xs.reduce((a, b) => a + b, 0) / xs.length
+            : provX.get(n.id)!,
+        );
+      }
+      ns.sort((a, b) => bary.get(a.id)! - bary.get(b.id)!);
+      layoutBand(ns);
+    }
+  }
+
   const nodePos = new Map<string, { x: number; y: number }>();
   for (const [ord, ns] of byOrd) {
     const top = bandTopY(ord) + (BAND_H - CARD_H) / 2;
-    const totalW = ns.length * CARD_W + (ns.length - 1) * NODE_GAP;
-    const startX = Math.max(24, (BOARD_W - totalW) / 2);
-    ns.forEach((n, j) => {
-      nodePos.set(n.id, { x: startX + j * (CARD_W + NODE_GAP), y: top });
-    });
+    for (const n of ns) {
+      nodePos.set(n.id, {
+        x: provX.get(n.id) ?? Math.max(24, (BOARD_W - CARD_W) / 2),
+        y: top,
+      });
+    }
   }
 
   // ── desired shape ids at this depth ──
