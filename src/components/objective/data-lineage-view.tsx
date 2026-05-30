@@ -41,7 +41,7 @@ interface Props {
   stages: LineageStage[];
 }
 
-const ACCENTS = ["#6366F1", "#0EA5E9", "#10B981", "#D97706", "#7C3AED"];
+const ACCENTS = ["#475569", "#0EA5E9", "#10B981", "#D97706", "#475569"];
 
 function tint(hex: string, a: number): string {
   const r = parseInt(hex.slice(1, 3), 16);

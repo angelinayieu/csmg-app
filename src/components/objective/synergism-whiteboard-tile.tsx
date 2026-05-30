@@ -15,7 +15,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowUpRight, Loader2, Mic, Sparkles, StickyNote } from "lucide-react";
+import { ArrowUpRight, Loader2, Mic, StickyNote } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 
 interface Props {
   /** The current objective text — passed as the seed so the whiteboard
@@ -63,7 +64,7 @@ export function SynergismWhiteboardTile({ objective }: Props) {
         className="pointer-events-none absolute -left-20 -top-20 h-[280px] w-[280px] opacity-70 transition-opacity duration-300 group-hover:opacity-100"
         style={{
           background:
-            "radial-gradient(circle, rgba(10,132,255,0.16) 0%, rgba(124,58,237,0.08) 40%, transparent 75%)",
+            "radial-gradient(circle, rgba(10,132,255,0.16) 0%, rgba(71,85,105,0.08) 40%, transparent 75%)",
           filter: "blur(8px)",
         }}
         aria-hidden
@@ -76,7 +77,7 @@ export function SynergismWhiteboardTile({ objective }: Props) {
           className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl"
           style={{
             background:
-              "linear-gradient(150deg, rgba(10,132,255,0.92) 0%, rgba(124,58,237,0.95) 100%)",
+              "linear-gradient(150deg, rgba(10,132,255,0.92) 0%, rgba(71,85,105,0.95) 100%)",
             boxShadow:
               "inset 0 1px 0 rgba(255,255,255,0.30), 0 10px 24px -10px rgba(10,132,255,0.50)",
           }}
@@ -84,7 +85,7 @@ export function SynergismWhiteboardTile({ objective }: Props) {
           {pending ? (
             <Loader2 className="h-6 w-6 animate-spin text-white" strokeWidth={1.75} />
           ) : (
-            <Sparkles
+            <Sparkle
               className="h-6 w-6 text-white"
               strokeWidth={1.75}
               style={{ filter: "drop-shadow(0 0 8px rgba(255,255,255,0.35))" }}
@@ -127,7 +128,7 @@ export function SynergismWhiteboardTile({ objective }: Props) {
           </p>
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <FeatureChip Icon={Mic} label="Voice-first" />
-            <FeatureChip Icon={Sparkles} label="AI Companion" />
+            <FeatureChip Icon={Sparkle} label="AI Companion" />
             <FeatureChip Icon={StickyNote} label="Sticky + sketch" />
           </div>
         </div>

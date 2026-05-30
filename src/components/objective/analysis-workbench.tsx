@@ -116,12 +116,12 @@ const CATEGORY_LABEL: Record<AnalysisCategory, string> = {
 
 const CATEGORY_COLOR: Record<AnalysisCategory, string> = {
   friction: "rgba(220,38,38,0.85)", // red
-  redundancy: "rgba(124,58,237,0.85)", // purple
+  redundancy: "rgba(71,85,105,0.85)", // purple
   gap: "rgba(217,119,6,0.85)", // amber
   bottleneck: "rgba(234,88,12,0.85)", // orange
   priority: "rgba(37,99,235,0.85)", // blue
   structure: "rgba(22,163,74,0.85)", // green
-  theme: "rgba(124,58,237,0.85)", // purple
+  theme: "rgba(71,85,105,0.85)", // purple
 };
 
 const SEVERITY_RANK: Record<AnalysisSeverity, number> = {
@@ -843,9 +843,9 @@ function FindingCard({
                   style={{
                     background: branching
                       ? appleVibe.surface.chip
-                      : "rgba(124,58,237,0.10)",
-                    color: "rgba(76,29,149,0.95)",
-                    border: "1px solid rgba(124,58,237,0.25)",
+                      : "rgba(71,85,105,0.10)",
+                    color: "rgba(71,85,105,0.95)",
+                    border: "1px solid rgba(71,85,105,0.25)",
                     cursor: branching ? "wait" : "pointer",
                     opacity: branching ? 0.7 : 1,
                   }}

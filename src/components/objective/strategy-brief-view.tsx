@@ -25,12 +25,12 @@ import {
   Check,
   Copy,
   Printer,
-  Sparkles,
   RefreshCw,
   AlertCircle,
   ArrowUpRight,
   FileCode2,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import {
   renderStrategyBriefMarkdown,
   type StrategyBrief,
@@ -54,8 +54,8 @@ const COLOR = {
   rule: "rgba(15,23,42,0.10)",
   bg: "#fafafa",
   paper: "#ffffff",
-  accent: "rgba(124,58,237,0.92)", // purple
-  accentSoft: "rgba(124,58,237,0.10)",
+  accent: "rgba(71,85,105,0.92)", // slate
+  accentSoft: "rgba(71,85,105,0.10)",
   conflict: "rgba(220,38,38,0.92)",
   conflictSoft: "rgba(220,38,38,0.06)",
   conflictBorder: "rgba(220,38,38,0.22)",
@@ -281,11 +281,11 @@ export function StrategyBriefView({
               onClick={() => handlePolish(polishStale)}
               icon={
                 polishing ? (
-                  <Sparkles className="h-3 w-3 animate-pulse" />
+                  <Sparkle className="h-3 w-3 animate-pulse" />
                 ) : localTldr ? (
                   <RefreshCw className="h-3 w-3" />
                 ) : (
-                  <Sparkles className="h-3 w-3" />
+                  <Sparkle className="h-3 w-3" />
                 )
               }
               label={
@@ -1255,8 +1255,8 @@ function ActionBtn({
       className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold transition-colors"
       style={{
         background: accent ? COLOR.accentSoft : "transparent",
-        color: accent ? "rgba(76,29,149,0.95)" : COLOR.inkSoft,
-        border: `1px solid ${accent ? "rgba(124,58,237,0.20)" : COLOR.rule}`,
+        color: accent ? "rgba(71,85,105,0.95)" : COLOR.inkSoft,
+        border: `1px solid ${accent ? "rgba(71,85,105,0.20)" : COLOR.rule}`,
       }}
     >
       {icon}

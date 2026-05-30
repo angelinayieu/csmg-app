@@ -9,8 +9,9 @@
 // dismiss it — never nags. Non-blocking: only the dismiss button takes
 // pointer events, so the board stays fully interactive underneath.
 
-import { Sparkles, X } from "lucide-react";
+import { X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 
 export function BoardHint({ onDismiss }: { onDismiss: () => void }) {
   return (
@@ -53,7 +54,7 @@ export function BoardHint({ onDismiss }: { onDismiss: () => void }) {
             flexShrink: 0,
           }}
         >
-          <Sparkles
+          <Sparkle
             style={{ width: 16, height: 16, color: appleVibe.accent.primary }}
             strokeWidth={2.2}
           />

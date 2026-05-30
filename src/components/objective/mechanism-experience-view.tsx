@@ -77,8 +77,8 @@ const ACCENT: Record<AccentIntent, AccentPalette> = {
     ink: "rgba(22,101,52,0.95)",
   },
   insight: {
-    primary: "rgba(124,58,237,1)",
-    tint: "rgba(124,58,237,0.10)",
+    primary: "rgba(71,85,105,1)",
+    tint: "rgba(71,85,105,0.10)",
     ink: "rgba(67,33,138,0.95)",
   },
   neutral: {

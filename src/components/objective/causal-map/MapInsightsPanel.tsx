@@ -20,8 +20,8 @@ import {
   Activity,
   GitBranch,
   Link2,
-  Sparkles,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { MainCanvasSub } from "@/components/objective/main-canvas-view";
 import type { ObjectiveStack } from "@/lib/objective-canvas/layer-model";
@@ -74,7 +74,7 @@ export function MapInsightsPanel({
     >
       {/* Headline */}
       <div className="flex items-start gap-2">
-        <Sparkles
+        <Sparkle
           className="mt-0.5 h-4 w-4 shrink-0"
           style={{ color: appleVibe.accent.primary }}
           strokeWidth={2.2}

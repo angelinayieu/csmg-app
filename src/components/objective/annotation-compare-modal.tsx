@@ -386,13 +386,13 @@ export function AnnotationCompareModal({
                 <details
                   className="mt-1 rounded-md px-2 py-1.5"
                   style={{
-                    background: "rgba(124,58,237,0.04)",
-                    border: "1px solid rgba(124,58,237,0.14)",
+                    background: "rgba(71,85,105,0.04)",
+                    border: "1px solid rgba(71,85,105,0.14)",
                   }}
                 >
                   <summary
                     className="cursor-pointer text-[10.5px] font-semibold uppercase tracking-wider"
-                    style={{ color: "rgba(91,33,182,0.95)" }}
+                    style={{ color: "rgba(71,85,105,0.95)" }}
                   >
                     Arbitration record ({v.arbitration_record.length})
                   </summary>

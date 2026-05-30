@@ -229,9 +229,9 @@ export function PortalCard({
         <span
           className="absolute right-4 top-4 inline-flex items-center rounded-full px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em]"
           style={{
-            background: "rgba(124,58,237,0.08)",
-            color: "rgba(91,33,182,0.95)",
-            border: "1px solid rgba(124,58,237,0.18)",
+            background: "rgba(71,85,105,0.08)",
+            color: "rgba(71,85,105,0.95)",
+            border: "1px solid rgba(71,85,105,0.18)",
           }}
         >
           {badge}

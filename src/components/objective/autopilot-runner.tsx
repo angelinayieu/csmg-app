@@ -23,10 +23,10 @@ import {
   Check,
   Loader2,
   Play,
-  Sparkles,
   X,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import type { ChainTriple } from "@/lib/objective-canvas/compute-chains";
 
 type Status = "idle" | "running" | "done" | "cancelled";
@@ -206,7 +206,7 @@ export function AutopilotRunner({
               : "No chains to run autopilot on yet"
           }
         >
-          <Sparkles
+          <Sparkle
             className="h-3 w-3"
             strokeWidth={2}
             style={{ color: FEATURES }}
@@ -402,7 +402,7 @@ function AutopilotDropdown({
       >
         <div className="px-3.5 py-3">
           <div className="flex items-center gap-1.5">
-            <Sparkles
+            <Sparkle
               className="h-3 w-3 flex-shrink-0"
               strokeWidth={2}
               style={{ color: FEATURES }}

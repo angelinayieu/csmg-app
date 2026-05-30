@@ -121,26 +121,26 @@ export function edgeOpacity(strength: number): number {
 // so the eye intuits "energy rises through the stack."
 
 export const ARCHETYPE_BAND_TINT: Record<string, string> = {
-  substrate: "rgba(99,102,241,0.045)",
+  substrate: "rgba(71,85,105,0.045)",
   mechanism: "rgba(14,165,233,0.05)",
   process: "rgba(16,185,129,0.05)",
   output: "rgba(217,119,6,0.05)",
-  outcome: "rgba(124,58,237,0.06)",
+  outcome: "rgba(71,85,105,0.06)",
 };
 
 export const ARCHETYPE_BAND_RULE: Record<string, string> = {
-  substrate: "rgba(99,102,241,0.18)",
+  substrate: "rgba(71,85,105,0.18)",
   mechanism: "rgba(14,165,233,0.20)",
   process: "rgba(16,185,129,0.20)",
   output: "rgba(217,119,6,0.20)",
-  outcome: "rgba(124,58,237,0.22)",
+  outcome: "rgba(71,85,105,0.22)",
 };
 
 // ── Loop ring colors ─────────────────────────────────────────────────────
 
 export const LOOP_COLORS = {
   reinforcing: { ring: "#EA580C", label: "R", tint: "rgba(234,88,12,0.10)" },
-  balancing: { ring: "#7C3AED", label: "B", tint: "rgba(124,58,237,0.10)" },
+  balancing: { ring: "#475569", label: "B", tint: "rgba(71,85,105,0.10)" },
 } as const;
 
 // ── Method tier glyphs (mirror MethodBadge) ──────────────────────────────

@@ -39,7 +39,7 @@ interface Props {
 }
 
 const LENS_META: Record<string, { label: string; color: string }> = {
-  frameworks: { label: "Frameworks", color: "#7C3AED" },
+  frameworks: { label: "Frameworks", color: "#475569" },
   precedents: { label: "Precedents", color: "#16A34A" },
   mechanisms: { label: "Mechanisms", color: "#2563EB" },
   failure_modes: { label: "Failure modes", color: "#DC2626" },

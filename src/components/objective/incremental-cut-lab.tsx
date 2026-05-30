@@ -21,7 +21,8 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Plus, RefreshCw, Sparkles } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type {
   SubObjectiveBlock,
@@ -181,7 +182,7 @@ export function IncrementalCutLab({
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Sparkles
+          <Sparkle
             className="h-3 w-3 flex-shrink-0"
             strokeWidth={2}
             style={{ color: appleVibe.text.tertiary }}
@@ -237,16 +238,16 @@ export function IncrementalCutLab({
                   className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all"
                   style={{
                     background: active
-                      ? "rgba(124,58,237,0.10)"
+                      ? "rgba(71,85,105,0.10)"
                       : "rgba(255,255,255,0.85)",
                     color: active
-                      ? "rgba(91,33,182,0.95)"
+                      ? "rgba(71,85,105,0.95)"
                       : appleVibe.text.secondary,
                     border: `1px solid ${
                       active
-                        ? "rgba(124,58,237,0.35)"
+                        ? "rgba(71,85,105,0.35)"
                         : isPref
-                          ? "rgba(124,58,237,0.20)"
+                          ? "rgba(71,85,105,0.20)"
                           : appleVibe.stroke.hairline
                     }`,
                     cursor: generating ? "wait" : "pointer",
@@ -258,7 +259,7 @@ export function IncrementalCutLab({
                   {isPref && (
                     <span
                       className="ml-0.5 text-[9px] font-semibold"
-                      style={{ color: "rgba(91,33,182,0.95)" }}
+                      style={{ color: "rgba(71,85,105,0.95)" }}
                     >
                       ★
                     </span>
@@ -293,7 +294,7 @@ export function IncrementalCutLab({
               </>
             ) : (
               <>
-                <Sparkles className="h-3 w-3" strokeWidth={2} />
+                <Sparkle className="h-3 w-3" strokeWidth={2} />
                 Generate variants
               </>
             )}

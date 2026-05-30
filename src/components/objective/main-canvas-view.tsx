@@ -22,10 +22,10 @@ import {
   AlignLeft,
   LayoutGrid,
   RefreshCw,
-  Sparkles,
   Waypoints,
   Workflow,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { ObjectiveCore } from "@/components/objective/icons/objective-core";
 import {
@@ -390,7 +390,7 @@ export function MainCanvasView({
             style={{
               background: "rgba(255,255,255,0.72)",
               boxShadow:
-                "0 1px 0 rgba(255,255,255,0.9) inset, 0 6px 16px -6px rgba(124,58,237,0.5)",
+                "0 1px 0 rgba(255,255,255,0.9) inset, 0 6px 16px -6px rgba(71,85,105,0.5)",
             }}
             aria-hidden
           >
@@ -398,7 +398,7 @@ export function MainCanvasView({
           </span>
           <span
             className="text-[11px] font-semibold uppercase tracking-[0.18em]"
-            style={{ color: "rgba(91,33,182,0.9)" }}
+            style={{ color: "rgba(71,85,105,0.9)" }}
           >
             Core Objective
           </span>
@@ -1268,15 +1268,15 @@ function ThemeControlBar({
               className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full"
               style={{
                 background:
-                  "linear-gradient(180deg, rgba(124,58,237,0.14) 0%, rgba(124,58,237,0.06) 100%)",
-                border: `1px solid rgba(124,58,237,0.18)`,
+                  "linear-gradient(180deg, rgba(71,85,105,0.14) 0%, rgba(71,85,105,0.06) 100%)",
+                border: `1px solid rgba(71,85,105,0.18)`,
               }}
               aria-hidden
             >
-              <Sparkles
+              <Sparkle
                 className="h-3.5 w-3.5"
                 strokeWidth={1.8}
-                style={{ color: "rgba(91,33,182,0.95)" }}
+                style={{ color: "rgba(71,85,105,0.95)" }}
               />
             </span>
             <div className="flex flex-col gap-0.5">
@@ -1301,12 +1301,12 @@ function ThemeControlBar({
             className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] font-semibold transition-all disabled:cursor-wait"
             style={{
               background: busy
-                ? "rgba(124,58,237,0.10)"
-                : "linear-gradient(180deg, rgba(139,92,246,1) 0%, rgba(124,58,237,1) 100%)",
-              color: busy ? "rgba(91,33,182,0.85)" : "#fff",
+                ? "rgba(71,85,105,0.10)"
+                : "linear-gradient(180deg, rgba(71,85,105,1) 0%, rgba(71,85,105,1) 100%)",
+              color: busy ? "rgba(71,85,105,0.85)" : "#fff",
               boxShadow: busy
                 ? "none"
-                : "0 1px 0 rgba(255,255,255,0.22) inset, 0 6px 16px -6px rgba(124,58,237,0.55)",
+                : "0 1px 0 rgba(255,255,255,0.22) inset, 0 6px 16px -6px rgba(71,85,105,0.55)",
               letterSpacing: "-0.005em",
             }}
           >
@@ -1317,7 +1317,7 @@ function ThemeControlBar({
               </>
             ) : (
               <>
-                <Sparkles className="h-3 w-3" strokeWidth={2.2} />
+                <Sparkle className="h-3 w-3" strokeWidth={2.2} />
                 Detect themes
               </>
             )}
@@ -1332,15 +1332,15 @@ function ThemeControlBar({
               className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full"
               style={{
                 background:
-                  "linear-gradient(180deg, rgba(124,58,237,0.14) 0%, rgba(124,58,237,0.06) 100%)",
-                border: `1px solid rgba(124,58,237,0.18)`,
+                  "linear-gradient(180deg, rgba(71,85,105,0.14) 0%, rgba(71,85,105,0.06) 100%)",
+                border: `1px solid rgba(71,85,105,0.18)`,
               }}
               aria-hidden
             >
-              <Sparkles
+              <Sparkle
                 className="h-3.5 w-3.5"
                 strokeWidth={1.8}
-                style={{ color: "rgba(91,33,182,0.95)" }}
+                style={{ color: "rgba(71,85,105,0.95)" }}
               />
             </span>
             <div className="flex items-center gap-2">
@@ -1566,7 +1566,7 @@ function ThemedSubGallery({
                 )}
                 <span
                   className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
-                  style={{ color: "rgba(91,33,182,0.95)" }}
+                  style={{ color: "rgba(71,85,105,0.95)" }}
                 >
                   {cluster.label}
                 </span>

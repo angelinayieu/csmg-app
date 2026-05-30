@@ -39,11 +39,11 @@ import {
   GitCompare,
   Layers as LayersIcon,
   RefreshCw,
-  Sparkles,
   Star,
   Target,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { ObjectiveCore } from "@/components/objective/icons/objective-core";
 import {
   AnnotationGlyph,
@@ -373,7 +373,7 @@ export function AnnotatedObjectiveCard({
             style={{
               background: "rgba(255,255,255,0.72)",
               boxShadow:
-                "0 1px 0 rgba(255,255,255,0.9) inset, 0 5px 14px -6px rgba(124,58,237,0.5)",
+                "0 1px 0 rgba(255,255,255,0.9) inset, 0 5px 14px -6px rgba(71,85,105,0.5)",
             }}
             aria-hidden
           >
@@ -381,7 +381,7 @@ export function AnnotatedObjectiveCard({
           </span>
           <span
             className="text-[10px] font-semibold uppercase tracking-[0.18em]"
-            style={{ color: "rgba(91,33,182,0.9)" }}
+            style={{ color: "rgba(71,85,105,0.9)" }}
           >
             Core Objective
           </span>
@@ -564,7 +564,7 @@ export function AnnotatedObjectiveCard({
                     : "Show every AI reading as a note in the margin"
                 }
               >
-                <Sparkles className="h-2.5 w-2.5" strokeWidth={2.25} />
+                <Sparkle className="h-2.5 w-2.5" strokeWidth={2.25} />
                 {reading ? "Notes on" : "Margin notes"}
               </button>
               <button
@@ -839,7 +839,7 @@ function AnnotatedMark({
 const TAB_ICONS: Record<TabKey, React.ReactNode> = {
   read: <BookOpen className="h-3 w-3" strokeWidth={2} />,
   layers: <LayersIcon className="h-3 w-3" strokeWidth={2} />,
-  like: <Sparkles className="h-3 w-3" strokeWidth={2} />,
+  like: <Sparkle className="h-3 w-3" strokeWidth={2} />,
   how: <Cog className="h-3 w-3" strokeWidth={2} />,
   stakes: <Target className="h-3 w-3" strokeWidth={2} />,
   warn: <AlertTriangle className="h-3 w-3" strokeWidth={2} />,

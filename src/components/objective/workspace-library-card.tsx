@@ -36,8 +36,8 @@ const COLOR = {
   inkGhost: "rgba(15,23,42,0.28)",
   rule: "rgba(15,23,42,0.08)",
   paper: "#ffffff",
-  accent: "rgba(124,58,237,0.92)",
-  accentSoft: "rgba(124,58,237,0.08)",
+  accent: "rgba(71,85,105,0.92)",
+  accentSoft: "rgba(71,85,105,0.08)",
   conflict: "rgba(220,38,38,0.92)",
   conflictSoft: "rgba(220,38,38,0.06)",
 };
@@ -61,7 +61,7 @@ const STAGE_LABEL: Record<WorkspaceStage, string> = {
 const STAGE_TONE: Record<WorkspaceStage, { fg: string; dot: string }> = {
   drafted: { fg: COLOR.inkGhost, dot: COLOR.inkGhost },
   active: { fg: COLOR.inkMuted, dot: "rgba(15,23,42,0.45)" },
-  engaged: { fg: "rgba(76,29,149,0.95)", dot: COLOR.accent },
+  engaged: { fg: "rgba(71,85,105,0.95)", dot: COLOR.accent },
   shipping: { fg: "rgba(20,83,45,0.95)", dot: "rgba(22,163,74,0.85)" },
 };
 
@@ -156,8 +156,8 @@ export function WorkspaceLibraryCard({
                     : COLOR.accentSoft,
                   color: t.spawned_sub_objective_id
                     ? "rgba(20,83,45,0.95)"
-                    : "rgba(76,29,149,0.95)",
-                  border: `1px solid ${t.spawned_sub_objective_id ? "rgba(22,163,74,0.18)" : "rgba(124,58,237,0.16)"}`,
+                    : "rgba(71,85,105,0.95)",
+                  border: `1px solid ${t.spawned_sub_objective_id ? "rgba(22,163,74,0.18)" : "rgba(71,85,105,0.16)"}`,
                   maxWidth: 200,
                 }}
                 title={

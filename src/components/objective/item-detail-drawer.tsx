@@ -411,7 +411,7 @@ const FACET_COLOR: Record<VariationFacet, string> = {
   analogy: "rgba(37,99,235,0.78)",
   dimension: "rgba(22,163,74,0.78)",
   tension: "rgba(217,119,6,0.78)",
-  inference: "rgba(124,58,237,0.78)",
+  inference: "rgba(71,85,105,0.78)",
   reading: "rgba(15,23,42,0.45)",
 };
 
@@ -2717,7 +2717,7 @@ function VariationCard({
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           <span
             className="text-[9px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: "rgba(91,33,182,0.95)" }}
+            style={{ color: "rgba(71,85,105,0.95)" }}
           >
             ↻ links to
           </span>
@@ -2730,11 +2730,11 @@ function VariationCard({
                   e.stopPropagation();
                   onConceptClick(c.canonical_code);
                 }}
-                className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-[rgba(124,58,237,0.16)]"
+                className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-[rgba(71,85,105,0.16)]"
                 style={{
-                  background: "rgba(124,58,237,0.08)",
-                  color: "rgba(91,33,182,0.95)",
-                  border: "1px solid rgba(124,58,237,0.18)",
+                  background: "rgba(71,85,105,0.08)",
+                  color: "rgba(71,85,105,0.95)",
+                  border: "1px solid rgba(71,85,105,0.18)",
                   cursor: "pointer",
                 }}
                 title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"} · click to open cross-space view`}
@@ -2743,7 +2743,7 @@ function VariationCard({
                 {c.space_count > 1 && (
                   <span
                     className="font-mono text-[8.5px]"
-                    style={{ color: "rgba(91,33,182,0.75)" }}
+                    style={{ color: "rgba(71,85,105,0.75)" }}
                   >
                     {c.space_count}×
                   </span>
@@ -2754,9 +2754,9 @@ function VariationCard({
                 key={c.display_name}
                 className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
                 style={{
-                  background: "rgba(124,58,237,0.08)",
-                  color: "rgba(91,33,182,0.95)",
-                  border: "1px solid rgba(124,58,237,0.18)",
+                  background: "rgba(71,85,105,0.08)",
+                  color: "rgba(71,85,105,0.95)",
+                  border: "1px solid rgba(71,85,105,0.18)",
                 }}
                 title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"}`}
               >
@@ -2764,7 +2764,7 @@ function VariationCard({
                 {c.space_count > 1 && (
                   <span
                     className="font-mono text-[8.5px]"
-                    style={{ color: "rgba(91,33,182,0.75)" }}
+                    style={{ color: "rgba(71,85,105,0.75)" }}
                   >
                     {c.space_count}×
                   </span>
@@ -4152,8 +4152,8 @@ function DrawerPriorConceptsStrip({
     <div
       className="mb-3 rounded-2xl border p-2.5"
       style={{
-        background: "rgba(124,58,237,0.025)",
-        borderColor: "rgba(124,58,237,0.18)",
+        background: "rgba(71,85,105,0.025)",
+        borderColor: "rgba(71,85,105,0.18)",
         borderRadius: appleVibe.radius.md,
       }}
     >
@@ -4166,11 +4166,11 @@ function DrawerPriorConceptsStrip({
           <Link2
             className="h-3 w-3 flex-shrink-0"
             strokeWidth={2}
-            style={{ color: "rgba(91,33,182,0.9)" }}
+            style={{ color: "rgba(71,85,105,0.9)" }}
           />
           <span
             className="text-[10px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: "rgba(91,33,182,0.95)" }}
+            style={{ color: "rgba(71,85,105,0.95)" }}
           >
             {concepts.length} prior concept{concepts.length === 1 ? "" : "s"}
           </span>
@@ -4203,11 +4203,11 @@ function DrawerPriorConceptsStrip({
                 e.stopPropagation();
                 onConceptClick(c.canonical_code);
               }}
-              className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-medium transition-colors hover:bg-[rgba(124,58,237,0.10)]"
+              className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-medium transition-colors hover:bg-[rgba(71,85,105,0.10)]"
               style={{
                 background: "rgba(255,255,255,0.92)",
-                color: "rgba(91,33,182,0.95)",
-                border: "1px solid rgba(124,58,237,0.20)",
+                color: "rgba(71,85,105,0.95)",
+                border: "1px solid rgba(71,85,105,0.20)",
                 cursor: "pointer",
               }}
               title={
@@ -4219,7 +4219,7 @@ function DrawerPriorConceptsStrip({
               <span className="truncate">{c.display_name}</span>
               <span
                 className="font-mono text-[9px]"
-                style={{ color: "rgba(91,33,182,0.65)" }}
+                style={{ color: "rgba(71,85,105,0.65)" }}
               >
                 {c.space_count}×
               </span>

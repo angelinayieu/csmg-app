@@ -33,14 +33,14 @@ export type LayerBandShape = TLBaseShape<
 /** Archetype → accent, so each band reads as its role at a glance. */
 const ARCHETYPE_COLOR: Record<string, string> = {
   substrate: "#64748B",
-  mechanism: "#7C3AED",
+  mechanism: "#475569",
   process: "#2563EB",
   output: "#0891B2",
   outcome: "#059669",
 };
 
 export function bandAccentFor(archetype: string): string {
-  return ARCHETYPE_COLOR[archetype] ?? "#7C3AED";
+  return ARCHETYPE_COLOR[archetype] ?? "#475569";
 }
 
 export class LayerBandShapeUtil extends BaseBoxShapeUtil<LayerBandShape> {
@@ -69,7 +69,7 @@ export class LayerBandShapeUtil extends BaseBoxShapeUtil<LayerBandShape> {
       name: "Layer",
       archetype: "mechanism",
       uncovered: false,
-      accent: "#7C3AED",
+      accent: "#475569",
     };
   }
 

@@ -665,7 +665,7 @@ function BackFace({
       {spaceId && subObjectiveId && (
         <a
           href={`/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${featureId}`}
-          className="flex items-center justify-center gap-1.5 px-4 py-2.5 text-[11px] font-semibold transition-colors hover:bg-[rgba(124,58,237,0.06)]"
+          className="flex items-center justify-center gap-1.5 px-4 py-2.5 text-[11px] font-semibold transition-colors hover:bg-[rgba(71,85,105,0.06)]"
           style={{
             color: appleVibe.accent.primary,
             borderTop: `1px solid ${appleVibe.stroke.hairline}`,

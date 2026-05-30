@@ -24,7 +24,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, Loader2, Sparkles, X } from "lucide-react";
+import { Check, Loader2, X } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 // A hung room/generate (a stuck multi-stage LLM pass) used to freeze the
@@ -283,7 +284,7 @@ export function RoomFillRunner({
           strokeWidth={2.5}
         />
       )}
-      <Sparkles
+      <Sparkle
         className="h-3 w-3 flex-shrink-0"
         style={{ color: FEATURES }}
         strokeWidth={2}

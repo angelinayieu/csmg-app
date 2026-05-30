@@ -149,18 +149,18 @@ export function ResearchIndicator({
       className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10.5px] font-semibold transition-all"
       style={{
         background: anyPending
-          ? "rgba(124,58,237,0.06)"
+          ? "rgba(71,85,105,0.06)"
           : surfaceComplete
             ? "rgba(22,163,74,0.06)"
             : "rgba(15,23,42,0.04)",
         color: anyPending
-          ? "rgba(91,33,182,0.95)"
+          ? "rgba(71,85,105,0.95)"
           : surfaceComplete
             ? "rgba(20,83,45,0.95)"
             : appleVibe.text.tertiary,
         border: `1px solid ${
           anyPending
-            ? "rgba(124,58,237,0.18)"
+            ? "rgba(71,85,105,0.18)"
             : surfaceComplete
               ? "rgba(22,163,74,0.22)"
               : appleVibe.stroke.hairline

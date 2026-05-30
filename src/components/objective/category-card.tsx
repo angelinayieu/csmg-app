@@ -46,9 +46,9 @@ import {
   FlaskConical,
   Loader2,
   RefreshCw,
-  Sparkles,
   X,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { MethodBadge } from "./method-badge";
 import type { ChainTriple } from "@/lib/objective-canvas/compute-chains";
@@ -1410,7 +1410,7 @@ export function MechanismLineup({
             No variations yet — open the mechanism to inspect.
           </p>
         </div>
-        <Sparkles
+        <Sparkle
           className="h-3.5 w-3.5 flex-shrink-0"
           strokeWidth={2}
           style={{ color: FEATURE_COLOR }}
@@ -1539,7 +1539,7 @@ export function MechanismLineup({
                 </>
               ) : (
                 <>
-                  <Sparkles className="h-2.5 w-2.5" strokeWidth={2.5} />
+                  <Sparkle className="h-2.5 w-2.5" strokeWidth={2.5} />
                   Run experiment
                 </>
               )}
@@ -1788,7 +1788,7 @@ function LineupRow({
             <a
               href={`/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${featureId}`}
               onClick={(e) => e.stopPropagation()}
-              className="flex h-6 w-6 items-center justify-center rounded-full opacity-0 transition-all duration-150 ease-out hover:bg-[rgba(124,58,237,0.10)] group-hover:opacity-100"
+              className="flex h-6 w-6 items-center justify-center rounded-full opacity-0 transition-all duration-150 ease-out hover:bg-[rgba(71,85,105,0.10)] group-hover:opacity-100"
               style={{ color: appleVibe.accent.primary }}
               title="Open Lab — focused evaluation for this mechanism"
               aria-label="Open Lab"
@@ -2441,7 +2441,7 @@ function InlineMockupPreview({
           }}
           whileHover={{ y: -1, transition: { duration: 0.15 } }}
           whileTap={{ y: 0.5, transition: { duration: 0.08 } }}
-          className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(124,58,237,0.08)]"
+          className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(71,85,105,0.08)]"
           style={{
             background: appleVibe.surface.card,
             color: appleVibe.accent.primary,
@@ -2456,7 +2456,7 @@ function InlineMockupPreview({
           }}
           title="Generate a 480×320 HTML mockup of this variation's interface — shows inline below"
         >
-          <Sparkles
+          <Sparkle
             className="h-3 w-3"
             strokeWidth={2.2}
             style={{ color: appleVibe.accent.primary }}

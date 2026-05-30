@@ -44,8 +44,8 @@ const COLOR = {
   rule: "rgba(15,23,42,0.08)",
   paper: "#ffffff",
   bg: "#fafafa",
-  accent: "rgba(124,58,237,0.92)",
-  accentSoft: "rgba(124,58,237,0.08)",
+  accent: "rgba(71,85,105,0.92)",
+  accentSoft: "rgba(71,85,105,0.08)",
   // Status palette — single-axis, never paired
   planned: "rgba(15,23,42,0.55)",
   running: "rgba(37,99,235,0.85)",

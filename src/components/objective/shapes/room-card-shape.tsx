@@ -75,7 +75,7 @@ export class RoomCardShapeUtil extends BaseBoxShapeUtil<RoomCardShape> {
       h: 184,
       title: "Room",
       subtitle: "",
-      color: "#7C3AED",
+      color: "#475569",
       roomId: "",
       chips: [],
     };

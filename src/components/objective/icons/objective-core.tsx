@@ -35,15 +35,15 @@ export function ObjectiveCore({ className, ...rest }: ObjectiveCoreProps) {
       <defs>
         {/* Body — lit from upper-left, deepening to the far lower edge. */}
         <radialGradient id={body} cx="38%" cy="32%" r="80%">
-          <stop offset="0%" stopColor="#CDBBFF" />
-          <stop offset="44%" stopColor="#8B5CF6" />
-          <stop offset="100%" stopColor="#5B21B6" />
+          <stop offset="0%" stopColor="#94A3B8" />
+          <stop offset="44%" stopColor="#475569" />
+          <stop offset="100%" stopColor="#475569" />
         </radialGradient>
         {/* Rim light — bright only along the lower-right edge. */}
         <linearGradient id={rim} x1="28%" y1="16%" x2="76%" y2="94%">
           <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0" />
           <stop offset="68%" stopColor="#FFFFFF" stopOpacity="0" />
-          <stop offset="100%" stopColor="#EDE3FF" stopOpacity="0.9" />
+          <stop offset="100%" stopColor="#F1F5F9" stopOpacity="0.9" />
         </linearGradient>
         {/* Specular highlight — soft glossy spot upper-left. */}
         <radialGradient id={spec} cx="50%" cy="50%" r="50%">

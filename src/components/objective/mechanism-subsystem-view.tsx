@@ -66,7 +66,7 @@ function tint(hex: string, alpha: number): string {
     const b = parseInt(hex.slice(5, 7), 16);
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
-  return `rgba(99, 102, 241, ${alpha})`;
+  return `rgba(71,85,105, ${alpha})`;
 }
 
 export function MechanismSubsystemView({

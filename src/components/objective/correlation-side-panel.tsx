@@ -21,10 +21,10 @@ import {
   Check,
   Filter,
   RefreshCw,
-  Sparkles,
   X,
   AlertTriangle,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { RoomEdge } from "./sub-objective-room-view";
 import {
@@ -416,7 +416,7 @@ export function CorrelationSidePanel({
               opacity: retrying ? 0.7 : 1,
             }}
           >
-            <Sparkles className="h-3.5 w-3.5" strokeWidth={2} />
+            <Sparkle className="h-3.5 w-3.5" strokeWidth={2} />
             {retrying ? "Generating…" : "Generate correlations"}
           </button>
           <p
@@ -797,7 +797,7 @@ export function CorrelationSidePanel({
                                       annFacet === "tension"
                                         ? "rgba(217,119,6,0.78)"
                                         : annFacet === "inference"
-                                          ? "rgba(124,58,237,0.78)"
+                                          ? "rgba(71,85,105,0.78)"
                                           : annFacet === "fragility"
                                             ? "rgba(220,38,38,0.78)"
                                             : annFacet === "analogy"

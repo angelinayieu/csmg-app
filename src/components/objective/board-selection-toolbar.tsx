@@ -9,8 +9,9 @@
 // (BoardOverlay in whiteboard-base) owns the selection math + the LLM
 // call and passes screen coordinates + handlers in.
 
-import { Sparkles, Loader2, GitMerge, Check, BookmarkPlus } from "lucide-react";
+import { Loader2, GitMerge, Check, BookmarkPlus } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 
 export function BoardSelectionToolbar({
   x,
@@ -37,7 +38,7 @@ export function BoardSelectionToolbar({
 }) {
   const isConnect = count === 2;
   const label = isConnect ? "Connect" : "Synthesize";
-  const Icon = isConnect ? GitMerge : Sparkles;
+  const Icon = isConnect ? GitMerge : Sparkle;
   const hint = isConnect ? "name the relationship" : `weave ${count} together`;
 
   return (
@@ -73,7 +74,7 @@ export function BoardSelectionToolbar({
             cursor: busy ? "wait" : "pointer",
             opacity: busy ? 0.85 : 1,
             boxShadow:
-              "0 16px 40px -12px rgba(124,58,237,0.45), 0 4px 12px -2px rgba(11,18,40,0.14)",
+              "0 16px 40px -12px rgba(71,85,105,0.45), 0 4px 12px -2px rgba(11,18,40,0.14)",
             fontFamily: appleVibe.font.stack,
           }}
         >

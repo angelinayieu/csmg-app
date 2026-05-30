@@ -46,6 +46,7 @@ import { ResearchSourcesSheet } from "./research-sources-sheet";
 import { SharedCausesStrip } from "./cards/shared-causes-strip";
 import { PortfolioStrip } from "./cards/portfolio-strip";
 import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
+import { BrainstormPanel } from "./brainstorm/brainstorm-panel";
 import { ConstraintsStrip } from "./cards/constraints-strip";
 import { PriorityStrip } from "./cards/priority-strip";
 import type { PriorityVector } from "@/lib/objective-canvas/priority-vector";
@@ -219,6 +220,10 @@ export function SubObjectiveRoomView({
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
+  // Phase 6b — Deepen-lens panel open state. Mounts the BrainstormPanel
+  // in annotation mode, which orchestrates a single generateDeepenedAnnotations
+  // call and presents the v2 annotations as candidates with elect/refuse.
+  const [lensBrainstormOpen, setLensBrainstormOpen] = useState(false);
   const [highlightedCauses, setHighlightedCauses] = useState<Set<string>>(
     new Set(),
   );
@@ -1008,6 +1013,7 @@ export function SubObjectiveRoomView({
                 crossRoomCoverageByIndex={crossRoomCoverageByIndex}
                 hoveredIndex={hoveredAnnotationIndex}
                 onHoverIndex={setHoveredAnnotationIndex}
+                onDeepenLens={() => setLensBrainstormOpen(true)}
               />
             )}
           </div>
@@ -1461,6 +1467,22 @@ export function SubObjectiveRoomView({
           />
         );
       })()}
+
+      {/* Phase 6b — Deepen-lens panel. Mode='annotation' triggers the
+          single-pass deepen runner; elect appends the chosen v2
+          annotation into improvement_goals[core].annotations + the
+          router refresh repaints the lens strip with the new readings. */}
+      <BrainstormPanel
+        open={lensBrainstormOpen}
+        onClose={() => setLensBrainstormOpen(false)}
+        spaceId={spaceId}
+        mode="annotation"
+        onElected={() => {
+          startTransition(() => {
+            router.refresh();
+          });
+        }}
+      />
     </div>
   );
 }

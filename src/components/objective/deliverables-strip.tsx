@@ -475,7 +475,7 @@ export function DeliverablesStrip({ spaceId, embedded = false }: Props) {
                   ? undefined
                   : { y: 0.5, transition: { duration: 0.08 } }
               }
-              className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(124,58,237,0.10)] disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(71,85,105,0.10)] disabled:cursor-not-allowed disabled:opacity-60"
               style={{
                 background: appleVibe.surface.card,
                 color: appleVibe.accent.primary,

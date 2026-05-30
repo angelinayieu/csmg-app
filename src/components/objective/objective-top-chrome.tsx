@@ -92,7 +92,7 @@ export function ObjectiveTopChrome({ userEmail, creditBalance = 0 }: Props) {
           </div>
           <span
             className="inline-flex items-center gap-1 text-[11px] font-bold"
-            style={{ color: "rgba(91,33,182,0.95)" }}
+            style={{ color: "rgba(71,85,105,0.95)" }}
           >
             <Coins className="h-2.5 w-2.5" />
             {creditBalance}
@@ -142,9 +142,9 @@ export function ObjectiveTopChrome({ userEmail, creditBalance = 0 }: Props) {
               <span
                 className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-bold"
                 style={{
-                  background: "rgba(124,58,237,0.08)",
-                  border: "1px solid rgba(124,58,237,0.18)",
-                  color: "rgba(91,33,182,0.95)",
+                  background: "rgba(71,85,105,0.08)",
+                  border: "1px solid rgba(71,85,105,0.18)",
+                  color: "rgba(71,85,105,0.95)",
                 }}
               >
                 <Coins className="h-2.5 w-2.5" />

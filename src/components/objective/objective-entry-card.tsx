@@ -214,7 +214,7 @@ export function ObjectiveEntryCard({ onCancel }: Props) {
           style={{
             borderRadius: 28,
             background:
-              "radial-gradient(60% 80% at 50% 50%, rgba(124,58,237,0.10) 0%, rgba(37,99,235,0.06) 45%, rgba(15,23,42,0) 75%)",
+              "radial-gradient(60% 80% at 50% 50%, rgba(71,85,105,0.10) 0%, rgba(37,99,235,0.06) 45%, rgba(15,23,42,0) 75%)",
             filter: "blur(20px)",
           }}
         />
@@ -552,7 +552,7 @@ function ModeChip({
         {recommended && !active && (
           <span
             className="ml-0.5 h-1 w-1 rounded-full"
-            style={{ background: "rgba(124,58,237,0.65)" }}
+            style={{ background: "rgba(71,85,105,0.65)" }}
             aria-label="recommended"
           />
         )}

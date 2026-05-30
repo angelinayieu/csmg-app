@@ -19,8 +19,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Pencil, Sliders, Sparkles } from "lucide-react";
+import { Check, Pencil, Sliders } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import {
   DIMENSION_HINT,
   DIMENSION_LABEL,
@@ -160,7 +161,7 @@ export function PriorityStrip({ initialVector, subObjectiveId }: Props) {
             boxShadow: appleVibe.shadow.chip,
           }}
         >
-          <Sparkles className="h-3 w-3" strokeWidth={2} />
+          <Sparkle className="h-3 w-3" strokeWidth={2} />
           <span className="font-medium">Reading your priorities…</span>
         </div>
       );
@@ -254,7 +255,7 @@ export function PriorityStrip({ initialVector, subObjectiveId }: Props) {
               style={{ color: appleVibe.text.faint }}
               title="The system inferred this from your objective + clarifying answers. Click edit to tune."
             >
-              <Sparkles className="h-2.5 w-2.5" strokeWidth={2} />
+              <Sparkle className="h-2.5 w-2.5" strokeWidth={2} />
               AI&apos;s read — adjust
             </span>
           )}

@@ -19,11 +19,11 @@ import {
   Check,
   HelpCircle,
   Loader2,
-  Sparkles,
   Wand2,
   X,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 
 interface AutoElectChoice {
   variation_id: string;
@@ -351,7 +351,7 @@ export function AutoElectModal({
                     {busy ? (
                       <Loader2 className="h-3 w-3 animate-spin" strokeWidth={2.4} />
                     ) : (
-                      <Sparkles className="h-3 w-3" strokeWidth={2.4} />
+                      <Sparkle className="h-3 w-3" strokeWidth={2.4} />
                     )}
                     {busy ? "Applying…" : "Apply + generate"}
                   </motion.button>
@@ -506,7 +506,7 @@ function VariationChoiceCard({
                   color: appleVibe.accent.primary,
                 }}
               >
-                <Sparkles className="h-2 w-2" strokeWidth={2.5} />
+                <Sparkle className="h-2 w-2" strokeWidth={2.5} />
                 Suggested
               </span>
             )}

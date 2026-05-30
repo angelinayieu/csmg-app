@@ -25,9 +25,9 @@ import {
   ChevronDown,
   ChevronUp,
   Cog,
-  Sparkles,
   TreeDeciduous,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type {
   CrossRoomSignal,
@@ -75,7 +75,7 @@ export function CrossRoomSignalsStrip({ spaceId, signals }: Props) {
             }}
             aria-hidden
           >
-            <Sparkles
+            <Sparkle
               className="h-3.5 w-3.5"
               strokeWidth={1.8}
               style={{ color: appleVibe.text.secondary }}
@@ -121,12 +121,12 @@ export function CrossRoomSignalsStrip({ spaceId, signals }: Props) {
             <SignalSection
               spaceId={spaceId}
               icon={
-                <Sparkles className="h-3 w-3" strokeWidth={2} />
+                <Sparkle className="h-3 w-3" strokeWidth={2} />
               }
               title="Lens convergence"
               description="Parent-objective readings seeding items in multiple rooms"
               signals={signals.lens_convergence}
-              accent="rgba(124,58,237,0.78)"
+              accent="rgba(71,85,105,0.78)"
             />
           )}
           {signals.mechanisms.length > 0 && (

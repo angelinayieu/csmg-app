@@ -32,10 +32,10 @@ import {
   Layout,
   Loader2,
   RefreshCw,
-  Sparkles,
   Wand2,
   X,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 type Tab = "doc" | "mockup" | "prompt";
@@ -362,7 +362,7 @@ export function VariationDeliverablesModal({
                   />
                   <TabPill
                     label="Export Prompt"
-                    icon={Sparkles}
+                    icon={Sparkle}
                     active={tab === "prompt"}
                     onClick={() => setTab("prompt")}
                   />
@@ -432,7 +432,7 @@ function TabPill({
   onClick,
 }: {
   label: string;
-  icon: typeof FileText;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   active: boolean;
   onClick: () => void;
 }) {
@@ -980,7 +980,7 @@ function PromptHistoryBadge({ history }: { history: PromptHistory }) {
           : "The judge model still flagged issues even after revision — preview output may need a manual review."
       }
     >
-      <Sparkles className="h-2.5 w-2.5" strokeWidth={2.4} />
+      <Sparkle className="h-2.5 w-2.5" strokeWidth={2.4} />
       Round-trip tested · {score.toFixed(1)}/10
       {history.iterations > 1 && ` · ${history.iterations} iter`}
       {!shipped && " · needs review"}

@@ -309,7 +309,7 @@ export function ObjectiveCanvasShell({
                   fontSize: 11.5,
                   fontWeight: 650,
                   letterSpacing: "0.01em",
-                  boxShadow: "0 10px 26px -8px rgba(124,58,237,0.45)",
+                  boxShadow: "0 10px 26px -8px rgba(71,85,105,0.45)",
                   fontFamily: appleVibe.font.stack,
                 }}
               >

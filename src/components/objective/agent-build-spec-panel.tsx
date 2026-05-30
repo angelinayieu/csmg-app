@@ -22,9 +22,9 @@ const C = {
   inkMuted: "rgba(15,23,42,0.5)",
   inkFaint: "rgba(15,23,42,0.4)",
   rule: "rgba(15,23,42,0.08)",
-  accent: "rgba(76,29,149,0.95)",
-  accentSoft: "rgba(124,58,237,0.08)",
-  accentBorder: "rgba(124,58,237,0.20)",
+  accent: "rgba(71,85,105,0.95)",
+  accentSoft: "rgba(71,85,105,0.08)",
+  accentBorder: "rgba(71,85,105,0.20)",
   paper: "#ffffff",
   bg: "#fafafa",
 };

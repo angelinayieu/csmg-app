@@ -12,11 +12,12 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronDown, ChevronUp, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 
-// Objective lane color = #7C3AED. The concept memory strip is the
+// Objective lane color = #475569. The concept memory strip is the
 // cross-space KG signal that rolls up to the objective layer, so it
 // visually anchors there (faint tint, no shouting).
 const OBJECTIVE = appleVibe.stage.objective;
@@ -79,7 +80,7 @@ export function ConceptMemoryFeedStrip({ concepts, currentSpaceId }: Props) {
           className="flex w-full items-center justify-between"
         >
           <div className="flex items-center gap-2">
-            <Sparkles
+            <Sparkle
               className="h-3 w-3 flex-shrink-0"
               strokeWidth={2}
               style={{ color: OBJECTIVE }}
