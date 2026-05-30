@@ -285,10 +285,10 @@ function RoomCardRenderer({
 
       </div>
 
-        {/* Hover action bar — reveals just below the card (Synergism
-            parity). Generative actions only; fires CardActions on the bus
-            for the brainstorm engine's handler. */}
-        {!compact && (
+        {/* Hover action bar — reveals just below the card on hover. Enabled on
+            compact unfurl map nodes too, so every card the user sees is
+            interactive. Generative actions; fires CardActions on the bus. */}
+        {(
           <div
             style={{
               position: "absolute",

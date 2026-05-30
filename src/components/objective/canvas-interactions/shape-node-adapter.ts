@@ -124,15 +124,40 @@ function shapeFullText(props: Props): string {
   return typeof props.text === "string" ? (props.text as string).trim() : "";
 }
 
-/** Project a single "idea" shape (a sticky note / text / labeled geo) into an
- *  OperationTarget the canvas AI scanner can run operations against. Returns
- *  null for cards (they carry their own hover menu) and for chrome shapes.
- *  See CANVAS_AI_SCANNER_PLAN.md §3a. */
+/** Project a single board shape into an OperationTarget the AI scanner runs ops
+ *  against — a sticky note / text / labeled geo, OR a board card (room /
+ *  artifact / insight). Selecting any of these opens the scanner panel (the
+ *  "sidebar"). Returns null for chrome (arrows, layer bands). See
+ *  CANVAS_AI_SCANNER_PLAN.md §3a. */
 export function shapeToScanTarget(shape: TLShape): OperationTarget | null {
-  if (shape.type !== "note" && shape.type !== "text" && shape.type !== "geo") {
-    return null;
+  const props = shape.props as unknown as Props;
+  switch (shape.type) {
+    case "note":
+    case "text":
+    case "geo": {
+      const text = shapeFullText(props);
+      return text.length >= 3 ? { text, shapeId: shape.id as string } : null;
+    }
+    case "room-card":
+    case "artifact-card": {
+      const text = [asString(props.title), asString(props.subtitle)]
+        .filter(Boolean)
+        .join(" — ");
+      if (text.length < 3) return null;
+      const roomId = typeof props.roomId === "string" ? props.roomId : undefined;
+      const entityId =
+        typeof props.entityId === "string" && props.entityId
+          ? props.entityId
+          : roomId;
+      return { text, shapeId: shape.id as string, entityId, roomId };
+    }
+    case "insight-card": {
+      const text = [asString(props.headline), asString(props.body)]
+        .filter(Boolean)
+        .join(" — ");
+      return text.length >= 3 ? { text, shapeId: shape.id as string } : null;
+    }
+    default:
+      return null;
   }
-  const text = shapeFullText(shape.props as unknown as Props);
-  if (text.length < 3) return null;
-  return { text, shapeId: shape.id as string };
 }

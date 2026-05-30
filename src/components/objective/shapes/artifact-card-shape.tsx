@@ -257,8 +257,9 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
 
       </div>
 
-        {/* Per-card hover action bar — pops up just below the card. */}
-        {!compact && (
+        {/* Per-card hover action bar — pops up just below the card. Enabled on
+            compact unfurl map nodes too, so every card is interactive. */}
+        {(
           <div
             style={{
               position: "absolute",
