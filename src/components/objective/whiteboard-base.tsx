@@ -50,6 +50,10 @@ import {
   saveCardsToLibrary,
   type SaveableCard,
 } from "./canvas-interactions/save-to-library";
+import { boardShapesToNodes } from "./canvas-interactions/shape-node-adapter";
+import { FocusModePanel } from "./canvas-interactions/focus-mode-panel";
+import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
+import { ListChecks } from "lucide-react";
 import { BoardHint } from "./board-hint";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
 import {
@@ -763,6 +767,9 @@ function BoardOverlay({
           .map(cardSaveable)
           .filter((c): c is SaveableCard => c !== null),
         screen,
+        // Board projected into the Synergism ClientNode model so Focus
+        // Mode's auto-marker can bucket what's decided vs. exploratory.
+        nodes: boardShapesToNodes(shapes),
         boardCardCount: shapes.filter(
           (s) => s.type === "room-card" || s.type === "artifact-card",
         ).length,
@@ -773,6 +780,39 @@ function BoardOverlay({
   );
 
   const count = view.ids.length;
+
+  // ── Focus Mode ("Converge") ───────────────────────────────────────
+  // Project the board → ClientNodes, run the auto-marker, and let the
+  // user mark what they decided + publish the kept set to the Library
+  // (the canvas → object → Strategy Brief bridge).
+  const focus = useFocusMode(view.nodes);
+
+  // Hover a panel row → select the matching shape so it highlights on
+  // the canvas; clearing on mouse-out keeps it ephemeral.
+  function handleFocusNode(id: string | null) {
+    try {
+      editor.setSelectedShapes(id ? [id as TLShapeId] : []);
+    } catch {
+      /* selection is best-effort */
+    }
+  }
+
+  // Publish the converged set: persist the kept board cards to the
+  // Library as objects (they then flow into the Strategy Brief / spec).
+  async function handlePublishConverged(keptIds: string[]) {
+    const saveables = keptIds
+      .map((id) => editor.getShape(id as TLShapeId))
+      .filter((s): s is TLShape => !!s)
+      .map(cardSaveable)
+      .filter((c): c is SaveableCard => c !== null);
+    try {
+      if (saveables.length > 0) await saveCardsToLibrary(spaceId, saveables);
+    } catch (err) {
+      console.warn("[board] converge publish failed:", err);
+    } finally {
+      focus.endPublishing();
+    }
+  }
 
   function dismissHint() {
     setHintDismissed(true);
@@ -847,6 +887,49 @@ function BoardOverlay({
           }
           saved={saved}
         />
+      )}
+
+      {/* Converge entry — opens Focus Mode to mark what's decided. */}
+      {focus.phase === "closed" && view.nodes.length > 0 && (
+        <button
+          type="button"
+          onClick={() => focus.open()}
+          title="Converge — mark what you decided, then publish the kept set"
+          style={{
+            position: "absolute",
+            right: 16,
+            bottom: 16,
+            zIndex: 65,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 7,
+            padding: "9px 14px",
+            borderRadius: 999,
+            border: `1px solid ${appleVibe.stroke.soft}`,
+            background: appleVibe.surface.card,
+            color: appleVibe.text.primary,
+            boxShadow: appleVibe.shadow.chip,
+            cursor: "pointer",
+            fontSize: 13,
+            fontWeight: 600,
+            fontFamily: appleVibe.font.stack,
+          }}
+        >
+          <ListChecks style={{ width: 15, height: 15 }} strokeWidth={2.2} />
+          Converge
+        </button>
+      )}
+
+      {/* Focus Mode panel — mark / publish the converged set. */}
+      {focus.phase !== "closed" && (
+        <div style={{ position: "absolute", right: 16, top: 16, zIndex: 75 }}>
+          <FocusModePanel
+            nodes={view.nodes}
+            focus={focus}
+            onFocusNode={handleFocusNode}
+            onPublish={handlePublishConverged}
+          />
+        </div>
       )}
     </>
   );
