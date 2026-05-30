@@ -382,6 +382,84 @@ export function narrateScanComplete(input: {
   };
 }
 
+/** research_completed (Cooperation Plan v2 Fix A) — narrates the
+ *  per-feature research stage. Fired from /api/brainstorm/item/research
+ *  whether triggered by the canvas autopilot's research stage, the
+ *  drawer's lazy fetch, or room-gen's fire-and-forget pre-warm.
+ *
+ *  Body tells the user the research now exists so downstream stages
+ *  (rubric scoring, mechanism-spec) have grounding. Cached re-fires
+ *  produce a softer "already on file" body so the notebook doesn't
+ *  spam identical research events on autopilot re-runs. */
+export function narrateResearch(input: {
+  entityName: string;
+  technicalCount: number;
+  designCount: number;
+  cached?: boolean;
+}): RichNarrationMeta {
+  const { entityName, technicalCount, designCount, cached = false } = input;
+  const total = technicalCount + designCount;
+
+  const bodyParts: string[] = [];
+  if (cached) {
+    bodyParts.push(
+      `Research already on file for ${clip(entityName, 60)} (${total} source${total === 1 ? "" : "s"} cached).`,
+    );
+  } else if (total === 0) {
+    bodyParts.push(
+      `Research pass for ${clip(entityName, 60)} returned no sources — the LLM will score without precedents.`,
+    );
+  } else {
+    const parts: string[] = [];
+    if (technicalCount > 0) {
+      parts.push(
+        `${technicalCount} technical precedent${technicalCount === 1 ? "" : "s"}`,
+      );
+    }
+    if (designCount > 0) {
+      parts.push(
+        `${designCount} design reference${designCount === 1 ? "" : "s"}`,
+      );
+    }
+    bodyParts.push(
+      `Pulled ${parts.join(" + ")} for ${clip(entityName, 60)} — feeding score grounding.`,
+    );
+  }
+
+  const facts: NarrationFact[] = [];
+  if (technicalCount > 0) {
+    facts.push({
+      label: "Technical",
+      value: String(technicalCount),
+      tone: "neutral",
+    });
+  }
+  if (designCount > 0) {
+    facts.push({
+      label: "Design",
+      value: String(designCount),
+      tone: "neutral",
+    });
+  }
+  if (cached) {
+    facts.push({ label: "Source", value: "cached", tone: "neutral" });
+  }
+
+  return {
+    narration_title: cached
+      ? `Research cached · ${clip(entityName, 50)}`
+      : total === 0
+        ? `Research empty · ${clip(entityName, 50)}`
+        : `Researched · ${clip(entityName, 50)}`,
+    narration_body: clip(bodyParts.join(" "), 240),
+    narration_facts: facts,
+    narration_tags: [
+      "#research",
+      cached ? "#cached" : total === 0 ? "#empty" : "#fresh",
+    ],
+  };
+}
+
 /** room_generated — narrates room composition (pain/feature/outcome
  *  counts) and a one-line preview. */
 export function narrateRoomGenerated(input: {

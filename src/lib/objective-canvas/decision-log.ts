@@ -160,7 +160,25 @@ export type DecisionAction =
   | "algorithm_chosen"
   | "design_intent_set"
   | "macro_rolled_up"
-  | "data_lineage_resolved";
+  | "data_lineage_resolved"
+  // 20260911 — Cooperation Plan v2 Fix A. CHECK extended in
+  // 20260911_autopilot_research_action.sql.
+  //
+  //   research_completed    — fires whenever /api/brainstorm/item/research
+  //                           populates detail_research successfully —
+  //                           whether triggered by the canvas autopilot's
+  //                           research stage (Fix A), the drawer's lazy
+  //                           fetch, or room-gen's fire-and-forget
+  //                           pre-warm. Metadata carries entity_id,
+  //                           entity_name, technical_count, design_count,
+  //                           cached (true on idempotent re-fire). Without
+  //                           this action, autopilot's research stage
+  //                           would have no notebook footprint — the
+  //                           runner's postLog only emits on
+  //                           skipped/failed, mirroring how score /
+  //                           chains_enriched / mechanism_spec_generated
+  //                           / scan_complete are each their own action.
+  | "research_completed";
 
 export interface LogDecisionArgs {
   userId: string;

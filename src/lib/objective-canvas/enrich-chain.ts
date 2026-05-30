@@ -84,6 +84,29 @@ export interface EnrichChainInput {
     name: string;
     positive_outcome?: string;
     first_principles?: string[];
+    /** Cooperation Plan v2 Fix D — the user-elected (or top-scored
+     *  fallback) variation that represents THE concrete mechanism for
+     *  this feature. When present, the chain narrative is built around
+     *  this specific variation instead of the abstract feature, so the
+     *  "Spec'd Pomodoro Timer" chain reads "Pomodoro's fixed-25-min
+     *  intervals counter context-switching by..." rather than the
+     *  generic "the Pomodoro feature addresses focus by...".
+     *
+     *  Selection rule (see pick-variation.ts): user election always
+     *  wins; otherwise the top effectiveness_score wins; otherwise
+     *  undefined (pre-autopilot state). The route-side enrich-chains
+     *  caller resolves this via the shared pickRepresentativeVariation
+     *  helper so the same fallback logic applies in both Fix D
+     *  (enrich-chains) and Fix E (mechanism-spec). */
+    representative_variation?: {
+      name: string;
+      description: string;
+      /** Composite rubric score 0..1, when available. Surfaces in the
+       *  prompt so chain_strength can be calibrated against the
+       *  variation's grading: a 0.85 variation deserves a stronger
+       *  chain narrative than a 0.35 one. */
+      effectiveness_score?: number;
+    };
   };
   outcome: {
     name: string;
@@ -228,7 +251,15 @@ THE CHAIN TO ENRICH:
     ctx.feature.positive_outcome
       ? `\n  positive_outcome: ${ctx.feature.positive_outcome}`
       : ""
-  }${featurePrinciples}
+  }${featurePrinciples}${
+    ctx.feature.representative_variation
+      ? `\n  CHOSEN MECHANISM (build the narrative around THIS, not the abstract feature):\n    ${ctx.feature.representative_variation.name}${
+          typeof ctx.feature.representative_variation.effectiveness_score === "number"
+            ? ` [composite ${ctx.feature.representative_variation.effectiveness_score.toFixed(2)}]`
+            : ""
+        }\n    ${ctx.feature.representative_variation.description.slice(0, 200)}`
+      : ""
+  }
 
 [OUTCOME] ${ctx.outcome.name}${
     ctx.outcome.measured_by ? `\n  measured_by: ${ctx.outcome.measured_by}` : ""

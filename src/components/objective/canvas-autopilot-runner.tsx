@@ -57,6 +57,7 @@ async function fetchWithTimeout(
 // must never block the runner.
 type StageName =
   | "expand"
+  | "research"
   | "score"
   | "refine"
   | "enrich_chains"
@@ -66,6 +67,14 @@ type StageName =
   | "macro_rollup"
   | "brief_polish"
   | "annotate";
+
+// Cooperation Plan v2 Fix A — concurrency cap for the research stage.
+// Each /research call makes 1 Tavily request + 1 LLM "informs" pass
+// (~3-5s). Firing all features in a room serially adds N × 4s; firing
+// them all in parallel risks Tavily rate-limit (free tier ~30 req/min).
+// 3 hits the sweet spot for typical 5-6 features per room = 2 chunks
+// of ~4s each ≈ 8s per room.
+const RESEARCH_CONCURRENCY = 3;
 
 async function postLog(
   spaceId: string,
@@ -262,6 +271,59 @@ export function CanvasAutopilotRunner({
       setRoomIdx(i);
       const room = workList[i];
       let roomOk = true;
+
+      // ── Cooperation Plan v2 Fix A — research pre-pass ────────
+      // Populate detail_research for every feature in this room
+      // BEFORE the per-feature score+refine loop runs, so the
+      // rubric's GROUNDING clause (Fix B) sees populated tech /
+      // design inspiration arrays rather than the null-guard path.
+      //
+      // Idempotent: room-gen's fire-and-forget pre-warm may have
+      // already filled detail_research for some entities; the
+      // /research route short-circuits on cache and still logs a
+      // research_completed event with cached:true so the notebook
+      // reflects the pre-warm.
+      //
+      // Batched at RESEARCH_CONCURRENCY=3 to stay under Tavily
+      // rate limits while finishing in ~8s for a typical 5-6
+      // feature room (2 chunks × ~4s/chunk). Failures are
+      // soft-fail per feature via postLog — a missing research
+      // bundle degrades score grounding (Fix B handles this via
+      // null-guard) but does not block the autopilot.
+      for (
+        let k = 0;
+        k < room.featureIds.length;
+        k += RESEARCH_CONCURRENCY
+      ) {
+        if (cancelRef.current) {
+          setStatus("cancelled");
+          onAllComplete?.();
+          return;
+        }
+        const chunk = room.featureIds.slice(k, k + RESEARCH_CONCURRENCY);
+        await Promise.allSettled(
+          chunk.map(async (entityId) => {
+            const researchRes = await fetchWithTimeout(
+              "/api/brainstorm/item/research",
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ entityId }),
+              },
+            ).catch(() => undefined);
+            if (!researchRes || !researchRes.ok) {
+              void postLog(spaceId, {
+                stage: "research",
+                status: "failed",
+                subObjectiveId: room.subObjectiveId,
+                entityId,
+                reason: reasonFromResponse(researchRes),
+              });
+            }
+          }),
+        );
+      }
+
       for (let j = 0; j < room.featureIds.length; j++) {
         if (cancelRef.current) {
           setStatus("cancelled");
@@ -338,6 +400,40 @@ export function CanvasAutopilotRunner({
                 entityId,
                 reason: reasonFromResponse(refineRes),
               });
+            } else if (!cancelRef.current) {
+              // Cooperation Plan v2 Fix C — rescore so refine's newly
+              // added variations land with effectiveness_score populated.
+              // Subset mode: grades only the new candidates + 3
+              // reference scores for novelty calibration (~40% fewer
+              // tokens than re-grading the entire set). The route's
+              // rescore: true flag is passed through to logDecision so
+              // the notebook can chapter-group this event with the
+              // initial score.
+              //
+              // Soft-fail per feature — a missing rescore leaves the
+              // refined variations unscored (the drawer renders them
+              // without a score ring), but the rest of the autopilot
+              // continues normally.
+              const rescoreRes = await fetchWithTimeout(
+                "/api/brainstorm/item/variation/score",
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({
+                    entityId,
+                    rescore_unscored: true,
+                  }),
+                },
+              ).catch(() => undefined);
+              if (!rescoreRes || !rescoreRes.ok) {
+                void postLog(spaceId, {
+                  stage: "score",
+                  status: "failed",
+                  subObjectiveId: room.subObjectiveId,
+                  entityId,
+                  reason: `rescore_${reasonFromResponse(rescoreRes)}`,
+                });
+              }
             }
           }
           // status !== "ok" (no_variations, etc.) is logged by the

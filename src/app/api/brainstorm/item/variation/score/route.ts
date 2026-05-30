@@ -66,6 +66,58 @@ import { logDecision } from "@/lib/objective-canvas/decision-log";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
+/**
+ * Cooperation Plan v2 Fix B — extract inspiration summaries from the
+ * entity's `detail_research` JSONB for the rubric scorer's prompt.
+ *
+ * The bundle has two shapes the rubric tolerates:
+ *   - New two-rail: { technical: ItemSource[], design: ItemSource[] }
+ *   - Legacy flat:  { sources: ItemSource[] }   ← promoted to `technical`
+ *
+ * Mirrors normalizeStoredBundle from research/route.ts — inlined here so
+ * the score route doesn't import across route files. Returns at most 5
+ * items per rail with { title, informs }; empty array when the field is
+ * null/missing OR the requested rail doesn't exist. The empty-array
+ * return is the null-guard that lets Fix B ship before Fix A: when the
+ * room-gen pre-warm hasn't completed (race condition described in
+ * AUTOPILOT_COOPERATION_PLAN.md §2.0.a), the rubric prompt's
+ * TECHNICAL/DESIGN INSPIRATION blocks simply don't render and the LLM's
+ * GROUNDING clause becomes a no-op for the missing source type.
+ */
+function extractInspirationSummaries(
+  detailResearch: unknown,
+  rail: "technical" | "design",
+): Array<{ title: string; informs: string }> {
+  if (!detailResearch || typeof detailResearch !== "object") return [];
+  const obj = detailResearch as Record<string, unknown>;
+
+  let arr: unknown;
+  if (Array.isArray(obj.technical) || Array.isArray(obj.design)) {
+    // New two-rail shape.
+    arr = obj[rail];
+  } else if (Array.isArray(obj.sources) && rail === "technical") {
+    // Legacy flat shape — promote sources into technical rail; design
+    // rail returns empty (legacy rows had no design sources).
+    arr = obj.sources;
+  } else {
+    return [];
+  }
+
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter(
+      (s): s is { title: string; informs?: string } =>
+        typeof s === "object" &&
+        s !== null &&
+        typeof (s as { title?: unknown }).title === "string",
+    )
+    .slice(0, 5)
+    .map((s) => ({
+      title: s.title,
+      informs: typeof s.informs === "string" ? s.informs : "",
+    }));
+}
+
 interface Body {
   entityId?: string;
   /** Phase 11.1 — evaluation tier selector. Defaults to "rubric"
@@ -85,6 +137,19 @@ interface Body {
    *  with REML τ² so the envelope surfaces heterogeneity. ~2x rubric
    *  token cost; the most rigorous tier short of an actual experiment. */
   method?: "rubric" | "simulation" | "ensemble";
+  /** Cooperation Plan v2 Fix C — subset re-score mode. When true:
+   *    - the rubric grades ONLY variations without an effectiveness_score
+   *    - up to 3 of the highest-scored existing variations are included
+   *      as a reference set for novelty calibration (LLM sees them
+   *      tagged [REFERENCE] but doesn't emit rows for them)
+   *    - existing scores are NOT overwritten (the persist loop merges
+   *      only the new rows on top of the prior variations[])
+   *    - the notebook decision metadata carries rescore: true so the
+   *      notebook can group the rescore event under the initial score
+   *      event for the same feature (NOTEBOOK_TIMELINE_PLAN.md §3.4)
+   *  Used by the canvas autopilot after refine adds new candidates.
+   *  Ignored when method !== "rubric". Defaults to false. */
+  rescore_unscored?: boolean;
 }
 
 export async function POST(req: NextRequest) {
@@ -263,6 +328,66 @@ export async function POST(req: NextRequest) {
           .filter((x): x is string => typeof x === "string" && x.length > 0)
           .slice(0, 6)
       : undefined;
+    // Cooperation Plan v2 Fix C — subset re-score partitioning.
+    // When body.rescore_unscored is true, the rubric grades only
+    // variations missing effectiveness_score, with up to 3 of the
+    // highest-scored existing variations included as a [REFERENCE]
+    // set for novelty calibration (the LLM sees them but doesn't emit
+    // rows for them). When false (default), grade every variation
+    // (current behavior).
+    //
+    // The no-unscored short-circuit logs an autopilot_iteration skip
+    // so the notebook reflects "rescore requested but nothing new to
+    // grade" rather than silently doing nothing.
+    const isRescoreMode = body?.rescore_unscored === true;
+    let variationsForGrading: typeof existing.variations = existing.variations;
+    let variationsToScoreIds: string[] | undefined;
+    if (isRescoreMode) {
+      const unscored = existing.variations.filter(
+        (v) => typeof v.effectiveness_score !== "number",
+      );
+      if (unscored.length === 0) {
+        void logDecision(db, {
+          userId: auth.user.id,
+          spaceId: entity.space_id,
+          subObjectiveId: entity.parent_sub_objective_id ?? null,
+          proposalId: entityId,
+          action: "autopilot_iteration",
+          metadata: {
+            stage: "score",
+            status: "skipped",
+            reason: "no_unscored_variations",
+            rescore: true,
+            entity_id: entityId,
+            entity_name: entity.name,
+          },
+        });
+        return NextResponse.json(
+          {
+            evaluation_method: "rubric",
+            variation_scores: [],
+            status: "no_unscored_variations",
+            status_detail:
+              "All variations already scored — nothing to rescore.",
+            scored_at: new Date().toISOString(),
+          },
+          { status: 200 },
+        );
+      }
+      // Top-3 scored variations as the novelty reference set. Sorting
+      // by composite descending so the LLM compares the new candidates
+      // against the strongest peers, not the weakest.
+      const referenceSet = existing.variations
+        .filter((v) => typeof v.effectiveness_score === "number")
+        .sort(
+          (a, b) =>
+            (b.effectiveness_score ?? 0) - (a.effectiveness_score ?? 0),
+        )
+        .slice(0, 3);
+      variationsForGrading = [...unscored, ...referenceSet];
+      variationsToScoreIds = unscored.map((v) => v.id);
+    }
+
     let rubricEnvelope: Awaited<
       ReturnType<typeof scoreVariationsWithRubric>
     >;
@@ -278,7 +403,30 @@ export async function POST(req: NextRequest) {
         sub_objective_title: subObjectiveTitle,
         core_objective_text: coreObjectiveText,
         constraints,
-        variations: existing.variations,
+        variations: variationsForGrading,
+        // Fix C — when set, the rubric grades only IDs in this list;
+        // the rest of variationsForGrading is tagged [REFERENCE] in the
+        // prompt and filtered server-side defensively. Undefined for
+        // the default (grade all) path.
+        variations_to_score: variationsToScoreIds,
+        // Cooperation Plan v2 Fix B — thread planning + research bundle
+        // into the rubric prompt so the LLM grades on the full feature
+        // context, not just variations + room pains/outcomes. All three
+        // are optional in RubricContext; the prompt builder's
+        // "(when present)" branches keep absent grounding blocks out of
+        // the prompt entirely. extractInspirationSummaries returns [] on
+        // null/missing detail_research, which surfaces to the rubric as
+        // "no TECHNICAL/DESIGN INSPIRATION block" — the null-guard that
+        // lets this fix ship before Fix A's awaited research stage lands.
+        planning: existing.planning ?? undefined,
+        tech_inspiration: extractInspirationSummaries(
+          entity.detail_research,
+          "technical",
+        ),
+        design_inspiration: extractInspirationSummaries(
+          entity.detail_research,
+          "design",
+        ),
       });
     } catch (err) {
       return NextResponse.json(
@@ -408,6 +556,12 @@ export async function POST(req: NextRequest) {
           // confidence so the row can flag "shaky proxy" when low.
           indicator_breakdown: indicatorBreakdown,
           indicator_count: indicatorAgg.size,
+          // Fix C — when this is the post-refine rescore pass, the
+          // notebook can group it under the initial `score` event for
+          // the same feature (NOTEBOOK_TIMELINE_PLAN.md §3.4 chapter
+          // aggregation). variation_count reflects only the newly-
+          // scored variations, not the reference set.
+          rescore: isRescoreMode,
         },
       });
     }

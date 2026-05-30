@@ -152,6 +152,43 @@ export interface RubricContext {
    *  feature so the LLM can make relative judgments across the set
    *  (novelty is comparative). */
   variations: ItemVariation[];
+  /** Phase B+ (Cooperation Plan v2 Fix B) — feature's planning block
+   *  from expanded_detail. Drives:
+   *    - constraint_fit (depends_on / assumes flag execution dependencies)
+   *    - risk (risks list anchors the inverted risk score)
+   *  Optional — if missing or empty, criteria fall back to current
+   *  behavior (constraint_fit/risk score on first principles only). */
+  planning?: {
+    assumes?: string[];
+    depends_on?: string[];
+    risks?: string[];
+  };
+  /** Phase B+ (Cooperation Plan v2 Fix B) — technical research bundle
+   *  from detail_research.technical. Drives:
+   *    - plausibility (precedents anchor "well-established" judgment)
+   *  Optional — when null (race with room-gen's fire-and-forget research
+   *  pre-warm, or autopilot fired before research stage), the prompt's
+   *  TECHNICAL INSPIRATION block is omitted and plausibility falls back
+   *  to first_principles only. The route is REQUIRED to pass an array
+   *  (possibly empty) so the prompt builder branches deterministically. */
+  tech_inspiration?: Array<{ title: string; informs: string }>;
+  /** Phase B+ (Cooperation Plan v2 Fix B) — design research bundle
+   *  from detail_research.design. Drives:
+   *    - novelty (design references calibrate "first-thing-anyone-suggests")
+   *  Optional — same race / null-guard semantics as tech_inspiration. */
+  design_inspiration?: Array<{ title: string; informs: string }>;
+  /** Phase B+ (Cooperation Plan v2 Fix C — subset re-score mode) —
+   *  restrict grading to a subset of variations[] by ID. When set:
+   *    - the LLM is SHOWN all variations (so novelty calibration sees
+   *      the full set), but variations not in this list are tagged
+   *      [REFERENCE] in the prompt and the LLM is instructed to omit
+   *      them from variation_scores.
+   *    - the parser then filters defensively: any rows the LLM emits
+   *      for REFERENCE variations are dropped.
+   *  Used by autopilot's re-score-after-refine pass to grade ONLY the
+   *  newly-refined variations without overwriting prior grades.
+   *  Undefined → grade all variations (current behavior). */
+  variations_to_score?: string[];
 }
 
 /** Phase 11.2 — global cap on indicators graded per scoring run.
@@ -209,6 +246,18 @@ PART 1 — for EACH variation, score these 5 criteria from 0 to 1 with a one-sen
 4. novelty — Does this propose something non-obvious vs the OTHER variations and standard defaults in this domain? Score 0.0 (cliché / first-thing-anyone-would-suggest) to 1.0 (genuinely surprising and well-reasoned).
 
 5. risk — Likelihood of failure or harm. INVERTED scale: score 0.0 (high risk of failing or causing damage) to 1.0 (low risk, safe to ship).
+
+PART 1 — GROUNDING (when present):
+
+When a PLANNING block is provided, use planning.risks[] to ground the risk criterion (these are user-identified risks for THIS feature — score risk LOWER when these risks are plausible and unmitigated; HIGHER when the variation's design pre-empts them). Use planning.depends_on[] + planning.assumes[] to ground constraint_fit — a variation that requires an absent dependency or violates a stated assumption scores ≤0.4 on constraint_fit.
+
+When TECHNICAL INSPIRATION sources are provided, use them as evidence anchors for plausibility. If a source's informs note clearly supports a variation's mechanism, you may cite it inline in the reason (e.g. "plausible — T3 shows this pattern works at scale"). Do NOT invent sources or citations.
+
+When DESIGN INSPIRATION sources are provided, use them as the comparison set for novelty. A variation that exactly matches a referenced design pattern scores LOWER on novelty (it's the default); one that diverges from the references in a justified way scores HIGHER.
+
+PART 1 — SCOPING (subset re-score mode):
+
+Each variation is tagged either [SCORE] or [REFERENCE]. Emit variation_scores rows ONLY for variations tagged [SCORE]. Variations tagged [REFERENCE] have already been graded in a prior pass and are shown here only so your novelty grades for [SCORE] variations stay calibrated against the full feature set — do NOT emit rows for them, do NOT re-grade them. When all variations are tagged [SCORE] (the default), grade every one.
 
 PART 2 — for EACH variation × EACH proxy indicator listed under "ROOM PROXY INDICATORS", produce ONE indicator_score row:
 - indicator_index (integer): the 1-based number of the indicator from the "ROOM PROXY INDICATORS" list — copy it EXACTLY. This is how the row is wired to the indicator; do NOT rephrase the indicator, just cite its number. Only use indices that appear in the list.
@@ -313,15 +362,69 @@ function buildUserPrompt(ctx: RubricContext): string {
       ? `\n  first_principles: ${ctx.feature.first_principles.slice(0, 5).join(" · ")}`
       : "";
 
+  // Phase B+ (Cooperation Plan v2 Fix B) — three new grounding blocks.
+  // Each is conditionally empty so the LLM sees a tight prompt when the
+  // upstream artifact is missing (race with room-gen's fire-and-forget
+  // research pre-warm; or planning never generated). The "(when present)"
+  // language in the SYSTEM_PROMPT means absent blocks are first-class —
+  // the LLM ignores the GROUNDING clause cleanly.
+  const planningBlock =
+    ctx.planning &&
+    ((ctx.planning.assumes && ctx.planning.assumes.length > 0) ||
+      (ctx.planning.depends_on && ctx.planning.depends_on.length > 0) ||
+      (ctx.planning.risks && ctx.planning.risks.length > 0))
+      ? `\nPLANNING (feature-level — drives constraint_fit + risk grounding):
+  Assumes: ${(ctx.planning.assumes ?? []).slice(0, 5).join("; ") || "—"}
+  Depends on: ${(ctx.planning.depends_on ?? []).slice(0, 5).join("; ") || "—"}
+  Risks: ${(ctx.planning.risks ?? []).slice(0, 5).join("; ") || "—"}\n`
+      : "";
+
+  const techBlock =
+    ctx.tech_inspiration && ctx.tech_inspiration.length > 0
+      ? `\nTECHNICAL INSPIRATION (precedents — evidence anchors for plausibility):
+${ctx.tech_inspiration
+  .slice(0, 5)
+  .map(
+    (s, i) =>
+      `  T${i + 1}. ${s.title}${s.informs ? ` — ${s.informs}` : ""}`,
+  )
+  .join("\n")}\n`
+      : "";
+
+  const designBlock =
+    ctx.design_inspiration && ctx.design_inspiration.length > 0
+      ? `\nDESIGN INSPIRATION (UI patterns — comparison set for novelty):
+${ctx.design_inspiration
+  .slice(0, 5)
+  .map(
+    (s, i) =>
+      `  D${i + 1}. ${s.title}${s.informs ? ` — ${s.informs}` : ""}`,
+  )
+  .join("\n")}\n`
+      : "";
+
+  // Phase B+ (Cooperation Plan v2 Fix C) — when variations_to_score is
+  // set, tag each variation [SCORE] or [REFERENCE] so the LLM grades
+  // only the targeted subset while still seeing the full set for novelty
+  // calibration. When unset, every variation is [SCORE] (matches the
+  // pre-Fix-C behavior; the tag is harmless noise to the LLM in that
+  // case since the SCOPING clause's "when all are [SCORE], grade every
+  // one" branch fires).
+  const variationsToScoreSet = ctx.variations_to_score
+    ? new Set(ctx.variations_to_score)
+    : null;
   const variationsBlock = ctx.variations
-    .map(
-      (v, i) =>
-        `[VARIATION ${i + 1} — id=${v.id}]
+    .map((v, i) => {
+      const tag =
+        variationsToScoreSet === null || variationsToScoreSet.has(v.id)
+          ? "[SCORE]"
+          : "[REFERENCE]";
+      return `[VARIATION ${i + 1} — id=${v.id}] ${tag}
   name: ${v.name}
   description: ${v.description}
   tradeoff: ${v.tradeoff}
-  kind: ${v.kind}`,
-    )
+  kind: ${v.kind}`;
+    })
     .join("\n\n");
 
   return `PARENT OBJECTIVE:
@@ -345,8 +448,10 @@ ${outcomesBlock}
 
 ROOM PROXY INDICATORS (PART 2 — for indicator_scores; reference by index [N]):
 ${indicatorsBlock}
-${constraintsBlock}
-VARIATIONS TO SCORE (${ctx.variations.length} total):
+${constraintsBlock}${planningBlock}${techBlock}${designBlock}
+${variationsToScoreSet === null
+  ? `VARIATIONS TO SCORE (${ctx.variations.length} total):`
+  : `VARIATIONS (${ctx.variations.length} total — grade only [SCORE]-tagged, ${variationsToScoreSet.size} of them; [REFERENCE]-tagged shown for novelty calibration only):`}
 
 ${variationsBlock}
 
@@ -522,11 +627,21 @@ export async function scoreVariationsWithRubric(
   // outcome_id are the VERBATIM pre-generated values (no paraphrase).
   const flat = flattenIndicators(ctx.room_outcomes);
   const scores: RubricVariationScore[] = [];
+  // Phase B+ (Cooperation Plan v2 Fix C) — defensive filter for subset
+  // mode. The SCOPING clause in the system prompt tells the LLM to skip
+  // [REFERENCE] variations, but we filter server-side too so a chatty
+  // LLM that emits rows for [REFERENCE] variations doesn't accidentally
+  // overwrite previously-graded scores at persist time. Null when the
+  // caller didn't request subset mode.
+  const allowedIds = ctx.variations_to_score
+    ? new Set(ctx.variations_to_score)
+    : null;
 
   for (const row of raw?.variation_scores ?? []) {
     const variation_id =
       typeof row?.variation_id === "string" ? row.variation_id : "";
     if (!variation_id || !variationsById.has(variation_id)) continue;
+    if (allowedIds !== null && !allowedIds.has(variation_id)) continue;
     const c = row?.criteria;
     if (!c) continue;
 

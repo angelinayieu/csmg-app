@@ -400,6 +400,41 @@ export interface EnrichMechanismSpecInput {
    *  registry falls back to free-text token emission with no
    *  behavior change. See `data-unit-registry.ts`. */
   registry?: SpaceDataUnitRegistry | null;
+  /** Cooperation Plan v2 Fix E — rubric composite_score (0..1) of the
+   *  representative variation (elected first, top-scored fallback).
+   *  Drives TWO behaviors:
+   *    1. PROSE CALIBRATION — the prompt instructs the LLM to use
+   *       decisive language when ≥0.7 (high confidence the mechanism
+   *       works), exploratory + flagged-uncertainty when <0.4 (low
+   *       confidence — the spec should hedge in mechanism_of_action).
+   *    2. SPECIFICITY FLOOR — the quality-gate retry decision uses
+   *       max(self_score.specificity, top_variation_score) so a
+   *       strongly-scored variation doesn't trigger retry on the
+   *       specificity axis just because the spec's own self-grade is
+   *       conservative. Prevents the "better grading → same retry
+   *       behavior" perverse outcome (Finding X2 of the v2 review).
+   *  Undefined when no variation has been scored yet — calibration
+   *  and floor both no-op. */
+  top_variation_score?: number;
+  /** Cooperation Plan v2 Fix E — technical research anchors from
+   *  detail_research.technical, up to ~5 items with { title, informs }.
+   *  Drives the `research_basis` field's evidence: when present, the
+   *  LLM cites real source titles instead of hallucinating precedents.
+   *  Empty array OR undefined → research_basis falls back to existing
+   *  behavior (LLM-generated framing without grounded citations).
+   *  Caller is responsible for normalizing legacy bundle shapes — the
+   *  enricher trusts the array as-is. */
+  research_anchors?: Array<{ title: string; informs: string }>;
+  /** Cooperation Plan v2 Fix E — retry guard. When true, the
+   *  quality-gate retry is SUPPRESSED even if the first attempt's
+   *  minQuality is below QUALITY_THRESHOLD. Caller sets this when
+   *  the low quality is EXPECTED (e.g. top_variation_score < 0.4 —
+   *  the underlying mechanism is uncertain, retrying won't make the
+   *  spec more specific because the input itself is shaky). The
+   *  first-attempt spec is persisted with quality_calibrated_uncertainty
+   *  metadata. Prevents the retry loop on inherently uncertain
+   *  variations (Q4 resolution in the v2 plan §8). */
+  accept_on_first_attempt?: boolean;
 }
 
 // ── Use-case-adaptive framing — same template, different vocabulary ──
@@ -659,6 +694,34 @@ function buildUserPrompt(ctx: EnrichMechanismSpecInput, mode: UseCaseMode): stri
   COARSE→FINE RULE: the narrative above is the EDGE-LEVEL story — which root cause connects to which outcome, and where the path is fragile. Your mechanism_of_action must stay CONSISTENT with it and go FINER: explain HOW the feature INTERNALLY produces the effect the chain claims, naming the SAME root cause + indicator. Do NOT restate the narrative. Fold the chain's mediators into runtime_flow / fidelity_signals where they're load-bearing, and make your kill_criteria + fidelity_signals directly address the chain's named weak points.`
     : "";
 
+  // Cooperation Plan v2 Fix E — research anchors block. When present,
+  // the LLM cites real source titles in research_basis instead of
+  // hallucinating precedents. Cap at 5; the prompt budget is already
+  // tight after chain_context + variations + room context.
+  const researchBlock =
+    ctx.research_anchors && ctx.research_anchors.length > 0
+      ? `\n\nRESEARCH ANCHORS (real precedents for research_basis — cite by title in research_basis.what_we_know, do NOT invent sources):\n${ctx.research_anchors
+          .slice(0, 5)
+          .map(
+            (a, i) =>
+              `  T${i + 1}. ${a.title.slice(0, 120)}${a.informs ? ` — ${a.informs.slice(0, 140)}` : ""}`,
+          )
+          .join("\n")}`
+      : "";
+
+  // Cooperation Plan v2 Fix E — score calibration block. Tells the
+  // LLM how confident to be in mechanism_of_action prose. The 0.4 and
+  // 0.7 thresholds match the route-side accept_on_first_attempt
+  // decision so the spec's tone is consistent with the retry policy.
+  const scoreBlock =
+    typeof ctx.top_variation_score === "number"
+      ? `\n\nVARIATION CONFIDENCE (rubric composite, 0..1): ${ctx.top_variation_score.toFixed(2)}
+  CALIBRATION:
+    ≥0.7 — the rubric grades this variation as strongly plausible. Be DECISIVE in mechanism_of_action: name the mechanism class, commit to the active_ingredients, don't hedge.
+    0.4-0.7 — moderate. Standard tone is fine; surface honest uncertainty in fidelity_signals + kill_criteria.
+    <0.4 — the rubric flags this variation as weak. Be EXPLORATORY in mechanism_of_action: use "candidate" / "we hypothesize" / "investigates whether" language, name the specific uncertainty in research_basis.what_we_dont_know, and make validation_experiment the load-bearing element. Do NOT inflate certainty to pass the quality gate — the caller will accept a calibrated-uncertainty spec on first attempt without retry.`
+      : "";
+
   return `${MODE_FRAMING[mode]}
 
 PARENT OBJECTIVE:
@@ -673,7 +736,7 @@ ${ctx.sub_objective_title}
 
 THE MECHANISM TO SPEC:
 
-[FEATURE / MECHANISM] ${ctx.feature.name}${positive}${fp}${def}${electedBlock}${painsBlock}${outcomesBlock}${chainBlock}
+[FEATURE / MECHANISM] ${ctx.feature.name}${positive}${fp}${def}${electedBlock}${painsBlock}${outcomesBlock}${chainBlock}${researchBlock}${scoreBlock}
 ${constraintsBlock}
 Produce the technical mechanism spec per the system instructions. Be specific, be honest about evidence, and make mechanism_of_action name the root cause engaged + the indicator moved.`;
 }
@@ -1232,11 +1295,6 @@ function parseSpec(
   };
 }
 
-/** Lowest of the 6 quality axes. */
-function minQuality(s: MechanismSpec): number {
-  return Math.min(...Object.values(s.quality_score));
-}
-
 /** Single-feature mechanism spec (v2). Soft-fails on LLM error.
  *
  *  Quality gate: the LLM self-scores 6 axes; if any axis lands below
@@ -1293,7 +1351,40 @@ export async function enrichMechanismSpec(
 
   const first = await attempt("");
   if (!first) return null;
-  if (minQuality(first) >= QUALITY_THRESHOLD) return first;
+
+  // Cooperation Plan v2 Fix E — specificity floor. When a strongly-
+  // scored variation underlies the spec, the spec's specificity axis
+  // self-score is at least the rubric composite. Prevents the perverse
+  // "better rubric grading → same retry behavior" outcome (Finding X2):
+  // a clearly-plausible variation (composite 0.85) producing a spec
+  // whose self-graded specificity is 0.55 shouldn't trigger a retry
+  // just because the spec author was modest. Only LIFTS specificity in
+  // the retry decision; the persisted quality_score is unchanged
+  // (consumers see the LLM's honest self-grade).
+  const effectiveMinQuality = (s: MechanismSpec): number => {
+    const axes = { ...s.quality_score };
+    if (typeof ctx.top_variation_score === "number") {
+      axes.specificity = Math.max(axes.specificity, ctx.top_variation_score);
+    }
+    return Math.min(...Object.values(axes));
+  };
+
+  if (effectiveMinQuality(first) >= QUALITY_THRESHOLD) return first;
+
+  // Cooperation Plan v2 Fix E — retry guard. When the caller says
+  // accept_on_first_attempt (e.g. top_variation_score < 0.4: the
+  // underlying mechanism is weak, retrying can't fix that — see Q4 in
+  // AUTOPILOT_COOPERATION_PLAN.md §8), persist the first attempt with
+  // a calibrated_uncertainty marker rather than burning budget on a
+  // retry that will produce a similarly hedged spec. The scoreBlock in
+  // buildUserPrompt has already instructed the LLM to be honestly
+  // exploratory in this case, so the first attempt is the right tone.
+  if (ctx.accept_on_first_attempt === true) {
+    return {
+      ...first,
+      quality_calibrated_uncertainty: true,
+    } as MechanismSpec & { quality_calibrated_uncertainty: true };
+  }
 
   // Weak — regenerate once, naming the axes that fell short.
   const weak = (
@@ -1304,6 +1395,11 @@ export async function enrichMechanismSpec(
   const suffix = `\n\nYOUR PREVIOUS DRAFT SCORED LOW ON: ${weak.join(", ")}. That means it is STILL TOO VAGUE on those axes. Regenerate the FULL spec, materially stronger on exactly those axes (more specific, more buildable, more measurable, better connected to user-visible behavior, more feasible, or clearer failure modes — as applicable). Earn the score; do not inflate it.`;
   const retry = await attempt(suffix);
   if (!retry) return first;
-  // Keep the stronger draft (prefer the retry on ties).
-  return minQuality(retry) >= minQuality(first) ? retry : first;
+  // Keep the stronger draft (prefer the retry on ties). Uses the
+  // specificity-floored comparator so a high-composite variation
+  // doesn't inadvertently pick a worse retry just because the retry's
+  // raw self-grade dipped.
+  return effectiveMinQuality(retry) >= effectiveMinQuality(first)
+    ? retry
+    : first;
 }

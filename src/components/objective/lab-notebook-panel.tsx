@@ -36,6 +36,7 @@ import {
   Check,
   ChevronDown,
   Combine,
+  Compass,
   FileCode,
   FlaskConical,
   Gauge,
@@ -1785,6 +1786,13 @@ function visualFor(
         icon: BookText,
         label: "Polished brief",
         color: appleVibe.accent.primary,
+      };
+    // ── 2026-05-30 — Cooperation Plan v2 Fix A — research stage ─
+    case "research_completed":
+      return {
+        icon: Compass,
+        label: "Researched precedents",
+        color: appleVibe.stage.features,
       };
     default:
       return {

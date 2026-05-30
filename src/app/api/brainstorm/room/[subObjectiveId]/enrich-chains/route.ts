@@ -36,6 +36,8 @@ import { readConstraints } from "@/lib/objective-canvas/constraints";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
 import { narrateChainsEnriched } from "@/lib/objective-canvas/compose-rich-narration";
 import type { RoomEdge } from "@/components/objective/sub-objective-room-view";
+import { pickRepresentativeVariation } from "@/lib/objective-canvas/pick-variation";
+import type { ItemVariation } from "@/lib/objective-canvas/expand-item-detail";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -50,6 +52,13 @@ interface EntityRow {
   entity_type: string;
   parent_sub_objective_id: string | null;
   causal_chain: Record<string, unknown> | null;
+  /** Cooperation Plan v2 Fix D — added so each chain's enrichment
+   *  prompt can be grounded in the feature's representative variation
+   *  (elected first, top-scored fallback) instead of the abstract
+   *  feature. Loaded for ALL entities; only feature entities consult
+   *  it during chain enrichment (pains + outcomes ignore the field).
+   *  Null for pre-autopilot entities or fresh inserts. */
+  expanded_detail: Record<string, unknown> | null;
 }
 
 interface EdgeRow {
@@ -136,9 +145,18 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
   const constraints = readConstraints(spaceForConstraints?.synthesis_data);
 
   // ── Load entities for this sub-objective + their causal_chain. ──
+  // Cooperation Plan v2 Fix D — added expanded_detail so each feature
+  // entity's representative variation (elected first, top-scored
+  // fallback) can ground the chain enrichment prompt. The autopilot
+  // pass OVERWRITES the room-gen narrative because it has access to
+  // scores (room-gen does not), and per-edge narrative is a single
+  // slot — see AUTOPILOT_COOPERATION_PLAN.md §2.D for the overwrite
+  // policy rationale.
   const { data: entityRows } = await db
     .from("entities")
-    .select("id, name, entity_type, parent_sub_objective_id, causal_chain")
+    .select(
+      "id, name, entity_type, parent_sub_objective_id, causal_chain, expanded_detail",
+    )
     .eq("parent_sub_objective_id", subObjectiveId);
   const entities = (entityRows ?? []) as EntityRow[];
   if (entities.length === 0) {
@@ -243,6 +261,36 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
                 (s): s is string => typeof s === "string",
               )
             : undefined,
+          // Cooperation Plan v2 Fix D — representative variation for
+          // the chain narrative. Elected first, top-scored fallback,
+          // undefined when neither (pre-autopilot state — chain
+          // narrative falls through to the abstract feature framing).
+          // Shared helper pickRepresentativeVariation keeps Fix D's
+          // selection rule in lockstep with Fix E (mechanism-spec).
+          representative_variation: (() => {
+            const variations =
+              featureEntity.expanded_detail &&
+              Array.isArray(
+                (featureEntity.expanded_detail as Record<string, unknown>)
+                  .variations,
+              )
+                ? ((featureEntity.expanded_detail as Record<string, unknown>)
+                    .variations as ItemVariation[])
+                : [];
+            const rep = pickRepresentativeVariation(variations);
+            if (!rep || typeof rep.name !== "string" || !rep.name) {
+              return undefined;
+            }
+            return {
+              name: rep.name,
+              description:
+                typeof rep.description === "string" ? rep.description : "",
+              effectiveness_score:
+                typeof rep.effectiveness_score === "number"
+                  ? rep.effectiveness_score
+                  : undefined,
+            };
+          })(),
         },
         outcome: {
           name: outcomeEntity.name,

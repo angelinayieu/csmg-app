@@ -18,6 +18,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { searchTavilyTechnicalAndDesign } from "@/lib/research/typed-search";
 import { llmJSON } from "@/lib/llm";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { narrateResearch } from "@/lib/objective-canvas/compose-rich-narration";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -156,6 +158,32 @@ export async function POST(req: NextRequest) {
       cached.technical.length > 0 ||
       cached.design.length > 0);
   if (!force && hasCached) {
+    // Cooperation Plan v2 Fix A — narrate cached re-fires so the
+    // notebook can render "research already on file" rather than
+    // staying silent when autopilot's research stage hits an
+    // already-warm row (room-gen's fire-and-forget pre-warm got
+    // there first, or the user previously opened the drawer).
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId: entity.space_id,
+      subObjectiveId: entity.parent_sub_objective_id ?? null,
+      proposalId: entityId,
+      action: "research_completed",
+      batchIntent: null,
+      metadata: {
+        entity_id: entityId,
+        entity_name: entity.name,
+        technical_count: cached!.technical.length,
+        design_count: cached!.design.length,
+        cached: true,
+        ...narrateResearch({
+          entityName: entity.name,
+          technicalCount: cached!.technical.length,
+          designCount: cached!.design.length,
+          cached: true,
+        }),
+      },
+    });
     return NextResponse.json({ detail_research: cached, cached: true });
   }
 
@@ -214,6 +242,31 @@ export async function POST(req: NextRequest) {
       .from("entities")
       .update({ detail_research: empty })
       .eq("id", entityId);
+    // Cooperation Plan v2 Fix A — narrate empty research so the user
+    // (and the chat agent) know Tavily ran but returned nothing, vs
+    // research having never been attempted. narration_body explains
+    // that scoring will fall back to first_principles only.
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId: entity.space_id,
+      subObjectiveId: entity.parent_sub_objective_id ?? null,
+      proposalId: entityId,
+      action: "research_completed",
+      batchIntent: null,
+      metadata: {
+        entity_id: entityId,
+        entity_name: entity.name,
+        technical_count: 0,
+        design_count: 0,
+        cached: false,
+        ...narrateResearch({
+          entityName: entity.name,
+          technicalCount: 0,
+          designCount: 0,
+          cached: false,
+        }),
+      },
+    });
     return NextResponse.json({ detail_research: empty });
   }
 
@@ -352,6 +405,35 @@ Return strict JSON.`,
       writeRes.error.message,
     );
   }
+
+  // Cooperation Plan v2 Fix A — narrate the success so the autopilot's
+  // research stage has a notebook footprint. Without this, /research
+  // returns 200 silently and the chat shows nothing — the runner's
+  // postLog only fires on skipped/failed (canvas-autopilot-runner.tsx
+  // §postLog). Mirrors how score / chains_enriched /
+  // mechanism_spec_generated / scan_complete each emit their own
+  // logDecision on the happy path.
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId: entity.space_id,
+    subObjectiveId: entity.parent_sub_objective_id ?? null,
+    proposalId: entityId,
+    action: "research_completed",
+    batchIntent: null,
+    metadata: {
+      entity_id: entityId,
+      entity_name: entity.name,
+      technical_count: technical.length,
+      design_count: design.length,
+      cached: false,
+      ...narrateResearch({
+        entityName: entity.name,
+        technicalCount: technical.length,
+        designCount: design.length,
+        cached: false,
+      }),
+    },
+  });
 
   return NextResponse.json({ detail_research: out });
 }
