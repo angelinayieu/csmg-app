@@ -160,7 +160,7 @@ interface AgentBuildSpec {
 
 1. **MechanismSpec: add `acceptance_criteria` + `scope_boundaries`** — mirror `kill_criteria`
    in `enrich-mechanism-spec.ts`: interface (~L228), `SPEC_SCHEMA` properties (~L684) + `required`
-   (~L735), prompt instruction (~L378), assembly (`strArr`, ~L866/903). *Type + generation only; back-compat (older specs lack them → compiler treats as empty).* No migration (lives in `expanded_detail` JSONB).
+   (~L735), prompt instruction (~L378), assembly (`strArr`, ~L866/903). *Type + generation only; back-compat (older specs lack them → compiler treats as empty).* No migration (lives in `expanded_detail` JSONB). **✅ Built 2026-05-29 — 6 spots mirrored `kill_criteria`; tsc-clean, no other `MechanismSpec` constructor broke. New specs now generate both fields; older specs read as empty.**
 2. **`compile-agent-build-spec.ts` (new lib)** — gathers, per the schema's "← from" tags:
    `StrategyBrief` + per-feature `MechanismSpec` (incl. `runtime_flow`, `decision_record`,
    `system_components`) + `synthesis_data.define` (P1.1) + `operational_constraints` +
@@ -168,15 +168,15 @@ interface AgentBuildSpec {
    per-variation `mockup_html`. Then one `llmJSON` synth call fills the connective tissue
    (conceptual_model bridge, data_model, build_sequence). Reuse `llm.ts`. **Degrades gracefully**:
    sections whose source data is absent (no MechanismSpec, rollup not yet run) emit
-   `[NEEDS CLARIFICATION]` rather than blocking.
+   `[NEEDS CLARIFICATION]` rather than blocking. **✅ Built 2026-05-29 — `compile-agent-build-spec.ts`: hybrid (deterministic assembly of the direct sections + ONE `llmJSON` call for the connective tissue: product_summary, conceptual_model, data_model, cross-feature data_flow, build_sequence, flows). Pure function; tsc-clean. The route (Item 3) gathers inputs + caches.**
 3. **Route `POST/GET /api/brainstorm/space/[spaceId]/agent-spec`** — POST compiles + caches on
    `synthesis_data.agent_build_spec` (state_hash); GET returns cached or 404. A second GET variant
    (or `?format=md`) returns a downloadable `.md` (mirror `deliverables/export` headers + a new
-   `renderAgentBuildSpecMarkdown`).
+   `renderAgentBuildSpecMarkdown`). **✅ Built 2026-05-29 — `space/[spaceId]/agent-spec/route.ts`: POST compile+cache (cheap `state_hash` pre-check skips the LLM on an unchanged canvas, mirroring brief-polish) + GET cached/stale/404. Gathers brief + per-feature MechanismSpecs (batched entity query) + define block + glossary + macro-layer skeleton (`objective_canvas.layers`). tsc-clean. `?format=md` deferred to Item 5's renderer.**
 4. **UI on `strategy-brief-view.tsx`** — an "Agent build spec" action beside Copy/Print/Polish:
    button → compile (spinner) → render the spec inline (or a panel) with **Copy** + **Download .md**
-   + a stale hint (reuse the `polishStale` pattern). Print-friendly.
-5. **`renderAgentBuildSpecMarkdown(spec)`** — deterministic md (mirror `renderStrategyBriefMarkdown`).
+   + a stale hint (reuse the `polishStale` pattern). Print-friendly. **✅ Built 2026-05-29 — `agent-build-spec-panel.tsx` (full-screen document render: macro→features→flow→design→decisions→sequence) + a `FileCode2` action on the Brief's action bar (POST compile → overlay) + the route now returns `markdown` for Copy. 6 surgical edits to the clean brief-view; tsc-clean. NOT click-tested live (needs an authed brief with elected, spec'd features).**
+5. **`renderAgentBuildSpecMarkdown(spec)`** — deterministic md (mirror `renderStrategyBriefMarkdown`). **✅ Built 2026-05-29 — in `compile-agent-build-spec.ts` (ordered macro→conceptual→data→flow→micro→design→decisions→sequence, skips empty sections); wired into the route's `?format=md` download. tsc-clean. Backend now complete end-to-end (Items 1–3, 5).**
 
 ## Operations
 

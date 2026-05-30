@@ -809,8 +809,14 @@ export function LabNotebookPanel({
                                 onNavigate?.({
                                   entityId: ev.subject.entity_id ?? null,
                                   variationId: ev.subject.variation_id ?? null,
+                                  // Fall back to the spawned room when the
+                                  // event itself was space-scoped but created
+                                  // a new room (concept_branched,
+                                  // theme_distilled, sub-objective add).
                                   subObjectiveId:
-                                    ev.subject.sub_objective_id ?? null,
+                                    ev.subject.sub_objective_id ??
+                                    ev.meta.spawned_sub_objective_id ??
+                                    null,
                                 })
                               }
                             />
@@ -2138,7 +2144,11 @@ function ChapterRow({
                   onNavigate({
                     entityId: c.subject.entity_id ?? null,
                     variationId: c.subject.variation_id ?? null,
-                    subObjectiveId: c.subject.sub_objective_id ?? null,
+                    // Same spawned-room fallback as the top-level row.
+                    subObjectiveId:
+                      c.subject.sub_objective_id ??
+                      c.meta.spawned_sub_objective_id ??
+                      null,
                   });
                 }}
                 className="cursor-pointer text-[11px] leading-snug"

@@ -82,8 +82,22 @@ export function ObjectiveCanvasShell({
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { objectiveTitle?: string; subs?: SubLite[] } | null) => {
         if (cancelled || !d) return;
-        setSubs(Array.isArray(d.subs) ? d.subs : []);
+        const nextSubs = Array.isArray(d.subs) ? d.subs : [];
+        setSubs(nextSubs);
         setObjectiveTitle(d.objectiveTitle ?? "");
+        // Warm the RSC cache for every room so clicking a sidebar
+        // circle (or the main-canvas Open Room link) feels instant.
+        // The room page is force-dynamic + ~6 Supabase queries per
+        // visit, so even one prewarmed RTT saves visible latency.
+        // Cheap: most spaces have <10 rooms, Next dedupes prefetches.
+        try {
+          router.prefetch(`/app/objective/${spaceId}`);
+          for (const s of nextSubs) {
+            router.prefetch(`/app/objective/${spaceId}/sub/${s.id}`);
+          }
+        } catch {
+          /* prefetch best-effort — never blocks paint */
+        }
       })
       .catch(() => {
         /* soft-fail — sidebar just shows the objective */
@@ -91,7 +105,7 @@ export function ObjectiveCanvasShell({
     return () => {
       cancelled = true;
     };
-  }, [spaceId]);
+  }, [spaceId, router]);
 
   // rooms = [Objective, ...subs]; active room derived from the URL.
   const rooms: SubLite[] = [

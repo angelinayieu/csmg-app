@@ -170,7 +170,10 @@ export async function POST(req: NextRequest) {
       lens_coverage: proposal.lens_coverage ?? [],
       confidence: proposal.confidence,
       post_confirm: true, // distinguishes from initial confirm events
-      new_goal_id: newGoalId,
+      // Canonical key (was new_goal_id pre-2026-06-01) so notebook
+      // row clicks can navigate to the spawned room — same field name
+      // theme_distilled / concept_branched / sub-objective-add all use.
+      spawned_sub_objective_id: newGoalId,
     },
   });
 

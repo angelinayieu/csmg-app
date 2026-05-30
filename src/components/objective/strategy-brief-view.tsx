@@ -29,6 +29,7 @@ import {
   RefreshCw,
   AlertCircle,
   ArrowUpRight,
+  FileCode2,
 } from "lucide-react";
 import {
   renderStrategyBriefMarkdown,
@@ -36,6 +37,8 @@ import {
   type BriefRoom,
 } from "@/lib/objective-canvas/build-strategy-brief";
 import { IndicatorValidityMatrix } from "@/components/objective/indicator-validity-matrix";
+import { AgentBuildSpecPanel } from "@/components/objective/agent-build-spec-panel";
+import type { AgentBuildSpec } from "@/lib/objective-canvas/compile-agent-build-spec";
 
 // ── Style tokens — local to this view ──
 //
@@ -81,6 +84,13 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
   const [polishing, setPolishing] = useState(false);
   const [polishError, setPolishError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Agent build spec (P1.2-B) — compiled on demand, shown in an overlay.
+  const [specOpen, setSpecOpen] = useState(false);
+  const [agentSpec, setAgentSpec] = useState<AgentBuildSpec | null>(null);
+  const [agentSpecMd, setAgentSpecMd] = useState("");
+  const [agentSpecStale, setAgentSpecStale] = useState(false);
+  const [specBusy, setSpecBusy] = useState(false);
+  const [specError, setSpecError] = useState<string | null>(null);
 
   // Reset copied flag after 2s.
   useEffect(() => {
@@ -118,6 +128,35 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
   const handlePrint = useCallback(() => {
     window.print();
   }, []);
+
+  const handleAgentSpec = useCallback(async () => {
+    setSpecBusy(true);
+    setSpecError(null);
+    try {
+      const res = await fetch(`/api/brainstorm/space/${spaceId}/agent-spec`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        spec?: AgentBuildSpec;
+        markdown?: string;
+        error?: string;
+      };
+      if (!res.ok || !json.spec) {
+        setSpecError(json.error ?? "Couldn't compile the build spec.");
+        return;
+      }
+      setAgentSpec(json.spec);
+      setAgentSpecMd(json.markdown ?? "");
+      setAgentSpecStale(false);
+      setSpecOpen(true);
+    } catch (err) {
+      setSpecError(err instanceof Error ? err.message : "Network error.");
+    } finally {
+      setSpecBusy(false);
+    }
+  }, [spaceId]);
 
   const handlePolish = useCallback(
     async (force = false) => {
@@ -162,6 +201,28 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
       }}
     >
       <style>{PRINT_STYLES}</style>
+      {specOpen && agentSpec && (
+        <AgentBuildSpecPanel
+          spaceId={spaceId}
+          spec={agentSpec}
+          markdown={agentSpecMd}
+          stale={agentSpecStale}
+          onClose={() => setSpecOpen(false)}
+        />
+      )}
+      {specError && (
+        <div
+          className="print-hide fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl px-4 py-2.5 text-[12.5px]"
+          style={{
+            background: "rgba(220,38,38,0.06)",
+            border: "1px solid rgba(220,38,38,0.18)",
+            color: "rgba(127,29,29,0.95)",
+          }}
+          role="alert"
+        >
+          {specError}
+        </div>
+      )}
       {/* ── Action bar (sticky, thin, prints hidden) ── */}
       <div
         className="brief-action-bar print-hide"
@@ -218,6 +279,16 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
               onClick={handlePrint}
               icon={<Printer className="h-3 w-3" />}
               label="Print"
+            />
+            <ActionBtn
+              onClick={handleAgentSpec}
+              icon={
+                <FileCode2
+                  className={`h-3 w-3${specBusy ? " animate-pulse" : ""}`}
+                />
+              }
+              label={specBusy ? "Compiling…" : "Agent build spec"}
+              accent
             />
           </div>
         </div>

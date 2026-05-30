@@ -14,11 +14,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
   Layers,
+  AlignLeft,
   LayoutGrid,
   RefreshCw,
   Sparkles,
@@ -62,6 +63,8 @@ import {
 import { CausalMap } from "@/components/objective/causal-map/CausalMap";
 import { MapInsightsPanel } from "@/components/objective/causal-map/MapInsightsPanel";
 import { LayerShelvesView } from "@/components/objective/layer-shelves-view";
+import { MacroSummaryCard } from "@/components/objective/macro-summary-card";
+import { buildMacroSummaryProps } from "@/lib/objective-canvas/build-macro-summary-props";
 import { useDecisionLogSignal } from "@/components/objective/causal-map/hooks/useDecisionLogSignal";
 import { useLocalPref } from "@/components/objective/causal-map/hooks/useLocalPref";
 import { SynergismWhiteboardTile } from "@/components/objective/synergism-whiteboard-tile";
@@ -228,13 +231,49 @@ export function MainCanvasView({
   );
   // Phase 12.A — Cards vs Map (per-space, sticky via localStorage).
   // Default "cards" so no existing flow breaks (N4); Map is opt-in.
-  const [canvasView, setCanvasView] = useLocalPref<"cards" | "map">(
+  const [canvasView, setCanvasView] = useLocalPref<"overview" | "cards" | "map">(
     `causalmap:view:${spaceId}`,
-    "cards",
+    "overview",
   );
   // Phase 11.0b — notebook state moved to the layout. router still
   // needed for IncrementalCutLab + CanvasAutopilotRunner refresh.
   const router = useRouter();
+
+  // Overview self-populate: the macro sub-problem bands come from the
+  // Tier-2 `macro_problems` roll-up, which otherwise only runs on a manual
+  // workbench click. When the user is on the Overview and the roll-up
+  // hasn't produced findings for this state yet, fire it ONCE, then refresh
+  // so the bands + distilled objective fill in. The run route caches by
+  // state_hash, so this is a one-shot per state (no loop, no re-spend).
+  const macroRollupFired = useRef(false);
+  useEffect(() => {
+    const hasStack = !!objectiveStack && objectiveStack.layers.length > 0;
+    const hasGeneratedRooms = subs.some((s) => s.generatedAt);
+    const hasMacroFindings = (analysis?.findings ?? []).some(
+      (f) => f.analysis_key === "macro_problems",
+    );
+    if (
+      canvasView !== "overview" ||
+      !hasStack ||
+      !hasGeneratedRooms ||
+      hasMacroFindings ||
+      macroRollupFired.current
+    ) {
+      return;
+    }
+    macroRollupFired.current = true;
+    fetch("/api/brainstorm/space/analysis/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ spaceId, operationKey: "macro_problems" }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (res?.findings_added?.length) router.refresh();
+      })
+      .catch(() => {});
+  }, [canvasView, objectiveStack, subs, analysis, spaceId, router]);
+
   // Phase 12.A.9 — live refresh. While the Map is active, poll the
   // decision log; on a new event (autopilot / score / enrichment /
   // layer regen / confirm) pull fresh server props so the map updates.
@@ -366,7 +405,7 @@ export function MainCanvasView({
                 border: `1px solid ${appleVibe.stroke.soft}`,
               }}
             >
-              {(["cards", "map"] as const).map((v) => {
+              {(["overview", "cards", "map"] as const).map((v) => {
                 const active = canvasView === v;
                 return (
                   <button
@@ -383,15 +422,27 @@ export function MainCanvasView({
                         : appleVibe.text.tertiary,
                       boxShadow: active ? appleVibe.shadow.chip : "none",
                     }}
-                    title={v === "cards" ? "Card grid" : "Causal system map"}
+                    title={
+                      v === "overview"
+                        ? "Plain summary — the goal + the path"
+                        : v === "cards"
+                          ? "The detailed layers + cards"
+                          : "Causal system map"
+                    }
                     aria-pressed={active}
                   >
-                    {v === "cards" ? (
+                    {v === "overview" ? (
+                      <AlignLeft className="h-3.5 w-3.5" strokeWidth={2.2} />
+                    ) : v === "cards" ? (
                       <LayoutGrid className="h-3.5 w-3.5" strokeWidth={2.2} />
                     ) : (
                       <Waypoints className="h-3.5 w-3.5" strokeWidth={2.2} />
                     )}
-                    {v === "cards" ? "Cards" : "Map"}
+                    {v === "overview"
+                      ? "Overview"
+                      : v === "cards"
+                        ? "Blueprint"
+                        : "Map"}
                   </button>
                 );
               })}
@@ -596,7 +647,18 @@ export function MainCanvasView({
       {/* Phase 12.A — Map view replaces the cards-region entirely.
           Otherwise: sub-objective cards as the flat grid (default) or
           the theme-row gallery ("by theme"). */}
-      {canvasView === "map" ? (
+      {canvasView === "overview" && stackPresent ? (
+        <div className="relative mx-auto mt-4 w-full max-w-3xl">
+          <MacroSummaryCard
+            {...buildMacroSummaryProps({
+              objective,
+              subs,
+              objectiveStack: objectiveStack!,
+              analysis,
+            })}
+          />
+        </div>
+      ) : canvasView === "map" ? (
         <div className="relative mx-auto mt-2 w-full">
           <CausalMap
             spaceId={spaceId}

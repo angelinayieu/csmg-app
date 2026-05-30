@@ -99,28 +99,56 @@ export default async function SubObjectiveRoomPage({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  // ── Sub-objective ──
-  const { data: sub } = (await db
-    .from("improvement_goals")
-    .select(
-      "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels, room_categories, annotations, layer_ordinals, layer_position_label, priority_vector",
-    )
-    .eq("id", subId)
-    .maybeSingle()) as { data: Sub | null };
+  // ── Wave 1: launch every query whose only dependency is (spaceId,
+  //    subId) IN PARALLEL. Was 5 serial round-trips; now one. ──
+  const [
+    subResult,
+    spaceModeResult,
+    layerRowsResult,
+    entityRowsResult,
+    edgeRowsResult,
+  ] = await Promise.all([
+    db
+      .from("improvement_goals")
+      .select(
+        "id, title, description, space_id, user_id, parent_goal_id, room_layers_generated_at, top_negative_outcome, room_lane_labels, room_categories, annotations, layer_ordinals, layer_position_label, priority_vector",
+      )
+      .eq("id", subId)
+      .maybeSingle(),
+    db
+      .from("spaces")
+      .select("pipeline_mode, synthesis_data")
+      .eq("id", spaceId)
+      .maybeSingle(),
+    db
+      .from("layer_ontology")
+      .select("id, slug, label, color")
+      .eq("space_id", spaceId),
+    // expanded_detail is selected so FEATURE items can hydrate the
+    // CategoryCard mechanism lineup without a /expand round-trip. It's
+    // a bulky blob, so we only ATTACH it to feature-lane items below.
+    db
+      .from("entities")
+      .select(
+        "id, name, description, entity_type, layer_ontology_id, causal_chain, expanded_detail",
+      )
+      .eq("parent_sub_objective_id", subId),
+    // agent_feedback carries the LLM-named mechanism (the specific
+    // lever) for the side panel to surface as deeper insight.
+    db
+      .from("edges")
+      .select(
+        "id, source_entity_id, target_entity_id, relationship_type, strength, polarity, conditions, approved_at, agent_feedback",
+      )
+      .eq("parent_sub_objective_id", subId),
+  ]);
 
+  const sub = subResult.data as Sub | null;
   if (!sub || sub.user_id !== user.id || sub.space_id !== spaceId) {
     notFound();
   }
 
-  // Pipeline mode drives auto-generate behavior in the room view.
-  // Also pull synthesis_data so we can extract the operational
-  // constraints (Phase 5a — surfaces them as a CONTROL VARIABLES
-  // strip inside the room).
-  const { data: spaceModeRow } = await db
-    .from("spaces")
-    .select("pipeline_mode, synthesis_data")
-    .eq("id", spaceId)
-    .maybeSingle();
+  const spaceModeRow = spaceModeResult.data;
   const pipelineMode: PipelineMode =
     spaceModeRow?.pipeline_mode === "review_each"
       ? "review_each"
@@ -130,31 +158,46 @@ export default async function SubObjectiveRoomPage({
   // PriorityStrip lazy-fires GET /priorities on mount which infers
   // + persists. Same lazy pattern as constraints' auto-infer-on-GET.
   const priorityVector = readPriorityVector(sub.priority_vector);
+  const layerRows = layerRowsResult.data;
+  const entityRows = entityRowsResult.data;
+  const edgeRows = edgeRowsResult.data;
 
-  // ── Parent annotations — carries the persisted readings the canvas
-  //    extracted from the parent objective's text; we surface them as
-  //    the Annotation Lens header inside the room so the user can see
-  //    which semantic readings seeded each generated item. Falls
-  //    through to the space-level root goal if no parent row exists. ──
-  let parentAnnotationsRaw: unknown = null;
-  if (sub.parent_goal_id) {
-    const { data: parent } = await db
-      .from("improvement_goals")
-      .select("annotations")
-      .eq("id", sub.parent_goal_id)
-      .maybeSingle();
-    parentAnnotationsRaw = parent?.annotations ?? null;
-  } else {
-    // Sub IS the root — fetch the space's root improvement_goal
-    // (parent_goal_id IS NULL) for annotations.
-    const { data: rootGoal } = await db
-      .from("improvement_goals")
-      .select("annotations")
-      .eq("space_id", spaceId)
-      .is("parent_goal_id", null)
-      .maybeSingle();
-    parentAnnotationsRaw = rootGoal?.annotations ?? null;
-  }
+  // ── Wave 2: queries that depend only on `sub`. Parent annotations
+  //    + sibling room IDs both branch on sub.parent_goal_id and run
+  //    in parallel. (Sibling-IDs launches optimistically even though
+  //    we'll only use the result when parentAnnotations is non-empty
+  //    — saves a round-trip in the common case.) ──
+  const parentAnnotationsPromise: Promise<unknown> = sub.parent_goal_id
+    ? db
+        .from("improvement_goals")
+        .select("annotations")
+        .eq("id", sub.parent_goal_id)
+        .maybeSingle()
+        .then((r: { data: { annotations?: unknown } | null }) => r.data?.annotations ?? null)
+    : db
+        .from("improvement_goals")
+        .select("annotations")
+        .eq("space_id", spaceId)
+        .is("parent_goal_id", null)
+        .maybeSingle()
+        .then((r: { data: { annotations?: unknown } | null }) => r.data?.annotations ?? null);
+
+  const siblingRoomIdsPromise: Promise<string[]> = sub.parent_goal_id
+    ? db
+        .from("improvement_goals")
+        .select("id")
+        .eq("parent_goal_id", sub.parent_goal_id)
+        .neq("id", subId)
+        .then((r: { data: Array<{ id: string }> | null }) =>
+          (r.data ?? []).map((row) => row.id),
+        )
+    : Promise.resolve([]);
+
+  const [parentAnnotationsRaw, siblingIds] = await Promise.all([
+    parentAnnotationsPromise,
+    siblingRoomIdsPromise,
+  ]);
+
   const parentAnnotations = normalizeAnnotations(parentAnnotationsRaw);
   // K1 — sub-objective's own annotations. Parallel lens, scoped to
   // this sub-objective's text. Split into title-range vs description-
@@ -167,77 +210,62 @@ export default async function SubObjectiveRoomPage({
     subAnnotations,
   );
 
-  // ── O3 — Cross-room annotation coverage ──
-  // Same parent annotations seed every sibling room in the space.
-  // When the user hovers a chip in this room's lens strip, we want to
-  // surface "+N items in other rooms also derive from this reading"
-  // so the annotation's load-bearing status is visible even when its
+  // ── Wave 3: sibling entity rows for cross-room annotation coverage.
+  //    Only fires if parentAnnotations exists AND siblings exist —
+  //    the conditional that gates the work, not the work that gates
+  //    the conditional. ──
+  // O3 — Same parent annotations seed every sibling room. When the
+  // user hovers a chip in this room's lens strip, we want to surface
+  // "+N items in other rooms also derive from this reading" so the
+  // annotation's load-bearing status is visible even when its
   // derivations live elsewhere. Without this, a high-utility cross-
   // room annotation looks orphaned at the per-room level.
-  //
-  // Strategy: load sibling rooms' entities (causal_chain only — no
-  // expanded_detail bulk), aggregate derived_from_annotation_phrases
-  // by phrase, then map to parentAnnotation indices.
   const crossRoomCoverageByIndex: Record<number, number> = {};
-  if (parentAnnotations.length > 0 && sub.parent_goal_id) {
-    const { data: siblingRoomRows } = await db
-      .from("improvement_goals")
-      .select("id")
-      .eq("parent_goal_id", sub.parent_goal_id)
-      .neq("id", subId);
-    const siblingIds = (
-      (siblingRoomRows ?? []) as Array<{ id: string }>
-    ).map((r) => r.id);
-    if (siblingIds.length > 0) {
-      const { data: siblingEntityRows } = await db
-        .from("entities")
-        .select("parent_sub_objective_id, causal_chain")
-        .in("parent_sub_objective_id", siblingIds);
-      // Aggregate: phrase (lowercased) → count of items deriving from
-      // it. A single item with 3 dimensions on the same phrase counts
-      // ONCE per item; an item across 3 rooms counts 3.
-      const countByPhrase = new Map<string, number>();
-      for (const row of (siblingEntityRows ?? []) as Array<{
-        parent_sub_objective_id: string;
-        causal_chain: Record<string, unknown> | null;
-      }>) {
-        const dfa = row.causal_chain?.derived_from_annotations;
-        if (!Array.isArray(dfa)) continue;
-        const itemPhrases = new Set<string>();
-        for (const entry of dfa as Array<{ phrase?: unknown }>) {
-          if (
-            typeof entry?.phrase === "string" &&
-            entry.phrase.trim().length > 0
-          ) {
-            itemPhrases.add(entry.phrase.trim().toLowerCase());
-          }
-        }
-        for (const p of itemPhrases) {
-          countByPhrase.set(p, (countByPhrase.get(p) ?? 0) + 1);
+  if (parentAnnotations.length > 0 && siblingIds.length > 0) {
+    const { data: siblingEntityRows } = await db
+      .from("entities")
+      .select("parent_sub_objective_id, causal_chain")
+      .in("parent_sub_objective_id", siblingIds);
+    // Aggregate: phrase (lowercased) → count of items deriving from
+    // it. A single item with 3 dimensions on the same phrase counts
+    // ONCE per item; an item across 3 rooms counts 3.
+    const countByPhrase = new Map<string, number>();
+    for (const row of (siblingEntityRows ?? []) as Array<{
+      parent_sub_objective_id: string;
+      causal_chain: Record<string, unknown> | null;
+    }>) {
+      const dfa = row.causal_chain?.derived_from_annotations;
+      if (!Array.isArray(dfa)) continue;
+      const itemPhrases = new Set<string>();
+      for (const entry of dfa as Array<{ phrase?: unknown }>) {
+        if (
+          typeof entry?.phrase === "string" &&
+          entry.phrase.trim().length > 0
+        ) {
+          itemPhrases.add(entry.phrase.trim().toLowerCase());
         }
       }
-      // Map phrase counts → 1-based annotation indices. CRITICAL:
-      // weight-sort first to match the lens strip + the LLM's view
-      // (the room generator sorts annotations by weight desc before
-      // showing them to the LLM, then the LLM emits 1-based indices
-      // against that sorted order; the in-room coverageByIndex uses
-      // those same indices). Without this sort, the cross-room
-      // subscript would land on the wrong chips.
-      const rankedForIndexing = [...parentAnnotations]
-        .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
-        .slice(0, 8);
-      rankedForIndexing.forEach((a, i) => {
-        const c = countByPhrase.get(a.phrase.trim().toLowerCase()) ?? 0;
-        if (c > 0) crossRoomCoverageByIndex[i + 1] = c;
-      });
+      for (const p of itemPhrases) {
+        countByPhrase.set(p, (countByPhrase.get(p) ?? 0) + 1);
+      }
     }
+    // Map phrase counts → 1-based annotation indices. CRITICAL:
+    // weight-sort first to match the lens strip + the LLM's view
+    // (the room generator sorts annotations by weight desc before
+    // showing them to the LLM, then the LLM emits 1-based indices
+    // against that sorted order; the in-room coverageByIndex uses
+    // those same indices). Without this sort, the cross-room
+    // subscript would land on the wrong chips.
+    const rankedForIndexing = [...parentAnnotations]
+      .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
+      .slice(0, 8);
+    rankedForIndexing.forEach((a, i) => {
+      const c = countByPhrase.get(a.phrase.trim().toLowerCase()) ?? 0;
+      if (c > 0) crossRoomCoverageByIndex[i + 1] = c;
+    });
   }
 
-  // ── Layers ──
-  const { data: layerRows } = await db
-    .from("layer_ontology")
-    .select("id, slug, label, color")
-    .eq("space_id", spaceId);
+  // ── Layer index ── (rows fetched in wave 1 above)
   const layerById = new Map<
     string,
     { slug: string; label: string; color: string | null }
@@ -252,17 +280,6 @@ export default async function SubObjectiveRoomPage({
     layerById.set(r.id, { slug: r.slug, label: r.label, color: r.color });
     layerBySlug.set(r.slug, { id: r.id, color: r.color });
   }
-
-  // ── Entities scoped to this sub-objective ──
-  // expanded_detail is selected so FEATURE items can hydrate the
-  // CategoryCard mechanism lineup without a /expand round-trip. It's a
-  // bulky blob, so we only ATTACH it to feature-lane items below.
-  const { data: entityRows } = await db
-    .from("entities")
-    .select(
-      "id, name, description, entity_type, layer_ontology_id, causal_chain, expanded_detail",
-    )
-    .eq("parent_sub_objective_id", subId);
 
   // Canonical labels are the source of truth — LLM-picked
   // room_lane_labels are stored but intentionally not surfaced.
@@ -318,15 +335,7 @@ export default async function SubObjectiveRoomPage({
     });
   }
 
-  // ── Edges scoped to this sub-objective ──
-  // agent_feedback carries the LLM-named mechanism (the specific
-  // lever) for the side panel to surface as deeper insight.
-  const { data: edgeRows } = await db
-    .from("edges")
-    .select(
-      "id, source_entity_id, target_entity_id, relationship_type, strength, polarity, conditions, approved_at, agent_feedback",
-    )
-    .eq("parent_sub_objective_id", subId);
+  // Edges fetched in wave 1 above.
   const edges: RoomEdge[] = ((edgeRows ?? []) as RoomEdge[]) ?? [];
 
   // ── Room placement on the outer ObjectiveStack ──

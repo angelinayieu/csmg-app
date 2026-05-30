@@ -122,11 +122,16 @@ For each layer, produce its sub-problems. For each sub-problem:
 
 Group ONLY within a layer (don't merge across layers). Every pain_item_id MUST come from that layer's input list. Prefer 2-4 sub-problems per layer; fewer if the layer has few problems.
 
+ALSO return "distilled_objective": ONE dense, plain sentence (≤ 45 words, no jargon, no archetype words like "substrate") that states the whole goal — the outcome, for whom, via what path. It should read like a crisp one-line executive summary of the objective.
+
 Return strict JSON.`;
 
     const user = `CORE OBJECTIVE:\n"""\n${state.core_objective_text.slice(0, 800)}\n"""\n\nLAYERS AND THEIR ROOM-PROBLEMS:\n${layerBlocks.join("\n\n")}${constraintsBlock}\n\nRoll each layer's problems up into its macro sub-problems per the system instructions.`;
 
-    const raw = await llmJSON<{ layers?: RawLayerGroup[] }>({
+    const raw = await llmJSON<{
+      layers?: RawLayerGroup[];
+      distilled_objective?: unknown;
+    }>({
       system,
       user,
       responseSchema: {
@@ -135,6 +140,7 @@ Return strict JSON.`;
           type: "object",
           additionalProperties: false,
           properties: {
+            distilled_objective: { type: "string" },
             layers: {
               type: "array",
               items: {
@@ -163,7 +169,7 @@ Return strict JSON.`;
               },
             },
           },
-          required: ["layers"],
+          required: ["layers", "distilled_objective"],
         },
       },
       temperature: 0.4,
@@ -225,6 +231,29 @@ Return strict JSON.`;
           disposition: "open",
           generated_at: now,
         });
+      });
+    }
+
+    // Distilled objective — one dense sentence, emitted as a special
+    // finding (no layer_ordinal, so the per-layer reader skips it). The
+    // Goal card's Overview reads this; falls back to a first sentence if absent.
+    const distilled =
+      typeof raw?.distilled_objective === "string"
+        ? raw.distilled_objective.trim()
+        : "";
+    if (distilled) {
+      findings.push({
+        id: `${KEY}__distilled_objective`,
+        analysis_key: KEY,
+        category: "structure",
+        severity: "info",
+        tier: 2,
+        title: distilled.slice(0, 200),
+        summary: distilled.slice(0, 200),
+        body: { kind: "distilled_objective", text: distilled },
+        references: { room_ids: [], item_ids: [] },
+        disposition: "open",
+        generated_at: now,
       });
     }
 

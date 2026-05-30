@@ -54,6 +54,7 @@ import type { VariationScoreEnvelope } from "@/lib/objective-canvas/score-variat
 import type { MechanismSpec } from "@/lib/objective-canvas/enrich-mechanism-spec";
 import type { GlossaryTerm } from "@/lib/objective-canvas/generate-glossary";
 import { GlossaryText } from "@/components/objective/glossary-text";
+import { MechanismExperienceView } from "@/components/objective/mechanism-experience-view";
 import {
   DecisionSurface,
   DECISION_ANCHORS,
@@ -61,6 +62,7 @@ import {
 import { VariationDeliverablesModal } from "@/components/objective/variation-deliverables-modal";
 import { IndicatorValidityMatrix } from "@/components/objective/indicator-validity-matrix";
 import { GoodhartPairingsPanel } from "@/components/objective/goodhart-pairings-panel";
+import { MechanismDataflowView } from "@/components/objective/mechanism-dataflow-view";
 
 interface DefinitionHighlight {
   phrase: string;
@@ -4447,8 +4449,12 @@ function MechanismSpecPanel({
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showDetail, setShowDetail] = useState(false);
-  const [showEng, setShowEng] = useState(false);
+  // Four-tab strip replaces the prior showDetail/showEng tier
+  // toggles. Summary = strategic essentials. Data flow = the DAG.
+  // Experience = the designed end-user artifact. Engineering = the
+  // full text spec for builders. See MECHANISM_EXPERIENCE_SPEC.md §3.
+  type SpecTab = "summary" | "dataflow" | "experience" | "engineering";
+  const [activeTab, setActiveTab] = useState<SpecTab>("summary");
 
   const generate = useCallback(async () => {
     if (loading) return;
@@ -4468,7 +4474,10 @@ function MechanismSpecPanel({
         return;
       }
       onSpecGenerated(json.mechanism_spec as MechanismSpec);
-      setShowDetail(true);
+      // Land on Summary after a fresh generation — the user just
+      // hit "Generate," they want the strategic essentials first,
+      // not the full engineering dump.
+      setActiveTab("summary");
     } catch {
       setError("Network error — try again.");
     } finally {
@@ -4552,25 +4561,10 @@ function MechanismSpecPanel({
             </p>
           </div>
 
-          {/* ── PRIORITY: what the user sees (mechanism → UI link) ── */}
-          {spec.user_visible_behavior && (
-            <div>
-              <div
-                className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
-                style={{ color: appleVibe.text.tertiary }}
-              >
-                What the user sees
-              </div>
-              <p
-                className="text-[12px] font-light leading-relaxed"
-                style={{ color: appleVibe.text.secondary }}
-              >
-                {spec.user_visible_behavior}
-              </p>
-            </div>
-          )}
-
-          {/* ── Chips (evidence + quality gate) + tier toggles ── */}
+          {/* ── Chips (evidence + quality gate) ──
+              Persistent above the tab strip — these are context
+              badges, not tab content, so they read no matter which
+              tab is active. */}
           <div className="flex flex-wrap items-center gap-1.5">
             {evidence && (
               <span
@@ -4602,42 +4596,66 @@ function MechanismSpecPanel({
               );
             })()}
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setShowDetail((v) => !v)}
-              className="inline-flex items-center gap-0.5 text-[10.5px] font-semibold"
-              style={{ color: appleVibe.text.tertiary }}
-              aria-expanded={showDetail}
-            >
-              {showDetail ? (
-                <ChevronUp className="h-3 w-3" strokeWidth={2} />
-              ) : (
-                <ChevronDown className="h-3 w-3" strokeWidth={2} />
-              )}
-              {showDetail ? "Hide mechanism" : "Mechanism"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowEng((v) => !v)}
-              className="inline-flex items-center gap-0.5 text-[10.5px] font-semibold"
-              style={{ color: appleVibe.text.tertiary }}
-              aria-expanded={showEng}
-            >
-              {showEng ? (
-                <ChevronUp className="h-3 w-3" strokeWidth={2} />
-              ) : (
-                <ChevronDown className="h-3 w-3" strokeWidth={2} />
-              )}
-              {showEng ? "Hide engineering spec" : "Engineering spec"}
-            </button>
-          </div>
+          {/* ── Tab strip — Vision Pro segmented control ──
+              4 tabs partition the spec content. Active tab carries
+              the white glass pill; inactives blend into the dark
+              tinted track. Replaces the prior two-toggle accordion
+              (showDetail/showEng) for a cleaner browse experience. */}
+          {(() => {
+            const TABS: ReadonlyArray<{ id: SpecTab; label: string }> = [
+              { id: "summary", label: "Summary" },
+              { id: "dataflow", label: "Data flow" },
+              { id: "experience", label: "Experience" },
+              { id: "engineering", label: "Engineering" },
+            ];
+            return (
+              <div
+                role="tablist"
+                aria-label="Mechanism spec sections"
+                className="flex w-full gap-0.5 rounded-full p-0.5"
+                style={{
+                  background: "rgba(15,23,42,0.045)",
+                  border: `1px solid ${appleVibe.stroke.hairline}`,
+                }}
+              >
+                {TABS.map((t) => {
+                  const active = activeTab === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => setActiveTab(t.id)}
+                      className="flex-1 rounded-full px-2 py-1 text-[10.5px] font-semibold transition-all"
+                      style={{
+                        background: active
+                          ? "rgba(255,255,255,0.92)"
+                          : "transparent",
+                        color: active
+                          ? appleVibe.text.primary
+                          : appleVibe.text.tertiary,
+                        boxShadow: active
+                          ? "0 1px 0 rgba(255,255,255,0.7) inset, 0 1px 4px rgba(11,18,40,0.06)"
+                          : "none",
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
-          {/* ── TIER 2: Mechanism (showDetail) ── */}
-          {showDetail && (
+          {/* ── Tab content — outer wrapper renders for any non-Experience
+              tab; each inner block self-gates on activeTab. Summary +
+              Data flow + Engineering all draw from the blocks below. */}
+          {activeTab !== "experience" && (
             <div className="flex flex-col gap-3">
-              {(spec.mechanism_hypothesis.if_do ||
-                spec.mechanism_hypothesis.then_improves) && (
+              {activeTab === "summary" &&
+                (spec.mechanism_hypothesis.if_do ||
+                  spec.mechanism_hypothesis.then_improves) && (
                 <div
                   className="rounded-xl px-2.5 py-2"
                   style={{
@@ -4665,7 +4683,7 @@ function MechanismSpecPanel({
                 </div>
               )}
 
-              {spec.active_ingredients.length > 0 && (
+              {activeTab === "summary" && spec.active_ingredients.length > 0 && (
                 <div>
                   <div
                     className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -4702,7 +4720,7 @@ function MechanismSpecPanel({
                 </div>
               )}
 
-              {spec.input_data.length > 0 && (
+              {activeTab === "dataflow" && spec.input_data.length > 0 && (
                 <div>
                   <div
                     className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -4727,7 +4745,7 @@ function MechanismSpecPanel({
                 </div>
               )}
 
-              {spec.how_it_works.length > 0 && (
+              {activeTab === "engineering" && spec.how_it_works.length > 0 && (
                 <div>
                   <div
                     className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -4759,71 +4777,53 @@ function MechanismSpecPanel({
                 </div>
               )}
 
-              {spec.fidelity_signals.length > 0 && (
-                <PlanningGroup
-                  label="Done right when"
-                  items={spec.fidelity_signals}
-                  tone="info"
-                />
-              )}
-              {spec.kill_criteria.length > 0 && (
-                <PlanningGroup
-                  label="Abandon if"
-                  items={spec.kill_criteria}
-                  tone="warn"
-                />
-              )}
+              {activeTab === "engineering" &&
+                spec.fidelity_signals.length > 0 && (
+                  <PlanningGroup
+                    label="Done right when"
+                    items={spec.fidelity_signals}
+                    tone="info"
+                  />
+                )}
+              {activeTab === "engineering" &&
+                spec.kill_criteria.length > 0 && (
+                  <PlanningGroup
+                    label="Abandon if"
+                    items={spec.kill_criteria}
+                    tone="warn"
+                  />
+                )}
             </div>
           )}
 
-          {/* ── TIER 3: Engineering spec (showEng) ── */}
-          {showEng && (
+          {/* ── More tab content — Data flow tab (runtime_flow DAG) and
+              Engineering tab (everything else under here). Experience
+              tab gets its own block below. */}
+          {activeTab !== "experience" && (
             <div className="flex flex-col gap-3">
-              {spec.runtime_flow.length > 0 && (
+              {activeTab === "dataflow" && spec.runtime_flow.length > 0 && (
                 <div>
                   <div
-                    className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
-                    style={{ color: appleVibe.text.tertiary }}
+                    className="mb-1.5 flex items-baseline justify-between"
                   >
-                    Runtime flow
+                    <div
+                      className="text-[10px] font-semibold uppercase tracking-[0.1em]"
+                      style={{ color: appleVibe.text.tertiary }}
+                    >
+                      Runtime flow
+                    </div>
+                    <div
+                      className="text-[9.5px] font-light"
+                      style={{ color: appleVibe.text.faint }}
+                    >
+                      hover an edge for the data token
+                    </div>
                   </div>
-                  <ol className="flex flex-col gap-1">
-                    {spec.runtime_flow.map((r, i) => (
-                      <li
-                        key={i}
-                        className="rounded-xl px-2.5 py-1.5"
-                        style={{
-                          background: "rgba(255,255,255,0.6)",
-                          border: `1px solid ${appleVibe.stroke.hairline}`,
-                        }}
-                      >
-                        <div
-                          className="flex gap-2 text-[11.5px] font-light leading-snug"
-                          style={{ color: appleVibe.text.primary }}
-                        >
-                          <span
-                            className="flex-shrink-0 font-semibold"
-                            style={{ color: appleVibe.text.tertiary }}
-                          >
-                            {i + 1}.
-                          </span>
-                          <span>{r.step}</span>
-                        </div>
-                        <div
-                          className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 pl-5 text-[10px]"
-                          style={{ color: appleVibe.text.faint }}
-                        >
-                          <span>⚙ {r.component}</span>
-                          {r.data !== "—" && <span>· data: {r.data}</span>}
-                          {r.user_sees !== "—" && <span>· sees: {r.user_sees}</span>}
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
+                  <MechanismDataflowView spec={spec} />
                 </div>
               )}
 
-              {spec.implementation_methods.length > 0 && (
+              {activeTab === "engineering" && spec.implementation_methods.length > 0 && (
                 <div>
                   <div
                     className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -4885,7 +4885,7 @@ function MechanismSpecPanel({
                 </div>
               )}
 
-              {spec.decision_record.chosen && (
+              {activeTab === "engineering" && spec.decision_record.chosen && (
                 <div>
                   <div
                     className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -4943,7 +4943,7 @@ function MechanismSpecPanel({
                 </div>
               )}
 
-              {spec.system_components.length > 0 && (
+              {activeTab === "engineering" && spec.system_components.length > 0 && (
                 <div>
                   <div
                     className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -4990,7 +4990,7 @@ function MechanismSpecPanel({
                 </div>
               )}
 
-              {spec.dosage && (
+              {activeTab === "engineering" && spec.dosage && (
                 <div>
                   <div
                     className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -5011,6 +5011,7 @@ function MechanismSpecPanel({
                 </div>
               )}
 
+              {activeTab === "engineering" && (
               <div>
                 <div
                   className="mb-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -5050,7 +5051,9 @@ function MechanismSpecPanel({
                   )}
                 </div>
               </div>
+              )}
 
+              {activeTab === "engineering" && (
               <div>
                 <div
                   className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]"
@@ -5096,7 +5099,17 @@ function MechanismSpecPanel({
                   ))}
                 </div>
               </div>
+              )}
             </div>
+          )}
+
+          {/* ── EXPERIENCE TAB ──
+              The end-user-facing designed view. Self-contained component:
+              renders the v3 premium artifact when design_intent is
+              present, falls back to a legacy "What the user sees" text
+              block when not, returns null when neither is available. */}
+          {activeTab === "experience" && (
+            <MechanismExperienceView spec={spec} />
           )}
         </div>
       )}

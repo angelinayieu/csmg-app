@@ -74,6 +74,7 @@ import {
   type OperationalConstraints,
   type UseCaseMode,
 } from "./constraints";
+import { loadUiSkillSystem } from "./ui-skill-system";
 
 export interface MechanismActiveIngredient {
   /** Short noun phrase — the component, e.g. "fixed 25-min work
@@ -143,6 +144,69 @@ export interface MechanismRuntimeStep {
   data: string;
   /** User-visible effect at this step, or "—" when internal. */
   user_sees: string;
+  /** v3 — structured data tokens this step EMITS. Token IDs
+   *  (snake_case, ≤40 chars) that other steps can `consumes`.
+   *  Wires `runtime_flow` into a directed DAG so the L3 data-flow
+   *  view can render the exact dependency graph instead of parsing
+   *  the `data` free-text. Empty array = step emits nothing
+   *  consumable by later steps. Optional on the interface (old
+   *  stored rows lack it). */
+  produces?: string[];
+  /** v3 — token IDs this step REQUIRES from upstream (input_data or
+   *  earlier `produces`). Pairs with `produces` to build the DAG. */
+  consumes?: string[];
+  /** v3 — what KIND of user-facing surface this step manifests on,
+   *  when it manifests at all. Drives the Experience tab's per-step
+   *  iconography (screen → device frame, notification → toast, etc).
+   *  Null when the step is purely internal (`user_sees === "—"`). */
+  visual_intent?:
+    | "screen"
+    | "notification"
+    | "ambient"
+    | "physical"
+    | "background"
+    | null;
+  /** v3 — concise 1-2 sentence sketch of what the user DOES at this
+   *  step and how it feels — the experience layer that turns
+   *  `user_sees` from a description into a designed moment. Null
+   *  when the step is internal. */
+  interaction_sketch?: string | null;
+}
+
+/** v3 — opinionated design intent for the mechanism's Experience
+ *  view. Composed from existing globals.css tokens so the Experience
+ *  renderer doesn't need to invent new design language — it just
+ *  picks slots from the established Vision-Pro substrate.
+ *
+ *  All fields required when present on a spec: the model is asked to
+ *  COMMIT to a design direction, not punt. The Experience view
+ *  reuses these to choose glass tier, accent color, density,
+ *  motion, and hero composition. */
+export interface MechanismDesignIntent {
+  /** Glass elevation from the existing 4-tier system
+   *  (`.glass-plate`/`.glass-card`/`.glass-float`/`.glass-hero`). */
+  glass_tier: "plate" | "card" | "float" | "hero";
+  /** Semantic accent — picks the existing accent palette by intent,
+   *  not by raw color. */
+  accent_intent: "signal" | "warning" | "growth" | "insight" | "neutral";
+  /** Information density target for the Experience hero. */
+  density: "airy" | "comfortable" | "dense";
+  /** Default motion vocabulary on mount + interaction. */
+  motion_intent: "still" | "breathing" | "reveal" | "responsive";
+  /** Dominant pattern for the hero composition. The Experience
+   *  renderer dispatches on this to pick the right layout. */
+  hero_pattern:
+    | "metric"
+    | "flow"
+    | "cycle"
+    | "before_after"
+    | "evidence"
+    | "decision";
+  /** MoSCoW reduction trace from the UI skill pack: what was kept
+   *  (Must), what was deferred (Could/Should), what was removed
+   *  (Won't) — with one-line rationale each. Tells the user WHY the
+   *  Experience view is shaped this way. 2-6 entries. */
+  reduction_log: string[];
 }
 
 /** One way to BUILD the mechanism — the implementation-method
@@ -247,6 +311,18 @@ export interface MechanismSpec {
   /** Which tier produced this — for the MethodBadge. Always "rubric"
    *  (single analytic LLM pass). */
   evaluation_method: "rubric";
+  /** v3 — opinionated design intent for the Experience view.
+   *  Optional on the interface so old stored specs (which lack it)
+   *  still parse cleanly; required in the LLM schema so every new
+   *  generation commits to a direction. */
+  design_intent?: MechanismDesignIntent;
+  /** v3 — stable identity slug shared with the room glossary +
+   *  cross-room weave. Reserved here so the parallel concept-slug
+   *  workstream can populate it without a schema migration; the
+   *  generator emits null until that lands. See
+   *  ROOM_ANNOTATION_GLOSSARY_PHASE2_PLAN.md +
+   *  MACRO_ROLLUP_AND_COORDINATION_SPEC.md Step 5. */
+  concept_slug?: string | null;
 }
 
 export interface EnrichMechanismSpecInput {
@@ -365,7 +441,16 @@ Produce these fields:
 
 5. how_it_works (3-7 ordered steps) — the operational procedure / transformation logic, trigger → effect. Each ≤140 chars.
 
-6. runtime_flow (4-8 rows) — the EXECUTABLE sequence. Each row: { step (what happens), component (which component does it), data (data in → out, or "—"), user_sees (the user-visible effect at this step, or "—" if internal) }. This is the engineering spine — be concrete about which component touches which data.
+6. runtime_flow (4-8 rows) — the EXECUTABLE sequence. Each row carries BOTH the engineering spine AND the experience layer:
+   • step — what happens (imperative)
+   • component — which component does it
+   • data — data in → out (free-text, or "—")
+   • user_sees — what the user observes at this step, or "—" if internal
+   • produces — token IDs this step EMITS (snake_case, ≤40 chars each). Used by later steps' \`consumes\` to wire a DAG. Empty array if nothing consumable. Example: ["ranked_candidates", "ranking_explanation"].
+   • consumes — token IDs this step REQUIRES from earlier steps' \`produces\` or from input_data. Empty array if self-contained. Example: ["user_active_goal", "ranked_candidates"].
+   • visual_intent — what KIND of surface this step manifests on, or null when purely internal (user_sees === "—"). One of: "screen" (a primary view), "notification" (toast / push / banner), "ambient" (peripheral signal — color, hum, glow), "physical" (a real-world object or action), "background" (silent server-side work the user only notices by its result).
+   • interaction_sketch — 1-2 concise sentences on what the USER DOES at this step + how it should FEEL. Lead with verb. Null when purely internal. Examples: "User flicks the deck up; the top card eases out with a subtle spring while the next one breathes forward." / "User taps Approve; the row collapses into a single confirmed line and the next item slides into focus."
+   This is the engineering spine AND the experience layer — be concrete about both. The L3 Data-flow view consumes produces/consumes; the Experience view consumes visual_intent/interaction_sketch.
 
 7. system_components (2-6) — concrete parts to build/provision. Each: name + category (per USE-CASE framing) + detail.
 
@@ -394,7 +479,7 @@ Produce these fields:
    • specificity — is it specific, not generic platitudes?
    • technical_depth — could an engineer build from it?
    • measurability — can the system measure whether it worked?
-   • ui_connection — does it connect to actual user-visible UI/behavior?
+   • ui_connection — how well does the spec connect to actual user-visible UI/behavior? Grade against three concrete checks: (a) every runtime_flow row where user_sees ≠ "—" has a non-null visual_intent AND a concrete interaction_sketch; (b) design_intent's glass_tier / accent_intent / density / motion_intent / hero_pattern form a COHERENT story (e.g. "dense + reveal + cycle" is plausible, "dense + still + decision" is contradictory); (c) the reduction_log shows at least one MoSCoW kept-or-dropped choice with rationale. Three checks pass → ≥0.8; two → ~0.6; one or zero → ≤0.4.
    • feasibility — is it buildable under the constraints?
    • failure_mode_clarity — are the failure modes named clearly?
    Score honestly — a low score is a useful signal, not a failure. Do NOT inflate.
@@ -403,11 +488,22 @@ Produce these fields:
 
 17. scope_boundaries (2-5) — what this mechanism explicitly does NOT do, to stop scope creep ("does not handle multi-user shared streaks", "no offline mode in v1"). Concrete non-goals, not vague disclaimers.
 
+18. design_intent — opinionated design direction for the Experience view. Every field is REQUIRED — commit to a choice, don't punt:
+   • glass_tier — pick the elevation tier from the existing glass system: "plate" (subtle), "card" (default), "float" (elevated panel), "hero" (the highest, most-blurred surface — reserved for showstopper moments).
+   • accent_intent — pick by MEANING, not color: "signal" (information / live data), "warning" (caution / fragile state), "growth" (progress / positive momentum), "insight" (analytical / synthesized), "neutral" (default).
+   • density — "airy" (lots of breathing room, one big idea), "comfortable" (balanced — the default for most mechanisms), "dense" (many small data points, reserved for instruments/dashboards).
+   • motion_intent — "still" (no animation, archival feel), "breathing" (subtle ambient pulse — for live/running state), "reveal" (mount-in choreography — for new generations), "responsive" (motion ties tightly to user input — for direct-manipulation feel).
+   • hero_pattern — the dominant composition of the Experience hero. Pick by the SHAPE of the mechanism: "metric" (one big number + delta — for measurement mechanisms), "flow" (3-step ribbon — for transformation mechanisms), "cycle" (loop diagram — for feedback-loop mechanisms), "before_after" (split — for state-change mechanisms), "evidence" (quotes + citations — for research-grounded mechanisms), "decision" (fork — for branching / gating mechanisms).
+   • reduction_log (2-6 items) — your MoSCoW reduction trace per the UI skill pack: what you KEPT and what you DROPPED, each one-line with rationale. Format: "Kept: X — because Y" / "Dropped: A — because B". Show the discipline.
+
+19. concept_slug — set to null. Reserved for a parallel workstream that stamps a stable identity slug on annotations + room entities; the generator does not populate it yet.
+
 Rules:
 - EVERY field references something specific from the feature, its elected direction, the room's pains/root_causes, or the outcomes/indicators. Generic filler is forbidden.
 - If the user ELECTED a variation, spec THAT chosen direction concretely.
 - Respect the operational constraints. A spec the user can't build is wasted.
 - Be honest about evidence_strength + quality_score.
+- design_intent must be COHERENT with the mechanism's nature: a slow archival audit mechanism should not pick "responsive" motion + "dense" + "decision"; a live monitoring instrument should not pick "still" + "airy". Reduction_log should reflect at least one real tradeoff you made.
 
 Return JSON matching the response schema. No prose outside the JSON.`;
 
@@ -613,8 +709,45 @@ const SPEC_SCHEMA = {
             component: { type: "string" },
             data: { type: "string" },
             user_sees: { type: "string" },
+            // v3 — produces/consumes wire the steps into a DAG so the
+            // L3 data-flow view can render the exact dependency
+            // graph without parsing the free-text `data` field.
+            // Strict mode forces these to be REQUIRED in the schema;
+            // the LLM emits [] when the step has nothing to declare.
+            produces: {
+              type: "array",
+              items: { type: "string" },
+            },
+            consumes: {
+              type: "array",
+              items: { type: "string" },
+            },
+            // v3 — visual_intent + interaction_sketch drive the
+            // Experience tab. Null when the step is purely internal
+            // (i.e. user_sees === "—").
+            visual_intent: {
+              type: ["string", "null"],
+              enum: [
+                "screen",
+                "notification",
+                "ambient",
+                "physical",
+                "background",
+                null,
+              ],
+            },
+            interaction_sketch: { type: ["string", "null"] },
           },
-          required: ["step", "component", "data", "user_sees"],
+          required: [
+            "step",
+            "component",
+            "data",
+            "user_sees",
+            "produces",
+            "consumes",
+            "visual_intent",
+            "interaction_sketch",
+          ],
         },
       },
       system_components: {
@@ -738,6 +871,59 @@ const SPEC_SCHEMA = {
           "failure_mode_clarity",
         ],
       },
+      // v3 — opinionated design intent for the Experience view.
+      // Every new generation commits; old stored rows (which lack
+      // this) keep working because the TS interface marks it
+      // optional. parseSpec defaults to a neutral block on absence.
+      design_intent: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          glass_tier: {
+            type: "string",
+            enum: ["plate", "card", "float", "hero"],
+          },
+          accent_intent: {
+            type: "string",
+            enum: ["signal", "warning", "growth", "insight", "neutral"],
+          },
+          density: {
+            type: "string",
+            enum: ["airy", "comfortable", "dense"],
+          },
+          motion_intent: {
+            type: "string",
+            enum: ["still", "breathing", "reveal", "responsive"],
+          },
+          hero_pattern: {
+            type: "string",
+            enum: [
+              "metric",
+              "flow",
+              "cycle",
+              "before_after",
+              "evidence",
+              "decision",
+            ],
+          },
+          reduction_log: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: [
+          "glass_tier",
+          "accent_intent",
+          "density",
+          "motion_intent",
+          "hero_pattern",
+          "reduction_log",
+        ],
+      },
+      // v3 — concept_slug reserved for the parallel concept-slug
+      // workstream. Generator emits null until that lands; the
+      // glossary/cross-room weave will populate it later.
+      concept_slug: { type: ["string", "null"] },
     },
     required: [
       "mechanism_of_action",
@@ -757,6 +943,8 @@ const SPEC_SCHEMA = {
       "scope_boundaries",
       "research_basis",
       "quality_score",
+      "design_intent",
+      "concept_slug",
     ],
   },
 };
@@ -811,15 +999,48 @@ function parseSpec(
 
   const how_it_works = strArr(raw?.how_it_works, 8, 200);
 
+  const VISUAL_INTENT_ALLOWED = new Set([
+    "screen",
+    "notification",
+    "ambient",
+    "physical",
+    "background",
+  ]);
   const runtime_flow: MechanismRuntimeStep[] = [];
   for (const r of (raw?.runtime_flow as Array<Record<string, unknown>>) ?? []) {
     const step = str(r?.step, 200);
     if (!step) continue;
+    const user_sees = str(r?.user_sees, 160) || "—";
+    const isInternal = user_sees === "—";
+
+    // visual_intent — clamp to enum, force null when the step is
+    // purely internal (matches the schema's intent + the parseSpec
+    // contract: internal steps don't have a visual surface).
+    const rawVi =
+      typeof r?.visual_intent === "string" ? r.visual_intent : "";
+    const visual_intent: MechanismRuntimeStep["visual_intent"] = isInternal
+      ? null
+      : VISUAL_INTENT_ALLOWED.has(rawVi)
+        ? (rawVi as NonNullable<MechanismRuntimeStep["visual_intent"]>)
+        : null;
+
+    // interaction_sketch — null when internal; trimmed + capped.
+    const rawSketch = str(r?.interaction_sketch, 280);
+    const interaction_sketch: string | null = isInternal
+      ? null
+      : rawSketch.length > 0
+        ? rawSketch
+        : null;
+
     runtime_flow.push({
       step,
       component: str(r?.component, 90) || "—",
       data: str(r?.data, 160) || "—",
-      user_sees: str(r?.user_sees, 160) || "—",
+      user_sees,
+      produces: strArr(r?.produces, 8, 40),
+      consumes: strArr(r?.consumes, 8, 40),
+      visual_intent,
+      interaction_sketch,
     });
     if (runtime_flow.length >= 9) break;
   }
@@ -911,6 +1132,67 @@ function parseSpec(
     failure_mode_clarity: clampAxis(qs.failure_mode_clarity),
   };
 
+  // ── design_intent — clamp each enum, fall back to a neutral
+  // mid-density / card / breathing / flow block when the LLM
+  // omitted or mis-emitted the field. Strict mode means a fresh
+  // generation always has it; the defaults only kick in for old
+  // stored rows replayed through parseSpec (rare).
+  const di = (raw?.design_intent as Record<string, unknown>) ?? {};
+  const GLASS_TIER_ALLOWED = new Set(["plate", "card", "float", "hero"]);
+  const ACCENT_INTENT_ALLOWED = new Set([
+    "signal",
+    "warning",
+    "growth",
+    "insight",
+    "neutral",
+  ]);
+  const DENSITY_ALLOWED = new Set(["airy", "comfortable", "dense"]);
+  const MOTION_INTENT_ALLOWED = new Set([
+    "still",
+    "breathing",
+    "reveal",
+    "responsive",
+  ]);
+  const HERO_PATTERN_ALLOWED = new Set([
+    "metric",
+    "flow",
+    "cycle",
+    "before_after",
+    "evidence",
+    "decision",
+  ]);
+
+  const rawGT = typeof di.glass_tier === "string" ? di.glass_tier : "";
+  const rawAI = typeof di.accent_intent === "string" ? di.accent_intent : "";
+  const rawDen = typeof di.density === "string" ? di.density : "";
+  const rawMI = typeof di.motion_intent === "string" ? di.motion_intent : "";
+  const rawHP = typeof di.hero_pattern === "string" ? di.hero_pattern : "";
+
+  const design_intent: MechanismDesignIntent = {
+    glass_tier: GLASS_TIER_ALLOWED.has(rawGT)
+      ? (rawGT as MechanismDesignIntent["glass_tier"])
+      : "card",
+    accent_intent: ACCENT_INTENT_ALLOWED.has(rawAI)
+      ? (rawAI as MechanismDesignIntent["accent_intent"])
+      : "neutral",
+    density: DENSITY_ALLOWED.has(rawDen)
+      ? (rawDen as MechanismDesignIntent["density"])
+      : "comfortable",
+    motion_intent: MOTION_INTENT_ALLOWED.has(rawMI)
+      ? (rawMI as MechanismDesignIntent["motion_intent"])
+      : "breathing",
+    hero_pattern: HERO_PATTERN_ALLOWED.has(rawHP)
+      ? (rawHP as MechanismDesignIntent["hero_pattern"])
+      : "flow",
+    reduction_log: strArr(di.reduction_log, 6, 240),
+  };
+
+  // ── concept_slug — reserved stub. Generator emits null today;
+  // tolerate any prior populated value if a parallel session ever
+  // wrote one (forward-compat).
+  const rawSlug = str(raw?.concept_slug, 80);
+  const concept_slug: string | null = rawSlug.length > 0 ? rawSlug : null;
+
   return {
     mechanism_of_action,
     mechanism_hypothesis,
@@ -932,6 +1214,8 @@ function parseSpec(
     use_case_mode: mode,
     generated_at: new Date().toISOString(),
     evaluation_method: "rubric",
+    design_intent,
+    concept_slug,
   };
 }
 
@@ -952,11 +1236,21 @@ export async function enrichMechanismSpec(
   const mode = resolveUseCaseMode(ctx.constraints);
   const userPrompt = buildUserPrompt(ctx, mode);
 
+  // Load the UI design skill pack as a system-prompt PREFIX. Stable
+  // across calls + cached at module scope, so it forms an
+  // identical-prefix message that OpenAI's automatic prompt cache
+  // can hit on repeated generations within the cache window. Empty
+  // string when the pack is missing — generator degrades cleanly.
+  const uiSkillPrefix = await loadUiSkillSystem();
+
   async function attempt(systemSuffix: string): Promise<MechanismSpec | null> {
     let raw: Record<string, unknown>;
     try {
       raw = await llmJSON({
-        system: SYSTEM_PROMPT + systemSuffix,
+        // Order matters for prefix-cache hits: STABLE prefix first
+        // (skill + base prompt), VARYING suffix last (weak-axes
+        // regenerate message on the retry path).
+        system: uiSkillPrefix + SYSTEM_PROMPT + systemSuffix,
         user: userPrompt,
         responseSchema: SPEC_SCHEMA,
         temperature: 0.3,
