@@ -128,7 +128,7 @@ export function AnnotationLensStrip({
             className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold transition hover:scale-[1.02]"
             style={{
               background:
-                "linear-gradient(135deg, rgba(59,130,246,0.95) 0%, rgba(168,85,247,0.95) 100%)",
+                "linear-gradient(135deg, rgba(59,130,246,0.95) 0%, rgba(71,85,105,0.95) 100%)",
               color: "white",
               boxShadow: "0 2px 6px -1px rgba(59,130,246,0.32)",
             }}

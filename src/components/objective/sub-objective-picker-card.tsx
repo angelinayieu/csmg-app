@@ -45,9 +45,6 @@ import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept
 import { LayerPositionChip } from "@/components/objective/layer-position-chip";
 import { BrainstormButton } from "@/components/objective/brainstorm/brainstorm-button";
 import { BrainstormPanel } from "@/components/objective/brainstorm/brainstorm-panel";
-import { BrainstormLibraryPopover } from "@/components/objective/brainstorm/brainstorm-library-popover";
-import type { BrainstormSession } from "@/lib/brainstorm/session-types";
-import { Bookmark } from "lucide-react";
 
 interface ObjectiveAnnotationLite {
   phrase: string;
@@ -146,15 +143,12 @@ export function SubObjectivePickerCard({
   // version of the variant lab. The "Generate better" bar stays for
   // single-intent manual presses; this opens the orchestrated 3-intent
   // → cleanup → critique → rank flow in a rail-card panel.
+  //
+  // Phase 7-Consolidate: the prior BrainstormLibraryPopover + Library
+  // button + rehydrate state were removed. Past sessions live as
+  // canonical library_objects of type='brainstorm_cluster' surfaced
+  // through the existing LibraryPanel — one library, one storage layer.
   const [brainstormOpen, setBrainstormOpen] = useState(false);
-  // Brainstorm library popover (Phase 5) — lists pinned past sessions
-  // for THIS space. Anchored to the brainstorm action row.
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  // Re-open state (Phase 4-polish). When non-null, the panel jumps to
-  // settled view with this session's ranking instead of running a fresh
-  // pipeline. Cleared on panel close so the next press starts clean.
-  const [rehydrateSession, setRehydrateSession] =
-    useState<BrainstormSession | null>(null);
 
   // ── Auto-propose on mount if nothing is cached ──
   useEffect(() => {
@@ -700,52 +694,22 @@ export function SubObjectivePickerCard({
         )}
       </div>
 
-      {/* Brainstorm — autopilot version of the variant lab (Phase 4 of
-          BRAINSTORM_MODULE_SPEC.md). Sits above the manual "Generate
-          better" bar so the orchestrated flow is the primary affordance;
-          the bar stays for single-intent power-user presses. The Library
-          button (Phase 5) surfaces pinned past sessions for this space. */}
-      <div className="relative mt-5 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <BrainstormButton
-            onClick={() => setBrainstormOpen(true)}
-            disabled={busy || !block || allProposals.length === 0}
-          />
-          <button
-            type="button"
-            onClick={() => setLibraryOpen((v) => !v)}
-            className="inline-flex items-center gap-1 rounded-xl border px-2.5 py-2 text-[11.5px] font-semibold transition hover:bg-gray-50"
-            style={{
-              borderColor: appleVibe.stroke.hairline,
-              background: libraryOpen
-                ? "rgba(254,243,199,0.5)"
-                : appleVibe.surface.card,
-              color: libraryOpen
-                ? "rgba(146,64,14,0.95)"
-                : appleVibe.text.secondary,
-            }}
-            title="Saved brainstorm sessions for this space"
-          >
-            <Bookmark className="h-3 w-3" strokeWidth={2.25} />
-            Library
-          </button>
-        </div>
+      {/* Brainstorm — autopilot version of the variant lab. Sits above
+          the manual "Generate better" bar so the orchestrated flow is
+          the primary affordance. Phase 7-Consolidate removed the
+          parallel Library popover — saved sessions appear in the
+          canonical LibraryPanel (library_objects of type 'brainstorm_cluster'). */}
+      <div className="mt-5 flex items-center justify-between gap-2">
+        <BrainstormButton
+          onClick={() => setBrainstormOpen(true)}
+          disabled={busy || !block || allProposals.length === 0}
+        />
         <span
           className="text-[10.5px] font-light"
           style={{ color: appleVibe.text.tertiary }}
         >
           or steer one intent at a time below ↓
         </span>
-        <BrainstormLibraryPopover
-          spaceId={spaceId}
-          open={libraryOpen}
-          onClose={() => setLibraryOpen(false)}
-          anchor="left"
-          onSelect={(s) => {
-            setRehydrateSession(s);
-            setBrainstormOpen(true);
-          }}
-        />
       </div>
 
       {/* Variant Lab bar — generate more, layered onto existing.
@@ -841,14 +805,8 @@ export function SubObjectivePickerCard({
           server re-fetch (the elect-candidate route already wrote it). */}
       <BrainstormPanel
         open={brainstormOpen}
-        onClose={() => {
-          setBrainstormOpen(false);
-          // Clear rehydrate after a brief delay so the panel's exit
-          // animation finishes without flipping back to idle state mid-fade.
-          setTimeout(() => setRehydrateSession(null), 400);
-        }}
+        onClose={() => setBrainstormOpen(false)}
         spaceId={spaceId}
-        rehydrateSession={rehydrateSession}
         onElected={(proposalId) => {
           setBlock((prev) => {
             if (!prev) return prev;

@@ -579,7 +579,7 @@ function ModeChip({
             {recommended && (
               <span
                 className="ml-1 text-[10px] uppercase tracking-wider"
-                style={{ color: "rgba(196,181,253,0.95)" }}
+                style={{ color: "rgba(148,163,184,0.95)" }}
               >
                 · recommended
               </span>
