@@ -28,6 +28,7 @@
 
 import type { TLShape } from "tldraw";
 import type { ClientNode, NodeKind } from "@/lib/synergy/types";
+import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 
 type Props = Record<string, unknown>;
 
@@ -113,4 +114,25 @@ export function boardShapesToNodes(shapes: TLShape[]): ClientNode[] {
   }
 
   return nodes;
+}
+
+/** Full text of a tldraw note/text/geo shape (richText doc → concatenated
+ *  leaves; falls back to a legacy string `text` prop). */
+function shapeFullText(props: Props): string {
+  const fromRich = props.richText ? collectText(props.richText).trim() : "";
+  if (fromRich) return fromRich;
+  return typeof props.text === "string" ? (props.text as string).trim() : "";
+}
+
+/** Project a single "idea" shape (a sticky note / text / labeled geo) into an
+ *  OperationTarget the canvas AI scanner can run operations against. Returns
+ *  null for cards (they carry their own hover menu) and for chrome shapes.
+ *  See CANVAS_AI_SCANNER_PLAN.md §3a. */
+export function shapeToScanTarget(shape: TLShape): OperationTarget | null {
+  if (shape.type !== "note" && shape.type !== "text" && shape.type !== "geo") {
+    return null;
+  }
+  const text = shapeFullText(shape.props as unknown as Props);
+  if (text.length < 3) return null;
+  return { text, shapeId: shape.id as string };
 }

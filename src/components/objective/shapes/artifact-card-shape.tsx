@@ -302,7 +302,7 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
               accent={color}
               saved={saved}
               onAction={(action) =>
-                dispatchCardAction({ action, entityId, title, roomId })
+                dispatchCardAction({ action, entityId, title, roomId, shapeId: shape.id })
               }
             />
           </div>

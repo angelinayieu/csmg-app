@@ -80,8 +80,8 @@ export function openUnfurl(anchor: UnfurlAnchor) {
 // ── Per-card hover actions ────────────────────────────────────────
 // Fired by a card's hover action bar (canvas-interactions/card-hover-
 // actions.tsx). WhiteboardBase listens: "save" → Library; the AI actions
-// (decompose/variations/questions/make_plan) are routed onward (today they
-// surface a request the brainstorm engine / item routes can fulfil).
+// (decompose/variations/questions/make_plan) run through the canvas operation
+// registry + executor — dropping result cards just below the source shape.
 
 export type CardAction =
   | "decompose"
@@ -95,6 +95,9 @@ export interface CardActionDetail {
   entityId: string;
   title: string;
   roomId?: string | null;
+  /** tldraw id of the source card — lets the executor tether results
+   *  (drop them just below the originating shape). */
+  shapeId?: string;
 }
 
 export const CARD_ACTION_EVENT = "objective-board:card-action";

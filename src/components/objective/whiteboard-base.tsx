@@ -50,8 +50,14 @@ import {
   saveCardsToLibrary,
   type SaveableCard,
 } from "./canvas-interactions/save-to-library";
-import { boardShapesToNodes } from "./canvas-interactions/shape-node-adapter";
+import {
+  boardShapesToNodes,
+  shapeToScanTarget,
+} from "./canvas-interactions/shape-node-adapter";
 import { FocusModePanel } from "./canvas-interactions/focus-mode-panel";
+import { executeCardOperation } from "./canvas-interactions/operation-executor";
+import { AiScannerPanel } from "./canvas-interactions/ai-scanner-panel";
+import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
 import { ListChecks } from "lucide-react";
 import { BoardHint } from "./board-hint";
@@ -465,19 +471,37 @@ export function WhiteboardBase({
     // the bus for the brainstorm engine's handler — not owned here.
     function onCardAction(e: Event) {
       const d = (e as CustomEvent<CardActionDetail>).detail;
-      if (!d || d.action !== "save") return;
-      void (async () => {
-        const { saved: n } = await saveCardsToLibrary(spaceId, [
-          {
-            objectType: "feature",
-            title: d.title,
-            sourceEntityId: d.entityId,
-            sourceSubObjectiveId: d.roomId ?? null,
-          },
-        ]);
-        // Confirm back to the card so its Save tile shows "Saved ✓".
-        if (n >= 1) dispatchCardSaved(d.entityId);
-      })();
+      if (!d) return;
+      if (d.action === "save") {
+        void (async () => {
+          const { saved: n } = await saveCardsToLibrary(spaceId, [
+            {
+              objectType: "feature",
+              title: d.title,
+              sourceEntityId: d.entityId,
+              sourceSubObjectiveId: d.roomId ?? null,
+            },
+          ]);
+          // Confirm back to the card so its Save tile shows "Saved ✓".
+          if (n >= 1) dispatchCardSaved(d.entityId);
+        })();
+        return;
+      }
+      // AI actions (decompose/variations/questions/make_plan) → run via the
+      // canvas operation registry + executor; results land as cards just
+      // below the source shape.
+      const editor = editorRef.current;
+      if (!editor) return;
+      void executeCardOperation(
+        editor,
+        {
+          text: d.title,
+          shapeId: d.shapeId,
+          entityId: d.entityId,
+          roomId: d.roomId ?? undefined,
+        },
+        d.action,
+      );
     }
 
     window.addEventListener(DEPLOY_CARD_EVENT, onDeploy);
@@ -755,11 +779,27 @@ function BoardOverlay({
     "board-overlay",
     () => {
       const shapes = editor.getCurrentPageShapes();
-      const cards = editor.getSelectedShapes().filter(isBoardCard);
+      const selected = editor.getSelectedShapes();
+      const cards = selected.filter(isBoardCard);
       const bounds = editor.getSelectionRotatedPageBounds();
       const screen = bounds
         ? editor.pageToScreen({ x: bounds.midX, y: bounds.minY })
         : null;
+      // Single "idea" shape (sticky note / text) selected, not mid-edit →
+      // offer the AI scanner. Cards already carry their own hover menu.
+      let single: { target: OperationTarget; sx: number; sy: number } | null =
+        null;
+      if (
+        selected.length === 1 &&
+        editor.getEditingShapeId() !== selected[0].id
+      ) {
+        const tgt = shapeToScanTarget(selected[0]);
+        const sb = tgt ? editor.getShapePageBounds(selected[0].id) : null;
+        if (tgt && sb) {
+          const pt = editor.pageToScreen({ x: sb.maxX, y: sb.minY });
+          single = { target: tgt, sx: pt.x, sy: pt.y };
+        }
+      }
       return {
         ids: cards.map((c) => c.id),
         payloads: cards.map(cardPayload),
@@ -774,6 +814,7 @@ function BoardOverlay({
           (s) => s.type === "room-card" || s.type === "artifact-card",
         ).length,
         insightCount: shapes.filter((s) => s.type === "insight-card").length,
+        single,
       };
     },
     [editor],
@@ -886,6 +927,19 @@ function BoardOverlay({
             view.saveables.length >= 1 ? handleSaveToLibrary : undefined
           }
           saved={saved}
+        />
+      )}
+
+      {/* AI scanner — a sticky-note / text idea selected → recommend + run ops. */}
+      {view.single && (
+        <AiScannerPanel
+          key={view.single.target.shapeId}
+          target={view.single.target}
+          x={view.single.sx}
+          y={view.single.sy}
+          onRun={(opId) =>
+            executeCardOperation(editor, view.single!.target, opId)
+          }
         />
       )}
 

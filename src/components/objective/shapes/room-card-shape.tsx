@@ -27,7 +27,10 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
+import { useState } from "react";
 import { Maximize2, GripVertical } from "lucide-react";
+import { CardHoverActions } from "../canvas-interactions/card-hover-actions";
+import { dispatchCardAction } from "../board-bus";
 
 export type RoomCardShape = TLBaseShape<
   "room-card",
@@ -104,6 +107,12 @@ function RoomCardRenderer({
   // to-card / send-to-board contexts leave it unset → full chrome.
   const compact = !!(shape.meta as { compact?: boolean }).compact;
 
+  // Per-card hover action bar (Synergism parity) — reveals just below the
+  // card. A room is already persistent and has no Library object type, so it
+  // shows only the generative actions (no Save). The bar is a DOM child of the
+  // hover wrapper, so crossing the pointer onto it doesn't fire mouseleave.
+  const [hovered, setHovered] = useState(false);
+
   function expand(e: React.MouseEvent) {
     e.stopPropagation();
     // Toggle semantics: the room becomes a window again, so the card
@@ -122,6 +131,11 @@ function RoomCardRenderer({
         pointerEvents: "all",
       }}
     >
+      <div
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{ position: "relative", width: "100%", height: "100%" }}
+      >
       <div
         style={{
           position: "relative",
@@ -296,6 +310,33 @@ function RoomCardRenderer({
             }}
           >
             On the board · drag to arrange · Expand to reopen
+          </div>
+        )}
+      </div>
+
+        {/* Hover action bar — reveals just below the card (Synergism
+            parity). Generative actions only; fires CardActions on the bus
+            for the brainstorm engine's handler. */}
+        {!compact && (
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 5px)",
+              left: "50%",
+              transform: `translateX(-50%) translateY(${hovered ? 0 : -4}px)`,
+              opacity: hovered ? 1 : 0,
+              pointerEvents: hovered ? "auto" : "none",
+              transition: "opacity 130ms ease-out, transform 130ms ease-out",
+              zIndex: 60,
+            }}
+          >
+            <CardHoverActions
+              accent={color}
+              actions={["decompose", "variations", "questions", "make_plan"]}
+              onAction={(action) =>
+                dispatchCardAction({ action, entityId: roomId, title, roomId, shapeId: shape.id })
+              }
+            />
           </div>
         )}
       </div>

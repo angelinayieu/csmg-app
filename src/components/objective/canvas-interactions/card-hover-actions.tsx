@@ -37,6 +37,7 @@ export function CardHoverActions({
   onAction,
   accent = "rgba(15,23,42,0.92)",
   saved = false,
+  actions,
 }: {
   onAction: (action: CardAction) => void;
   /** Card's lane accent — tints the icon on hover. */
@@ -44,7 +45,14 @@ export function CardHoverActions({
   /** True once the card's item is persisted to Library — the Save tile
    *  then shows a confirmed "Saved ✓" state in the accent color. */
   saved?: boolean;
+  /** Restrict which tiles show (default: all five). Always rendered in the
+   *  canonical order regardless of the order passed. Room cards pass the
+   *  generative subset (no Save — a room is already persistent). */
+  actions?: CardAction[];
 }) {
+  const shown = actions
+    ? ACTIONS.filter((a) => actions.includes(a.key))
+    : ACTIONS;
   return (
     <div
       style={{
@@ -58,7 +66,7 @@ export function CardHoverActions({
         backdropFilter: "blur(8px)",
       }}
     >
-      {ACTIONS.map(({ key, label, Icon }) => {
+      {shown.map(({ key, label, Icon }) => {
         const isSaved = saved && key === "save";
         const TileIcon = isSaved ? BookmarkCheck : Icon;
         const restColor = isSaved ? accent : "rgba(15,23,42,0.66)";
