@@ -57,6 +57,8 @@ import {
 import { FocusModePanel } from "./canvas-interactions/focus-mode-panel";
 import { executeCardOperation } from "./canvas-interactions/operation-executor";
 import { AiScannerPanel } from "./canvas-interactions/ai-scanner-panel";
+import { CollapsibleStylePanel } from "./canvas-interactions/collapsible-style-panel";
+import type { TLComponents } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
 import { ListChecks } from "lucide-react";
@@ -152,6 +154,12 @@ export type AiLinkFn = (
 // Custom shapes — room cards (collapsed rooms) + insight cards (AI
 // connect/synthesize results). tldraw supplies select/draw/note/arrow/
 // text/geo out of the box, which is the rest of the interactive surface.
+/** Collapse tldraw's always-open style palette into a glass icon — declutters
+ *  the top-right and stops it colliding with the Notebook pill. */
+const BOARD_COMPONENTS: TLComponents = {
+  StylePanel: CollapsibleStylePanel,
+};
+
 const CUSTOM_SHAPE_UTILS = [
   RoomCardShapeUtil,
   InsightCardShapeUtil,
@@ -520,6 +528,7 @@ export function WhiteboardBase({
     <div className="absolute inset-0">
       <Tldraw
         shapeUtils={CUSTOM_SHAPE_UTILS}
+        components={BOARD_COMPONENTS}
         onMount={handleMount}
         inferDarkMode={false}
         hideUi={!showUi}
