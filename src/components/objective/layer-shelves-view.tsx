@@ -610,31 +610,6 @@ export function LayerFlashcard({
           {sub.title}
         </h3>
 
-        {/* Counters / description */}
-        {sub.topNegativeOutcome ? (
-          <p
-            className="line-clamp-2 text-[11.5px] font-light italic leading-snug"
-            style={{ color: appleVibe.text.secondary }}
-          >
-            <span
-              className="font-semibold not-italic"
-              style={{ color: appleVibe.text.tertiary }}
-            >
-              Counters:
-            </span>{" "}
-            {sub.topNegativeOutcome}
-          </p>
-        ) : (
-          sub.description && (
-            <p
-              className="line-clamp-2 text-[11.5px] font-light leading-snug"
-              style={{ color: appleVibe.text.secondary }}
-            >
-              {sub.description}
-            </p>
-          )
-        )}
-
         {/* Results pills — the headline payoff */}
         {hasResults ? (
           <ResultsPills
