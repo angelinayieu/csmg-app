@@ -177,6 +177,10 @@ export interface BriefOpenItem {
 
 export interface StrategyBrief {
   objective_text: string;
+  /** P-CtD — polished one-line objective (the macro roll-up's
+   *  distilled_objective finding). Null until the roll-up runs; the
+   *  view + markdown fall back to objective_text. */
+  distilled_objective: string | null;
   space_id: string;
   generated_at: string;
   constraints: OperationalConstraints | null;
@@ -536,8 +540,23 @@ export function buildStrategyBrief(
     ),
   };
 
+  // P-CtD — title with the polished one-line objective (the macro
+  // roll-up's distilled_objective finding) instead of the raw prompt.
+  // The raw text stays on objective_text for the collapsible full view.
+  const distilledFinding = findings.find(
+    (f) =>
+      f.analysis_key === "macro_problems" &&
+      (f.body as { kind?: unknown } | null)?.kind === "distilled_objective",
+  );
+  const distilled_objective =
+    distilledFinding &&
+    typeof (distilledFinding.body as { text?: unknown }).text === "string"
+      ? (distilledFinding.body as { text: string }).text.trim() || null
+      : null;
+
   return {
     objective_text: state.core_objective_text,
+    distilled_objective,
     space_id: state.space_id,
     generated_at: new Date().toISOString(),
     constraints: state.constraints,
@@ -609,8 +628,12 @@ export function renderStrategyBriefMarkdown(brief: StrategyBrief): string {
 
   out.push(`# Strategy Brief`);
   out.push("");
-  out.push(`> ${brief.objective_text}`);
+  out.push(`> ${brief.distilled_objective || brief.objective_text}`);
   out.push("");
+  if (brief.distilled_objective) {
+    out.push(`_Full objective:_ ${brief.objective_text}`);
+    out.push("");
+  }
   out.push(
     `_${brief.totals.rooms} rooms · ${brief.totals.items} items · ${brief.totals.elected_variations} elected · ${brief.totals.composed_designs} composed · ${brief.totals.experiments_planned} experiments${
       brief.totals.expansion_nodes > 0

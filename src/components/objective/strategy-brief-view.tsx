@@ -326,8 +326,24 @@ export function StrategyBriefView({ spaceId, brief, polishStale }: Props) {
               fontFamily: FONT.display,
             }}
           >
-            {brief.objective_text}
+            {brief.distilled_objective || brief.objective_text}
           </h1>
+          {brief.distilled_objective && (
+            <details className="mt-2">
+              <summary
+                className="cursor-pointer text-[12px]"
+                style={{ color: COLOR.inkMuted }}
+              >
+                Full objective
+              </summary>
+              <p
+                className="mt-1.5 max-w-[70ch] text-[13px] leading-relaxed"
+                style={{ color: COLOR.inkMuted }}
+              >
+                {brief.objective_text}
+              </p>
+            </details>
+          )}
           <div
             className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]"
             style={{ color: COLOR.inkMuted }}
