@@ -25,7 +25,8 @@ import {
   type TLShapeId,
   resizeBox,
 } from "tldraw";
-import { GitMerge, Check, X } from "lucide-react";
+import { Check, X } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 
 export type InsightCardShape = TLBaseShape<
   "insight-card",
@@ -166,7 +167,7 @@ function InsightCardRenderer({
       >
         {/* Eyebrow — the AI provenance tag. */}
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-          <GitMerge style={{ width: 12, height: 12, color }} strokeWidth={2.4} />
+          <Sparkle style={{ width: 12, height: 12, color }} strokeWidth={2.4} />
           <span
             style={{
               fontSize: 9,

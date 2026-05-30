@@ -1,48 +1,44 @@
-// ── Smart-marker icon ──
+// ── Custom sparkle icon ──
 //
-// NOTE (2026-05-30): the design direction reversed — no sparkle/twinkle
-// glyphs anywhere in the product. This component keeps the `Sparkle`
-// export name purely for API stability across its many importers (so we
-// don't churn unrelated files), but renders a restrained, theme-neutral
-// straight-edged diamond instead of a twinkle. It inherits `currentColor`,
-// so callers' graphite/slate accents apply unchanged. New code should NOT
-// reach for a decorative glyph here — prefer a functional lucide icon for
-// the specific affordance.
+// Replaces lucide-react's Sparkles across the Objective Canvas
+// module. Reference: design ask 2026-05-24 — a 4-pointed twinkle
+// star with concave edges + a smaller secondary star offset to the
+// lower-right. Matches the pill-icon style the user shared.
 //
-// Typed + shaped as a lucide `LucideIcon` (forwardRef, LucideProps) so it
-// is a true drop-in: it renders as `<Sparkle className=… strokeWidth=… />`
-// AND is assignable to `icon={…}` props typed as `LucideIcon`.
+// API parity with lucide icons: accepts `className` (sized via
+// h-* w-*) and `strokeWidth` (ignored since the shape is filled,
+// kept so callers can swap without prop edits). Inherits color
+// from `currentColor`.
 
 import * as React from "react";
-import type { LucideIcon } from "lucide-react";
 
-export const Sparkle = React.forwardRef<
-  SVGSVGElement,
-  React.ComponentProps<LucideIcon>
->(function Sparkle(
-  // Strip lucide-only props so they don't land on the SVG as invalid
-  // attributes; `size` maps to width/height, `color` to the CSS color
-  // that `currentColor` reads. `strokeWidth` is intentionally ignored
-  // (the shape is filled), kept for API parity.
-  { className, size, color, strokeWidth, absoluteStrokeWidth, style, ...rest },
-  ref,
-) {
+interface SparkleProps extends React.SVGProps<SVGSVGElement> {
+  className?: string;
+  /** Ignored — kept for API parity with lucide-react icons. */
+  strokeWidth?: number;
+}
+
+export function Sparkle({
+  className,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  strokeWidth,
+  ...rest
+}: SparkleProps) {
   return (
     <svg
-      ref={ref}
       viewBox="0 0 24 24"
-      width={size ?? undefined}
-      height={size ?? undefined}
       fill="currentColor"
       stroke="none"
       className={className}
-      style={color ? { color, ...(style as React.CSSProperties) } : style}
       aria-hidden="true"
       {...rest}
     >
-      {/* Straight-edged diamond (rotated rounded square) — a neutral
-          marker with NO concave waist, so it can't read as a twinkle. */}
-      <path d="M12 3.2 L20.8 12 L12 20.8 L3.2 12 Z" strokeLinejoin="round" />
+      {/* Primary 4-point twinkle, weighted toward upper-left.
+          Quadratic curves give the sparkle its concave waist. */}
+      <path d="M9 1.5 Q10 9.2 16.8 10.2 Q10 11.2 9 18.9 Q8 11.2 1.2 10.2 Q8 9.2 9 1.5 Z" />
+      {/* Secondary smaller twinkle, lower-right.
+          Subtler — establishes the sparkle "cluster" feel. */}
+      <path d="M18 13.5 Q18.45 17.4 22.6 17.9 Q18.45 18.4 18 22.3 Q17.55 18.4 13.4 17.9 Q17.55 17.4 18 13.5 Z" />
     </svg>
   );
-}) as LucideIcon;
+}
