@@ -34,6 +34,7 @@ import {
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { narrateChainsEnriched } from "@/lib/objective-canvas/compose-rich-narration";
 import type { RoomEdge } from "@/components/objective/sub-objective-room-view";
 
 export const runtime = "nodejs";
@@ -507,6 +508,16 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
   // ── Log the chains_enriched notebook event. ──
   const avgChainStrength =
     enrichedChainCount > 0 ? strengthSum / enrichedChainCount : 0;
+  // v3 — rich narration: surfaces enrichment counts + orphan closure
+  // + avg strength as a chat body the user reads without expanding.
+  const narration = narrateChainsEnriched({
+    enrichedCount: enrichedChainCount,
+    newCount: newChainsCount,
+    avgStrength: avgChainStrength,
+    orphansClosed: orphansClosed.size,
+    subObjectiveId,
+    subObjectiveTitle: null,
+  });
   void logDecision(db, {
     userId: auth.user.id,
     spaceId,
@@ -519,6 +530,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       orphans_closed: orphansClosed.size,
       orphans_before: orphans.length,
       llm_errors: llmErrors,
+      ...narration,
     },
   });
 

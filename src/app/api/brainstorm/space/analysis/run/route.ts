@@ -23,6 +23,7 @@ import type {
   CrossRoomAnalysisState,
 } from "@/lib/objective-canvas/analyses/types";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -167,6 +168,54 @@ export async function POST(req: NextRequest) {
       "[analysis/run] persist failed (non-fatal):",
       writeRes.error.message,
     );
+  }
+
+  // ── Notebook visibility for the macro rollup operations ──
+  // The autopilot runner fires distill_concepts + distill_macro_problems
+  // automatically after the scan; without this, those operations are
+  // silent in the chat. distill_concepts → `theme_distilled` (its
+  // canonical semantic); distill_macro_problems → `macro_rolled_up`
+  // (the dedicated action added in 20260909_narration_actions.sql per
+  // INTAKE_TO_BRIEF_SURFACING_PLAN.md §4). Each carries a
+  // RichNarrationMeta blob with title + body + facts so the chat
+  // reads natively when the notebook redesign lands. Soft-fail.
+  if (
+    operationKey === "distill_concepts" ||
+    operationKey === "distill_macro_problems"
+  ) {
+    const isMacro = operationKey === "distill_macro_problems";
+    const opLabel = isMacro ? "macro sub-problems" : "themes";
+    const verb = isMacro ? "Rolled up" : "Distilled";
+    const action = isMacro ? "macro_rolled_up" : "theme_distilled";
+    const titleSample =
+      typeof freshFindings[0]?.title === "string"
+        ? (freshFindings[0].title as string)
+        : "";
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId,
+      subObjectiveId: null,
+      action,
+      metadata: {
+        operation_key: operationKey,
+        finding_count: freshFindings.length,
+        narration_title: `${verb} ${freshFindings.length} ${opLabel}`,
+        narration_body:
+          freshFindings.length === 0
+            ? `The ${opLabel} pass ran but found no patterns this time.`
+            : titleSample
+              ? `${verb} ${freshFindings.length} ${opLabel} from across your rooms. Headline: ${titleSample.slice(0, 140)}.`
+              : `${verb} ${freshFindings.length} ${opLabel} from across your rooms.`,
+        narration_facts: [
+          {
+            label: opLabel,
+            value: String(freshFindings.length),
+            tone: "neutral",
+          },
+        ],
+        narration_tags: ["#macro", `#${operationKey}`],
+      },
+    });
   }
 
   return NextResponse.json({

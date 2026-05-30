@@ -16,6 +16,7 @@ import {
   runExportPromptRoundTrip,
 } from "@/lib/objective-canvas/generate-export-prompt";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -188,6 +189,28 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+
+  // Notebook visibility — only the fresh-gen path (cache hits silent).
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId: entity.space_id,
+    subObjectiveId:
+      typeof entity.parent_sub_objective_id === "string"
+        ? entity.parent_sub_objective_id
+        : null,
+    proposalId: entityId,
+    action: "deliverable_generated",
+    metadata: {
+      deliverable_subtype: "export_prompt",
+      entity_id: entityId,
+      entity_name: typeof entity.name === "string" ? entity.name : null,
+      variation_id: variationId,
+      variation_name:
+        typeof variation.name === "string" ? variation.name : null,
+      framing,
+      optimized: optimize,
+    },
+  });
 
   return NextResponse.json({
     export_prompt: finalPrompt,

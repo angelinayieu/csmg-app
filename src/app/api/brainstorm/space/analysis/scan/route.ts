@@ -15,6 +15,8 @@ import type {
   AnalysisFinding,
   CrossRoomAnalysisState,
 } from "@/lib/objective-canvas/analyses/types";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { narrateScanComplete } from "@/lib/objective-canvas/compose-rich-narration";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -116,6 +118,43 @@ export async function POST(req: NextRequest) {
       writeRes.error.message,
     );
   }
+
+  // Notebook visibility — closes the autopilot's silent ending.
+  // Count net-new findings vs the prior cached state so the row can
+  // render "swept canvas · 2 new patterns" only when something changed.
+  const priorFindingIds = new Set(
+    (cached?.findings ?? []).map((f) => f.id),
+  );
+  const newFindings = merged.filter((f) => !priorFindingIds.has(f.id));
+  const newFindingCount = newFindings.length;
+  // v3 — rich narration: surfaces a body summarizing what the scan
+  // found, plus the top new finding's title for the user to read
+  // without expanding.
+  const narration = narrateScanComplete({
+    findingCount: merged.length,
+    newFindingCount,
+    topFindings: newFindings.slice(0, 1).map((f) => ({
+      title:
+        typeof (f as { title?: unknown }).title === "string"
+          ? ((f as { title: string }).title as string)
+          : ((f as { headline?: string }).headline ?? ""),
+      severity:
+        typeof (f as { severity?: unknown }).severity === "string"
+          ? ((f as { severity: string }).severity as string)
+          : undefined,
+    })),
+  });
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId,
+    subObjectiveId: null,
+    action: "scan_complete",
+    metadata: {
+      finding_count: merged.length,
+      new_finding_count: newFindingCount,
+      ...narration,
+    },
+  });
 
   return NextResponse.json({ analysis: next });
 }

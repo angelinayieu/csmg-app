@@ -140,6 +140,25 @@ export async function POST(req: NextRequest) {
   if (method === "rubric") {
     const existing = entity.expanded_detail as ExpandedItemDetail | null;
     if (!existing || !Array.isArray(existing.variations) || existing.variations.length === 0) {
+      // Log the silent skip so the canvas autopilot doesn't look frozen
+      // when a fresh room's features were never expanded. Without this
+      // row the notebook shows nothing for the entire room — the
+      // FIX_PLAN's "the killer" path. Reuses the existing
+      // autopilot_iteration action (CHECK-constraint-safe; no migration).
+      void logDecision(db, {
+        userId: auth.user.id,
+        spaceId: entity.space_id,
+        subObjectiveId: entity.parent_sub_objective_id ?? null,
+        proposalId: entityId,
+        action: "autopilot_iteration",
+        metadata: {
+          stage: "score",
+          status: "skipped",
+          reason: "no_variations",
+          entity_id: entityId,
+          entity_name: entity.name,
+        },
+      });
       return NextResponse.json(
         {
           evaluation_method: "rubric",

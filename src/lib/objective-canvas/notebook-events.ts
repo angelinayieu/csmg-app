@@ -184,6 +184,26 @@ export interface NotebookEventMeta {
   /** mechanism_spec_generated — which use-case mode framed the spec
    *  (feature spec vs intervention protocol vs experimental method). */
   spec_use_case_mode?: "consumer_app" | "personal_health" | "scientific";
+  // ── 2026-05-29 — deliverable-visibility metadata ───────────────
+  /** scan_complete — total findings on the canvas after the run. */
+  finding_count?: number;
+  /** scan_complete — net-new findings vs the prior scan. */
+  new_finding_count?: number;
+  /** deliverable_generated — which artifact kind was produced. Drives
+   *  the row label ("Built mockup" vs "Built export prompt" etc.) and
+   *  filter routing. */
+  deliverable_subtype?:
+    | "mockup"
+    | "export_prompt"
+    | "description_doc"
+    | "prototype_brief"
+    | "agent_spec";
+  /** deliverable_generated — short human-readable size hint where it
+   *  makes sense ("12 pages", "2.3KB", "4 sections"). Free-form, the
+   *  row renders as-is or omits. */
+  deliverable_size?: string;
+  /** brief_polished — sentence count of the polished tldr (2 or 3). */
+  tldr_sentence_count?: number;
 }
 
 export interface NotebookEvent {

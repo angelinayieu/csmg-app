@@ -16,7 +16,7 @@
 //   • Variant Lab bar below proposals — primary "Generate 3 variants"
 //     button + expandable intent palette
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -44,6 +44,11 @@ import type {
 } from "@/lib/objective-canvas/cluster-proposals";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 import { LayerPositionChip } from "@/components/objective/layer-position-chip";
+import { BrainstormButton } from "@/components/objective/brainstorm/brainstorm-button";
+import { BrainstormPanel } from "@/components/objective/brainstorm/brainstorm-panel";
+import { BrainstormLibraryPopover } from "@/components/objective/brainstorm/brainstorm-library-popover";
+import type { BrainstormSession } from "@/lib/brainstorm/session-types";
+import { Bookmark } from "lucide-react";
 
 interface ObjectiveAnnotationLite {
   phrase: string;
@@ -138,6 +143,19 @@ export function SubObjectivePickerCard({
   // both the PriorConceptsStrip + per-proposal "↻ links to" badges
   // fire this. Null = closed.
   const [openConceptCode, setOpenConceptCode] = useState<string | null>(null);
+  // Brainstorm panel (Phase 4 of BRAINSTORM_MODULE_SPEC.md) — autopilot
+  // version of the variant lab. The "Generate better" bar stays for
+  // single-intent manual presses; this opens the orchestrated 3-intent
+  // → cleanup → critique → rank flow in a rail-card panel.
+  const [brainstormOpen, setBrainstormOpen] = useState(false);
+  // Brainstorm library popover (Phase 5) — lists pinned past sessions
+  // for THIS space. Anchored to the brainstorm action row.
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  // Re-open state (Phase 4-polish). When non-null, the panel jumps to
+  // settled view with this session's ranking instead of running a fresh
+  // pipeline. Cleared on panel close so the next press starts clean.
+  const [rehydrateSession, setRehydrateSession] =
+    useState<BrainstormSession | null>(null);
 
   // ── Auto-propose on mount if nothing is cached ──
   useEffect(() => {
@@ -145,6 +163,66 @@ export function SubObjectivePickerCard({
     void runAction("propose", { mode: "initial" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Auto-clustering — fingerprint of the most-recent fired set so we
+  // don't re-fire while a result is still in flight or already saved
+  // for the same proposal set. Reset on /propose so a new variant
+  // batch can re-cluster automatically.
+  const lastAutoClusterKeyRef = useRef<string | null>(null);
+
+  // Silent auto-cluster — fires whenever there are ≥5 proposals and
+  // either no analysis exists yet or the current analysis is stale
+  // (a new variant batch arrived since the last run). The user no
+  // longer needs to click "Detect clusters"; it just happens. View
+  // mode is NOT switched automatically — the batch view remains the
+  // default so users see what each generation pass produced; the
+  // toggle to "by theme" stays available.
+  useEffect(() => {
+    if (!block) return;
+    const proposals = block.proposals ?? [];
+    if (proposals.length < 5) return;
+    if (clusterBusy) return;
+    const key = proposals.map((p) => p.id).sort().join("|");
+    const existing = block.cluster_analysis as ClusterAnalysis | undefined;
+    const existingKey =
+      existing && Array.isArray(existing.clusters)
+        ? existing.clusters
+            .flatMap((c) => c.proposal_ids)
+            .sort()
+            .join("|")
+        : null;
+    const isFresh = existingKey !== null && existingKey === key;
+    if (isFresh) return;
+    if (lastAutoClusterKeyRef.current === key) return;
+    lastAutoClusterKeyRef.current = key;
+    setClusterBusy(true);
+    setClusterError(null);
+    void (async () => {
+      try {
+        const res = await fetch("/api/brainstorm/sub-objectives/cluster", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ spaceId, mode: "default" }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          setClusterError(json?.error ?? "Clustering failed.");
+          lastAutoClusterKeyRef.current = null; // allow retry on next change
+          return;
+        }
+        setBlock((prev) =>
+          prev ? { ...prev, cluster_analysis: json.cluster_analysis } : prev,
+        );
+      } catch (err) {
+        setClusterError(
+          err instanceof Error ? err.message : "Network error.",
+        );
+        lastAutoClusterKeyRef.current = null;
+      } finally {
+        setClusterBusy(false);
+      }
+    })();
+  }, [block, clusterBusy, spaceId]);
 
   // Top-8 weight-sorted lens — matches the prompt projection so
   // lens_coverage indices line up with the chips we render.
@@ -311,6 +389,48 @@ export function SubObjectivePickerCard({
     }
   }
 
+  /** Bulk disposition update — drives the Select-all toggle. Sets
+   *  every proposal's disposition to the same value (elected to
+   *  pick all, null to clear) optimistically, then fans out PATCHes
+   *  in parallel. Reverts on any failure. */
+  async function setAllDispositions(disposition: SubObjectiveDisposition) {
+    if (!block) return;
+    const prev = block;
+    const apply = (p: SubObjectiveProposal) => ({ ...p, disposition });
+    const optimistic: SubObjectiveBlock = {
+      ...block,
+      proposals: block.proposals.map(apply),
+      batches: block.batches?.map((b) => ({
+        ...b,
+        proposals: b.proposals.map(apply),
+      })),
+    };
+    setBlock(optimistic);
+    try {
+      const results = await Promise.all(
+        prev.proposals.map((p) =>
+          fetch("/api/brainstorm/sub-objectives/disposition", {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              spaceId,
+              proposalId: p.id,
+              disposition,
+            }),
+          }),
+        ),
+      );
+      const failed = results.find((r) => !r.ok);
+      if (failed) {
+        setError("Could not update all picks.");
+        setBlock(prev);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error.");
+      setBlock(prev);
+    }
+  }
+
   // ── Render ──
   if (loading) {
     return (
@@ -441,21 +561,46 @@ export function SubObjectivePickerCard({
           {allProposals.length} {block.category || "proposed"}
           {hasBatches && ` · ${batches.length} generations`}
         </Eyebrow>
-        <button
-          type="button"
-          onClick={() => runAction("propose", { mode: "regenerate" })}
-          disabled={busy}
-          className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
-          style={{
-            background: appleVibe.surface.chip,
-            color: appleVibe.text.secondary,
-            cursor: busy ? "wait" : "pointer",
-          }}
-          title="Wipe everything and regenerate from scratch"
-        >
-          <RefreshCw className="h-3 w-3" strokeWidth={2} />
-          Reset
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() =>
+              setAllDispositions(
+                totalElected === allProposals.length ? null : "elected",
+              )
+            }
+            disabled={busy || allProposals.length === 0}
+            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
+            style={{
+              background: appleVibe.surface.chip,
+              color: appleVibe.text.secondary,
+              cursor: busy ? "wait" : "pointer",
+            }}
+            title={
+              totalElected === allProposals.length
+                ? "Clear all picks"
+                : "Pick every proposal"
+            }
+          >
+            <Check className="h-3 w-3" strokeWidth={2} />
+            {totalElected === allProposals.length ? "Clear all" : "Select all"}
+          </button>
+          <button
+            type="button"
+            onClick={() => runAction("propose", { mode: "regenerate" })}
+            disabled={busy}
+            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
+            style={{
+              background: appleVibe.surface.chip,
+              color: appleVibe.text.secondary,
+              cursor: busy ? "wait" : "pointer",
+            }}
+            title="Wipe everything and regenerate from scratch"
+          >
+            <RefreshCw className="h-3 w-3" strokeWidth={2} />
+            Reset
+          </button>
+        </div>
       </div>
 
       <Heading>Pick the ones you want to fork</Heading>
@@ -490,15 +635,10 @@ export function SubObjectivePickerCard({
         />
       )}
 
-      {/* Cluster CTA / view toggle ──────────────────────────────────
-          - When no clustering has been run yet AND there are ≥5
-            proposals, show a "Detect clusters" CTA so the user can
-            collapse redundancy before forking.
-          - When clustering exists, show a small view toggle between
-            "by generation" (default batch view) and "by theme"
-            (cluster view).
-          - When clustering is stale (new batch since last run),
-            offer a refresh inside the toggle. */}
+      {/* Cluster bar — auto-fires on the proposal set; renders only
+          when there's something to surface (in-flight, results, or
+          error). View toggle flips between batch view and theme
+          view; user can manually re-cluster from the bar. */}
       {canCluster && (
         <ClusterControlBar
           hasClusters={hasClusters}
@@ -506,7 +646,6 @@ export function SubObjectivePickerCard({
           stale={!!clusterIsStale}
           viewMode={viewMode}
           onViewMode={setViewMode}
-          onRun={() => runCluster(false)}
           onRerun={() => runCluster(true)}
           busy={clusterBusy}
           error={clusterError}
@@ -560,6 +699,54 @@ export function SubObjectivePickerCard({
             ))}
           </ul>
         )}
+      </div>
+
+      {/* Brainstorm — autopilot version of the variant lab (Phase 4 of
+          BRAINSTORM_MODULE_SPEC.md). Sits above the manual "Generate
+          better" bar so the orchestrated flow is the primary affordance;
+          the bar stays for single-intent power-user presses. The Library
+          button (Phase 5) surfaces pinned past sessions for this space. */}
+      <div className="relative mt-5 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <BrainstormButton
+            onClick={() => setBrainstormOpen(true)}
+            disabled={busy || !block || allProposals.length === 0}
+          />
+          <button
+            type="button"
+            onClick={() => setLibraryOpen((v) => !v)}
+            className="inline-flex items-center gap-1 rounded-xl border px-2.5 py-2 text-[11.5px] font-semibold transition hover:bg-gray-50"
+            style={{
+              borderColor: appleVibe.stroke.hairline,
+              background: libraryOpen
+                ? "rgba(254,243,199,0.5)"
+                : appleVibe.surface.card,
+              color: libraryOpen
+                ? "rgba(146,64,14,0.95)"
+                : appleVibe.text.secondary,
+            }}
+            title="Saved brainstorm sessions for this space"
+          >
+            <Bookmark className="h-3 w-3" strokeWidth={2.25} />
+            Library
+          </button>
+        </div>
+        <span
+          className="text-[10.5px] font-light"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          or steer one intent at a time below ↓
+        </span>
+        <BrainstormLibraryPopover
+          spaceId={spaceId}
+          open={libraryOpen}
+          onClose={() => setLibraryOpen(false)}
+          anchor="left"
+          onSelect={(s) => {
+            setRehydrateSession(s);
+            setBrainstormOpen(true);
+          }}
+        />
       </div>
 
       {/* Variant Lab bar — generate more, layered onto existing.
@@ -647,6 +834,40 @@ export function SubObjectivePickerCard({
           currentSpaceId={spaceId}
         />
       )}
+
+      {/* Brainstorm panel (BRAINSTORM_MODULE_SPEC.md Phase 4). Rail-card
+          chrome — fixed-positioned, canvas-underneath stays interactive.
+          onElected mirrors disposition locally so the picker's lens
+          coverage strip + total counter reflect the change without a
+          server re-fetch (the elect-candidate route already wrote it). */}
+      <BrainstormPanel
+        open={brainstormOpen}
+        onClose={() => {
+          setBrainstormOpen(false);
+          // Clear rehydrate after a brief delay so the panel's exit
+          // animation finishes without flipping back to idle state mid-fade.
+          setTimeout(() => setRehydrateSession(null), 400);
+        }}
+        spaceId={spaceId}
+        rehydrateSession={rehydrateSession}
+        onElected={(proposalId) => {
+          setBlock((prev) => {
+            if (!prev) return prev;
+            const electOne = (p: SubObjectiveProposal): SubObjectiveProposal =>
+              p.id === proposalId
+                ? { ...p, disposition: "elected" }
+                : p;
+            return {
+              ...prev,
+              proposals: prev.proposals.map(electOne),
+              batches: (prev.batches ?? []).map((b) => ({
+                ...b,
+                proposals: b.proposals.map(electOne),
+              })),
+            };
+          });
+        }}
+      />
     </Shell>
   );
 }
@@ -1562,13 +1783,15 @@ function RetrospectivePanel({
 //   • Post-cluster: a view toggle (by generation / by theme) +
 //     refresh button when clustering is stale
 
+// Cluster bar — auto-fires now, so the bar is silent until either
+// (a) clustering is in flight (subtle status), or (b) clusters are
+// ready (view toggle). The manual CTA branch has been removed.
 function ClusterControlBar({
   hasClusters,
   clusterCount,
   stale,
   viewMode,
   onViewMode,
-  onRun,
   onRerun,
   busy,
   error,
@@ -1578,181 +1801,141 @@ function ClusterControlBar({
   stale: boolean;
   viewMode: "batches" | "clusters";
   onViewMode: (m: "batches" | "clusters") => void;
-  onRun: () => void;
   onRerun: () => void;
   busy: boolean;
   error: string | null;
 }) {
+  // Suppress the bar entirely while clustering is silently running
+  // for the first time — no clusters to toggle against yet, and the
+  // status is non-blocking. Only render when there's something to
+  // surface: clusters ready, busy + stale (re-cluster in flight), or
+  // an error.
+  if (!hasClusters && !error && !busy) return null;
+
   return (
     <div
-      className="mt-4 rounded-2xl border p-3"
+      className="mt-4 flex items-center justify-between gap-3 rounded-2xl px-3 py-2"
       style={{
-        background: "rgba(124,58,237,0.025)",
-        borderColor: hasClusters
-          ? "rgba(124,58,237,0.18)"
-          : appleVibe.stroke.hairline,
+        background: "rgba(15,23,42,0.025)",
+        border: `1px solid ${appleVibe.stroke.hairline}`,
         borderRadius: appleVibe.radius.md,
       }}
     >
-      {!hasClusters && (
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Sparkles
-              className="h-3 w-3 flex-shrink-0"
+      {/* Left: status / count */}
+      <div className="flex min-w-0 items-center gap-2">
+        {busy && !hasClusters ? (
+          <>
+            <RefreshCw
+              className="h-3 w-3 animate-spin flex-shrink-0"
               strokeWidth={2}
-              style={{ color: "rgba(91,33,182,0.9)" }}
+              style={{ color: appleVibe.text.tertiary }}
             />
             <span
-              className="text-[11px] font-semibold uppercase tracking-[0.14em]"
-              style={{ color: "rgba(91,33,182,0.95)" }}
+              className="text-[11.5px] font-medium"
+              style={{ color: appleVibe.text.secondary }}
             >
-              Detect clusters
+              Grouping by theme…
+            </span>
+          </>
+        ) : hasClusters ? (
+          <>
+            <span
+              className="text-[11.5px] font-semibold"
+              style={{ color: appleVibe.text.primary }}
+            >
+              {clusterCount} themes
             </span>
             <span
               className="text-[11.5px] font-light"
               style={{ color: appleVibe.text.tertiary }}
             >
-              · groups proposals by theme so you can spot redundancy
-              before forking
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onRun}
-            disabled={busy}
-            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold"
-            style={{
-              background: busy
-                ? appleVibe.surface.chip
-                : "rgba(124,58,237,0.92)",
-              color: busy ? appleVibe.text.tertiary : "#fff",
-              cursor: busy ? "wait" : "pointer",
-            }}
-          >
-            {busy ? (
-              <>
-                <RefreshCw className="h-3 w-3 animate-spin" strokeWidth={2} />
-                Clustering…
-              </>
-            ) : (
-              <>
-                <Sparkles className="h-3 w-3" strokeWidth={2} />
-                Detect clusters
-              </>
-            )}
-          </button>
-        </div>
-      )}
-
-      {hasClusters && (
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Sparkles
-              className="h-3 w-3 flex-shrink-0"
-              strokeWidth={2}
-              style={{ color: "rgba(91,33,182,0.9)" }}
-            />
-            <span
-              className="text-[11px] font-semibold uppercase tracking-[0.14em]"
-              style={{ color: "rgba(91,33,182,0.95)" }}
-            >
-              {clusterCount} clusters
+              · auto-grouped
             </span>
             {stale && (
               <span
-                className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
+                className="rounded-full px-1.5 py-0.5 text-[9.5px] font-medium"
                 style={{
-                  background: "rgba(217,119,6,0.12)",
+                  background: "rgba(217,119,6,0.10)",
                   color: "rgba(146,64,14,0.95)",
                 }}
               >
-                stale
+                refreshing
               </span>
             )}
-          </div>
-          <div className="flex items-center gap-2">
-            {/* View toggle — "by generation" / "by theme" */}
-            <div
-              className="inline-flex rounded-full p-0.5"
-              style={{
-                background: "rgba(15,23,42,0.05)",
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => onViewMode("batches")}
-                className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold"
-                style={{
-                  background:
-                    viewMode === "batches"
-                      ? "#fff"
-                      : "transparent",
-                  color:
-                    viewMode === "batches"
-                      ? appleVibe.text.primary
-                      : appleVibe.text.tertiary,
-                  boxShadow:
-                    viewMode === "batches"
-                      ? "0 1px 2px rgba(15,23,42,0.08)"
-                      : undefined,
-                }}
-              >
-                by generation
-              </button>
-              <button
-                type="button"
-                onClick={() => onViewMode("clusters")}
-                className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold"
-                style={{
-                  background:
-                    viewMode === "clusters"
-                      ? "#fff"
-                      : "transparent",
-                  color:
-                    viewMode === "clusters"
-                      ? appleVibe.text.primary
-                      : appleVibe.text.tertiary,
-                  boxShadow:
-                    viewMode === "clusters"
-                      ? "0 1px 2px rgba(15,23,42,0.08)"
-                      : undefined,
-                }}
-              >
-                by theme
-              </button>
-            </div>
-            {/* Refresh — visible always, prominent when stale */}
+          </>
+        ) : null}
+      </div>
+
+      {/* Right: view toggle + re-cluster (only when clusters exist) */}
+      {hasClusters && (
+        <div className="flex items-center gap-2">
+          <div
+            className="inline-flex rounded-full p-0.5"
+            style={{ background: "rgba(15,23,42,0.05)" }}
+          >
             <button
               type="button"
-              onClick={onRerun}
-              disabled={busy}
-              className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10.5px] font-semibold"
+              onClick={() => onViewMode("batches")}
+              className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold"
               style={{
-                background: stale
-                  ? "rgba(217,119,6,0.15)"
-                  : appleVibe.surface.chip,
-                color: stale
-                  ? "rgba(146,64,14,0.95)"
-                  : appleVibe.text.tertiary,
-                cursor: busy ? "wait" : "pointer",
+                background:
+                  viewMode === "batches" ? "#fff" : "transparent",
+                color:
+                  viewMode === "batches"
+                    ? appleVibe.text.primary
+                    : appleVibe.text.tertiary,
+                boxShadow:
+                  viewMode === "batches"
+                    ? "0 1px 2px rgba(15,23,42,0.08)"
+                    : undefined,
               }}
-              title={stale ? "Re-cluster — proposals changed" : "Re-cluster"}
             >
-              <RefreshCw
-                className={
-                  busy ? "h-2.5 w-2.5 animate-spin" : "h-2.5 w-2.5"
-                }
-                strokeWidth={2}
-              />
+              by generation
+            </button>
+            <button
+              type="button"
+              onClick={() => onViewMode("clusters")}
+              className="rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold"
+              style={{
+                background:
+                  viewMode === "clusters" ? "#fff" : "transparent",
+                color:
+                  viewMode === "clusters"
+                    ? appleVibe.text.primary
+                    : appleVibe.text.tertiary,
+                boxShadow:
+                  viewMode === "clusters"
+                    ? "0 1px 2px rgba(15,23,42,0.08)"
+                    : undefined,
+              }}
+            >
+              by theme
             </button>
           </div>
+          <button
+            type="button"
+            onClick={onRerun}
+            disabled={busy}
+            className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10.5px] font-medium"
+            style={{
+              background: appleVibe.surface.chip,
+              color: appleVibe.text.tertiary,
+              cursor: busy ? "wait" : "pointer",
+            }}
+            title="Re-group by theme"
+          >
+            <RefreshCw
+              className={busy ? "h-2.5 w-2.5 animate-spin" : "h-2.5 w-2.5"}
+              strokeWidth={2}
+            />
+          </button>
         </div>
       )}
 
       {error && (
         <div
           role="alert"
-          className="mt-2 rounded-xl px-2.5 py-1.5 text-[11.5px]"
+          className="ml-2 rounded-xl px-2.5 py-1 text-[11px]"
           style={{
             background: "rgba(220,38,38,0.06)",
             border: "1px solid rgba(220,38,38,0.18)",
@@ -1890,6 +2073,10 @@ function ClusterView({
 //
 // Collapsed by default. Each chip = display_name + space_count badge.
 
+// Auto-detected concepts strip — frosted, sparkle-free. Leads with
+// a numeric badge + concise label; chips expand inline. Tinted
+// purple surfaces removed in favor of a neutral Apple-vibe band so
+// the strip reads as informational ambient memory, not as a CTA.
 function PriorConceptsStrip({
   concepts,
   onConceptClick,
@@ -1911,66 +2098,72 @@ function PriorConceptsStrip({
 
   return (
     <div
-      className="mt-4 rounded-2xl border p-3"
+      className="mt-4 rounded-2xl px-3 py-2.5"
       style={{
-        background: "rgba(124,58,237,0.025)",
-        borderColor: "rgba(124,58,237,0.18)",
+        background: "rgba(255,255,255,0.6)",
+        backdropFilter: "blur(8px)",
+        WebkitBackdropFilter: "blur(8px)",
+        border: `1px solid ${appleVibe.stroke.hairline}`,
+        boxShadow: "0 1px 2px rgba(15,23,42,0.04)",
         borderRadius: appleVibe.radius.md,
       }}
     >
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between"
+        className="flex w-full items-center justify-between gap-3"
       >
-        <div className="flex items-center gap-2">
-          <Sparkles
-            className="h-3 w-3 flex-shrink-0"
-            strokeWidth={2}
-            style={{ color: "rgba(91,33,182,0.9)" }}
-          />
+        <div className="flex min-w-0 items-center gap-2.5">
           <span
-            className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: "rgba(91,33,182,0.95)" }}
+            className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10.5px] font-semibold tabular-nums"
+            style={{
+              background: "rgba(15,23,42,0.06)",
+              color: appleVibe.text.secondary,
+            }}
           >
-            {concepts.length} concept{concepts.length === 1 ? "" : "s"} from
-            your prior spaces
+            {concepts.length}
           </span>
           <span
-            className="text-[11.5px] font-light italic"
+            className="text-[12px] font-medium"
+            style={{ color: appleVibe.text.primary }}
+          >
+            Concepts from your prior spaces
+          </span>
+          <span
+            className="hidden text-[11.5px] font-light sm:inline"
             style={{ color: appleVibe.text.tertiary }}
           >
-            · proposals can link or diverge from these
+            proposals can link or diverge
           </span>
         </div>
         <span
-          className="inline-flex items-center gap-1 text-[10.5px] font-medium"
+          className="inline-flex items-center gap-0.5 text-[10.5px] font-medium"
           style={{ color: appleVibe.text.tertiary }}
         >
+          {expanded ? "hide" : "show"}
           {expanded ? (
-            <>
-              hide <ChevronUp className="h-3 w-3" strokeWidth={2} />
-            </>
+            <ChevronUp className="h-3 w-3" strokeWidth={2} />
           ) : (
-            <>
-              show <ChevronDown className="h-3 w-3" strokeWidth={2} />
-            </>
+            <ChevronDown className="h-3 w-3" strokeWidth={2} />
           )}
         </span>
       </button>
 
       {expanded && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <div
+          className="mt-3 flex flex-wrap gap-1.5 border-t pt-3"
+          style={{ borderColor: appleVibe.stroke.hairline }}
+        >
           {concepts.map((c) => (
             <button
               type="button"
               key={c.id}
               onClick={() => onConceptClick(c.canonical_code)}
-              className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium transition-colors hover:bg-[rgba(124,58,237,0.10)]"
+              className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors hover:bg-[rgba(15,23,42,0.04)]"
               style={{
-                background: "rgba(255,255,255,0.92)",
-                color: "rgba(91,33,182,0.95)",
-                border: "1px solid rgba(124,58,237,0.20)",
+                background: "#fff",
+                color: appleVibe.text.primary,
+                border: `1px solid ${appleVibe.stroke.hairline}`,
                 cursor: "pointer",
               }}
               title={
@@ -1981,8 +2174,8 @@ function PriorConceptsStrip({
             >
               <span className="truncate">{c.display_name}</span>
               <span
-                className="font-mono text-[9.5px]"
-                style={{ color: "rgba(91,33,182,0.65)" }}
+                className="font-mono text-[9.5px] tabular-nums"
+                style={{ color: appleVibe.text.tertiary }}
               >
                 {c.space_count}×
               </span>

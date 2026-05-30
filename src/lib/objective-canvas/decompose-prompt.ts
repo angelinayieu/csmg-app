@@ -255,9 +255,11 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
   // these specifically." Every regen pass sees the prior set.
   const existingBlock =
     existingProposals && existingProposals.length > 0
-      ? `\n\nEXISTING PROPOSALS (do NOT duplicate or trivially paraphrase — your new proposals must attack DIFFERENT facets):\n${existingProposals
+      ? `\n\nEXISTING PROPOSALS (the user ALREADY has these — do NOT duplicate, trivially paraphrase, or restate at a different abstraction level. Your new proposals must attack DIFFERENT facets, surface NEW assumptions, or cover gaps the existing set misses):\n${existingProposals
           .map((p, i) => `  ${i + 1}. ${p.title} — ${p.summary}`)
-          .join("\n")}\n\nSelf-test: if a new title could swap in for an existing title without changing meaning, REWRITE.`
+          .join(
+            "\n",
+          )}\n\nHARD RULES:\n  1. Every new proposal must be conceptually distinct from EVERY entry above — no overlap in core mechanism, target user, or outcome.\n  2. Self-test before emitting: read each new title alongside the existing titles. If a new one could swap in for an existing one without changing meaning, REWRITE it from a different angle.\n  3. Self-test again on rationale: if the underlying argument would also justify an existing proposal, you're duplicating — REWRITE.\n  4. If you can't generate enough genuinely-distinct proposals to fill the quota, emit FEWER rather than padding with near-duplicates.`
       : "";
 
   // Variant Lab — ANNOTATION LENS. Same lens shape as the room

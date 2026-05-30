@@ -156,7 +156,7 @@ export default async function ObjectiveCanvasPage({
           // position on the ObjectiveStack via the LayerPositionChip
           // + so the Stack widget can compute per-layer coverage.
           // Both columns default to '{}' / null for pre-11.A rooms.
-          "id, title, description, auto_detection_rationale, room_layers_generated_at, top_negative_outcome, room_categories, layer_ordinals, layer_position_label, created_at",
+          "id, title, description, auto_detection_rationale, room_layers_generated_at, top_negative_outcome, room_categories, layer_ordinals, layer_position_label, container_card_id, created_at",
         )
         .eq("space_id", spaceId)
         .eq("parent_goal_id", parentGoalId)
@@ -171,6 +171,7 @@ export default async function ObjectiveCanvasPage({
         room_categories: unknown;
         layer_ordinals: number[] | null;
         layer_position_label: string | null;
+        container_card_id: string | null;
       }>);
 
       // For each sub-objective, find approved-edge endpoints and the
@@ -490,6 +491,10 @@ export default async function ObjectiveCanvasPage({
             ? r.layer_ordinals
             : [],
           layerPositionLabel: r.layer_position_label ?? null,
+          // Phase 11.A.5 — sibling card this one nests under (the
+          // nesting axis). Null = top-level. Drives the shelf's
+          // container → sub-feature tree.
+          containerCardId: r.container_card_id ?? null,
           // Pipeline readiness (room → expanded → scored → elected →
           // export-ready), rolled up from this sub's entities. Required
           // by the LayerShelvesView flashcard progress bar; computed

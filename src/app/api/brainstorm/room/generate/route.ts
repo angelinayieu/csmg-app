@@ -42,6 +42,7 @@ import {
   type ResearchSource,
 } from "@/lib/research/research-service";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { narrateRoomGenerated } from "@/lib/objective-canvas/compose-rich-narration";
 import { readConstraints, buildConstraintsBlock } from "@/lib/objective-canvas/constraints";
 import {
   loadRecentLearnings,
@@ -862,6 +863,21 @@ export async function POST(req: NextRequest) {
   // Phase 10a — log room_generated for the Lab Notebook. The room
   // panel renders this as the room's "birthday" event; the All-rooms
   // view surfaces it as the room's appearance on the canvas timeline.
+  // v3 — rich narration: surfaces room composition + top pain.
+  const topNegativeOutcome =
+    pain.length > 0 && typeof pain[0]?.negative_outcome === "string"
+      ? (pain[0].negative_outcome as string)
+      : undefined;
+  const narration = narrateRoomGenerated({
+    subObjectiveId,
+    subObjectiveTitle:
+      typeof sub?.title === "string" ? sub.title : "this room",
+    painCount: pain.length,
+    featureCount: features.length,
+    outcomeCount: outcomes.length,
+    edgeCount,
+    topNegativeOutcome,
+  });
   void logDecision(db, {
     userId: auth.user.id,
     spaceId,
@@ -882,6 +898,7 @@ export async function POST(req: NextRequest) {
       // bindings vs the inferred correlation pass.
       declared_edge_count: declaredEdgeCount,
       correlation_warning: correlationWarning,
+      ...narration,
     },
   });
 

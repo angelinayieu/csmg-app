@@ -47,7 +47,9 @@ import {
   MessageCircle,
   Play,
   Plus,
+  Package,
   RefreshCw,
+  ScanLine,
   Send,
   Sliders,
   X,
@@ -159,6 +161,12 @@ const FILTERS: ReadonlyArray<{
       // Priority vector — per-sub-objective soft weights edited.
       // Same bucket as constraints_set (settings-altitude change).
       "priorities_set",
+      // 2026-05-29 — deliverable-visibility slice. Cross-room scan
+      // closure + every artifact-producing route (mockup, export
+      // prompt, doc, prototype brief, agent spec) + brief polish.
+      "scan_complete",
+      "deliverable_generated",
+      "brief_polished",
     ],
   },
 ];
@@ -1146,8 +1154,9 @@ function NotebookRow({
 }) {
   // Phase 10b — visualFor is action-driven; the row click handler
   // now forwards sub_objective_id too so the host can route to the
-  // right room from the all-rooms feed.
-  const visual = visualFor(ev.action);
+  // right room from the all-rooms feed. Meta is passed so subtype-
+  // bearing actions (deliverable_generated) get the specific label.
+  const visual = visualFor(ev.action, ev.meta);
   const Icon = visual.icon;
   const subject = formatSubject(ev);
   const time = formatTime(ev.created_at);
@@ -1554,7 +1563,10 @@ type VisualForAction = {
   color: string;
 };
 
-function visualFor(action: NotebookEvent["action"]): VisualForAction {
+function visualFor(
+  action: NotebookEvent["action"],
+  meta?: NotebookEvent["meta"],
+): VisualForAction {
   switch (action) {
     case "elect":
       return { icon: Check, label: "Elected", color: appleVibe.stage.outcomes };
@@ -1734,6 +1746,39 @@ function visualFor(action: NotebookEvent["action"]): VisualForAction {
         label: "Tuned priorities",
         color: appleVibe.accent.primary,
       };
+    // ── 2026-05-29 — deliverable visibility ─────────────────────
+    case "scan_complete":
+      return {
+        icon: ScanLine,
+        label: "Cross-room scan",
+        color: appleVibe.accent.primary,
+      };
+    case "deliverable_generated": {
+      // Subtype-specific label so the row reads "Built mockup" rather
+      // than a generic "Built deliverable". Falls back when meta missing
+      // (e.g. chapter aggregation, where visualFor is called without it).
+      const subtypeLabel: Record<string, string> = {
+        mockup: "Built mockup",
+        export_prompt: "Built export prompt",
+        description_doc: "Built description doc",
+        prototype_brief: "Built prototype brief",
+        agent_spec: "Built agent spec",
+      };
+      const sub = meta?.deliverable_subtype;
+      return {
+        icon: Package,
+        label:
+          (typeof sub === "string" && subtypeLabel[sub]) ||
+          "Built deliverable",
+        color: appleVibe.accent.primary,
+      };
+    }
+    case "brief_polished":
+      return {
+        icon: BookText,
+        label: "Polished brief",
+        color: appleVibe.accent.primary,
+      };
     default:
       return {
         icon: RefreshCw,
@@ -1834,6 +1879,9 @@ const HEADLINE_ACTIONS = new Set<NotebookAction>([
   "baseline_set",
   "layers_generated",
   "layers_regenerated",
+  // 2026-05-29 — the user's actual takeaways are headlines.
+  "deliverable_generated",
+  "brief_polished",
 ]);
 
 const MUTED_ACTIONS = new Set<NotebookAction>([
@@ -1854,6 +1902,14 @@ function weightFor(ev: NotebookEvent): EventWeight {
     ev.action === "score" &&
     typeof ev.meta.lift_pct === "number" &&
     ev.meta.lift_pct > 0
+  )
+    return "headline";
+  // A scan that surfaced net-new cross-room patterns is the autopilot's
+  // closing "I noticed something" — headline. Otherwise routine.
+  if (
+    ev.action === "scan_complete" &&
+    typeof ev.meta.new_finding_count === "number" &&
+    ev.meta.new_finding_count > 0
   )
     return "headline";
   if (MUTED_ACTIONS.has(ev.action)) return "muted";
@@ -2134,7 +2190,7 @@ function ChapterRow({
           style={{ borderColor: appleVibe.stroke.hairline }}
         >
           {children.map((c) => {
-            const v = visualFor(c.action);
+            const v = visualFor(c.action, c.meta);
             const subject = formatSubject(c);
             return (
               <li

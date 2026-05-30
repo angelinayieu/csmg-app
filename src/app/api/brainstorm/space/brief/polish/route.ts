@@ -17,6 +17,8 @@ import { loadCrossRoomState } from "@/lib/objective-canvas/analyses/cross-room-s
 import { buildStrategyBrief } from "@/lib/objective-canvas/build-strategy-brief";
 import { buildConstraintsBlock } from "@/lib/objective-canvas/constraints";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { narrateBriefPolished } from "@/lib/objective-canvas/compose-rich-narration";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -222,6 +224,30 @@ Return strict JSON.`;
       writeRes.error.message,
     );
   }
+
+  // Notebook visibility — only the fresh-polish path (cache hits silent).
+  // Approximate sentence count from terminal punctuation so the row can
+  // render "polished · 3 sentences".
+  const sentenceCount = (tldr.match(/[.!?]+(?=\s|$)/g) ?? []).length || 1;
+  // v3 — rich narration: surfaces the tldr verbatim in the chat
+  // body + a deep-link straight to the brief's executive summary.
+  // This is the SINGLE most important narration in the autopilot
+  // chain — the user's "Your strategy is ready" moment.
+  const narration = narrateBriefPolished({
+    tldr,
+    tldrSentenceCount: sentenceCount,
+  });
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId,
+    subObjectiveId: null,
+    action: "brief_polished",
+    metadata: {
+      tldr_sentence_count: sentenceCount,
+      state_hash: loaded.state_hash,
+      ...narration,
+    },
+  });
 
   return NextResponse.json({ tldr });
 }

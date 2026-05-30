@@ -28,6 +28,7 @@ import {
 } from "@/lib/objective-canvas/compile-agent-build-spec";
 import type { MechanismSpec } from "@/lib/objective-canvas/enrich-mechanism-spec";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -113,21 +114,53 @@ async function gatherAndCompile(
   const layerArr = Array.isArray(oc?.layers?.layers)
     ? (oc!.layers!.layers as Array<Record<string, unknown>>)
     : [];
+  // P-CtD — wire the per-layer subObjectives + macroProblems the compiler
+  // expects. Previously hardcoded empty, so every feature's layer resolved
+  // to "" (the dead room→layer join). subObjectives come from the rooms'
+  // layer_ordinals tags (the Step-1 seam on RoomSnapshot); macroProblems
+  // from the macro_problems roll-up findings, keyed by layer_ordinal.
+  const subObjectivesByOrdinal = new Map<number, string[]>();
+  for (const r of loaded.state.rooms ?? []) {
+    for (const ord of r.layer_ordinals ?? []) {
+      const arr = subObjectivesByOrdinal.get(ord) ?? [];
+      if (r.title) arr.push(r.title);
+      subObjectivesByOrdinal.set(ord, arr);
+    }
+  }
+  const macroProblemsByOrdinal = new Map<
+    number,
+    Array<{ name: string; description: string }>
+  >();
+  for (const f of cachedAnalysis?.findings ?? []) {
+    if (f.analysis_key !== "macro_problems") continue;
+    const body = (f.body ?? {}) as { layer_ordinal?: unknown; name?: unknown };
+    if (typeof body.layer_ordinal !== "number") continue;
+    const arr = macroProblemsByOrdinal.get(body.layer_ordinal) ?? [];
+    arr.push({
+      name: typeof body.name === "string" ? body.name : f.title,
+      description: typeof f.summary === "string" ? f.summary : "",
+    });
+    macroProblemsByOrdinal.set(body.layer_ordinal, arr);
+  }
+
   const macroLayers: MacroLayerInput[] | null =
     layerArr.length > 0
-      ? layerArr.map((l, i) => ({
-          ordinal: typeof l.ordinal === "number" ? l.ordinal : i + 1,
-          id: typeof l.id === "string" ? l.id : `L${i + 1}`,
-          name:
-            typeof l.name === "string"
-              ? l.name
-              : typeof l.label === "string"
-                ? (l.label as string)
-                : "",
-          archetype: typeof l.archetype === "string" ? l.archetype : "",
-          subObjectives: [],
-          macroProblems: [],
-        }))
+      ? layerArr.map((l, i) => {
+          const ordinal = typeof l.ordinal === "number" ? l.ordinal : i + 1;
+          return {
+            ordinal,
+            id: typeof l.id === "string" ? l.id : `L${i + 1}`,
+            name:
+              typeof l.name === "string"
+                ? l.name
+                : typeof l.label === "string"
+                  ? (l.label as string)
+                  : "",
+            archetype: typeof l.archetype === "string" ? l.archetype : "",
+            subObjectives: subObjectivesByOrdinal.get(ordinal) ?? [],
+            macroProblems: macroProblemsByOrdinal.get(ordinal) ?? [],
+          };
+        })
       : null;
 
   const spec = await compileAgentBuildSpec({
@@ -199,6 +232,19 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
         writeRes.error.message,
       );
     }
+
+    // Notebook visibility — only the fresh-compile path (cache hits
+    // short-circuit above before this).
+    void logDecision(db, {
+      userId: auth.user.id,
+      spaceId,
+      subObjectiveId: null,
+      action: "deliverable_generated",
+      metadata: {
+        deliverable_subtype: "agent_spec",
+        state_hash: result.spec.state_hash ?? null,
+      },
+    });
 
     return NextResponse.json({
       spec: result.spec,

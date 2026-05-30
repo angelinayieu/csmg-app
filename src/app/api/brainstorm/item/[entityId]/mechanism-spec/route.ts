@@ -35,11 +35,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { narrateMechanismSpec } from "@/lib/objective-canvas/compose-rich-narration";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import {
   enrichMechanismSpec,
   type EnrichMechanismSpecInput,
 } from "@/lib/objective-canvas/enrich-mechanism-spec";
+import {
+  normalizeRegistry,
+  registerUnit,
+  saveRegistry,
+  validateTokens,
+} from "@/lib/objective-canvas/data-unit-registry";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -289,6 +296,20 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     // Soft-fail — chain context is optional grounding for the spec.
   }
 
+  // ── Load the space's data-unit registry ──
+  // Normalized off the already-loaded synthesis_data so no extra DB
+  // roundtrip. When populated, the generator prepends the registered
+  // slugs to the user prompt → LLM picks from existing vocabulary
+  // for runtime_flow.produces/consumes (the semantic spine the
+  // macro data-flow view + depends_on derivation need). Empty
+  // registry falls back to free-text emission with no behavior
+  // change. Reference: INTAKE_TO_BRIEF_SURFACING_PLAN.md §J.
+  const priorSynth =
+    space.synthesis_data && typeof space.synthesis_data === "object"
+      ? (space.synthesis_data as Record<string, unknown>)
+      : {};
+  const registry = normalizeRegistry(priorSynth.data_unit_registry);
+
   // ── Generate the spec ──
   const spec = await enrichMechanismSpec({
     feature: {
@@ -309,6 +330,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     // Phase B — feed the chain analyst's coarse causal story so the spec
     // deepens it (coarse→fine) instead of authoring a parallel narrative.
     chain_context: chainContext,
+    registry,
   });
 
   if (!spec) {
@@ -348,7 +370,54 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     );
   }
 
+  // ── Auto-register novel data-unit tokens ──
+  // Walk every runtime_flow step's produces/consumes, validate
+  // against the loaded registry, and register the novel ones so
+  // SUBSEQUENT spec generations pick from a richer vocabulary. New
+  // units are stamped origin:"llm" with the slug as both id + name
+  // (a user can rename via a future registry editor; for now the
+  // raw slug renders fine in the macro view). Soft-fail — registry
+  // is enrichment, not a hard dependency.
+  try {
+    const allTokens = (spec.runtime_flow ?? []).flatMap((s) => [
+      ...(s.produces ?? []),
+      ...(s.consumes ?? []),
+    ]);
+    if (allTokens.length > 0) {
+      const { novel } = validateTokens(registry, allTokens);
+      if (novel.length > 0) {
+        let next = registry;
+        for (const slug of novel) {
+          next = registerUnit(next, {
+            slug,
+            name: slug.replace(/_/g, " "),
+            description: `Auto-registered from mechanism spec for ${entity.name}.`,
+            kind: "state",
+            origin: "llm",
+          });
+        }
+        void saveRegistry(db, entity.space_id, next);
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[mechanism-spec] registry auto-register failed (non-fatal):",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
   // ── Log the notebook event ──
+  // v3 — rich narration: surfaces chosen algorithm + rationale +
+  // design intent (hero pattern, density) + touchpoint count +
+  // data-token spine summary directly in the chat body, so the
+  // user reads what the spec means without opening the drawer.
+  // Reference: INTAKE_TO_BRIEF_SURFACING_PLAN.md §3.2.
+  const narration = narrateMechanismSpec({
+    spec,
+    entity: { id: entityId, name: entity.name },
+    subObjectiveId,
+    subObjectiveTitle: null,
+  });
   void logDecision(db, {
     userId: auth.user.id,
     spaceId: entity.space_id,
@@ -364,6 +433,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       n_active_ingredients: spec.active_ingredients.length,
       n_components: spec.system_components.length,
       had_elected_direction: electedVariations.length > 0,
+      ...narration,
     },
   });
 

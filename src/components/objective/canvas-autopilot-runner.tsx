@@ -48,11 +48,57 @@ async function fetchWithTimeout(
   }
 }
 
+// Soft-fail step logger — POSTs to /autopilot/log so the notebook
+// gets a row for every stage that times out, throws, or silently
+// skips. Without this, autopilot fires N×M stages but the notebook
+// only sees the successful ones (the underlying routes only call
+// logDecision on the happy path), so the user watches the chip spin
+// without any record of failures. Soft-fail throughout — telemetry
+// must never block the runner.
+type StageName =
+  | "expand"
+  | "score"
+  | "refine"
+  | "enrich_chains"
+  | "mechanism_spec"
+  | "deliverables"
+  | "scan"
+  | "macro_rollup"
+  | "brief_polish"
+  | "annotate";
+
+async function postLog(
+  spaceId: string,
+  body: {
+    stage: StageName;
+    status: "skipped" | "failed";
+    subObjectiveId?: string;
+    entityId?: string;
+    reason?: string;
+  },
+): Promise<void> {
+  try {
+    await fetch(`/api/brainstorm/space/${spaceId}/autopilot/log`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // Soft-fail — logging the log failure would be turtles all the way.
+  }
+}
+
+function reasonFromResponse(res: Response | undefined): string {
+  if (!res) return "timeout";
+  return `http_${res.status}`;
+}
+
 type Status =
   | "idle"
   | "running"
   | "enriching"
   | "speccing"
+  | "delivering"
   | "done"
   | "cancelled";
 
@@ -114,7 +160,10 @@ export function CanvasAutopilotRunner({
   const isSubset =
     roomOptions.length > 0 && selectedIds.length < roomOptions.length;
 
-  async function runCanvasAutopilot(withSpecs: boolean) {
+  async function runCanvasAutopilot(
+    withSpecs: boolean,
+    withDeliverables: boolean,
+  ) {
     setOpen(false);
     cancelRef.current = false;
     setError(null);
@@ -179,13 +228,28 @@ export function CanvasAutopilotRunner({
     // pipeline still works without annotations, just with weaker
     // concept threading.
     try {
-      await fetchWithTimeout("/api/brainstorm/annotations/generate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ spaceId, mode: "initial" }),
-      });
+      const annotRes = await fetchWithTimeout(
+        "/api/brainstorm/annotations/generate",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ spaceId, mode: "initial" }),
+        },
+      );
+      if (!annotRes.ok) {
+        void postLog(spaceId, {
+          stage: "annotate",
+          status: "failed",
+          reason: reasonFromResponse(annotRes),
+        });
+      }
     } catch {
       // Soft-fail — annotations are enrichment, not a blocker.
+      void postLog(spaceId, {
+        stage: "annotate",
+        status: "failed",
+        reason: "timeout",
+      });
     }
 
     // ── Step 2: outer loop over rooms, inner loop over features ──
@@ -214,11 +278,23 @@ export function CanvasAutopilotRunner({
         // short-circuit, expand/route.ts), so re-firing is free once
         // variations exist; a failure here just falls through to the
         // same no_variations score as before.
-        await fetchWithTimeout("/api/brainstorm/item/expand", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ entityId }),
-        }).catch(() => undefined);
+        const expandRes = await fetchWithTimeout(
+          "/api/brainstorm/item/expand",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ entityId }),
+          },
+        ).catch(() => undefined);
+        if (!expandRes || !expandRes.ok) {
+          void postLog(spaceId, {
+            stage: "expand",
+            status: "failed",
+            subObjectiveId: room.subObjectiveId,
+            entityId,
+            reason: reasonFromResponse(expandRes),
+          });
+        }
         try {
           // Score is cache-aware — if the feature has an existing
           // envelope, it cheaply re-confirms. Refine ONLY fires if
@@ -234,19 +310,50 @@ export function CanvasAutopilotRunner({
           const scoreJson = (await scoreRes.json().catch(() => ({}))) as {
             status?: string;
           };
-          if (
-            scoreRes.ok &&
+          if (!scoreRes.ok) {
+            void postLog(spaceId, {
+              stage: "score",
+              status: "failed",
+              subObjectiveId: room.subObjectiveId,
+              entityId,
+              reason: reasonFromResponse(scoreRes),
+            });
+          } else if (
             scoreJson.status === "ok" &&
             !cancelRef.current
           ) {
-            await fetchWithTimeout("/api/brainstorm/item/variation/refine", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ entityId }),
-            }).catch(() => undefined);
+            const refineRes = await fetchWithTimeout(
+              "/api/brainstorm/item/variation/refine",
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ entityId }),
+              },
+            ).catch(() => undefined);
+            if (!refineRes || !refineRes.ok) {
+              void postLog(spaceId, {
+                stage: "refine",
+                status: "failed",
+                subObjectiveId: room.subObjectiveId,
+                entityId,
+                reason: reasonFromResponse(refineRes),
+              });
+            }
           }
+          // status !== "ok" (no_variations, etc.) is logged by the
+          // score route itself so we don't double-emit; refine simply
+          // wasn't scheduled, which the score skip row explains.
         } catch {
+          // Hit when the score fetch is aborted by the stage timeout
+          // (other failure modes are caught by .catch() above + ok-check).
           roomOk = false;
+          void postLog(spaceId, {
+            stage: "score",
+            status: "failed",
+            subObjectiveId: room.subObjectiveId,
+            entityId,
+            reason: "timeout",
+          });
         }
       }
       setRoomResults((prev) => {
@@ -273,7 +380,7 @@ export function CanvasAutopilotRunner({
       setRoomIdx(i);
       const room = workList[i];
       try {
-        await fetchWithTimeout(
+        const enrichRes = await fetchWithTimeout(
           `/api/brainstorm/room/${room.subObjectiveId}/enrich-chains`,
           {
             method: "POST",
@@ -281,9 +388,23 @@ export function CanvasAutopilotRunner({
             body: JSON.stringify({}),
           },
         );
+        if (!enrichRes.ok) {
+          void postLog(spaceId, {
+            stage: "enrich_chains",
+            status: "failed",
+            subObjectiveId: room.subObjectiveId,
+            reason: reasonFromResponse(enrichRes),
+          });
+        }
       } catch {
         // Soft-fail — one room's enrichment failing doesn't kill the
         // whole canvas run. The notebook will show partial results.
+        void postLog(spaceId, {
+          stage: "enrich_chains",
+          status: "failed",
+          subObjectiveId: room.subObjectiveId,
+          reason: "timeout",
+        });
       }
     }
 
@@ -313,12 +434,86 @@ export function CanvasAutopilotRunner({
           }
           setFeatureIdx(j);
           try {
-            await fetchWithTimeout(
+            const specRes = await fetchWithTimeout(
               `/api/brainstorm/item/${room.featureIds[j]}/mechanism-spec`,
               { method: "POST" },
             );
+            if (!specRes.ok) {
+              void postLog(spaceId, {
+                stage: "mechanism_spec",
+                status: "failed",
+                subObjectiveId: room.subObjectiveId,
+                entityId: room.featureIds[j],
+                reason: reasonFromResponse(specRes),
+              });
+            }
           } catch {
             // Soft-fail — one feature's spec failing doesn't kill the run.
+            void postLog(spaceId, {
+              stage: "mechanism_spec",
+              status: "failed",
+              subObjectiveId: room.subObjectiveId,
+              entityId: room.featureIds[j],
+              reason: "timeout",
+            });
+          }
+        }
+      }
+    }
+
+    // ── Step 2.7 (opt-in): fan out per-variation deliverables ──
+    // For every feature, ask the deliverables endpoint to take the
+    // top 2 variations by effectiveness_score and generate the four
+    // orphan artifacts that surface as empty panes in the per-card
+    // drawer otherwise: mockup_html + export_prompt + description_doc
+    // + prototype_brief. The endpoint is idempotent (artifacts
+    // already present are skipped) so re-running autopilot is cheap.
+    // Soft-fail per feature; the cap is generous because each call
+    // can chain up to ~8 LLM requests back-to-back.
+    if (withDeliverables) {
+      setStatus("delivering");
+      for (let i = 0; i < workList.length; i++) {
+        if (cancelRef.current) {
+          setStatus("cancelled");
+          onAllComplete?.();
+          return;
+        }
+        setRoomIdx(i);
+        const room = workList[i];
+        for (let j = 0; j < room.featureIds.length; j++) {
+          if (cancelRef.current) {
+            setStatus("cancelled");
+            onAllComplete?.();
+            return;
+          }
+          setFeatureIdx(j);
+          try {
+            const delivRes = await fetchWithTimeout(
+              `/api/brainstorm/item/${room.featureIds[j]}/deliverables`,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ topN: 2 }),
+              },
+              300_000,
+            );
+            if (!delivRes.ok) {
+              void postLog(spaceId, {
+                stage: "deliverables",
+                status: "failed",
+                subObjectiveId: room.subObjectiveId,
+                entityId: room.featureIds[j],
+                reason: reasonFromResponse(delivRes),
+              });
+            }
+          } catch {
+            void postLog(spaceId, {
+              stage: "deliverables",
+              status: "failed",
+              subObjectiveId: room.subObjectiveId,
+              entityId: room.featureIds[j],
+              reason: "timeout",
+            });
           }
         }
       }
@@ -328,13 +523,28 @@ export function CanvasAutopilotRunner({
     // Soft-fail — if the scan errors out, the autopilot run itself
     // still counts as complete.
     try {
-      await fetchWithTimeout("/api/brainstorm/space/analysis/scan", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ spaceId, mode: "force" }),
-      });
+      const scanRes = await fetchWithTimeout(
+        "/api/brainstorm/space/analysis/scan",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ spaceId, mode: "force" }),
+        },
+      );
+      if (!scanRes.ok) {
+        void postLog(spaceId, {
+          stage: "scan",
+          status: "failed",
+          reason: reasonFromResponse(scanRes),
+        });
+      }
     } catch {
       // Soft-fail — analysis refresh is a nice-to-have, not a blocker.
+      void postLog(spaceId, {
+        stage: "scan",
+        status: "failed",
+        reason: "timeout",
+      });
     }
 
     // ── Step 3.5: macro rollup — distill themes + macro sub-problems
@@ -349,19 +559,34 @@ export function CanvasAutopilotRunner({
       "distill_macro_problems",
     ]) {
       try {
-        await fetchWithTimeout("/api/brainstorm/space/analysis/run", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            spaceId,
-            operationKey,
-            mode: "force",
-          }),
-        });
+        const rollupRes = await fetchWithTimeout(
+          "/api/brainstorm/space/analysis/run",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              spaceId,
+              operationKey,
+              mode: "force",
+            }),
+          },
+        );
+        if (!rollupRes.ok) {
+          void postLog(spaceId, {
+            stage: "macro_rollup",
+            status: "failed",
+            reason: `${operationKey}:${reasonFromResponse(rollupRes)}`,
+          });
+        }
       } catch {
         // Soft-fail — macro rollup is enrichment. The brief
         // gracefully degrades to [NEEDS CLARIFICATION] markers
         // when the rollup hasn't run.
+        void postLog(spaceId, {
+          stage: "macro_rollup",
+          status: "failed",
+          reason: `${operationKey}:timeout`,
+        });
       }
     }
 
@@ -376,13 +601,28 @@ export function CanvasAutopilotRunner({
     // still renders without polish, just with the raw lead instead.
     // Reference: INTAKE_TO_BRIEF_SURFACING_PLAN.md §3.5(d).
     try {
-      await fetchWithTimeout("/api/brainstorm/space/brief/polish", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ spaceId, mode: "force" }),
-      });
+      const polishRes = await fetchWithTimeout(
+        "/api/brainstorm/space/brief/polish",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ spaceId, mode: "force" }),
+        },
+      );
+      if (!polishRes.ok) {
+        void postLog(spaceId, {
+          stage: "brief_polish",
+          status: "failed",
+          reason: reasonFromResponse(polishRes),
+        });
+      }
     } catch {
       // Soft-fail — brief polish is enrichment, not a blocker.
+      void postLog(spaceId, {
+        stage: "brief_polish",
+        status: "failed",
+        reason: "timeout",
+      });
     }
 
     setStatus("done");
@@ -577,6 +817,60 @@ export function CanvasAutopilotRunner({
     );
   }
 
+  // ── DELIVERING — progress chip during deliverables fanout pass ──
+  if (status === "delivering") {
+    const room = targets[roomIdx];
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: -4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+        className="inline-flex items-center gap-2"
+        style={{
+          background: appleVibe.surface.card,
+          border: `1px solid ${FEATURES}40`,
+          borderRadius: appleVibe.radius.pill,
+          padding: "4px 4px 4px 12px",
+          fontSize: "11px",
+          fontWeight: 600,
+          letterSpacing: "0.02em",
+          boxShadow: appleVibe.shadow.chip,
+          fontFamily: appleVibe.font.stack,
+          color: appleVibe.text.primary,
+        }}
+      >
+        <Loader2
+          className="h-3 w-3 flex-shrink-0 animate-spin"
+          style={{ color: FEATURES }}
+          strokeWidth={2}
+        />
+        <span>
+          Delivering {roomIdx + 1}/{targets.length}
+        </span>
+        <span
+          className="font-light italic"
+          style={{ color: appleVibe.text.tertiary }}
+          title={room?.subObjectiveTitle ?? ""}
+        >
+          · mockups + briefs
+        </span>
+        <button
+          type="button"
+          onClick={cancel}
+          className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[rgba(15,23,42,0.06)]"
+          title="Cancel — stops after the current feature finishes"
+          aria-label="Cancel canvas autopilot"
+        >
+          <X
+            className="h-3 w-3"
+            strokeWidth={2}
+            style={{ color: appleVibe.text.tertiary }}
+          />
+        </button>
+      </motion.div>
+    );
+  }
+
   // ── RUNNING — progress chip showing room X of N · feature Y of M ──
   if (status === "running") {
     const room = targets[roomIdx];
@@ -732,7 +1026,7 @@ function CanvasAutopilotDropdown({
   onToggleRoom: (id: string) => void;
   onSelectAll: () => void;
   onSelectNone: () => void;
-  onRun: (withSpecs: boolean) => void;
+  onRun: (withSpecs: boolean, withDeliverables: boolean) => void;
   onClose: () => void;
 }) {
   // Estimated time displayed before user commits — same heuristic as
@@ -750,6 +1044,13 @@ function CanvasAutopilotDropdown({
   // who want a fast scan-only run; default reflects the right
   // expectation.
   const [withSpecs, setWithSpecs] = useState(true);
+  // Deliverables fanout default OFF — each feature triggers up to 8
+  // LLM calls (4 generators × top-2 variations), so a 25-feature run
+  // can balloon to ~200 extra calls. User opts in when they want the
+  // drawer's mockup / export-prompt / description-doc / prototype-
+  // brief panes pre-populated; otherwise these stay on per-card
+  // manual buttons.
+  const [withDeliverables, setWithDeliverables] = useState(false);
 
   const selectedSet = new Set(selectedIds);
   const allSelected = rooms.length > 0 && selectedIds.length === rooms.length;
@@ -892,6 +1193,27 @@ function CanvasAutopilotDropdown({
               LLM pass per feature.
             </span>
           </label>
+          {/* Opt-in — fan out per-variation deliverables across the
+              top 2 variations per feature. Pre-fills the four drawer
+              panes (mockup, export prompt, description doc, prototype
+              brief) that otherwise stay empty until a user clicks the
+              per-card "generate" buttons. Significantly slower. */}
+          <label className="mt-2 flex cursor-pointer items-start gap-2">
+            <input
+              type="checkbox"
+              checked={withDeliverables}
+              onChange={(e) => setWithDeliverables(e.target.checked)}
+              className="mt-0.5 h-3 w-3 flex-shrink-0"
+            />
+            <span
+              className="text-[11px] font-light leading-snug"
+              style={{ color: appleVibe.text.secondary }}
+            >
+              Also generate variation deliverables (mockup, export prompt,
+              description doc, prototype brief) for the top 2 variations per
+              feature. Significantly slower — up to 8 LLM calls per feature.
+            </span>
+          </label>
         </div>
         <div
           className="flex items-center justify-end gap-2 px-3.5 py-2"
@@ -908,7 +1230,7 @@ function CanvasAutopilotDropdown({
           <motion.button
             type="button"
             disabled={noneSelected}
-            onClick={() => onRun(withSpecs)}
+            onClick={() => onRun(withSpecs, withDeliverables)}
             whileHover={noneSelected ? undefined : { y: -1 }}
             whileTap={noneSelected ? undefined : { y: 0.5 }}
             className="inline-flex items-center gap-1.5 transition-all duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-40"

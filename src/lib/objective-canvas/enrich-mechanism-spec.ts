@@ -75,6 +75,10 @@ import {
   type UseCaseMode,
 } from "./constraints";
 import { loadUiSkillSystem } from "./ui-skill-system";
+import {
+  buildRegistryPromptContext,
+  type SpaceDataUnitRegistry,
+} from "./data-unit-registry";
 
 export interface MechanismActiveIngredient {
   /** Short noun phrase — the component, e.g. "fixed 25-min work
@@ -387,6 +391,15 @@ export interface EnrichMechanismSpecInput {
     weak_points?: string[];
     chain_strength?: number;
   } | null;
+  /** v3 — the space's data-unit registry, when populated. When
+   *  provided, the LLM is given the list of registered slugs so it
+   *  picks from the existing vocabulary for `runtime_flow.produces`/
+   *  `consumes` instead of inventing fresh synonyms (the silent
+   *  drift that breaks downstream depends_on derivation + the
+   *  macro data-flow view). Optional + soft: an empty/missing
+   *  registry falls back to free-text token emission with no
+   *  behavior change. See `data-unit-registry.ts`. */
+  registry?: SpaceDataUnitRegistry | null;
 }
 
 // ── Use-case-adaptive framing — same template, different vocabulary ──
@@ -1243,6 +1256,18 @@ export async function enrichMechanismSpec(
   // string when the pack is missing — generator degrades cleanly.
   const uiSkillPrefix = await loadUiSkillSystem();
 
+  // v3 — data unit registry context. Goes in the USER prompt (not
+  // system) because it's per-space data; the SYSTEM_PROMPT stays
+  // byte-identical across calls so the prefix cache still hits.
+  // Empty string when registry isn't provided OR is empty — the LLM
+  // falls back to free-text token emission with no behavior change.
+  const registryPrefix = ctx.registry
+    ? buildRegistryPromptContext(ctx.registry)
+    : "";
+  const userPromptWithRegistry = registryPrefix
+    ? `${registryPrefix}\n${userPrompt}`
+    : userPrompt;
+
   async function attempt(systemSuffix: string): Promise<MechanismSpec | null> {
     let raw: Record<string, unknown>;
     try {
@@ -1251,7 +1276,7 @@ export async function enrichMechanismSpec(
         // (skill + base prompt), VARYING suffix last (weak-axes
         // regenerate message on the retry path).
         system: uiSkillPrefix + SYSTEM_PROMPT + systemSuffix,
-        user: userPrompt,
+        user: userPromptWithRegistry,
         responseSchema: SPEC_SCHEMA,
         temperature: 0.3,
         maxTokens: 3800,

@@ -96,7 +96,71 @@ export type DecisionAction =
   // Metadata: scope ("objective" | "sub") + phrase_count, so the notebook
   // can render "extracted 14 concepts from your objective". CHECK
   // constraint extended in 20260905_annotations_generated_action.sql.
-  | "annotations_generated";
+  | "annotations_generated"
+  // Cross-room analysis scan completed (POST /space/analysis/scan).
+  // Closes the "autopilot ends silently" gap — the runner fires scan
+  // at the end of its loop but the route never logged. Fires only on
+  // fresh runs (cache-hit short-circuit is silent). Metadata:
+  // n_findings, n_new (vs prior), n_resolved. CHECK extended in
+  // 20260906_deliverable_visibility.sql.
+  | "scan_complete"
+  // Deliverable artifact generated for a variation or space — single
+  // action covering mockup, export prompt, description doc, prototype
+  // brief, agent build spec. Metadata.deliverable_subtype picks the
+  // visual + label. Fires only on fresh generation (cache hits silent).
+  // CHECK extended in 20260906_deliverable_visibility.sql.
+  | "deliverable_generated"
+  // Strategy brief executive summary polished (POST /space/brief/polish).
+  // The highest-altitude artifact gets its own audible event; the brief
+  // body itself is built on read with no LLM, polish is the LLM step.
+  // Fires only on fresh generation. CHECK extended in
+  // 20260906_deliverable_visibility.sql.
+  | "brief_polished"
+  // Brainstorm module (BRAINSTORM_MODULE_SPEC.md, 2026-05-29). Fires
+  // when the user presses the `Brainstorm` button on the sub-objective
+  // approval page — the Runner orchestrates 3 intent batches via the
+  // existing /sub-objectives/propose endpoint, then cleanup + the new
+  // critique-and-rank pass. Three lifecycle actions:
+  //
+  //   brainstorm_started    — Runner accepted. metadata: { session_id,
+  //                           target_kind, planned_intents,
+  //                           intent_reasons }
+  //   brainstorm_completed  — Critique pass settled. metadata:
+  //                           { session_id, n_candidates, n_top,
+  //                             n_explore, n_tray, latency_ms }
+  //   brainstorm_elected    — User clicked a panel candidate to elect.
+  //                           metadata: { session_id, proposal_id,
+  //                                       ribbon, composite_score,
+  //                                       intent_of_origin }
+  //
+  // CHECK constraint extended in 20260907_brainstorm_sessions.sql.
+  | "brainstorm_started"
+  | "brainstorm_completed"
+  | "brainstorm_elected"
+  // 20260909 — narration actions per INTAKE_TO_BRIEF_SURFACING_PLAN.md §4.
+  // CHECK extended in 20260909_narration_actions.sql.
+  //
+  //   algorithm_chosen      — fires when an `implementation_method` is
+  //                           selected as `decision_record.chosen`. Carries
+  //                           the rationale + (when scored) score delta vs
+  //                           rejected alternatives so the chat row reads
+  //                           "Chose X over Y because Z (+12% in rubric)".
+  //   design_intent_set     — fires when a fresh spec emits a v3
+  //                           `design_intent` block. Surfaces the design
+  //                           moment distinctly from the spec event so the
+  //                           chat reads "Designed as a flow · airy · breathing
+  //                           — kept X, dropped Y because Z".
+  //   macro_rolled_up       — fires when /space/analysis/run runs
+  //                           `distill_macro_problems`. Today conflated
+  //                           with `theme_distilled`; now a first-class
+  //                           macro moment.
+  //   data_lineage_resolved — fires when the data-unit registry validates
+  //                           a fresh spec's produces/consumes tokens
+  //                           (registered vs novel auto-registered counts).
+  | "algorithm_chosen"
+  | "design_intent_set"
+  | "macro_rolled_up"
+  | "data_lineage_resolved";
 
 export interface LogDecisionArgs {
   userId: string;

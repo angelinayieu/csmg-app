@@ -29,6 +29,9 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, ChevronDown } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { ARCHETYPE_COLOR } from "@/components/objective/objective-stack";
+import { RetagCardsButton } from "@/components/objective/retag-cards-button";
+import { GroupCardsButton } from "@/components/objective/group-cards-button";
+import { NestedChildCard } from "@/components/objective/nested-child-card";
 import type {
   LayerInfluenceVerb,
   ObjectiveLayer,
@@ -765,12 +768,16 @@ function LayerShelf({
   subs,
   themeBySubId,
   tabFadeBySubId,
+  childrenByContainer,
 }: {
   spaceId: string;
   layer: ObjectiveLayer;
   subs: MainCanvasSub[];
   themeBySubId: Map<string, string>;
   tabFadeBySubId: Map<string, number>;
+  /** Nesting axis: containerCardId → its sub-feature cards. A container
+   *  card in this shelf renders its children stacked beside it. */
+  childrenByContainer: Map<string, MainCanvasSub[]>;
 }) {
   const accent = ARCHETYPE_COLOR[layer.archetype];
   const covered = subs.length > 0;
@@ -910,17 +917,59 @@ function LayerShelf({
               .filter((o) => o !== layer.ordinal)
               .sort((a, b) => b - a);
             const themeLabel = themeBySubId.get(sub.id) ?? null;
+            const children = childrenByContainer.get(sub.id) ?? [];
+            if (children.length === 0) {
+              return (
+                <LayerFlashcard
+                  key={sub.id}
+                  spaceId={spaceId}
+                  sub={sub}
+                  accent={accent}
+                  themeLabel={themeLabel}
+                  tabFade={tabFadeBySubId.get(sub.id) ?? 1}
+                  bridgesTo={bridgesTo}
+                  getDragged={getDragged}
+                />
+              );
+            }
+            // Container card: render its sub-feature cards stacked
+            // beside it (the "card below the card" nesting).
             return (
-              <LayerFlashcard
+              <div
                 key={sub.id}
-                spaceId={spaceId}
-                sub={sub}
-                accent={accent}
-                themeLabel={themeLabel}
-                tabFade={tabFadeBySubId.get(sub.id) ?? 1}
-                bridgesTo={bridgesTo}
-                getDragged={getDragged}
-              />
+                className="flex items-start gap-2.5"
+                style={{ scrollSnapAlign: "start" }}
+              >
+                <LayerFlashcard
+                  spaceId={spaceId}
+                  sub={sub}
+                  accent={accent}
+                  themeLabel={themeLabel}
+                  tabFade={tabFadeBySubId.get(sub.id) ?? 1}
+                  bridgesTo={bridgesTo}
+                  getDragged={getDragged}
+                />
+                <div
+                  className="flex flex-col gap-1.5 pt-1"
+                  style={{ width: 190, flex: "0 0 auto" }}
+                >
+                  <span
+                    className="pl-0.5 text-[9px] font-semibold uppercase tracking-[0.13em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    {children.length} sub-feature{children.length === 1 ? "" : "s"}
+                  </span>
+                  {children.map((ch) => (
+                    <NestedChildCard
+                      key={ch.id}
+                      spaceId={spaceId}
+                      sub={ch}
+                      accent={accent}
+                      getDragged={getDragged}
+                    />
+                  ))}
+                </div>
+              </div>
             );
           })}
         </div>
@@ -1026,10 +1075,30 @@ export function LayerShelvesView({
   }, [themes]);
 
   // Bucket subs by their PRIMARY (highest) ordinal; collect untagged.
-  const { byOrdinal, unplaced } = useMemo(() => {
+  const { byOrdinal, unplaced, childrenByContainer } = useMemo(() => {
+    const presentIds = new Set(subs.map((s) => s.id));
+    const isNested = (s: MainCanvasSub) => {
+      const cid = s.containerCardId ?? null;
+      return !!cid && cid !== s.id && presentIds.has(cid);
+    };
+
+    // Nesting axis: a card with a valid container renders UNDER that
+    // container (wherever it sits), not on its own layer shelf. Build
+    // the child map first, then bucket only the top-level cards.
+    const children = new Map<string, MainCanvasSub[]>();
+    for (const sub of subs) {
+      if (isNested(sub)) {
+        const cid = sub.containerCardId!;
+        const list = children.get(cid) ?? [];
+        list.push(sub);
+        children.set(cid, list);
+      }
+    }
+
     const buckets = new Map<number, MainCanvasSub[]>();
     const orphans: MainCanvasSub[] = [];
     for (const sub of subs) {
+      if (isNested(sub)) continue; // shown under its container instead
       const ords = sub.layerOrdinals ?? [];
       if (ords.length === 0) {
         orphans.push(sub);
@@ -1040,11 +1109,25 @@ export function LayerShelvesView({
       list.push(sub);
       buckets.set(primary, list);
     }
-    return { byOrdinal: buckets, unplaced: orphans };
+    return {
+      byOrdinal: buckets,
+      unplaced: orphans,
+      childrenByContainer: children,
+    };
   }, [subs]);
 
   return (
     <div className="mx-auto mt-2 flex w-full max-w-5xl flex-col">
+      {/* Nesting controls — group the flat card row into container →
+          sub-feature features (the second axis below layers). */}
+      {subs.length >= 3 && (
+        <div className="mb-1 flex items-center justify-end gap-2 px-1">
+          {childrenByContainer.size > 0 && (
+            <GroupCardsButton spaceId={spaceId} mode="clear" />
+          )}
+          <GroupCardsButton spaceId={spaceId} />
+        </div>
+      )}
       {layersTopDown.map((layer, idx) => {
         const isLast = idx === layersTopDown.length - 1;
         const below = layersTopDown[idx + 1];
@@ -1059,13 +1142,16 @@ export function LayerShelvesView({
               subs={byOrdinal.get(layer.ordinal) ?? []}
               themeBySubId={themeBySubId}
               tabFadeBySubId={tabFadeBySubId}
+              childrenByContainer={childrenByContainer}
             />
             {!isLast && <ShelfConnector verb={verb} />}
           </div>
         );
       })}
 
-      {/* Unplaced shelf — subs picked before the stack existed. */}
+      {/* Unplaced shelf — cards with no layer_ordinals (picked before
+          the stack existed, or too broad/structural for the proposer's
+          tagger to place). The button runs the in-place re-sort. */}
       {unplaced.length > 0 && (
         <>
           <ShelfConnector verb={null} />
@@ -1076,14 +1162,18 @@ export function LayerShelvesView({
               ordinal: 0,
               name: "Unplaced",
               description:
-                "Picked before the stack was generated — re-propose to tag these by layer.",
+                "No layer yet — sort them in to drop each card onto the layer it operates at.",
               archetype: "substrate",
               variables: [],
             }}
             subs={unplaced}
             themeBySubId={themeBySubId}
             tabFadeBySubId={tabFadeBySubId}
+            childrenByContainer={childrenByContainer}
           />
+          <div className="mt-2 px-5">
+            <RetagCardsButton spaceId={spaceId} unplacedCount={unplaced.length} />
+          </div>
         </>
       )}
 

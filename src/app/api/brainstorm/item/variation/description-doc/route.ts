@@ -11,6 +11,7 @@ import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers
 import type { ExpandedItemDetail } from "@/lib/objective-canvas/expand-item-detail";
 import { generateVariationDescriptionDoc } from "@/lib/objective-canvas/generate-description-doc";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -162,6 +163,27 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+
+  // Notebook visibility — only the fresh-gen path (cache hits silent).
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId: entity.space_id,
+    subObjectiveId:
+      typeof entity.parent_sub_objective_id === "string"
+        ? entity.parent_sub_objective_id
+        : null,
+    proposalId: entityId,
+    action: "deliverable_generated",
+    metadata: {
+      deliverable_subtype: "description_doc",
+      entity_id: entityId,
+      entity_name: typeof entity.name === "string" ? entity.name : null,
+      variation_id: variationId,
+      variation_name:
+        typeof variation.name === "string" ? variation.name : null,
+      refined: refine === true,
+    },
+  });
 
   return NextResponse.json({
     description_doc: result.doc,

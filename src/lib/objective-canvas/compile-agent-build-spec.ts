@@ -19,6 +19,11 @@
 import { llmJSON } from "@/lib/llm";
 import type { StrategyBrief } from "./build-strategy-brief";
 import type { MechanismSpec } from "./enrich-mechanism-spec";
+import { applyDependsOn } from "./derive-depends-on";
+import {
+  composeExperienceBriefSection,
+  type ExperienceBriefSection,
+} from "./compose-experience-brief-section";
 
 const CLARIFY = "[NEEDS CLARIFICATION]";
 
@@ -34,6 +39,14 @@ export interface AgentBuildFeature {
   acceptance_criteria: string[];
   scope_boundaries: string[];
   depends_on: string[];
+  /** v3 — the end-user-facing experience layer of this feature, when
+   *  the underlying MechanismSpec carries a v3 `design_intent` block.
+   *  Surfaces hero pattern, touchpoints, interaction beats, the
+   *  data-token spine, and the MoSCoW reduction log so the brief
+   *  delivers BOTH engineering depth (existing) AND designed
+   *  experience (new). Null for pre-v3 specs — brief renderer can
+   *  branch on null. See `compose-experience-brief-section.ts`. */
+  experience: ExperienceBriefSection | null;
 }
 
 export interface AgentBuildSpec {
@@ -194,8 +207,13 @@ function assembleFeatures(input: CompileAgentBuildSpecInput): {
           inputs: strArr(spec.input_data, 10, 160),
           acceptance_criteria: strArr(spec.acceptance_criteria, 6, 240),
           scope_boundaries: strArr(spec.scope_boundaries, 6, 240),
-          depends_on: [],
+          depends_on: [], // populated below via applyDependsOn after cross_feature lands
+          experience: composeExperienceBriefSection(spec),
         });
+        // v3 — extend per-feature flow with the wiring (produces/consumes)
+        // + experience layer (visual_intent / interaction_sketch) per
+        // step. Brief render branches on presence: legacy specs lacking
+        // these fields render as before.
         const steps = (spec.runtime_flow ?? [])
           .slice(0, 10)
           .map((r) => ({
@@ -228,6 +246,7 @@ function assembleFeatures(input: CompileAgentBuildSpecInput): {
           acceptance_criteria: [],
           scope_boundaries: [],
           depends_on: [],
+          experience: null,
         });
       }
     }
@@ -554,7 +573,26 @@ export async function compileAgentBuildSpec(
         : [],
       per_feature: perFeatureFlow,
     },
-    features,
+    // v3 — derive each feature's depends_on from the cross-feature
+    // edges (closes SYSTEMS_WIRING_MASTER_PLAN.md Gap #1). The stub
+    // `[]` initializers above are intentionally placeholders; this
+    // line populates them from real data right before emission.
+    features: applyDependsOn(
+      features,
+      Array.isArray(synth.data_flow_cross_feature)
+        ? (synth.data_flow_cross_feature as Array<Record<string, unknown>>)
+            .map((f) => ({
+              from: str(f.from, 120),
+              to: str(f.to, 120),
+              data: str(f.data, 200),
+              direction:
+                f.direction === "upstream"
+                  ? ("upstream" as const)
+                  : ("downstream" as const),
+            }))
+            .filter((f) => f.from && f.to)
+        : [],
+    ),
     design: {
       user_flows: strArr(synth.user_flows, 10, 300),
       component_inventory: componentInventory.slice(0, 40),

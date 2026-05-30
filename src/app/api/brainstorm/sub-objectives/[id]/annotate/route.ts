@@ -21,6 +21,7 @@ import {
 } from "@/lib/objective-canvas/generate-annotations";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { narrateAnnotationsGenerated } from "@/lib/objective-canvas/compose-rich-narration";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -165,6 +166,19 @@ export async function POST(
   // previously silent. Scoped to this room (subObjectiveId set). Only
   // reached on an actual generation (cache hits returned earlier).
   // Soft-fail via void.
+  // v3 — rich narration: previews extracted concepts.
+  const previewPhrases = Array.isArray(annotations)
+    ? (annotations as Array<{ phrase?: unknown }>)
+        .map((a) => (typeof a?.phrase === "string" ? a.phrase : ""))
+        .filter((p) => p.length > 0)
+        .slice(0, 3)
+    : [];
+  const narration = narrateAnnotationsGenerated({
+    scope: "sub",
+    subObjectiveId,
+    phraseCount: Array.isArray(annotations) ? annotations.length : 0,
+    previewPhrases,
+  });
   void logDecision(db, {
     userId: auth.user.id,
     spaceId: sub.space_id,
@@ -173,6 +187,7 @@ export async function POST(
     metadata: {
       scope: "sub",
       phrase_count: Array.isArray(annotations) ? annotations.length : 0,
+      ...narration,
     },
   });
 

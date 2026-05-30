@@ -146,6 +146,12 @@ export interface MainCanvasSub {
    *  "L2→L3 · Bridge"). Set by the proposer's JOB 3 when the stack
    *  was present at generation time. Null for pre-11.A picks. */
   layerPositionLabel?: string | null;
+  /** Phase 11.A.5 — the nesting axis. When set, this card is a
+   *  sub-feature that nests UNDER the sibling card with this id
+   *  (a surface / engine / umbrella). Null/undefined = top-level.
+   *  Orthogonal to layerOrdinals (altitude); this is containment.
+   *  Written by /cards/group; never overloads parent_goal_id. */
+  containerCardId?: string | null;
   /** Pipeline progress (room → expanded → scored → elected → export-
    *  ready), rolled up from this sub's entities + variations. Drives
    *  the flashcard progress bar. */
@@ -398,65 +404,6 @@ export function MainCanvasView({
           </span>
         </div>
         <div className="flex items-center gap-1.5">
-          {/* Phase 12.A — Cards / Map segmented toggle. Shown once there's
-              something to lay out; Cards stays the default. */}
-          {subs.length > 0 && (
-            <div
-              className="flex items-center rounded-full p-0.5"
-              style={{
-                background: appleVibe.surface.chip,
-                border: `1px solid ${appleVibe.stroke.soft}`,
-              }}
-            >
-              {(["overview", "cards", "map", "flow"] as const).map((v) => {
-                const active = canvasView === v;
-                return (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setCanvasView(v)}
-                    className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors"
-                    style={{
-                      background: active
-                        ? appleVibe.surface.card
-                        : "transparent",
-                      color: active
-                        ? appleVibe.text.primary
-                        : appleVibe.text.tertiary,
-                      boxShadow: active ? appleVibe.shadow.chip : "none",
-                    }}
-                    title={
-                      v === "overview"
-                        ? "Plain summary — the goal + the path"
-                        : v === "cards"
-                          ? "The detailed layers + cards"
-                          : v === "map"
-                            ? "Causal system map"
-                            : "Data flow — how one base unit becomes the outcome"
-                    }
-                    aria-pressed={active}
-                  >
-                    {v === "overview" ? (
-                      <AlignLeft className="h-3.5 w-3.5" strokeWidth={2.2} />
-                    ) : v === "cards" ? (
-                      <LayoutGrid className="h-3.5 w-3.5" strokeWidth={2.2} />
-                    ) : v === "map" ? (
-                      <Waypoints className="h-3.5 w-3.5" strokeWidth={2.2} />
-                    ) : (
-                      <Workflow className="h-3.5 w-3.5" strokeWidth={2.2} />
-                    )}
-                    {v === "overview"
-                      ? "Overview"
-                      : v === "cards"
-                        ? "Blueprint"
-                        : v === "map"
-                          ? "Map"
-                          : "Data flow"}
-                  </button>
-                );
-              })}
-            </div>
-          )}
           <HCDToggle spaceId={spaceId} />
           {/* Only render the canvas autopilot button when at least one
               sub-objective room has been generated. Empty-canvas runs
@@ -651,6 +598,69 @@ export function MainCanvasView({
           }
           style={{ background: appleVibe.stroke.medium }}
         />
+      )}
+
+      {/* Phase 12.A — Cards / Map segmented toggle. Moved here so it sits
+          directly above the layer/card content it switches between
+          (rather than at the top of the page, far from its target). */}
+      {subs.length > 0 && (
+        <div className="mx-auto mt-6 flex w-full max-w-3xl justify-center">
+          <div
+            className="flex items-center rounded-full p-0.5"
+            style={{
+              background: appleVibe.surface.chip,
+              border: `1px solid ${appleVibe.stroke.soft}`,
+            }}
+          >
+            {(["overview", "cards", "map", "flow"] as const).map((v) => {
+              const active = canvasView === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setCanvasView(v)}
+                  className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                  style={{
+                    background: active
+                      ? appleVibe.surface.card
+                      : "transparent",
+                    color: active
+                      ? appleVibe.text.primary
+                      : appleVibe.text.tertiary,
+                    boxShadow: active ? appleVibe.shadow.chip : "none",
+                  }}
+                  title={
+                    v === "overview"
+                      ? "Plain summary — the goal + the path"
+                      : v === "cards"
+                        ? "The detailed layers + cards"
+                        : v === "map"
+                          ? "Causal system map"
+                          : "Data flow — how one base unit becomes the outcome"
+                  }
+                  aria-pressed={active}
+                >
+                  {v === "overview" ? (
+                    <AlignLeft className="h-3.5 w-3.5" strokeWidth={2.2} />
+                  ) : v === "cards" ? (
+                    <LayoutGrid className="h-3.5 w-3.5" strokeWidth={2.2} />
+                  ) : v === "map" ? (
+                    <Waypoints className="h-3.5 w-3.5" strokeWidth={2.2} />
+                  ) : (
+                    <Workflow className="h-3.5 w-3.5" strokeWidth={2.2} />
+                  )}
+                  {v === "overview"
+                    ? "Overview"
+                    : v === "cards"
+                      ? "Blueprint"
+                      : v === "map"
+                        ? "Map"
+                        : "Data flow"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {/* Phase 12.A — Map view replaces the cards-region entirely.

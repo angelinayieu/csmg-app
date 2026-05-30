@@ -21,6 +21,7 @@ import {
   loadRecentLearnings,
   buildLearningsBlock,
 } from "@/lib/objective-canvas/load-recent-learnings";
+import { logDecision } from "@/lib/objective-canvas/decision-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -314,6 +315,27 @@ export async function POST(req: NextRequest) {
       writeRes.error.message,
     );
   }
+
+  // Notebook visibility — only the fresh-gen path (cache hits silent).
+  void logDecision(db, {
+    userId: auth.user.id,
+    spaceId: entity.space_id,
+    subObjectiveId:
+      typeof entity.parent_sub_objective_id === "string"
+        ? entity.parent_sub_objective_id
+        : null,
+    proposalId: entityId,
+    action: "deliverable_generated",
+    metadata: {
+      deliverable_subtype: "prototype_brief",
+      entity_id: entityId,
+      entity_name: typeof entity.name === "string" ? entity.name : null,
+      variation_id: variationId,
+      variation_name:
+        typeof variation.name === "string" ? variation.name : null,
+      open_question: openQuestion,
+    },
+  });
 
   return NextResponse.json({ brief });
 }

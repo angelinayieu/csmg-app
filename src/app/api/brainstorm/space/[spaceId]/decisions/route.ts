@@ -66,6 +66,15 @@ const ALLOWED_ACTIONS: ReadonlyArray<DecisionAction> = [
   "baseline_set",
   // Arc 3.1 — mechanism technical-depth spec
   "mechanism_spec_generated",
+  // Priority vector — per-sub-objective soft weights edited.
+  "priorities_set",
+  // Annotation lens generated for the core objective or a sub-objective.
+  "annotations_generated",
+  // 2026-05-29 — deliverable visibility (autopilot ends silently +
+  // every artifact-producing route was silent before this).
+  "scan_complete",
+  "deliverable_generated",
+  "brief_polished",
 ];
 
 const DEFAULT_LIMIT = 30;
