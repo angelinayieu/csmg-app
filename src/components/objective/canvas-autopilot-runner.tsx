@@ -26,6 +26,28 @@ import { motion } from "framer-motion";
 import { Check, Loader2, Orbit, Play, X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
+// A hung stage fetch (a slow/stuck LLM call) used to freeze the ENTIRE
+// sequential autopilot run indefinitely — no AbortController, no timeout,
+// so one stalled request blocked every remaining room forever. Wrap every
+// stage call: a request that exceeds the budget aborts, the existing
+// per-stage catch marks the room errored, and the loop CONTINUES instead
+// of hanging. Bounds total run time + makes "it just stopped" recoverable.
+const STAGE_TIMEOUT_MS = 120_000; // 2 min — generous for slow LLM stages, fatal only to truly-hung calls.
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = STAGE_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 type Status =
   | "idle"
   | "running"
@@ -113,7 +135,7 @@ export function CanvasAutopilotRunner({
     // ── Step 1: fetch the work list + log the canvas autopilot_run header ──
     let workList: AutopilotTarget[];
     try {
-      const startRes = await fetch(
+      const startRes = await fetchWithTimeout(
         `/api/brainstorm/space/${spaceId}/autopilot/start`,
         {
           method: "POST",
@@ -170,7 +192,7 @@ export function CanvasAutopilotRunner({
           // Score is cache-aware — if the feature has an existing
           // envelope, it cheaply re-confirms. Refine ONLY fires if
           // score resolved an actual target (status=ok).
-          const scoreRes = await fetch(
+          const scoreRes = await fetchWithTimeout(
             "/api/brainstorm/item/variation/score",
             {
               method: "POST",
@@ -186,7 +208,7 @@ export function CanvasAutopilotRunner({
             scoreJson.status === "ok" &&
             !cancelRef.current
           ) {
-            await fetch("/api/brainstorm/item/variation/refine", {
+            await fetchWithTimeout("/api/brainstorm/item/variation/refine", {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ entityId }),
@@ -220,7 +242,7 @@ export function CanvasAutopilotRunner({
       setRoomIdx(i);
       const room = workList[i];
       try {
-        await fetch(
+        await fetchWithTimeout(
           `/api/brainstorm/room/${room.subObjectiveId}/enrich-chains`,
           {
             method: "POST",
@@ -260,7 +282,7 @@ export function CanvasAutopilotRunner({
           }
           setFeatureIdx(j);
           try {
-            await fetch(
+            await fetchWithTimeout(
               `/api/brainstorm/item/${room.featureIds[j]}/mechanism-spec`,
               { method: "POST" },
             );
@@ -275,7 +297,7 @@ export function CanvasAutopilotRunner({
     // Soft-fail — if the scan errors out, the autopilot run itself
     // still counts as complete.
     try {
-      await fetch("/api/brainstorm/space/analysis/scan", {
+      await fetchWithTimeout("/api/brainstorm/space/analysis/scan", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ spaceId, mode: "force" }),
