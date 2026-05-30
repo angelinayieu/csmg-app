@@ -20,6 +20,7 @@ import {
   BookmarkCheck,
 } from "lucide-react";
 import type { CardAction } from "../board-bus";
+import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 const ACTIONS: {
   key: CardAction;
@@ -59,17 +60,19 @@ export function CardHoverActions({
         display: "flex",
         gap: 4,
         padding: "5px 6px",
-        borderRadius: 12,
-        background: "rgba(255,255,255,0.97)",
-        border: "1px solid rgba(15,23,42,0.08)",
-        boxShadow: "0 8px 24px -10px rgba(11,18,40,0.22)",
-        backdropFilter: "blur(8px)",
+        borderRadius: appleVibe.radius.sm,
+        background: "var(--glass-float-bg)",
+        border: "1px solid var(--glass-border)",
+        boxShadow:
+          "inset 0 1px 0 var(--glass-highlight), 0 10px 26px -12px rgba(11,18,40,0.26)",
+        backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
       }}
     >
       {shown.map(({ key, label, Icon }) => {
         const isSaved = saved && key === "save";
         const TileIcon = isSaved ? BookmarkCheck : Icon;
-        const restColor = isSaved ? accent : "rgba(15,23,42,0.66)";
+        const restColor = isSaved ? accent : appleVibe.text.secondary;
         const restBg = isSaved ? `${accent}14` : "transparent";
         return (
           <button
@@ -90,13 +93,12 @@ export function CardHoverActions({
               cursor: "pointer",
               background: restBg,
               border: "1px solid transparent",
-              fontFamily:
-                '-apple-system, "SF Pro Text", system-ui, sans-serif',
+              fontFamily: appleVibe.font.stack,
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = isSaved
                 ? `${accent}1F`
-                : "rgba(15,23,42,0.045)";
+                : appleVibe.surface.chipHover;
               e.currentTarget.style.color = accent;
             }}
             onMouseLeave={(e) => {
