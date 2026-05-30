@@ -56,6 +56,7 @@ import {
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { NotebookGlossaryView } from "./notebook-glossary-view";
+import { LibraryPanel } from "./library-panel";
 import type {
   NotebookAction,
   NotebookEvent,
@@ -190,7 +191,9 @@ export function LabNotebookPanel({
   // Arc 3.5 — the rail hosts two views: the activity log (timeline +
   // chat) and the space Glossary (the definition page). Glossary only
   // offered when we have a spaceId to load it from.
-  const [bodyView, setBodyView] = useState<"activity" | "glossary">("activity");
+  const [bodyView, setBodyView] = useState<
+    "activity" | "glossary" | "library"
+  >("activity");
   // Phase 10c — chat thread state. Sticky input at bottom + message
   // bubbles at the top of the scrollable body. Loads on open + after
   // every send so the thread stays in sync without polling.
@@ -610,7 +613,7 @@ export function LabNotebookPanel({
                 when we have a spaceId to load the project dictionary). */}
             {spaceId && (
               <div className="flex items-center gap-1 px-5 pt-3">
-                {(["activity", "glossary"] as const).map((v) => {
+                {(["activity", "glossary", "library"] as const).map((v) => {
                   const active = bodyView === v;
                   return (
                     <button
@@ -636,7 +639,7 @@ export function LabNotebookPanel({
                       {v === "glossary" && (
                         <BookText className="h-3 w-3" strokeWidth={2} />
                       )}
-                      {v === "activity" ? "Activity" : "Glossary"}
+                      {v === "activity" ? "Activity" : v === "glossary" ? "Glossary" : "Library"}
                     </button>
                   );
                 })}
@@ -683,7 +686,11 @@ export function LabNotebookPanel({
 
             {/* Scrollable body — Glossary view OR the activity log
                 (chat + timeline). */}
-            {bodyView === "glossary" && spaceId ? (
+            {bodyView === "library" && spaceId ? (
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                <LibraryPanel spaceId={spaceId} />
+              </div>
+            ) : bodyView === "glossary" && spaceId ? (
               <div className="flex-1 overflow-y-auto px-5 py-4">
                 <NotebookGlossaryView spaceId={spaceId} />
               </div>
