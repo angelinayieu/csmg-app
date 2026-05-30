@@ -16,7 +16,7 @@
 -- Phase 1 (this migration): picker-only target. Phase 6 generalises
 -- to room features + annotations via the target_kind enum.
 
-create table if not exists public.brainstorm_sessions (
+create table if not exists public.objective_brainstorm_sessions (
   id                uuid primary key default gen_random_uuid(),
   space_id          uuid not null references public.spaces(id) on delete cascade,
   user_id           uuid not null references auth.users(id) on delete cascade,
@@ -87,53 +87,53 @@ create table if not exists public.brainstorm_sessions (
 );
 
 -- Most queries: "this user's recent sessions in this space".
-create index if not exists brainstorm_sessions_space_user_idx
-  on public.brainstorm_sessions(space_id, user_id, started_at desc);
+create index if not exists objective_brainstorm_sessions_space_user_idx
+  on public.objective_brainstorm_sessions(space_id, user_id, started_at desc);
 
 -- Library view: "this user's pinned sessions across spaces, newest first".
-create index if not exists brainstorm_sessions_pinned_idx
-  on public.brainstorm_sessions(user_id, settled_at desc)
+create index if not exists objective_brainstorm_sessions_pinned_idx
+  on public.objective_brainstorm_sessions(user_id, settled_at desc)
   where pinned = true;
 
 -- Phase 6 lookups: "all sessions for this sub-objective" / "this entity".
-create index if not exists brainstorm_sessions_target_idx
-  on public.brainstorm_sessions(sub_objective_id, entity_id)
+create index if not exists objective_brainstorm_sessions_target_idx
+  on public.objective_brainstorm_sessions(sub_objective_id, entity_id)
   where sub_objective_id is not null or entity_id is not null;
 
 -- RLS — same pattern as sub_objective_decisions: user can see/mutate their own.
-alter table public.brainstorm_sessions enable row level security;
+alter table public.objective_brainstorm_sessions enable row level security;
 
 drop policy if exists "users can read own brainstorm sessions"
-  on public.brainstorm_sessions;
+  on public.objective_brainstorm_sessions;
 create policy "users can read own brainstorm sessions"
-  on public.brainstorm_sessions
+  on public.objective_brainstorm_sessions
   for select
   using (user_id = auth.uid());
 
 drop policy if exists "users can insert own brainstorm sessions"
-  on public.brainstorm_sessions;
+  on public.objective_brainstorm_sessions;
 create policy "users can insert own brainstorm sessions"
-  on public.brainstorm_sessions
+  on public.objective_brainstorm_sessions
   for insert
   with check (user_id = auth.uid());
 
 drop policy if exists "users can update own brainstorm sessions"
-  on public.brainstorm_sessions;
+  on public.objective_brainstorm_sessions;
 create policy "users can update own brainstorm sessions"
-  on public.brainstorm_sessions
+  on public.objective_brainstorm_sessions
   for update
   using (user_id = auth.uid())
   with check (user_id = auth.uid());
 
 drop policy if exists "users can delete own brainstorm sessions"
-  on public.brainstorm_sessions;
+  on public.objective_brainstorm_sessions;
 create policy "users can delete own brainstorm sessions"
-  on public.brainstorm_sessions
+  on public.objective_brainstorm_sessions
   for delete
   using (user_id = auth.uid());
 
 -- updated_at auto-bump.
-create or replace function public.touch_brainstorm_sessions_updated_at()
+create or replace function public.touch_objective_brainstorm_sessions_updated_at()
 returns trigger
 language plpgsql
 as $$
@@ -143,12 +143,12 @@ begin
 end;
 $$;
 
-drop trigger if exists brainstorm_sessions_touch_updated_at
-  on public.brainstorm_sessions;
-create trigger brainstorm_sessions_touch_updated_at
-  before update on public.brainstorm_sessions
+drop trigger if exists objective_brainstorm_sessions_touch_updated_at
+  on public.objective_brainstorm_sessions;
+create trigger objective_brainstorm_sessions_touch_updated_at
+  before update on public.objective_brainstorm_sessions
   for each row
-  execute function public.touch_brainstorm_sessions_updated_at();
+  execute function public.touch_objective_brainstorm_sessions_updated_at();
 
 -- ── sub_objective_decisions actions: brainstorm_{started,completed,elected} ──
 --
@@ -226,8 +226,15 @@ alter table public.sub_objective_decisions
     'scan_complete',
     'deliverable_generated',
     'brief_polished',
-    -- NEW: Brainstorm module lifecycle (BRAINSTORM_MODULE_SPEC.md).
+    -- Brainstorm module lifecycle (BRAINSTORM_MODULE_SPEC.md).
     'brainstorm_started',
     'brainstorm_completed',
-    'brainstorm_elected'
+    'brainstorm_elected',
+    -- Parallel-session additions discovered on live constraint inspection
+    -- 2026-05-30 — preserve them in the superset re-assert to defend
+    -- against the clobber trap (project_parallel_workstreams memory).
+    'algorithm_chosen',
+    'design_intent_set',
+    'macro_rolled_up',
+    'data_lineage_resolved'
   ));

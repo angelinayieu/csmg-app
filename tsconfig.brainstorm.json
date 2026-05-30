@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/components/objective/brainstorm/**/*.ts",
+    "src/components/objective/brainstorm/**/*.tsx",
+    "src/components/objective/whiteboard-base.tsx",
+    "src/components/objective/sub-objective-picker-card.tsx",
+    "src/components/objective/sub-objective-room-view.tsx",
+    "src/components/objective/cards/annotation-lens-strip.tsx",
+    "src/components/objective/lab/lab-page-view.tsx",
+    "src/lib/brainstorm/**/*.ts",
+    "src/app/api/brainstorm/sessions/**/*.ts",
+    "src/lib/objective-canvas/decision-log.ts",
+    "next-env.d.ts"
+  ],
+  "exclude": []
+}
