@@ -86,8 +86,7 @@ export function heuristicScan(target: OperationTarget): ScoredOperation[] {
       reason: reason[op.id] ?? op.intent,
       score: score[op.id] ?? 0.5,
     }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 6);
+    .sort((a, b) => b.score - a.score);
 }
 
 /** LLM refine: ask the model which ops best advance THIS idea and why.

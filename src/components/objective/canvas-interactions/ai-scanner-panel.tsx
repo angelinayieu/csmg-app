@@ -13,7 +13,7 @@
 // patches it (scan-recommendations.ts). Clicking a row runs the operation via
 // the host's onRun (→ executeCardOperation → result cards near the source).
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   Split,
   Shuffle,
@@ -67,6 +67,8 @@ export function AiScannerPanel({
   const [recs, setRecs] = useState<ScoredOperation[]>(() =>
     heuristicScan(target),
   );
+  // How many leading rows are "recommended" (highlighted, above the divider).
+  const [recommendedCount, setRecommendedCount] = useState(3);
   const [refining, setRefining] = useState(true);
   const [ranId, setRanId] = useState<string | null>(null);
   // Entrance — grow + fade from the anchored corner on mount.
@@ -79,12 +81,20 @@ export function AiScannerPanel({
   }, [reduceMotion]);
 
   useEffect(() => {
-    setRecs(heuristicScan(target));
+    const base = heuristicScan(target);
+    setRecs(base);
+    setRecommendedCount(Math.min(3, base.length));
     setRefining(true);
     let alive = true;
     refineScan(target)
-      .then((r) => {
-        if (alive && r && r.length) setRecs(r);
+      .then((refined) => {
+        if (!alive || !refined || !refined.length) return;
+        // Surface the AI's picks first WITHOUT dropping the rest — every
+        // operation stays available, just re-ordered + grouped under "More".
+        const ids = new Set(refined.map((r) => r.id));
+        const rest = base.filter((o) => !ids.has(o.id));
+        setRecs([...refined, ...rest]);
+        setRecommendedCount(refined.length);
       })
       .finally(() => {
         if (alive) setRefining(false);
@@ -197,11 +207,26 @@ export function AiScannerPanel({
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {recs.map((op, i) => {
           const Icon = ICONS[op.id] ?? Sparkles;
-          const recommended = i === 0;
+          const isTop = i === 0;
+          const inRecommended = i < recommendedCount;
           const ran = ranId === op.id;
+          const showMoreDivider =
+            i === recommendedCount && recommendedCount < recs.length;
           return (
+            <Fragment key={op.id}>
+              {showMoreDivider && (
+                <div
+                  style={{
+                    margin: "6px 6px 2px",
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: appleVibe.text.faint,
+                  }}
+                >
+                  More options
+                </div>
+              )}
             <button
-              key={op.id}
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -218,14 +243,16 @@ export function AiScannerPanel({
                 borderRadius: appleVibe.radius.sm,
                 border: "1px solid transparent",
                 cursor: "pointer",
-                background: recommended ? appleVibe.surface.chip : "transparent",
+                background: inRecommended
+                  ? appleVibe.surface.chip
+                  : "transparent",
                 transition: rowTransition,
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = appleVibe.surface.chipHover;
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = recommended
+                e.currentTarget.style.background = inRecommended
                   ? appleVibe.surface.chip
                   : "transparent";
               }}
@@ -264,7 +291,7 @@ export function AiScannerPanel({
                   }}
                 >
                   {op.label}
-                  {recommended && (
+                  {isTop && (
                     <span
                       style={{
                         display: "inline-flex",
@@ -296,6 +323,7 @@ export function AiScannerPanel({
                 </span>
               </span>
             </button>
+            </Fragment>
           );
         })}
       </div>
