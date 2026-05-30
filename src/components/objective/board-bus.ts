@@ -77,6 +77,33 @@ export function openUnfurl(anchor: UnfurlAnchor) {
   window.dispatchEvent(new CustomEvent(OPEN_UNFURL_EVENT, { detail: anchor }));
 }
 
+// ── Per-card hover actions ────────────────────────────────────────
+// Fired by a card's hover action bar (canvas-interactions/card-hover-
+// actions.tsx). WhiteboardBase listens: "save" → Library; the AI actions
+// (decompose/variations/questions/make_plan) are routed onward (today they
+// surface a request the brainstorm engine / item routes can fulfil).
+
+export type CardAction =
+  | "decompose"
+  | "variations"
+  | "questions"
+  | "make_plan"
+  | "save";
+
+export interface CardActionDetail {
+  action: CardAction;
+  entityId: string;
+  title: string;
+  roomId?: string | null;
+}
+
+export const CARD_ACTION_EVENT = "objective-board:card-action";
+
+/** Fire from a card's hover action bar. WhiteboardBase listens. */
+export function dispatchCardAction(detail: CardActionDetail) {
+  window.dispatchEvent(new CustomEvent(CARD_ACTION_EVENT, { detail }));
+}
+
 /** Read + clear the pending-artifact queue for this space. */
 export function drainPendingArtifacts(spaceId: string): ArtifactCardDetail[] {
   try {

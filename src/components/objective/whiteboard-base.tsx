@@ -55,6 +55,8 @@ import { useObjectiveBoardPersistence } from "./use-objective-board-persistence"
 import {
   DEPLOY_ARTIFACT_EVENT,
   OPEN_UNFURL_EVENT,
+  CARD_ACTION_EVENT,
+  type CardActionDetail,
   drainPendingArtifacts,
   type ArtifactCardDetail,
 } from "./board-bus";
@@ -404,13 +406,31 @@ export function WhiteboardBase({
       createArtifactCard(editor, (e as CustomEvent<ArtifactCardDetail>).detail);
     }
 
+    // Per-card hover action. "save" → Library (canvas → object bridge).
+    // The AI actions (decompose/variations/questions/make_plan) are left on
+    // the bus for the brainstorm engine's handler — not owned here.
+    function onCardAction(e: Event) {
+      const d = (e as CustomEvent<CardActionDetail>).detail;
+      if (!d || d.action !== "save") return;
+      void saveCardsToLibrary(spaceId, [
+        {
+          objectType: "feature",
+          title: d.title,
+          sourceEntityId: d.entityId,
+          sourceSubObjectiveId: d.roomId ?? null,
+        },
+      ]);
+    }
+
     window.addEventListener(DEPLOY_CARD_EVENT, onDeploy);
     window.addEventListener(REMOVE_CARD_EVENT, onRemove);
     window.addEventListener(DEPLOY_ARTIFACT_EVENT, onArtifact);
+    window.addEventListener(CARD_ACTION_EVENT, onCardAction);
     return () => {
       window.removeEventListener(DEPLOY_CARD_EVENT, onDeploy);
       window.removeEventListener(REMOVE_CARD_EVENT, onRemove);
       window.removeEventListener(DEPLOY_ARTIFACT_EVENT, onArtifact);
+      window.removeEventListener(CARD_ACTION_EVENT, onCardAction);
     };
   }, []);
 

@@ -21,8 +21,11 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
+import { useState } from "react";
 import { ArrowUpRight, GripVertical } from "lucide-react";
 import { OPEN_ROOM_EVENT } from "./room-card-shape";
+import { CardHoverActions } from "../canvas-interactions/card-hover-actions";
+import { dispatchCardAction } from "../board-bus";
 
 export type ArtifactCardShape = TLBaseShape<
   "artifact-card",
@@ -93,10 +96,15 @@ export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
 }
 
 function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
-  const { kind, title, subtitle, color, roomId } = shape.props;
+  const { kind, title, subtitle, color, roomId, entityId } = shape.props;
   // Compact = an unfurl map node — drop the Open-room button + footer
   // (flagged via meta, no schema change). Send-to-board leaves it unset.
   const compact = !!(shape.meta as { compact?: boolean }).compact;
+
+  // Per-card hover action bar. The bar is a DOM child of the hover wrapper
+  // (even though positioned below the card), so mouseleave only fires when
+  // the pointer leaves BOTH — no flicker as the pointer crosses to it.
+  const [hovered, setHovered] = useState(false);
 
   function openRoom(e: React.MouseEvent) {
     e.stopPropagation();
@@ -116,6 +124,11 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
         pointerEvents: "all",
       }}
     >
+      <div
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{ position: "relative", width: "100%", height: "100%" }}
+      >
       <div
         style={{
           position: "relative",
@@ -249,6 +262,30 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
             }}
           >
             Artifact · select with others to Connect
+          </div>
+        )}
+      </div>
+
+        {/* Per-card hover action bar — pops up just below the card. */}
+        {!compact && (
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 5px)",
+              left: "50%",
+              transform: `translateX(-50%) translateY(${hovered ? 0 : -4}px)`,
+              opacity: hovered ? 1 : 0,
+              pointerEvents: hovered ? "auto" : "none",
+              transition: "opacity 130ms ease-out, transform 130ms ease-out",
+              zIndex: 60,
+            }}
+          >
+            <CardHoverActions
+              accent={color}
+              onAction={(action) =>
+                dispatchCardAction({ action, entityId, title, roomId })
+              }
+            />
           </div>
         )}
       </div>
