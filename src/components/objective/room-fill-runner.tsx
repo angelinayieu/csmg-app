@@ -27,6 +27,26 @@ import { motion } from "framer-motion";
 import { Check, Loader2, Sparkles, X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
+// A hung room/generate (a stuck multi-stage LLM pass) used to freeze the
+// whole fill loop — no AbortController, no timeout, so one stalled room
+// blocked every remaining room. Wrap it: a stalled room aborts after the
+// budget, the existing soft-fail skips it, and the rest continue.
+const ROOM_FILL_TIMEOUT_MS = 180_000; // 3 min — room/generate is a 4-stage LLM pass; fatal only to truly-hung rooms.
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = ROOM_FILL_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 type Status = "idle" | "running" | "done" | "cancelled";
 
 interface RoomFillTarget {
@@ -108,7 +128,7 @@ export function RoomFillRunner({
       try {
         // mode:"initial" → the route no-ops when the room already has
         // content, so this is safe even if generatedAt was stale.
-        await fetch("/api/brainstorm/room/generate", {
+        await fetchWithTimeout("/api/brainstorm/room/generate", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
