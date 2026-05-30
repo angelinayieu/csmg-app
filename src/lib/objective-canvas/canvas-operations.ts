@@ -56,6 +56,9 @@ export interface CanvasOperation {
   /** False = cataloged for the registry/scanner, but the executor can't run it
    *  yet (native-route wiring lands in a later phase). Keeps the doc honest. */
   wired: boolean;
+  /** How the executor lays out result cards (default grid). Ordered ops
+   *  (e.g. layers) read better as a vertical column. */
+  resultLayout?: "grid" | "column";
 }
 
 /** THE CATALOG. Grounded in src/lib/objective-canvas/* + the routes that invoke
@@ -98,17 +101,25 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
     requiresLlm: true,
     wired: true,
   },
-
-  // ── Cataloged, native-route wiring pending (scanner/Phase 2-3) ──
+  {
+    id: "make_technical",
+    label: "Make it more technical",
+    intent: "Refine this into concrete technical components",
+    contract: "text",
+    requiresLlm: true,
+    wired: true,
+  },
   {
     id: "layers",
     label: "What are the layers",
     intent: "Show the causal-altitude stack of this",
     contract: "text",
-    route: "/api/brainstorm/space/[spaceId]/layers/generate",
     requiresLlm: true,
-    wired: false,
+    wired: true,
+    resultLayout: "column",
   },
+
+  // ── Cataloged; entity ops pending the Phase-3 scratch-entity scaffold ──
   {
     id: "sub_objectives",
     label: "Break into sub-objectives",
@@ -119,9 +130,9 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
     wired: false,
   },
   {
-    id: "make_technical",
-    label: "Make it more technical",
-    intent: "Develop the mechanism spec (data flow, components, methods)",
+    id: "mechanism_spec",
+    label: "Develop the mechanism spec",
+    intent: "Full engineering spec: data-flow DAG, components, methods",
     contract: "entity",
     route: "/api/brainstorm/item/[entityId]/mechanism-spec",
     requiresLlm: true,
@@ -226,5 +237,47 @@ function normalizeAugment(
     }
     default:
       return [];
+  }
+}
+
+/** Dispatch: run any wired operation and return normalized result rows.
+ *  augment-backed ops → /api/synergy/augment; the rest → /api/canvas/idea-op. */
+export async function runOperation(
+  op: CanvasOperation,
+  target: OperationTarget,
+): Promise<OperationResultItem[]> {
+  if (op.augmentMode) return runAugmentOperation(op, target);
+  if (op.wired) return runIdeaOp(op, target);
+  return [];
+}
+
+/** Run a non-augment text op (layers / make_technical) via /api/canvas/idea-op.
+ *  Soft-fails to [] so the caller never throws. */
+async function runIdeaOp(
+  op: CanvasOperation,
+  target: OperationTarget,
+): Promise<OperationResultItem[]> {
+  if (!target.text.trim()) return [];
+  try {
+    const res = await fetch("/api/canvas/idea-op", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: target.text.slice(0, 4000), kind: op.id }),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      items?: Array<{ title?: string; subtitle?: string }>;
+    };
+    return (json.items ?? [])
+      .filter(
+        (it) => typeof it.title === "string" && it.title.trim().length > 0,
+      )
+      .map((it) => ({
+        title: (it.title as string).trim(),
+        subtitle: typeof it.subtitle === "string" ? it.subtitle : undefined,
+      }))
+      .slice(0, MAX_RESULT_ITEMS);
+  } catch {
+    return [];
   }
 }

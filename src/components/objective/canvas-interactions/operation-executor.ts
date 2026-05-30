@@ -8,12 +8,18 @@
 // source shape (so they're saveable to Library + tethered to where they came
 // from). tldraw-coupled; imported only by whiteboard-base.
 
-import { createShapeId, type Editor, type TLShapeId } from "tldraw";
+import {
+  createShapeId,
+  toRichText,
+  type Editor,
+  type TLShapeId,
+} from "tldraw";
 import type { ArtifactCardShape } from "../shapes/artifact-card-shape";
 import {
   operationById,
-  runAugmentOperation,
+  runOperation,
   type OperationTarget,
+  type OperationResultItem,
 } from "@/lib/objective-canvas/canvas-operations";
 
 const RESULT_W = 216;
@@ -34,9 +40,6 @@ export async function executeCardOperation(
   const op = operationById(opId);
   if (!op || !op.wired) return;
 
-  const items = await runAugmentOperation(op, target);
-  if (!items.length) return;
-
   // Anchor the result cluster just below the source shape (fallback: viewport).
   let anchorMidX: number;
   let startY: number;
@@ -52,7 +55,40 @@ export async function executeCardOperation(
     startY = vp.center.y;
   }
 
-  const perRow = Math.min(items.length, PER_ROW);
+  // Pending placeholder so the LLM wait has immediate feedback (covers the
+  // card-menu path; the scanner panel shows its own per-row "Working…" too).
+  const pendingId = createShapeId();
+  try {
+    editor.createShape({
+      id: pendingId,
+      type: "note",
+      x: anchorMidX - 90,
+      y: startY,
+      props: {
+        color: "grey",
+        size: "s",
+        richText: toRichText(`Generating ${op.label.toLowerCase()}…`),
+      },
+      meta: { opPending: true, op: opId },
+    });
+  } catch {
+    /* placeholder is best-effort */
+  }
+
+  let items: OperationResultItem[];
+  try {
+    items = await runOperation(op, target);
+  } finally {
+    try {
+      editor.deleteShape(pendingId);
+    } catch {
+      /* already removed */
+    }
+  }
+  if (!items.length) return;
+
+  const perRow =
+    op.resultLayout === "column" ? 1 : Math.min(items.length, PER_ROW);
   const rowWidth = perRow * RESULT_W + (perRow - 1) * GAP_X;
   const stamp = Date.now();
 

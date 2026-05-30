@@ -38,12 +38,22 @@ export function heuristicScan(target: OperationTarget): ScoredOperation[] {
     );
   const isShort = words.length <= 4;
   const isBroad = words.length >= 6 && !isQuestion;
+  const isSystemic =
+    /\b(system|process|flow|pipeline|architecture|stack|loop|end-to-end|workflow)\b/.test(
+      lower,
+    );
+  const isTechnical =
+    /\b(api|data|algorithm|schema|model|service|function|database|latency|throughput|index|cache|query)\b/.test(
+      lower,
+    );
 
   const score: Record<string, number> = {
     questions: (isQuestion ? 0.92 : 0.42) + (isShort ? 0.14 : 0),
     decompose: (isBroad ? 0.86 : 0.5) + (words.length > 10 ? 0.1 : 0),
     variations: (isQuestion ? 0.34 : 0.62) + (hasVerb ? 0.08 : 0),
     make_plan: (hasVerb ? 0.82 : 0.46) + (isQuestion ? -0.12 : 0),
+    make_technical: (isTechnical ? 0.32 : 0.58) + (hasVerb ? 0.06 : 0),
+    layers: (isBroad ? 0.6 : 0.42) + (isSystemic ? 0.2 : 0),
   };
   const reason: Record<string, string> = {
     questions: isQuestion
@@ -54,6 +64,10 @@ export function heuristicScan(target: OperationTarget): ScoredOperation[] {
       : "Surface its principles and pieces",
     variations: "Explore alternative angles",
     make_plan: hasVerb ? "Actionable — turn it into steps" : "Sketch the steps",
+    make_technical: isTechnical
+      ? "Push the technical detail further"
+      : "Ground it in concrete tech",
+    layers: "See it as a substrate→outcome stack",
   };
 
   return menuOperations()
