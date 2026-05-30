@@ -68,7 +68,9 @@ export const appleVibe = {
     features: "#2563EB",
     process: "#0D9488",
     outcomes: "#16A34A",
-    objective: "#7C3AED",
+    // Apex layer reads as restrained graphite-slate, NOT purple — the
+    // objective frames the stack, it shouldn't shout in violet.
+    objective: "#475569",
   },
 
   // Typography stack — SF on Apple, Inter on the rest. Both render

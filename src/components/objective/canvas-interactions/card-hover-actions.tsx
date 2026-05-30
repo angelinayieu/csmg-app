@@ -35,7 +35,7 @@ const ACTIONS: {
 
 export function CardHoverActions({
   onAction,
-  accent = "#7C3AED",
+  accent = "rgba(15,23,42,0.92)",
   saved = false,
 }: {
   onAction: (action: CardAction) => void;

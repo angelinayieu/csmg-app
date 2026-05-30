@@ -25,7 +25,7 @@ import {
   type TLShapeId,
   resizeBox,
 } from "tldraw";
-import { Sparkles, Check, X } from "lucide-react";
+import { GitMerge, Check, X } from "lucide-react";
 
 export type InsightCardShape = TLBaseShape<
   "insight-card",
@@ -72,7 +72,7 @@ export class InsightCardShapeUtil extends BaseBoxShapeUtil<InsightCardShape> {
       kind: "connect",
       headline: "",
       body: "",
-      color: "#7C3AED",
+      color: "#475569",
       sourceIds: [],
     };
   }
@@ -121,7 +121,7 @@ function InsightCardRenderer({
       editor.updateShape({
         id,
         type: "arrow",
-        props: { dash: "solid", color: "violet" },
+        props: { dash: "solid", color: "grey" },
       });
     }
   }
@@ -166,7 +166,7 @@ function InsightCardRenderer({
       >
         {/* Eyebrow — the AI provenance tag. */}
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-          <Sparkles style={{ width: 12, height: 12, color }} strokeWidth={2.4} />
+          <GitMerge style={{ width: 12, height: 12, color }} strokeWidth={2.4} />
           <span
             style={{
               fontSize: 9,

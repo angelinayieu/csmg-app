@@ -24,8 +24,9 @@
 import { useMemo } from "react";
 import {
   Check,
-  Sparkles,
+  ListChecks,
   GitBranch,
+  GitMerge,
   FlaskConical,
   CircleDashed,
   X,
@@ -41,12 +42,12 @@ type Bucket = "plans" | "expanded" | "unclear" | "exploratory";
 
 const SECTION: Record<
   Bucket,
-  { label: string; hint: string; Icon: typeof Sparkles; color: string }
+  { label: string; hint: string; Icon: typeof ListChecks; color: string }
 > = {
   plans: {
     label: "Synthesized",
     hint: "Plans you converged",
-    Icon: Sparkles,
+    Icon: GitMerge,
     color: appleVibe.stage.objective,
   },
   expanded: {
@@ -89,7 +90,7 @@ export function FocusModePanel({
   focus,
   onPublish,
   onFocusNode,
-  accent = appleVibe.stage.objective,
+  accent = appleVibe.accent.primary,
 }: FocusModePanelProps) {
   const { phase, keptIds, hoveredNodeId, scopedIds } = focus;
 
@@ -172,7 +173,7 @@ export function FocusModePanel({
             color: accent,
           }}
         >
-          <Sparkles style={{ width: 16, height: 16 }} strokeWidth={2.2} />
+          <ListChecks style={{ width: 16, height: 16 }} strokeWidth={2.2} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
