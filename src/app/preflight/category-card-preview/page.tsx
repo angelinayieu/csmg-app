@@ -420,7 +420,6 @@ export default function Page() {
             spaceId="demo"
             title={subTitle}
             titleAnnotations={titleAnnotations}
-            topNegativeOutcome="Users fail to align digital activities with career advancement goals, missing long-term opportunities."
           />
           <div
             className="mx-auto w-full max-w-[1400px] px-8"

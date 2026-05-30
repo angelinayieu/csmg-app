@@ -58,6 +58,16 @@ import type {
   ExpandedItemDetail,
   ItemVariation,
 } from "@/lib/objective-canvas/expand-item-detail";
+// MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 1.
+// Lab is now the canonical mechanism page (per user pick). The 6
+// read-oriented sections live in mechanism-page/ and compose into the
+// existing eval-oriented section stack.
+import { OverviewSection } from "@/components/objective/mechanism-page/overview-section";
+import { SpecSection } from "@/components/objective/mechanism-page/spec-section";
+import { InspirationSection } from "@/components/objective/mechanism-page/inspiration-section";
+import { PlanningSection } from "@/components/objective/mechanism-page/planning-section";
+import { ChainsSection } from "@/components/objective/mechanism-page/chains-section";
+import { DecisionsSection } from "@/components/objective/mechanism-page/decisions-section";
 
 interface PeerOutcome {
   id: string;
@@ -77,6 +87,25 @@ interface Props {
   peerOutcomes: PeerOutcome[];
   coreObjectiveText: string;
   subObjectiveTitle: string;
+  /** MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 1.
+   *  Linked chains through this mechanism, pre-derived server-side
+   *  from edges + sibling names. Drives the §6 Chains section. */
+  linkedChains: Array<{
+    id: string;
+    label: string;
+    pct: number;
+    approved: boolean;
+  }>;
+  /** Decision audit log for this entity (sub_objective_decisions
+   *  rows keyed by proposal_id=entityId). Drives the §7 Decisions
+   *  section. Already sorted desc by created_at, capped at 50. */
+  decisions: Array<{
+    id: string;
+    action: string;
+    proposal_id: string | null;
+    metadata: Record<string, unknown> | null;
+    created_at: string;
+  }>;
 }
 
 interface ResearchSource {
@@ -110,9 +139,29 @@ export function LabPageView({
   peerOutcomes,
   coreObjectiveText: _coreObjectiveText,
   subObjectiveTitle: _subObjectiveTitle,
+  linkedChains,
+  decisions,
 }: Props) {
   const router = useRouter();
   const [, startTransition] = useTransition();
+  // MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 1.
+  // The mechanism-page section components accept an entity-shaped
+  // object. We construct it once from the split props Lab already
+  // receives — no extra fetches, no behavioral change for the
+  // existing eval sections. expanded_detail uses local optimistic
+  // state below where possible; for the page sections the initial
+  // server-loaded copy is fine (re-fetch via router.refresh after
+  // any action that mutates the underlying row).
+  const mechanismEntity = useMemo(
+    () => ({
+      id: entityId,
+      name: entityName,
+      causal_chain: (causalChain ?? {}) as Record<string, unknown>,
+      expanded_detail: (expandedDetail ?? {}) as Record<string, unknown>,
+      detail_research: detailResearch,
+    }),
+    [entityId, entityName, causalChain, expandedDetail, detailResearch],
+  );
   // Local optimistic state for the variations array — after a re-run,
   // patch the locally-rendered list while the router.refresh() repaints.
   const [variationsLocal, setVariationsLocal] = useState<ItemVariation[]>(
@@ -598,6 +647,21 @@ export function LabPageView({
         )}
       </header>
 
+      {/* MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 1.
+          The Lab page is now the canonical mechanism surface. The
+          read-oriented §1 Overview lands here, BEFORE the evaluation
+          stack — so the user sees "what this mechanism is" before
+          "how it scores." The remaining read sections (Spec /
+          Inspiration / Planning / Chains / Decisions) interleave
+          with the eval sections at the right points below. */}
+      <Section title="§1 Overview">
+        <OverviewSection entity={mechanismEntity} />
+      </Section>
+
+      {/* ── Section 2 (Variations) is composed of Lab's existing
+          eval sections (Indicators / Proxy / Counter / REML / Diff).
+          They are the canonical "Variations" content. */}
+
       {/* ── Section 1: Indicators (rubric criteria) ── */}
       <Section title="Indicators · rubric criteria">
         <IndicatorsTable
@@ -673,9 +737,49 @@ export function LabPageView({
         </Section>
       )}
 
+      {/* MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 1.
+          §3 Spec: mechanism_spec content (mechanism_of_action,
+          active ingredients, data flow DAG, experience layer,
+          engineering detail, research basis). Consolidated from
+          what used to be 4 drawer tabs. */}
+      <Section title="§3 Spec">
+        <SpecSection entity={mechanismEntity} />
+      </Section>
+
+      {/* §4 Inspiration: technical + design sources from
+          detail_research. Lab's older EvidenceTable below shows the
+          same underlying data in a tabular view with a future
+          "Supports?" column — we keep both for Phase 1; the
+          tabular Evidence view stays the eval-grade citation table,
+          and Inspiration is the design-context view. */}
+      <Section title="§4 Inspiration">
+        <InspirationSection entity={mechanismEntity} />
+      </Section>
+
+      {/* §5 Planning: assumes / depends_on / risks from
+          expanded_detail.planning. Three-pillar layout. */}
+      <Section title="§5 Planning">
+        <PlanningSection entity={mechanismEntity} />
+      </Section>
+
       {/* ── Section 4: Evidence (item-level research) ── */}
       <Section title="Evidence · research-grounded">
         <EvidenceTable detailResearch={detailResearch} />
+      </Section>
+
+      {/* MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 1.
+          §6 Chains: linked chains through this mechanism, with %
+          composite strength + approval state. Pre-derived
+          server-side from edges + sibling names. */}
+      <Section title="§6 Chains">
+        <ChainsSection chains={linkedChains} />
+      </Section>
+
+      {/* §7 Decisions: full audit log for this entity. Sub-objective
+          decisions where proposal_id == entityId, capped at 50,
+          desc by created_at. */}
+      <Section title="§7 Decisions">
+        <DecisionsSection decisions={decisions} />
       </Section>
 
       {/* ── Section 5: Simulation Results (MC) ── */}

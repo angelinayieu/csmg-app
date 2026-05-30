@@ -64,7 +64,6 @@ export default function RoomInstrumentPreview() {
         spaceId="preview"
         title="Goal-Driven Knowledge Pathways"
         titleAnnotations={[]}
-        topNegativeOutcome="Users fail to align digital activities with career advancement goals, missing long-term opportunities."
         placement={{ label: "L3 · Goal Conversion", archetype: "process" }}
       />
 

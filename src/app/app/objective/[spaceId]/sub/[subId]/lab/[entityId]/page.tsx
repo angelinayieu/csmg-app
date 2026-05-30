@@ -118,36 +118,124 @@ export default async function LabPage({
     );
   }
 
-  // ── Load room peer outcomes — needed to render indicator names
-  //    even when the user hasn't run rubric (so the Indicators table
-  //    can show "no scores yet" with the right indicator headers). ──
+  // ── Load room peer outcomes + room siblings + edges + decision log ──
+  //
+  // MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 1. Lab is now the
+  // canonical mechanism page, so it serves the read-oriented sections
+  // (Overview / Spec / Inspiration / Planning / Chains / Decisions)
+  // in addition to its original focused-evaluation sections.
+  //
+  // - peerOutcomes (existing): drives the indicator names in the
+  //   IndicatorsTable + ProxyIndicatorsTable.
+  // - siblings (new): every entity in the room — pains + outcomes —
+  //   so chain labels can resolve incoming/outgoing edge endpoints.
+  // - edges (new): every edge in the room — used to derive linked
+  //   chains through this mechanism (pain → feature → outcome).
+  // - decisions (new): every sub_objective_decisions row keyed by
+  //   proposal_id=entityId — drives the Decisions section's audit log.
+  //
+  // All four queries are wave-1-parallel: they only depend on
+  // parent_sub_objective_id which we already have from the entity load.
   let peerOutcomes: Array<{
     id: string;
     name: string;
     indicators: string[];
   }> = [];
+  let siblingRows: Array<{
+    id: string;
+    name: string;
+    entity_type: string;
+    causal_chain: Record<string, unknown> | null;
+  }> = [];
+  let edgeRows: Array<{
+    id: string;
+    source_entity_id: string;
+    target_entity_id: string;
+    strength: number | null;
+    polarity: string | null;
+    approved_at: string | null;
+  }> = [];
+
   if (entity.parent_sub_objective_id) {
-    const { data: outcomesRows } = await supabase
-      .from("entities")
-      .select("id, name, causal_chain")
-      .eq("parent_sub_objective_id", entity.parent_sub_objective_id)
-      .eq("entity_type", "outcome");
-    peerOutcomes = ((outcomesRows ?? []) as Array<{
-      id: string;
-      name: string;
-      causal_chain: Record<string, unknown> | null;
-    }>).map((o) => ({
-      id: o.id,
-      name: o.name,
-      indicators: Array.isArray(o.causal_chain?.indicators)
-        ? (o.causal_chain.indicators as unknown[])
-            .filter(
-              (x): x is string => typeof x === "string" && x.length > 0,
-            )
-            .slice(0, 6)
-        : [],
-    }));
+    const [siblingsRes, edgesRes] = await Promise.all([
+      supabase
+        .from("entities")
+        .select("id, name, entity_type, causal_chain")
+        .eq("parent_sub_objective_id", entity.parent_sub_objective_id),
+      supabase
+        .from("edges")
+        .select(
+          "id, source_entity_id, target_entity_id, strength, polarity, approved_at",
+        )
+        .eq("parent_sub_objective_id", entity.parent_sub_objective_id),
+    ]);
+    siblingRows = (siblingsRes.data ?? []) as typeof siblingRows;
+    edgeRows = (edgesRes.data ?? []) as typeof edgeRows;
+
+    // Slice peer outcomes off the sibling rows (one less round trip).
+    peerOutcomes = siblingRows
+      .filter((s) => s.entity_type === "outcome")
+      .map((o) => ({
+        id: o.id,
+        name: o.name,
+        indicators: Array.isArray(o.causal_chain?.indicators)
+          ? (o.causal_chain.indicators as unknown[])
+              .filter(
+                (x): x is string => typeof x === "string" && x.length > 0,
+              )
+              .slice(0, 6)
+          : [],
+      }));
   }
+
+  // Decision audit log for this entity — last 50, most recent first.
+  // Proposal_id == entityId because the canvas's logDecision threads the
+  // entity id into proposal_id on every per-item event (elect / reject /
+  // score / mechanism_spec_generated / etc).
+  const { data: decisionRows } = await supabase
+    .from("sub_objective_decisions")
+    .select("id, action, proposal_id, metadata, created_at")
+    .eq("proposal_id", entityId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  const decisions = (decisionRows ?? []) as Array<{
+    id: string;
+    action: string;
+    proposal_id: string | null;
+    metadata: Record<string, unknown> | null;
+    created_at: string;
+  }>;
+
+  // Derive linked chains: every (incoming, outgoing) pair through this
+  // feature is one chain (pain → feature → outcome). Strength = mean of
+  // the two edge strengths × 100.
+  const nameById = new Map<string, string>();
+  for (const s of siblingRows) nameById.set(s.id, s.name);
+  const incoming = edgeRows.filter((e) => e.target_entity_id === entityId);
+  const outgoing = edgeRows.filter((e) => e.source_entity_id === entityId);
+  const linkedChains: Array<{
+    id: string;
+    label: string;
+    pct: number;
+    approved: boolean;
+  }> = [];
+  for (const inE of incoming) {
+    const painName = nameById.get(inE.source_entity_id);
+    if (!painName) continue;
+    for (const outE of outgoing) {
+      const outName = nameById.get(outE.target_entity_id);
+      if (!outName) continue;
+      const inS = typeof inE.strength === "number" ? inE.strength : 0.5;
+      const outS = typeof outE.strength === "number" ? outE.strength : 0.5;
+      linkedChains.push({
+        id: `${inE.id}::${outE.id}`,
+        label: `${painName} → ${outName}`,
+        pct: Math.round(((inS + outS) / 2) * 100),
+        approved: !!inE.approved_at && !!outE.approved_at,
+      });
+    }
+  }
+  linkedChains.sort((a, b) => b.pct - a.pct);
 
   const expanded = (entity.expanded_detail as ExpandedItemDetail | null) ?? null;
 
@@ -233,6 +321,8 @@ export default async function LabPage({
             peerOutcomes={peerOutcomes}
             coreObjectiveText={coreObjectiveText}
             subObjectiveTitle={subObjectiveTitle}
+            linkedChains={linkedChains}
+            decisions={decisions}
           />
       </div>
     </>

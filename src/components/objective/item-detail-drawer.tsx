@@ -21,6 +21,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -455,6 +456,11 @@ interface Props {
    *  so the "+ Branch into current space" affordance can fire. When
    *  undefined, the branch button stays hidden (drawer-as-read-only). */
   spaceId?: string;
+  /** The room (sub-objective) id this item belongs to. Required for
+   *  the "Open full mechanism page" deep-link, which resolves to
+   *  /app/objective/[spaceId]/sub/[subObjectiveId]/lab/[entityId].
+   *  When undefined, the deep-link button stays hidden. */
+  subObjectiveId?: string;
   onClose: () => void;
 }
 
@@ -480,6 +486,7 @@ export function ItemDetailDrawer({
   initialDetailResearch,
   linkedChains,
   spaceId,
+  subObjectiveId,
   onClose,
 }: Props) {
   const reduce = useReducedMotion();
@@ -986,6 +993,25 @@ export function ItemDetailDrawer({
                   {itemName}
                 </h2>
               </div>
+              {/* MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 1.
+                  When this drawer is showing a FEATURE (mechanism), expose
+                  a deep-link to the canonical Lab page (which now also
+                  holds the 6 added sections: Overview, Spec, Inspiration,
+                  Planning, Chains, Decisions). Drawer stays as the
+                  in-room peek; the Lab page is the consolidated detail
+                  view. spaceId + subObjectiveId required for the route —
+                  if either is missing, the link hides. */}
+              {itemLayer === "features" && entityId && spaceId && subObjectiveId && (
+                <Link
+                  href={`/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${entityId}`}
+                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[color:var(--home-chrome-fill,rgba(15,23,42,0.04))]"
+                  aria-label="Open full mechanism page"
+                  title="Open full mechanism page"
+                  style={{ color: appleVibe.text.secondary }}
+                >
+                  <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={2} />
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => setFullscreen((v) => !v)}
@@ -1058,6 +1084,53 @@ export function ItemDetailDrawer({
                   onRefresh={regenerateExpansion}
                   busy={expandLoading}
                 />
+              )}
+
+              {/* MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.3.
+                  Slim-drawer CTA banner for mechanisms. The drawer is
+                  the in-room peek; the canonical Lab page is the
+                  full surface. This banner is the loud one-click path
+                  from the peek to the page. Renders only for the
+                  feature lane — pains/outcomes keep their existing
+                  drawer-only flow. */}
+              {itemLayer === "features" && entityId && spaceId && subObjectiveId && (
+                <Link
+                  href={`/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${entityId}`}
+                  className="block rounded-2xl border p-3 transition-colors hover:bg-[color:var(--home-chrome-fill,rgba(15,23,42,0.025))]"
+                  style={{
+                    borderColor: appleVibe.stroke.hairline,
+                    background:
+                      "linear-gradient(135deg, rgba(59,130,246,0.04) 0%, rgba(59,130,246,0.02) 100%)",
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div
+                        className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+                        style={{ color: "rgba(37,99,235,0.85)" }}
+                      >
+                        Quick peek
+                      </div>
+                      <div
+                        className="mt-0.5 text-[12.5px] font-medium"
+                        style={{ color: appleVibe.text.primary }}
+                      >
+                        Variations, spec, planning, chains, and decisions live
+                        on the full page.
+                      </div>
+                    </div>
+                    <div
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-[11px] font-semibold"
+                      style={{
+                        background: appleVibe.accent.primary,
+                        color: appleVibe.text.onAccent,
+                      }}
+                    >
+                      Open Lab
+                      <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
+                    </div>
+                  </div>
+                </Link>
               )}
 
               {/* ── 1. DEFINITION ── */}
@@ -1208,19 +1281,11 @@ export function ItemDetailDrawer({
                   components / dosage / fidelity / research basis.
                   Only meaningful for the FEATURE lane — a pain or
                   outcome has no "mechanism" to spec. */}
-              {itemLayer === "features" && entityId && (
-                <MechanismSpecPanel
-                  entityId={entityId}
-                  spec={expanded?.mechanism_spec}
-                  onSpecGenerated={(s) =>
-                    setExpanded((prev) =>
-                      prev
-                        ? { ...prev, mechanism_spec: s }
-                        : { mechanism_spec: s },
-                    )
-                  }
-                />
-              )}
+              {/* MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.3.
+                  MechanismSpecPanel (the 4-tab spec view) moved to the
+                  canonical Lab page (§3 Spec). Drawer is now a peek; the
+                  Lab page is the full surface. Users reach the spec via
+                  the "Open Lab" banner at the top of the body. */}
 
               {/* ── TERMS USED HERE (Arc 3.5) — contextual glossary ──
                   Only the project terms that actually appear in THIS
@@ -1446,7 +1511,17 @@ export function ItemDetailDrawer({
                     • annotation-lens chips (provenance)
                     • elect / defer / reject buttons (P3 disposition)
                   Followed by the COMPOSED DESIGN surface when ≥2 are
-                  elected — conflicts_open render as a loud banner. */}
+                  elected — conflicts_open render as a loud banner.
+
+                  MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.3.
+                  For features (mechanisms) the entire interactive
+                  variation rail moved to the canonical Lab page
+                  (Indicators · Proxy · Counter · REML · Variation
+                  Diff sections, plus my added §2 Variations frame).
+                  Pains/outcomes keep this section because their
+                  "variations" are still drawer-only today
+                  (Manifestations / Measurement strategies). */}
+              {itemLayer !== "features" && (
               <Section
                 icon={
                   <Layers
@@ -1464,13 +1539,15 @@ export function ItemDetailDrawer({
                 //   objective → "Variations" (legacy fallback)
                 // Underlying data structure unchanged.
                 title={
-                  itemLayer === "features"
-                    ? "IV Candidates"
-                    : itemLayer === "pain"
-                      ? "Manifestations"
-                      : itemLayer === "outcomes"
-                        ? "Measurement strategies"
-                        : "Variations"
+                  // MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.3.
+                  // The outer guard already excludes "features" — this
+                  // Section only renders for pain/outcomes/objective
+                  // (features handle variations on the Lab page).
+                  itemLayer === "pain"
+                    ? "Manifestations"
+                    : itemLayer === "outcomes"
+                      ? "Measurement strategies"
+                      : "Variations"
                 }
                 anchorId={DECISION_ANCHORS.variations}
                 subtitle={
@@ -1491,28 +1568,14 @@ export function ItemDetailDrawer({
                   />
                 )}
 
-                {/* Phase 4b — Mechanism effectiveness scoring.
-                    Only renders for feature cards with at least one
-                    variation. Self-contained: own state, own fetch,
-                    own UI. Score lives in component state until
-                    user closes the drawer (no persistence yet — that's
-                    Phase 4c). */}
-                {itemLayer === "features" &&
-                  expanded?.variations &&
-                  expanded.variations.length > 0 &&
-                  entityId && (
-                    <VariationScoringPanel
-                      entityId={entityId}
-                      itemName={itemName}
-                      variations={expanded.variations}
-                      initialEnvelope={reconstructEnvelopeFromExpanded(
-                        expanded,
-                        entityId,
-                        itemName,
-                      )}
-                      onRefreshExpanded={refetchExpandedSoft}
-                    />
-                  )}
+                {/* MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.3.
+                    Phase 4b VariationScoringPanel was features-only; the
+                    outer guard now excludes features, so the panel is
+                    unreachable here. Mechanism variation scoring lives
+                    on the Lab page (Indicators · rubric criteria).
+                    Pains/outcomes never used VariationScoringPanel.
+                    VariationScoringPanel is preserved as an export for
+                    any future surface that wants it. */}
 
                 {expandLoading && !expanded?.variations?.length ? (
                   <SkeletonLines lines={3} />
@@ -1578,13 +1641,20 @@ export function ItemDetailDrawer({
                   />
                 )}
               </Section>
+              )}
 
-              {/* ── Phase 11.9a — INDICATOR VALIDITY MATRIX ── */}
-              {/* Decision-stakes view of the rigor stack. Renders one
-                  matrix per variation that has indicator_scores. When
-                  no variation has been scored yet, the section hides
-                  entirely (no value showing an empty grid). */}
-              {expanded?.variations &&
+              {/* ── Phase 11.9a — INDICATOR VALIDITY MATRIX ──
+                  MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.3.
+                  Per-variation rigor matrix is feature-specific and
+                  now lives on the Lab page (Indicators · Proxy ·
+                  Counter · REML stack). Hidden from the drawer for
+                  features; pains/outcomes never rendered it anyway
+                  (indicator_scores are mechanism-specific). The
+                  outer guard is kept conservative — even if a pain
+                  or outcome ever ends up with indicator_scores, we
+                  still want the drawer to stay slim for features. */}
+              {itemLayer !== "features" &&
+                expanded?.variations &&
                 expanded.variations.some(
                   (v) =>
                     Array.isArray(v.indicator_scores) &&
@@ -1611,14 +1681,13 @@ export function ItemDetailDrawer({
                   </Section>
                 )}
 
-              {/* ── Phase 11.9b — GOODHART PAIRINGS PANEL ── */}
-              {/* Counter-indicators ensemble proposed (Phase 11.3) but
-                  no UI surface had been rendering. Surfaces the yang/yin
-                  pairing per outcome so the user actually sees the
-                  Goodhart antidote they should track alongside the
-                  primary indicator set. Always rendered (use_case_mode
-                  agnostic) when counter_indicators are present. */}
-              {expanded?.effectiveness_envelope?.counter_indicators &&
+              {/* ── Phase 11.9b — GOODHART PAIRINGS PANEL ──
+                  MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.3.
+                  Goodhart counter-indicators are mechanism-specific and
+                  now live on the Lab page. Hidden from the drawer for
+                  features. */}
+              {itemLayer !== "features" &&
+                expanded?.effectiveness_envelope?.counter_indicators &&
                 expanded.effectiveness_envelope.counter_indicators.length >
                   0 && (
                   <Section

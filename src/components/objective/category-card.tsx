@@ -40,6 +40,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
+  ArrowUpRight,
   Check,
   ChevronDown,
   ChevronUp,
@@ -48,6 +49,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { MethodBadge } from "./method-badge";
@@ -431,8 +433,21 @@ export function CategoryCard({
   // ── Phase 7b action state — score / refine / dispatch (elect+reject)
   // status flags. Separate from detail because actions are user-driven
   // and should not collide with the initial lazy-load.
+  // MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.2 leftover.
+  // These state hooks + the handleScore/handleRefine/handleDispatch
+  // functions below used to power the inline MechanismLineup. They're
+  // orphaned now (the card renders MechanismSummaryChip instead, and
+  // all per-variation actions live on the Lab page). Kept here so the
+  // exported MechanismLineup component (preflight preview still uses
+  // it) can keep using these as props in its own preview harness if
+  // needed. Phase 3 cleanup: delete this block + handle* + the fetch
+  // useEffect that drives them, and have the preflight preview supply
+  // its own state instead.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [scoringBusy, setScoringBusy] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [refiningBusy, setRefiningBusy] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [actionError, setActionError] = useState<string | null>(null);
   // Optimistic dispatch tracking — when the user clicks elect/reject
   // on a row, we update the UI before the API responds. The Set
@@ -1082,23 +1097,24 @@ export function CategoryCard({
         </div>
       )}
 
-      {/* Mechanism Lineup */}
+      {/* MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.2.
+          Reduced from MechanismLineup (full variation grid + inline
+          scoring + indicator breakdowns + mockup previews) to a slim
+          summary chip per the consolidation spec. The full variation
+          grid lives in the canonical Lab page; this card surfaces
+          just enough to identify the chain at a glance. Click the
+          card body or the "Open" CTA → Lab page for full
+          interaction (elect / reject / score / refine / etc).
+          MechanismLineup itself is preserved as an export so the
+          preflight preview can still showcase it. */}
       <div className="px-6 pb-5 pt-1">
-        <MechanismLineup
+        <MechanismSummaryChip
           variations={sortedVariations}
           featureId={chain.featureId}
           spaceId={spaceId}
           subObjectiveId={subObjectiveId}
           loading={detailLoading}
-          envelope={detail?.envelope}
           hasScores={hasScores}
-          scoringBusy={scoringBusy}
-          refiningBusy={refiningBusy}
-          actionError={actionError}
-          onScore={handleScore}
-          onRefine={handleRefine}
-          onElect={(id) => void handleDispatch(id, "elected")}
-          onReject={(id) => void handleDispatch(id, "rejected")}
           onOpenFeatureDetail={onOpenFeatureDetail}
         />
       </div>
@@ -1308,6 +1324,221 @@ function OutcomeHalf({
         );
       })()}
     </motion.button>
+  );
+}
+
+// ── Mechanism Summary Chip ────────────────────────────────────────
+//
+// MECHANISM_PAGE_CONSOLIDATION_PLAN — Phase 2.2.
+//
+// Replaces the rich variation lineup that used to render inline on
+// every CategoryCard. The card is now a chain-level summary; the
+// full variation interaction (elect / reject / score / refine /
+// indicator breakdown / inline mockup) lives on the canonical Lab
+// page one click away.
+//
+// Shows:
+//   - top variation (elected first, else top-scored, else first)
+//   - effectiveness pill when scored, "needs scoring" when not
+//   - variation count + elected count
+//   - prominent "Open in Lab" CTA
+//
+// Empty state: "No variations yet — generate them in the Lab."
+//
+// Loading state: shimmer placeholder so the card doesn't reflow
+// when expanded_detail lazy-loads.
+
+function MechanismSummaryChip({
+  variations,
+  featureId,
+  spaceId,
+  subObjectiveId,
+  loading,
+  hasScores,
+  onOpenFeatureDetail,
+}: {
+  variations: LineupVariation[];
+  featureId: string;
+  spaceId?: string;
+  subObjectiveId?: string;
+  loading: boolean;
+  hasScores: boolean;
+  onOpenFeatureDetail: () => void;
+}) {
+  const labHref =
+    spaceId && subObjectiveId
+      ? `/app/objective/${spaceId}/sub/${subObjectiveId}/lab/${featureId}`
+      : null;
+
+  if (loading) {
+    return (
+      <div
+        className="flex items-center gap-3 rounded-lg border px-4 py-3"
+        style={{
+          borderColor: appleVibe.stroke.hairline,
+          background: appleVibe.surface.chip,
+        }}
+      >
+        <Loader2
+          className="h-3.5 w-3.5 animate-spin"
+          style={{ color: appleVibe.text.faint }}
+          strokeWidth={2}
+        />
+        <span
+          className="text-[12px] font-light italic"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          Loading variations…
+        </span>
+      </div>
+    );
+  }
+
+  if (variations.length === 0) {
+    return (
+      <div
+        className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3"
+        style={{
+          borderStyle: "dashed",
+          borderColor: appleVibe.stroke.hairline,
+        }}
+      >
+        <span
+          className="text-[12px] font-light italic"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          No variations yet
+        </span>
+        <button
+          type="button"
+          onClick={onOpenFeatureDetail}
+          className="text-[11.5px] font-semibold hover:underline"
+          style={{ color: appleVibe.accent.primary }}
+        >
+          Open mechanism →
+        </button>
+      </div>
+    );
+  }
+
+  // Pick the lead variation: elected first; else top by effectiveness
+  // score; else first in the array (which is already display-sorted).
+  const elected = variations.find((v) => v.disposition === "elected");
+  const topByScore = [...variations]
+    .filter((v) => typeof v.effectiveness_score === "number")
+    .sort(
+      (a, b) =>
+        (b.effectiveness_score ?? 0) - (a.effectiveness_score ?? 0),
+    )[0];
+  const lead = elected ?? topByScore ?? variations[0];
+  const electedCount = variations.filter(
+    (v) => v.disposition === "elected",
+  ).length;
+  const scorePct =
+    typeof lead.effectiveness_score === "number"
+      ? Math.round(lead.effectiveness_score * 100)
+      : null;
+  const scoreColor =
+    scorePct === null
+      ? appleVibe.text.tertiary
+      : scorePct >= 70
+        ? "rgba(21,128,61,0.95)"
+        : scorePct >= 40
+          ? "rgba(180,83,9,0.92)"
+          : appleVibe.text.tertiary;
+
+  const inner = (
+    <div
+      className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3 transition-colors hover:bg-[color:var(--home-chrome-fill,rgba(15,23,42,0.025))]"
+      style={{
+        borderColor: elected
+          ? "rgba(34,197,94,0.30)"
+          : appleVibe.stroke.hairline,
+        background: elected ? "rgba(34,197,94,0.03)" : appleVibe.surface.card,
+      }}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          {elected && (
+            <span
+              className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+              style={{
+                background: "rgba(34,197,94,0.15)",
+                color: "rgba(21,128,61,0.95)",
+              }}
+            >
+              Elected
+            </span>
+          )}
+          <span
+            className="truncate text-[13px] font-semibold"
+            style={{ color: appleVibe.text.primary }}
+            title={lead.name}
+          >
+            {lead.name}
+          </span>
+        </div>
+        <div
+          className="mt-0.5 text-[10.5px] font-light"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          {variations.length}{" "}
+          {variations.length === 1 ? "variation" : "variations"}
+          {electedCount > 0 && ` · ${electedCount} elected`}
+          {!hasScores && variations.length > 0 && " · not scored"}
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {scorePct !== null && (
+          <div className="text-right">
+            <div
+              className="text-[15px] font-semibold leading-none tabular-nums"
+              style={{ color: scoreColor }}
+            >
+              {scorePct}
+            </div>
+            <div
+              className="mt-0.5 text-[8.5px] font-semibold uppercase tracking-wider"
+              style={{ color: appleVibe.text.faint }}
+            >
+              eff
+            </div>
+          </div>
+        )}
+        <span
+          className="inline-flex h-6 w-6 items-center justify-center rounded-full"
+          style={{
+            background: appleVibe.accent.primary,
+            color: appleVibe.text.onAccent,
+          }}
+          aria-hidden
+        >
+          <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
+        </span>
+      </div>
+    </div>
+  );
+
+  // When we have the Lab URL, the whole chip is a link. Without it
+  // (legacy mounts missing spaceId/subObjectiveId), fall back to
+  // opening the drawer so users still have a path forward.
+  return labHref ? (
+    <Link
+      href={labHref}
+      aria-label={`Open ${lead.name} in Lab`}
+      className="block"
+    >
+      {inner}
+    </Link>
+  ) : (
+    <button
+      type="button"
+      onClick={onOpenFeatureDetail}
+      className="block w-full text-left"
+      aria-label={`Open ${lead.name} drawer`}
+    >
+      {inner}
+    </button>
   );
 }
 
