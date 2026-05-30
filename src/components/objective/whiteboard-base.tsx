@@ -241,12 +241,23 @@ export function WhiteboardBase({
     anchor: UnfurlAnchor;
     graphs: UnfurlGraphs;
   } | null>(null);
+  // Levers descend: guard concurrent room fetches, cache per room so the 2↔3
+  // scrub is instant, and remember which room we anchored (independent of
+  // whether it had levers to show) so an empty room can't retrigger a loop.
+  const descendingRef = useRef(false);
+  const anchoredRoomRef = useRef<string | null>(null);
+  const roomGraphCache = useRef<
+    Map<string, { room: UnfurlGraphs["room"]; roomTitle?: string }>
+  >(new Map());
 
   useEffect(() => {
     function onOpen(e: Event) {
       const anchor = (e as CustomEvent<UnfurlAnchor>).detail;
       if (!anchor) return;
       dial.setDepth(anchor.depth);
+      // A fresh unfurl resets the descend anchor to whatever the open carried
+      // (a room id when opened from a room; null from the objective).
+      anchoredRoomRef.current = anchor.roomId ?? null;
       const qs = anchor.roomId
         ? `?room=${encodeURIComponent(anchor.roomId)}`
         : "";
@@ -304,6 +315,102 @@ export function WhiteboardBase({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spaceId]);
 
+  // Levers descend (depth ≥ 3): the objective-level unfurl carries no room, so
+  // scrubbing into Levers anchors the focused room — the one selected, else the
+  // room-card nearest the viewport center — fetches its lanes/edges, and builds
+  // the room graph so the room phase can render. Scrubbing back below Levers
+  // releases the anchor so the next descent can pick a different room.
+  useEffect(() => {
+    if (!unfurl) return;
+    const ed = editorRef.current;
+    if (!ed) return;
+
+    if (dial.depth >= 3 && anchoredRoomRef.current === null && !descendingRef.current) {
+      // Focus target: a single selected unfurl room-card, else the unfurl
+      // room-card nearest the viewport center.
+      const isRoom = (s: { type: string; meta?: Record<string, unknown> }) =>
+        s.type === "room-card" && !!(s.meta as { unfurl?: boolean })?.unfurl;
+      const realRoom = (rid: string | undefined): rid is string =>
+        !!rid && rid !== "__obj";
+      let roomId: string | null = null;
+      const sel = ed.getSelectedShapes().filter((s): s is RoomCardShape => isRoom(s));
+      if (sel.length === 1 && realRoom(sel[0].props.roomId)) {
+        roomId = sel[0].props.roomId;
+      } else {
+        const vp = ed.getViewportPageBounds();
+        const cx = vp.x + vp.w / 2;
+        const cy = vp.y + vp.h / 2;
+        let bestD = Infinity;
+        for (const s of ed.getCurrentPageShapes()) {
+          if (!isRoom(s)) continue;
+          const rid = (s as RoomCardShape).props.roomId;
+          if (!realRoom(rid)) continue;
+          const b = ed.getShapePageBounds(s.id);
+          if (!b) continue;
+          const d = Math.hypot(b.x + b.w / 2 - cx, b.y + b.h / 2 - cy);
+          if (d < bestD) {
+            bestD = d;
+            roomId = rid;
+          }
+        }
+      }
+      if (!roomId) return; // no room to descend into — stays clamped at Bets
+      // Mark anchored BEFORE the fetch so an empty room can't retrigger.
+      anchoredRoomRef.current = roomId;
+      const cached = roomGraphCache.current.get(roomId);
+      if (cached) {
+        const rid = roomId;
+        setUnfurl((u) =>
+          u
+            ? { ...u, graphs: { ...u.graphs, room: cached.room, roomId: rid, roomTitle: cached.roomTitle } }
+            : u,
+        );
+        return;
+      }
+      descendingRef.current = true;
+      const rid = roomId;
+      fetch(`/api/objective/${spaceId}/unfurl?room=${encodeURIComponent(rid)}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+        .then(
+          (d: {
+            room: { lanes: unknown; edges: unknown } | null;
+            roomTitle?: string;
+          }) => {
+            let room: UnfurlGraphs["room"] = null;
+            if (d.room) {
+              const rg = buildRoomGraph({
+                lanes: d.room.lanes,
+                edges: d.room.edges,
+                spaceId,
+                subObjectiveId: rid,
+              } as Parameters<typeof buildRoomGraph>[0]);
+              room = { nodes: rg.nodes, edges: rg.edges };
+            }
+            roomGraphCache.current.set(rid, { room, roomTitle: d.roomTitle });
+            setUnfurl((u) =>
+              u
+                ? { ...u, graphs: { ...u.graphs, room, roomId: rid, roomTitle: d.roomTitle } }
+                : u,
+            );
+          },
+        )
+        .catch(() => {})
+        .finally(() => {
+          descendingRef.current = false;
+        });
+      return;
+    }
+
+    // Released back to the canvas phase — drop the anchor + room so the next
+    // descent re-picks (possibly a different room).
+    if (dial.depth < 3 && anchoredRoomRef.current !== null) {
+      anchoredRoomRef.current = null;
+      setUnfurl((u) =>
+        u && u.graphs.room ? { ...u, graphs: { ...u.graphs, room: null } } : u,
+      );
+    }
+  }, [dial.depth, unfurl, spaceId]);
+
   // Reconcile the unfurl on depth / graph change, then frame it.
   useEffect(() => {
     const ed = editorRef.current;
@@ -343,6 +450,7 @@ export function WhiteboardBase({
     const ed = editorRef.current;
     if (ed) clearUnfurl(ed);
     setUnfurl(null);
+    anchoredRoomRef.current = null;
   }
 
   // ── Brainstorm board integration (Phase 4b-2) ─────────────────────
