@@ -282,16 +282,14 @@ export function ObjectiveStackWidget({
             <div key={layer.id}>
               {/* Layer row */}
               <div
-                className="rounded-2xl px-3 py-2.5 transition-colors duration-150"
+                className="rounded-2xl px-4 py-3.5 transition-shadow duration-200"
                 style={{
                   background: isCovered
-                    ? `${ARCHETYPE_COLOR[layer.archetype]}0A`
-                    : appleVibe.surface.cardElevated,
-                  border: `1px solid ${
-                    isCovered
-                      ? `${ARCHETYPE_COLOR[layer.archetype]}33`
-                      : appleVibe.stroke.hairline
-                  }`,
+                    ? `${ARCHETYPE_COLOR[layer.archetype]}0E`
+                    : "#FFFFFF",
+                  boxShadow: isCovered
+                    ? `0 8px 26px -10px ${ARCHETYPE_COLOR[layer.archetype]}59, 0 1px 0 rgba(255,255,255,0.7) inset`
+                    : "0 4px 16px -8px rgba(11,18,40,0.16), 0 1px 0 rgba(255,255,255,0.6) inset",
                 }}
               >
                 {/* Header row — ordinal · archetype · name · proposal count · coverage state */}
@@ -343,13 +341,17 @@ export function ObjectiveStackWidget({
                     )}
                     {isCovered && (
                       <span
-                        className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.12em]"
+                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold"
                         style={{
-                          background: `${ARCHETYPE_COLOR[layer.archetype]}14`,
+                          background: `${ARCHETYPE_COLOR[layer.archetype]}16`,
                           color: ARCHETYPE_COLOR[layer.archetype],
                         }}
                       >
-                        covered
+                        <span
+                          className="h-[5px] w-[5px] rounded-full"
+                          style={{ background: ARCHETYPE_COLOR[layer.archetype] }}
+                        />
+                        Covered
                       </span>
                     )}
                   </div>
@@ -374,11 +376,10 @@ export function ObjectiveStackWidget({
                       onClick={() =>
                         setOpenVariable({ layerId: layer.id, variable: v })
                       }
-                      className="inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-medium transition-colors hover:bg-[rgba(15,23,42,0.05)]"
+                      className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium transition-transform hover:scale-[1.03]"
                       style={{
-                        background: appleVibe.surface.chip,
+                        background: `${ARCHETYPE_COLOR[layer.archetype]}12`,
                         color: appleVibe.text.secondary,
-                        border: `1px solid ${appleVibe.stroke.hairline}`,
                       }}
                       title={v.description.slice(0, 120)}
                     >
