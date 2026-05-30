@@ -25,7 +25,6 @@ import {
   ChevronUp,
   Pause,
   RefreshCw,
-  Sparkles,
   X,
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
@@ -46,9 +45,6 @@ import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept
 import { LayerPositionChip } from "@/components/objective/layer-position-chip";
 import { BrainstormButton } from "@/components/objective/brainstorm/brainstorm-button";
 import { BrainstormPanel } from "@/components/objective/brainstorm/brainstorm-panel";
-import { BrainstormLibraryPopover } from "@/components/objective/brainstorm/brainstorm-library-popover";
-import type { BrainstormSession } from "@/lib/brainstorm/session-types";
-import { Bookmark } from "lucide-react";
 
 interface ObjectiveAnnotationLite {
   phrase: string;
@@ -147,15 +143,12 @@ export function SubObjectivePickerCard({
   // version of the variant lab. The "Generate better" bar stays for
   // single-intent manual presses; this opens the orchestrated 3-intent
   // → cleanup → critique → rank flow in a rail-card panel.
+  //
+  // Phase 7-Consolidate: the prior BrainstormLibraryPopover + Library
+  // button + rehydrate state were removed. Past sessions live as
+  // canonical library_objects of type='brainstorm_cluster' surfaced
+  // through the existing LibraryPanel — one library, one storage layer.
   const [brainstormOpen, setBrainstormOpen] = useState(false);
-  // Brainstorm library popover (Phase 5) — lists pinned past sessions
-  // for THIS space. Anchored to the brainstorm action row.
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  // Re-open state (Phase 4-polish). When non-null, the panel jumps to
-  // settled view with this session's ranking instead of running a fresh
-  // pipeline. Cleared on panel close so the next press starts clean.
-  const [rehydrateSession, setRehydrateSession] =
-    useState<BrainstormSession | null>(null);
 
   // ── Auto-propose on mount if nothing is cached ──
   useEffect(() => {
@@ -701,52 +694,22 @@ export function SubObjectivePickerCard({
         )}
       </div>
 
-      {/* Brainstorm — autopilot version of the variant lab (Phase 4 of
-          BRAINSTORM_MODULE_SPEC.md). Sits above the manual "Generate
-          better" bar so the orchestrated flow is the primary affordance;
-          the bar stays for single-intent power-user presses. The Library
-          button (Phase 5) surfaces pinned past sessions for this space. */}
-      <div className="relative mt-5 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <BrainstormButton
-            onClick={() => setBrainstormOpen(true)}
-            disabled={busy || !block || allProposals.length === 0}
-          />
-          <button
-            type="button"
-            onClick={() => setLibraryOpen((v) => !v)}
-            className="inline-flex items-center gap-1 rounded-xl border px-2.5 py-2 text-[11.5px] font-semibold transition hover:bg-gray-50"
-            style={{
-              borderColor: appleVibe.stroke.hairline,
-              background: libraryOpen
-                ? "rgba(254,243,199,0.5)"
-                : appleVibe.surface.card,
-              color: libraryOpen
-                ? "rgba(146,64,14,0.95)"
-                : appleVibe.text.secondary,
-            }}
-            title="Saved brainstorm sessions for this space"
-          >
-            <Bookmark className="h-3 w-3" strokeWidth={2.25} />
-            Library
-          </button>
-        </div>
+      {/* Brainstorm — autopilot version of the variant lab. Sits above
+          the manual "Generate better" bar so the orchestrated flow is
+          the primary affordance. Phase 7-Consolidate removed the
+          parallel Library popover — saved sessions appear in the
+          canonical LibraryPanel (library_objects of type 'brainstorm_cluster'). */}
+      <div className="mt-5 flex items-center justify-between gap-2">
+        <BrainstormButton
+          onClick={() => setBrainstormOpen(true)}
+          disabled={busy || !block || allProposals.length === 0}
+        />
         <span
           className="text-[10.5px] font-light"
           style={{ color: appleVibe.text.tertiary }}
         >
           or steer one intent at a time below ↓
         </span>
-        <BrainstormLibraryPopover
-          spaceId={spaceId}
-          open={libraryOpen}
-          onClose={() => setLibraryOpen(false)}
-          anchor="left"
-          onSelect={(s) => {
-            setRehydrateSession(s);
-            setBrainstormOpen(true);
-          }}
-        />
       </div>
 
       {/* Variant Lab bar — generate more, layered onto existing.
@@ -842,14 +805,8 @@ export function SubObjectivePickerCard({
           server re-fetch (the elect-candidate route already wrote it). */}
       <BrainstormPanel
         open={brainstormOpen}
-        onClose={() => {
-          setBrainstormOpen(false);
-          // Clear rehydrate after a brief delay so the panel's exit
-          // animation finishes without flipping back to idle state mid-fade.
-          setTimeout(() => setRehydrateSession(null), 400);
-        }}
+        onClose={() => setBrainstormOpen(false)}
         spaceId={spaceId}
-        rehydrateSession={rehydrateSession}
         onElected={(proposalId) => {
           setBlock((prev) => {
             if (!prev) return prev;
@@ -964,7 +921,7 @@ function LensCoverageStrip({
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Sparkles
+          <Sparkle
             className="h-3 w-3 flex-shrink-0"
             strokeWidth={2}
             style={{ color: appleVibe.text.tertiary }}
@@ -1182,7 +1139,7 @@ function VariantLabBar({
                   color: appleVibe.text.secondary,
                   border: `1px solid ${
                     intent === suggestedIntent
-                      ? "rgba(124,58,237,0.35)"
+                      ? "rgba(71,85,105,0.35)"
                       : appleVibe.stroke.hairline
                   }`,
                   cursor: disabled || busy ? "wait" : "pointer",
@@ -1194,7 +1151,7 @@ function VariantLabBar({
                 {intent === suggestedIntent && (
                   <span
                     className="ml-0.5 text-[9px] font-semibold"
-                    style={{ color: "rgba(91,33,182,0.95)" }}
+                    style={{ color: "rgba(71,85,105,0.95)" }}
                   >
                     ★
                   </span>
@@ -1294,8 +1251,8 @@ function ProposalRow({
               <span
                 className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]"
                 style={{
-                  background: "rgba(124,58,237,0.08)",
-                  color: "rgba(91,33,182,0.95)",
+                  background: "rgba(71,85,105,0.08)",
+                  color: "rgba(71,85,105,0.95)",
                 }}
                 title="LLM-picked as load-bearing in its batch"
               >
@@ -1346,7 +1303,7 @@ function ProposalRow({
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
               <span
                 className="text-[9px] font-semibold uppercase tracking-[0.12em]"
-                style={{ color: "rgba(91,33,182,0.95)" }}
+                style={{ color: "rgba(71,85,105,0.95)" }}
               >
                 ↻ links to
               </span>
@@ -1359,11 +1316,11 @@ function ProposalRow({
                       e.stopPropagation();
                       onConceptClick(c.canonical_code);
                     }}
-                    className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-[rgba(124,58,237,0.16)]"
+                    className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-[rgba(71,85,105,0.16)]"
                     style={{
-                      background: "rgba(124,58,237,0.08)",
-                      color: "rgba(91,33,182,0.95)",
-                      border: "1px solid rgba(124,58,237,0.18)",
+                      background: "rgba(71,85,105,0.08)",
+                      color: "rgba(71,85,105,0.95)",
+                      border: "1px solid rgba(71,85,105,0.18)",
                       cursor: "pointer",
                     }}
                     title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"} · click to open cross-space view`}
@@ -1372,7 +1329,7 @@ function ProposalRow({
                     {c.space_count > 1 && (
                       <span
                         className="font-mono text-[8.5px]"
-                        style={{ color: "rgba(91,33,182,0.75)" }}
+                        style={{ color: "rgba(71,85,105,0.75)" }}
                       >
                         {c.space_count}×
                       </span>
@@ -1383,9 +1340,9 @@ function ProposalRow({
                     key={c.display_name}
                     className="inline-flex max-w-[200px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
                     style={{
-                      background: "rgba(124,58,237,0.08)",
-                      color: "rgba(91,33,182,0.95)",
-                      border: "1px solid rgba(124,58,237,0.18)",
+                      background: "rgba(71,85,105,0.08)",
+                      color: "rgba(71,85,105,0.95)",
+                      border: "1px solid rgba(71,85,105,0.18)",
                     }}
                     title={`Used in ${c.space_count} of your space${c.space_count === 1 ? "" : "s"}`}
                   >
@@ -1393,7 +1350,7 @@ function ProposalRow({
                     {c.space_count > 1 && (
                       <span
                         className="font-mono text-[8.5px]"
-                        style={{ color: "rgba(91,33,182,0.75)" }}
+                        style={{ color: "rgba(71,85,105,0.75)" }}
                       >
                         {c.space_count}×
                       </span>
@@ -2004,7 +1961,7 @@ function ClusterView({
               <div className="flex items-baseline gap-2 min-w-0">
                 <span
                   className="text-[11px] font-semibold uppercase tracking-[0.14em]"
-                  style={{ color: "rgba(91,33,182,0.95)" }}
+                  style={{ color: "rgba(71,85,105,0.95)" }}
                 >
                   {c.label}
                 </span>

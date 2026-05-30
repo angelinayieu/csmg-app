@@ -527,7 +527,7 @@ function KGGraphReal() {
     "#06B6D4",
     "#F59E0B",
     "#EC4899",
-    "#8B5CF6",
+    "#475569",
     "#14B8A6",
     "#1E293B",
   ];
@@ -1210,7 +1210,7 @@ function TrajectoryCard() {
         <path
           d={interventionPath}
           fill="none"
-          stroke="#7C3AED"
+          stroke="#475569"
           strokeWidth="2"
         />
       </svg>
@@ -1860,7 +1860,7 @@ function MiniLayered({ W = 220, H = 160 }: { W?: number; H?: number }) {
   const padX = 18;
   const padY = 12;
   const positions = useMemo(() => layoutKG(W, H, padX, padY), [W, H]);
-  const layerColors = ["#94A3B8", "#06B6D4", "#F59E0B", "#EC4899", "#8B5CF6", "#14B8A6", "#1E293B"];
+  const layerColors = ["#94A3B8", "#06B6D4", "#F59E0B", "#EC4899", "#475569", "#14B8A6", "#1E293B"];
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full">
       {EDGES.map((e) => {
@@ -1905,7 +1905,7 @@ function MiniSphere({ W = 220, H = 160 }: { W?: number; H?: number }) {
     const a = (i / ring2.length) * Math.PI * 2 + 0.15;
     positions[id] = { x: rd(cx + Math.cos(a) * 60), y: rd(cy + Math.sin(a) * 60), layer: NODE_BY_ID.get(id)?.layer ?? 3, ring: 2 };
   });
-  const layerColors = ["#94A3B8", "#06B6D4", "#F59E0B", "#EC4899", "#8B5CF6", "#14B8A6", "#1E293B"];
+  const layerColors = ["#94A3B8", "#06B6D4", "#F59E0B", "#EC4899", "#475569", "#14B8A6", "#1E293B"];
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full">
       <circle cx={cx} cy={cy} r={32} fill="none" stroke="#F1F5F9" strokeWidth="0.5" />
@@ -1946,7 +1946,7 @@ function MiniForce({ W = 220, H = 160 }: { W?: number; H?: number }) {
     const dist = pseudo(i * 11) * 18 + 4;
     positions[n.id] = { x: rd(c.x + Math.cos(ang) * dist), y: rd(c.y + Math.sin(ang) * dist), layer: n.layer };
   });
-  const layerColors = ["#94A3B8", "#06B6D4", "#F59E0B", "#EC4899", "#8B5CF6", "#14B8A6", "#1E293B"];
+  const layerColors = ["#94A3B8", "#06B6D4", "#F59E0B", "#EC4899", "#475569", "#14B8A6", "#1E293B"];
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full">
       {EDGES.map((e) => {
@@ -1984,7 +1984,7 @@ function MiniMatrix({ W = 220, H = 160 }: { W?: number; H?: number }) {
               <rect
                 x={padL + t * cellW + 0.5} y={padT + r * cellH + 0.5}
                 width={cellW - 1} height={cellH - 1} rx={1.5}
-                fill={`rgba(124, 58, 237, ${op.toFixed(2)})`}
+                fill={`rgba(71,85,105, ${op.toFixed(2)})`}
               />
               {c > 0 && <text x={padL + t * cellW + cellW / 2} y={padT + r * cellH + cellH / 2 + 2}
                 fontSize="6" textAnchor="middle" fill={c / max > 0.4 ? "white" : "#475569"} fontFamily="ui-monospace">{c}</text>}
@@ -2062,9 +2062,9 @@ function TimingPoolCard() {
               <circle cx={xScale(e.onset[1])} cy={H / 2 - 6} r="2.5" fill="#06B6D4" />
               <text x={64} y={H / 2 - 4} fontSize="7" textAnchor="end" fill="#06B6D4">onset</text>
               {/* peak range */}
-              <line x1={xScale(e.peak[0])} y1={H / 2} x2={xScale(e.peak[2])} y2={H / 2} stroke="#7C3AED" strokeWidth="2" opacity="0.7" />
-              <circle cx={xScale(e.peak[1])} cy={H / 2} r="2.5" fill="#7C3AED" />
-              <text x={64} y={H / 2 + 2} fontSize="7" textAnchor="end" fill="#7C3AED">peak</text>
+              <line x1={xScale(e.peak[0])} y1={H / 2} x2={xScale(e.peak[2])} y2={H / 2} stroke="#475569" strokeWidth="2" opacity="0.7" />
+              <circle cx={xScale(e.peak[1])} cy={H / 2} r="2.5" fill="#475569" />
+              <text x={64} y={H / 2 + 2} fontSize="7" textAnchor="end" fill="#475569">peak</text>
               {/* persistence range */}
               <line x1={xScale(e.persist[0])} y1={H / 2 + 6} x2={xScale(e.persist[2])} y2={H / 2 + 6} stroke="#F59E0B" strokeWidth="2" opacity="0.7" />
               <circle cx={xScale(e.persist[1])} cy={H / 2 + 6} r="2.5" fill="#F59E0B" />
@@ -2084,7 +2084,7 @@ function TimingPoolCard() {
 function DecayKineticsCard() {
   const kinetics = [
     { id: "linear", label: "Linear", count: 6, color: "#06B6D4", path: "M 4 22 L 60 6" },
-    { id: "exp", label: "Exponential", count: 9, color: "#7C3AED", path: "M 4 6 Q 18 18 60 22" },
+    { id: "exp", label: "Exponential", count: 9, color: "#475569", path: "M 4 6 Q 18 18 60 22" },
     { id: "sustained", label: "Sustained", count: 5, color: "#F59E0B", path: "M 4 6 L 18 6 L 18 8 L 60 8" },
     { id: "biphasic", label: "Biphasic", count: 3, color: "#EC4899", path: "M 4 22 L 18 6 L 32 18 L 46 8 L 60 14" },
   ];
@@ -2266,7 +2266,7 @@ function HiddenInsightsRow() {
 
 function VarianceDecompCard() {
   const sources = [
-    { l: "Edge SE (between-edge)", p: 38, c: "#7C3AED" },
+    { l: "Edge SE (between-edge)", p: 38, c: "#475569" },
     { l: "Proxy approximation", p: 23, c: "#0EA5E9" },
     { l: "Heterogeneity τ²", p: 18, c: "#F59E0B" },
     { l: "Latent confounders", p: 15, c: "#10B981" },
@@ -2312,8 +2312,8 @@ function CalibrationCascadeCard() {
     { l: "Hetero. τ²", v: 0.270, op: "+ 0.020", c: "#F59E0B" },
     { l: "Measurement", v: 0.284, op: "× 1.05", c: "#06B6D4" },
     { l: "GRADE", v: 0.270, op: "× 0.95", c: "#10B981" },
-    { l: "Temporal match", v: 0.254, op: "× 0.94", c: "#7C3AED" },
-    { l: "Freshness", v: 0.249, op: "× 0.98", c: "#7C3AED" },
+    { l: "Temporal match", v: 0.254, op: "× 0.94", c: "#475569" },
+    { l: "Freshness", v: 0.249, op: "× 0.98", c: "#475569" },
     { l: "SE_eff", v: 0.21, op: "✓", c: "#1E293B" },
   ];
   const max = 0.34;
@@ -2395,14 +2395,14 @@ function ForestPlotCard() {
               <line x1={xs(r.baseCi[0])} y1={y - 3} x2={xs(r.baseCi[1])} y2={y - 3} stroke="#94A3B8" strokeWidth="1.4" opacity="0.6" />
               <circle cx={xs(r.base)} cy={y - 3} r={r.emph ? 3 : 2.2} fill="#475569" />
               {/* post-intervention CI */}
-              <line x1={xs(r.postCi[0])} y1={y + 3} x2={xs(r.postCi[1])} y2={y + 3} stroke="#7C3AED" strokeWidth="1.4" opacity="0.7" />
+              <line x1={xs(r.postCi[0])} y1={y + 3} x2={xs(r.postCi[1])} y2={y + 3} stroke="#475569" strokeWidth="1.4" opacity="0.7" />
               {r.emph ? (
                 <polygon
                   points={`${xs(r.post) - 5},${y + 3} ${xs(r.post)},${y + 3 - 4} ${xs(r.post) + 5},${y + 3} ${xs(r.post)},${y + 3 + 4}`}
-                  fill="#7C3AED"
+                  fill="#475569"
                 />
               ) : (
-                <circle cx={xs(r.post)} cy={y + 3} r="2.2" fill="#7C3AED" />
+                <circle cx={xs(r.post)} cy={y + 3} r="2.2" fill="#475569" />
               )}
             </g>
           );
@@ -2540,7 +2540,7 @@ function DiscoveryProposalsCard() {
   };
   const sourceColor: Record<string, string> = {
     convergent_point: "#F59E0B",
-    what_if: "#7C3AED",
+    what_if: "#475569",
     combination: "#06B6D4",
     interaction_probe: "#EC4899",
   };
@@ -2707,7 +2707,7 @@ const INTAKE_STREAMS = [
     label: "Router",
     sub: "intelligence engine",
     glyph: "↻",
-    color: "#7C3AED",
+    color: "#475569",
     pending: 4,
     superseded: 1,
     items: [
@@ -2977,7 +2977,7 @@ const APPS_DATA = [
     entities: 18,
     metrics: 4,
     stale: null,
-    color: "#7C3AED",
+    color: "#475569",
   },
   {
     id: "cog_measure",
@@ -3120,7 +3120,7 @@ function AppsPortfolioCard() {
 const INTERVENTIONS_DAG = [
   { id: "iv_aerobic", name: "Aerobic Exercise", effort: 0.55, impact: 0.85, deps: [], target: "N20", color: "#1E40AF" },
   { id: "iv_resist", name: "Resistance Training", effort: 0.62, impact: 0.62, deps: ["iv_aerobic"], target: "N23", color: "#3B82F6" },
-  { id: "iv_cbti", name: "CBT-I", effort: 0.48, impact: 0.71, deps: [], target: "N24", color: "#7C3AED" },
+  { id: "iv_cbti", name: "CBT-I", effort: 0.48, impact: 0.71, deps: [], target: "N24", color: "#475569" },
   { id: "iv_mbsr", name: "MBSR", effort: 0.41, impact: 0.58, deps: [], target: "N32", color: "#0F766E" },
   { id: "iv_diet", name: "Mediterranean Diet", effort: 0.65, impact: 0.44, deps: [], target: "N20", color: "#B45309" },
   { id: "iv_cog", name: "Cognitive Training", effort: 0.32, impact: 0.51, deps: ["iv_aerobic", "iv_cbti"], target: "N33", color: "#DC2626" },
@@ -3283,9 +3283,9 @@ function PredictionFanCard() {
         <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke="#CBD5E1" strokeWidth="0.6" />
         <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke="#CBD5E1" strokeWidth="0.6" />
         {/* fan band */}
-        <path d={fanPath} fill="#7C3AED" opacity="0.18" />
+        <path d={fanPath} fill="#475569" opacity="0.18" />
         {/* p50 */}
-        <path d={p50Path} fill="none" stroke="#7C3AED" strokeWidth="1.8" />
+        <path d={p50Path} fill="none" stroke="#475569" strokeWidth="1.8" />
         {/* baseline at zero */}
         <line x1={padL} y1={ys(0)} x2={W - padR} y2={ys(0)} stroke="#CBD5E1" strokeDasharray="3 2" strokeWidth="0.6" />
         {/* "now" marker at w=8 */}
@@ -3498,7 +3498,7 @@ function LoopCycleBurndownCard() {
           const gH = ((c.gapsClose / max) * (H - padT - padB));
           return (
             <g key={c.n}>
-              <rect x={x} y={yCursor} width={barW} height={eH} fill="#7C3AED" opacity="0.85" />
+              <rect x={x} y={yCursor} width={barW} height={eH} fill="#475569" opacity="0.85" />
               <rect x={x} y={yCursor + eH} width={barW} height={edH} fill="#06B6D4" opacity="0.85" />
               <rect x={x} y={yCursor + eH + edH} width={barW} height={gH} fill="#F59E0B" opacity="0.85" />
               <text x={xs(c.n)} y={H - padB + 12} fontSize="8" textAnchor="middle" fill="#94A3B8">
@@ -3837,7 +3837,7 @@ function ObjectiveTreeCard() {
     red: "#EF4444",
   };
   const statusStyles: Record<string, { bg: string; text: string; border: string }> = {
-    active: { bg: "rgba(124,58,237,0.12)", text: "#7C3AED", border: "rgba(124,58,237,0.28)" },
+    active: { bg: "rgba(71,85,105,0.12)", text: "#475569", border: "rgba(71,85,105,0.28)" },
     queued: { bg: "rgba(15,23,42,0.06)", text: "#475569", border: "rgba(15,23,42,0.12)" },
     deferred: { bg: "rgba(15,23,42,0.04)", text: "#94A3B8", border: "rgba(15,23,42,0.08)" },
   };
@@ -4151,7 +4151,7 @@ const TEMPLATE_ARCH_LAYERS = [
   { id: 1, label: "Substrate", color: "#94A3B8" },
   { id: 2, label: "Analysis", color: "#F59E0B" },
   { id: 3, label: "Insights", color: "#EC4899" },
-  { id: 4, label: "Forecast", color: "#7C3AED" },
+  { id: 4, label: "Forecast", color: "#475569" },
   { id: 5, label: "Audit", color: "#10B981" },
   { id: 6, label: "Proposals", color: "#1E293B" },
 ];
@@ -4402,7 +4402,7 @@ type ObjectiveKey = "orient" | "diagnose" | "plan" | "predict" | "calibrate" | "
 const OBJECTIVE_LENSES: { key: ObjectiveKey; label: string; glyph: string; ask: string; color: string }[] = [
   { key: "orient", label: "Orient", glyph: "◎", ask: "where am I?", color: "#94A3B8" },
   { key: "diagnose", label: "Diagnose", glyph: "▴", ask: "what's broken?", color: "#F59E0B" },
-  { key: "plan", label: "Plan", glyph: "▤", ask: "what to do?", color: "#7C3AED" },
+  { key: "plan", label: "Plan", glyph: "▤", ask: "what to do?", color: "#475569" },
   { key: "predict", label: "Predict", glyph: "◞", ask: "how will it evolve?", color: "#0EA5E9" },
   { key: "calibrate", label: "Calibrate", glyph: "◯", ask: "are predictions right?", color: "#10B981" },
   { key: "explore", label: "Explore", glyph: "↻", ask: "what's hidden?", color: "#EC4899" },
@@ -4684,7 +4684,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
       return (
         <div className="space-y-1.5">
           {[
-            { name: "Mind-Body Cognition", n: "63 ent · 91 edges", c: "#7C3AED", chosen: true },
+            { name: "Mind-Body Cognition", n: "63 ent · 91 edges", c: "#475569", chosen: true },
             { name: "Sleep Optimization", n: "22 ent · 26 edges", c: "#0EA5E9", chosen: false },
             { name: "Cancer-Related Fatigue", n: "38 ent · 47 edges", c: "#F59E0B", chosen: false },
           ].map((t) => (
@@ -4785,7 +4785,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
           </div>
           <div className="space-y-1">
             {[
-              { l: "Triangulation pass", n: 18, c: "#7C3AED", state: "complete" },
+              { l: "Triangulation pass", n: 18, c: "#475569", state: "complete" },
               { l: "Adversarial pass", n: 12, c: "#EC4899", state: "complete" },
               { l: "Convergence detect", n: 5, c: "#F59E0B", state: "active" },
             ].map((p) => (
@@ -4808,7 +4808,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
       return (
         <div className="space-y-1">
           {[
-            { l: "Leverage points", n: 6, c: "#7C3AED" },
+            { l: "Leverage points", n: 6, c: "#475569" },
             { l: "Risk points", n: 4, c: "#EF4444" },
             { l: "Master bottleneck", n: 1, c: "#F59E0B" },
             { l: "Feedback loops", n: 2, c: "#EC4899" },
@@ -5013,8 +5013,8 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
               <text x={4} y={10} fontSize="7" fill="#475569">{e.label.slice(0, 18)}</text>
               <line x1={xs(e.onset[0])} y1={18} x2={xs(e.onset[2])} y2={18} stroke="#06B6D4" strokeWidth="1.6" opacity="0.7" />
               <circle cx={xs(e.onset[1])} cy={18} r="2" fill="#06B6D4" />
-              <line x1={xs(e.peak[0])} y1={22} x2={xs(e.peak[2])} y2={22} stroke="#7C3AED" strokeWidth="1.6" opacity="0.7" />
-              <circle cx={xs(e.peak[1])} cy={22} r="2" fill="#7C3AED" />
+              <line x1={xs(e.peak[0])} y1={22} x2={xs(e.peak[2])} y2={22} stroke="#475569" strokeWidth="1.6" opacity="0.7" />
+              <circle cx={xs(e.peak[1])} cy={22} r="2" fill="#475569" />
               <line x1={xs(e.persist[0])} y1={26} x2={xs(e.persist[2])} y2={26} stroke="#F59E0B" strokeWidth="1.6" opacity="0.7" />
               <circle cx={xs(e.persist[1])} cy={26} r="2" fill="#F59E0B" />
             </g>
@@ -5030,7 +5030,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
         <div className="space-y-1.5">
           {[
             { l: "Linear", n: 6, c: "#06B6D4", path: "M 4 18 L 60 4" },
-            { l: "Exponential", n: 9, c: "#7C3AED", path: "M 4 4 Q 18 14 60 18" },
+            { l: "Exponential", n: 9, c: "#475569", path: "M 4 4 Q 18 14 60 18" },
             { l: "Sustained", n: 5, c: "#F59E0B", path: "M 4 4 L 18 4 L 18 6 L 60 6" },
             { l: "Biphasic", n: 3, c: "#EC4899", path: "M 4 18 L 18 4 L 32 14 L 46 6 L 60 12" },
           ].map((k) => (
@@ -5136,7 +5136,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
       return (
         <div className="space-y-1.5">
           {[
-            { glyph: "↻", title: "OIC cycle", detail: "N20→N30→N32→N24→N20", c: "#7C3AED" },
+            { glyph: "↻", title: "OIC cycle", detail: "N20→N30→N32→N24→N20", c: "#475569" },
             { glyph: "◇", title: "N30 bridge", detail: "73% paths · betweenness 0.54", c: "#F59E0B" },
             { glyph: "≠", title: "Chain–direct gap", detail: "β_chain −0.18 vs −0.34 (Z=2.1)", c: "#EF4444" },
             { glyph: "Δt", title: "Onset mismatch", detail: "predicted 14d · observed 28d", c: "#06B6D4" },
@@ -5153,7 +5153,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
       );
     case "variance_decomp": {
       const sources = [
-        { l: "Edge SE", p: 38, c: "#7C3AED" }, { l: "Proxy", p: 23, c: "#0EA5E9" },
+        { l: "Edge SE", p: 38, c: "#475569" }, { l: "Proxy", p: 23, c: "#0EA5E9" },
         { l: "τ²", p: 18, c: "#F59E0B" }, { l: "Latent", p: 15, c: "#10B981" }, { l: "Adherence", p: 6, c: "#94A3B8" },
       ];
       return (
@@ -5177,7 +5177,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
       const layers = [
         { l: "SE_raw", v: 0.32, c: "#94A3B8" }, { l: "Study", v: 0.272, c: "#06B6D4" }, { l: "Pop", v: 0.250, c: "#06B6D4" },
         { l: "τ²", v: 0.270, c: "#F59E0B" }, { l: "Meas", v: 0.284, c: "#06B6D4" }, { l: "GRADE", v: 0.270, c: "#10B981" },
-        { l: "Temp", v: 0.254, c: "#7C3AED" }, { l: "Fresh", v: 0.249, c: "#7C3AED" }, { l: "SE_eff", v: 0.21, c: "#1E293B" },
+        { l: "Temp", v: 0.254, c: "#475569" }, { l: "Fresh", v: 0.249, c: "#475569" }, { l: "SE_eff", v: 0.21, c: "#1E293B" },
       ];
       const max = 0.34;
       return (
@@ -5217,8 +5217,8 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
                 <text x={padL - 4} y={y + 2} fontSize="7" textAnchor="end" fill={r.emph ? "#0F172A" : "#475569"} fontWeight={r.emph ? 600 : 400}>{r.name}</text>
                 <line x1={xs(r.baseCi[0])} y1={y - 2} x2={xs(r.baseCi[1])} y2={y - 2} stroke="#94A3B8" strokeWidth="1" opacity="0.6" />
                 <circle cx={xs(r.base)} cy={y - 2} r={r.emph ? 2.4 : 1.6} fill="#475569" />
-                <line x1={xs(r.postCi[0])} y1={y + 2} x2={xs(r.postCi[1])} y2={y + 2} stroke="#7C3AED" strokeWidth="1" opacity="0.7" />
-                <circle cx={xs(r.post)} cy={y + 2} r={r.emph ? 2.4 : 1.6} fill="#7C3AED" />
+                <line x1={xs(r.postCi[0])} y1={y + 2} x2={xs(r.postCi[1])} y2={y + 2} stroke="#475569" strokeWidth="1" opacity="0.7" />
+                <circle cx={xs(r.post)} cy={y + 2} r={r.emph ? 2.4 : 1.6} fill="#475569" />
               </g>
             );
           })}
@@ -5242,7 +5242,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
       return (
         <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full">
           <path d={recPath} fill="none" stroke="#94A3B8" strokeWidth="1.2" strokeDasharray="3 2" />
-          <path d={ivPath} fill="none" stroke="#7C3AED" strokeWidth="1.6" />
+          <path d={ivPath} fill="none" stroke="#475569" strokeWidth="1.6" />
           <text x={padL} y={H - 4} fontSize="6" fill="#94A3B8">0mo</text>
           <text x={W - padR} y={H - 4} fontSize="6" textAnchor="end" fill="#94A3B8">36mo</text>
           <text x={4} y={padT + 4} fontSize="6" fill="#64748B">r(z)</text>
@@ -5254,7 +5254,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
         <div className="space-y-1">
           {[
             { l: "Activity", v: 0.50, c: "#1E40AF" },
-            { l: "Sleep", v: 0.40, c: "#7C3AED" },
+            { l: "Sleep", v: 0.40, c: "#475569" },
             { l: "Chemo", v: 1.00, c: "#DC2626" },
           ].map((s) => (
             <div key={s.l}>
@@ -5291,8 +5291,8 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
       const p50Path = Array.from({ length: 27 }, (_, w) => `${w === 0 ? "M" : "L"} ${xs(w).toFixed(1)} ${ys(p50(w)).toFixed(1)}`).join(" ");
       return (
         <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full">
-          <path d={`M ${upper} L ${lower} Z`} fill="#7C3AED" opacity="0.18" />
-          <path d={p50Path} fill="none" stroke="#7C3AED" strokeWidth="1.4" />
+          <path d={`M ${upper} L ${lower} Z`} fill="#475569" opacity="0.18" />
+          <path d={p50Path} fill="none" stroke="#475569" strokeWidth="1.4" />
           <line x1={xs(8)} y1={padT} x2={xs(8)} y2={H - padB} stroke="#F59E0B" strokeWidth="0.6" strokeDasharray="2 2" />
           {[{ w: 0, v: -0.78 }, { w: 4, v: -0.62 }, { w: 8, v: -0.41 }].map((a, i, arr) => (
             <g key={i}>
@@ -5410,7 +5410,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
             const gH = (c.gapsClose / max) * (H - padT - padB);
             return (
               <g key={c.n}>
-                <rect x={x} y={yT} width={barW} height={eH} fill="#7C3AED" opacity="0.85" />
+                <rect x={x} y={yT} width={barW} height={eH} fill="#475569" opacity="0.85" />
                 <rect x={x} y={yT + eH} width={barW} height={edH} fill="#06B6D4" opacity="0.85" />
                 <rect x={x} y={yT + eH + edH} width={barW} height={gH} fill="#F59E0B" opacity="0.85" />
               </g>
@@ -5471,7 +5471,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
             {[
               { l: "Anti-Inflam Stack", c: "#F59E0B", ent: 14 },
               { l: "Sleep Protocol", c: "#0EA5E9", ent: 9 },
-              { l: "Cog Game", c: "#7C3AED", ent: 18 },
+              { l: "Cog Game", c: "#475569", ent: 18 },
               { l: "Cog Measure", c: "#06B6D4", ent: 12 },
               { l: "MBSR Stack", c: "#10B981", ent: 7 },
             ].slice(0, 4).map((a, i) => (
@@ -5597,7 +5597,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
       const apps = [
         { name: "Anti-Inflam Stack", c: "#F59E0B", health: 0.71, healthDelta: -0.06, adher: 64, deliveredZ: 0.12, expectedZ: 0.21, target: "IL-6 ↓" },
         { name: "Sleep Protocol", c: "#0EA5E9", health: 0.88, healthDelta: 0.04, adher: 81, deliveredZ: 0.18, expectedZ: 0.15, target: "PSQI ↓" },
-        { name: "Cog Game", c: "#7C3AED", health: 0.84, healthDelta: 0.02, adher: 72, deliveredZ: 0.09, expectedZ: 0.14, target: "BDNF ↑" },
+        { name: "Cog Game", c: "#475569", health: 0.84, healthDelta: 0.02, adher: 72, deliveredZ: 0.09, expectedZ: 0.14, target: "BDNF ↑" },
         { name: "Cog Measure", c: "#06B6D4", health: 0.91, healthDelta: 0.01, adher: 95, deliveredZ: null, expectedZ: null, target: "monitor" },
         { name: "MBSR Stack", c: "#10B981", health: 0.62, healthDelta: -0.09, adher: 38, deliveredZ: 0.04, expectedZ: 0.18, target: "Cortisol ↓" },
       ];
@@ -5769,7 +5769,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
     }
     case "intel_radar": {
       const signals = [
-        { l: "Convergence", v: 0.82, c: "#7C3AED" },
+        { l: "Convergence", v: 0.82, c: "#475569" },
         { l: "Contradiction", v: 0.34, c: "#EF4444" },
         { l: "Cycle dynamics", v: 0.71, c: "#F59E0B" },
         { l: "Bridge redundancy", v: 0.34, c: "#06B6D4" },
@@ -5795,7 +5795,7 @@ function FullCardContent({ cardId, lensColor, layerColor }: { cardId: string; le
               const [x, y] = pointFor(i, 1);
               return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="#F1F5F9" strokeWidth="0.5" />;
             })}
-            <polygon points={polyPoints} fill="#7C3AED" fillOpacity="0.2" stroke="#7C3AED" strokeWidth="1.4" />
+            <polygon points={polyPoints} fill="#475569" fillOpacity="0.2" stroke="#475569" strokeWidth="1.4" />
             {signals.map((s, i) => {
               const [x, y] = pointFor(i, s.v);
               return <circle key={i} cx={x} cy={y} r="2" fill={s.c} stroke="white" strokeWidth="0.6" />;
@@ -6330,7 +6330,7 @@ function CardDetailInspector({ cardId, onClose }: { cardId: string | null; onClo
               </ul>
             </div>
           </div>
-          <div className="rounded-lg border p-4" style={{ background: "#7C3AED08", borderColor: "#7C3AED33" }}>
+          <div className="rounded-lg border p-4" style={{ background: "#47556908", borderColor: "#47556933" }}>
             <div className="flex items-center gap-2"><Chip kind="model">IDEAL</Chip><span className="text-[10px] font-semibold uppercase tracking-wider text-violet-700">target state</span></div>
             <div className="mt-2 text-[12px] font-semibold text-slate-900">What it should show</div>
             <ul className="mt-2.5 space-y-1.5">
@@ -6364,7 +6364,7 @@ const USE_CASE_PRESETS: {
 }[] = [
   { key: "all", label: "All cards", glyph: "⊞", blurb: "Every card surfaced equally — generic system overview.", outputs: "Full system map · 37 cards · 51 data-flow edges", prominent: [], secondary: [], lens: "orient", color: "#94A3B8" },
   { key: "discovery", label: "Hidden pattern discovery", glyph: "✦", blurb: "Detect relationships missed by variable-by-variable analysis. Surfaces cycles, bridges, discordances, convergent points.", outputs: "Pattern map · candidate mechanisms · variable interactions · recommended follow-ups", prominent: ["kg_graph", "multi_lenses", "hidden_insights", "variance_decomp", "synthesis_decomp", "research_orchestration", "proposal_funnel"], secondary: ["temporal_atlas", "calib_cascade", "decay_kinetics", "kg_overview"], lens: "explore", color: "#EC4899" },
-  { key: "simulation", label: "Protocol simulation", glyph: "⚡", blurb: "Model intervention logic, baselines, and expected outcomes before a study runs.", outputs: "Predicted outcome distributions · missing-variable alerts · protocol risk areas · measurement priorities", prominent: ["subjects", "trajectory", "twin", "prediction_fan", "interv_dag", "dose_response", "action_plan", "recovery_curves"], secondary: ["master_bottleneck", "vuln_matrix", "apps_portfolio", "objective_intake"], lens: "predict", color: "#7C3AED" },
+  { key: "simulation", label: "Protocol simulation", glyph: "⚡", blurb: "Model intervention logic, baselines, and expected outcomes before a study runs.", outputs: "Predicted outcome distributions · missing-variable alerts · protocol risk areas · measurement priorities", prominent: ["subjects", "trajectory", "twin", "prediction_fan", "interv_dag", "dose_response", "action_plan", "recovery_curves"], secondary: ["master_bottleneck", "vuln_matrix", "apps_portfolio", "objective_intake"], lens: "predict", color: "#475569" },
   { key: "deviation", label: "Deviation analysis", glyph: "↻", blurb: "Compare expected vs observed outcomes. Explain weak, opposite, heterogeneous, or subgroup-specific effects.", outputs: "Deviation report · subgroup hypotheses · confounder candidates · pattern library updates", prominent: ["calib_scatter", "edge_drift", "reality_calib", "hidden_insights", "forest_plot", "prediction_fan", "baseline_delta"], secondary: ["synthesis_decomp", "variance_decomp", "calib_cascade", "loop_burndown"], lens: "calibrate", color: "#F59E0B" },
   { key: "biomarker", label: "Wearable / biomarker", glyph: "◴", blurb: "Connect low-friction signals (sleep, HRV, activity, respiration) to cognition and biological mechanisms.", outputs: "Biometric–cognition maps · proxy indicators · real-world monitoring logic · signal priorities", prominent: ["kg_graph", "temporal_atlas", "csv_drop", "recovery_curves", "decay_kinetics", "forest_plot", "ingestion_pipeline"], secondary: ["subjects", "ref_domains", "hidden_insights", "edge_drift"], lens: "explore", color: "#0EA5E9" },
   { key: "assessment", label: "Cognitive assessment refinement", glyph: "✓", blurb: "Distinguish whether test performance reflects target cognitive domain or confounders (attention, fatigue, stress, engagement).", outputs: "Assessment weakness map · measurement recommendations · adaptive testing logic", prominent: ["ref_domains", "variance_decomp", "calib_cascade", "apps_portfolio", "twin", "forest_plot"], secondary: ["subjects", "vuln_matrix", "kg_graph", "intake_review"], lens: "diagnose", color: "#10B981" },
@@ -6431,7 +6431,7 @@ const CARD_WEATHER: Record<string, { fresh: number; cov: number; conf: number }>
 const STAKEHOLDERS = [
   { key: "all" as const, label: "All", glyph: "◯", color: "#94A3B8", focus: [] as string[] },
   { key: "clinician" as const, label: "Clinician", glyph: "✚", color: "#10B981", focus: ["action_plan", "apps_portfolio", "trajectory", "subjects", "ref_domains", "interv_dag", "dose_response", "intake_review"] },
-  { key: "researcher" as const, label: "Researcher", glyph: "≡", color: "#7C3AED", focus: ["ingestion_pipeline", "research_orchestration", "synthesis_decomp", "hypothesis_ladders", "forest_plot", "argument_tribunal", "calib_cascade", "variance_decomp"] },
+  { key: "researcher" as const, label: "Researcher", glyph: "≡", color: "#475569", focus: ["ingestion_pipeline", "research_orchestration", "synthesis_decomp", "hypothesis_ladders", "forest_plot", "argument_tribunal", "calib_cascade", "variance_decomp"] },
   { key: "patient" as const, label: "Patient", glyph: "◉", color: "#0EA5E9", focus: ["subjects", "trajectory", "action_plan", "twin", "metric_observations", "app_outcomes", "objective_intake"] },
   { key: "payer" as const, label: "Payer", glyph: "◎", color: "#F59E0B", focus: ["apps_portfolio", "interv_dag", "action_plan", "reality_calib", "baseline_delta", "loop_burndown", "intel_radar"] },
 ];
@@ -6508,7 +6508,7 @@ const SANKEY_STAGES: SankeyStage[] = [
     id: "kg",
     label: "KG state",
     sublabel: "248 ent · 511 edges · 4 cycles",
-    color: "#6366f1", // indigo
+    color: "#475569", // indigo
     bands: [
       { id: "kg_entities", label: "Entities", count: 248, userPortion: 0.18 },
       { id: "kg_edges", label: "Edges", count: 80, userPortion: 0.10, detail: "511 total · top 80 by weight" },
@@ -6520,7 +6520,7 @@ const SANKEY_STAGES: SankeyStage[] = [
     id: "hypothesis",
     label: "Hypotheses",
     sublabel: "24 candidates · 8 active",
-    color: "#8b5cf6", // violet
+    color: "#475569", // violet
     bands: [
       { id: "hyp_active", label: "Active", count: 8, userPortion: 0.45, detail: "carry forward" },
       { id: "hyp_deferred", label: "Deferred", count: 12, userPortion: 0.20, detail: "needs more evidence" },
@@ -6852,7 +6852,7 @@ function KGFlowSankey({ scrubT, onPickStage }: { scrubT: number; onPickStage?: (
               )}
               {/* Agent-portion stripe (violet on bottom of left edge) */}
               {h - stripeH > 0.5 && (
-                <rect x={p.x} y={p.y0 + stripeH} width={3} height={h - stripeH} fill="#7c3aed" />
+                <rect x={p.x} y={p.y0 + stripeH} width={3} height={h - stripeH} fill="#475569" />
               )}
               {/* Hover highlight */}
               {isHovered && (
@@ -6969,7 +6969,7 @@ function KGFlowSankey({ scrubT, onPickStage }: { scrubT: number; onPickStage?: (
               {/* User / agent split bar */}
               <rect x={tipX + 14} y={barY} width={barW} height={4} rx={2} fill="#f1f5f9" />
               {uW > 0 && <rect x={tipX + 14} y={barY} width={uW} height={4} rx={2} fill="#1d4ed8" opacity={0.75} />}
-              {barW - uW > 0 && <rect x={tipX + 14 + uW} y={barY} width={barW - uW} height={4} rx={2} fill="#7c3aed" opacity={0.55} />}
+              {barW - uW > 0 && <rect x={tipX + 14 + uW} y={barY} width={barW - uW} height={4} rx={2} fill="#475569" opacity={0.55} />}
               <text x={tipX + 14} y={barY + 13} fontSize="8" fill="#94a3b8" fontFamily='"SF Mono", ui-monospace, monospace'>
                 {Math.round(p.band.userPortion * 100)}% user · {Math.round((1 - p.band.userPortion) * 100)}% agent
               </text>
@@ -7016,7 +7016,7 @@ function KGFlowSankey({ scrubT, onPickStage }: { scrubT: number; onPickStage?: (
             user contribution
           </span>
           <span className="flex items-center gap-1">
-            <span className="inline-block h-2 w-3" style={{ background: "#7c3aed" }} />
+            <span className="inline-block h-2 w-3" style={{ background: "#475569" }} />
             agent contribution
           </span>
           <span className="text-slate-300">·</span>
@@ -7241,7 +7241,7 @@ function DashSynthesis() {
     { kind: "Bottleneck", color: "#b42318", title: "N30 routes 73% of paths", body: "Master bottleneck — single-node failure" },
     { kind: "Leverage", color: "#15803d", title: "Activity → BDNF +0.42z", body: "Direct Δz≈0.30 + multiplier" },
     { kind: "Risk", color: "#a16207", title: "HPA flat AM rise", body: "Slow-burn; compounds over months" },
-    { kind: "Cycle", color: "#6d28d9", title: "OIC cycle: N20→N30→N32", body: "Self-reinforcing — needs break" },
+    { kind: "Cycle", color: "#475569", title: "OIC cycle: N20→N30→N32", body: "Self-reinforcing — needs break" },
   ];
   return (
     <DashPanel idx={2} name="Synthesis view" src="SynthesisView">
@@ -7314,7 +7314,7 @@ function DashCommandCenter() {
           <svg viewBox="0 0 120 36" className="mt-1.5 w-full">
             {[16, 22, 28, 19, 31, 24].map((h, i) => (
               <g key={i}>
-                <rect x={i * 20} y={36 - h} width={6} height={h} fill="#7C3AED" rx={1} />
+                <rect x={i * 20} y={36 - h} width={6} height={h} fill="#475569" rx={1} />
                 <rect x={i * 20 + 8} y={36 - h * 0.6} width={6} height={h * 0.6} fill="#0EA5E9" rx={1} />
               </g>
             ))}
@@ -7365,11 +7365,11 @@ function DashTwin() {
           <svg viewBox="0 0 200 60" className="mt-1 h-[48px] w-full">
             <line x1={0} y1={48} x2={200} y2={48} stroke="#E2E8F0" strokeDasharray="2 3" strokeWidth={0.6} />
             <line x1={0} y1={20} x2={200} y2={20} stroke="#E2E8F0" strokeDasharray="2 3" strokeWidth={0.6} />
-            <path d="M 0 48 Q 50 44, 100 32 Q 150 22, 200 18" fill="none" stroke="#7C3AED" strokeWidth={1.4} />
-            <path d="M 0 50 Q 50 47, 100 38 Q 150 30, 200 27" fill="none" stroke="#7C3AED" strokeWidth={0.8} strokeDasharray="3 2" opacity={0.5} />
-            <path d="M 0 46 Q 50 41, 100 26 Q 150 16, 200 11" fill="none" stroke="#7C3AED" strokeWidth={0.8} strokeDasharray="3 2" opacity={0.5} />
-            <circle cx={120} cy={28} r={2.4} fill="#7C3AED" />
-            <text x={124} y={26} fontSize={6} fill="#7C3AED" fontWeight={600}>target</text>
+            <path d="M 0 48 Q 50 44, 100 32 Q 150 22, 200 18" fill="none" stroke="#475569" strokeWidth={1.4} />
+            <path d="M 0 50 Q 50 47, 100 38 Q 150 30, 200 27" fill="none" stroke="#475569" strokeWidth={0.8} strokeDasharray="3 2" opacity={0.5} />
+            <path d="M 0 46 Q 50 41, 100 26 Q 150 16, 200 11" fill="none" stroke="#475569" strokeWidth={0.8} strokeDasharray="3 2" opacity={0.5} />
+            <circle cx={120} cy={28} r={2.4} fill="#475569" />
+            <text x={124} y={26} fontSize={6} fill="#475569" fontWeight={600}>target</text>
           </svg>
         </div>
       </div>
@@ -7410,7 +7410,7 @@ function DashTrajectory() {
 function DashProductionSequence() {
   const items = [
     { name: "Information", count: 11, color: "#0EA5E9", note: "sources" },
-    { name: "Sub-objectives", count: 3, color: "#7C3AED", note: "g1.s1 / s2 / s3" },
+    { name: "Sub-objectives", count: 3, color: "#475569", note: "g1.s1 / s2 / s3" },
     { name: "Interventions", count: 6, color: "#F59E0B", note: "ranked by Δimpact" },
     { name: "Apps", count: 8, color: "#10B981", note: "5 types · pri × cmplx" },
   ];
@@ -7459,7 +7459,7 @@ function DashAppGrid() {
   const TYPE_COLOR: Record<string, string> = {
     behavior: "#0EA5E9",
     nutrition: "#10B981",
-    cognitive: "#7C3AED",
+    cognitive: "#475569",
     supplement: "#F59E0B",
   };
   const STATUS_TINT: Record<string, string> = {
@@ -7939,7 +7939,7 @@ function TemplateArchitectureCard() {
               </marker>
               {/* Feedback violet */}
               <marker id="arch-arrow-feedback" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                <path d="M0,0 L7,3.5 L0,7 z" fill="#7C3AED" />
+                <path d="M0,0 L7,3.5 L0,7 z" fill="#475569" />
               </marker>
             </defs>
 
@@ -8036,13 +8036,13 @@ function TemplateArchitectureCard() {
                     <path
                       d={path}
                       fill="none"
-                      stroke="#7C3AED"
+                      stroke="#475569"
                       strokeWidth={hi ? 2 : 1.4}
                       strokeDasharray="4 4"
                       strokeOpacity={(hi ? 0.95 : hovered ? 0.18 : 0.55) * presetEdgeOpacity}
                       markerEnd="url(#arch-arrow-feedback)"
                     />
-                    <text x={(sx + tx) / 2} y={bottomY - 4} fontSize="9" textAnchor="middle" fill="#7C3AED" fontStyle="italic" opacity={(hi ? 1 : hovered ? 0.4 : 0.75) * presetEdgeOpacity}>
+                    <text x={(sx + tx) / 2} y={bottomY - 4} fontSize="9" textAnchor="middle" fill="#475569" fontStyle="italic" opacity={(hi ? 1 : hovered ? 0.4 : 0.75) * presetEdgeOpacity}>
                       approve → materialize
                     </text>
                   </g>
@@ -8542,7 +8542,7 @@ function TemplateArchitectureCard() {
                 y1="3"
                 x2="20"
                 y2="3"
-                stroke="#7C3AED"
+                stroke="#475569"
                 strokeWidth="1.4"
                 strokeDasharray="3 3"
               />

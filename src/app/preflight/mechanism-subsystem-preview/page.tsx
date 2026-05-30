@@ -14,7 +14,7 @@ import {
 } from "@/components/objective/mechanism-subsystem-view";
 
 const SUBSYSTEMS: SubsystemSpec[] = [
-  { id: "trust", label: "Trust & Data", color: "#6366F1" },
+  { id: "trust", label: "Trust & Data", color: "#475569" },
   { id: "engage", label: "Engagement Loop", color: "#0D9488" },
 ];
 

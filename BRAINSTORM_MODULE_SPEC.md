@@ -115,17 +115,17 @@ Every elect from this panel marks `elected_from_brainstorm=true` in decision_log
                               │
                               ▼
                     ┌──────────────────────┐
-                    │  brainstorm_sessions │  ← Phase 1 (this commit)
+                    │  objective_brainstorm_sessions │  ← Phase 1 (this commit)
                     │  table               │
                     └──────────────────────┘
 ```
 
 ## 5. Data model
 
-### New table: `brainstorm_sessions`
+### New table: `objective_brainstorm_sessions`
 
 ```sql
-CREATE TABLE public.brainstorm_sessions (
+CREATE TABLE public.objective_brainstorm_sessions (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   space_id          uuid NOT NULL REFERENCES public.spaces(id) ON DELETE CASCADE,
   user_id           uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -162,11 +162,11 @@ CREATE TABLE public.brainstorm_sessions (
   updated_at        timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX brainstorm_sessions_space_user_idx
-  ON public.brainstorm_sessions(space_id, user_id, started_at DESC);
+CREATE INDEX objective_brainstorm_sessions_space_user_idx
+  ON public.objective_brainstorm_sessions(space_id, user_id, started_at DESC);
 
-CREATE INDEX brainstorm_sessions_pinned_idx
-  ON public.brainstorm_sessions(user_id, pinned, settled_at DESC)
+CREATE INDEX objective_brainstorm_sessions_pinned_idx
+  ON public.objective_brainstorm_sessions(user_id, pinned, settled_at DESC)
   WHERE pinned = true;
 ```
 
@@ -268,16 +268,21 @@ Phase 5. New view at `/app/library/brainstorms` (or as a tab on the existing wor
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| **1a** | `brainstorm_sessions` migration + decision_log actions (full superset re-assert) | ✅ shipped (`20260907_brainstorm_sessions.sql`) |
+| **1a** | `objective_brainstorm_sessions` migration + decision_log actions (full superset re-assert) | ✅ shipped (`20260907_objective_brainstorm_sessions.sql`) |
 | **1b** | TypeScript types + DecisionAction union extension | ✅ shipped (`src/lib/brainstorm/session-types.ts`) |
 | **1c** | Session CRUD helpers | ✅ shipped (`src/lib/brainstorm/sessions.ts`) |
 | **2** | Brainstorm Runner — `POST /api/brainstorm/sessions/run` orchestrating plan → 3× /propose → /cluster → critique → settle | ✅ shipped (`src/app/api/brainstorm/sessions/run/route.ts` + `src/lib/brainstorm/plan.ts` + `src/lib/brainstorm/critique.ts`) |
 | **3** | LLM critique — `rankWithLLMCritique()` swap inside `critique.ts`; one batch call, scores + prose reasoning, soft-fails to deterministic | ✅ shipped (additive: `rankDeterministic` retained as fallback) |
 | **4** | BrainstormPanel rail-card + Brainstorm button + elect-candidate route | ✅ shipped (`src/components/objective/brainstorm/*.tsx` + `src/app/api/brainstorm/sessions/[id]/elect-candidate/route.ts`) |
 | **4-polish** | Abandon-on-close + re-open from library (rehydrate panel from prior session) | ✅ shipped (`/sessions/[id]/abandon` route + `rehydrateSession` panel prop + popover `onSelect` plumbing) |
-| **4b** | tldraw page integration · per-stage SSE streaming via pipeline_runs/events · user-idea persistence · collapse-to-base | Pending |
+| **4b-1** | Live streaming via session-row polling (client-provided session id + 1s GET poll + per-intent ticker showing batches landing in real time) | ✅ shipped |
+| **4b-2** | tldraw page integration — `BRAINSTORM_OPEN_ON_BOARD_EVENT` bus + `renderBrainstormOnBoard()` lays out one sticky-note per candidate on a dedicated tldraw page; lanes by ribbon, colour by intent; `Open on whiteboard` / `Collapse to base` buttons in panel | ✅ shipped |
+| **4b-3** | User-added ideas persist via `POST /sessions/[id]/idea` → `user_added_ideas` JSONB (scoring deferred to Phase 5b) | ✅ shipped |
 | **5** | Brainstorm Library lens — `GET /sessions` + `POST /sessions/[id]/pin` + `BrainstormLibraryPopover` wired into the picker | ✅ shipped |
-| **6** | Generalise to room features + annotations (target_kind switch) | Pending |
+| **6** | Generalise to room features (target_kind="room_feature"): new `POST /sessions/run-feature` runner reuses `proposeMechanismCandidates`, fires 3× against top weakest root causes, dedupes, ranks deterministically. `BrainstormPanel` gets `mode="picker"\|"feature"` + `entityId` prop; lab page mounts it next to "Propose new variations". `elect-candidate` route dispatches on `target_kind` to write either `spaces.synthesis_data` or `entities.expanded_detail.variations`. | ✅ shipped |
+| **6b** | Generalise to annotations (target_kind="annotation"): new `POST /sessions/run-annotation` wraps `generateDeepenedAnnotations` as a single-batch pipeline; candidates are phrases scored on weight·novelty·utility. `BrainstormPanel` adds `mode="annotation"`. `AnnotationLensStrip` gets a `Deepen lens` button (optional `onDeepenLens` prop) wired from `sub-objective-room-view`. `elect-candidate` dispatches `target_kind="annotation"` → merges the full `ObjectiveAnnotation` (via `BrainstormCandidate.source_payload` escape hatch) into `improvement_goals[core].annotations`. | ✅ shipped |
+| **Migration** | `objective_brainstorm_sessions` (renamed from `brainstorm_sessions` to avoid collision with existing Synergy table) — applied to remote via `mcp__supabase__apply_migration`. 19 cols · 4 RLS policies · 1 trigger · 4 indices · full 45-action superset re-asserted on `sub_objective_decisions` (preserving 4 parallel-session additions: `algorithm_chosen`, `design_intent_set`, `macro_rolled_up`, `data_lineage_resolved`). | ✅ applied |
+| **7-Consolidate** | Audit found parallel library subsystem. Settled brainstorm sessions now write to the canonical `library_objects` table as type='brainstorm_cluster' via `saveSessionToLibrary` (uses existing `upsertLibraryObject`). New `POST /sessions/[id]/save-to-library` route. Panel's pin toggle replaced with idempotent "Save to Library" button. `BrainstormLibraryPopover` + `/sessions/[id]/pin` route deleted (~280 LOC). Past sessions surface through existing `LibraryPanel` — one library, one storage layer. | ✅ shipped |
 
 End-to-end MVP (Phases 1-5 + polish): shipped. Unique invention is *only* the critique-rank LLM call + the orchestration UX — everything else is plumbing over what exists.
 
@@ -287,6 +292,16 @@ End-to-end MVP (Phases 1-5 + polish): shipped. Unique invention is *only* the cr
 - Save-to-library pin · re-open past sessions from the library popover (jumps straight to settled view)
 - Close mid-run cleans up the session row as `abandoned`
 - User-added ideas live as local sticky-notes (Phase 4b persists + scores them)
+
+## 8.5 Typecheck verification
+
+Full-project `tsc --noEmit` keeps overrunning the 5-10 min sandbox timeouts on this codebase. Created `tsconfig.brainstorm.json` at repo root (extends `./tsconfig.json`, includes only brainstorm-related paths) for fast focused checks:
+
+```bash
+npx tsc --noEmit --skipLibCheck -p tsconfig.brainstorm.json
+```
+
+**Result: 0 errors in any new or touched brainstorm file.** The 35 errors that surface in `whiteboard-base.tsx` / `unfurl/*` are pre-existing tldraw type mismatches on the project's custom shape utils — unrelated to this work and present on `main` independently.
 
 ## 9. Anti-patterns watched
 

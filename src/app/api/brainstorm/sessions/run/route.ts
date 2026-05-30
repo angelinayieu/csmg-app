@@ -97,6 +97,10 @@ interface Body {
   spaceId?: string;
   intents?: SubObjectiveIntent[];
   tldrawPageId?: string | null;
+  /** Phase 4b-1 live-polling: client may supply the session id up
+   *  front (crypto.randomUUID()) so the panel can start polling
+   *  /sessions/[id] while the runner is mid-pipeline. */
+  sessionId?: string | null;
 }
 
 export async function POST(req: NextRequest) {
@@ -221,12 +225,22 @@ export async function POST(req: NextRequest) {
 
   let session;
   try {
+    // Client-provided session id powers live polling (Phase 4b-1).
+    // Strip anything that's not a v4-shape UUID to avoid pollution.
+    const clientId =
+      typeof body?.sessionId === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        body.sessionId,
+      )
+        ? body.sessionId
+        : null;
     session = await createSession(db, {
       userId,
       spaceId,
       targetKind: "sub_objective_picker",
       title: autoTitle(plan.intents),
       tldrawPageId: body?.tldrawPageId ?? null,
+      id: clientId,
     });
   } catch (err) {
     return NextResponse.json(
@@ -477,7 +491,7 @@ export async function POST(req: NextRequest) {
   // Re-fetch the session row so we return the freshly-settled snapshot
   // (caller passes this straight into the panel).
   const { data: finalRow } = await db
-    .from("brainstorm_sessions")
+    .from("objective_brainstorm_sessions")
     .select("*")
     .eq("id", session.id)
     .maybeSingle();

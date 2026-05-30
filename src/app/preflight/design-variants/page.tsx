@@ -90,7 +90,7 @@ const CARDS: Array<{ sub: MainCanvasSub; accent: string; theme: string; bridgesT
       approvedPlayCount: 1,
       layerOrdinals: [2, 3],
     }),
-    accent: "#7C3AED",
+    accent: "#475569",
     theme: "Goal Alignment & Achievement Tools",
     bridgesTo: [2],
   },
@@ -250,7 +250,7 @@ export default function DesignVariantsPage() {
               className="flex flex-col gap-4 rounded-3xl p-6"
               style={{
                 background:
-                  "linear-gradient(180deg, rgba(124,58,237,0.05), transparent 60%), #FAFBFC",
+                  "linear-gradient(180deg, rgba(71,85,105,0.05), transparent 60%), #FAFBFC",
                 border: "1px solid rgba(15,23,42,0.05)",
               }}
             >

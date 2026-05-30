@@ -258,7 +258,7 @@ export function GlassAurora({ sub, accent, themeLabel }: CardVariantProps) {
       <div
         aria-hidden
         className="pointer-events-none absolute -bottom-16 -right-10 h-48 w-48 rounded-full"
-        style={{ background: "radial-gradient(circle, rgba(99,102,241,0.32), transparent 70%)" }}
+        style={{ background: "radial-gradient(circle, rgba(71,85,105,0.32), transparent 70%)" }}
       />
 
       <div className="relative flex flex-1 flex-col gap-2.5 px-5 pb-4 pt-4">

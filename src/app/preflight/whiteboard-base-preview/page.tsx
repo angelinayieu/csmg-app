@@ -87,12 +87,12 @@ export default function WhiteboardBasePreviewPage() {
               roomId: "__obj",
               title: "Cognitive Performance",
               subtitle: "The full objective, collapsed onto the board.",
-              color: "#7C3AED",
+              color: "#475569",
               chips: ["3 rooms", "2 ready", "4 layers"],
             })
           }
           className="mt-1 rounded-full px-3 py-2 text-[12px] font-semibold text-white"
-          style={{ background: "#7C3AED" }}
+          style={{ background: "#475569" }}
         >
           Deploy Objective card
         </button>

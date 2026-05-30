@@ -681,7 +681,7 @@ function trimText(candidate: unknown, fallback: string): string {
 
 // ── Outcome summary (for library row) ──────────────────────────────
 
-/** Human-readable summary for the brainstorm_sessions.outcome_summary
+/** Human-readable summary for the objective_brainstorm_sessions.outcome_summary
  *  column. Surfaces in the library lens. */
 export function summariseRanking(ranking: BrainstormRanking): string {
   const n = ranking.candidates.length;

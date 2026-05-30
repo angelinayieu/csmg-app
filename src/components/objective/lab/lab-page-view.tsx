@@ -43,12 +43,14 @@ import {
   LayoutGrid,
   Loader2,
   RefreshCw,
-  Sparkles,
   X,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { sendArtifactToBoard } from "@/components/objective/board-bus";
 import { MethodBadge } from "@/components/objective/method-badge";
+import { BrainstormButton } from "@/components/objective/brainstorm/brainstorm-button";
+import { BrainstormPanel } from "@/components/objective/brainstorm/brainstorm-panel";
 import type {
   EvaluationMethod,
 } from "@/components/objective/method-badge";
@@ -139,6 +141,11 @@ export function LabPageView({
   const [diffRight, setDiffRight] = useState<string | null>(
     sortedVariations[1]?.id ?? null,
   );
+  // Phase 6: BrainstormPanel state (mode='feature'). Opens when the
+  // user clicks the Brainstorm button — orchestrates 3× refine against
+  // the top weakest root causes, dedups, ranks, surfaces a panel for
+  // one-click elect on variations.
+  const [brainstormOpen, setBrainstormOpen] = useState(false);
 
   // Top score for the header — max composite across variations.
   const topScore = useMemo(() => {
@@ -507,7 +514,7 @@ export function LabPageView({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
             <ActionButton
               label={hasScored ? "Re-evaluate all" : "Evaluate with AI"}
-              icon={hasScored ? RefreshCw : Sparkles}
+              icon={hasScored ? RefreshCw : Sparkle}
               onClick={runRubric}
               primary
               hero
@@ -571,6 +578,17 @@ export function LabPageView({
               onClick={runRefine}
               disabled={actionStatus?.state === "running"}
               title="The R&D agent proposes 3 new candidate variations targeting the weakest root cause of the target pain."
+            />
+            {/* Phase 6: orchestrated autopilot version of refine — fires
+                the proposer 3× against the top weakest root causes, dedupes,
+                ranks, surfaces a panel for one-click elect. */}
+            <BrainstormButton
+              onClick={() => setBrainstormOpen(true)}
+              disabled={
+                actionStatus?.state === "running" ||
+                !hasVariations ||
+                !expandedDetail?.effectiveness_envelope?.target_entity_id
+              }
             />
           </div>
         </div>
@@ -692,6 +710,28 @@ export function LabPageView({
           target; this is just a scroll target so the "Discuss" link
           in the header chrome doesn't 404. */}
       <div id="discuss" className="h-2" />
+
+      {/* Phase 6: BrainstormPanel mounted at lab-page level. Mode=feature
+          so the runner targets the entity's variations (not the picker's
+          sub-objectives). onElected refreshes via router so the new
+          variation surfaces in the lab table. */}
+      <BrainstormPanel
+        open={brainstormOpen}
+        onClose={() => setBrainstormOpen(false)}
+        spaceId={spaceId}
+        mode="feature"
+        entityId={entityId}
+        onElected={() => {
+          // Refresh the page so the elected variation appears in the
+          // expanded_detail.variations[] table. Optimistic local merge
+          // would be tighter but the lab page reads many derived shapes
+          // (envelope, diff picker, evidence) — a full refresh keeps
+          // them consistent without manual reconciliation.
+          startTransition(() => {
+            router.refresh();
+          });
+        }}
+      />
     </main>
   );
 }
@@ -996,7 +1036,7 @@ function IndicatorsTable({
           <LayoutGrid
             className="h-4 w-4 flex-shrink-0"
             strokeWidth={2.2}
-            style={{ color: "#C4B5FD" }}
+            style={{ color: "#94A3B8" }}
           />
           <span>
             <strong style={{ fontWeight: 650 }}>{lastSent}</strong> sent to your

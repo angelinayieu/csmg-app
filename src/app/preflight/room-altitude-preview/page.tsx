@@ -82,7 +82,7 @@ const LANES: RoomLane[] = [
   {
     slug: "objective",
     label: "Objective",
-    color: "#7C3AED",
+    color: "#475569",
     items: [
       {
         id: "obj1",

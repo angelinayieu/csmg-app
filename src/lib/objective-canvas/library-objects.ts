@@ -69,10 +69,16 @@ export interface LibraryObjectRow {
   in_strategy_brief: boolean;
   on_whiteboard: boolean;
   board_shape_id: string | null;
+  /** Optional JSONB blob the upserter may have stashed. Object-type
+   *  specific shape — e.g. brainstorm_cluster carries
+   *  { session_id, target_kind, ranking_summary, top_3:[...] } for the
+   *  LibraryPanel's hover preview. Always optional + unknown so existing
+   *  consumers that don't read it stay unaffected. */
+  content_snapshot?: unknown;
 }
 
 const SELECT_COLS =
-  "id, space_id, object_type, title, summary, source_entity_id, source_sub_objective_id, source_ref, blueprint_layer_ordinal, rank_score, selection_status, included_in_spec, in_strategy_brief, on_whiteboard, board_shape_id";
+  "id, space_id, object_type, title, summary, source_entity_id, source_sub_objective_id, source_ref, blueprint_layer_ordinal, rank_score, selection_status, included_in_spec, in_strategy_brief, on_whiteboard, board_shape_id, content_snapshot";
 
 /**
  * Lazy, idempotent upsert by the natural key. Re-"saving" the same blob item

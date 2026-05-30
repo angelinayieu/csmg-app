@@ -29,7 +29,7 @@ const NODES: Array<{
   left: string;
   top: string;
 }> = [
-  { id: "obj", title: "Strategy for {{companyName}}", subtitle: "Main objective · 3 rooms", color: "#7C3AED", left: "12%", top: "16%" },
+  { id: "obj", title: "Strategy for {{companyName}}", subtitle: "Main objective · 3 rooms", color: "#475569", left: "12%", top: "16%" },
   { id: "r1", title: "Goal-Driven Knowledge Pathways", subtitle: "Sub-objective · 3 chains", color: LANE.pain, left: "46%", top: "30%" },
   { id: "r2", title: "Distraction & Attention", subtitle: "Sub-objective · 2 chains", color: LANE.feature, left: "20%", top: "55%" },
   { id: "r3", title: "Privacy & Trust", subtitle: "Sub-objective · 1 chain", color: LANE.outcome, left: "62%", top: "62%" },

@@ -1,7 +1,7 @@
 // ── Brainstorm Sessions — CRUD helpers ──────────────────────────────
 //
-// Thin wrappers over the brainstorm_sessions table (migration
-// 20260907_brainstorm_sessions.sql). One row = one user press of
+// Thin wrappers over the objective_brainstorm_sessions table (migration
+// 20260907_objective_brainstorm_sessions.sql). One row = one user press of
 // `Brainstorm`; columns are JSONB blobs typed by session-types.ts.
 //
 // Conventions match src/lib/objective-canvas/decision-log.ts:
@@ -17,6 +17,7 @@
 // Spec: BRAINSTORM_MODULE_SPEC.md §5.
 
 import { logDecision } from "@/lib/objective-canvas/decision-log";
+import { upsertLibraryObject } from "@/lib/objective-canvas/library-objects";
 import type {
   BrainstormCleanup,
   BrainstormCompletedMetadata,
@@ -44,6 +45,12 @@ export interface CreateSessionArgs {
   /** tldraw page id the panel created on the existing objective board.
    *  Stored here so reopen / collapse / library re-open all find it. */
   tldrawPageId?: string | null;
+  /** Phase 4b-1 live-streaming support: caller may supply the session
+   *  id up front so the panel can start polling /sessions/[id] while
+   *  the runner is mid-pipeline. Must be a valid UUID v4. Server
+   *  validates; on collision the helper throws. Omit to let Postgres
+   *  generate one. */
+  id?: string | null;
 }
 
 /** Insert a fresh brainstorm session row in `running` status. Plan is
@@ -54,21 +61,29 @@ export async function createSession(
   db: any,
   args: CreateSessionArgs,
 ): Promise<BrainstormSession> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const insertRow: Record<string, any> = {
+    user_id: args.userId,
+    space_id: args.spaceId,
+    target_kind: args.targetKind,
+    sub_objective_id: args.subObjectiveId ?? null,
+    entity_id: args.entityId ?? null,
+    title: args.title ?? null,
+    tldraw_page_id: args.tldrawPageId ?? null,
+    plan: {},
+    generations: [],
+    user_added_ideas: [],
+    status: "running" satisfies BrainstormSessionStatus,
+  };
+  if (args.id) {
+    // Client-provided id (for live-polling). UUID validity is enforced
+    // by the column type — Postgres rejects malformed inputs. Collision
+    // with an existing row raises a unique-violation we surface verbatim.
+    insertRow.id = args.id;
+  }
   const { data, error } = await db
-    .from("brainstorm_sessions")
-    .insert({
-      user_id: args.userId,
-      space_id: args.spaceId,
-      target_kind: args.targetKind,
-      sub_objective_id: args.subObjectiveId ?? null,
-      entity_id: args.entityId ?? null,
-      title: args.title ?? null,
-      tldraw_page_id: args.tldrawPageId ?? null,
-      plan: {},
-      generations: [],
-      user_added_ideas: [],
-      status: "running" satisfies BrainstormSessionStatus,
-    })
+    .from("objective_brainstorm_sessions")
+    .insert(insertRow)
     .select("*")
     .single();
   if (error || !data) {
@@ -99,7 +114,7 @@ export async function commitPlan(
 ): Promise<boolean> {
   try {
     const { error } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .update({ plan: args.plan })
       .eq("id", args.sessionId);
     if (error) {
@@ -145,7 +160,7 @@ export async function appendGeneration(
 ): Promise<number | null> {
   try {
     const { data: row, error: readErr } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .select("generations")
       .eq("id", sessionId)
       .single();
@@ -159,7 +174,7 @@ export async function appendGeneration(
     const existing = (row.generations as BrainstormGeneration[]) ?? [];
     const next = [...existing, generation];
     const { error: writeErr } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .update({ generations: next })
       .eq("id", sessionId);
     if (writeErr) {
@@ -189,7 +204,7 @@ export async function setCleanup(
 ): Promise<boolean> {
   try {
     const { error } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .update({ cleanup })
       .eq("id", sessionId);
     if (error) {
@@ -228,7 +243,7 @@ export async function settle(
 ): Promise<void> {
   const settledAt = new Date().toISOString();
   const { error } = await db
-    .from("brainstorm_sessions")
+    .from("objective_brainstorm_sessions")
     .update({
       ranking: args.ranking,
       status: "settled" satisfies BrainstormSessionStatus,
@@ -279,7 +294,7 @@ export async function appendUserIdea(
 ): Promise<boolean> {
   try {
     const { data: row, error: readErr } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .select("user_added_ideas")
       .eq("id", sessionId)
       .single();
@@ -293,7 +308,7 @@ export async function appendUserIdea(
     const existing = (row.user_added_ideas as BrainstormUserIdea[]) ?? [];
     const next = [...existing, idea];
     const { error: writeErr } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .update({ user_added_ideas: next })
       .eq("id", sessionId);
     if (writeErr) {
@@ -324,7 +339,7 @@ export async function patchUserIdea(
 ): Promise<boolean> {
   try {
     const { data: row, error: readErr } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .select("user_added_ideas")
       .eq("id", sessionId)
       .single();
@@ -338,7 +353,7 @@ export async function patchUserIdea(
     const existing = (row.user_added_ideas as BrainstormUserIdea[]) ?? [];
     const next = existing.map((i) => (i.id === ideaId ? { ...i, ...patch } : i));
     const { error: writeErr } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .update({ user_added_ideas: next })
       .eq("id", sessionId);
     if (writeErr) {
@@ -369,7 +384,7 @@ export async function abandon(
 ): Promise<boolean> {
   try {
     const { error } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .update({
         status: "abandoned" satisfies BrainstormSessionStatus,
         settled_at: new Date().toISOString(),
@@ -389,9 +404,61 @@ export async function abandon(
   }
 }
 
-/** Toggle the library pin. Pinned sessions surface in the brainstorm
- *  library lens; unpinned sessions are still readable by id (e.g. via
- *  the page's tldraw page id) but don't appear in the list view. */
+/** Phase 7-Consolidate: write the settled session as a canonical
+ *  `library_objects` row of type `brainstorm_cluster`. This is the
+ *  unified library storage — replaces the parallel `pinned` flag.
+ *  Idempotent via upsertLibraryObject's natural-key dedup
+ *  (space_id × source_entity_id × object_type × source_ref).
+ *
+ *  Returns the library_object id on success, null on soft failure.
+ *  Callers are the panel's "Save to Library" button + (optionally)
+ *  an auto-save hook in the runner's settle path. */
+export async function saveSessionToLibrary(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  args: {
+    userId: string;
+    session: BrainstormSession;
+  },
+): Promise<string | null> {
+  const s = args.session;
+  // Composite source ref: includes session.id so re-runs (which create
+  // new sessions) get their own library row instead of clobbering the
+  // prior one. Use session.id verbatim as the source_ref.
+  return upsertLibraryObject(db, {
+    spaceId: s.space_id,
+    userId: args.userId,
+    objectType: "brainstorm_cluster",
+    title:
+      s.title ??
+      `Brainstorm · ${s.target_kind.replace(/_/g, " ")} · ${s.id.slice(0, 8)}`,
+    summary: s.outcome_summary ?? null,
+    sourceEntityId: s.entity_id,
+    sourceSubObjectiveId: s.sub_objective_id,
+    sourceRef: s.id, // session id → 1:1 library row per brainstorm
+    contentSnapshot: {
+      session_id: s.id,
+      target_kind: s.target_kind,
+      tldraw_page_id: s.tldraw_page_id,
+      ranking_summary: s.outcome_summary,
+      // Surface a compact ranked list for the LibraryPanel hover preview
+      // without forcing it to refetch the whole session blob.
+      top_3:
+        (s.ranking?.candidates ?? [])
+          .filter((c) => c.ribbon === "green")
+          .slice(0, 3)
+          .map((c) => ({
+            proposal_id: c.proposal_id,
+            composite_score: c.composite_score,
+          })),
+    },
+  });
+}
+
+/** [Deprecated by Phase 7-Consolidate] Toggle the legacy `pinned` flag.
+ *  The canonical library storage is `library_objects` via
+ *  `saveSessionToLibrary` above. Kept as a no-op-safe helper for any
+ *  legacy callers; remove with the column drop in a future migration. */
 export async function setPinned(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
@@ -400,7 +467,7 @@ export async function setPinned(
 ): Promise<boolean> {
   try {
     const { error } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .update({ pinned })
       .eq("id", sessionId);
     if (error) {
@@ -432,7 +499,7 @@ export async function getSession(
 ): Promise<BrainstormSession | null> {
   try {
     const { data, error } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .select("*")
       .eq("id", sessionId)
       .single();
@@ -472,7 +539,7 @@ export async function listSessions(
   const limit = Math.min(Math.max(args.limit ?? 50, 1), 200);
   try {
     let q = db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .select("*")
       .order("started_at", { ascending: false })
       .limit(limit);

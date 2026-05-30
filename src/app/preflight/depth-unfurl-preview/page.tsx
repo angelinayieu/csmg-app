@@ -227,10 +227,10 @@ const ROOMS: Record<string, Room> = {
 
 const ARCHETYPE: Record<Archetype, { color: string; Icon: typeof Layers; label: string }> = {
   substrate: { color: "#64748B", Icon: Layers, label: "Substrate" },
-  mechanism: { color: "#6366F1", Icon: Settings2, label: "Mechanism" },
-  process: { color: "#8B5CF6", Icon: RefreshCw, label: "Process" },
+  mechanism: { color: "#475569", Icon: Settings2, label: "Mechanism" },
+  process: { color: "#475569", Icon: RefreshCw, label: "Process" },
   output: { color: "#C026D3", Icon: Activity, label: "Output" },
-  outcome: { color: "#7C3AED", Icon: Target, label: "Outcome" },
+  outcome: { color: "#475569", Icon: Target, label: "Outcome" },
 };
 
 // ── Scoring math (all derived, nothing hand-set) ─────────────────────────
@@ -593,8 +593,8 @@ function Orb({ readiness, big }: { readiness: number; big: boolean }) {
       style={{
         width: size,
         height: size,
-        background: "radial-gradient(circle at 35% 30%, #A78BFA 0%, #7C3AED 55%, #5B21B6 100%)",
-        boxShadow: "0 30px 80px -20px rgba(124,58,237,0.55), inset 0 2px 12px rgba(255,255,255,0.35)",
+        background: "radial-gradient(circle at 35% 30%, #94A3B8 0%, #475569 55%, #475569 100%)",
+        boxShadow: "0 30px 80px -20px rgba(71,85,105,0.55), inset 0 2px 12px rgba(255,255,255,0.35)",
         transition: "width 0.5s, height 0.5s",
       }}
     >
@@ -1038,7 +1038,7 @@ function RoomView({
   }
   const cols: { key: keyof Room; title: string; color: string; items: RoomItem[] }[] = [
     { key: "pains", title: "Pains", color: "#EF4444", items: room.pains },
-    { key: "mechanisms", title: "Mechanisms", color: "#6366F1", items: room.mechanisms },
+    { key: "mechanisms", title: "Mechanisms", color: "#475569", items: room.mechanisms },
     { key: "outcomes", title: "Outcomes", color: "#10B981", items: room.outcomes },
   ];
   const find = (id: string) =>
@@ -1060,7 +1060,7 @@ function RoomView({
         <span className="font-semibold" style={{ color: appleVibe.text.primary }}>
           {bet.title}
         </span>
-        <span className="rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide" style={{ background: "rgba(124,58,237,0.1)", color: appleVibe.accent.primary }}>
+        <span className="rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide" style={{ background: "rgba(71,85,105,0.1)", color: appleVibe.accent.primary }}>
           {depthLabel}
         </span>
         {depth === 5 && (
@@ -1134,7 +1134,7 @@ function RoomView({
           <div className="mb-1 grid grid-cols-[1fr_40px_1fr_40px_1fr] gap-2 px-3 text-[9px] font-bold uppercase tracking-[0.12em]" style={{ color: appleVibe.text.faint }}>
             <span style={{ color: "#EF4444" }}>Pain</span>
             <span />
-            <span style={{ color: "#6366F1" }}>Mechanism</span>
+            <span style={{ color: "#475569" }}>Mechanism</span>
             <span />
             <span style={{ color: "#10B981" }}>Outcome</span>
           </div>
@@ -1153,7 +1153,7 @@ function RoomView({
           {room.loopLabel && (
             <div
               className="mt-1 flex items-center gap-2 rounded-2xl px-3.5 py-2.5"
-              style={{ background: "rgba(124,58,237,0.06)", border: "1px solid rgba(124,58,237,0.18)" }}
+              style={{ background: "rgba(71,85,105,0.06)", border: "1px solid rgba(71,85,105,0.18)" }}
             >
               <RefreshCw className="h-4 w-4 flex-shrink-0" style={{ color: appleVibe.accent.primary }} strokeWidth={2.2} />
               <span className="text-[11.5px]" style={{ color: appleVibe.text.secondary }}>
@@ -1205,7 +1205,7 @@ function ChainRow({
     >
       <ChainChip label={pain?.name ?? "?"} color="#EF4444" />
       <ChainArrow polarity={chain.polarity} strength={chain.strength} />
-      <ChainChip label={mech?.name ?? "?"} color="#6366F1" hero={mech?.id === heroMechId} />
+      <ChainChip label={mech?.name ?? "?"} color="#475569" hero={mech?.id === heroMechId} />
       <ChainArrow polarity={chain.polarity} strength={chain.strength} />
       <div className="flex items-center gap-1.5">
         <ChainChip label={out?.name ?? "?"} color="#10B981" />

@@ -42,12 +42,19 @@ import {
   Check,
   Lightbulb,
   Loader2,
+  Minimize2,
+  PanelRightOpen,
   Plus,
   RefreshCw,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
+import {
+  brainstormOpenOnBoard,
+  brainstormCollapsePage,
+  candidatesForBoard,
+} from "./brainstorm-board-bus";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type {
   BrainstormSession,
@@ -70,6 +77,17 @@ interface Props {
    *  prior session's ranking. Re-runs ("Brainstorm again") fire a
    *  fresh runner from scratch — they do NOT mutate the prior session. */
   rehydrateSession?: BrainstormSession | null;
+  /** Phase 6/6b: which runner to fire on Start.
+   *    "picker"     (default) → POST /api/brainstorm/sessions/run
+   *                             (sub-objective picker autopilot)
+   *    "feature"              → POST /api/brainstorm/sessions/run-feature
+   *                             (per-feature R&D variation autopilot;
+   *                             requires entityId to be set)
+   *    "annotation"           → POST /api/brainstorm/sessions/run-annotation
+   *                             (lens Deepen autopilot on the core goal) */
+  mode?: "picker" | "feature" | "annotation";
+  /** Required when mode='feature'. */
+  entityId?: string | null;
 }
 
 type Phase = "idle" | "running" | "settled" | "error";
@@ -86,6 +104,8 @@ export function BrainstormPanel({
   spaceId,
   onElected,
   rehydrateSession = null,
+  mode = "picker",
+  entityId = null,
 }: Props) {
   const reduce = useReducedMotion();
 
@@ -105,10 +125,19 @@ export function BrainstormPanel({
   const [ideas, setIdeas] = useState<LocalIdea[]>([]);
   const [draftIdea, setDraftIdea] = useState("");
 
-  // Library pin state (Phase 5 wiring). Sessions auto-save on close;
-  // pinning is what surfaces them in the library list.
-  const [pinned, setPinned] = useState(false);
-  const [pinning, setPinning] = useState(false);
+  // Phase 7-Consolidate: replaces the legacy `pinned` flag. The Save
+  // action writes a `library_objects` row of type='brainstorm_cluster'
+  // through the canonical save-to-library route, so the session shows
+  // up in the existing LibraryPanel alongside other saved objects.
+  // Idempotent — re-clicking just re-upserts the same row.
+  const [savedToLibrary, setSavedToLibrary] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Phase 4b-2 board-page state. True = candidates have been pushed to
+  // a dedicated tldraw page on the objective board (visible behind the
+  // panel). The Collapse button switches the editor back to the main
+  // page without unmounting the panel itself.
+  const [openedOnBoard, setOpenedOnBoard] = useState(false);
 
   // Rehydrate from a prior session when the panel opens with one. Skip
   // the runner entirely and land directly on settled. Reset to idle when
@@ -139,7 +168,9 @@ export function BrainstormPanel({
         }
       }
       setElectedIds(electedSeed);
-      setPinned(rehydrateSession.pinned);
+      // Rehydrate: can't know save-state without a library_objects query;
+      // default to false. User can click Save again — it's idempotent.
+      setSavedToLibrary(false);
     } else if (!rehydrateSession && lastRehydratedId.current !== null) {
       // Re-opened without a session → reset to fresh idle state.
       lastRehydratedId.current = null;
@@ -147,7 +178,7 @@ export function BrainstormPanel({
       setPhase("idle");
       setErrorMsg(null);
       setElectedIds(new Set());
-      setPinned(false);
+      setSavedToLibrary(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, rehydrateSession?.id]);
@@ -172,42 +203,111 @@ export function BrainstormPanel({
     onClose();
   }, [session?.id, phase, onClose]);
 
-  const togglePin = useCallback(async () => {
-    if (!session || pinning) return;
-    const nextPinned = !pinned;
-    setPinning(true);
+  // Open the session on the objective board (Phase 4b-2). Pushes one
+  // sticky note per candidate to a new tldraw page named after the
+  // session, switches the editor to it. Re-clickable to push updates.
+  const openOnBoard = useCallback(() => {
+    if (!session) return;
+    brainstormOpenOnBoard({
+      sessionId: session.id,
+      pageTitle: session.title ?? `Brainstorm · ${session.id.slice(0, 8)}`,
+      candidates: candidatesForBoard(session),
+    });
+    setOpenedOnBoard(true);
+  }, [session]);
+
+  const collapseOnBoard = useCallback(() => {
+    if (!session) return;
+    brainstormCollapsePage({ sessionId: session.id });
+    setOpenedOnBoard(false);
+  }, [session]);
+
+  const saveToLibrary = useCallback(async () => {
+    if (!session || saving || savedToLibrary) return;
+    setSaving(true);
     try {
       const res = await fetch(
-        `/api/brainstorm/sessions/${session.id}/pin`,
+        `/api/brainstorm/sessions/${session.id}/save-to-library`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pinned: nextPinned }),
         },
       );
       if (!res.ok) {
         const detail = await safeText(res);
-        setErrorMsg(`Pin failed: ${detail}`);
+        setErrorMsg(`Save to library failed: ${detail}`);
         return;
       }
-      setPinned(nextPinned);
+      setSavedToLibrary(true);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {
-      setPinning(false);
+      setSaving(false);
     }
-  }, [session, pinning, pinned]);
+  }, [session, saving, savedToLibrary]);
 
   const runBrainstorm = useCallback(async () => {
+    // Phase 4b-1: generate the session id client-side so we can start
+    // polling /sessions/[id] BEFORE the runner POST completes. As the
+    // runner appends generations / sets cleanup / sets ranking to the
+    // row, the polling effect below picks it up and renders live.
+    const newId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : // Fallback for older browsers — still uuid-ish, server validates
+          `${Date.now().toString(16)}-0000-4000-8000-${Math.random()
+            .toString(16)
+            .slice(2, 14)
+            .padEnd(12, "0")}`;
+
     setPhase("running");
     setErrorMsg(null);
     setElectedIds(new Set());
-    setPinned(false); // fresh run resets pin state for the new session
+    setSavedToLibrary(false); // fresh run = a new session, not yet saved
+    // Seed a stub session so polling can start immediately. Real
+    // server-returned shape replaces this on first poll / on POST response.
+    setSession({
+      id: newId,
+      space_id: spaceId,
+      user_id: "",
+      target_kind:
+        mode === "feature"
+          ? "room_feature"
+          : mode === "annotation"
+            ? "annotation"
+            : "sub_objective_picker",
+      sub_objective_id: null,
+      entity_id: mode === "feature" ? entityId : null,
+      plan: {},
+      generations: [],
+      cleanup: null,
+      ranking: null,
+      user_added_ideas: [],
+      tldraw_page_id: null,
+      pinned: false,
+      title: null,
+      outcome_summary: null,
+      status: "running",
+      started_at: new Date().toISOString(),
+      settled_at: null,
+      updated_at: new Date().toISOString(),
+    });
+
     try {
-      const res = await fetch("/api/brainstorm/sessions/run", {
+      const runUrl =
+        mode === "feature"
+          ? "/api/brainstorm/sessions/run-feature"
+          : mode === "annotation"
+            ? "/api/brainstorm/sessions/run-annotation"
+            : "/api/brainstorm/sessions/run";
+      const runBody =
+        mode === "feature"
+          ? { entityId, sessionId: newId }
+          : { spaceId, sessionId: newId };
+      const res = await fetch(runUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spaceId }),
+        body: JSON.stringify(runBody),
       });
       if (!res.ok) {
         const detail = await safeText(res);
@@ -221,13 +321,57 @@ export function BrainstormPanel({
         setPhase("error");
         return;
       }
+      // POST winning the race is fine — set the canonical row + flip
+      // settled. (Polling will see the same data on its next tick and
+      // no-op since status==='settled' breaks the loop.)
       setSession(json.session);
       setPhase("settled");
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
       setPhase("error");
     }
-  }, [spaceId]);
+  }, [spaceId, mode, entityId]);
+
+  // ── Live polling (Phase 4b-1) ────────────────────────────────────
+  // While phase==='running' AND we have a session id, poll the row
+  // every 1s so the panel reflects the runner's incremental progress
+  // (plan locked → batch 1 appended → batch 2 → cleanup → ranking).
+  // The runner's POST response also lands and races us — whoever
+  // arrives first wins; the loser sees status==='settled' and no-ops.
+  useEffect(() => {
+    if (phase !== "running") return;
+    const sid = session?.id;
+    if (!sid) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/brainstorm/sessions/${sid}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return; // 404 right after creation is normal — retry next tick
+        const json = (await res.json()) as { session: BrainstormSession | null };
+        if (cancelled || !json.session) return;
+        setSession(json.session);
+        if (json.session.status === "settled") {
+          setPhase("settled");
+        } else if (json.session.status === "abandoned") {
+          setErrorMsg("Session was abandoned.");
+          setPhase("error");
+        }
+      } catch {
+        // Soft-fail — next tick will retry.
+      }
+    };
+    // Kick the first poll fast (300ms) so users see something quickly,
+    // then settle into 1s cadence.
+    const fast = window.setTimeout(tick, 300);
+    const interval = window.setInterval(tick, 1000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(fast);
+      window.clearInterval(interval);
+    };
+  }, [phase, session?.id]);
 
   const elect = useCallback(
     async (cand: BrainstormRankedCandidate, intent: SubObjectiveIntent) => {
@@ -267,16 +411,32 @@ export function BrainstormPanel({
   const addIdea = useCallback(() => {
     const text = draftIdea.trim();
     if (text.length < 3) return;
+    const localId = `idea-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2, 8)}`;
+    // Optimistic local update (instant UI feedback).
     setIdeas((prev) => [
       ...prev,
-      {
-        id: `local-${Date.now()}`,
-        text,
-        added_at: new Date().toISOString(),
-      },
+      { id: localId, text, added_at: new Date().toISOString() },
     ]);
     setDraftIdea("");
-  }, [draftIdea]);
+    // Phase 4b-3 persist: fire-and-forget the server append. Soft-fails
+    // — the local sticky stays visible regardless. Only persists if we
+    // already have a session (settled or running); for idle/error
+    // phases there's nothing to attach to.
+    const sid = session?.id;
+    if (sid) {
+      void fetch(`/api/brainstorm/sessions/${sid}/idea`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: localId, text }),
+        keepalive: true,
+      }).catch(() => {
+        // Persist failure is invisible — Phase 5b will surface stale
+        // ideas via a "syncing..." chip if/when this proves common.
+      });
+    }
+  }, [draftIdea, session?.id]);
 
   const removeIdea = useCallback((id: string) => {
     setIdeas((prev) => prev.filter((i) => i.id !== id));
@@ -327,7 +487,7 @@ export function BrainstormPanel({
 
           <div className="relative flex-1 overflow-y-auto">
             {phase === "idle" && <IdleView onStart={runBrainstorm} />}
-            {phase === "running" && <RunningView />}
+            {phase === "running" && <RunningView session={session} />}
             {phase === "error" && (
               <ErrorView message={errorMsg} onRetry={runBrainstorm} />
             )}
@@ -346,9 +506,12 @@ export function BrainstormPanel({
                 onRemoveIdea={removeIdea}
                 onBrainstormAgain={runBrainstorm}
                 errorMsg={errorMsg}
-                pinned={pinned}
-                pinning={pinning}
-                onTogglePin={togglePin}
+                savedToLibrary={savedToLibrary}
+                saving={saving}
+                onSaveToLibrary={saveToLibrary}
+                openedOnBoard={openedOnBoard}
+                onOpenOnBoard={openOnBoard}
+                onCollapseOnBoard={collapseOnBoard}
               />
             )}
           </div>
@@ -376,7 +539,7 @@ function Header({ phase, onClose }: { phase: Phase; onClose: () => void }) {
           className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em]"
           style={{ color: appleVibe.text.tertiary }}
         >
-          <Sparkles className="h-3 w-3" strokeWidth={2} />
+          <Sparkle className="h-3 w-3" strokeWidth={2} />
           Brainstorm
         </div>
         <h2
@@ -421,10 +584,28 @@ function StageProgress({
   phase: Phase;
   session: BrainstormSession | null;
 }) {
-  // Map phase + session state to a 0..4 active index.
-  // idle = 0 (Plan only highlighted); running = 1..3 best-guess; settled = 4.
+  // Phase 4b-1: derive precise stage from the live-polled session row.
+  // Persist-then-emit means each JSONB column is set the moment that
+  // stage finishes, so we can read column presence to know where we
+  // are. Stage progression:
+  //   0 Plan        : default / idle
+  //   1 Diverge     : plan locked, generations < 3
+  //   2 Cleanup     : 3 generations done, cleanup null
+  //   3 Rank        : cleanup set, ranking null
+  //   4 Settled     : ranking set
   let activeIdx = 0;
-  if (phase === "running") activeIdx = 2; // mid-pipeline guess (no SSE yet)
+  if (phase === "running" && session) {
+    const plan = session.plan as { intents?: unknown[] } | Record<string, never>;
+    const planLocked =
+      Array.isArray((plan as { intents?: unknown[] }).intents) &&
+      ((plan as { intents?: unknown[] }).intents!.length ?? 0) > 0;
+    const nGen = session.generations?.length ?? 0;
+    if (session.ranking) activeIdx = 4;
+    else if (session.cleanup) activeIdx = 3;
+    else if (nGen >= 3) activeIdx = 2;
+    else if (planLocked || nGen > 0) activeIdx = 1;
+    else activeIdx = 0;
+  }
   if (phase === "settled" && session?.ranking) activeIdx = 4;
 
   return (
@@ -541,7 +722,7 @@ function IdleView({ onStart }: { onStart: () => void }) {
           boxShadow: "0 4px 12px -2px rgba(59,130,246,0.35)",
         }}
       >
-        <Sparkles className="h-3.5 w-3.5" strokeWidth={2.25} />
+        <Sparkle className="h-3.5 w-3.5" strokeWidth={2.25} />
         Start brainstorm
         <span
           className="ml-2 rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-medium tabular-nums"
@@ -564,23 +745,177 @@ function IdleView({ onStart }: { onStart: () => void }) {
 
 // ── Running view ────────────────────────────────────────────────────
 
-function RunningView() {
+function RunningView({ session }: { session: BrainstormSession | null }) {
+  // Phase 4b-1: read live state from the polled row so the user sees
+  // EXACTLY what's happening — which intent is firing, how many
+  // candidates have landed, which stage we're in.
+  const plan = (session?.plan ?? {}) as
+    | { intents?: SubObjectiveIntent[] }
+    | Record<string, never>;
+  const intents = Array.isArray((plan as { intents?: SubObjectiveIntent[] }).intents)
+    ? (plan as { intents: SubObjectiveIntent[] }).intents
+    : [];
+  const generations = session?.generations ?? [];
+  const totalCandidates = generations.reduce(
+    (n, g) => n + g.candidates.length,
+    0,
+  );
+
+  // What's the runner doing RIGHT NOW?
+  let nowDoing = "Booting up…";
+  if (session?.ranking) nowDoing = "Ready — finalizing";
+  else if (session?.cleanup) nowDoing = "Ranking with critique pass";
+  else if (generations.length >= 3) nowDoing = "Cleaning up duplicates";
+  else if (generations.length > 0) {
+    const nextIntent = intents[generations.length];
+    nowDoing = nextIntent
+      ? `Diverging — ${nextIntent} (round ${generations.length + 1}/${intents.length})`
+      : `Diverging — round ${generations.length + 1}`;
+  } else if (intents.length > 0) {
+    nowDoing = `Diverging — ${intents[0]} (round 1/${intents.length})`;
+  }
+
   return (
-    <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-4 px-6 py-8">
-      <BreathingPulse />
-      <h3
-        className="text-center text-[15px] font-semibold"
-        style={{ color: appleVibe.text.primary }}
-      >
-        Diverging, cleaning, ranking…
-      </h3>
-      <p
-        className="max-w-[280px] text-center text-[12px] leading-relaxed"
-        style={{ color: appleVibe.text.secondary }}
-      >
-        Three intent batches firing in sequence, then dedup + critique. Hold
-        tight — this runs ~25-30 seconds.
-      </p>
+    <div className="flex flex-col gap-5 px-5 py-6">
+      <div className="flex flex-col items-center gap-3">
+        <BreathingPulse />
+        <h3
+          className="text-center text-[14px] font-semibold"
+          style={{ color: appleVibe.text.primary }}
+        >
+          {nowDoing}
+        </h3>
+      </div>
+
+      {/* Per-intent ticker — shows which batches have landed live. */}
+      {intents.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          {intents.map((i, idx) => {
+            const gen = generations[idx];
+            const done = !!gen;
+            const inFlight = idx === generations.length && !session?.cleanup;
+            return (
+              <div
+                key={`${i}-${idx}`}
+                className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5"
+                style={{
+                  background: done
+                    ? "rgba(220,252,231,0.45)"
+                    : inFlight
+                      ? "rgba(219,234,254,0.5)"
+                      : "rgba(248,250,252,0.6)",
+                  border: `1px solid ${
+                    done
+                      ? "rgba(22,163,74,0.18)"
+                      : inFlight
+                        ? "rgba(59,130,246,0.25)"
+                        : appleVibe.stroke.hairline
+                  }`,
+                }}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className="h-2 w-2 flex-shrink-0 rounded-full"
+                    style={{ background: intentColor(i) }}
+                  />
+                  <span
+                    className="text-[11.5px] font-semibold uppercase tracking-[0.08em]"
+                    style={{ color: appleVibe.text.primary }}
+                  >
+                    {i}
+                  </span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  {done ? (
+                    <>
+                      <Check
+                        className="h-3 w-3"
+                        strokeWidth={2.5}
+                        style={{ color: "rgba(22,163,74,0.85)" }}
+                      />
+                      <span
+                        className="text-[10.5px] tabular-nums"
+                        style={{ color: appleVibe.text.secondary }}
+                      >
+                        {gen.candidates.length} cand · {Math.round(gen.latency_ms / 100) / 10}s
+                      </span>
+                    </>
+                  ) : inFlight ? (
+                    <>
+                      <Loader2
+                        className="h-3 w-3 animate-spin"
+                        strokeWidth={2}
+                        style={{ color: "rgba(59,130,246,0.85)" }}
+                      />
+                      <span
+                        className="text-[10.5px]"
+                        style={{ color: "rgba(59,130,246,0.85)" }}
+                      >
+                        running
+                      </span>
+                    </>
+                  ) : (
+                    <span
+                      className="text-[10.5px]"
+                      style={{ color: appleVibe.text.faint }}
+                    >
+                      queued
+                    </span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Live candidate accumulator. */}
+      {totalCandidates > 0 && (
+        <div
+          className="rounded-xl border px-3 py-2.5"
+          style={{
+            borderColor: appleVibe.stroke.hairline,
+            background: "rgba(248,250,252,0.6)",
+          }}
+        >
+          <div
+            className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Candidates so far
+          </div>
+          <div
+            className="mt-1 font-mono text-[18px] font-semibold tabular-nums"
+            style={{ color: appleVibe.text.primary }}
+          >
+            {totalCandidates}
+          </div>
+          <ul className="mt-1.5 flex flex-col gap-0.5">
+            {generations.flatMap((g) =>
+              g.candidates.slice(0, 3).map((c) => (
+                <li
+                  key={c.proposal_id}
+                  className="truncate text-[11.5px] leading-snug"
+                  style={{ color: appleVibe.text.secondary }}
+                  title={c.title}
+                >
+                  · {c.title}
+                </li>
+              )),
+            )}
+          </ul>
+        </div>
+      )}
+
+      {totalCandidates === 0 && (
+        <p
+          className="max-w-[320px] self-center text-center text-[11.5px] leading-relaxed"
+          style={{ color: appleVibe.text.secondary }}
+        >
+          The runner posts each batch the moment it lands. You should see the
+          first round within ~10 seconds.
+        </p>
+      )}
     </div>
   );
 }
@@ -601,7 +936,7 @@ function BreathingPulse() {
         style={{ borderColor: "rgba(59,130,246,0.4)" }}
       />
       <div className="absolute inset-0 flex items-center justify-center">
-        <Sparkles
+        <Sparkle
           className="h-5 w-5"
           strokeWidth={1.75}
           style={{ color: appleVibe.accent.primary }}
@@ -680,9 +1015,12 @@ interface SettledProps {
   onRemoveIdea: (id: string) => void;
   onBrainstormAgain: () => void;
   errorMsg: string | null;
-  pinned: boolean;
-  pinning: boolean;
-  onTogglePin: () => void;
+  savedToLibrary: boolean;
+  saving: boolean;
+  onSaveToLibrary: () => void;
+  openedOnBoard: boolean;
+  onOpenOnBoard: () => void;
+  onCollapseOnBoard: () => void;
 }
 
 function SettledView(props: SettledProps) {
@@ -770,6 +1108,49 @@ function SettledView(props: SettledProps) {
         <TraySection candidates={byRibbon.tray} {...props} />
       )}
 
+      {/* Board-page actions (Phase 4b-2) — open all candidates as
+          sticky notes on a dedicated tldraw page; collapse switches
+          the editor back without losing the brainstorm page. */}
+      <div className="-mb-1 flex items-center justify-between gap-2">
+        {props.openedOnBoard ? (
+          <button
+            onClick={props.onCollapseOnBoard}
+            className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition hover:bg-gray-50"
+            style={{
+              borderColor: "rgba(59,130,246,0.3)",
+              background: "rgba(219,234,254,0.4)",
+              color: "rgba(30,58,138,0.95)",
+            }}
+            title="Switch the board back to its main page (brainstorm page stays in the sidebar)"
+          >
+            <Minimize2 className="h-3 w-3" strokeWidth={2.25} />
+            Collapse to base
+          </button>
+        ) : (
+          <button
+            onClick={props.onOpenOnBoard}
+            className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition hover:bg-gray-50"
+            style={{
+              borderColor: appleVibe.stroke.hairline,
+              background: appleVibe.surface.card,
+              color: appleVibe.text.primary,
+            }}
+            title="Push all candidates as sticky notes onto a new tldraw page on the objective board"
+          >
+            <PanelRightOpen className="h-3 w-3" strokeWidth={2.25} />
+            Open on whiteboard
+          </button>
+        )}
+        <span
+          className="text-[10px] font-light"
+          style={{ color: appleVibe.text.faint }}
+        >
+          {props.openedOnBoard
+            ? "candidates live on the board page"
+            : "or just elect from the panel"}
+        </span>
+      </div>
+
       {/* Footer actions */}
       <div
         className="sticky bottom-0 mt-2 flex items-center justify-between gap-2 border-t px-1 pt-3 pb-1"
@@ -780,33 +1161,39 @@ function SettledView(props: SettledProps) {
         }}
       >
         <button
-          onClick={props.onTogglePin}
-          disabled={props.pinning}
+          onClick={props.onSaveToLibrary}
+          disabled={props.saving || props.savedToLibrary}
           className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition"
           style={{
-            borderColor: props.pinned
-              ? "rgba(217,119,6,0.3)"
+            borderColor: props.savedToLibrary
+              ? "rgba(22,163,74,0.3)"
               : appleVibe.stroke.hairline,
-            background: props.pinned
-              ? "rgba(254,243,199,0.4)"
+            background: props.savedToLibrary
+              ? "rgba(220,252,231,0.5)"
               : appleVibe.surface.card,
-            color: props.pinned
-              ? "rgba(146,64,14,0.95)"
+            color: props.savedToLibrary
+              ? "rgba(22,101,52,0.95)"
               : appleVibe.text.secondary,
-            cursor: props.pinning ? "wait" : "pointer",
+            cursor: props.saving
+              ? "wait"
+              : props.savedToLibrary
+                ? "default"
+                : "pointer",
           }}
           title={
-            props.pinned
-              ? "Pinned to library — click to unpin"
-              : "Save this session to the library"
+            props.savedToLibrary
+              ? "Saved to Library — surfaces alongside features, mechanisms, deliverables"
+              : "Write this session as a brainstorm_cluster in library_objects (canonical library storage)"
           }
         >
-          {props.pinning ? (
+          {props.saving ? (
             <Loader2 className="h-3 w-3 animate-spin" strokeWidth={2.25} />
+          ) : props.savedToLibrary ? (
+            <Check className="h-3 w-3" strokeWidth={2.5} />
           ) : (
             <BookmarkPlus className="h-3 w-3" strokeWidth={2.25} />
           )}
-          {props.pinned ? "Pinned" : "Save to library"}
+          {props.savedToLibrary ? "Saved to Library" : "Save to Library"}
         </button>
         <button
           onClick={props.onBrainstormAgain}
@@ -1238,7 +1625,7 @@ function intentColor(intent: SubObjectiveIntent): string {
     case "concrete":
       return "rgba(20,184,166,0.85)";
     case "contrarian":
-      return "rgba(168,85,247,0.85)";
+      return "rgba(71,85,105,0.85)";
     case "gap_fill":
       return "rgba(217,119,6,0.85)";
     case "ambitious":

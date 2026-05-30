@@ -120,7 +120,7 @@ const FACET_COLOR: Record<Facet, string> = {
   analogy: "rgba(37,99,235,0.78)",
   dimension: "rgba(22,163,74,0.78)",
   tension: "rgba(217,119,6,0.78)",
-  inference: "rgba(124,58,237,0.78)",
+  inference: "rgba(71,85,105,0.78)",
 };
 
 // ── Mock room ───────────────────────────────────────────────────────

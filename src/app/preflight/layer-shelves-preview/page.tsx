@@ -19,7 +19,7 @@ import { subProgressFromCompleted } from "@/lib/objective-canvas/elected-ready-v
 const R = ["#16A34A", "#059669", "#0D9488", "#15803D", "#84CC16"];
 // Friction (reds/oranges) + mechanism (blues/purples).
 const F = ["#DC2626", "#EA580C", "#D97706", "#B45309"];
-const M = ["#2563EB", "#7C3AED", "#1D4ED8", "#4338CA"];
+const M = ["#2563EB", "#475569", "#1D4ED8", "#4338CA"];
 
 function rows(labels: string[], palette: string[]): LaneBreakdownRow[] {
   return labels.map((label, i) => ({

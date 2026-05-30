@@ -31,7 +31,7 @@ interface Room {
 }
 
 const ROOMS: Room[] = [
-  { id: "obj", label: "Strategy for {{companyName}}", short: "OBJ", kind: "objective", color: "#7C3AED" },
+  { id: "obj", label: "Strategy for {{companyName}}", short: "OBJ", kind: "objective", color: "#475569" },
   { id: "r1", label: "Goal-Driven Knowledge Pathways", short: "GK", kind: "room", color: "#DC2626" },
   { id: "r2", label: "Distraction & Attention", short: "DA", kind: "room", color: "#2563EB" },
   { id: "r3", label: "Privacy & Trust", short: "PT", kind: "room", color: "#16A34A" },

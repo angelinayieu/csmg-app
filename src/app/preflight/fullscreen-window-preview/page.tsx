@@ -13,7 +13,7 @@ import { FloatingCard } from "@/components/ui/floating-card";
 import { CanvasWorkspaceRoomFullscreen } from "@/components/canvas/chrome/canvas-workspace-room-fullscreen";
 
 const NODES = [
-  { id: "obj", kind: "objective", title: "Strategy for {{companyName}}", subtitle: "Main objective", color: "#7C3AED", left: "12%", top: "20%", href: "/preflight/mock-room" },
+  { id: "obj", kind: "objective", title: "Strategy for {{companyName}}", subtitle: "Main objective", color: "#475569", left: "12%", top: "20%", href: "/preflight/mock-room" },
   { id: "r1", kind: "room", title: "Goal-Driven Knowledge Pathways", subtitle: "Sub-objective room", color: "#DC2626", left: "44%", top: "34%", href: "/preflight/mock-room" },
   { id: "r2", kind: "lab", title: "Contextual Content Filter", subtitle: "Lab", color: "#2563EB", left: "24%", top: "58%", href: "/preflight/mock-room" },
 ];

@@ -1,7 +1,7 @@
 // ── Brainstorm Session Types ────────────────────────────────────────
 //
-// TypeScript shapes for the brainstorm_sessions table (migration
-// 20260907_brainstorm_sessions.sql). One row = one user press of the
+// TypeScript shapes for the objective_brainstorm_sessions table (migration
+// 20260907_objective_brainstorm_sessions.sql). One row = one user press of the
 // `Brainstorm` button; captures the whole pipeline atomically as JSONB.
 //
 // Spec: BRAINSTORM_MODULE_SPEC.md §5.
@@ -60,6 +60,14 @@ export interface BrainstormCandidate {
   lens_coverage: number[];
   /** Which intent produced this candidate (for colour + critique). */
   intent_of_origin: SubObjectiveIntent;
+  /** Phase 6+ escape hatch: target-specific payload the runner stashes
+   *  so the elect handler can reconstruct the original domain object
+   *  (e.g. for target_kind="annotation" this carries the full
+   *  ObjectiveAnnotation with start/end offsets + dimensions + analogies;
+   *  for target_kind="room_feature" it carries the ProposedMechanismCandidate
+   *  with addresses_pain + open_questions). Opaque/unknown by design —
+   *  the elect handler validates the shape per target_kind before use. */
+  source_payload?: unknown;
 }
 
 /** One batch result. The runner produces N of these (N = plan.intents.length). */
@@ -173,7 +181,7 @@ export type BrainstormSessionStatus = "running" | "settled" | "abandoned";
 
 // ── The full row ────────────────────────────────────────────────────
 
-/** Mirror of the brainstorm_sessions row. JSONB columns typed via the
+/** Mirror of the objective_brainstorm_sessions row. JSONB columns typed via the
  *  shapes above. */
 export interface BrainstormSession {
   id: string;

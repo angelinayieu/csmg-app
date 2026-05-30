@@ -202,9 +202,8 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
           title="Open Lab Notebook"
           aria-label="Open Lab Notebook"
           style={{
-            top: "50%",
+            top: RAIL_MARGIN,
             right: RAIL_MARGIN,
-            transform: "translateY(-50%)",
             zIndex: 60,
             background: appleVibe.accent.primary,
             border: `1px solid ${appleVibe.accent.primary}`,

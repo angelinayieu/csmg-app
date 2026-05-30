@@ -7,7 +7,7 @@
 // "Generate better" bar STAYS for power users who want one-intent-at-
 // a-time manual control. This button is the autopilot version.
 
-import { Sparkles } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 interface Props {
@@ -25,7 +25,7 @@ export function BrainstormButton({ onClick, disabled }: Props) {
       style={{
         background: disabled
           ? appleVibe.surface.chip
-          : "linear-gradient(135deg, rgba(59,130,246,0.95) 0%, rgba(168,85,247,0.95) 100%)",
+          : "linear-gradient(135deg, rgba(59,130,246,0.95) 0%, rgba(71,85,105,0.95) 100%)",
         color: disabled ? appleVibe.text.faint : "white",
         boxShadow: disabled
           ? "none"
@@ -34,7 +34,7 @@ export function BrainstormButton({ onClick, disabled }: Props) {
       }}
       title="Auto-pilot the variant lab — 3 intents → cleanup → critique → ranked picks"
     >
-      <Sparkles
+      <Sparkle
         className="h-3.5 w-3.5 transition group-hover:rotate-12"
         strokeWidth={2.5}
       />

@@ -552,7 +552,7 @@ export default function Page() {
               }}
               archetype={{
                 pain: { label: "Distraction Overload", color: "#DC2626" },
-                feature: { label: "Attention Tracking", color: "#7C3AED" },
+                feature: { label: "Attention Tracking", color: "#475569" },
                 result: { label: "Efficiency Gain", color: "#16A34A" },
               }}
               painRootCauses={pain.root_causes}
@@ -574,7 +574,7 @@ export default function Page() {
               }}
               archetype={{
                 pain: { label: "Goal Alignment", color: "#DC2626" },
-                feature: { label: "Goal Setting Tools", color: "#7C3AED" },
+                feature: { label: "Goal Setting Tools", color: "#475569" },
                 result: { label: "Productivity Boost", color: "#16A34A" },
               }}
               painRootCauses={[

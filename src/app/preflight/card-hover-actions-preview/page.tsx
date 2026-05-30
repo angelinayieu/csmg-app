@@ -30,11 +30,11 @@ export default function CardHoverActionsPreview() {
             borderRadius: 18,
             background: "linear-gradient(160deg,#fff,#f8f9fc)",
             border: "1px solid rgba(15,23,42,0.07)",
-            boxShadow: "0 14px 36px -16px rgba(124,58,237,0.33), 0 6px 18px -10px rgba(11,18,40,0.16)",
+            boxShadow: "0 14px 36px -16px rgba(71,85,105,0.33), 0 6px 18px -10px rgba(11,18,40,0.16)",
             padding: 14,
           }}
         >
-          <div style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.14em", color: "#7C3AED" }}>
+          <div style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.14em", color: "#475569" }}>
             FEATURE
           </div>
           <div style={{ marginTop: 10, fontSize: 14.5, fontWeight: 600, color: "#0B1228" }}>
@@ -42,7 +42,7 @@ export default function CardHoverActionsPreview() {
           </div>
         </div>
         <div style={{ position: "absolute", top: "calc(100% + 5px)", left: "50%", transform: "translateX(-50%)" }}>
-          <CardHoverActions accent="#7C3AED" onAction={setLast} />
+          <CardHoverActions accent="#475569" onAction={setLast} />
         </div>
       </div>
     </div>

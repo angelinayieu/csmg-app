@@ -19,6 +19,7 @@
 // inspect the highlight.
 
 import { motion } from "framer-motion";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { ObjectiveAnnotation } from "@/components/objective/annotated-objective-card";
 
@@ -34,6 +35,11 @@ interface Props {
   crossRoomCoverageByIndex?: Record<number, number>;
   hoveredIndex: number | null;
   onHoverIndex: (index: number | null) => void;
+  /** Phase 6b: open the annotation-target brainstorm panel. When
+   *  omitted, the Deepen-lens button hides. Host provides this from
+   *  the room view (or the picker) and mounts BrainstormPanel with
+   *  mode='annotation'. */
+  onDeepenLens?: () => void;
 }
 
 /** Layer-tag → dot color. Mirrors the canonical lane palette so
@@ -53,6 +59,7 @@ export function AnnotationLensStrip({
   crossRoomCoverageByIndex = {},
   hoveredIndex,
   onHoverIndex,
+  onDeepenLens,
 }: Props) {
   if (annotations.length === 0) return null;
 
@@ -110,6 +117,26 @@ export function AnnotationLensStrip({
             />
             {orphanCount} not yet addressed
           </span>
+        )}
+        {/* Phase 6b — Deepen the lens via the annotation brainstorm
+            runner. Surfaced inline so the affordance is right where
+            the user feels the gap (alongside the orphan count). */}
+        {onDeepenLens && (
+          <button
+            type="button"
+            onClick={onDeepenLens}
+            className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold transition hover:scale-[1.02]"
+            style={{
+              background:
+                "linear-gradient(135deg, rgba(59,130,246,0.95) 0%, rgba(71,85,105,0.95) 100%)",
+              color: "white",
+              boxShadow: "0 2px 6px -1px rgba(59,130,246,0.32)",
+            }}
+            title="Run the deepen pass on the objective's lens — proposes ~7-9 new readings, ranks by load-bearing-ness, lets you elect which to keep."
+          >
+            <Sparkle className="h-2.5 w-2.5" strokeWidth={2.5} />
+            Deepen lens
+          </button>
         )}
       </div>
 
@@ -181,7 +208,7 @@ export function AnnotationLensStrip({
                 {crossRoom > 0 && (
                   <span
                     className="text-[10px] font-semibold tabular-nums"
-                    style={{ color: "rgba(124,58,237,0.65)" }}
+                    style={{ color: "rgba(71,85,105,0.65)" }}
                     title={`Also derives ${crossRoom} ${crossRoom === 1 ? "item" : "items"} in your other rooms — load-bearing across the space.`}
                   >
                     +{crossRoom}

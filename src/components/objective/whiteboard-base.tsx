@@ -61,6 +61,16 @@ import {
   drainPendingArtifacts,
   type ArtifactCardDetail,
 } from "./board-bus";
+import {
+  BRAINSTORM_OPEN_ON_BOARD_EVENT,
+  BRAINSTORM_COLLAPSE_PAGE_EVENT,
+  type BrainstormOpenOnBoardDetail,
+  type BrainstormCollapsePageDetail,
+} from "./brainstorm/brainstorm-board-bus";
+import {
+  renderBrainstormOnBoard,
+  collapseBrainstormPage,
+} from "./brainstorm/render-brainstorm-on-board";
 import { useDepthDial } from "./unfurl/use-depth-dial";
 import { DepthScrubber } from "./unfurl/depth-scrubber";
 import {
@@ -317,6 +327,45 @@ export function WhiteboardBase({
     setUnfurl(null);
   }
 
+  // ── Brainstorm board integration (Phase 4b-2) ─────────────────────
+  // The BrainstormPanel fires BRAINSTORM_OPEN_ON_BOARD_EVENT when the
+  // user clicks "Open on whiteboard" (or, in future, automatically on
+  // settle). We create a dedicated tldraw page and drop one sticky
+  // note per candidate. Re-firing with the same sessionId updates the
+  // existing shapes in place so streaming additions don't duplicate.
+  //
+  // COLLAPSE event switches the editor back to the main page; the
+  // brainstorm page persists in tldraw's page sidebar so the user can
+  // flip back via the built-in nav.
+  useEffect(() => {
+    function onOpen(e: Event) {
+      const detail = (e as CustomEvent<BrainstormOpenOnBoardDetail>).detail;
+      const ed = editorRef.current;
+      if (!ed || !detail) return;
+      try {
+        renderBrainstormOnBoard(ed, detail);
+      } catch {
+        // Soft-fail — the panel still works as a list view.
+      }
+    }
+    function onCollapse(e: Event) {
+      const detail = (e as CustomEvent<BrainstormCollapsePageDetail>).detail;
+      const ed = editorRef.current;
+      if (!ed || !detail) return;
+      try {
+        collapseBrainstormPage(ed, detail.sessionId);
+      } catch {
+        /* swallow */
+      }
+    }
+    window.addEventListener(BRAINSTORM_OPEN_ON_BOARD_EVENT, onOpen);
+    window.addEventListener(BRAINSTORM_COLLAPSE_PAGE_EVENT, onCollapse);
+    return () => {
+      window.removeEventListener(BRAINSTORM_OPEN_ON_BOARD_EVENT, onOpen);
+      window.removeEventListener(BRAINSTORM_COLLAPSE_PAGE_EVENT, onCollapse);
+    };
+  }, []);
+
   // Collapse-to-card: the shell fires DEPLOY_CARD_EVENT; we materialize
   // a room-card near the current viewport center and select it so the
   // user immediately sees where the room "landed."
@@ -369,7 +418,7 @@ export function WhiteboardBase({
           h,
           title: detail.title || "Room",
           subtitle: detail.subtitle ?? "",
-          color: detail.color ?? "#7C3AED",
+          color: detail.color ?? "#475569",
           roomId: detail.roomId,
           chips: detail.chips ?? [],
         },

@@ -180,8 +180,9 @@ export function PainCard({
           on its own row below so the title gets the full card width. */}
       <div className="flex items-start justify-between gap-2">
         <h4
-          className="line-clamp-3 text-[15px] font-semibold leading-snug tracking-tight"
+          className="text-[15px] font-semibold leading-snug tracking-tight break-words"
           style={{ color: appleVibe.text.primary, letterSpacing: "-0.01em" }}
+          title={item.name}
         >
           {item.name}
         </h4>

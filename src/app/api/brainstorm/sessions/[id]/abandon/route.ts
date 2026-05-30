@@ -33,7 +33,7 @@ export async function POST(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = auth.supabase as any;
     const { data: row } = await db
-      .from("brainstorm_sessions")
+      .from("objective_brainstorm_sessions")
       .select("user_id, status")
       .eq("id", sessionId)
       .maybeSingle();

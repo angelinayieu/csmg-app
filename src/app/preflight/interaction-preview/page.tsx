@@ -123,7 +123,7 @@ export default function Page() {
   const query = (id: string) => {
     const n = byId(id);
     if (!n) return;
-    const ans: GNode = { id: uid("g"), kind: "artifact", ghost: true, x: n.x + 260, y: n.y, w: 230, h: 90, title: mockAnswer(n), sub: "AI answer", color: "#7C3AED" };
+    const ans: GNode = { id: uid("g"), kind: "artifact", ghost: true, x: n.x + 260, y: n.y, w: 230, h: 90, title: mockAnswer(n), sub: "AI answer", color: "#475569" };
     setNodes((ns) => [...ns, ans]);
     setEdges((es) => [...es, { id: uid("e"), from: id, to: ans.id, ghost: true, label: "answers" }]);
     setSelected([]);
@@ -185,7 +185,7 @@ export default function Page() {
             <line
               key={e.id}
               x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
-              stroke={e.ghost ? "rgba(124,58,237,0.55)" : "rgba(15,23,42,0.35)"}
+              stroke={e.ghost ? "rgba(71,85,105,0.55)" : "rgba(15,23,42,0.35)"}
               strokeWidth={e.ghost ? 1.5 : 2}
               strokeDasharray={e.ghost ? "5 4" : undefined}
             />
@@ -199,8 +199,8 @@ export default function Page() {
         if (!a || !b) return null;
         const mx = (center(a).x + center(b).x) / 2, my = (center(a).y + center(b).y) / 2;
         return (
-          <div key={`chip-${e.id}`} className="absolute z-[15] flex items-center gap-1 rounded-full px-2 py-1" style={{ left: mx - 60, top: my - 14, background: "white", boxShadow: "0 6px 18px -8px rgba(15,23,42,0.25)", border: "1px solid rgba(124,58,237,0.25)" }}>
-            <span className="text-[9.5px] font-medium" style={{ color: "#7C3AED" }}>{e.label}</span>
+          <div key={`chip-${e.id}`} className="absolute z-[15] flex items-center gap-1 rounded-full px-2 py-1" style={{ left: mx - 60, top: my - 14, background: "white", boxShadow: "0 6px 18px -8px rgba(15,23,42,0.25)", border: "1px solid rgba(71,85,105,0.25)" }}>
+            <span className="text-[9.5px] font-medium" style={{ color: "#475569" }}>{e.label}</span>
             <button onClick={() => acceptEdge(e.id)} className="grid h-4 w-4 place-items-center rounded-full" style={{ background: "#16A34A", color: "white" }}><Check className="h-2.5 w-2.5" strokeWidth={3} /></button>
             <button onClick={() => rejectEdge(e.id)} className="grid h-4 w-4 place-items-center rounded-full" style={{ background: "rgba(15,23,42,0.06)", color: "rgba(15,23,42,0.5)" }}><X className="h-2.5 w-2.5" strokeWidth={2.5} /></button>
           </div>
