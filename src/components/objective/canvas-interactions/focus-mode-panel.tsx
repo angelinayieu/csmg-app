@@ -21,7 +21,12 @@
 // can read `keptIds` to dim out-of-scope shapes via editor opacity) and
 // passes it down. Board → nodes is the shape-node-adapter's job.
 
-import { useMemo, type ComponentType, type CSSProperties } from "react";
+import {
+  useEffect,
+  useMemo,
+  type ComponentType,
+  type CSSProperties,
+} from "react";
 import {
   Check,
   ListChecks,
@@ -107,6 +112,17 @@ export function FocusModePanel({
     const marks = autoMarkBoard(scoped);
     return groupForStage1(scoped, marks);
   }, [scoped]);
+
+  // Escape closes the panel — a reliable exit even if board chrome (the
+  // Notebook pill) overlaps the X button.
+  const closeFocus = focus.close;
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") closeFocus();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [closeFocus]);
 
   if (phase === "closed") return null;
 

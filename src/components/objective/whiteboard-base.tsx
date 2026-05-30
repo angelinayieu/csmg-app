@@ -1091,9 +1091,11 @@ function BoardOverlay({
         </button>
       )}
 
-      {/* Focus Mode panel — mark / publish the converged set. */}
+      {/* Focus Mode panel — mark / publish the converged set. Offset below
+          the Notebook pill (top-right, layout stacking context) so the panel's
+          close button isn't buried under it. */}
       {focus.phase !== "closed" && (
-        <div style={{ position: "absolute", right: 16, top: 16, zIndex: 75 }}>
+        <div style={{ position: "absolute", right: 16, top: 64, zIndex: 75 }}>
           <FocusModePanel
             nodes={view.nodes}
             focus={focus}
