@@ -149,11 +149,61 @@ export async function POST(req: NextRequest) {
   }
 
   const env = detail.effectiveness_envelope;
-  if (!env.target_entity_id) {
+
+  // The rubric scorer (autopilot's DEFAULT) leaves target_entity_id null —
+  // only the simulation path resolves it (score-variation-effectiveness.ts) —
+  // so refine would silently no_target on every autopilot run and the R&D
+  // loop never executes (zero rd_iterate rows despite full scoring). Resolve
+  // the target pain here from the feature's inbound edges (pain → feature),
+  // preferring the strongest upstream neighbor that actually carries
+  // root_causes. Works for both scorers; no behavior change when the
+  // simulation path already set a target.
+  let targetEntityId = env.target_entity_id;
+  if (!targetEntityId) {
+    const { data: inboundEdges } = await db
+      .from("edges")
+      .select("source_entity_id, strength")
+      .eq("space_id", entity.space_id)
+      .eq("target_entity_id", entityId);
+    const sources = ((inboundEdges ?? []) as Array<{
+      source_entity_id: string | null;
+      strength: number | null;
+    }>)
+      .map((e) => ({
+        id: e.source_entity_id,
+        strength: typeof e.strength === "number" ? e.strength : 0,
+      }))
+      .filter((s): s is { id: string; strength: number } => !!s.id)
+      .sort((a, b) => b.strength - a.strength);
+    if (sources.length > 0) {
+      const { data: srcEntities } = await db
+        .from("entities")
+        .select("id, causal_chain")
+        .in(
+          "id",
+          sources.map((s) => s.id),
+        );
+      const withRootCauses = new Set(
+        ((srcEntities ?? []) as Array<{
+          id: string;
+          causal_chain: Record<string, unknown> | null;
+        }>)
+          .filter((e) => {
+            const rc = e.causal_chain?.root_causes;
+            return Array.isArray(rc) && rc.length > 0;
+          })
+          .map((e) => e.id),
+      );
+      targetEntityId =
+        sources.find((s) => withRootCauses.has(s.id))?.id ?? sources[0].id;
+    }
+  }
+
+  if (!targetEntityId) {
     const resp: RefineResponse = {
       status: "no_target",
       status_detail:
-        "The prior scoring run didn't resolve a target pain — generate correlations + re-score first.",
+        "Couldn't resolve a target pain — generate correlations (pain → feature edges) first.",
       new_candidate_ids: [],
       target_root_cause: null,
     };
@@ -164,7 +214,7 @@ export async function POST(req: NextRequest) {
   const { data: painRow } = await db
     .from("entities")
     .select("id, name, causal_chain")
-    .eq("id", env.target_entity_id)
+    .eq("id", targetEntityId)
     .maybeSingle();
   if (!painRow) {
     const resp: RefineResponse = {
