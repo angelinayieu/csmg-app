@@ -21,6 +21,7 @@ import {
   ListChecks,
   Wrench,
   Layers3,
+  Workflow,
   Sparkles,
   Loader2,
   Check,
@@ -40,6 +41,7 @@ const ICONS: Record<string, typeof Split> = {
   make_plan: ListChecks,
   make_technical: Wrench,
   layers: Layers3,
+  data_flow: Workflow,
 };
 
 const PANEL_W = 300;

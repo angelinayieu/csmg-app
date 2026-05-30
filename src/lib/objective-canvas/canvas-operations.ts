@@ -116,7 +116,16 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
   {
     id: "layers",
     label: "What are the layers",
-    intent: "Show the causal-altitude stack of this",
+    intent: "Conceptual altitude stack (substrate → outcome)",
+    contract: "text",
+    requiresLlm: true,
+    wired: true,
+    resultLayout: "column",
+  },
+  {
+    id: "data_flow",
+    label: "Map the data flow",
+    intent: "Practical upstream → downstream: what data moves where, at what scale",
     contract: "text",
     requiresLlm: true,
     wired: true,

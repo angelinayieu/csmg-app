@@ -4,9 +4,9 @@
 // note's text) — the ones the AI scanner offers beyond the synergy/augment
 // modes. One endpoint, `kind`-dispatched, each returning a flat list of result
 // rows the board renders as cards (CANVAS_AI_SCANNER_PLAN.md §2):
-//   layers — the causal-altitude stack (substrate → outcome). "make_technical"
-//   used to live here too but now routes to /api/canvas/idea-mechanism (the
-//   full MechanismSpec generator), so idea-op is layers-only for now.
+//   layers    — Type A: the conceptual causal-altitude stack (substrate → outcome)
+//   data_flow — Type B: the practical upstream→downstream data-processing view
+//   ("make_technical" routes to /api/canvas/idea-mechanism, the full spec.)
 
 import { NextResponse } from "next/server";
 import { llmJSON, detectCreditError } from "@/lib/llm";
@@ -14,8 +14,8 @@ import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers
 
 export const maxDuration = 30;
 
-type IdeaOpKind = "layers";
-const VALID_KINDS: IdeaOpKind[] = ["layers"];
+type IdeaOpKind = "layers" | "data_flow";
+const VALID_KINDS: IdeaOpKind[] = ["layers", "data_flow"];
 
 interface Body {
   text?: unknown;
@@ -28,6 +28,12 @@ const SYSTEM: Record<IdeaOpKind, string> = {
     "from the lowest substrate (raw inputs / data) UP to the highest outcome " +
     "(the change the user feels). Each layer: a short title (2-4 words) and a " +
     "one-sentence description of what lives at that altitude for THIS idea.",
+  data_flow:
+    "You map an idea's PRACTICAL data flow — the upstream→downstream " +
+    "processing, NOT the conceptual depth. Return 4-6 stages ordered from raw " +
+    "inputs (upstream) to final outputs (downstream). Each stage: a short " +
+    "title (the processing step / data surface) and a one-sentence detail " +
+    "naming the data type, where it comes from or goes, and rough scale.",
 };
 
 export async function POST(request: Request) {

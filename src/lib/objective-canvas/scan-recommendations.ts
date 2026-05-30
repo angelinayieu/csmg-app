@@ -54,6 +54,13 @@ export function heuristicScan(target: OperationTarget): ScoredOperation[] {
     make_plan: (hasVerb ? 0.82 : 0.46) + (isQuestion ? -0.12 : 0),
     make_technical: (isTechnical ? 0.32 : 0.58) + (hasVerb ? 0.06 : 0),
     layers: (isBroad ? 0.6 : 0.42) + (isSystemic ? 0.2 : 0),
+    data_flow:
+      (isTechnical || isSystemic ? 0.5 : 0.36) +
+      (/\b(data|pipeline|process|flow|input|output|source|stream|scale)\b/.test(
+        lower,
+      )
+        ? 0.22
+        : 0),
   };
   const reason: Record<string, string> = {
     questions: isQuestion
@@ -68,6 +75,7 @@ export function heuristicScan(target: OperationTarget): ScoredOperation[] {
       ? "Push the technical detail further"
       : "Ground it in concrete tech",
     layers: "See it as a substrate→outcome stack",
+    data_flow: "Trace inputs → processing → outputs",
   };
 
   return menuOperations()
@@ -78,7 +86,8 @@ export function heuristicScan(target: OperationTarget): ScoredOperation[] {
       reason: reason[op.id] ?? op.intent,
       score: score[op.id] ?? 0.5,
     }))
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6);
 }
 
 /** LLM refine: ask the model which ops best advance THIS idea and why.
