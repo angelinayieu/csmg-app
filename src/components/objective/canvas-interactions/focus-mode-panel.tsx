@@ -21,18 +21,18 @@
 // can read `keptIds` to dim out-of-scope shapes via editor opacity) and
 // passes it down. Board → nodes is the shape-node-adapter's job.
 
-import { useMemo } from "react";
+import { useMemo, type ComponentType, type CSSProperties } from "react";
 import {
   Check,
   ListChecks,
   GitBranch,
-  GitMerge,
   FlaskConical,
   CircleDashed,
   X,
   ArrowRight,
   Loader2,
 } from "lucide-react";
+import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { autoMarkBoard, groupForStage1 } from "@/lib/synergy/focus-mode";
 import type { ClientNode } from "@/lib/synergy/types";
@@ -42,12 +42,17 @@ type Bucket = "plans" | "expanded" | "unclear" | "exploratory";
 
 const SECTION: Record<
   Bucket,
-  { label: string; hint: string; Icon: typeof ListChecks; color: string }
+  {
+    label: string;
+    hint: string;
+    Icon: ComponentType<{ style?: CSSProperties; strokeWidth?: number }>;
+    color: string;
+  }
 > = {
   plans: {
     label: "Synthesized",
     hint: "Plans you converged",
-    Icon: GitMerge,
+    Icon: Sparkle,
     color: appleVibe.stage.objective,
   },
   expanded: {
