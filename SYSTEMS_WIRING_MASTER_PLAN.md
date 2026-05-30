@@ -55,8 +55,44 @@ downstream is represented at two scales: **within a mechanism** (the runtime_flo
 
 ## Ordered next actions (for the ASAP priority)
 
-1. **Verify end-to-end on the live space** (read-only, highest value) — run/inspect the macro roll-up, confirm the Overview + AgentBuildSpec populate, and read the `data_flow_cross_feature` to judge whether the upstream/downstream dependencies are sensible. *This tells us if the wired system actually delivers your priority.*
-2. **Close gap 1** — populate `depends_on` from the cross-feature flow (real per-feature dependencies on the tech spec).
-3. **Retire the redundant chain spine** (gap 4) — keep the surface area clean.
-4. **Precision pass** (gap 2) — deepen nodes + evidence-ground + calibrate (the substance upgrade).
-5. **Auto-fire** (gap 5) — fold the roll-up + spec into the autopilot sweep.
+1. ✅ **DONE — verified end-to-end (2026-05-29).** Live `Monetary Value Feedback Loop` space:
+   the macro roll-up HAS run (12 `macro_problems` findings + 1 `distilled_objective`), and
+   **10 of 17 features are specced**. So the Overview card, the polished brief title, the
+   AgentBuildSpec tech spec, and the drawer data-flow DAG all populate with REAL data; the 7
+   un-specced features degrade gracefully ([NEEDS CLARIFICATION]). **The wired system delivers.**
+   *(Caveat: this populated only because the roll-up was run on-demand — see #6.)*
+2. ✅ **DONE — brief title polished (commit `f75f9c1`).** The brief header + markdown export now
+   lead with `distilled_objective` (raw prompt demoted to a collapsible "Full objective"),
+   fallback-safe. Closes the "title is just the raw prompt" complaint.
+3. ✅ **DONE — retired the redundant chain spine (commit `e252112`).** `compute-macro-chain.ts` +
+   `macro-chain-spine.tsx` + harness removed (superseded by CausalMap + `data_flow_cross_feature`).
+
+**Remaining — all PARALLEL-OWNED; recommend to the owning sessions, don't clobber:**
+4. **Close gap 1** — populate `depends_on` from `data_flow_cross_feature` (real per-feature deps on the tech spec). *Owner: the `compile-agent-build-spec.ts` session.*
+5. **Precision pass** (gap 2) — deepen nodes + evidence-ground + calibrate. *Owner: the `enrich-mechanism-spec.ts` session + the cross-audit rigor seam.*
+6. **Auto-fire** (gap 5) — fold the roll-up + spec into the autopilot sweep so the deliverable is always populated, not on-demand. *Owner: the autopilot / `room-fill-runner.tsx` session.*
+
+## Added scope (2026-05-29) — two gaps the current system papers over
+
+**A. Base-unit data-flow (data lineage) view — NEW, not built, not redundant.**
+Today's data-flow surfaces are *per-mechanism* (`runtime_flow` DAG) and *feature→feature*
+(`data_flow_cross_feature`). Neither traces a single **base data unit** (e.g. *attention units*)
+from collection → transformation → realized outcome across the layers. This is a distinct lens
+— *what raw thing do we capture, and what does it become at each layer* — NOT a causal graph
+(CausalMap) and NOT feature flows. Proposed home: a **4th Goal-card view ("Data Flow")** beside
+Overview/Blueprint/Map.
+- *Data seed (no new generation):* per-layer `variables` (the data state at each layer) +
+  the layer transitions / `data_flow_cross_feature` (transform labels) + `runtime_flow`
+  produces/consumes tokens (the unit tokens). Compose, don't invent.
+- *Status:* prototyped in `preflight/data-lineage-preview` (this session, harness + mock).
+  Wire-in (the real Goal-card tab + a compose-from-state helper) is a follow-up; the tab system
+  is parallel-owned (`main-canvas-view.tsx`) → coordinate.
+
+**B. Eval-driven algorithm selection — "optimal" is currently a misnomer.**
+`MechanismSpec.decision_record.chosen` (which `implementation_method` to "use") is **LLM-asserted
+at spec-gen; nothing runs or scores the alternatives** (grep-confirmed: no bake-off). To make
+"optimal" real, route the `implementation_methods` through the **existing scoring tiers**
+(rubric / ensemble / MC-placebo — already built) so `chosen` reflects an evaluation, then surface
+the chosen algorithm on the Blueprint card + the tech spec.
+- *Reuses existing evaluators* — no new scorer. Touches `enrich-mechanism-spec.ts` + the
+  `score` route (**PARALLEL-OWNED** → hand to the owning session / coordinate).

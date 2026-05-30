@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Sparkles,
   Waypoints,
+  Workflow,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { ObjectiveCore } from "@/components/objective/icons/objective-core";
@@ -65,6 +66,8 @@ import { MapInsightsPanel } from "@/components/objective/causal-map/MapInsightsP
 import { LayerShelvesView } from "@/components/objective/layer-shelves-view";
 import { MacroSummaryCard } from "@/components/objective/macro-summary-card";
 import { buildMacroSummaryProps } from "@/lib/objective-canvas/build-macro-summary-props";
+import { DataLineageView } from "@/components/objective/data-lineage-view";
+import { buildDataLineageProps } from "@/lib/objective-canvas/build-data-lineage-props";
 import { useDecisionLogSignal } from "@/components/objective/causal-map/hooks/useDecisionLogSignal";
 import { useLocalPref } from "@/components/objective/causal-map/hooks/useLocalPref";
 import { SynergismWhiteboardTile } from "@/components/objective/synergism-whiteboard-tile";
@@ -231,7 +234,7 @@ export function MainCanvasView({
   );
   // Phase 12.A — Cards vs Map (per-space, sticky via localStorage).
   // Default "cards" so no existing flow breaks (N4); Map is opt-in.
-  const [canvasView, setCanvasView] = useLocalPref<"overview" | "cards" | "map">(
+  const [canvasView, setCanvasView] = useLocalPref<"overview" | "cards" | "map" | "flow">(
     `causalmap:view:${spaceId}`,
     "overview",
   );
@@ -405,7 +408,7 @@ export function MainCanvasView({
                 border: `1px solid ${appleVibe.stroke.soft}`,
               }}
             >
-              {(["overview", "cards", "map"] as const).map((v) => {
+              {(["overview", "cards", "map", "flow"] as const).map((v) => {
                 const active = canvasView === v;
                 return (
                   <button
@@ -427,7 +430,9 @@ export function MainCanvasView({
                         ? "Plain summary — the goal + the path"
                         : v === "cards"
                           ? "The detailed layers + cards"
-                          : "Causal system map"
+                          : v === "map"
+                            ? "Causal system map"
+                            : "Data flow — how one base unit becomes the outcome"
                     }
                     aria-pressed={active}
                   >
@@ -435,14 +440,18 @@ export function MainCanvasView({
                       <AlignLeft className="h-3.5 w-3.5" strokeWidth={2.2} />
                     ) : v === "cards" ? (
                       <LayoutGrid className="h-3.5 w-3.5" strokeWidth={2.2} />
-                    ) : (
+                    ) : v === "map" ? (
                       <Waypoints className="h-3.5 w-3.5" strokeWidth={2.2} />
+                    ) : (
+                      <Workflow className="h-3.5 w-3.5" strokeWidth={2.2} />
                     )}
                     {v === "overview"
                       ? "Overview"
                       : v === "cards"
                         ? "Blueprint"
-                        : "Map"}
+                        : v === "map"
+                          ? "Map"
+                          : "Data flow"}
                   </button>
                 );
               })}
@@ -672,6 +681,16 @@ export function MainCanvasView({
             objectiveStack={objectiveStack}
             crossRoomSignals={crossRoomSignals}
           />
+        </div>
+      ) : canvasView === "flow" ? (
+        <div className="relative mx-auto mt-4 w-full max-w-3xl">
+          {objectiveStack && objectiveStack.layers.length > 0 ? (
+            <DataLineageView
+              {...buildDataLineageProps({ objectiveStack: objectiveStack!, subs })}
+            />
+          ) : (
+            <EmptyState />
+          )}
         </div>
       ) : subs.length === 0 ? (
         <div className="relative mx-auto mt-2 grid w-full gap-5">
