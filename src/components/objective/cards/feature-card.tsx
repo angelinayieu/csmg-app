@@ -23,6 +23,7 @@ import {
   type AnnotationChipRowItem,
 } from "./annotation-chip-row";
 import { SendToBoardButton } from "./send-to-board-button";
+import { SaveToLibraryButton } from "./save-to-library-button";
 
 export interface FeatureCardItem {
   id: string;
@@ -157,6 +158,13 @@ export function FeatureCard({
           {onSendToBoard && (
             <SendToBoardButton onSend={onSendToBoard} color={FEATURE_COLOR} />
           )}
+          <SaveToLibraryButton
+            objectType="feature"
+            title={item.name}
+            summary={item.positive_outcome ?? null}
+            sourceEntityId={item.id}
+            color={FEATURE_COLOR}
+          />
           {citations && citations.length > 0 && (
             <CitationBadge
               citations={citations}
