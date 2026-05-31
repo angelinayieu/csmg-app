@@ -49,6 +49,7 @@ import {
   type SubsystemKgShape,
 } from "./shapes/subsystem-kg-shape";
 import { LayerBandShapeUtil } from "./shapes/layer-band-shape";
+import { SpecForgeCardShapeUtil } from "./shapes/specforge-card-shape";
 import { BoardSelectionToolbar } from "./board-selection-toolbar";
 import {
   saveCardsToLibrary,
@@ -60,12 +61,16 @@ import {
 } from "./canvas-interactions/shape-node-adapter";
 import { FocusModePanel } from "./canvas-interactions/focus-mode-panel";
 import { executeCardOperation } from "./canvas-interactions/operation-executor";
+import {
+  runSpecForge,
+  type SpecForgeProgress,
+} from "./canvas-interactions/specforge-runner";
 import { AiScannerPanel } from "./canvas-interactions/ai-scanner-panel";
 import { CollapsibleStylePanel } from "./canvas-interactions/collapsible-style-panel";
 import type { TLComponents } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
-import { ListChecks, Sparkles } from "lucide-react";
+import { ListChecks, Sparkles, Wand2, Loader2, Check } from "lucide-react";
 import { BoardHint } from "./board-hint";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
 import {
@@ -175,6 +180,7 @@ const CUSTOM_SHAPE_UTILS = [
   ArtifactCardShapeUtil,
   SubsystemKgShapeUtil,
   LayerBandShapeUtil,
+  SpecForgeCardShapeUtil,
 ];
 
 export function WhiteboardBase({
@@ -966,6 +972,29 @@ function BoardOverlay({
   // Pin the AI scanner open so live recommendations persist while you work
   // (scans the selected card, or the whole board when nothing is selected).
   const [pinned, setPinned] = useState(false);
+  // SpecForge — the full causal-spec chain running off the selected idea.
+  // Non-null while the chain runs; drives the floating progress chip + the
+  // scanner's "Forge full spec" button busy state.
+  const [forging, setForging] = useState<SpecForgeProgress | null>(null);
+
+  // Run the SpecForge chain for the selected idea — streams decision cards
+  // below the source. Guarded so a second click can't double-run.
+  function handleForge(target: OperationTarget) {
+    if (forging && forging.phase === "running") return;
+    if (!target.text.trim()) return;
+    setForging({ phase: "running", done: 0, total: 9, label: "Starting…" });
+    void runSpecForge(editor, target, {
+      onProgress: (p) => {
+        setForging(p);
+        if (p.phase !== "running") {
+          window.setTimeout(
+            () => setForging((cur) => (cur === p ? null : cur)),
+            1400,
+          );
+        }
+      },
+    });
+  }
 
   useEffect(() => {
     try {
@@ -1160,9 +1189,15 @@ function BoardOverlay({
               x={sx}
               y={sy}
               onRun={(opId) => executeCardOperation(editor, target, opId)}
+              onForge={() => handleForge(target)}
+              forging={forging?.phase === "running"}
             />
           );
         })()}
+
+      {/* SpecForge progress — a calm glass chip while the causal-spec chain
+          runs, so the user knows the cards are streaming in below the idea. */}
+      {forging && <SpecForgeProgressChip progress={forging} />}
 
       {/* Persistent AI panel toggle — pin the scanner open so live
           recommendations stay while you work (scans the selected card, or the
@@ -1242,5 +1277,102 @@ function BoardOverlay({
         </div>
       )}
     </>
+  );
+}
+
+// ── SpecForge progress chip ───────────────────────────────────────
+// A calm, centered glass status pill shown while the causal-spec chain runs.
+// Reads the runner's onProgress stream; on completion it flips to a "Spec
+// ready" confirmation before the host clears it.
+function SpecForgeProgressChip({ progress }: { progress: SpecForgeProgress }) {
+  const done = progress.phase === "done";
+  const pct = Math.round((progress.done / Math.max(1, progress.total)) * 100);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        bottom: 24,
+        transform: "translateX(-50%)",
+        zIndex: 80,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 11,
+        padding: "9px 15px",
+        borderRadius: 999,
+        background: "var(--glass-float-bg)",
+        backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+        border: "1px solid var(--glass-border)",
+        boxShadow:
+          "inset 0 1px 0 var(--glass-highlight), 0 18px 40px -18px rgba(11,18,40,0.34)",
+        fontFamily: appleVibe.font.stack,
+      }}
+    >
+      <span
+        style={{
+          display: "inline-flex",
+          width: 22,
+          height: 22,
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: 999,
+          background: done ? "#2FA968" : appleVibe.accent.primary,
+          color: "white",
+        }}
+      >
+        {done ? (
+          <Check style={{ width: 13, height: 13 }} strokeWidth={2.8} />
+        ) : (
+          <Wand2 style={{ width: 12.5, height: 12.5 }} strokeWidth={2.2} />
+        )}
+      </span>
+      <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
+        <span
+          style={{
+            fontSize: 12.5,
+            fontWeight: 650,
+            letterSpacing: "-0.01em",
+            color: appleVibe.text.primary,
+          }}
+        >
+          {done ? "Spec ready" : "Forging full spec"}
+        </span>
+        <span style={{ fontSize: 11, fontWeight: 500, color: appleVibe.text.tertiary }}>
+          {done
+            ? `${progress.total} stages · scroll down to read`
+            : `${progress.label} · ${progress.done}/${progress.total}`}
+        </span>
+      </span>
+      {!done && (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span
+            style={{
+              position: "relative",
+              width: 56,
+              height: 4,
+              borderRadius: 999,
+              background: "rgba(15,23,42,0.10)",
+              overflow: "hidden",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: `${pct}%`,
+                borderRadius: 999,
+                background: appleVibe.accent.primary,
+                transition: "width 280ms ease-out",
+              }}
+            />
+          </span>
+          <Loader2
+            className="animate-spin"
+            style={{ width: 13, height: 13, color: appleVibe.text.faint }}
+          />
+        </span>
+      )}
+    </div>
   );
 }

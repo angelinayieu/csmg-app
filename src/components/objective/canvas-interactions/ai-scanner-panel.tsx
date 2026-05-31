@@ -25,6 +25,8 @@ import {
   Sparkles,
   Loader2,
   Check,
+  Wand2,
+  ArrowRight,
 } from "lucide-react";
 import {
   heuristicScan,
@@ -51,11 +53,17 @@ export function AiScannerPanel({
   x,
   y,
   onRun,
+  onForge,
+  forging = false,
 }: {
   target: OperationTarget;
   x: number;
   y: number;
   onRun: (opId: string) => void;
+  /** Run the full SpecForge causal-spec chain on this idea (the hero CTA). */
+  onForge?: () => void;
+  /** True while the chain is running — disables the hero button. */
+  forging?: boolean;
 }) {
   const reduceMotion = useMemo(
     () =>
@@ -202,6 +210,91 @@ export function AiScannerPanel({
           </div>
         )}
       </div>
+
+      {/* Hero CTA — run the full SpecForge causal-spec chain on this idea.
+          Unfurls ~14 decision cards (clean summary → target user → problem
+          root → thesis → differentiation → MVPs → recommended build) below. */}
+      {onForge && (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          disabled={forging}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!forging) onForge();
+          }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            width: "100%",
+            textAlign: "left",
+            marginBottom: 8,
+            padding: "10px 11px",
+            borderRadius: appleVibe.radius.md,
+            border: "1px solid rgba(255,255,255,0.14)",
+            cursor: forging ? "default" : "pointer",
+            background:
+              "linear-gradient(135deg, rgba(28,33,48,0.98) 0%, rgba(15,20,33,0.99) 100%)",
+            boxShadow:
+              "inset 0 1px 0 rgba(255,255,255,0.14), 0 12px 28px -14px rgba(11,18,40,0.55)",
+            opacity: forging ? 0.82 : 1,
+            transition: "opacity var(--dur-quick) var(--ease-spring-tight)",
+          }}
+        >
+          <span
+            style={{
+              display: "inline-flex",
+              width: 28,
+              height: 28,
+              flexShrink: 0,
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 9,
+              background: "rgba(255,255,255,0.14)",
+              color: "white",
+            }}
+          >
+            {forging ? (
+              <Loader2 className="animate-spin" style={{ width: 15, height: 15 }} />
+            ) : (
+              <Wand2 style={{ width: 15, height: 15 }} strokeWidth={2.2} />
+            )}
+          </span>
+          <span style={{ minWidth: 0, flex: 1 }}>
+            <span
+              style={{
+                display: "block",
+                fontSize: 13,
+                fontWeight: 650,
+                letterSpacing: "-0.01em",
+                color: "white",
+              }}
+            >
+              {forging ? "Forging full spec…" : "Forge full spec"}
+            </span>
+            <span
+              style={{
+                display: "block",
+                marginTop: 1,
+                fontSize: 11,
+                lineHeight: 1.3,
+                color: "rgba(255,255,255,0.62)",
+              }}
+            >
+              {forging
+                ? "Streaming decision cards below"
+                : "Idea → root cause → MVPs → first build"}
+            </span>
+          </span>
+          {!forging && (
+            <ArrowRight
+              style={{ width: 15, height: 15, color: "rgba(255,255,255,0.7)" }}
+              strokeWidth={2.2}
+            />
+          )}
+        </button>
+      )}
 
       {/* Operation rows — recommended first, the top one softly highlighted. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>

@@ -974,6 +974,23 @@ declare module "@tldraw/tlschema" {
       uncovered: boolean;
       accent: string;
     };
+    // SpecForge — one decision card in a causal-spec unfurl (idea → clean
+    // summary → target user → problem cause tree → root constraint →
+    // first-principles need → desired result → product thesis →
+    // alternatives → differentiation → solution families → top MVPs →
+    // recommended first build). `stage` drives the accent; `body` carries
+    // "\n"-delimited bullet lines. Run by the SpecForge runner off a
+    // selected idea; ephemeral board artifacts (saveable to Library).
+    "specforge-card": {
+      w: number;
+      h: number;
+      stage: string;
+      eyebrow: string;
+      title: string;
+      subtitle: string;
+      body: string;
+      entityId: string;
+    };
   }
 }
 
