@@ -1205,18 +1205,37 @@ function RecommendedPresentation({
 // shared connector language (curved black lines + node dots, image-ref).
 // Vertical here; the same grammar applies to the canvas graphs.
 function CardConnector() {
+  // A real node-editor wire between cards: a solid black bezier anchored to
+  // port "sockets" that sit on the adjacent card edges (imitates image-ref).
+  // The svg overflows its box (marginTop) so the sockets land ON the cards,
+  // not floating in the gap. Same grammar will carry to the canvas graphs.
   return (
-    <div className="flex justify-center py-1" aria-hidden>
-      <svg width="36" height="22" viewBox="0 0 36 22" fill="none">
+    <div
+      className="relative z-10 flex justify-center"
+      style={{ height: 38 }}
+      aria-hidden
+    >
+      <svg
+        width="64"
+        height="52"
+        viewBox="0 0 64 52"
+        fill="none"
+        style={{ overflow: "visible", marginTop: -7 }}
+      >
+        {/* the wire */}
         <path
-          d="M18 2 C 13 9, 23 13, 18 20"
-          stroke="rgba(15,23,42,0.4)"
-          strokeWidth="1.5"
+          d="M32 5 C 13 19, 51 33, 32 47"
+          stroke="#0F172A"
+          strokeWidth="2"
           strokeLinecap="round"
           fill="none"
         />
-        <circle cx="18" cy="2.5" r="2" fill="rgba(15,23,42,0.65)" />
-        <circle cx="18" cy="19.5" r="2" fill="rgba(15,23,42,0.65)" />
+        {/* output socket — sits on the bottom edge of the card above */}
+        <circle cx="32" cy="5" r="4.5" fill="#0F172A" />
+        <circle cx="32" cy="5" r="1.7" fill="#FFFFFF" />
+        {/* input socket — sits on the top edge of the card below */}
+        <circle cx="32" cy="47" r="4.5" fill="#0F172A" />
+        <circle cx="32" cy="47" r="1.7" fill="#FFFFFF" />
       </svg>
     </div>
   );
