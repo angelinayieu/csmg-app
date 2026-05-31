@@ -168,10 +168,6 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 6,
-                padding: "3px 9px 3px 7px",
-                borderRadius: 999,
-                background: `${color}14`,
-                border: `1px solid ${color}26`,
               }}
             >
               <span

@@ -11,7 +11,13 @@
 // chosen first build). Each engine soft-fails independently: a failed stage just
 // drops no card and the chain continues with whatever context exists.
 
-import { createShapeId, type Editor, type TLShapeId } from "tldraw";
+import {
+  createShapeId,
+  type Editor,
+  type TLShapeId,
+  type TLArrowShape,
+  type TLShapePartial,
+} from "tldraw";
 import type { SpecForgeCardShape } from "../shapes/specforge-card-shape";
 import {
   SPECFORGE_CHAIN,
@@ -112,6 +118,9 @@ export async function runSpecForge(
   const contextParts: string[] = [];
   const stamp = Date.now();
   let createdAny = false;
+  // Every placed card, in causal order — threaded into a connected
+  // dependency graph (sequence → fork → converge) once the chain finishes.
+  const allPlaced: PlacedCard[] = [];
 
   opts.onProgress?.({
     phase: "running",
@@ -136,11 +145,18 @@ export async function runSpecForge(
 
       const cards = resultToCards(engine, result);
       if (cards.length) {
-        cursorY = placeBatch(editor, cards, engine, anchorMidX, cursorY, stamp);
+        const batch = placeBatch(editor, cards, engine, anchorMidX, cursorY, stamp);
+        cursorY = batch.cursorY;
+        allPlaced.push(...batch.placed);
         createdAny = true;
       }
     }
   }
+
+  // Thread the spec into a connected dependency graph: a black node-line
+  // down the spine, forking out to the MVP variations, then converging on
+  // the recommended first build. Connectors sit beneath the cards.
+  if (allPlaced.length > 1) connectSpecCards(editor, allPlaced);
 
   opts.onProgress?.({
     phase: "done",
@@ -167,8 +183,9 @@ function placeBatch(
   anchorMidX: number,
   startY: number,
   stamp: number,
-): number {
+): { cursorY: number; placed: PlacedCard[] } {
   let cursorY = startY;
+  const placed: PlacedCard[] = [];
   const diverge = cards.filter((c) => c.layout === "diverge");
   const stacked = cards.filter((c) => c.layout !== "diverge");
 
@@ -177,7 +194,8 @@ function placeBatch(
     const card = stacked[i];
     const w = card.layout === "hero" ? HERO_W : SPINE_W;
     const h = cardHeight(card);
-    create(editor, card, engine, anchorMidX - w / 2, cursorY, w, h, stamp, i);
+    const id = create(editor, card, engine, anchorMidX - w / 2, cursorY, w, h, stamp, i);
+    if (id) placed.push({ id, layout: card.layout });
     cursorY += h + ROW_GAP;
   }
 
@@ -189,12 +207,13 @@ function placeBatch(
     const left = anchorMidX - rowWidth / 2;
     diverge.forEach((card, i) => {
       const x = left + i * (MVP_W + MVP_GAP);
-      create(editor, card, engine, x, cursorY, MVP_W, rowH, stamp, i);
+      const id = create(editor, card, engine, x, cursorY, MVP_W, rowH, stamp, i);
+      if (id) placed.push({ id, layout: card.layout });
     });
     cursorY += rowH + ROW_GAP;
   }
 
-  return cursorY;
+  return { cursorY, placed };
 }
 
 function create(
@@ -207,10 +226,11 @@ function create(
   h: number,
   stamp: number,
   i: number,
-): void {
+): TLShapeId | null {
   try {
+    const id = createShapeId();
     editor.createShape<SpecForgeCardShape>({
-      id: createShapeId(),
+      id,
       type: "specforge-card",
       x,
       y,
@@ -226,7 +246,106 @@ function create(
       },
       meta: { specforge: true, engine, stage: card.stage },
     });
+    return id;
   } catch {
     /* best-effort — a single bad card never breaks the chain */
+    return null;
+  }
+}
+
+// ── Connectors — the dependency graph threading the placed cards ──────
+interface PlacedCard {
+  id: TLShapeId;
+  layout: SpecForgeCard["layout"];
+}
+
+/** Walk the placed cards in causal order and draw black node-connectors: a
+ *  spine link between consecutive stacked cards, a FORK from the card above
+ *  the MVP row to each MVP, and a CONVERGE from each MVP to the recommendation
+ *  that follows. Same connector grammar used across the canvas graphs. */
+function connectSpecCards(editor: Editor, placed: PlacedCard[]): void {
+  let prevStacked: TLShapeId | null = null;
+  let pendingDiverge: TLShapeId[] = [];
+  const arrowIds: TLShapeId[] = [];
+  const link = (from: TLShapeId, to: TLShapeId) => {
+    const a = connectCards(editor, from, to);
+    if (a) arrowIds.push(a);
+  };
+
+  for (const c of placed) {
+    if (c.layout === "diverge") {
+      if (prevStacked) link(prevStacked, c.id); // fork out
+      pendingDiverge.push(c.id);
+    } else {
+      if (pendingDiverge.length > 0) {
+        for (const d of pendingDiverge) link(d, c.id); // converge in
+        pendingDiverge = [];
+      } else if (prevStacked) {
+        link(prevStacked, c.id); // spine sequence
+      }
+      prevStacked = c.id;
+    }
+  }
+
+  // Keep connectors beneath the cards so they never cover content.
+  if (arrowIds.length > 0) {
+    try {
+      editor.sendToBack(arrowIds);
+    } catch {
+      /* z-order is cosmetic — never break on it */
+    }
+  }
+}
+
+/** One black, arrowhead-less connector bound bottom-of-`from` → top-of-`to`. */
+function connectCards(
+  editor: Editor,
+  fromId: TLShapeId,
+  toId: TLShapeId,
+): TLShapeId | null {
+  try {
+    const arrowId = createShapeId();
+    const arrow: TLShapePartial<TLArrowShape> = {
+      id: arrowId,
+      type: "arrow",
+      props: {
+        color: "black",
+        size: "s",
+        dash: "solid",
+        arrowheadStart: "none",
+        arrowheadEnd: "none",
+      },
+      meta: { specforge: true, connector: true },
+    };
+    editor.createShapes([arrow]);
+    editor.createBindings([
+      {
+        fromId: arrowId,
+        toId: fromId,
+        type: "arrow",
+        props: {
+          terminal: "start",
+          normalizedAnchor: { x: 0.5, y: 1 },
+          isExact: false,
+          isPrecise: false,
+        },
+        meta: {},
+      },
+      {
+        fromId: arrowId,
+        toId: toId,
+        type: "arrow",
+        props: {
+          terminal: "end",
+          normalizedAnchor: { x: 0.5, y: 0 },
+          isExact: false,
+          isPrecise: false,
+        },
+        meta: {},
+      },
+    ]);
+    return arrowId;
+  } catch {
+    return null;
   }
 }
