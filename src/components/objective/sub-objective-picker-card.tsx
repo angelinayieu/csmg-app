@@ -42,6 +42,7 @@ import type {
   ProposalCluster,
 } from "@/lib/objective-canvas/cluster-proposals";
 import type { ObjectiveStack } from "@/lib/objective-canvas/layer-model";
+import { CONNECTOR_INK } from "@/lib/objective-canvas/connector-tokens";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 import { LayerPositionChip } from "@/components/objective/layer-position-chip";
 import { BrainstormButton } from "@/components/objective/brainstorm/brainstorm-button";
@@ -1205,38 +1206,38 @@ function RecommendedPresentation({
 // shared connector language (curved black lines + node dots, image-ref).
 // Vertical here; the same grammar applies to the canvas graphs.
 function CardConnector() {
-  // A real node-editor wire between cards: a solid black bezier anchored to
-  // port "sockets" that sit on the adjacent card edges (imitates image-ref).
-  // The svg overflows its box (marginTop) so the sockets land ON the cards,
-  // not floating in the gap. Same grammar will carry to the canvas graphs.
+  // A real, STRAIGHT connector between two vertically-aligned cards — built
+  // from DOM elements, not an SVG path: a 2px ink wire + a port socket on
+  // each card edge. The cards share an x-axis, so the wire is straight;
+  // curvature only belongs where endpoints are offset (e.g. the whiteboard).
+  const socket = {
+    position: "absolute" as const,
+    left: "50%",
+    transform: "translateX(-50%)",
+    width: 9,
+    height: 9,
+    borderRadius: 999,
+    background: CONNECTOR_INK,
+    border: "2px solid #FFFFFF",
+    boxSizing: "border-box" as const,
+  };
   return (
-    <div
-      className="relative z-10 flex justify-center"
-      style={{ height: 38 }}
-      aria-hidden
-    >
-      <svg
-        width="64"
-        height="52"
-        viewBox="0 0 64 52"
-        fill="none"
-        style={{ overflow: "visible", marginTop: -7 }}
-      >
-        {/* the wire */}
-        <path
-          d="M32 5 C 13 19, 51 33, 32 47"
-          stroke="#0F172A"
-          strokeWidth="2"
-          strokeLinecap="round"
-          fill="none"
-        />
-        {/* output socket — sits on the bottom edge of the card above */}
-        <circle cx="32" cy="5" r="4.5" fill="#0F172A" />
-        <circle cx="32" cy="5" r="1.7" fill="#FFFFFF" />
-        {/* input socket — sits on the top edge of the card below */}
-        <circle cx="32" cy="47" r="4.5" fill="#0F172A" />
-        <circle cx="32" cy="47" r="1.7" fill="#FFFFFF" />
-      </svg>
+    <div className="relative z-10" style={{ height: 32 }} aria-hidden>
+      {/* the wire — a straight vertical line bridging the two card edges */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: -4,
+          bottom: -4,
+          width: 2,
+          transform: "translateX(-50%)",
+          background: CONNECTOR_INK,
+        }}
+      />
+      {/* sockets sit ON the adjacent card edges */}
+      <div style={{ ...socket, top: -6 }} />
+      <div style={{ ...socket, bottom: -6 }} />
     </div>
   );
 }
