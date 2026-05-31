@@ -55,3 +55,8 @@ idea-synthesizer-claude-add-precision-control-slider-QC8rq/
 # author's local sessions, not part of the deployed app).
 UI agent /
 UI agent .zip
+
+# Local app installers downloaded into the repo folder (e.g. a 241MB
+# "Granola - AI Notepad.dmg"). Binaries, not source — and GitHub rejects
+# files over 100MB anyway.
+*.dmg
