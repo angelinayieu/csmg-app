@@ -24,6 +24,26 @@ Research verdict: keep `@xyflow/react` (right renderer — custom operator/data-
 
 ---
 
+## 0.5 Coordination with the `concept_slug` workstream (parallel chat) — READ
+
+A parallel session has built (currently **UNCOMMITTED in this same working tree**, ~28 files) the `concept_slug` identity end-to-end: LLM annotation emits a canonical `concept` + `concept_slug` → glossary dedupes by slug → room-gen ANNOTATION LENS feeds the slug to the LLM + tells it to mirror canonical concept names → each item's `derived_from_annotations[]` carries `concept_slug` (`layered-generation.ts:1777`) → cross-room analyses cluster by slug → tech-spec `terminology[]` carries `concept_slug` + `origin_annotations`. **This is the SAME identity problem this spec needs — the two MUST compose, not fork.**
+
+**One identity spine, two tiers:**
+- **`concept_slug` (their work) = the lightweight JSONB GLUE** that already spans annotation ↔ glossary ↔ item provenance ↔ cross-room ↔ tech-spec. **This is what is POPULATED and flowing today.**
+- **`canonical_concept_id → canonical_concepts` (§0A) = the heavyweight, persisted, cross-SPACE registry.** Sparse today (3 producers, none in room-gen).
+- **Bridge = `concept_slug ↔ canonical_concepts.canonical_code`** (both chats independently flagged it). The ONE shared piece — **build together, not solo.**
+
+**Lane split (no clobber):**
+- They OWN the `concept_slug` substrate (annotation / glossary / orchestrator / tech-spec). **I do NOT edit those 28 files.**
+- I OWN the system data-flow MAP (downstream). It **CONSUMES `concept_slug`** from items' `derived_from_annotations` as the **primary cross-card connection key** — so the map is a *view of their identity*, not a new one — enriched by the declared causal bindings (§0A) + mechanism tokens (§2).
+- The bridge (`slug ↔ canonical_code`) is coordinated before either side builds it.
+
+**Sequence:** the `concept_slug` substrate must be **committed** before the map's connection builder is written (never build a consumer against an uncommitted, still-moving substrate). Until then this is a *contract*, not code.
+
+**Net:** the map keys cross-card connections on `concept_slug` → it is wired INTO the existing identity system, not orphaned. Their glossary↔annotation-by-slug + this map's item↔item-by-slug + the `canonical_code` bridge = ONE coherent identity spine across every concept-card layer.
+
+---
+
 ## 1. Why (grounded in the codebase review)
 
 Three findings from a 3-front audit:
