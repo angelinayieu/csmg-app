@@ -16,13 +16,13 @@ import { memo } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
-  getSmoothStepPath,
+  getBezierPath,
   type EdgeProps,
 } from "@xyflow/react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { CONNECTOR_INK } from "@/lib/objective-canvas/connector-tokens";
 import type { CausalMapEdgeData } from "../lib/types";
 import {
-  POLARITY_COLORS,
   LOOP_COLORS,
   edgeStrokeWidth,
   edgeOpacity,
@@ -41,24 +41,22 @@ function CausalMapEdgeInner({
 }: EdgeProps) {
   const d = (data ?? {}) as unknown as CausalMapEdgeData;
 
-  const [edgePath, labelX, labelY] = getSmoothStepPath({
+  const [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
     targetX,
     targetY,
     sourcePosition,
     targetPosition,
-    borderRadius: 14,
   });
 
   const loopActive = d.loopActive === true;
   const focused = d.focused === true;
-  const baseColor = POLARITY_COLORS[d.polarity] ?? POLARITY_COLORS.neutral;
-  const stroke = loopActive
-    ? d.loopKind
-      ? LOOP_COLORS[d.loopKind].ring
-      : baseColor
-    : baseColor;
+  // Connector grammar: black node-editor wires everywhere (curved bezier).
+  // Highlighted feedback loops keep their loop color — the map's key signal;
+  // every other wire is the shared connector ink.
+  const stroke =
+    loopActive && d.loopKind ? LOOP_COLORS[d.loopKind].ring : CONNECTOR_INK;
   const width =
     loopActive || focused
       ? edgeStrokeWidth(d.strength) + 1.4
