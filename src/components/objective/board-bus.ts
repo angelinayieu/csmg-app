@@ -89,7 +89,8 @@ export type CardAction =
   | "questions"
   | "make_plan"
   | "save"
-  | "open_room";
+  | "open_room"
+  | "promote_objective";
 
 export interface CardActionDetail {
   action: CardAction;

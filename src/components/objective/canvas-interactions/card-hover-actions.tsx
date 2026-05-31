@@ -19,6 +19,7 @@ import {
   BookmarkPlus,
   BookmarkCheck,
   Layers,
+  Rocket,
 } from "lucide-react";
 import type { CardAction } from "../board-bus";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -29,6 +30,7 @@ const ACTIONS: {
   Icon: typeof Split;
 }[] = [
   { key: "open_room", label: "Open as room", Icon: Layers },
+  { key: "promote_objective", label: "New objective", Icon: Rocket },
   { key: "decompose", label: "Decompose", Icon: Split },
   { key: "variations", label: "Variations", Icon: Shuffle },
   { key: "questions", label: "Questions", Icon: HelpCircle },

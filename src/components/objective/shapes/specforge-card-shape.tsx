@@ -164,6 +164,44 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
     }
   }
 
+  // "New objective" — spin this card off into its OWN objective canvas via
+  // the full intake pipeline (its own clarify → sub-objectives → rooms →
+  // layers). Autopilot mode skips the questions and advances straight to the
+  // sub-objective picker, mirroring the entry card.
+  async function promoteToObjective() {
+    if (opening) return;
+    setOpening(true);
+    try {
+      const objective = [title, subtitle, body]
+        .filter(Boolean)
+        .join(" — ")
+        .slice(0, 4000);
+      const res = await fetch("/api/brainstorm/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ objective, mode: "autopilot" }),
+      });
+      const json = (await res.json()) as { spaceId?: string };
+      if (!json?.spaceId) {
+        setOpening(false);
+        return;
+      }
+      // Autopilot: skip clarifying questions → advance to the picker.
+      try {
+        await fetch("/api/brainstorm/clarify/complete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ spaceId: json.spaceId }),
+        });
+      } catch {
+        /* non-fatal — the new canvas can recover on load */
+      }
+      window.location.assign(`/app/objective/${json.spaceId}`);
+    } catch {
+      setOpening(false);
+    }
+  }
+
   return (
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
@@ -344,6 +382,10 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
             onAction={(action) => {
               if (action === "open_room") {
                 void openAsRoom();
+                return;
+              }
+              if (action === "promote_objective") {
+                void promoteToObjective();
                 return;
               }
               dispatchCardAction({
