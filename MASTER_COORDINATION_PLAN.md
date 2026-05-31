@@ -65,6 +65,22 @@ glossary[].concept_slug · annotations[].concept_slug  ← already join here (WS
 
 ---
 
+## C.1 — VERIFIED ROOT CAUSE: the OC substrate-starvation pattern (2026-05-30)
+
+The single finding that explains "nothing connects / the map is fuzzy / are there orphans": **objective-canvas room generation is a parallel pipeline that feeds NONE of the advanced substrates the legacy pipeline populates.** Measured against the live DB (OC = entities with `parent_sub_objective_id`):
+
+| Substrate | Legacy coverage | **OC coverage** | Why starved | Fix class |
+|---|---|---|---|---|
+| `canonical_concept_id` | 77.6% | **0% → wired** | room-gen never called the matcher | **CHEAP (deterministic) — ✅ SHIPPED `ed1ccc6`** (future rooms link) |
+| `evidence_registries` (→ REML edge strength) | 259 attached | **0 attached** | needs effect-size extraction over papers; OC content isn't quantitative research | BIG build + **likely inappropriate** for OC content |
+| `bridges` (cross-room influence) | 49 (all cross-*space*) | **0 touching OC** | needs LLM bridge-detection pass | BIG build + shared-write |
+| mechanism tokens (`produces/consumes`) | — | **26/510** | only written when autopilot "tech specs" on | conditional; sparse |
+| dense cross-room connections | — | **6 (canonical) / 39 (root_cause)** | concepts are space-specific phrasings; exact-match too sparse | needs **semantic clustering (embeddings)** — shared-write |
+
+**Implication for the map:** a denser/clearer map is **not a viewing problem** (the views exist, parallel-session-owned). It needs a substrate **population** pass. Only `canonical` was cheap+deterministic (shipped). The rest are real builds, several writing to **shared** cross-space tables (coordinate, don't solo) — and `evidence`/effect-size extraction is a poor fit for OC's qualitative content. **The one lever that serves the dense-map goal = semantic clustering of canonical concepts (embeddings) — high value, shared-write, must be scoped.**
+
+---
+
 ## D. Lane split (no clobber)
 
 | Lane | Owner | Files (do not cross) |
