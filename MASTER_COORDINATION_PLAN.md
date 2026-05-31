@@ -86,6 +86,10 @@ glossary[].concept_slug · annotations[].concept_slug  ← already join here (WS
 - **P0 · LOCK** the identity spine (B) + schema decision. *Blocks everything keyed on identity.* [decision + ~½ day wiring]
 - **P1 · Cleanup** (parallel-safe, now): retire the dead trio. [zero-risk]
 - **P2 · Identity wiring** (after WS-A commits): populate `canonical_concept_id` + `entities.concept_slug` in room-gen; alias bridge. [me]
+  - **✅ VERIFIED against live DB 2026-05-30** (don't trust the aggregate — it lies): `entities` total 5075, 70% linked *in aggregate* — BUT that's all legacy. Bucketed by `parent_sub_objective_id` (the OC marker): **OC room entities = 510, `canonical_concept_id` linked = 0 (0.0%)**; legacy = 4565 @ 77.6%. So the spine genuinely never reaches the objective canvas — premise confirmed.
+  - **Infra present** (no build needed): helper `linkEntityToCanonicalConcept` @ `src/lib/kg/canonical-concept-matcher.ts:279` (3 callers: decompose, variable-proposals/approve, persist-framing-protos — none in room-gen); FK `entities.canonical_concept_id` ✅; `canonical_concepts.aliases[]` ✅ (bridge column ready); 1971 canonical rows.
+  - **Missing schema (LOCK):** `entities.concept_slug` and `library_objects.concept_slug` columns do NOT exist yet. (Latest migration on disk: `20260911`; next free = `20260912`.)
+  - **Call-sites (HOT):** `brainstorm/room/generate/route.ts` + `brainstorm/sessions/run-feature/route.ts` — currently being rewritten by the parallel "Subsystems re-altitude / Strategy Lab" session. **Do not edit until they settle** (would clobber).
 - **P3 · Connections persistence**: a `connections` rollup (feature↔feature via shared canonical concept + causal bindings + data tokens), rebuilt on gen — retires the fragile recomputes AND is the data-flow map's source. [me]
 - **P4 · System data-flow map**: `build-system-dataflow.ts` + `SystemDataflowView` (ELK), keyed on the spine; surfaces `data_unit_registry`; unifies the 3 views. [me]
 - **P5 · Object-flow feed**: auto-write `library_objects` + `object_links` from generation/election; wire `getSpecObjects` into the compiler. [coordinate]
