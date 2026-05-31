@@ -55,8 +55,12 @@ export async function generateClarifyingQuestions(
       if (question.length === 0) return null;
       const rationale =
         typeof q?.rationale === "string" ? q.rationale.trim() : "";
-      const selection: "single" | "multi" =
-        q?.selection === "multi" ? "multi" : "single";
+      const selection: "single" | "multi" | "weighted" =
+        q?.selection === "multi"
+          ? "multi"
+          : q?.selection === "weighted"
+            ? "weighted"
+            : "single";
       const options = Array.isArray(q?.options)
         ? q.options
             .map((o) => ({

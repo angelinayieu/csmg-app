@@ -43,12 +43,19 @@ export interface ClarifyingQuestion {
   rationale: string;
   options?: ClarifyingOption[];
   slot?: string;
-  /** How the user picks an answer. "single" = one MCQ option commits;
-   *  "multi" = user toggles 1+ options then explicitly saves. The
-   *  generator tags this per-question; absent on legacy persisted
-   *  questions and treated as "single". When "multi", the saved
-   *  answer.value is the picked labels joined by " · ". */
-  selection?: "single" | "multi";
+  /** How the user picks an answer.
+   *   - "single"   — one MCQ option commits (mutually-exclusive taxonomy).
+   *   - "multi"    — user toggles 1+ independent options then saves;
+   *                  answer.value is the picked labels joined by " · ".
+   *   - "weighted" — the options are COMPONENTS the user blends into a
+   *                  composite with relative importance (sliders); the
+   *                  saved answer.value reads "Label 40% · Label 30% · …"
+   *                  (normalized, zero-weight options dropped). Use for
+   *                  composite success metrics, scoring rubrics, priority
+   *                  mixes — where "the answer" is a weighting, not a pick.
+   *  The generator tags this per-question; absent on legacy persisted
+   *  questions and treated as "single". */
+  selection?: "single" | "multi" | "weighted";
 }
 
 export interface ClarifyingAnswer {

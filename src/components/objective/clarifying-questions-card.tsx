@@ -56,6 +56,11 @@ export function ClarifyingQuestionsCard({
   // question keeps its own staged selection while the user toggles.
   // Single-select questions don't use this — they commit on click.
   const [multiPicks, setMultiPicks] = useState<Record<string, string[]>>({});
+  // Raw weights (0-100) for "weighted" composite questions, keyed by
+  // question id → option label. Normalized to % on save.
+  const [weightPicks, setWeightPicks] = useState<
+    Record<string, Record<string, number>>
+  >({});
 
   // ── Auto-generate the first set on mount when none exists yet ──
   useEffect(() => {
@@ -269,6 +274,137 @@ export function ClarifyingQuestionsCard({
       {currentQuestion.options && currentQuestion.options.length > 0 && (
         <>
           {(() => {
+            // Weighted composite: sliders → a normalized "Label N% · …"
+            // string. Downstream reads answer.value as text, so no answer
+            // shape change is needed — the weighting rides in the value.
+            if (currentQuestion.selection === "weighted") {
+              const opts = currentQuestion.options ?? [];
+              const weights = weightPicks[currentQuestion.id] ?? {};
+              const rawTotal = opts.reduce(
+                (s, o) => s + (weights[o.label] ?? 0),
+                0,
+              );
+              const setWeight = (label: string, v: number) =>
+                setWeightPicks((prev) => ({
+                  ...prev,
+                  [currentQuestion.id]: {
+                    ...(prev[currentQuestion.id] ?? {}),
+                    [label]: v,
+                  },
+                }));
+              const submitWeighted = () => {
+                if (rawTotal <= 0) return;
+                const parts = opts
+                  .map((o) => ({
+                    label: o.label,
+                    w: Math.round(((weights[o.label] ?? 0) / rawTotal) * 100),
+                  }))
+                  .filter((p) => p.w > 0)
+                  .map((p) => `${p.label} ${p.w}%`);
+                if (parts.length === 0) return;
+                runAction("answer", { value: parts.join(" · ") });
+              };
+              return (
+                <>
+                  <div
+                    className="mt-3 text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Weight into a composite · normalized to 100%
+                  </div>
+                  <div className="mt-1.5 flex flex-col gap-2.5">
+                    {opts.map((opt) => {
+                      const raw = weights[opt.label] ?? 0;
+                      const pct =
+                        rawTotal > 0 ? Math.round((raw / rawTotal) * 100) : 0;
+                      return (
+                        <div
+                          key={opt.label}
+                          className="rounded-2xl px-3.5 py-2.5"
+                          style={{
+                            background: appleVibe.surface.base,
+                            border: `1px solid ${
+                              raw > 0
+                                ? appleVibe.accent.primary
+                                : appleVibe.stroke.hairline
+                            }`,
+                            borderRadius: appleVibe.radius.md,
+                          }}
+                        >
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span
+                              className="text-[13px] font-semibold"
+                              style={{ color: appleVibe.text.primary }}
+                            >
+                              {opt.label}
+                            </span>
+                            <span
+                              className="text-[12px] font-semibold tabular-nums"
+                              style={{
+                                color:
+                                  raw > 0
+                                    ? appleVibe.accent.primary
+                                    : appleVibe.text.tertiary,
+                              }}
+                            >
+                              {pct}%
+                            </span>
+                          </div>
+                          {opt.detail && (
+                            <span
+                              className="text-[11.5px] font-light leading-snug"
+                              style={{ color: appleVibe.text.secondary }}
+                            >
+                              {opt.detail}
+                            </span>
+                          )}
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={raw}
+                            disabled={busy}
+                            onChange={(e) =>
+                              setWeight(opt.label, Number(e.target.value))
+                            }
+                            className="mt-2 w-full"
+                            style={{
+                              accentColor: appleVibe.accent.primary,
+                              cursor: busy ? "wait" : "pointer",
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={submitWeighted}
+                    disabled={busy || rawTotal <= 0}
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] font-semibold"
+                    style={{
+                      background:
+                        rawTotal > 0 && !busy
+                          ? appleVibe.accent.primary
+                          : appleVibe.surface.chip,
+                      color:
+                        rawTotal > 0 && !busy
+                          ? appleVibe.text.onAccent
+                          : appleVibe.text.tertiary,
+                      cursor: rawTotal > 0 && !busy ? "pointer" : "not-allowed",
+                    }}
+                  >
+                    <span>
+                      {rawTotal > 0
+                        ? "Save weighting"
+                        : "Set at least one weight"}
+                    </span>
+                    <ArrowRight className="h-3 w-3" strokeWidth={2.25} />
+                  </button>
+                </>
+              );
+            }
             const isMulti = currentQuestion.selection === "multi";
             const picks = multiPicks[currentQuestion.id] ?? [];
             const togglePick = (label: string) => {

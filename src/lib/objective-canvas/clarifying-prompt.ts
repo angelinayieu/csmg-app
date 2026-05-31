@@ -41,10 +41,10 @@ QUESTION RULES:
 - Order by impact: most gap-closing first.
 - Tag each question with a "selection" field — see SELECTION TYPE below.
 
-SELECTION TYPE (per question):
-- "single" (default) — the question is answered by exactly ONE option (a single concrete commitment). Use for: target metric, timeframe, budget tier, primary KPI, or any question that picks one item from a mutually-exclusive taxonomy.
-- "multi" — the question accepts ONE OR MORE compatible options that legitimately combine. Use ONLY when the options describe independent attributes, scope, or coverage — e.g. "Which user segments are in scope?", "Which mechanisms are in play?", "Which regions are we covering?", "Which lenses should we apply?".
-- Default to "single". A question is "multi" only when it is genuinely about combinable coverage; most aren't.
+SELECTION TYPE (per question) — choose the type that matches the SEMANTICS of the answer, not the convenience of a single pick:
+- "single" — answered by exactly ONE option from a mutually-exclusive taxonomy (a timeframe, a budget tier, a named approach, one decision). NOT for "the primary metric" when several listed options each partly define success — that is "weighted".
+- "multi" — accepts ONE OR MORE INDEPENDENT options that legitimately co-exist (scope / coverage): "Which user segments are in scope?", "Which mechanisms are in play?", "Which regions?". Any subset is a coherent answer.
+- "weighted" — the options are COMPONENTS the user blends into a COMPOSITE with relative importance (weights summing to 100%). Use whenever the real answer is a mix, not a pick: a success metric composed of several signals, a scoring rubric, a priority allocation across dimensions. STRONGLY PREFER "weighted" over "single" when a question asks for "the primary X" / "the main KPI" but the listed options would EACH legitimately contribute to X — e.g. "What defines engagement success?" with options {comments per post, 30-day retention, threaded conversations, time per session} is "weighted", because real success weights all four.
 
 OPTION RULES:
 - 3-4 multiple-choice options per question.
@@ -54,6 +54,7 @@ OPTION RULES:
 - Ordered logically (low→high, narrow→broad, conservative→ambitious).
 - For "single" questions: options must be MUTUALLY EXCLUSIVE.
 - For "multi" questions: options must be INDEPENDENT — picking any subset together must form a coherent answer. Never include options that contradict each other in a multi question.
+- For "weighted" questions: each option is a distinct, ADDITIVE COMPONENT of the composite (a signal, dimension, or lever that carries some share of the weight). They need not be mutually exclusive; together they should span the thing being weighted.
 - Each option: a single 5-14 word label + one short detail line on the tradeoff.
 
 DO NOT include "Skip" or "Other" as an option — the UI handles those separately.
@@ -96,7 +97,7 @@ export const RESPONSE_SCHEMA = {
           properties: {
             question: { type: "string" },
             rationale: { type: "string" },
-            selection: { type: "string", enum: ["single", "multi"] },
+            selection: { type: "string", enum: ["single", "multi", "weighted"] },
             options: {
               type: "array",
               items: {
