@@ -27,6 +27,7 @@ import {
   Tldraw,
   createShapeId,
   useValue,
+  useEditor,
   type Editor,
   type TLShape,
   type TLShapeId,
@@ -170,8 +171,73 @@ export type AiLinkFn = (
 // text/geo out of the box, which is the rest of the interactive surface.
 /** Collapse tldraw's always-open style palette into a glass icon — declutters
  *  the top-right and stops it colliding with the Notebook pill. */
+// Folder-tab page navigator — surfaces the board's pages as titled tabs at
+// the top so it's clear which page is which (and lets the user branch/switch
+// across them, e.g. a feature spun off into its own page). Reactive via
+// tldraw's useValue; hidden when there's only one page so it never clutters.
+function PageTabs() {
+  const editor = useEditor();
+  const pages = useValue("pages", () => editor.getPages(), [editor]);
+  const currentPageId = useValue(
+    "currentPageId",
+    () => editor.getCurrentPageId(),
+    [editor],
+  );
+  if (pages.length <= 1) return null;
+  return (
+    <div
+      style={{
+        pointerEvents: "all",
+        display: "flex",
+        alignItems: "flex-end",
+        gap: 2,
+        padding: "0 8px",
+        fontFamily: appleVibe.font.stack,
+      }}
+    >
+      {pages.map((p) => {
+        const active = p.id === currentPageId;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => editor.setCurrentPage(p.id)}
+            title={p.name}
+            style={{
+              maxWidth: 180,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: active ? 600 : 500,
+              color: active ? "rgba(15,23,42,0.92)" : "rgba(15,23,42,0.5)",
+              background: active
+                ? "rgba(255,255,255,0.94)"
+                : "rgba(255,255,255,0.55)",
+              border: "1px solid rgba(15,23,42,0.08)",
+              borderRadius: "12px 12px 0 0",
+              backdropFilter: "blur(20px) saturate(160%)",
+              WebkitBackdropFilter: "blur(20px) saturate(160%)",
+              boxShadow: active
+                ? "0 -2px 12px -4px rgba(15,23,42,0.18)"
+                : "none",
+              cursor: "pointer",
+              transition: "all 120ms ease-out",
+            }}
+          >
+            {p.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 const BOARD_COMPONENTS: TLComponents = {
   StylePanel: CollapsibleStylePanel,
+  TopPanel: PageTabs,
 };
 
 const CUSTOM_SHAPE_UTILS = [
