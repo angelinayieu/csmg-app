@@ -161,6 +161,58 @@ export function SubObjectivePickerCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Materialize the recommended trio as explicit picks ──
+  // electedIds otherwise FALLS BACK to the recommended set when no
+  // dispositions exist — so unticking a recommended (in the immersive view
+  // OR the full list) wouldn't "stick": the fallback would re-elect it.
+  // Materializing them as real "elected" dispositions once, on first load,
+  // makes selection explicit and keeps the immersive view + "See all"
+  // perfectly in sync. Optimistic local + persisted (soft-fail).
+  const materializedRef = useRef(false);
+  useEffect(() => {
+    if (materializedRef.current || !block) return;
+    const proposals = block.proposals ?? [];
+    if (proposals.length === 0) return;
+    const hasExplicit =
+      proposals.some((p) => p.disposition) ||
+      (block.picked_proposal_ids?.length ?? 0) > 0;
+    if (hasExplicit) {
+      materializedRef.current = true;
+      return;
+    }
+    const recIds = proposals.filter((p) => p.recommended).map((p) => p.id);
+    materializedRef.current = true;
+    if (recIds.length === 0) return;
+    const idSet = new Set(recIds);
+    const elect = (p: SubObjectiveProposal): SubObjectiveProposal =>
+      idSet.has(p.id) ? { ...p, disposition: "elected" } : p;
+    setBlock((prev) =>
+      prev
+        ? {
+            ...prev,
+            proposals: prev.proposals.map(elect),
+            batches: prev.batches?.map((b) => ({
+              ...b,
+              proposals: b.proposals.map(elect),
+            })),
+          }
+        : prev,
+    );
+    void Promise.all(
+      recIds.map((id) =>
+        fetch("/api/brainstorm/sub-objectives/disposition", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            spaceId,
+            proposalId: id,
+            disposition: "elected",
+          }),
+        }).catch(() => null),
+      ),
+    );
+  }, [block, spaceId]);
+
   // Auto-clustering — fingerprint of the most-recent fired set so we
   // don't re-fire while a result is still in flight or already saved
   // for the same proposal set. Reset on /propose so a new variant
@@ -472,10 +524,15 @@ export function SubObjectivePickerCard({
       <RecommendedPresentation
         recommended={recommended}
         totalCount={allProposals.length}
+        electedCount={electedIds.size}
         category={block.category}
         busy={busy}
         error={error}
-        onConfirm={(ids) => runAction("confirm", { pickedIds: ids })}
+        isElected={(id) => electedIds.has(id)}
+        onToggle={(id) =>
+          setDisposition(id, electedIds.has(id) ? "rejected" : "elected")
+        }
+        onConfirm={() => runAction("confirm")}
         onSeeAll={() => setShowAll(true)}
         onRegenerate={() => runAction("propose", { mode: "regenerate" })}
       />
@@ -870,35 +927,29 @@ export function SubObjectivePickerCard({
 function RecommendedPresentation({
   recommended,
   totalCount,
+  electedCount,
   category,
   busy,
   error,
+  isElected,
+  onToggle,
   onConfirm,
   onSeeAll,
   onRegenerate,
 }: {
   recommended: SubObjectiveProposal[];
   totalCount: number;
+  electedCount: number;
   category?: string | null;
   busy: boolean;
   error: string | null;
-  onConfirm: (ids: string[]) => void;
+  isElected: (id: string) => boolean;
+  onToggle: (id: string) => void;
+  onConfirm: () => void;
   onSeeAll: () => void;
   onRegenerate: () => void;
 }) {
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(recommended.map((p) => p.id)),
-  );
-  const selectedCount = selected.size;
   const moreCount = Math.max(0, totalCount - recommended.length);
-
-  const toggle = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
 
   return (
     <div
@@ -942,8 +993,8 @@ function RecommendedPresentation({
             key={p.id}
             proposal={p}
             index={i}
-            selected={selected.has(p.id)}
-            onToggle={() => toggle(p.id)}
+            selected={isElected(p.id)}
+            onToggle={() => onToggle(p.id)}
             disabled={busy}
           />
         ))}
@@ -953,33 +1004,33 @@ function RecommendedPresentation({
       <div className="mt-8 flex flex-col items-center gap-3.5">
         <button
           type="button"
-          onClick={() => onConfirm(Array.from(selected))}
-          disabled={busy || selectedCount === 0}
+          onClick={onConfirm}
+          disabled={busy || electedCount === 0}
           className="inline-flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold transition-all"
           style={{
             background:
-              busy || selectedCount === 0
+              busy || electedCount === 0
                 ? appleVibe.surface.chip
                 : appleVibe.accent.primary,
             color:
-              busy || selectedCount === 0
+              busy || electedCount === 0
                 ? appleVibe.text.tertiary
                 : appleVibe.text.onAccent,
             boxShadow:
-              busy || selectedCount === 0
+              busy || electedCount === 0
                 ? "none"
                 : "0 8px 30px -6px rgba(99,102,241,0.55), inset 0 0 0 1px rgba(255,255,255,0.12)",
-            cursor: busy || selectedCount === 0 ? "not-allowed" : "pointer",
+            cursor: busy || electedCount === 0 ? "not-allowed" : "pointer",
           }}
         >
           <span>
             {busy
               ? "Building…"
-              : selectedCount === 0
+              : electedCount === 0
                 ? "Select at least one"
-                : `Confirm ${selectedCount} → build the canvas`}
+                : `Confirm ${electedCount} → build the canvas`}
           </span>
-          {!busy && selectedCount > 0 && (
+          {!busy && electedCount > 0 && (
             <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
           )}
         </button>
@@ -1467,7 +1518,7 @@ function VariantLabBar({
 
 // ── Row with disposition controls ───────────────────────────────────
 
-function ProposalRow({
+export function ProposalRow({
   proposal,
   disposition,
   isElected,
