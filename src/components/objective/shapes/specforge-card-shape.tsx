@@ -21,13 +21,33 @@ import {
   resizeBox,
 } from "tldraw";
 import { useState, useEffect } from "react";
-import { GripVertical } from "lucide-react";
+import {
+  MoreHorizontal,
+  Layers,
+  Rocket,
+  Split,
+  Shuffle,
+  ListChecks,
+  BookmarkPlus,
+} from "lucide-react";
 import { CardHoverActions } from "../canvas-interactions/card-hover-actions";
 import {
   dispatchCardAction,
   CARD_SAVED_EVENT,
   type CardSavedDetail,
+  type CardAction,
 } from "../board-bus";
+
+// The actions a decision card can take, shown in its pop-up "⋯" menu.
+const CARD_MENU_ITEMS: { key: CardAction; label: string; Icon: typeof Split }[] =
+  [
+    { key: "open_room", label: "Open as room", Icon: Layers },
+    { key: "promote_objective", label: "New objective", Icon: Rocket },
+    { key: "decompose", label: "Decompose", Icon: Split },
+    { key: "variations", label: "Variations", Icon: Shuffle },
+    { key: "make_plan", label: "Make plan", Icon: ListChecks },
+    { key: "save", label: "Save to Library", Icon: BookmarkPlus },
+  ];
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { STAGE_META, type SpecForgeStage } from "@/lib/objective-canvas/specforge/types";
 
@@ -210,6 +230,22 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
     }
   }
 
+  // Unified action dispatch — shared by the hover bar + the "⋯" pop-up menu.
+  // Spawn actions are handled locally; the rest ride the board-bus.
+  const [menuOpen, setMenuOpen] = useState(false);
+  function handleAction(action: CardAction) {
+    setMenuOpen(false);
+    if (action === "open_room") {
+      void openAsRoom();
+      return;
+    }
+    if (action === "promote_objective") {
+      void promoteToObjective();
+      return;
+    }
+    dispatchCardAction({ action, entityId, title, shapeId: shape.id });
+  }
+
   return (
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
@@ -316,9 +352,29 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
                 {eyebrowLabel}
               </span>
             </span>
-            <GripVertical
-              style={{ width: 13, height: 13, color: "rgba(15,23,42,0.22)" }}
-            />
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen((v) => !v);
+              }}
+              title="Card actions"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 22,
+                height: 22,
+                borderRadius: 7,
+                border: "none",
+                background: menuOpen ? "rgba(15,23,42,0.07)" : "transparent",
+                color: "rgba(15,23,42,0.4)",
+                cursor: "pointer",
+              }}
+            >
+              <MoreHorizontal style={{ width: 15, height: 15 }} />
+            </button>
           </div>
 
           {/* Title */}
@@ -407,6 +463,72 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
           )}
         </div>
 
+        {/* "⋯" pop-up menu — the discoverable list of what this card can do.
+            Rendered in the OUTER (relative) wrapper so it isn't clipped by the
+            card body's overflow:hidden. */}
+        {menuOpen && (
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute",
+              top: 38,
+              right: 8,
+              zIndex: 80,
+              minWidth: 188,
+              padding: 6,
+              borderRadius: 14,
+              background: "rgba(255,255,255,0.93)",
+              border: "1px solid rgba(15,23,42,0.08)",
+              boxShadow:
+                "0 18px 50px -16px rgba(11,18,40,0.35), inset 0 1px 0 rgba(255,255,255,0.8)",
+              backdropFilter: "blur(20px) saturate(170%)",
+              WebkitBackdropFilter: "blur(20px) saturate(170%)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 1,
+              fontFamily: appleVibe.font.stack,
+            }}
+          >
+            {CARD_MENU_ITEMS.map(({ key, label, Icon }) => (
+              <button
+                key={key}
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleAction(key);
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 9,
+                  padding: "8px 10px",
+                  borderRadius: 9,
+                  border: "none",
+                  background: "transparent",
+                  color: "rgba(15,23,42,0.82)",
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "rgba(15,23,42,0.05)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <Icon
+                  style={{ width: 14, height: 14, color }}
+                  strokeWidth={2}
+                />
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Per-card hover action bar — same component the room/artifact cards
             use, so a decision card can be saved to Library or pushed deeper. */}
         <div
@@ -424,22 +546,7 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
           <CardHoverActions
             accent={color}
             saved={saved}
-            onAction={(action) => {
-              if (action === "open_room") {
-                void openAsRoom();
-                return;
-              }
-              if (action === "promote_objective") {
-                void promoteToObjective();
-                return;
-              }
-              dispatchCardAction({
-                action,
-                entityId,
-                title,
-                shapeId: shape.id,
-              });
-            }}
+            onAction={handleAction}
           />
         </div>
       </div>
