@@ -29,34 +29,33 @@ export interface ExtractResult {
 // ── PDF ──────────────────────────────────────────────────────────────
 
 /**
- * Extract text from a PDF buffer using pdf-parse.
+ * Extract text from a PDF buffer using unpdf.
  *
- * pdf-parse is a sync-ish Node library — we rely on it catching its own
- * errors rather than racing a timeout. For pathological PDFs the Next.js
- * route's maxDuration provides the outer safety net.
+ * unpdf ships a serverless-optimized build of pdfjs that runs without
+ * the browser globals (DOMMatrix / Path2D / ImageData) that the stock
+ * pdfjs-dist build pulls in via native @napi-rs/canvas. That native
+ * dependency only resolves for the host platform's prebuilt binary, so
+ * on Vercel's Linux runtime stock pdfjs failed at parse time with
+ * "DOMMatrix is not defined". unpdf has no such dependency, so the same
+ * code path works locally (macOS) and on Vercel (Linux) alike.
  */
 export async function extractPdf(
   buffer: Buffer,
   filename: string,
 ): Promise<{ ok: true; result: ExtractResult } | { ok: false; error: IngestError }> {
   try {
-    // Dynamic import — pdf-parse's worker setup can interfere with
-    // Next's build step if imported at module scope.
-    const { PDFParse } = await import("pdf-parse");
+    // Dynamic import keeps unpdf out of the module-scope graph so it
+    // never participates in the Next build's type/bundle step.
+    const { getDocumentProxy, extractText } = await import("unpdf");
 
-    // pdf-parse v2 expects Uint8Array; it handles Buffer → Uint8Array
-    // conversion internally, but we do it explicitly for type clarity.
-    const parser = new PDFParse({
-      data: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
-    });
+    // unpdf wants a fresh Uint8Array view over the buffer's bytes.
+    const pdf = await getDocumentProxy(
+      new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
+    );
 
-    // Pull metadata first so we can reject oversized PDFs without
-    // paying the full text-extraction cost.
-    const info = await parser.getInfo();
-    const numPages = info.total ?? 0;
-
+    // Reject oversized PDFs before paying the full text-extraction cost.
+    const numPages = pdf.numPages;
     if (numPages > MAX_PDF_PAGES) {
-      await parser.destroy();
       return {
         ok: false,
         error: {
@@ -66,10 +65,9 @@ export async function extractPdf(
       };
     }
 
-    const textResult = await parser.getText();
-    await parser.destroy();
+    const { text: rawText } = await extractText(pdf, { mergePages: true });
 
-    const text = (textResult.text ?? "").trim();
+    const text = (rawText ?? "").trim();
     if (!text) {
       return {
         ok: false,

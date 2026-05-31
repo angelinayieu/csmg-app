@@ -31,15 +31,19 @@ const nextConfig: NextConfig = {
   transpilePackages: ["mermaid"],
 
   // ── Server-only native/ESM packages must NOT be bundled ──────────────
-  // pdf-parse (v2) wraps pdfjs-dist (5.x, ESM). When Next's bundler
-  // inlines pdfjs into the server chunk it rewrites pdfjs's module-scope
-  // setup and breaks it with "Object.defineProperty called on non-object"
-  // at parse time — every PDF upload then fails with
-  // "extraction_failed: Could not parse PDF". Marking these external makes
-  // Next `require()` them as real Node modules at runtime, preserving
-  // their module structure. mammoth (DOCX) is externalized for the same
-  // class of reason.
-  serverExternalPackages: ["pdf-parse", "pdfjs-dist", "mammoth"],
+  // mammoth (DOCX) breaks when Next inlines it into the server chunk —
+  // its module-scope setup gets rewritten and fails at parse time.
+  // Marking it external makes Next `require()` it as a real Node module
+  // at runtime, preserving its structure.
+  //
+  // NOTE: PDF parsing uses `unpdf` (a serverless-optimized pdfjs build),
+  // which is intentionally NOT listed here — it's meant to be bundled and
+  // has no native dependency. The old stack (pdf-parse → pdfjs-dist →
+  // @napi-rs/canvas) WAS externalized here, but its native canvas binary
+  // only resolved on the build host's platform, so PDF parsing died on
+  // Vercel's Linux runtime with "DOMMatrix is not defined". unpdf removes
+  // that dependency entirely; do not re-add pdf-parse/pdfjs-dist.
+  serverExternalPackages: ["mammoth"],
 
   // ── Route consolidation redirects ─────────────────────────────────────
   // Preserve existing bookmarks and any stale internal links pointing at

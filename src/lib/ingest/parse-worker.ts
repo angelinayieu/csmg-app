@@ -73,7 +73,7 @@ export async function parseAssetInBackground(
 
   try {
     if (mime === "application/pdf") {
-      extractionMethod = "pdf-parse";
+      extractionMethod = "unpdf";
       extraction = await extractPdf(buffer, filename);
     } else if (
       mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

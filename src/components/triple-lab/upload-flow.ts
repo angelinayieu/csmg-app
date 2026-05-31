@@ -122,12 +122,19 @@ export async function processFileDrops(
       continue;
     }
 
-    const shouldReview =
-      assetClass === "research_pdf" || assetClass === "internal_doc";
+    // Open the HITL review drawer for anything the server parsed in the
+    // background — that's the exact set of assets with a pending
+    // `normalized_text`, and the server signals it with `awaiting_parse`.
+    // Gating on asset_class was fragile: the background-parse decision is
+    // MIME-based (any PDF/DOCX), but a PDF whose filename reads like a
+    // "report" / "spec" / "assessment" classifies as prior_analysis or
+    // spec_sheet — so those papers got parsed yet were silently skipped
+    // here and never showed the review drawer.
+    const shouldReview = ingestResponse.awaiting_parse === true;
 
     if (!shouldReview) {
-      // Text / markdown / image — materialized inline by the ingest
-      // route, no HITL needed.
+      // Text / markdown / image / url / paste — materialized inline by
+      // the ingest route, no background parse + review needed.
       emit({ stage: "materialized", assetId });
       continue;
     }
@@ -135,8 +142,14 @@ export async function processFileDrops(
     // Research-class asset: wait for parse to complete (preview
     // endpoint needs normalized_text). Poll up to 90s @ 1.2s cadence.
     emit({ stage: "parsing", assetId });
-    const parseOk = await pollUntilParsed(assetId);
-    if (!parseOk) {
+    const outcome = await pollUntilParsed(assetId);
+    if (outcome.status === "error") {
+      // Parser failed server-side — surface the real reason instead of
+      // opening an empty review drawer.
+      emit({ stage: "error", assetId, errorMessage: outcome.message });
+      continue;
+    }
+    if (outcome.status === "timeout") {
       emit({
         stage: "error",
         assetId,
@@ -146,7 +159,7 @@ export async function processFileDrops(
       continue;
     }
 
-    // Drawer time.
+    // outcome.status === "ready" → drawer time.
     emit({ stage: "opening_review", assetId });
     try {
       await deps.onAssetReady(assetId, sourceName, assetClass);
@@ -162,10 +175,16 @@ export async function processFileDrops(
 // ── Parse-status poller ─────────────────────────────────────────────
 // After a research-PDF / internal-doc upload, the ingest route returns
 // immediately with parse_status="pending" and runs the parse worker in
-// after(). The HITL preview endpoint needs normalized_text, so we
-// can't open the drawer until parse_status flips to "ready" (or
-// "error"). Same pattern as the asset-card-shape poll loop.
-async function pollUntilParsed(assetId: string): Promise<boolean> {
+// after(). The HITL preview endpoint needs normalized_text, so we can't
+// open the drawer until parse_status flips to "ready". If it flips to
+// "error" (or "skipped") we surface the reason instead of opening a
+// dead, empty review drawer.
+type ParseOutcome =
+  | { status: "ready" }
+  | { status: "error"; message: string }
+  | { status: "timeout" };
+
+async function pollUntilParsed(assetId: string): Promise<ParseOutcome> {
   const INTERVAL_MS = 1200;
   const TIMEOUT_MS = 90_000;
   const start = Date.now();
@@ -176,13 +195,29 @@ async function pollUntilParsed(assetId: string): Promise<boolean> {
         cache: "no-store",
       });
       if (res.ok) {
-        const body = (await res.json()) as { parse_status?: string };
-        // "ready" → safe to open drawer. "error" → still open the
-        // drawer so the user sees the error banner. Everything else
-        // (pending / parsing) → keep polling.
-        if (body.parse_status === "ready" || body.parse_status === "error") {
-          return true;
+        // NOTE: the endpoint returns `status` (the parse_status value),
+        // and a human-readable `error` when status === "error".
+        const body = (await res.json()) as {
+          status?: string;
+          error?: string | null;
+        };
+        if (body.status === "ready") {
+          return { status: "ready" };
         }
+        // Terminal failure states — stop polling and report why. Without
+        // this, a failed parse would burn the full 90s and then look
+        // like a timeout, hiding the real cause (e.g. a corrupt PDF).
+        if (body.status === "error" || body.status === "skipped") {
+          return {
+            status: "error",
+            message:
+              body.error?.trim() ||
+              (body.status === "skipped"
+                ? "This file wasn't parsed, so there's nothing to review yet."
+                : "The parser couldn't read this file. It may be scanned, image-only, or corrupt."),
+          };
+        }
+        // pending / parsing → keep polling.
       }
     } catch {
       // Soft-fail: a transient network blip shouldn't abort the poll.
@@ -193,5 +228,5 @@ async function pollUntilParsed(assetId: string): Promise<boolean> {
     "[triple-lab/upload] parse-status poll timed out after 90s for",
     assetId,
   );
-  return false;
+  return { status: "timeout" };
 }
