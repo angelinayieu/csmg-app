@@ -136,6 +136,23 @@ export function ObjectiveEntryCard({ onCancel }: Props) {
           );
           return;
         }
+        // Autopilot skips the clarifying questions: advance straight to the
+        // sub-objective picker. clarify/complete moves clarifying → picking
+        // and kicks off annotations + layers + deep research (it explicitly
+        // tolerates zero answers). HITL ("human") falls through and lands on
+        // the clarifying card as before. Best-effort — navigate regardless so
+        // a transient failure never traps the user on entry.
+        if (mode === "autopilot") {
+          try {
+            await fetch("/api/brainstorm/clarify/complete", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ spaceId: json.spaceId }),
+            });
+          } catch {
+            /* non-fatal — the canvas can recover on load */
+          }
+        }
         router.push(`/app/objective/${json.spaceId}`);
       } catch (err) {
         setError(

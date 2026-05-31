@@ -149,6 +149,10 @@ export function SubObjectivePickerCard({
   // canonical library_objects of type='brainstorm_cluster' surfaced
   // through the existing LibraryPanel — one library, one storage layer.
   const [brainstormOpen, setBrainstormOpen] = useState(false);
+  // Immersive presentation: lead with the recommended ≤3 as a read-and-
+  // confirm Vision Pro view. "See all options" flips this true to reveal
+  // the full power-user picker (dispositions, clustering, variant lab).
+  const [showAll, setShowAll] = useState(false);
 
   // ── Auto-propose on mount if nothing is cached ──
   useEffect(() => {
@@ -276,6 +280,10 @@ export function SubObjectivePickerCard({
     payload?: {
       mode?: "initial" | "regenerate" | "variant";
       intent?: SubObjectiveIntent;
+      /** Explicit pick set — used by the immersive presentation, which
+       *  tracks selection locally rather than via server dispositions.
+       *  Falls back to the disposition-derived electedIds when omitted. */
+      pickedIds?: string[];
     },
   ) {
     setError(null);
@@ -313,13 +321,14 @@ export function SubObjectivePickerCard({
           setLoading(false);
           setVariantInFlight(null);
         } else if (kind === "confirm") {
-          if (!block || electedIds.size === 0) return;
+          const ids = payload?.pickedIds ?? Array.from(electedIds);
+          if (!block || ids.length === 0) return;
           const res = await fetch("/api/brainstorm/sub-objectives/confirm", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               spaceId,
-              pickedProposalIds: Array.from(electedIds),
+              pickedProposalIds: ids,
             }),
           });
           const json = await res.json();
@@ -454,7 +463,26 @@ export function SubObjectivePickerCard({
     );
   }
 
-  const recommendedCount = allProposals.filter((p) => p.recommended).length;
+  // ── Immersive recommended presentation (default lead view) ──
+  // Lead with the recommended ≤3 in a clear, read-and-confirm Vision Pro
+  // layout. "See all options" reveals the full power-user picker below.
+  const recommended = allProposals.filter((p) => p.recommended);
+  if (!showAll && recommended.length > 0) {
+    return (
+      <RecommendedPresentation
+        recommended={recommended}
+        totalCount={allProposals.length}
+        category={block.category}
+        busy={busy}
+        error={error}
+        onConfirm={(ids) => runAction("confirm", { pickedIds: ids })}
+        onSeeAll={() => setShowAll(true)}
+        onRegenerate={() => runAction("propose", { mode: "regenerate" })}
+      />
+    );
+  }
+
+  const recommendedCount = recommended.length;
   const batches: SubObjectiveBatch[] = block.batches ?? [];
   const hasBatches = batches.length > 1; // only show dividers when >1
   const totalElected = electedIds.size;
@@ -826,6 +854,278 @@ export function SubObjectivePickerCard({
         }}
       />
     </Shell>
+  );
+}
+
+// ── Immersive recommended presentation ──────────────────────────────
+//
+// The default lead view: the recommended ≤3 proposals as large, frosted,
+// read-and-confirm cards (Apple Vision Pro vibe — depth, glow, generous
+// space, lead-with-the-recommendation). The user reads, optionally drops
+// one, and confirms; "See all options" opens the full power-user picker.
+// Selection is tracked LOCALLY (init = all recommended) and handed to the
+// parent's confirm as an explicit id set, so it never depends on the
+// server-side disposition fallback.
+
+function RecommendedPresentation({
+  recommended,
+  totalCount,
+  category,
+  busy,
+  error,
+  onConfirm,
+  onSeeAll,
+  onRegenerate,
+}: {
+  recommended: SubObjectiveProposal[];
+  totalCount: number;
+  category?: string | null;
+  busy: boolean;
+  error: string | null;
+  onConfirm: (ids: string[]) => void;
+  onSeeAll: () => void;
+  onRegenerate: () => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(recommended.map((p) => p.id)),
+  );
+  const selectedCount = selected.size;
+  const moreCount = Math.max(0, totalCount - recommended.length);
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  return (
+    <div
+      className="relative mx-auto w-full max-w-2xl"
+      style={{ fontFamily: appleVibe.font.stack }}
+    >
+      {/* Ambient depth glow behind the floating cards — the spatial cue. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 -top-10 -z-10 mx-auto h-72 max-w-xl"
+        style={{
+          background:
+            "radial-gradient(60% 60% at 50% 30%, rgba(120,150,255,0.18), rgba(120,150,255,0) 70%)",
+          filter: "blur(12px)",
+        }}
+      />
+
+      <div className="text-center">
+        <div className="flex justify-center">
+          <Eyebrow>Recommended focus</Eyebrow>
+        </div>
+        <Heading>
+          {recommended.length === 1
+            ? "Start here"
+            : `Start with these ${recommended.length}`}
+        </Heading>
+        <p
+          className="mx-auto mt-2 max-w-md text-[13px] font-light leading-relaxed"
+          style={{ color: appleVibe.text.secondary }}
+        >
+          The strongest cuts of your objective
+          {category ? ` · ${category}` : ""}. Read them, keep what fits, and
+          confirm — each becomes its own room.
+        </p>
+      </div>
+
+      {/* Hero cards — large, frosted, readable. */}
+      <div className="mt-7 flex flex-col gap-3.5">
+        {recommended.map((p, i) => (
+          <HeroProposalCard
+            key={p.id}
+            proposal={p}
+            index={i}
+            selected={selected.has(p.id)}
+            onToggle={() => toggle(p.id)}
+            disabled={busy}
+          />
+        ))}
+      </div>
+
+      {/* Primary confirm — glowing, unmistakable. */}
+      <div className="mt-8 flex flex-col items-center gap-3.5">
+        <button
+          type="button"
+          onClick={() => onConfirm(Array.from(selected))}
+          disabled={busy || selectedCount === 0}
+          className="inline-flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold transition-all"
+          style={{
+            background:
+              busy || selectedCount === 0
+                ? appleVibe.surface.chip
+                : appleVibe.accent.primary,
+            color:
+              busy || selectedCount === 0
+                ? appleVibe.text.tertiary
+                : appleVibe.text.onAccent,
+            boxShadow:
+              busy || selectedCount === 0
+                ? "none"
+                : "0 8px 30px -6px rgba(99,102,241,0.55), inset 0 0 0 1px rgba(255,255,255,0.12)",
+            cursor: busy || selectedCount === 0 ? "not-allowed" : "pointer",
+          }}
+        >
+          <span>
+            {busy
+              ? "Building…"
+              : selectedCount === 0
+                ? "Select at least one"
+                : `Confirm ${selectedCount} → build the canvas`}
+          </span>
+          {!busy && selectedCount > 0 && (
+            <ArrowRight className="h-4 w-4" strokeWidth={2.25} />
+          )}
+        </button>
+
+        <div className="flex items-center gap-5">
+          {moreCount > 0 && (
+            <button
+              type="button"
+              onClick={onSeeAll}
+              disabled={busy}
+              className="text-[12px] font-medium underline-offset-4 hover:underline"
+              style={{ color: appleVibe.text.secondary }}
+            >
+              See all {totalCount} options
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onRegenerate}
+            disabled={busy}
+            className="inline-flex items-center gap-1 text-[12px] font-medium"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            <RefreshCw className="h-3 w-3" strokeWidth={2} />
+            Regenerate
+          </button>
+        </div>
+      </div>
+
+      {error && <ErrorRow message={error} />}
+    </div>
+  );
+}
+
+function HeroProposalCard({
+  proposal,
+  index,
+  selected,
+  onToggle,
+  disabled,
+}: {
+  proposal: SubObjectiveProposal;
+  index: number;
+  selected: boolean;
+  onToggle: () => void;
+  disabled: boolean;
+}) {
+  const pct = Math.round(proposal.confidence * 100);
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      className="group relative w-full overflow-hidden text-left transition-all"
+      style={{
+        background: selected
+          ? "rgba(255,255,255,0.86)"
+          : "rgba(255,255,255,0.62)",
+        backdropFilter: "blur(20px) saturate(160%)",
+        WebkitBackdropFilter: "blur(20px) saturate(160%)",
+        border: `1px solid ${
+          selected ? "rgba(99,102,241,0.45)" : "rgba(255,255,255,0.6)"
+        }`,
+        boxShadow: selected
+          ? "0 12px 40px -10px rgba(99,102,241,0.40), 0 0 0 3px rgba(99,102,241,0.10)"
+          : "0 8px 30px -12px rgba(15,23,42,0.25)",
+        borderRadius: 24,
+        opacity: disabled ? 0.7 : 1,
+        cursor: disabled ? "wait" : "pointer",
+      }}
+    >
+      <div className="flex items-start gap-4 p-6">
+        {/* Selection medallion */}
+        <div
+          className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[13px] font-semibold transition-all"
+          style={{
+            background: selected
+              ? appleVibe.accent.primary
+              : "rgba(15,23,42,0.05)",
+            color: selected ? appleVibe.text.onAccent : appleVibe.text.tertiary,
+            boxShadow: selected
+              ? "0 4px 12px -2px rgba(99,102,241,0.5)"
+              : "none",
+          }}
+        >
+          {selected ? <Check className="h-4 w-4" strokeWidth={2.5} /> : index + 1}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <h3
+              className="text-[18px] font-semibold leading-snug tracking-tight"
+              style={{
+                color: appleVibe.text.primary,
+                letterSpacing: "-0.01em",
+              }}
+            >
+              {proposal.title}
+            </h3>
+            <ConfidenceRing pct={pct} />
+          </div>
+
+          {proposal.summary && (
+            <p
+              className="mt-2 text-[13.5px] font-light leading-relaxed"
+              style={{ color: appleVibe.text.secondary }}
+            >
+              {proposal.summary}
+            </p>
+          )}
+
+          {proposal.rationale && (
+            <p
+              className="mt-3 text-[12.5px] font-light italic leading-relaxed"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              Why this: {proposal.rationale}
+            </p>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function ConfidenceRing({ pct }: { pct: number }) {
+  const color =
+    pct >= 75 ? "#6366F1" : pct >= 50 ? "#8B5CF6" : "rgba(100,116,139,0.85)";
+  return (
+    <div
+      className="flex flex-shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1"
+      style={{ background: "rgba(99,102,241,0.08)" }}
+      title={`${pct}% model confidence`}
+    >
+      <span
+        className="block h-1.5 w-1.5 rounded-full"
+        style={{ background: color }}
+        aria-hidden
+      />
+      <span
+        className="font-mono text-[10.5px] font-semibold"
+        style={{ color: appleVibe.text.secondary }}
+      >
+        {pct}%
+      </span>
+    </div>
   );
 }
 
@@ -1205,29 +1505,35 @@ function ProposalRow({
     confidencePct >= 75 ? "#16A34A" : confidencePct >= 50 ? "#D97706" : "#DC2626";
   const rejected = disposition === "rejected";
   const deferred = disposition === "deferred";
+  const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const hasMore =
+    Boolean(proposal.rationale) || (proposal.summary?.length ?? 0) > 100;
+
+  // Surface treatment — all states sit on solid white; emphasis comes
+  // from a soft accent glow + ring, never a flat tint or hard border.
+  // Elected = emerald glow, deferred = amber glow, otherwise the neutral
+  // card shadow (lifting slightly on hover).
+  const boxShadow = isElected
+    ? "0 1px 0 rgba(255,255,255,0.9) inset, 0 0 0 1px rgba(22,163,74,0.22), 0 12px 30px -12px rgba(22,163,74,0.30)"
+    : deferred
+      ? "0 1px 0 rgba(255,255,255,0.9) inset, 0 0 0 1px rgba(217,119,6,0.20), 0 12px 30px -12px rgba(217,119,6,0.24)"
+      : hovered
+        ? appleVibe.shadow.cardHover
+        : appleVibe.shadow.card;
 
   return (
     <li>
       <div
-        className="flex w-full items-start gap-3 rounded-2xl p-3.5 text-left transition-all"
+        className="flex w-full items-start gap-3 rounded-2xl p-3.5 text-left transition-all duration-200"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         style={{
-          background: isElected
-            ? "rgba(240,253,244,0.7)"
-            : rejected
-              ? "rgba(255,255,255,0.45)"
-              : "rgba(255,255,255,0.7)",
-          border: `1px solid ${
-            isElected
-              ? "rgba(22,163,74,0.35)"
-              : rejected
-                ? appleVibe.stroke.hairline
-                : appleVibe.stroke.hairline
-          }`,
+          background: "#FFFFFF",
+          border: "1px solid rgba(15,23,42,0.05)",
           borderRadius: appleVibe.radius.md,
           opacity: rejected ? 0.55 : 1,
-          boxShadow: isElected
-            ? "0 0 0 3px rgba(22,163,74,0.10)"
-            : undefined,
+          boxShadow,
         }}
       >
         <DispositionControls
@@ -1289,7 +1595,9 @@ function ProposalRow({
 
           {proposal.summary && (
             <p
-              className="mt-1 line-clamp-2 text-[12px] font-light leading-snug"
+              className={`mt-1 text-[12px] font-light leading-snug${
+                expanded ? "" : " line-clamp-2"
+              }`}
               style={{ color: appleVibe.text.secondary }}
             >
               {proposal.summary}
@@ -1391,24 +1699,52 @@ function ProposalRow({
                 </span>
               </>
             )}
-            {proposal.rationale && (
-              <>
-                <span
-                  className="text-[10px]"
-                  style={{ color: appleVibe.text.faint }}
-                >
-                  ·
-                </span>
-                <span
-                  className="line-clamp-1 text-[11px] font-light italic"
-                  style={{ color: appleVibe.text.tertiary }}
-                  title={proposal.rationale}
-                >
-                  {proposal.rationale}
-                </span>
-              </>
-            )}
           </div>
+
+          {/* Expand affordance — reveals the full summary + the
+              rationale ("why this fits"). Collapsed by default so the
+              row stays concise; the rationale no longer double-renders
+              in the meta strip. */}
+          {hasMore && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setExpanded((v) => !v);
+              }}
+              className="mt-2 inline-flex items-center gap-0.5 text-[10.5px] font-medium transition-colors hover:opacity-70"
+              style={{ color: appleVibe.text.tertiary }}
+            >
+              {expanded ? (
+                <>
+                  Less
+                  <ChevronUp className="h-3 w-3" strokeWidth={2} />
+                </>
+              ) : (
+                <>
+                  More
+                  <ChevronDown className="h-3 w-3" strokeWidth={2} />
+                </>
+              )}
+            </button>
+          )}
+
+          {expanded && proposal.rationale && (
+            <div className="mt-2">
+              <div
+                className="text-[9px] font-semibold uppercase tracking-[0.12em]"
+                style={{ color: appleVibe.text.faint }}
+              >
+                Why this fits
+              </div>
+              <p
+                className="mt-0.5 text-[11.5px] font-light italic leading-snug"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                {proposal.rationale}
+              </p>
+            </div>
+          )}
 
           {deferred && (
             <div
