@@ -16,8 +16,9 @@
 // the bundle's `status` field tells the consumer how to render it.
 
 import { llmJSON } from "@/lib/llm";
+import { embedTexts } from "@/lib/embeddings";
+import { cosine } from "@/lib/insight-lab/scoring/cosine";
 import {
-  searchTavily,
   searchTavilyMany,
   type TavilyBundle,
   type TavilySource,
@@ -150,7 +151,11 @@ export async function runSurfacePass(
 ): Promise<SurfaceBundle> {
   const started_at = new Date().toISOString();
 
-  if (!input.objective.trim()) {
+  // Strip pasted-tool artifacts ("Open in Granola …") + boilerplate so
+  // neither the query planner nor the relevance gate is polluted by noise.
+  const objective = cleanObjectiveForSearch(input.objective);
+
+  if (!objective.trim()) {
     return {
       status: "skipped",
       sources: [],
@@ -159,7 +164,7 @@ export async function runSurfacePass(
       completed_at: new Date().toISOString(),
     };
   }
-  if (!isSearchWorthy(input.objective)) {
+  if (!isSearchWorthy(objective)) {
     return {
       status: "skipped",
       sources: [],
@@ -169,34 +174,150 @@ export async function runSurfacePass(
     };
   }
 
-  // Broad query — the objective itself, with a bias toward
-  // overview / framework / state-of-the-field results.
-  const query = `${input.objective.slice(0, 300)} — overview, frameworks, prior approaches`;
-  const bundle = await searchTavily(query, {
+  // ── 1. Guided plan: 2-3 targeted queries (not a 300-char raw dump) ──
+  // The planner reads the messy objective, finds the real subject, and
+  // emits focused phrases. Soft-fails to a trimmed keyword query.
+  let queries: string[] = [];
+  try {
+    queries = await generateSurfaceQueries(objective);
+  } catch (err) {
+    console.warn(
+      "[research/surface] query planning failed, using fallback:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  if (queries.length === 0) {
+    queries = [objective.split(/\s+/).slice(0, 14).join(" ")];
+  }
+
+  // ── 2. Search each plan query in parallel ──
+  const bundles = await searchTavilyMany(queries, {
     depth: "basic",
-    maxResults: 8,
+    maxResults: 5,
     includeAnswer: true,
   });
 
-  if (bundle.failed && bundle.sources.length === 0) {
+  const raw = dedupByUrl(bundles.flatMap((b) => distill(b, undefined, 500)));
+
+  if (raw.length === 0) {
+    const allFailed = bundles.every((b) => b.failed);
     return {
       status: "skipped",
       sources: [],
-      skip_reason: "no_api_key",
-      query,
+      skip_reason: allFailed ? "no_api_key" : "insufficient_specificity",
+      query: queries.join("  |  "),
       started_at,
       completed_at: new Date().toISOString(),
     };
   }
 
+  // ── 3. Relevance gate — drop off-topic junk (jobs, novels, libs…) ──
+  // Embedding cosine of each result vs the cleaned objective. Soft-fails
+  // to the raw (deduped) list capped at 8 if embeddings are unavailable.
+  let sources: ResearchSource[];
+  try {
+    sources = await filterSourcesByRelevance(objective, raw, {
+      minCosine: 0.28,
+      keepTop: 3,
+      max: 8,
+    });
+  } catch (err) {
+    console.warn(
+      "[research/surface] relevance filter failed, returning unfiltered:",
+      err instanceof Error ? err.message : err,
+    );
+    sources = raw.slice(0, 8);
+  }
+
   return {
     status: "complete",
-    query,
-    summary: bundle.answer ?? undefined,
-    sources: distill(bundle, undefined, 500),
+    query: queries.join("  |  "),
+    summary: bundles.find((b) => b.answer)?.answer ?? undefined,
+    sources,
     started_at,
     completed_at: new Date().toISOString(),
   };
+}
+
+// ── Surface-pass helpers ─────────────────────────────────────────
+
+/** Strip known export-tool prefixes ("Open in Granola …") + collapse
+ *  whitespace so search/embedding operate on the real objective. */
+function cleanObjectiveForSearch(objective: string): string {
+  return objective
+    .replace(/^\s*open in\s+\w+\b[\s—–\-:|]*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 2000);
+}
+
+/** Generate 2-3 focused surface-overview queries from a messy objective.
+ *  Mirrors the deep-pass planner but lighter (no clarifying answers,
+ *  domain-overview intent). Returns trimmed, search-ready phrases. */
+async function generateSurfaceQueries(objective: string): Promise<string[]> {
+  const raw = await llmJSON<{ queries?: unknown }>({
+    system: `You generate targeted web-search queries to research a project's PROBLEM SPACE for an initial overview. Given a messy project description, find the core subject and emit 2-3 specific queries.
+
+RULES:
+- Each query: one specific search phrase, ≤12 words, NOT a question.
+- Together cover: (1) the domain / state-of-the-field, (2) how existing products or efforts approach it, (3) a key mechanism or metric if relevant.
+- Reference the ACTUAL domain and concepts named — never generic ("best practices", "tips for", "guide to", "how to build").
+- Ignore pasted-tool artifacts, UI boilerplate, or meta-instructions in the description.
+- GOOD: "interest-based social feed ranking algorithms engagement signals"
+- BAD: "how to build a social media app"
+
+Return strict JSON: { "queries": string[] }.`,
+    user: `PROJECT DESCRIPTION:\n"""\n${objective.slice(0, 1500)}\n"""\n\nGenerate 2-3 search queries.`,
+    responseSchema: {
+      name: "surface_research_queries",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          queries: { type: "array", items: { type: "string" } },
+        },
+        required: ["queries"],
+      },
+    },
+    temperature: 0.3,
+    maxTokens: 300,
+  });
+  const arr = Array.isArray(raw?.queries) ? raw.queries : [];
+  return arr
+    .map((q) => (typeof q === "string" ? q.trim() : ""))
+    .filter((q) => q.length >= 6)
+    .slice(0, 3);
+}
+
+/** Embedding-cosine relevance gate. Drops sources whose meaning is far
+ *  from the objective (the jobs/novels/password-lib junk a broad query
+ *  returns). Always keeps the top `keepTop` so a strict threshold never
+ *  nukes the list to empty; caps at `max`. Sorted most-relevant first. */
+async function filterSourcesByRelevance(
+  objective: string,
+  sources: ResearchSource[],
+  opts: { minCosine?: number; keepTop?: number; max?: number } = {},
+): Promise<ResearchSource[]> {
+  const { minCosine = 0.28, keepTop = 3, max = 8 } = opts;
+  if (sources.length === 0) return [];
+
+  const texts = [
+    objective.slice(0, 1500),
+    ...sources.map((s) => `${s.title}. ${s.snippet.slice(0, 300)}`),
+  ];
+  const vectors = await embedTexts(texts);
+  if (!Array.isArray(vectors) || vectors.length !== texts.length) {
+    return sources.slice(0, max);
+  }
+  const objVec = vectors[0];
+
+  const scored = sources
+    .map((s, i) => ({ source: s, rel: cosine(objVec, vectors[i + 1]) }))
+    .sort((a, b) => b.rel - a.rel);
+
+  const passing = scored.filter((x) => x.rel >= minCosine);
+  const kept = passing.length >= keepTop ? passing : scored.slice(0, keepTop);
+  return kept.slice(0, max).map((x) => x.source);
 }
 
 // ── Deep pass ────────────────────────────────────────────────────
