@@ -213,7 +213,7 @@ export function OutcomeCard({
 
       {item.measured_by && (
         <p
-          className="mt-2 text-[13px] font-light leading-snug"
+          className="mt-2 text-[13px] font-normal leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
           <span className="italic" style={{ color: appleVibe.text.tertiary }}>
@@ -226,7 +226,7 @@ export function OutcomeCard({
       {/* Collapsed meta — counts only when there's something to drill into */}
       {!expanded && hasExpandContent && (
         <div
-          className="mt-2 flex items-center gap-1 text-[11px] font-light"
+          className="mt-2 flex items-center gap-1 text-[11px] font-normal"
           style={{ color: appleVibe.text.tertiary }}
         >
           {producedBy.length > 0 && (

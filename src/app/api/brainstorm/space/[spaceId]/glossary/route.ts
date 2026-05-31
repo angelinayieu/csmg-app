@@ -84,6 +84,12 @@ function seedsFromAnnotations(raw: unknown): AnnotationSeed[] {
       reading: a.reading,
       weight: typeof a.weight === "number" ? a.weight : undefined,
       layer_tag: a.layer_tag ?? null,
+      // Phase 2 — pass through the normalizer-derived concept + slug so
+      // the glossary merges/dedupes by stable identity (not text). When
+      // the annotation is pre-Phase-2 (concept === null) the slug is
+      // derived from the phrase, preserving the old text-match behavior.
+      concept: a.concept,
+      concept_slug: a.concept_slug,
     }));
 }
 

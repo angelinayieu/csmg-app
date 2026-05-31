@@ -163,6 +163,18 @@ interface Props {
    *  Empty array = not yet generated; the AnnotatedObjectiveCard
    *  will lazy-fetch on mount. */
   coreAnnotations: ObjectiveAnnotation[];
+  /** Phase 2 — space glossary, threaded into the AnnotatedObjectiveCard
+   *  popovers so every annotated phrase resolves to ONE canonical
+   *  definition (no per-render drift). Empty array hides the affordance
+   *  and falls through to the per-annotation `reading`. */
+  glossary?: import("@/lib/objective-canvas/generate-glossary").GlossaryTerm[];
+  /** Phase 2 (cross-space concept bridge) — per-slug stats from the
+   *  user's OTHER spaces (entity-name-slug match). Surfaced on the
+   *  popover as ambient KG signal. Empty hides the affordance. */
+  crossSpaceConcepts?: Record<
+    string,
+    import("@/lib/objective-canvas/cross-space-concept-stats").CrossSpaceConceptStat
+  >;
   /** Variant Lab — the user's revealed top-preferred intent. Passed
    *  through to the incremental cut lab below so the post-confirm
    *  affordance starts pre-set to the right direction. Null for new
@@ -216,6 +228,8 @@ export function MainCanvasView({
   objective,
   subs,
   coreAnnotations,
+  glossary = [],
+  crossSpaceConcepts = {},
   preferredIntent = null,
   crossRoomSignals = null,
   initialSubObjectiveThemes = null,
@@ -448,6 +462,8 @@ export function MainCanvasView({
         objective={objective}
         initialAnnotations={coreAnnotations}
         subObjectives={subStubs}
+        glossary={glossary}
+        crossSpaceConcepts={crossSpaceConcepts}
         showEyebrow={false}
       />
 

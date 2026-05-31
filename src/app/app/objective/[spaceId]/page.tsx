@@ -12,6 +12,11 @@ import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import type { MainCanvasSub } from "@/components/objective/main-canvas-view";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import type { GlossaryTerm } from "@/lib/objective-canvas/generate-glossary";
+import {
+  loadCrossSpaceConceptStats,
+  type CrossSpaceConceptStat,
+} from "@/lib/objective-canvas/cross-space-concept-stats";
 import { normalizeRoomCategories } from "@/lib/objective-canvas/generate-categories";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
 import {
@@ -69,6 +74,18 @@ export default async function ObjectiveCanvasPage({
     "";
 
   const state = readObjectiveCanvasState(space.synthesis_data);
+
+  // ── Phase 2 — space glossary (server-rendered for popover lookup) ──
+  // The glossary is the canonical definition registry for this space.
+  // Annotation popovers join their concept_slug against this list so
+  // every surface (main objective, room headings, drawer) reads from
+  // ONE source of truth. JSONB on the space row — no extra query;
+  // safe fallback to [] when the space has no synthesis run yet.
+  const initialGlossary: GlossaryTerm[] = Array.isArray(
+    (space.synthesis_data as { glossary?: unknown } | null)?.glossary,
+  )
+    ? ((space.synthesis_data as { glossary: GlossaryTerm[] }).glossary)
+    : [];
 
   // ── Load sub-objective rows for the "main" stage ───────────────
   // Sub-objectives = improvement_goals rows with parent_goal_id
@@ -560,6 +577,35 @@ export default async function ObjectiveCanvasPage({
   for (const s of initialMainSubs) {
     roomTitles[s.id] = s.title;
   }
+  // Phase 2 (cross-space concept bridge) — for every concept_slug
+  // surfaced in this space's annotations + glossary, look up how many
+  // OTHER user spaces have entities whose names slugify to the same
+  // value. The popover renders a quiet "across workspace · N spaces"
+  // line when present, anchoring the in-space annotation to the user's
+  // broader KG. Soft-fail; empty map hides the affordance entirely.
+  const initialCrossSpaceConcepts: Record<string, CrossSpaceConceptStat> =
+    await (async () => {
+      const slugs = new Set<string>();
+      for (const a of initialCoreAnnotations) {
+        if (a.concept_slug) slugs.add(a.concept_slug);
+      }
+      for (const g of initialGlossary) {
+        if (g.concept_slug) slugs.add(g.concept_slug);
+      }
+      if (slugs.size === 0) return {};
+      const map = await loadCrossSpaceConceptStats({
+        db,
+        userId: user.id,
+        currentSpaceId: spaceId,
+        conceptSlugs: Array.from(slugs),
+      });
+      // Serialize Map → plain Record so it crosses the server→client
+      // boundary cleanly (Next.js RSC props must be JSON-serializable).
+      const rec: Record<string, CrossSpaceConceptStat> = {};
+      for (const [slug, stat] of map.entries()) rec[slug] = stat;
+      return rec;
+    })();
+
   // Workbench only matters once rooms exist — gate on main/done
   // stage AND ≥1 sub-objective.
   const showWorkbench =
@@ -606,6 +652,8 @@ export default async function ObjectiveCanvasPage({
             initialSubObjectives={state.sub_objectives ?? null}
             initialMainSubs={initialMainSubs}
             initialCoreAnnotations={initialCoreAnnotations}
+            initialGlossary={initialGlossary}
+            initialCrossSpaceConcepts={initialCrossSpaceConcepts}
             initialPreferredIntent={initialPreferredIntent}
             initialPreferenceSource={initialPreferenceSource}
             initialUserPrefs={userPrefs}

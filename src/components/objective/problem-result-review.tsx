@@ -135,7 +135,7 @@ export function ProblemResultReview({
           Review problems &amp; results
         </h2>
         <p
-          className="mt-1 text-[12.5px] font-light leading-relaxed"
+          className="mt-1 text-[12.5px] font-normal leading-relaxed"
           style={{ color: appleVibe.text.secondary }}
         >
           Mechanisms are generated against THESE. Sharpen a vague root
@@ -197,7 +197,7 @@ export function ProblemResultReview({
       {/* CTA */}
       <div className="flex items-center justify-end gap-3 pt-1">
         <span
-          className="text-[11px] font-light"
+          className="text-[11px] font-normal"
           style={{ color: appleVibe.text.tertiary }}
         >
           Happy with the problems &amp; results?
@@ -256,7 +256,7 @@ function LaneHeader({
           {label}
         </span>
         <span
-          className="text-[10px] font-light"
+          className="text-[10px] font-normal"
           style={{ color: appleVibe.text.faint }}
         >
           · {count}
@@ -287,7 +287,7 @@ function LaneHeader({
 function EmptyNote({ text }: { text: string }) {
   return (
     <p
-      className="rounded-xl px-3 py-2 text-[11.5px] font-light italic"
+      className="rounded-xl px-3 py-2 text-[11.5px] font-normal italic"
       style={{
         color: appleVibe.text.tertiary,
         border: `1px dashed ${appleVibe.stroke.hairline}`,
@@ -496,7 +496,7 @@ function CardShell({
           )}
           {saving && (
             <span
-              className="inline-flex items-center gap-0.5 text-[9px] font-light"
+              className="inline-flex items-center gap-0.5 text-[9px] font-normal"
               style={{ color: appleVibe.text.faint }}
             >
               <Check className="h-2.5 w-2.5" strokeWidth={2} /> saved
@@ -593,7 +593,7 @@ function FieldTextarea({
       onBlur={onBlur}
       rows={rows}
       placeholder={placeholder}
-      className="w-full resize-none rounded-lg px-2 py-1.5 text-[12px] font-light leading-snug outline-none"
+      className="w-full resize-none rounded-lg px-2 py-1.5 text-[12px] font-normal leading-snug outline-none"
       style={{
         color: appleVibe.text.secondary,
         background: "rgba(255,255,255,0.5)",

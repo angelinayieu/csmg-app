@@ -43,6 +43,7 @@ import {
   Lightbulb,
   Loader2,
   Minimize2,
+  Network,
   PanelRightOpen,
   Plus,
   RefreshCw,
@@ -133,6 +134,13 @@ export function BrainstormPanel({
   const [savedToLibrary, setSavedToLibrary] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Path B: push the session's ready picks into the SHARED knowledge
+  // graph (entities table) via the candidate-materialize pipeline.
+  // kgEntityCount stays null until a successful materialize, then holds
+  // the number of entities committed (drives the "N in graph" pill).
+  const [materializingKg, setMaterializingKg] = useState(false);
+  const [kgEntityCount, setKgEntityCount] = useState<number | null>(null);
+
   // Phase 4b-2 board-page state. True = candidates have been pushed to
   // a dedicated tldraw page on the objective board (visible behind the
   // panel). The Collapse button switches the editor back to the main
@@ -171,6 +179,7 @@ export function BrainstormPanel({
       // Rehydrate: can't know save-state without a library_objects query;
       // default to false. User can click Save again — it's idempotent.
       setSavedToLibrary(false);
+      setKgEntityCount(null);
     } else if (!rehydrateSession && lastRehydratedId.current !== null) {
       // Re-opened without a session → reset to fresh idle state.
       lastRehydratedId.current = null;
@@ -179,6 +188,7 @@ export function BrainstormPanel({
       setErrorMsg(null);
       setElectedIds(new Set());
       setSavedToLibrary(false);
+      setKgEntityCount(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, rehydrateSession?.id]);
@@ -246,6 +256,44 @@ export function BrainstormPanel({
     }
   }, [session, saving, savedToLibrary]);
 
+  // Push the ready (green-ribbon) picks into the shared KG as entities.
+  // The user's elections in this panel are the human gate, so the
+  // endpoint stages + auto-commits in one shot — no separate review
+  // drawer. Idempotent-ish: once done, the button locks to the count.
+  const materializeToKg = useCallback(async () => {
+    if (!session || materializingKg || kgEntityCount !== null) return;
+    const proposalIds = (session.ranking?.candidates ?? [])
+      .filter((c) => c.ribbon === "green")
+      .map((c) => c.proposal_id);
+    setMaterializingKg(true);
+    try {
+      const res = await fetch(
+        `/api/brainstorm/sessions/${session.id}/materialize`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // Send explicit ids when we have green picks; otherwise let
+          // the endpoint apply its own green-ribbon default (will 422
+          // if nothing is ready, surfaced as an error toast).
+          body: JSON.stringify(
+            proposalIds.length > 0 ? { proposalIds } : {},
+          ),
+        },
+      );
+      if (!res.ok) {
+        const detail = await safeText(res);
+        setErrorMsg(`Add to graph failed: ${detail}`);
+        return;
+      }
+      const data = (await res.json()) as { committed?: number };
+      setKgEntityCount(typeof data.committed === "number" ? data.committed : 0);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMaterializingKg(false);
+    }
+  }, [session, materializingKg, kgEntityCount]);
+
   const runBrainstorm = useCallback(async () => {
     // Phase 4b-1: generate the session id client-side so we can start
     // polling /sessions/[id] BEFORE the runner POST completes. As the
@@ -264,6 +312,7 @@ export function BrainstormPanel({
     setErrorMsg(null);
     setElectedIds(new Set());
     setSavedToLibrary(false); // fresh run = a new session, not yet saved
+    setKgEntityCount(null);
     // Seed a stub session so polling can start immediately. Real
     // server-returned shape replaces this on first poll / on POST response.
     setSession({
@@ -509,6 +558,9 @@ export function BrainstormPanel({
                 savedToLibrary={savedToLibrary}
                 saving={saving}
                 onSaveToLibrary={saveToLibrary}
+                materializingKg={materializingKg}
+                kgEntityCount={kgEntityCount}
+                onMaterializeToKg={materializeToKg}
                 openedOnBoard={openedOnBoard}
                 onOpenOnBoard={openOnBoard}
                 onCollapseOnBoard={collapseOnBoard}
@@ -1018,6 +1070,9 @@ interface SettledProps {
   savedToLibrary: boolean;
   saving: boolean;
   onSaveToLibrary: () => void;
+  materializingKg: boolean;
+  kgEntityCount: number | null;
+  onMaterializeToKg: () => void;
   openedOnBoard: boolean;
   onOpenOnBoard: () => void;
   onCollapseOnBoard: () => void;
@@ -1194,6 +1249,48 @@ function SettledView(props: SettledProps) {
             <BookmarkPlus className="h-3 w-3" strokeWidth={2.25} />
           )}
           {props.savedToLibrary ? "Saved to Library" : "Save to Library"}
+        </button>
+        <button
+          onClick={props.onMaterializeToKg}
+          disabled={props.materializingKg || props.kgEntityCount !== null}
+          className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition"
+          style={{
+            borderColor:
+              props.kgEntityCount !== null
+                ? "rgba(124,58,237,0.3)"
+                : appleVibe.stroke.hairline,
+            background:
+              props.kgEntityCount !== null
+                ? "rgba(237,233,254,0.5)"
+                : appleVibe.surface.card,
+            color:
+              props.kgEntityCount !== null
+                ? "rgba(91,33,182,0.95)"
+                : appleVibe.text.secondary,
+            cursor: props.materializingKg
+              ? "wait"
+              : props.kgEntityCount !== null
+                ? "default"
+                : "pointer",
+          }}
+          title={
+            props.kgEntityCount !== null
+              ? `${props.kgEntityCount} concept${
+                  props.kgEntityCount === 1 ? "" : "s"
+                } added to the shared knowledge graph as entities`
+              : "Add the ready (green) picks to the shared knowledge graph as entities — they'll appear on the Lab whiteboard too"
+          }
+        >
+          {props.materializingKg ? (
+            <Loader2 className="h-3 w-3 animate-spin" strokeWidth={2.25} />
+          ) : props.kgEntityCount !== null ? (
+            <Check className="h-3 w-3" strokeWidth={2.5} />
+          ) : (
+            <Network className="h-3 w-3" strokeWidth={2.25} />
+          )}
+          {props.kgEntityCount !== null
+            ? `${props.kgEntityCount} in graph`
+            : "Add to graph"}
         </button>
         <button
           onClick={props.onBrainstormAgain}

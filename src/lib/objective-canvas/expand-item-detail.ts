@@ -1382,7 +1382,16 @@ Return strict JSON.`;
         typeof r.facet === "string"
           ? (r.facet as AnnotationProvenance["facet"])
           : "reading";
-      out.push({ index, phrase: ann.phrase, facet });
+      // Phase 2 — propagate canonical concept identity into variation
+      // provenance so cross-room analyses keying on concept_slug see
+      // variations as part of the same concept cluster as their parent.
+      out.push({
+        index,
+        phrase: ann.phrase,
+        facet,
+        concept_slug: ann.concept_slug,
+        concept: ann.concept,
+      });
       if (out.length >= 3) break;
     }
     return out;

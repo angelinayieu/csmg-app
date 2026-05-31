@@ -105,6 +105,14 @@ export interface ItemSnapshot {
    *  SHOULD match on this, not on indices. Lowercase + trimmed
    *  for case-insensitive matching at compute time. */
   derived_from_annotation_phrases: string[];
+  /** Phase-2 (glossary-link) — canonical concept slugs derived from
+   *  the source annotations. The strongest match key for cross-room
+   *  analyses: stable across annotation rewordings AND across rooms
+   *  (the LLM is now instructed to mirror canonical concept names in
+   *  generated entities, so even items from different rooms cluster
+   *  by slug). Empty for pre-Phase-2 items; analyses fall back to
+   *  phrase-matching when so. */
+  derived_from_annotation_concept_slugs: string[];
 }
 
 export interface EdgeSnapshot {

@@ -348,7 +348,15 @@ function cleanProv(
       typeof r.facet === "string"
         ? (r.facet as AnnotationProvenance["facet"])
         : "reading";
-    out.push({ index, phrase: ann.phrase, facet });
+    // Phase 2 — carry concept identity through so expanded children
+    // join the same cross-surface concept graph as the parent items.
+    out.push({
+      index,
+      phrase: ann.phrase,
+      facet,
+      concept_slug: ann.concept_slug,
+      concept: ann.concept,
+    });
     if (out.length >= 2) break;
   }
   return out;

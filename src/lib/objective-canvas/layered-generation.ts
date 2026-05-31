@@ -41,6 +41,15 @@ export interface AnnotationProvenance {
    *  color/icon the provenance ("fragility → friction", "analogy →
    *  mechanism", "dimension → outcome"). */
   facet: "fragility" | "analogy" | "tension" | "dimension" | "inference" | "reading";
+  /** Phase 2 — canonical concept identity for the source annotation
+   *  (slugify(concept ?? phrase)). The route resolves this from the
+   *  lens at persist time so cross-room analyses can group items by
+   *  hard-keyed concept identity instead of text-matching `phrase`.
+   *  Optional for back-compat with pre-Phase-2 persisted items. */
+  concept_slug?: string;
+  /** Phase 2 — canonical concept noun phrase (when the LLM emitted one).
+   *  Renders next to the chip when present; the slug is the join key. */
+  concept?: string | null;
 }
 
 export interface RoomCategoryEnum {
@@ -226,7 +235,9 @@ function ragSection(ctx: RoomContext): {
  *  emit [] when nothing in the lens covers the item. Indices are
  *  1-based into the lens list; the `facet` field tells the UI which
  *  structural slot of the annotation drove the seed. */
-const ANNOTATION_PROVENANCE_RULE = `ANNOTATION PROVENANCE: For each item, include a derived_from_annotations[] array. Each entry: { index: 1-based index into the ANNOTATION LENS above, facet: which structural slot of that annotation drove this item — one of "fragility" | "analogy" | "tension" | "dimension" | "inference" | "reading" }. Prefer mappings: fragility → friction (pain) items; analogy / mechanism → feature items; dimension / inference → outcome items; tension can seed any lane. Cite 0-3 annotations per item — quality over quantity. NEVER invent indices outside the lens. Empty array [] is acceptable when no annotation directly seeds this item.`;
+const ANNOTATION_PROVENANCE_RULE = `ANNOTATION PROVENANCE: For each item, include a derived_from_annotations[] array. Each entry: { index: 1-based index into the ANNOTATION LENS above, facet: which structural slot of that annotation drove this item — one of "fragility" | "analogy" | "tension" | "dimension" | "inference" | "reading" }. Prefer mappings: fragility → friction (pain) items; analogy / mechanism → feature items; dimension / inference → outcome items; tension can seed any lane. Cite 0-3 annotations per item — quality over quantity. NEVER invent indices outside the lens. Empty array [] is acceptable when no annotation directly seeds this item.
+
+CONCEPT IDENTITY (Phase 2): When an annotation in the lens above shows a "concept:" line, that concept is the CANONICAL name for the underlying idea across the entire workspace. If an item you generate embodies that same idea, MIRROR the canonical concept name in your item's name (or use it verbatim as a sub-string) — do NOT invent a new paraphrase. Example: lens entry says concept: "Vivid experience" → if you generate a feature about sensory-rich engagement, call it "Vivid experience layer" not "Immersive sensory engagement". This lets cross-room synthesis identify shared concepts and the glossary trace-back resolve to a single definition.`;
 
 /** Render the ANNOTATION LENS block + provenance rule for prompt
  *  prepend. Compact, max ~8 annotations, weight-sorted desc so the
@@ -254,6 +265,15 @@ function annotationLensSection(ctx: RoomContext): {
     const lane = a.layer_tag ? ` lane:${a.layer_tag}` : "";
     const w = typeof a.weight === "number" ? a.weight.toFixed(2) : "—";
     lines.push(`  [${idx}] "${a.phrase}" (weight ${w}${lane})`);
+    // Phase 2 — surface the canonical concept identity. When an item
+    // generated downstream embodies the same idea, use this concept
+    // name (NOT a fresh paraphrase) so cross-room analyses can
+    // identify shared concepts by text + the glossary popover resolves
+    // the trace-back. The slug is the deterministic join key; the
+    // concept string is what the LLM should mirror in its item names.
+    if (a.concept) {
+      lines.push(`        concept: "${a.concept}" [slug:${a.concept_slug}]`);
+    }
     if (a.reading) {
       lines.push(`        reading: ${a.reading}`);
     }
@@ -1748,6 +1768,14 @@ function resolveProvenance(
       index: entry.index,
       phrase: ann.phrase,
       facet: entry.facet,
+      // Phase 2 — bake the canonical concept identity into the
+      // persisted provenance so downstream cross-room analyses can
+      // group by hard-keyed slug instead of re-deriving from phrase
+      // text. The lens IS the parent objective's annotations, so the
+      // ObjectiveAnnotation type already carries concept_slug from
+      // the v3 generator + the normalizer's slugify(phrase) backfill.
+      concept_slug: ann.concept_slug,
+      concept: ann.concept,
     });
   }
   return out;

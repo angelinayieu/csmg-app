@@ -34,6 +34,7 @@ import {
 } from "@/lib/objective-canvas/generate-categories";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 import { generateObjectiveAnnotations } from "@/lib/objective-canvas/generate-annotations";
+import { loadAlreadyCoveredTerms } from "@/lib/objective-canvas/load-already-covered-terms";
 import {
   buildRagBlock,
   collectRagSources,
@@ -925,9 +926,16 @@ export async function POST(req: NextRequest) {
         .join("\n\n");
       if (focusText.trim().length >= 12) {
         try {
+          // #3 — room lens: exclude glossary + parent-objective terms so
+          // the auto-fired annotations match the manual annotate route.
+          const alreadyCoveredTerms = await loadAlreadyCoveredTerms(db, {
+            spaceId,
+            parentGoalId: sub.parent_goal_id,
+          });
           const subAnnotations = await generateObjectiveAnnotations({
             objective: focusText,
             subObjectives: [],
+            alreadyCovered: { terms: alreadyCoveredTerms },
           });
           if (subAnnotations.length > 0) {
             await db

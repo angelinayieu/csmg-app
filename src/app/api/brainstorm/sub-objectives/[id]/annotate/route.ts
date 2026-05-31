@@ -20,6 +20,7 @@ import {
   type ObjectiveAnnotation,
 } from "@/lib/objective-canvas/generate-annotations";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import { loadAlreadyCoveredTerms } from "@/lib/objective-canvas/load-already-covered-terms";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
 import { narrateAnnotationsGenerated } from "@/lib/objective-canvas/compose-rich-narration";
 
@@ -112,16 +113,25 @@ export async function POST(
     );
   }
 
-  // ── Load sibling sub-objectives so the lens can reference them ──
-  // Sibling context lets annotations cross-reference ("this sub-
-  // objective shares X with sibling Y") without altering offsets.
-  const { data: siblingRows } = await db
-    .from("improvement_goals")
-    .select("id, title, description")
-    .eq("space_id", sub.space_id)
-    .eq("parent_goal_id", sub.parent_goal_id)
-    .neq("id", subObjectiveId);
-  const siblings = (siblingRows ?? []) as Array<{
+  // ── Load context in parallel ──
+  //   siblings — cross-reference ("shares X with sibling Y") w/o offsets
+  //   alreadyCovered — #3: glossary + parent-objective annotation terms
+  //              already defined at a higher altitude; the room lens must
+  //              NOT re-annotate them (see load-already-covered-terms.ts)
+  const [siblingRes, alreadyCoveredTerms] = await Promise.all([
+    db
+      .from("improvement_goals")
+      .select("id, title, description")
+      .eq("space_id", sub.space_id)
+      .eq("parent_goal_id", sub.parent_goal_id)
+      .neq("id", subObjectiveId),
+    loadAlreadyCoveredTerms(db, {
+      spaceId: sub.space_id,
+      parentGoalId: sub.parent_goal_id,
+    }),
+  ]);
+
+  const siblings = (siblingRes.data ?? []) as Array<{
     id: string;
     title: string;
     description: string | null;
@@ -136,6 +146,7 @@ export async function POST(
         title: s.title,
         description: s.description,
       })),
+      alreadyCovered: { terms: alreadyCoveredTerms },
     });
   } catch (err) {
     return NextResponse.json(

@@ -30,16 +30,45 @@ export const annotationOverlap: AnalysisModule = {
     if (state.rooms.length < 2) return [];
     if (state.items.length === 0) return [];
 
-    // Phase-2 stability — group by PHRASE (lowercase trimmed), not
-    // index. Indices reference positional slots in the weight-sorted
-    // lens AT GENERATION TIME; if annotations regenerate and weights
-    // shift, indices point at different annotations. Phrases are
-    // stable across regenerations. Items persist both; we match on
-    // phrases here and look up display data by phrase at the end.
+    // Phase-2 (glossary-link) — group by CONCEPT_SLUG when present.
+    // The slug is stable across both annotation rewordings AND across
+    // rooms (the LLM is now instructed to mirror canonical concept
+    // names in generated items, so phrase wording can diverge while
+    // the slug stays identical). Falls back to phrase, then index.
+    //
+    // Build the byPhrase map keyed on whichever identifier won:
+    // we lookup display data by the corresponding annotation later,
+    // and a slug→phrase map is built alongside so the finding still
+    // names the user-visible phrase, not the internal slug.
     const byPhrase = new Map<
-      string, // lowercased phrase
+      string, // lowercased phrase OR slug — see annBySlug/annByPhrase lookups below
       { room_ids: Set<string>; item_ids: Set<string> }
     >();
+    const annBySlug = new Map<string, (typeof state.parent_annotations)[number]>();
+    for (const ann of state.parent_annotations) {
+      if (ann.concept_slug) annBySlug.set(ann.concept_slug, ann);
+    }
+
+    // Pass 1 — concept_slug match (strongest, post-Phase-2 items only).
+    for (const item of state.items) {
+      for (const slug of item.derived_from_annotation_concept_slugs) {
+        const ann = annBySlug.get(slug);
+        if (!ann) continue;
+        const key = ann.phrase.trim().toLowerCase();
+        const g = byPhrase.get(key) ?? {
+          room_ids: new Set<string>(),
+          item_ids: new Set<string>(),
+        };
+        g.room_ids.add(item.room_id);
+        g.item_ids.add(item.id);
+        byPhrase.set(key, g);
+      }
+    }
+
+    // Pass 2 — phrase match. Always run as a complement to slug
+    // matching: it catches pre-Phase-2 items, items where the LLM
+    // didn't echo a slug, and items that share a phrase but no slug
+    // (legacy rooms). Same map, same buckets — no double-counting.
     for (const item of state.items) {
       for (const phrase of item.derived_from_annotation_phrases) {
         const g = byPhrase.get(phrase) ?? {

@@ -38,7 +38,6 @@ import {
   Cog,
   GitCompare,
   Layers as LayersIcon,
-  RefreshCw,
   Star,
   Target,
 } from "lucide-react";
@@ -50,11 +49,16 @@ import {
   type GlyphKind,
 } from "@/components/objective/icons/annotation-glyphs";
 import { AnnotationCompareModal } from "@/components/objective/annotation-compare-modal";
+import { useAnnotationsVisible } from "@/components/objective/annotations-visibility";
 import type {
   AnnotationVersion,
   ArbitrationRecord,
 } from "@/lib/objective-canvas/annotation-versions";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import {
+  buildGlossaryBySlug,
+  type GlossaryTerm,
+} from "@/lib/objective-canvas/glossary-lookup";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -133,6 +137,14 @@ export interface ObjectiveAnnotation {
   tensions: AnnotationTension[];
   linked_sub_objective_id: string | null;
   layer_tag: AnnotationLayerTag;
+  /** Phase 2 — canonical ≤4-word noun phrase for the underlying idea.
+   *  Distinct from `phrase` (the verbatim text). LLM emits at generation
+   *  time; older rows have null and fall back to slugify(phrase). */
+  concept: string | null;
+  /** Phase 2 — stable slug derived from concept (or phrase fallback).
+   *  The cross-surface join key between annotation popovers, the space
+   *  glossary, and (eventually) entity rows. JSONB-only — no FK. */
+  concept_slug: string;
 }
 
 interface SubObjectiveStub {
@@ -145,6 +157,19 @@ interface Props {
   objective: string;
   initialAnnotations: ObjectiveAnnotation[];
   subObjectives: SubObjectiveStub[];
+  /** Phase 2 — space glossary. Popover joins each annotation's
+   *  concept_slug against this list to show the canonical definition
+   *  alongside the per-annotation reading. Empty array = no glossary
+   *  affordance (falls through to current behavior). */
+  glossary?: import("@/lib/objective-canvas/generate-glossary").GlossaryTerm[];
+  /** Phase 2 (cross-space concept bridge) — per concept_slug, stats
+   *  about how many of the user's OTHER spaces have entities under
+   *  the same canonical concept. Surfaced on the popover as
+   *  "across workspace · N spaces". Empty object hides the affordance. */
+  crossSpaceConcepts?: Record<
+    string,
+    import("@/lib/objective-canvas/cross-space-concept-stats").CrossSpaceConceptStat
+  >;
   /** When false, the centered "Core Objective" eyebrow is suppressed so
    *  a host (the main-canvas header) can own the identity label and the
    *  card aligns flush under a single coordinated toolbar. */
@@ -166,6 +191,21 @@ function colorForTag(tag: AnnotationLayerTag): string {
   return tag ? LAYER_COLOR[tag] : NEUTRAL_COLOR;
 }
 
+// Popup-chrome accent. The objective stage color is intentionally a
+// restrained graphite-slate so the apex layer doesn't shout in violet
+// across the canvas — but when EVERY annotation in a view is objective
+// (the Core Objective lens), inheriting that slate into the popover
+// flattens the header dot + "WORTH" chip + confidence bar + dimension
+// list into one dead-gray surface. The popover is a focused detail
+// view; it can carry a warmer indigo accent without competing with the
+// canvas-wide palette. Non-objective layers (pain/features/outcomes)
+// keep their vivid stage color so layer-of-origin still reads.
+const POPUP_OBJECTIVE_ACCENT = "#5B5BD6";
+
+function popupAccentFor(color: string): string {
+  return color === appleVibe.stage.objective ? POPUP_OBJECTIVE_ACCENT : color;
+}
+
 /** Map weight 0..1 → underline thickness in px. Floor at 0.8 so
  *  every annotation is visible; ceiling at 2.4 keeps text legible. */
 function underlineThickness(weight: number): number {
@@ -180,6 +220,8 @@ export function AnnotatedObjectiveCard({
   objective,
   initialAnnotations,
   subObjectives,
+  glossary = [],
+  crossSpaceConcepts = {},
   showEyebrow = true,
 }: Props) {
   const reduce = useReducedMotion();
@@ -190,6 +232,14 @@ export function AnnotatedObjectiveCard({
   const [annotations, setAnnotations] = useState<ObjectiveAnnotation[]>(() =>
     normalizeAnnotations(initialAnnotations),
   );
+  // Phase 2 — slug → glossary term lookup, built once per glossary
+  // change. Resolves each annotation's concept_slug into a canonical
+  // definition at popover-time. Backfills slugs for pre-Phase-2 rows
+  // via slugifyConcept(term) inside the helper.
+  const glossaryBySlug = useMemo(
+    () => buildGlossaryBySlug(glossary),
+    [glossary],
+  );
   const [reading, setReading] = useState(false); // margin-notes toggle
   const [hovered, setHovered] = useState<number | null>(null);
   const [paintedCount, setPaintedCount] = useState(0);
@@ -199,9 +249,7 @@ export function AnnotatedObjectiveCard({
   // ── Versions state (Deepen / Compare / Synthesize loop) ──
   const [versions, setVersions] = useState<AnnotationVersion[] | null>(null);
   const [versionsLoading, setVersionsLoading] = useState(false);
-  const [deepening, setDeepening] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
-  const [deepenError, setDeepenError] = useState<string | null>(null);
 
   async function loadVersions() {
     if (versions !== null || versionsLoading) return;
@@ -218,32 +266,6 @@ export function AnnotatedObjectiveCard({
       console.warn("[AnnotatedObjective] versions load failed", err);
     } finally {
       setVersionsLoading(false);
-    }
-  }
-
-  async function runDeepen() {
-    setDeepening(true);
-    setDeepenError(null);
-    try {
-      const res = await fetch("/api/brainstorm/annotations/deepen", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ spaceId }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setDeepenError(json?.error ?? "Deepen failed.");
-        return;
-      }
-      setAnnotations(json.annotations);
-      // Force version reload next time the user interacts.
-      setVersions(null);
-    } catch (err) {
-      setDeepenError(
-        err instanceof Error ? err.message : "Network error.",
-      );
-    } finally {
-      setDeepening(false);
     }
   }
 
@@ -348,9 +370,14 @@ export function AnnotatedObjectiveCard({
     };
   }, [annotations, reduce]);
 
+  // Global "annotations off" reading mode — feed zero annotations so the
+  // objective renders as plain prose (no marks, no popovers). The margin-
+  // notes panel + footer controls also gate on this below so "off" is a
+  // coherent state, not a half-hidden one.
+  const annotationsVisible = useAnnotationsVisible();
   const segments = useMemo(
-    () => buildSegments(objective, annotations),
-    [objective, annotations],
+    () => buildSegments(objective, annotationsVisible ? annotations : []),
+    [objective, annotations, annotationsVisible],
   );
   const linkedCount = annotations.filter(
     (a) => a.linked_sub_objective_id,
@@ -402,12 +429,20 @@ export function AnnotatedObjectiveCard({
         {/* Body */}
         <div
           className={
-            reading
+            reading && annotationsVisible
               ? "grid gap-x-8 md:grid-cols-[1fr_minmax(240px,280px)]"
               : ""
           }
         >
-          <p
+          {/* Prose container is a <div>, not a <p>, because each inline
+              AnnotatedMark renders a block-level popover on hover —
+              <div>/<ul>/<ol> nested in <p> is invalid HTML5 and
+              triggered React 19 hydration warnings. Typography is
+              preserved via the same classes + the explicit color.
+              The `as` semantic is now provided by aria-role on the
+              outer container if a host needs it. */}
+          <div
+            role="article"
             className="text-[18px] font-medium leading-[1.65] tracking-tight"
             style={{
               color: appleVibe.text.primary,
@@ -439,12 +474,22 @@ export function AnnotatedObjectiveCard({
                       : null
                   }
                   spaceId={spaceId}
+                  glossaryTerm={
+                    a.concept_slug
+                      ? glossaryBySlug.get(a.concept_slug) ?? null
+                      : null
+                  }
+                  crossSpaceStat={
+                    a.concept_slug
+                      ? crossSpaceConcepts[a.concept_slug] ?? null
+                      : null
+                  }
                 />
               );
             })}
-          </p>
+          </div>
 
-          {reading && (
+          {reading && annotationsVisible && (
             <div className="hidden md:block">
               <ul className="space-y-3">
                 {annotations.map((a, idx) => {
@@ -539,11 +584,13 @@ export function AnnotatedObjectiveCard({
           >
             {loading
               ? "Reading…"
-              : annotations.length > 0
-                ? `${annotations.length} phrases · ${linkedCount} link to sub-objectives`
-                : "No annotations yet"}
+              : !annotationsVisible && annotations.length > 0
+                ? "Annotations hidden"
+                : annotations.length > 0
+                  ? `${annotations.length} phrases · ${linkedCount} link to sub-objectives`
+                  : "No annotations yet"}
           </span>
-          {annotations.length > 0 && (
+          {annotations.length > 0 && annotationsVisible && (
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -569,30 +616,6 @@ export function AnnotatedObjectiveCard({
               </button>
               <button
                 type="button"
-                onClick={runDeepen}
-                disabled={deepening}
-                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
-                style={{
-                  background: deepening
-                    ? appleVibe.surface.chip
-                    : "rgba(15,23,42,0.06)",
-                  color: appleVibe.text.secondary,
-                  cursor: deepening ? "wait" : "pointer",
-                }}
-                title="Run the 7 deepening probes on this reading"
-              >
-                <RefreshCw
-                  className="h-2.5 w-2.5"
-                  strokeWidth={2}
-                  style={{
-                    transform: deepening ? "rotate(360deg)" : "none",
-                    transition: "transform 1.6s linear",
-                  }}
-                />
-                {deepening ? "Deepening…" : "Deepen"}
-              </button>
-              <button
-                type="button"
                 onClick={openCompare}
                 className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-semibold"
                 style={{
@@ -607,19 +630,6 @@ export function AnnotatedObjectiveCard({
             </div>
           )}
         </div>
-        {deepenError && (
-          <div
-            role="alert"
-            className="mt-2 rounded-lg px-3 py-2 text-[11.5px]"
-            style={{
-              background: "rgba(220,38,38,0.06)",
-              border: "1px solid rgba(220,38,38,0.18)",
-              color: "rgba(127,29,29,0.95)",
-            }}
-          >
-            {deepenError}
-          </div>
-        )}
       </div>
 
       {/* Compare modal */}
@@ -677,6 +687,8 @@ function AnnotatedMark({
   onHoverChange,
   subTitle,
   spaceId,
+  glossaryTerm,
+  crossSpaceStat,
 }: {
   annotation: ObjectiveAnnotation;
   index: number;
@@ -688,6 +700,15 @@ function AnnotatedMark({
   onHoverChange: (hovered: boolean) => void;
   subTitle: string | null;
   spaceId: string;
+  /** Phase 2 — resolved glossary term for this annotation's
+   *  concept_slug, or null if no glossary entry matches. The popover
+   *  shows it as an additive "From glossary" section above the
+   *  per-annotation reading; null hides the affordance entirely. */
+  glossaryTerm: GlossaryTerm | null;
+  /** Phase 2 (cross-space concept bridge) — stats about how many of
+   *  the user's OTHER spaces have this concept. Null when there's
+   *  no cross-space match — the popover hides the row entirely. */
+  crossSpaceStat: import("@/lib/objective-canvas/cross-space-concept-stats").CrossSpaceConceptStat | null;
 }) {
   const color = colorForTag(annotation.layer_tag);
   const reduce = useReducedMotion();
@@ -823,6 +844,8 @@ function AnnotatedMark({
               spaceId={spaceId}
               feedback={feedback}
               onFeedback={setFeedback}
+              glossaryTerm={glossaryTerm}
+              crossSpaceStat={crossSpaceStat}
             />
           </motion.div>
         )}
@@ -866,6 +889,8 @@ function PopoverCard({
   spaceId,
   feedback,
   onFeedback,
+  glossaryTerm,
+  crossSpaceStat,
 }: {
   annotation: ObjectiveAnnotation;
   color: string;
@@ -876,11 +901,27 @@ function PopoverCard({
   spaceId: string;
   feedback: "up" | "down" | null;
   onFeedback: (v: "up" | "down") => void;
+  /** Phase 2 — canonical definition from the space glossary (resolved
+   *  by concept_slug upstream). When present, rendered as a tiny
+   *  "From glossary" rail above the tabs — additive, not destructive
+   *  (the per-annotation reading still owns the Read tab). */
+  glossaryTerm: GlossaryTerm | null;
+  /** Phase 2 (cross-space concept bridge) — when this concept also
+   *  surfaces as an entity in the user's OTHER spaces, render a quiet
+   *  "across workspace · N spaces" line so the annotation anchors to
+   *  the user's broader KG. Null hides the affordance. */
+  crossSpaceStat: import("@/lib/objective-canvas/cross-space-concept-stats").CrossSpaceConceptStat | null;
 }) {
   const confidencePct =
     annotation.confidence !== null
       ? Math.round(annotation.confidence * 100)
       : null;
+
+  // The popover chrome (dot, chip, confidence bar, footer link, list
+  // accents) reads through `accent`, which swaps the cold objective
+  // slate for a warmer indigo so the focused detail surface feels
+  // alive without re-tinting the whole canvas. See popupAccentFor.
+  const accent = popupAccentFor(color);
 
   return (
     <div
@@ -888,8 +929,10 @@ function PopoverCard({
       style={{
         background: "rgba(255,255,255,0.98)",
         border: `1px solid ${appleVibe.stroke.medium}`,
-        boxShadow:
-          "0 1px 0 rgba(255,255,255,0.95) inset, 0 24px 50px -20px rgba(11,18,40,0.35)",
+        // Soft accent halo replaces the old solid bordered tints — same
+        // signal of "this surface has a color identity" but as a glow
+        // diffused into the shadow, not a hard ring (Vision Pro vibe).
+        boxShadow: `0 1px 0 rgba(255,255,255,0.95) inset, 0 24px 50px -20px rgba(11,18,40,0.35), 0 0 0 1px ${accent}10, 0 12px 36px -18px ${accent}40`,
         borderRadius: appleVibe.radius.lg,
         backdropFilter: "blur(8px)",
       }}
@@ -898,7 +941,7 @@ function PopoverCard({
       <div className="flex items-start gap-2">
         <span
           className="mt-1 block h-1.5 w-1.5 flex-shrink-0 rounded-full"
-          style={{ background: color }}
+          style={{ background: accent }}
           aria-hidden
         />
         <div className="min-w-0 flex-1">
@@ -911,8 +954,8 @@ function PopoverCard({
             </span>
             {annotation.crystal && (
               <span
-                className="rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wider"
-                style={{ background: `${color}14`, color }}
+                className="text-[9.5px] font-semibold uppercase tracking-[0.08em]"
+                style={{ color: accent }}
               >
                 {annotation.crystal}
               </span>
@@ -934,7 +977,7 @@ function PopoverCard({
                   className="block h-full"
                   style={{
                     width: `${confidencePct}%`,
-                    background: color,
+                    background: accent,
                   }}
                 />
               </span>
@@ -948,6 +991,57 @@ function PopoverCard({
           )}
         </div>
       </div>
+
+      {/* Phase 2 — canonical glossary definition. Rendered as a single
+          quiet line above the tabs (no box, no border) so it reads as a
+          shared "this term means…" rather than a competing card. The
+          per-annotation `reading` still owns the Read tab — they are
+          complementary (definition vs interpretation), not duplicate. */}
+      {glossaryTerm && glossaryTerm.definition?.trim() && (
+        <div
+          className="mt-3 flex items-baseline gap-1.5"
+          style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}`, paddingTop: 10 }}
+        >
+          <span
+            className="text-[9px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: accent }}
+          >
+            Glossary
+          </span>
+          <p
+            className="min-w-0 flex-1 text-[11.5px] font-light leading-snug"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            {glossaryTerm.definition}
+          </p>
+        </div>
+      )}
+
+      {/* Phase 2 (cross-space concept bridge) — ambient KG signal.
+          When this concept surfaces in N of the user's other spaces
+          (via entity-name-slug match), surface a quiet attribution
+          line. Single row; never competes with the glossary definition
+          above it. Hidden when no cross-space evidence exists. */}
+      {crossSpaceStat && crossSpaceStat.space_count > 0 && (
+        <div className="mt-1.5 flex items-baseline gap-1.5">
+          <span
+            className="text-[9px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Across workspace
+          </span>
+          <span
+            className="text-[10.5px] font-light"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            {crossSpaceStat.space_count}
+            {crossSpaceStat.space_count === 1 ? " other space" : " other spaces"}
+            {crossSpaceStat.entity_count > crossSpaceStat.space_count
+              ? ` · ${crossSpaceStat.entity_count} entities`
+              : ""}
+          </span>
+        </div>
+      )}
 
       {/* Tab strip — only show tabs the annotation has content for */}
       {tabs.length > 1 && (
@@ -984,7 +1078,7 @@ function PopoverCard({
 
       {/* Tab body */}
       <div className="mt-3 min-h-[64px]">
-        <TabBody tab={activeTab} annotation={annotation} color={color} />
+        <TabBody tab={activeTab} annotation={annotation} color={accent} />
       </div>
 
       {/* Footer: sub-link + feedback */}
@@ -995,11 +1089,14 @@ function PopoverCard({
         {annotation.linked_sub_objective_id && subTitle ? (
           <Link
             href={`/app/objective/${spaceId}/sub/${annotation.linked_sub_objective_id}`}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10.5px] font-semibold transition-colors"
-            style={{ background: `${color}14`, color }}
+            className="group/sublink inline-flex items-center gap-1 text-[10.5px] font-semibold transition-opacity hover:opacity-75"
+            style={{ color: accent }}
           >
             {subTitle}
-            <ArrowUpRight className="h-3 w-3" strokeWidth={2.5} />
+            <ArrowUpRight
+              className="h-3 w-3 transition-transform group-hover/sublink:translate-x-0.5 group-hover/sublink:-translate-y-0.5"
+              strokeWidth={2.5}
+            />
           </Link>
         ) : (
           <span />
@@ -1088,33 +1185,32 @@ function TabBody({
             >
               Composed of
             </div>
-            <ul className="space-y-1.5">
+            {/* Apple-tier list: no boxes, no borders, no tinted rects.
+                Each row is pure typography on the popover's own glass.
+                Hierarchy comes from weight + a 1×1 colored leading
+                micro-dot that aligns with the name baseline. */}
+            <ul className="space-y-2">
               {annotation.dimensions.map((d, i) => (
-                <li
-                  key={i}
-                  className="rounded-lg px-2.5 py-1.5"
-                  style={{
-                    background: `${color}0F`,
-                    border: `1px solid ${color}24`,
-                  }}
-                >
-                  <div
-                    className="flex items-center gap-1.5 text-[11.5px] font-semibold"
-                    style={{ color: appleVibe.text.primary }}
-                  >
-                    <span
-                      className="block h-1 w-1 flex-shrink-0 rounded-full"
-                      style={{ background: color }}
-                      aria-hidden
-                    />
-                    {d.name}
+                <li key={i} className="flex items-baseline gap-2">
+                  <span
+                    className="block h-1 w-1 flex-shrink-0 translate-y-[-1px] rounded-full"
+                    style={{ background: color }}
+                    aria-hidden
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className="text-[12px] font-semibold leading-snug"
+                      style={{ color: appleVibe.text.primary }}
+                    >
+                      {d.name}
+                    </div>
+                    <p
+                      className="text-[11px] font-light leading-snug"
+                      style={{ color: appleVibe.text.secondary }}
+                    >
+                      {d.why}
+                    </p>
                   </div>
-                  <p
-                    className="mt-0.5 pl-2.5 text-[11px] font-light leading-snug"
-                    style={{ color: appleVibe.text.secondary }}
-                  >
-                    {d.why}
-                  </p>
                 </li>
               ))}
             </ul>

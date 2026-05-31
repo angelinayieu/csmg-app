@@ -193,21 +193,30 @@ export async function loadCrossRoomState(
           .map((v) => v.id)
       : [];
 
-    // Derive annotation indices + phrases from
+    // Derive annotation indices + phrases + concept_slugs from
     // causal_chain.derived_from_annotations. The persisted shape is
-    // [{index, phrase, facet}]; we extract both. Phrases are the
-    // RELIABLE matching key — indices can shift if annotations
-    // get regenerated (see Phase-2 stability note in types.ts).
+    // now [{index, phrase, facet, concept_slug?, concept?}] (Phase 2).
+    // Phrases are the RELIABLE legacy matching key; concept_slug is
+    // the STRONGEST cross-room key (stable across regens AND across
+    // rooms that mirror the canonical concept name in their items).
     const dfa = (e.causal_chain as Record<string, unknown> | null)?.derived_from_annotations;
     const derivedFromAnnotationIndices: number[] = [];
     const derivedFromAnnotationPhrases: string[] = [];
+    const derivedFromAnnotationConceptSlugs: string[] = [];
     if (Array.isArray(dfa)) {
-      for (const entry of dfa as Array<{ index?: unknown; phrase?: unknown }>) {
+      for (const entry of dfa as Array<{
+        index?: unknown;
+        phrase?: unknown;
+        concept_slug?: unknown;
+      }>) {
         if (typeof entry?.index === "number" && Number.isFinite(entry.index) && entry.index >= 1) {
           derivedFromAnnotationIndices.push(Math.floor(entry.index));
         }
         if (typeof entry?.phrase === "string" && entry.phrase.trim().length > 0) {
           derivedFromAnnotationPhrases.push(entry.phrase.trim().toLowerCase());
+        }
+        if (typeof entry?.concept_slug === "string" && entry.concept_slug.trim().length > 0) {
+          derivedFromAnnotationConceptSlugs.push(entry.concept_slug.trim());
         }
       }
     }
@@ -222,6 +231,7 @@ export async function loadCrossRoomState(
       elected_variation_ids: electedVariationIds,
       derived_from_annotation_indices: derivedFromAnnotationIndices,
       derived_from_annotation_phrases: derivedFromAnnotationPhrases,
+      derived_from_annotation_concept_slugs: derivedFromAnnotationConceptSlugs,
     };
   });
 

@@ -131,10 +131,42 @@ function asScope(v: unknown): AnnotationScope {
   return v === "word" ? "word" : "phrase";
 }
 
+/** Phase 2 — concept_slug derivation. Deterministic, ASCII-safe,
+ *  hyphen-separated. Used as the cross-surface join key between
+ *  annotations and the space glossary. Stable across regens IFF the
+ *  concept (or fallback phrase) is stable — when the LLM rewords the
+ *  concept, the slug changes, and the glossary merge handles dedupe.
+ *
+ *  Hardened against unicode (smart quotes, accents) by NFKD-folding and
+ *  stripping combining marks before slugifying. Capped at 60 chars to
+ *  match the glossary term cap. */
+export function slugifyConcept(s: string | null | undefined): string {
+  const src = (s ?? "").toString();
+  if (!src.trim()) return "";
+  return src
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "") // strip diacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-") // non-alphanum → hyphen
+    .replace(/^-+|-+$/g, "") // trim leading/trailing hyphens
+    .slice(0, 60);
+}
+
 export function normalizeAnnotation(raw: unknown): ObjectiveAnnotation | null {
   if (!isRecord(raw)) return null;
   const phrase = asString(raw.phrase);
   if (phrase.length === 0) return null;
+
+  // Phase 2 — concept + concept_slug derivation. v3 rows have neither;
+  // fall back to slugify(phrase) so legacy data still resolves into the
+  // glossary by a deterministic key. When the LLM emits `concept`, use
+  // that as the canonical noun phrase and slug from there. Empty slug
+  // is tolerated (extremely degenerate phrases) — the popup just won't
+  // resolve into the glossary in that case.
+  const concept = typeof raw.concept === "string" && raw.concept.trim()
+    ? raw.concept.trim().slice(0, 60)
+    : null;
+  const concept_slug = slugifyConcept(concept ?? phrase);
 
   return {
     phrase,
@@ -165,6 +197,8 @@ export function normalizeAnnotation(raw: unknown): ObjectiveAnnotation | null {
         ? raw.linked_sub_objective_id
         : null,
     layer_tag: asLayerTag(raw.layer_tag),
+    concept,
+    concept_slug,
   };
 }
 

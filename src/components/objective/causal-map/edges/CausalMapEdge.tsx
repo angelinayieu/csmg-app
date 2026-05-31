@@ -81,6 +81,11 @@ function CausalMapEdgeInner({
           strokeWidth: width,
           opacity,
           strokeDasharray: dashed ? "5 4" : undefined,
+          // Hover focus/dim must EASE, not snap. Without this the wires
+          // hard-cut between rest → focused → faded on every pointer move,
+          // reading as a flash/flicker across the whole web.
+          transition:
+            "opacity 200ms ease-out, stroke-width 200ms ease-out, stroke 200ms ease-out",
         }}
       />
       {(d.label || d.mediator) && !d.faded ? (

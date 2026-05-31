@@ -719,8 +719,8 @@ export function CategoryCard({
       >
         <div className="min-w-0 flex-1">
           <div
-            className="text-[9.5px] font-medium uppercase tracking-[0.18em]"
-            style={{ color: appleVibe.text.faint }}
+            className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+            style={{ color: appleVibe.text.tertiary }}
           >
             Experiment frame
           </div>
@@ -777,8 +777,8 @@ export function CategoryCard({
               </span>
             </div>
             <div
-              className="mt-1 text-[8.5px] font-medium uppercase tracking-[0.2em]"
-              style={{ color: appleVibe.text.faint }}
+              className="mt-1 text-[9.5px] font-semibold uppercase tracking-[0.18em]"
+              style={{ color: appleVibe.text.tertiary }}
             >
               Composite
             </div>
@@ -830,8 +830,8 @@ export function CategoryCard({
           aria-hidden
         />
         <span
-          className="text-[10.5px] font-medium tracking-tight"
-          style={{ color: appleVibe.text.tertiary }}
+          className="text-[11px] font-semibold tracking-tight"
+          style={{ color: appleVibe.text.secondary }}
         >
           Tested via
         </span>
@@ -864,17 +864,13 @@ export function CategoryCard({
           per lock-in M5 "Lab elaborates with tables." */}
       {chainEnrichment && (
         <div
-          className="mx-6 mt-3 rounded-lg"
-          style={{
-            background: appleVibe.surface.chip,
-            border: `1px solid ${appleVibe.stroke.hairline}`,
-          }}
+          className="mx-6 mt-4 pt-3"
+          style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
         >
           <button
             type="button"
             onClick={() => setMechanismExpanded((v) => !v)}
-            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-[rgba(15,23,42,0.025)]"
-            style={{ borderRadius: 7 }}
+            className="group flex w-full items-center justify-between gap-3 text-left"
             aria-label={
               mechanismExpanded
                 ? "Hide causal mechanism"
@@ -883,14 +879,11 @@ export function CategoryCard({
             aria-expanded={mechanismExpanded}
           >
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <span
-                className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-                style={{ color: appleVibe.text.tertiary }}
-              >
+              <SectionLabel className="transition-opacity duration-150 group-hover:opacity-70">
                 Causal mechanism
-              </span>
+              </SectionLabel>
               <span
-                className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+                className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums"
                 style={{
                   background:
                     chainEnrichment.chain_strength >= 0.7
@@ -907,12 +900,12 @@ export function CategoryCard({
                 }}
                 title="End-to-end chain strength (0 to 1) — how plausibly Pain → Feature → Outcome closes the loop"
               >
-                ⚡ {chainEnrichment.chain_strength.toFixed(2)}
+                {chainEnrichment.chain_strength.toFixed(2)}
               </span>
               {chainEnrichment.mediators.length > 0 && (
                 <span
-                  className="text-[10px] font-light"
-                  style={{ color: appleVibe.text.tertiary }}
+                  className="text-[11px] font-normal"
+                  style={{ color: appleVibe.text.secondary }}
                 >
                   · {chainEnrichment.mediators.length}{" "}
                   {chainEnrichment.mediators.length === 1
@@ -922,7 +915,7 @@ export function CategoryCard({
               )}
               {chainEnrichment.weak_points.length > 0 && (
                 <span
-                  className="text-[10px] font-light"
+                  className="text-[11px] font-normal"
                   style={{ color: PAIN_COLOR }}
                   title={chainEnrichment.weak_points.join(" · ")}
                 >
@@ -935,44 +928,34 @@ export function CategoryCard({
             </div>
             {mechanismExpanded ? (
               <ChevronUp
-                className="h-3 w-3 flex-shrink-0"
+                className="h-3.5 w-3.5 flex-shrink-0"
                 strokeWidth={2.4}
                 style={{ color: appleVibe.text.tertiary }}
               />
             ) : (
               <ChevronDown
-                className="h-3 w-3 flex-shrink-0"
+                className="h-3.5 w-3.5 flex-shrink-0"
                 strokeWidth={2.4}
                 style={{ color: appleVibe.text.tertiary }}
               />
             )}
           </button>
           {mechanismExpanded && (
-            <div
-              className="px-3 pb-3 pt-1"
-              style={{
-                borderTop: `1px solid ${appleVibe.stroke.hairline}`,
-              }}
-            >
+            <div className="mt-2.5">
               <p
-                className="text-[11.5px] leading-snug"
-                style={{ color: appleVibe.text.primary }}
+                className="text-[11.5px] leading-relaxed"
+                style={{ color: appleVibe.text.secondary }}
               >
                 {chainEnrichment.narrative}
               </p>
               {chainEnrichment.mediators.length > 0 && (
-                <div className="mt-2">
-                  <div
-                    className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-                    style={{ color: appleVibe.text.tertiary }}
-                  >
-                    Mediators
-                  </div>
-                  <ul className="mt-1 space-y-1">
+                <div className="mt-3">
+                  <SectionLabel>Mediators</SectionLabel>
+                  <ul className="mt-1.5 space-y-1">
                     {chainEnrichment.mediators.map((m, idx) => (
                       <li
                         key={idx}
-                        className="flex items-baseline gap-2 text-[11px]"
+                        className="flex items-baseline gap-2 text-[11.5px]"
                       >
                         <span
                           className="font-medium"
@@ -1005,15 +988,10 @@ export function CategoryCard({
                 </div>
               )}
               {chainEnrichment.outcome_closes_loop && (
-                <div className="mt-2">
-                  <div
-                    className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-                    style={{ color: appleVibe.text.tertiary }}
-                  >
-                    Outcome closes loop
-                  </div>
+                <div className="mt-3">
+                  <SectionLabel>Outcome closes loop</SectionLabel>
                   <p
-                    className="mt-0.5 text-[11px] leading-snug"
+                    className="mt-1 text-[11.5px] leading-relaxed"
                     style={{ color: appleVibe.text.secondary }}
                   >
                     {chainEnrichment.outcome_closes_loop}
@@ -1021,18 +999,13 @@ export function CategoryCard({
                 </div>
               )}
               {chainEnrichment.weak_points.length > 0 && (
-                <div className="mt-2">
-                  <div
-                    className="text-[9.5px] font-semibold uppercase tracking-[0.14em]"
-                    style={{ color: PAIN_COLOR }}
-                  >
-                    Weak points
-                  </div>
-                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                <div className="mt-3">
+                  <SectionLabel tone="pain">Weak points</SectionLabel>
+                  <ul className="mt-1.5 list-disc space-y-1 pl-4">
                     {chainEnrichment.weak_points.map((w, idx) => (
                       <li
                         key={idx}
-                        className="text-[11px] leading-snug"
+                        className="text-[11.5px] leading-relaxed"
                         style={{ color: appleVibe.text.secondary }}
                       >
                         {w}
@@ -1077,17 +1050,12 @@ export function CategoryCard({
           className="mx-6 mt-4 mb-4 pt-3"
           style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
         >
-          <div
-            className="mb-1.5 text-[9.5px] font-medium tracking-tight"
-            style={{ color: appleVibe.text.faint }}
-          >
-            Why this works
-          </div>
+          <SectionLabel className="mb-1.5">Why this works</SectionLabel>
           <ul className="space-y-1">
             {feature.first_principles.slice(0, 5).map((p, i) => (
               <li
                 key={`${i}-${p}`}
-                className="text-[11.5px] leading-snug"
+                className="text-[11.5px] leading-relaxed"
                 style={{ color: appleVibe.text.secondary }}
               >
                 {p}
@@ -1159,6 +1127,38 @@ export function CategoryCard({
   );
 }
 
+// ── Section label ─────────────────────────────────────────────────
+//
+// ONE standardized sub-title for every section inside the frame
+// (Root causes, Indicators, Mediators, Why this works, …). Replaces
+// the prior grab-bag of 8.5–10.5px faint/tertiary uppercase eyebrows
+// that read SMALLER than the body beneath them. The rule: a section
+// label is the anchor of its block — solid near-black, heavier, and
+// a hair larger than the 11.5px body it heads. Sentence-case (Notion
+// clarity), not shouty all-caps.
+
+function SectionLabel({
+  children,
+  tone = "default",
+  className,
+}: {
+  children: React.ReactNode;
+  tone?: "default" | "pain";
+  className?: string;
+}) {
+  return (
+    <div
+      className={`text-[12.5px] font-semibold leading-tight ${className ?? ""}`}
+      style={{
+        color: tone === "pain" ? PAIN_COLOR : appleVibe.text.primary,
+        letterSpacing: "-0.006em",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 // ── Problem half — left side of the juxtaposition ────────────────
 
 function ProblemHalf({
@@ -1185,8 +1185,8 @@ function ProblemHalf({
           aria-hidden
         />
         <span
-          className="text-[10.5px] font-medium tracking-tight"
-          style={{ color: appleVibe.text.tertiary }}
+          className="text-[11px] font-semibold tracking-tight"
+          style={{ color: appleVibe.text.secondary }}
         >
           Problem
         </span>
@@ -1214,17 +1214,12 @@ function ProblemHalf({
           className="mt-3 pt-2.5"
           style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
         >
-          <div
-            className="text-[9.5px] font-medium tracking-tight"
-            style={{ color: appleVibe.text.faint }}
-          >
-            Root causes
-          </div>
-          <ul className="mt-1 space-y-0.5">
+          <SectionLabel>Root causes</SectionLabel>
+          <ul className="mt-1.5 space-y-1">
             {pain.root_causes.slice(0, 3).map((c, i) => (
               <li
                 key={i}
-                className="text-[11.5px] leading-snug"
+                className="text-[11.5px] leading-relaxed"
                 style={{ color: appleVibe.text.secondary }}
               >
                 {c}
@@ -1263,8 +1258,8 @@ function OutcomeHalf({
           aria-hidden
         />
         <span
-          className="text-[10.5px] font-medium tracking-tight"
-          style={{ color: appleVibe.text.tertiary }}
+          className="text-[11px] font-semibold tracking-tight"
+          style={{ color: appleVibe.text.secondary }}
         >
           Outcome
         </span>
@@ -1303,17 +1298,12 @@ function OutcomeHalf({
             className="mt-3 pt-2.5"
             style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
           >
-            <div
-              className="text-[9.5px] font-medium tracking-tight"
-              style={{ color: appleVibe.text.faint }}
-            >
-              Indicators
-            </div>
-            <ul className="mt-1 space-y-0.5">
+            <SectionLabel>Indicators</SectionLabel>
+            <ul className="mt-1.5 space-y-1">
               {list.slice(0, 4).map((ind, i) => (
                 <li
                   key={`${i}-${ind}`}
-                  className="text-[11.5px] leading-snug"
+                  className="text-[11.5px] leading-relaxed"
                   style={{ color: appleVibe.text.secondary }}
                 >
                   {ind}

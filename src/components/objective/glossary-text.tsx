@@ -14,6 +14,7 @@
 import type React from "react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { GlossaryTerm } from "@/lib/objective-canvas/generate-glossary";
+import { useAnnotationsVisible } from "@/components/objective/annotations-visibility";
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -26,6 +27,11 @@ export function GlossaryText({
   text: string;
   terms: GlossaryTerm[];
 }) {
+  // Hook must run unconditionally before any early return. Global
+  // "annotations off" mode also drops glossary underlines so the page
+  // reads as clean text.
+  const annotationsVisible = useAnnotationsVisible();
+  if (!annotationsVisible) return <>{text}</>;
   if (!text || !terms || terms.length === 0) return <>{text}</>;
 
   // Candidate surface forms (term + aliases) → definition. Longest

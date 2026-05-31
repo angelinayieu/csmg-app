@@ -94,6 +94,10 @@ async function gatherAndCompile(
       : null;
 
   // ── glossary terms ──
+  // Phase 2 — also pass concept_slug + annotation_phrase through so the
+  // compiler's LLM prompt + the spec terminology entries carry the
+  // concept-trace-back back to annotations. Pre-Phase-2 rows simply have
+  // these fields undefined and the compiler falls back to old behavior.
   const glossaryRaw = Array.isArray(synthesisData.glossary)
     ? (synthesisData.glossary as Array<Record<string, unknown>>)
     : [];
@@ -101,6 +105,14 @@ async function gatherAndCompile(
     .map((g) => ({
       term: typeof g.term === "string" ? g.term : "",
       definition: typeof g.definition === "string" ? g.definition : "",
+      concept_slug:
+        typeof g.concept_slug === "string" && g.concept_slug
+          ? g.concept_slug
+          : undefined,
+      annotation_phrase:
+        typeof g.annotation_phrase === "string" && g.annotation_phrase
+          ? g.annotation_phrase
+          : undefined,
     }))
     .filter((g) => g.term && g.definition);
 

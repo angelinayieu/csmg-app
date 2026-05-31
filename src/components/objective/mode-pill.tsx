@@ -190,7 +190,7 @@ function ModeOption({
           {label}
           {active && (
             <span
-              className="ml-1.5 text-[10px] font-light uppercase tracking-wider"
+              className="ml-1.5 text-[10px] font-normal uppercase tracking-wider"
               style={{ color: appleVibe.text.tertiary }}
             >
               current
@@ -198,7 +198,7 @@ function ModeOption({
           )}
         </div>
         <div
-          className="mt-0.5 text-[11px] font-light leading-snug"
+          className="mt-0.5 text-[11px] font-normal leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
           {hint}

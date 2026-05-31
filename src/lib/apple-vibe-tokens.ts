@@ -15,13 +15,18 @@ export const appleVibe = {
     chipHover: "rgba(15,23,42,0.06)",
   },
 
-  // Text — only ever rgba(15,23,42,...) at varying alphas. No pure
-  // black anywhere. Matches Apple system text on light backgrounds.
+  // Text — a black-forward slate ramp. `primary` is true slate-900
+  // (#0F172A), so titles + body read as near-black for clarity instead
+  // of the old washed 0.92 alpha. `secondary` is slate-700 (dark + fully
+  // legible) — the ONE subtitle / secondary-body color. `tertiary`
+  // slate-500 for meta + counts; `faint` slate-400 for the quietest
+  // hints. Hierarchy comes from weight + size, NOT from bleaching text
+  // toward the background (which is what made the UI look cheap).
   text: {
-    primary: "rgba(15,23,42,0.92)",
-    secondary: "rgba(15,23,42,0.62)",
-    tertiary: "rgba(15,23,42,0.45)",
-    faint: "rgba(15,23,42,0.28)",
+    primary: "#0F172A",
+    secondary: "#334155",
+    tertiary: "#64748B",
+    faint: "#94A3B8",
     onAccent: "white",
   },
 
@@ -92,6 +97,18 @@ export const appleVibe = {
   // natural case (e.g. "Analysis signals", not "ANALYSIS SIGNALS").
   label: {
     className: "text-[11px] font-semibold tracking-[0.02em]",
-    color: "rgba(15,23,42,0.62)",
+    color: "#475569",
+  },
+
+  // Standardized small-text scale — the ONE place item type is defined,
+  // so "subtitles" stop drifting across 9.5 / 10 / 11 / 12px ad hoc.
+  // Pair each className with the matching `text.*` color. Titles read as
+  // near-black; the single `subtitle` size keeps every secondary line
+  // visually identical across cards, lanes, and chrome.
+  type: {
+    title: "text-[13px] font-semibold leading-tight",
+    subtitle: "text-[11px] font-normal leading-snug",
+    body: "text-[13px] font-normal leading-relaxed",
+    meta: "text-[11px] font-medium tracking-[0.01em]",
   },
 } as const;

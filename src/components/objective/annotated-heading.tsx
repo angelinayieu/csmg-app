@@ -19,6 +19,7 @@ import { useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import { useAnnotationsVisible } from "@/components/objective/annotations-visibility";
 import type {
   ObjectiveAnnotation,
   AnnotationLayerTag,
@@ -112,7 +113,13 @@ export function AnnotatedHeading({
 }: Props) {
   const Tag = as;
   const reduce = useReducedMotion();
-  const safe = useMemo(() => normalizeAnnotations(annotations), [annotations]);
+  // Global "annotations off" reading mode: feed zero annotations so
+  // buildSegments returns one plain text segment (no marks, no popovers).
+  const annotationsVisible = useAnnotationsVisible();
+  const safe = useMemo(
+    () => (annotationsVisible ? normalizeAnnotations(annotations) : []),
+    [annotations, annotationsVisible],
+  );
   const segments = useMemo(() => buildSegments(text, safe), [text, safe]);
 
   const wrapRef = useRef<HTMLDivElement>(null);

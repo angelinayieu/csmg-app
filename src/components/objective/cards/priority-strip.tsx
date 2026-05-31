@@ -243,7 +243,7 @@ export function PriorityStrip({ initialVector, subObjectiveId }: Props) {
             Priorities
           </span>
           <span
-            className="text-[10px] font-light"
+            className="text-[10px] font-normal"
             style={{ color: appleVibe.text.tertiary }}
             title="Soft trade-off weights for THIS room. Distinct from the held-fixed control variables."
           >
@@ -251,7 +251,7 @@ export function PriorityStrip({ initialVector, subObjectiveId }: Props) {
           </span>
           {isInferred && !editing && (
             <span
-              className="ml-1 inline-flex items-center gap-1 text-[10px] font-light italic"
+              className="ml-1 inline-flex items-center gap-1 text-[10px] font-normal italic"
               style={{ color: appleVibe.text.faint }}
               title="The system inferred this from your objective + clarifying answers. Click edit to tune."
             >

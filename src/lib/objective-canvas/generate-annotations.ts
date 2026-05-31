@@ -13,6 +13,7 @@ import {
   RESPONSE_SCHEMA,
   type AnnotationSubObjectiveRef,
 } from "./annotations-prompt";
+import { slugifyConcept } from "./normalize-annotations";
 
 export type AnnotationLayerTag =
   | "features"
@@ -107,6 +108,16 @@ export interface ObjectiveAnnotation {
   // Connections
   linked_sub_objective_id: string | null;
   layer_tag: AnnotationLayerTag;
+
+  // Phase 2 — cross-surface concept identity (mirrors the UI-side type
+  // in annotated-objective-card.tsx). `concept` is the LLM-emitted
+  // canonical noun phrase (≤4 words); `concept_slug` is the
+  // deterministic slug used to join annotations ↔ glossary ↔
+  // downstream surfaces (room-gen LLM, tech spec). Both nullable for
+  // back-compat — older annotations without `concept` get
+  // concept_slug derived from slugify(phrase).
+  concept: string | null;
+  concept_slug: string;
 }
 
 interface LlmShape {
@@ -121,6 +132,12 @@ export interface GenerateAnnotationsOptions {
    *  preserving high-utility annotations + reframing orphaned ones.
    *  Optional; absent for cold-start (no rooms exist yet). */
   priorUtility?: Array<{ phrase: string; count: number }>;
+  /** #3 — Terms already defined at a higher altitude (space glossary +
+   *  parent-objective annotations). When non-empty, switches the prompt
+   *  into ROOM-LENS MODE: skip these redundant macro/glossary terms,
+   *  surface only room-new / room-ambiguous terms. Threaded straight
+   *  into buildUserPrompt. Absent ⇒ top-level objective lens. */
+  alreadyCovered?: { terms: string[] };
 }
 
 const ALLOWED_TAGS = new Set(["features", "outcomes", "pain", "objective"]);
@@ -330,6 +347,17 @@ export async function generateObjectiveAnnotations(
         ? (a.layer_tag as Exclude<AnnotationLayerTag, null>)
         : null;
 
+    // Phase 2 — concept + concept_slug. The LLM emits `concept` when
+    // the canonical noun phrase is distinct from the verbatim phrase.
+    // Slug is deterministic so legacy/missing concepts still fall back
+    // to slugify(phrase) and the glossary + downstream surfaces stay
+    // join-able even without an LLM-provided concept.
+    const concept =
+      typeof a.concept === "string" && a.concept.trim()
+        ? a.concept.trim().slice(0, 60)
+        : null;
+    const concept_slug = slugifyConcept(concept ?? resolvedPhrase);
+
     cleaned.push({
       phrase: resolvedPhrase,
       start_offset: start,
@@ -350,6 +378,8 @@ export async function generateObjectiveAnnotations(
       tensions,
       linked_sub_objective_id: linked,
       layer_tag: layerTag,
+      concept,
+      concept_slug,
     });
   }
 

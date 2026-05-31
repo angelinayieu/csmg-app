@@ -49,6 +49,7 @@ import {
   X,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { pushRightPanel } from "@/lib/objective-canvas/right-panel-signal";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 import { ThumbsRating } from "@/components/objective/thumbs-rating";
 import type { VariationScoreEnvelope } from "@/lib/objective-canvas/score-variation-effectiveness";
@@ -628,6 +629,15 @@ export function ItemDetailDrawer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // ── Own the top-right corner ──
+  // While open, signal the layout's collapsed "Notebook" pill (which
+  // anchors to the same corner) to hide so it stops covering this
+  // drawer's header. Cleanup releases the ref count on close/unmount.
+  useEffect(() => {
+    if (!open) return;
+    return pushRightPanel();
+  }, [open]);
 
   // ── Lazy-fetch detail on every open ──
   //

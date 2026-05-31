@@ -22,6 +22,7 @@
 // annotation seeds + existing terms still flow through.
 
 import { llmJSON } from "@/lib/llm";
+import { slugifyConcept } from "@/lib/objective-canvas/normalize-annotations";
 
 export type GlossarySource = "annotation" | "entity" | "llm" | "user";
 
@@ -42,6 +43,12 @@ export interface GlossaryTerm {
   weight?: number;
   /** User-edited / confirmed → NEVER overwritten on regeneration. */
   pinned?: boolean;
+  /** Phase 2 — stable cross-surface concept identity. Derived from the
+   *  source annotation's concept (or fallback slugify(term/phrase) for
+   *  pre-Phase-2 rows). The annotation popover joins on this slug to
+   *  show "this is also defined in the glossary as: …". Optional for
+   *  back-compat; backfilled lazily on next merge. */
+  concept_slug?: string;
   updated_at: string;
 }
 
@@ -51,6 +58,13 @@ export interface AnnotationSeed {
   reading: string;
   weight?: number;
   layer_tag?: string | null;
+  /** Phase 2 — canonical concept noun phrase (e.g. "Vivid experience").
+   *  Pre-Phase-2 callers can omit; glossary will fall back to
+   *  slugify(phrase). */
+  concept?: string | null;
+  /** Phase 2 — pre-computed slug. If omitted, derived from concept or
+   *  phrase. Passing it explicitly avoids re-slugifying. */
+  concept_slug?: string;
 }
 
 export interface GenerateGlossaryInput {
@@ -134,13 +148,40 @@ function surfaces(t: { term: string; aliases?: string[] }): string[] {
   return [t.term, ...(t.aliases ?? [])].map(norm).filter(Boolean);
 }
 
-/** Find an existing term whose term/alias overlaps the incoming one. */
+/** Find an existing term whose term/alias overlaps the incoming one.
+ *  Phase 2 — prefer concept_slug match (stable across rewordings) and
+ *  fall back to text-surface match for pre-Phase-2 rows. Slug match is
+ *  cheap and exact; surface match is the legacy bridge. */
 function findMatch(
   existing: GlossaryTerm[],
-  incoming: { term: string; aliases?: string[] },
+  incoming: { term: string; aliases?: string[]; concept_slug?: string },
 ): GlossaryTerm | undefined {
+  // 1) Stable slug match — Phase 2 primary path.
+  if (incoming.concept_slug) {
+    const slug = incoming.concept_slug;
+    const bySlug = existing.find((e) => e.concept_slug === slug);
+    if (bySlug) return bySlug;
+  }
+  // 2) Text-surface match — legacy path, also catches new terms that
+  //    happen to share a surface form with a pre-Phase-2 entry.
   const inc = new Set(surfaces(incoming));
   return existing.find((e) => surfaces(e).some((s) => inc.has(s)));
+}
+
+/** Phase 2 — read-side helper. Build a slug→term lookup over the
+ *  glossary. Backfills slugs on any pre-Phase-2 rows (slugify of term)
+ *  so the popover never misses a definition for legacy data. Last-write
+ *  wins on duplicate slugs (rare; only when two old rows collide). */
+export function buildGlossaryBySlug(
+  terms: GlossaryTerm[],
+): Map<string, GlossaryTerm> {
+  const out = new Map<string, GlossaryTerm>();
+  for (const t of terms) {
+    const slug = t.concept_slug ?? slugifyConcept(t.term);
+    if (!slug) continue;
+    out.set(slug, t);
+  }
+  return out;
 }
 
 /** Accumulate-merge: existing ⊕ incoming, with authority + pinned
@@ -151,14 +192,27 @@ export function mergeGlossary(
   existing: GlossaryTerm[],
   incoming: GlossaryTerm[],
 ): GlossaryTerm[] {
-  const out: GlossaryTerm[] = existing.map((t) => ({ ...t }));
+  // Phase 2 — opportunistically backfill concept_slug on pre-Phase-2
+  // rows so subsequent merges + the read-side lookup hit by slug, not
+  // text. Pure derivation, no destructive change to existing rows.
+  const out: GlossaryTerm[] = existing.map((t) => ({
+    ...t,
+    concept_slug: t.concept_slug ?? slugifyConcept(t.term),
+  }));
   for (const inc of incoming) {
-    const match = findMatch(out, inc);
+    const incSlug = inc.concept_slug ?? slugifyConcept(inc.term);
+    const incWithSlug = { ...inc, concept_slug: incSlug };
+    const match = findMatch(out, incWithSlug);
     if (!match) {
-      out.push(inc);
+      out.push(incWithSlug);
       continue;
     }
-    if (match.pinned) continue; // user-owned — immutable
+    if (match.pinned) {
+      // user-owned — definition is immutable, but we still backfill the
+      // slug on the existing row so it's findable next merge.
+      if (!match.concept_slug && incSlug) match.concept_slug = incSlug;
+      continue;
+    }
     const incRank = AUTHORITY[inc.source] ?? 1;
     const curRank = AUTHORITY[match.source] ?? 1;
     if (incRank >= curRank || !match.definition.trim()) {
@@ -172,6 +226,9 @@ export function mergeGlossary(
       match.weight = inc.weight ?? match.weight;
       match.updated_at = inc.updated_at;
     }
+    // Always backfill slug on the existing row — non-destructive,
+    // makes future slug lookups hit.
+    if (!match.concept_slug && incSlug) match.concept_slug = incSlug;
   }
   // Cap — keep pinned first, then by authority, weight, recency.
   out.sort((a, b) => {
@@ -193,15 +250,21 @@ export async function generateGlossary(
   const now = new Date().toISOString();
 
   // ── 1. Authoritative seeds from the Annotation Lens readings ──
+  // Phase 2 — dedupe by concept_slug when present (stable across
+  // rewordings), fall back to normalized term text for pre-Phase-2
+  // seeds. Two annotations with the same concept_slug ("vivid-experience"
+  // showing up in both parent objective and a sub) collapse into one
+  // glossary entry instead of two near-duplicate rows.
   const seeds: GlossaryTerm[] = [];
   const seedKeys = new Set<string>();
   for (const a of input.annotations) {
     const term = a.phrase?.trim().slice(0, 60) ?? "";
     const definition = a.reading?.trim().slice(0, 320) ?? "";
     if (!term || !definition) continue;
-    const key = norm(term);
-    if (seedKeys.has(key)) continue; // parent + sub readings can overlap
-    seedKeys.add(key);
+    const slug = a.concept_slug ?? slugifyConcept(a.concept ?? term);
+    const dedupeKey = slug || norm(term);
+    if (seedKeys.has(dedupeKey)) continue; // parent + sub readings can overlap
+    seedKeys.add(dedupeKey);
     seeds.push({
       term,
       definition,
@@ -210,6 +273,7 @@ export async function generateGlossary(
       annotation_phrase: a.phrase,
       layer_tag: a.layer_tag ?? null,
       weight: a.weight,
+      concept_slug: slug || undefined,
       updated_at: now,
     });
   }
@@ -297,6 +361,11 @@ export async function generateGlossary(
         definition,
         aliases,
         source: "entity",
+        // Phase 2 — entity-mined terms slug from their term text; they
+        // don't carry an annotation-side concept yet. Annotations whose
+        // phrase happens to coincide with an entity name will collide on
+        // this slug at popover-lookup time, which is exactly what we want.
+        concept_slug: slugifyConcept(term),
         updated_at: now,
       });
     }

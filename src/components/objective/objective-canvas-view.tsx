@@ -63,6 +63,8 @@ import type {
 import type { CrossRoomSignals } from "@/lib/objective-canvas/cross-room-signals";
 import type { IntentPreference } from "@/lib/objective-canvas/decision-log";
 import type { ConceptMemoryEntry } from "@/lib/objective-canvas/concept-memory-feed";
+import type { GlossaryTerm } from "@/lib/objective-canvas/generate-glossary";
+import type { CrossSpaceConceptStat } from "@/lib/objective-canvas/cross-space-concept-stats";
 
 interface Props {
   spaceId: string;
@@ -75,6 +77,18 @@ interface Props {
    *  array = not yet generated; the annotated card lazy-fetches on
    *  first paint. */
   initialCoreAnnotations: ObjectiveAnnotation[];
+  /** Phase 2 — space glossary, server-rendered. Threaded down to the
+   *  annotation popovers so the "what does this mean" answer is the
+   *  same on every surface (parent objective, room headings, drawer).
+   *  Empty array = no synthesis run yet; popovers fall through to the
+   *  per-annotation `reading`. */
+  initialGlossary?: GlossaryTerm[];
+  /** Phase 2 (cross-space concept bridge) — per-concept_slug stats
+   *  about the user's OTHER spaces (entity-name-slug match). When a
+   *  slug has stats, the popover surfaces "across workspace · N spaces"
+   *  as ambient KG signal. Empty object = no cross-space evidence
+   *  (new user, or no concept overlap). */
+  initialCrossSpaceConcepts?: Record<string, CrossSpaceConceptStat>;
   /** Variant Lab — user's revealed top-preferred intent (from the
    *  decision log). Null when the user has no history yet. Passed
    *  through to the picker as the "Suggested" affordance fallback
@@ -143,6 +157,8 @@ export function ObjectiveCanvasView({
   initialSubObjectives,
   initialMainSubs,
   initialCoreAnnotations,
+  initialGlossary = [],
+  initialCrossSpaceConcepts = {},
   initialPreferredIntent = null,
   initialPreferenceSource = "none",
   initialUserPrefs = [],
@@ -273,6 +289,8 @@ export function ObjectiveCanvasView({
         {stage === "main" && (
           <MainCanvasView
             coreAnnotations={initialCoreAnnotations}
+            glossary={initialGlossary}
+            crossSpaceConcepts={initialCrossSpaceConcepts}
             spaceId={spaceId}
             objective={objective}
             subs={initialMainSubs}

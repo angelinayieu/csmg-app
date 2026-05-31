@@ -61,8 +61,8 @@ import { RoomEdgesOverlay } from "./room-edges-overlay";
 // Phase 12.A.4 — the room-altitude Causal Loop Diagram. A third room
 // view alongside Categories / Variables; reads the same lanes + edges.
 import { RoomAltitudeMap } from "./causal-map/altitudes/RoomAltitudeMap";
-import { MechanismSubsystemView } from "./mechanism-subsystem-view";
-import { buildMechanismSubsystems } from "@/lib/objective-canvas/build-mechanism-subsystems";
+import { SubsystemModulesView } from "./subsystem-modules-view";
+import { buildSubsystemModules } from "@/lib/objective-canvas/build-subsystem-modules";
 // Phase 12.A.8 — remember the room's view choice per sub-objective.
 import { useLocalPref } from "./causal-map/hooks/useLocalPref";
 import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
@@ -900,7 +900,7 @@ export function SubObjectiveRoomView({
         <div className="mb-6 flex items-center justify-between gap-3">
           <div>
             <p
-              className="text-[13px] font-light"
+              className="text-[13px] font-normal"
               style={{ color: appleVibe.text.secondary }}
             >
               We&rsquo;ll spin out pain points first, then outcomes, then
@@ -1095,7 +1095,7 @@ export function SubObjectiveRoomView({
         <div className="flex min-w-0 items-center gap-3">
           {generatedAt && approvedCount > 0 && (
             <span
-              className="truncate text-[12px] font-light"
+              className="truncate text-[12px] font-normal"
               style={{ color: appleVibe.text.secondary }}
             >
               {approvedCount} correlation{approvedCount === 1 ? "" : "s"}{" "}
@@ -1175,8 +1175,9 @@ export function SubObjectiveRoomView({
         />
       )}
       {roomView === "subsystems" && (
-        <MechanismSubsystemView
-          {...buildMechanismSubsystems({ lanes, edges, roomCategories })}
+        <SubsystemModulesView
+          model={buildSubsystemModules({ lanes, edges, roomCategories })}
+          onOpenItem={setDetailEntityId}
         />
       )}
       {roomView === "variables" && (
@@ -1510,7 +1511,7 @@ function HeroProse({
    *  (untrimmed) description for the underlines to land correctly. */
   annotations?: ObjectiveAnnotation[];
 }) {
-  const proseClass = "max-w-[70ch] text-[13.5px] font-light leading-relaxed";
+  const proseClass = "max-w-[70ch] text-[13px] font-normal leading-relaxed";
   const proseStyle = { color: appleVibe.text.secondary };
   return (
     <div>
@@ -1658,74 +1659,50 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
                 : "flex flex-shrink-0 items-start gap-1"
             }
           >
-            <div className="flex min-w-0 flex-col items-center gap-1.5 px-2 text-center">
-              {/* Icon as the station glyph; count rides its lower-right
-                  corner as an iOS-style badge so there's no competing
-                  pill on the title row. */}
-              <div className="relative flex-shrink-0">
+            <div className="flex min-w-0 flex-col items-center gap-1 px-2 text-center">
+              {/* One calm row: lane-colored glyph + near-black title + a
+                  muted count. No flat tint disc, no competing badge — the
+                  icon is the single accent, everything else is type. */}
+              <div className="flex h-5 items-center gap-1.5">
+                <RoleIcon
+                  className="h-4 w-4 flex-shrink-0"
+                  strokeWidth={2}
+                  style={{ color }}
+                />
                 <span
-                  className="grid place-items-center rounded-full"
+                  className={appleVibe.type.title}
                   style={{
-                    width: 36,
-                    height: 36,
-                    background: `${color}1F`,
-                    color,
+                    color: appleVibe.text.primary,
+                    fontFamily: appleVibe.font.display,
+                    letterSpacing: "-0.01em",
                   }}
-                  aria-hidden
                 >
-                  <RoleIcon className="h-[18px] w-[18px]" strokeWidth={2} />
+                  {lane.label}
                 </span>
                 <span
-                  className="absolute -bottom-1 -right-1 grid min-w-[18px] place-items-center rounded-full px-1 text-[10px] font-semibold tabular-nums"
-                  style={{
-                    height: 18,
-                    background: appleVibe.surface.card,
-                    color,
-                    boxShadow: `0 0 0 1px ${color}33, 0 1px 3px -1px rgba(15,23,42,0.18)`,
-                  }}
+                  className="text-[11px] font-semibold tabular-nums"
+                  style={{ color: appleVibe.text.tertiary }}
                 >
                   {lane.items.length}
                 </span>
               </div>
               <span
-                className="text-[12.5px] font-semibold leading-tight"
-                style={{
-                  color: appleVibe.text.primary,
-                  fontFamily: appleVibe.font.display,
-                  letterSpacing: "-0.01em",
-                }}
-              >
-                {lane.label}
-              </span>
-              <span
                 className="text-[10px] font-medium tracking-[0.01em]"
-                style={{ color }}
+                style={{ color: appleVibe.text.tertiary }}
               >
                 {role.roleLabel} · {role.direction}
               </span>
             </div>
 
             {verb && (
-              // Connector height matches the icon (36px); items-center puts
-              // the line at the icon's vertical midpoint so it reads as one
-              // continuous pipeline icon→icon, with the title/descriptor
-              // hanging below. Verb floats just above the line.
+              // Two stacked rows mirror the station (title row / descriptor
+              // row) so the connector line sits on the title baseline and
+              // the flow verb lands level with the role descriptors.
               <div
-                className="relative flex flex-1 items-center"
-                style={{ height: 36, minWidth: 44 }}
+                className="flex flex-1 flex-col gap-1"
+                style={{ minWidth: 44 }}
               >
-                <span
-                  className="absolute whitespace-nowrap text-[8.5px] font-medium lowercase tracking-wide"
-                  style={{
-                    color: appleVibe.text.faint,
-                    left: "50%",
-                    top: "50%",
-                    transform: "translate(-50%, -150%)",
-                  }}
-                >
-                  {verb}
-                </span>
-                <div className="flex w-full items-center">
+                <div className="flex h-5 items-center">
                   <div
                     className="h-px flex-1"
                     style={{
@@ -1743,6 +1720,12 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
                     strokeWidth={2.4}
                   />
                 </div>
+                <span
+                  className="whitespace-nowrap text-center text-[10px] font-medium lowercase tracking-wide"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  {verb}
+                </span>
               </div>
             )}
           </div>
@@ -1822,7 +1805,6 @@ function LaneItem({
 }
 
 function Lane({
-  slug,
   label,
   color,
   count,
@@ -1836,8 +1818,6 @@ function Lane({
   loading: boolean;
   children: React.ReactNode;
 }) {
-  const role = LANE_ROLE[slug];
-  const RoleIcon = role.icon;
   return (
     <div
       className="flex min-h-[260px] flex-col p-5 transition-shadow duration-300 ease-out"
@@ -1855,53 +1835,35 @@ function Lane({
         fontFamily: appleVibe.font.stack,
       }}
     >
-      {/* Header — two stacked rows so the title gets the visual
-          weight + the scientific role line gets its own breathing room.
-          Phase 5a: this header turns the lane from a "things in a
-          column" container into a labeled experiment role. */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          {/* Row 1 — role icon + variable type chip. Lane-color
-              anchored so each lane reads as a distinct kind of
-              variable, not "another column." */}
-          <div className="flex items-center gap-1.5">
-            <RoleIcon
-              className="h-3.5 w-3.5 flex-shrink-0"
-              strokeWidth={2}
-            />
-            <span
-              className="text-[10px] font-semibold tracking-[0.02em]"
-              style={{ color }}
-            >
-              {role.roleLabel} var · {role.direction}
-            </span>
-          </div>
-          {/* Row 2 — the lane title, big and centered like before. */}
-          <div className="mt-1.5 flex items-center gap-2">
-            <span
-              className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
-              style={{
-                background: color,
-                // Lane-color dot gets a small glow so it reads as a
-                // status pip, not a decoration.
-                boxShadow: `0 0 0 3px ${color}1A`,
-              }}
-              aria-hidden
-            />
-            <h3
-              className="text-[15px] font-semibold tracking-tight"
-              style={{
-                color: appleVibe.text.primary,
-                letterSpacing: "-0.01em",
-                fontFamily: appleVibe.font.display,
-              }}
-            >
-              {label}
-            </h3>
-          </div>
+      {/* Header — one clean row: status pip + near-black title, count
+          chip on the right. The experiment-role framing (Dependent /
+          Independent · direction) lives in the always-on instrument
+          legend above every view, so the lane no longer repeats it. */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
+            style={{
+              background: color,
+              // Lane-color dot gets a small glow so it reads as a
+              // status pip, not a decoration.
+              boxShadow: `0 0 0 3px ${color}1A`,
+            }}
+            aria-hidden
+          />
+          <h3
+            className="text-[15px] font-semibold tracking-tight"
+            style={{
+              color: appleVibe.text.primary,
+              letterSpacing: "-0.01em",
+              fontFamily: appleVibe.font.display,
+            }}
+          >
+            {label}
+          </h3>
         </div>
         <span
-          className="mt-0.5 flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums"
+          className="flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums"
           style={{
             background: appleVibe.surface.chip,
             color: appleVibe.text.tertiary,
@@ -1944,7 +1906,7 @@ function SkeletonItem() {
 function EmptyHint() {
   return (
     <div
-      className="border border-dashed px-3 py-3 text-center text-[11.5px] font-light italic"
+      className="border border-dashed px-3 py-3 text-center text-[11px] font-normal italic"
       style={{
         borderColor: appleVibe.stroke.hairline,
         color: appleVibe.text.faint,

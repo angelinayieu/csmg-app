@@ -74,7 +74,19 @@ export interface AgentBuildSpec {
   conceptual_model: {
     objects: Array<{ name: string; description: string }>;
     relationships: string[];
-    terminology: Array<{ term: string; definition: string }>;
+    /** Phase 2 — terminology entries optionally carry concept_slug
+     *  (the cross-surface canonical identity from annotations/glossary)
+     *  and origin_annotations (the underlying phrases that seeded the
+     *  term). This lets the spec reader trace any term back to where it
+     *  entered the workspace, and lets agents reading the spec re-join
+     *  the spec terminology to the glossary + annotation popovers.
+     *  Empty when no glossary entry was passed for the term. */
+    terminology: Array<{
+      term: string;
+      definition: string;
+      concept_slug?: string;
+      origin_annotations?: string[];
+    }>;
   };
   // DATA
   data_model: Array<{ entity: string; fields: string[]; used_by: string[] }>;
@@ -136,8 +148,18 @@ export interface CompileAgentBuildSpecInput {
   mechanismSpecs: Record<string, MechanismSpec>;
   /** Macro-rollup layers. Null when the roll-up hasn't run for this space. */
   macroLayers: MacroLayerInput[] | null;
-  /** Space glossary terms (synthesis_data.glossary). */
-  glossary: Array<{ term: string; definition: string }>;
+  /** Space glossary terms (synthesis_data.glossary). Phase 2 — each
+   *  entry can carry concept_slug (the cross-surface concept identity)
+   *  + annotation_phrase (the underlying phrase that seeded the term).
+   *  Both optional for back-compat with pre-Phase-2 glossary blobs;
+   *  when present, the LLM is asked to populate terminology[].concept_slug
+   *  and origin_annotations on each spec terminology entry it generates. */
+  glossary: Array<{
+    term: string;
+    definition: string;
+    concept_slug?: string;
+    annotation_phrase?: string;
+  }>;
   /** loadCrossRoomState().state_hash — caches the compiled spec. */
   stateHash: string;
 }
@@ -333,8 +355,27 @@ const SYNTHESIS_SCHEMA = {
               properties: {
                 term: { type: "string" },
                 definition: { type: "string" },
+                // Phase 2 — cross-surface concept identity. When the LLM
+                // is generating a terminology entry that corresponds to a
+                // glossary term it was shown, it MUST echo the term's
+                // concept_slug back so the spec carries the trace-back
+                // (and a building agent can re-join to the annotation
+                // popover for the canonical reading). Nullable for
+                // freshly-coined spec terms with no glossary mapping.
+                concept_slug: { type: ["string", "null"] },
+                // The original annotation phrase(s) that seeded this
+                // concept. Empty array when no annotation maps to it.
+                origin_annotations: {
+                  type: "array",
+                  items: { type: "string" },
+                },
               },
-              required: ["term", "definition"],
+              required: [
+                "term",
+                "definition",
+                "concept_slug",
+                "origin_annotations",
+              ],
             },
           },
         },
@@ -407,7 +448,7 @@ function buildSynthesisPrompt(
 
 - product_summary: 2-3 sentences — what we're building + for whom (press-release clarity, no hype).
 - distilled_objective: ONE dense plain sentence naming the whole product.
-- conceptual_model: the domain objects, how they relate, and key terminology — the bridge between the data model and the UI (this is the most-skipped, highest-value layer). Derive objects/terms from the features + glossary; don't invent unrelated ones.
+- conceptual_model: the domain objects, how they relate, and key terminology — the bridge between the data model and the UI (this is the most-skipped, highest-value layer). Derive objects/terms from the features + glossary; don't invent unrelated ones. For EACH terminology entry, if it corresponds to a GLOSSARY row shown below (matched by term text OR by concept_slug), MIRROR that row's concept_slug into the terminology entry and list its annotation_phrase under origin_annotations[]. This preserves the trace-back from spec → glossary → annotation popover that a building agent and human reader rely on. Use concept_slug: null + origin_annotations: [] for freshly-coined spec terms that have no glossary mapping.
 - data_model: the concrete shared entities + fields the features need, and which features use each. Synthesize across features — find the SHARED entities, don't just restate per-feature data.
 - data_flow_cross_feature: ordered, labeled data flows BETWEEN features (from → to {data}, upstream/downstream). This is how the system's parts feed each other across layers. Use the layered architecture to infer direction (substrate → outcome = downstream).
 - build_sequence: dependency-ordered phases (data models → services → endpoints → UI). Foundational features first.
@@ -432,11 +473,22 @@ RULES: ground every claim in the provided pieces — no invented features or tec
           )
           .join("\n")
       : "(macro roll-up not yet run — infer a minimal layering from the features)";
+  // Phase 2 — surface concept_slug + annotation_phrase in the glossary
+  // block when present. The LLM uses these to thread terminology
+  // entries back to their annotation origin (concept-trace-back).
+  // Pre-Phase-2 rows (no slug) render with the old term/definition
+  // shape — instruction tells the LLM that null is OK.
   const glossaryLines =
     input.glossary.length > 0
       ? input.glossary
           .slice(0, 30)
-          .map((g) => `- ${g.term}: ${g.definition}`)
+          .map((g) => {
+            const slugBit = g.concept_slug ? ` [slug: ${g.concept_slug}]` : "";
+            const originBit = g.annotation_phrase
+              ? ` (annotation: "${g.annotation_phrase}")`
+              : "";
+            return `- ${g.term}${slugBit}: ${g.definition}${originBit}`;
+          })
           .join("\n")
       : "(no glossary)";
 
@@ -543,11 +595,47 @@ export async function compileAgentBuildSpec(
         : [],
       relationships: strArr(cm.relationships, 16, 240),
       terminology: Array.isArray(cm.terminology)
-        ? (cm.terminology as Array<{ term?: unknown; definition?: unknown }>)
-            .map((t) => ({ term: str(t.term, 120), definition: str(t.definition, 300) }))
+        ? (
+            cm.terminology as Array<{
+              term?: unknown;
+              definition?: unknown;
+              concept_slug?: unknown;
+              origin_annotations?: unknown;
+            }>
+          )
+            .map((t) => ({
+              term: str(t.term, 120),
+              definition: str(t.definition, 300),
+              // Phase 2 — preserve concept identity + traceback the LLM
+              // echoes back. Either may be omitted; we coerce conservatively
+              // so spec consumers can rely on the shape (string OR undefined,
+              // string[] OR undefined).
+              concept_slug:
+                typeof t.concept_slug === "string" && t.concept_slug
+                  ? t.concept_slug.slice(0, 80)
+                  : undefined,
+              origin_annotations: Array.isArray(t.origin_annotations)
+                ? (t.origin_annotations as unknown[])
+                    .filter(
+                      (s): s is string => typeof s === "string" && s.length > 0,
+                    )
+                    .map((s) => s.slice(0, 160))
+                    .slice(0, 6)
+                : undefined,
+            }))
             .filter((t) => t.term)
             .slice(0, 24)
-        : input.glossary.slice(0, 24),
+        : // Pre-LLM fallback: copy glossary rows straight through,
+          // preserving slug + annotation_phrase when present so the
+          // template's traceback still renders even if synthesis failed.
+          input.glossary.slice(0, 24).map((g) => ({
+            term: g.term,
+            definition: g.definition,
+            concept_slug: g.concept_slug,
+            origin_annotations: g.annotation_phrase
+              ? [g.annotation_phrase]
+              : undefined,
+          })),
     },
     data_model: Array.isArray(synth.data_model)
       ? (synth.data_model as Array<{ entity?: unknown; fields?: unknown; used_by?: unknown }>)
@@ -693,7 +781,24 @@ export function renderAgentBuildSpecMarkdown(spec: AgentBuildSpec): string {
     }
     if (cm.terminology.length > 0) {
       push("**Terminology**", "");
-      for (const t of cm.terminology) push(`- **${t.term}** — ${t.definition}`);
+      for (const t of cm.terminology) {
+        // Phase 2 — when concept_slug + origin annotations are present,
+        // surface them as an italic trace-back line under the term so a
+        // human reader (and an agent reading the spec) can re-resolve
+        // the term to the glossary + the original objective annotation.
+        // No trace-back row when the term was freshly coined.
+        push(`- **${t.term}** — ${t.definition}`);
+        const trace: string[] = [];
+        if (t.concept_slug) trace.push(`concept \`${t.concept_slug}\``);
+        if (t.origin_annotations && t.origin_annotations.length > 0) {
+          trace.push(
+            `from annotation${t.origin_annotations.length > 1 ? "s" : ""}: ${t.origin_annotations
+              .map((p) => `"${p}"`)
+              .join(", ")}`,
+          );
+        }
+        if (trace.length > 0) push(`  · _${trace.join(" · ")}_`);
+      }
     }
   }
 

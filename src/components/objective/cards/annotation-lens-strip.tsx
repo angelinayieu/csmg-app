@@ -98,7 +98,7 @@ export function AnnotationLensStrip({
           </span>
         </span>
         <span
-          className="text-[12px] font-light"
+          className="text-[12px] font-normal"
           style={{ color: appleVibe.text.tertiary }}
         >
           · {ranked.length} key reading{ranked.length === 1 ? "" : "s"} from
@@ -143,7 +143,7 @@ export function AnnotationLensStrip({
       {/* Body prose — same type as HeroProse so the three blocks read as
           one coordinated stack. */}
       <p
-        className="mb-2.5 max-w-[70ch] text-[13.5px] font-light leading-relaxed"
+        className="mb-2.5 max-w-[70ch] text-[13.5px] font-normal leading-relaxed"
         style={{ color: appleVibe.text.secondary }}
       >
         Each chip is a reading the AI took from your objective. The number is

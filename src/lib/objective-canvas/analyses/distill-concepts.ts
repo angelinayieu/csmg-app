@@ -83,13 +83,21 @@ export const distillConcepts: AnalysisModule = {
     const ranked = [...state.parent_annotations]
       .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
       .slice(0, 5);
+    // Phase 2 — surface the canonical concept name + slug per reading
+    // when present. Distillation can latch on to the LLM-emitted
+    // canonical concept (e.g. "Vivid experience") instead of having to
+    // re-coin a phrase from scratch, which tightens themes and aligns
+    // them with the names downstream items + glossary already use.
     const lensBlock =
       ranked.length > 0
         ? `\nPARENT OBJECTIVE READINGS:\n${ranked
-            .map(
-              (a, i) =>
-                `  [${i + 1}] "${a.phrase}"${a.reading ? ` — ${a.reading.slice(0, 100)}` : ""}`,
-            )
+            .map((a, i) => {
+              const concept = a.concept
+                ? ` · concept: "${a.concept}" [${a.concept_slug}]`
+                : "";
+              const reading = a.reading ? ` — ${a.reading.slice(0, 100)}` : "";
+              return `  [${i + 1}] "${a.phrase}"${concept}${reading}`;
+            })
             .join("\n")}`
         : "";
 

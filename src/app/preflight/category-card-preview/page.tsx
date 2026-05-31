@@ -121,6 +121,16 @@ function mkAnnotation(
     tensions: [],
     linked_sub_objective_id: null,
     layer_tag,
+    // Phase 2 — preflight fixtures don't carry LLM-emitted concepts;
+    // mirror the normalizer's deterministic fallback (slugify(phrase))
+    // so rendered popovers and any glossary lookups behave identically
+    // to live data.
+    concept: null,
+    concept_slug: phrase
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60),
   };
 }
 // Title-range annotations (offsets fall within subTitle) — these
@@ -171,6 +181,16 @@ function mkDescAnnotation(
     tensions: [],
     linked_sub_objective_id: null,
     layer_tag,
+    // Phase 2 — preflight fixtures don't carry LLM-emitted concepts;
+    // mirror the normalizer's deterministic fallback (slugify(phrase))
+    // so rendered popovers and any glossary lookups behave identically
+    // to live data.
+    concept: null,
+    concept_slug: phrase
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60),
   };
 }
 const descriptionAnnotations: ObjectiveAnnotation[] = [

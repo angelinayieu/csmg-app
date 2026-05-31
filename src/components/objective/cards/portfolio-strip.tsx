@@ -396,7 +396,7 @@ export function PortfolioStrip({
             <div>
               <div className="mb-1 flex items-baseline justify-end">
                 <span
-                  className="text-[11px] font-light tabular-nums"
+                  className="text-[11px] font-normal tabular-nums"
                   style={{ color: appleVibe.text.faint }}
                 >
                   {approvedChains}/{totalChains} approved
@@ -426,7 +426,7 @@ export function PortfolioStrip({
               className="flex w-full items-center justify-between gap-2 text-left"
             >
               <span
-                className="truncate text-[11.5px] font-light"
+                className="truncate text-[11.5px] font-normal"
                 style={{ color: appleVibe.text.tertiary }}
               >
                 Coverage · {totalProblems} problem

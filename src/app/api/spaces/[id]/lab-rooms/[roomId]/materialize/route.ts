@@ -108,11 +108,12 @@ export async function POST(_request: Request, ctx: Ctx) {
       { status: 404 },
     );
   }
-  // Extract the text content. Different room kinds may store the
-  // user-typed text under different keys; today scratch_note uses
-  // `text`. Future room kinds (reading_notes, brainstorm) will need
-  // their own extraction paths — extended via the dispatch below.
-  const text = pickRoomText(room.kind as string, room.room_config);
+  // Extract the text content. Different room kinds source their text
+  // differently: scratch_note stores it inline in room_config.text;
+  // brainstorm_session stores only a session_id and we fetch the
+  // session's nodes to build an outline. loadRoomText dispatches per
+  // kind (and may hit the DB), so it's async.
+  const text = await loadRoomText(db, room.kind as string, room.room_config);
   if (!text || text.trim().length === 0) {
     return NextResponse.json(
       { error: "Room is empty — nothing to materialize" },
@@ -199,16 +200,59 @@ export async function POST(_request: Request, ctx: Ctx) {
   });
 }
 
-/** Per-kind text extractor. Today only scratch_note has text;
- *  extending to brainstorm_session etc. is a follow-up. */
-function pickRoomText(
+/** Per-kind text loader. scratch_note keeps its text inline in
+ *  room_config; brainstorm_session keeps only a session_id, so we fetch
+ *  that session's nodes and flatten them into an outline the extractor
+ *  can read. Returns "" for kinds we don't know how to read yet. */
+async function loadRoomText(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
   kind: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   roomConfig: any,
-): string {
+): Promise<string> {
   if (!roomConfig || typeof roomConfig !== "object") return "";
+
   if (kind === "scratch_note") {
     return typeof roomConfig.text === "string" ? roomConfig.text : "";
   }
+
+  if (kind === "brainstorm_session") {
+    const sessionId =
+      typeof roomConfig.session_id === "string" ? roomConfig.session_id : null;
+    if (!sessionId) return "";
+    return loadBrainstormOutline(db, sessionId);
+  }
+
   return "";
+}
+
+// Brainstorm nodes (Synergy track) form a parent/child tree of typed
+// idea fragments. We flatten the meaningful ones into a bulleted
+// outline — label, plus its note when present — so the same noun-phrase
+// extractor used for scratch notes can lift entity candidates out of a
+// brainstorm. 'ranking' nodes are score artifacts, not ideas, so we
+// skip them.
+async function loadBrainstormOutline(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  sessionId: string,
+): Promise<string> {
+  const { data: nodes } = await db
+    .from("brainstorm_nodes")
+    .select("kind, label, meta")
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: true });
+
+  if (!Array.isArray(nodes) || nodes.length === 0) return "";
+
+  const lines = (nodes as Array<{ kind: string; label: string; meta: string | null }>)
+    .filter((n) => n.kind !== "ranking" && typeof n.label === "string" && n.label.trim().length > 0)
+    .map((n) => {
+      const label = n.label.trim();
+      const meta = typeof n.meta === "string" ? n.meta.trim() : "";
+      return meta ? `- ${label}: ${meta}` : `- ${label}`;
+    });
+
+  return lines.join("\n");
 }

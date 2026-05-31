@@ -384,7 +384,7 @@ export function CorrelationSidePanel({
               : `${filteredEdges.length} of ${edges.length} edges`}
         </h3>
         <p
-          className="mt-1 text-[11.5px] font-light leading-snug"
+          className="mt-1 text-[11.5px] font-normal leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
           {edges.length === 0
@@ -420,7 +420,7 @@ export function CorrelationSidePanel({
             {retrying ? "Generating…" : "Generate correlations"}
           </button>
           <p
-            className="mt-2 text-[10.5px] font-light italic leading-snug"
+            className="mt-2 text-[10.5px] font-normal italic leading-snug"
             style={{ color: appleVibe.text.tertiary }}
           >
             Cheaper than &quot;Regenerate the room&quot; — only the
@@ -689,7 +689,7 @@ export function CorrelationSidePanel({
                         </span>
                       </div>
                       <div
-                        className="my-0.5 text-[10px] font-light italic"
+                        className="my-0.5 text-[10px] font-normal italic"
                         style={{ color: appleVibe.text.tertiary }}
                       >
                         {e.relationship_type}{" "}
@@ -816,7 +816,7 @@ export function CorrelationSidePanel({
                       })()}
                       {e.conditions && (
                         <p
-                          className="mt-1.5 line-clamp-3 text-[11px] font-light leading-snug"
+                          className="mt-1.5 line-clamp-3 text-[11px] font-normal leading-snug"
                           style={{ color: appleVibe.text.secondary }}
                           title={e.conditions}
                         >
@@ -877,7 +877,7 @@ export function CorrelationSidePanel({
 function EmptyState({ msg }: { msg: string }) {
   return (
     <li
-      className="rounded-2xl border border-dashed px-3 py-4 text-center text-[11.5px] font-light"
+      className="rounded-2xl border border-dashed px-3 py-4 text-center text-[11.5px] font-normal"
       style={{
         borderColor: appleVibe.stroke.hairline,
         color: appleVibe.text.tertiary,

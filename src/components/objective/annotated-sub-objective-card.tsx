@@ -16,6 +16,7 @@ import { useMemo, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
+import { useAnnotationsVisible } from "@/components/objective/annotations-visibility";
 import type {
   ObjectiveAnnotation,
   AnnotationLayerTag,
@@ -81,10 +82,15 @@ export function AnnotatedSubObjectiveCard({
   annotations,
 }: Props) {
   const reduce = useReducedMotion();
-  const safeAnnotations = useMemo(
+  // Global "annotations off" reading mode hides every mark. We keep the
+  // card (it carries the sub-objective text) but feed buildSegments zero
+  // annotations so it renders as clean prose, and drop the lane chips.
+  const annotationsVisible = useAnnotationsVisible();
+  const normalized = useMemo(
     () => normalizeAnnotations(annotations),
     [annotations],
   );
+  const safeAnnotations = annotationsVisible ? normalized : [];
   const segments = useMemo(
     () => buildSegments(objectiveText, safeAnnotations),
     [objectiveText, safeAnnotations],
@@ -107,16 +113,18 @@ export function AnnotatedSubObjectiveCard({
       outcomes: 0,
       objective: 0,
     };
-    for (const a of safeAnnotations) {
+    for (const a of normalized) {
       if (a.layer_tag) acc[a.layer_tag] += 1;
     }
     return acc;
-  }, [safeAnnotations]);
+  }, [normalized]);
 
   if (objectiveText.trim().length === 0) return null;
 
-  // Loading hint when text exists but annotations don't yet.
-  const isLoading = safeAnnotations.length === 0;
+  // Loading hint when text exists but annotations don't yet — keyed off
+  // the RAW set so "annotations off" reads as hidden, not generating.
+  const isLoading = normalized.length === 0;
+  const hiddenByToggle = !annotationsVisible && normalized.length > 0;
 
   return (
     <motion.div
@@ -145,13 +153,15 @@ export function AnnotatedSubObjectiveCard({
           >
             {isLoading
               ? "generating…"
-              : `${safeAnnotations.length} reading${safeAnnotations.length === 1 ? "" : "s"}`}
+              : hiddenByToggle
+                ? "hidden"
+                : `${normalized.length} reading${normalized.length === 1 ? "" : "s"}`}
           </span>
         </div>
         {/* Interactive layer filter — sentence-case chips, monochrome
             outline when inactive, lane-tinted when active. Clicking
             toggles; clicking the active chip clears the filter. */}
-        {!isLoading && (
+        {!isLoading && annotationsVisible && (
           <div className="flex flex-wrap items-center gap-1.5">
             {(["pain", "features", "outcomes", "objective"] as const).map(
               (lane) => {

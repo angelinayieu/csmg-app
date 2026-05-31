@@ -15,18 +15,9 @@
 //   }
 //
 // For each accepted candidate the endpoint dispatches on `kind` to
-// materialize into the live KG table:
-//
-//   kind="entity"     → INSERT into entities
-//   kind="edge"       → INSERT into edges
-//   kind="claim"      → INSERT into claims
-//   kind="variation"  → not yet wired — flagged in response.deferred
-//   kind="cycle"      → not yet wired — flagged in response.deferred
-//
-// The two deferred kinds are kept as "accepted but not materialized"
-// rows so the audit log preserves the user's decision; a follow-up
-// commit (Phase 7c-4 + later) wires their materialize paths once the
-// gating routes start emitting them in production.
+// materialize into the live KG table. The per-kind materialize logic
+// now lives in @/lib/pipeline/materialize-candidates so other write
+// paths (e.g. the OC brainstorm → KG route) reuse it without forking.
 //
 // Returns a per-candidate result map so the drawer can show "12/15
 // committed, 3 deferred" with the exact IDs.
@@ -38,6 +29,10 @@ import {
   verifySpaceOwnership,
 } from "@/lib/api-helpers";
 import type { CandidateRow } from "@/lib/pipeline/candidates";
+import {
+  materializeCandidate,
+  type MaterializeOutcome,
+} from "@/lib/pipeline/materialize-candidates";
 
 export const dynamic = "force-dynamic";
 
@@ -50,12 +45,6 @@ interface CommitBody {
   reject?: unknown;
   batchId?: unknown;
 }
-
-type MaterializeOutcome =
-  | { status: "committed"; newId: string }
-  | { status: "rejected" }
-  | { status: "deferred"; reason: string }
-  | { status: "error"; message: string };
 
 export async function POST(request: NextRequest, ctx: Ctx) {
   const { user, supabase, error: authError } = await safeAuth();
@@ -172,156 +161,4 @@ function sanitizeIdList(v: unknown): string[] {
     if (typeof x === "string" && x.length > 0) out.push(x);
   }
   return out;
-}
-
-// ── Materializers ────────────────────────────────────────────────────
-//
-// Each candidate kind has its own materialize path because the live
-// KG tables have different shapes. Returns an outcome that the caller
-// uses to mark the candidate row (or skip it if errored).
-
-async function materializeCandidate(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: any,
-  spaceId: string,
-  userId: string,
-  c: CandidateRow,
-): Promise<MaterializeOutcome> {
-  try {
-    switch (c.kind) {
-      case "entity":
-        return await materializeEntity(db, spaceId, userId, c);
-      case "edge":
-        return await materializeEdge(db, spaceId, c);
-      case "claim":
-        return await materializeClaim(db, spaceId, c);
-      case "variation":
-      case "cycle":
-        // Not yet wired — the route-side staging for these kinds
-        // doesn't exist yet (Phase 7c-4 will add it once the parallel
-        // WIP in the route files is resolved). When that lands, add
-        // the materialize cases here. For now we accept the row but
-        // flag it so the drawer can show a "deferred" notice.
-        return {
-          status: "deferred",
-          reason: `Materialize for kind="${c.kind}" not wired yet`,
-        };
-    }
-  } catch (err) {
-    return {
-      status: "error",
-      message: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function materializeEntity(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: any,
-  spaceId: string,
-  userId: string,
-  c: CandidateRow,
-): Promise<MaterializeOutcome> {
-  const p = c.payload as Record<string, unknown>;
-  const entityIdSemantic =
-    typeof p.entity_id === "string" ? p.entity_id : null;
-  // Reproduce the chat-path insert pattern so the materialized entity
-  // looks the same as one the user typed in by hand. source_tag is
-  // 'explicit' because the user explicitly approved it.
-  const { data: inserted, error } = await db
-    .from("entities")
-    .insert({
-      space_id: spaceId,
-      entity_id:
-        entityIdSemantic ??
-        (typeof p.name === "string" ? p.name : "candidate").slice(0, 64),
-      name: c.display_name,
-      description: c.display_description ?? "",
-      entity_category: (p.entity_category as string | undefined) ?? "abstract",
-      entity_type: (p.entity_type as string | undefined) ?? "abstract",
-      source_tag: "explicit",
-      importance: (p.importance as string | undefined) ?? "moderate",
-      confidence:
-        typeof p.confidence === "number" ? p.confidence : 0.75,
-      knowledge_layer:
-        (p.knowledge_layer as string | undefined) ?? "internal",
-      authority_level:
-        (p.authority_level as string | undefined) ?? "moderate",
-      causal_role: (p.causal_role as string | undefined) ?? null,
-      provenance: {
-        source_type: "candidate_review",
-        candidate_id: c.id,
-        run_id: c.run_id,
-        stage: c.stage,
-        approved_by: userId,
-      },
-    })
-    .select("id")
-    .single();
-  if (error) {
-    return { status: "error", message: error.message };
-  }
-  return { status: "committed", newId: (inserted as { id: string }).id };
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function materializeEdge(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: any,
-  spaceId: string,
-  c: CandidateRow,
-): Promise<MaterializeOutcome> {
-  const p = c.payload as Record<string, unknown>;
-  const sourceId = typeof p.source_entity_id === "string" ? p.source_entity_id : null;
-  const targetId = typeof p.target_entity_id === "string" ? p.target_entity_id : null;
-  if (!sourceId || !targetId) {
-    return {
-      status: "error",
-      message: "Edge candidate missing source_entity_id or target_entity_id",
-    };
-  }
-  const { data: inserted, error } = await db
-    .from("edges")
-    .insert({
-      space_id: spaceId,
-      source_entity_id: sourceId,
-      target_entity_id: targetId,
-      relationship_type:
-        (p.relationship_type as string | undefined) ?? "relates_to",
-      dimension: (p.dimension as string | undefined) ?? "abstract",
-      confidence:
-        typeof p.confidence === "number" ? p.confidence : 0.7,
-      description: (p.description as string | undefined) ?? null,
-    })
-    .select("id")
-    .single();
-  if (error) return { status: "error", message: error.message };
-  return { status: "committed", newId: (inserted as { id: string }).id };
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function materializeClaim(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: any,
-  spaceId: string,
-  c: CandidateRow,
-): Promise<MaterializeOutcome> {
-  const p = c.payload as Record<string, unknown>;
-  const { data: inserted, error } = await db
-    .from("claims")
-    .insert({
-      space_id: spaceId,
-      claim_text: c.display_name,
-      claim_type: (p.claim_type as string | undefined) ?? "hypothesis",
-      confidence:
-        typeof p.confidence === "number" ? p.confidence : 0.7,
-      status: "candidate",
-      source_type: "agent",
-      source_quote: c.display_description ?? "[review_each]",
-    })
-    .select("id")
-    .single();
-  if (error) return { status: "error", message: error.message };
-  return { status: "committed", newId: (inserted as { id: string }).id };
 }

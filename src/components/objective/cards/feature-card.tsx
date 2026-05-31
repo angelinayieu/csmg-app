@@ -215,7 +215,7 @@ export function FeatureCard({
           pain card's "leads to" so the chain reads as prose. */}
       {item.positive_outcome && (
         <p
-          className="mt-2 line-clamp-3 text-[13px] font-light leading-snug"
+          className="mt-2 line-clamp-3 text-[13px] font-normal leading-snug"
           style={{ color: appleVibe.text.secondary }}
         >
           <span className="italic" style={{ color: appleVibe.text.tertiary }}>
@@ -227,7 +227,7 @@ export function FeatureCard({
 
       {!expanded && item.first_principles.length > 0 && (
         <div
-          className="mt-2 flex items-center gap-1 text-[11px] font-light"
+          className="mt-2 flex items-center gap-1 text-[11px] font-normal"
           style={{ color: appleVibe.text.tertiary }}
         >
           <span>

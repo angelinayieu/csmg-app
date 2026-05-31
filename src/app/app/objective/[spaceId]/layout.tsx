@@ -33,7 +33,12 @@ import { usePathname, useRouter } from "next/navigation";
 import { BookOpen } from "lucide-react";
 import { LabNotebookPanel } from "@/components/objective/lab-notebook-panel";
 import { requestCardFocus } from "@/lib/objective-canvas/notebook-focus";
+import {
+  isRightPanelOpen,
+  onRightPanelChange,
+} from "@/lib/objective-canvas/right-panel-signal";
 import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-shell";
+import { AnnotationsVisibilityToggle } from "@/components/objective/annotations-visibility-toggle";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
@@ -85,6 +90,11 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   // experience entirely and fall back to the existing slide-in
   // modal pattern, which feels less cramped on tablets/phones.
   const [isWide, setIsWide] = useState(true);
+  // A room detail drawer (or any right-edge panel) anchors to the same
+  // top-right corner as the collapsed Notebook pill. When one is open we
+  // hide the pill so it stops covering the panel. Initialized from the
+  // module so a panel opened before this subscribes is still reflected.
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(`notebook:open:${spaceId}`);
@@ -100,6 +110,11 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
     update();
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
+  }, []);
+
+  useEffect(() => {
+    setRightPanelOpen(isRightPanelOpen());
+    return onRightPanelChange(setRightPanelOpen);
   }, []);
 
   // Open the rail on demand — Canvas Autopilot fires "notebook:open"
@@ -137,6 +152,7 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
       <>
         <HomeTabNav />
         {children}
+        <AnnotationsVisibilityToggle />
       </>
     );
   }
@@ -193,8 +209,9 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
           true on first effect and the button hides). Previously this
           was gated behind `hydrated && !open` which meant the button
           didn't render at all before hydration completed — on slow
-          connections users saw nothing on the right side. */}
-      {!open && (
+          connections users saw nothing on the right side. Also hidden
+          while a right-edge detail drawer owns the top-right corner. */}
+      {!open && !rightPanelOpen && (
         <button
           type="button"
           onClick={() => persistOpen(true)}
@@ -256,6 +273,11 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
           }
         }}
       />
+
+      {/* Floating, persistent annotation-marks on/off switch. Mounted at
+          the layout level so it survives navigation across the main
+          canvas, rooms + lab. Bottom-left, clear of the right-edge rail. */}
+      <AnnotationsVisibilityToggle />
     </>
   );
 }

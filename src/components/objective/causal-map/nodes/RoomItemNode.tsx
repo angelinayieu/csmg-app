@@ -117,41 +117,47 @@ function RoomItemNodeInner({ data, selected }: NodeProps) {
         style={{ background: accent, width: 6, height: 6, border: "none" }}
       />
 
-      {/* Identity row — a quiet accent dot replaces the redundant kind
-          eyebrow (the lane-column header already names the stage). The
-          Lab affordance stays: it's an action, not a label. */}
-      <div className="flex items-center justify-between gap-1">
+      {/* Lab affordance — an ACTION, not a label. It floats top-right and
+          only surfaces on hover/select so the resting card stays clean. */}
+      {d.href ? (
+        <span
+          className="absolute right-2 top-2 inline-flex items-center gap-0.5 text-[9px] font-semibold uppercase tracking-wide transition-opacity duration-150"
+          style={{
+            color: accent,
+            opacity: hover || selected ? 0.9 : 0,
+            pointerEvents: "none",
+          }}
+          title="Open Lab — evaluate this mechanism"
+        >
+          <ExternalLink className="h-2.5 w-2.5" strokeWidth={2.4} />
+          Lab
+        </span>
+      ) : null}
+
+      {/* Title row — one quiet accent pip leads a near-black title, so the
+          card has a single clear focal line instead of a noisy dot+badge
+          header. The lane color now rides the pip, not a painted spine. */}
+      <div className="flex items-start gap-1.5">
         <span
           aria-label={KIND_LABEL[d.kind]}
           title={KIND_LABEL[d.kind]}
-          className="block h-[7px] w-[7px] flex-shrink-0 rounded-full"
+          className="mt-[5px] block h-[6px] w-[6px] flex-shrink-0 rounded-full"
           style={{
             background: accent,
-            boxShadow: `0 0 0 3px ${tint(accent, 0.14)}`,
+            boxShadow: `0 0 0 3px ${tint(accent, 0.12)}`,
           }}
         />
-        {d.href ? (
-          <span
-            className="inline-flex items-center gap-0.5 text-[8px] font-semibold uppercase tracking-wide"
-            style={{ color: accent, opacity: hover || selected ? 0.95 : 0.6 }}
-            title="Open Lab — evaluate this mechanism"
-          >
-            <ExternalLink className="h-2.5 w-2.5" strokeWidth={2.4} />
-            Lab
-          </span>
-        ) : null}
+        <p
+          className={`${appleVibe.type.title} line-clamp-2`}
+          style={{ color: appleVibe.text.primary }}
+        >
+          {d.title}
+        </p>
       </div>
-
-      <p
-        className="text-[12px] font-semibold leading-tight line-clamp-2"
-        style={{ color: appleVibe.text.primary }}
-      >
-        {d.title}
-      </p>
       {d.subtitle ? (
         <p
-          className="text-[9.5px] leading-snug line-clamp-2"
-          style={{ color: appleVibe.text.tertiary }}
+          className={`${appleVibe.type.subtitle} line-clamp-2 pl-3`}
+          style={{ color: appleVibe.text.secondary }}
         >
           {d.subtitle}
         </p>

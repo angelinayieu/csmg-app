@@ -148,6 +148,16 @@ REQUIRED FIELDS
   scope     — "word" | "phrase" (see above).
   reading   — "Read as: …" — committed interpretation. 1 sentence.
   weight    — 0..1 — how load-bearing this is. Drives underline thickness for phrase-scope; doesn't affect pill scope.
+  concept   — CANONICAL ≤4-word noun phrase for the UNDERLYING IDEA this
+              annotation is about. STABLE across surfaces — the same idea
+              referenced anywhere in the workspace (parent objective,
+              sub-objective, entity name) MUST share this concept string.
+              Distinct from "phrase" (the verbatim text) — e.g. phrase
+              "vivid experiences" → concept "Vivid experience"; phrase
+              "ai personalization" → concept "AI personalization".
+              Use Title Case. Strip determiners/articles. The system
+              slugifies this for cross-surface trace-back. Emit null ONLY
+              if no clean canonical noun phrase exists.
 
 ────────────────────────────────────────────────────────────────────
 OPTIONAL FIELDS (include only what genuinely applies)
@@ -309,6 +319,16 @@ export function buildUserPrompt(args: {
    *  phrases (≥2 derivations) and bias against zero-utility orphans.
    *  Soft signal — empty/undefined tolerated for cold-start runs. */
   priorUtility?: Array<{ phrase: string; count: number }>;
+  /** #3 — Terms ALREADY defined at a higher altitude: the space
+   *  glossary + the parent objective's own annotations. When present
+   *  and non-empty, this call is a ROOM lens (not the top-level
+   *  objective lens): the generator must NOT re-annotate these
+   *  macro/glossary terms — the user already set them on the main
+   *  objective page — and must instead surface terms that are NEW to
+   *  this room or whose concrete referent is AMBIGUOUS in this room's
+   *  context ("what does 'model' technically correspond to HERE?").
+   *  Empty/undefined ⇒ top-level lens, original 7-9 behavior unchanged. */
+  alreadyCovered?: { terms: string[] };
 }): string {
   const subBlock =
     args.subObjectives.length > 0
@@ -348,12 +368,47 @@ export function buildUserPrompt(args: {
         }\n  UTILITY RULE: When phrases are HIGH-UTILITY, treat them as anchors — your output should include the same phrase (or its sub-phrase) as an annotation slot so the user's existing derivations don't go orphan. When phrases are ORPHANED, you have permission to drop or reframe them.`
       : "";
 
+  // #3 — ROOM-LENS MODE. When the caller passes already-covered terms
+  // (glossary + parent-objective annotations), this is a room lens, not
+  // the macro objective lens. De-dupe case-insensitively (keep first
+  // casing), cap so the prompt stays tight.
+  const seenCovered = new Set<string>();
+  const coveredUnique: string[] = [];
+  for (const raw of args.alreadyCovered?.terms ?? []) {
+    const t = typeof raw === "string" ? raw.trim() : "";
+    if (!t) continue;
+    const k = t.toLowerCase();
+    if (seenCovered.has(k)) continue;
+    seenCovered.add(k);
+    coveredUnique.push(t);
+    if (coveredUnique.length >= 48) break;
+  }
+  const roomLens = coveredUnique.length > 0;
+  const roomLensBlock = roomLens
+    ? `\n\n⚠ ROOM-LENS MODE — OVERRIDES the "7-9 total" target AND the 4-6 / 2-3 scope quota in the system prompt.
+This text is ONE ROOM inside a larger objective, NOT the top-level objective. The terms below are ALREADY DEFINED at a higher altitude (the space glossary + the parent objective's own annotations). The user has explicitly said these are redundant here — do NOT re-highlight them.
+
+ALREADY DEFINED — DO NOT ANNOTATE (skip the term itself AND its close synonyms / obvious restatements):
+${coveredUnique.map((t) => `  • ${t}`).join("\n")}
+
+INSTEAD annotate ONLY what is genuinely ROOM-SPECIFIC:
+  1. Terms present in THIS room's text but ABSENT from the list above.
+  2. Terms that are generic at the macro level but become CONCRETE-yet-AMBIGUOUS here — commit to "what does this word technically correspond to IN THIS ROOM?" (e.g. "model" → which model, trained on what inputs, predicting what output?). The reading must name the room-level referent, never restate a dictionary sense.
+  3. SKIP anything that is just the macro objective restated.
+
+COUNT: emit ONLY as many as are truly room-new + load-bearing — typically 3-6, fewer is fine. DO NOT pad to a quota. Three sharp room-specific readings beat nine redundant ones. The word/phrase split is a guideline here, not a binding quota.`
+    : "";
+
+  const closing = roomLens
+    ? `Produce a ROOM lens per the ROOM-LENS MODE block above: only room-new / room-ambiguous terms, typically 3-6, no padding, no re-annotating already-defined terms. Each phrase must be a verbatim substring of the text above.`
+    : `Produce 7-9 RICH annotations per the system instructions: 4-6 word-scope (loaded concept words) AND 2-3 phrase-scope (multi-word interpretive units from text NOT covered by the word-scope picks). Each phrase must be a verbatim substring of the text above. Both layers are required — shipping only word-scope is a regression.`;
+
   return `CORE OBJECTIVE (user's typed text):
 """
 ${args.objective}
-"""${subBlock}${utilityBlock}
+"""${subBlock}${utilityBlock}${roomLensBlock}
 
-Produce 7-9 RICH annotations per the system instructions: 4-6 word-scope (loaded concept words) AND 2-3 phrase-scope (multi-word interpretive units from text NOT covered by the word-scope picks). Each phrase must be a verbatim substring of the text above. Both layers are required — shipping only word-scope is a regression.`;
+${closing}`;
 }
 
 export const RESPONSE_SCHEMA = {
@@ -372,6 +427,12 @@ export const RESPONSE_SCHEMA = {
             scope: { type: "string", enum: ["word", "phrase"] },
             reading: { type: "string" },
             weight: { type: "number" },
+            // Phase 2 (concept_slug trace-back) — canonical ≤4-word noun
+            // phrase for the underlying idea. Slugified downstream as
+            // the stable join key between annotation popovers and the
+            // space glossary. Nullable for back-compat with v3 rows;
+            // normalizer falls back to slugify(phrase) when absent.
+            concept: { type: ["string", "null"] },
             not_reading: { type: ["string", "null"] },
             crystal: { type: ["string", "null"] },
             confidence: { type: ["number", "null"] },
@@ -475,6 +536,7 @@ export const RESPONSE_SCHEMA = {
             "scope",
             "reading",
             "weight",
+            "concept",
             "not_reading",
             "crystal",
             "confidence",

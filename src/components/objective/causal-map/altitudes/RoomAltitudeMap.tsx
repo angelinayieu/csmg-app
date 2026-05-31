@@ -277,11 +277,12 @@ function RoomAltitudeMapInner({
         faded,
         focused,
       };
-      // Arrowhead tracks the edge's polarity color (not React Flow's default
-      // gray) and fades with the wire so dimmed edges don't keep bright tips.
-      const markerColor = faded
-        ? "rgba(15,23,42,0.10)"
-        : POLARITY_COLORS[ed.polarity] ?? POLARITY_COLORS.neutral;
+      // Arrowhead color is polarity-only and STABLE across hover. React Flow
+      // dedups <marker> defs by computed value, so recoloring per-hover
+      // (faded ? grey : color) churned the shared defs every pointer move and
+      // made every arrowhead blink. The tip still dims with its wire because
+      // the path's `opacity` fades the marker along with the stroke.
+      const markerColor = POLARITY_COLORS[ed.polarity] ?? POLARITY_COLORS.neutral;
       return {
         ...e,
         data,
