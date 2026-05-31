@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { StageCard, type StageStatus } from "./stage-card";
 
 type StageId = "setup" | "kg" | "refine" | "evidence" | "proposal" | "twin";
+type ReasoningDepth = "quick" | "standard" | "deep";
 
 interface StageView {
   id: StageId;
@@ -99,12 +101,23 @@ export function StrategyLabLiveView({
   initialStatus,
   initialPrompt,
   startedAt,
+  rerunPrompt,
+  rerunDepth,
+  rerunFileIds,
 }: {
   runId: string;
   spaceId: string;
   initialStatus: "running" | "completed" | "failed";
   initialPrompt: string;
   startedAt: string;
+  /** The original objective text — re-submitted verbatim by the re-run
+   *  button so the user doesn't retype. Full prompt from spaces.input_text. */
+  rerunPrompt: string;
+  /** The original reasoning depth, so a re-run matches the first attempt. */
+  rerunDepth: ReasoningDepth;
+  /** The papers attached to this run's space, re-attached to the fresh
+   *  run on re-run. */
+  rerunFileIds: string[];
 }) {
   const [stages, setStages] = useState<StageView[]>(EMPTY_STAGES);
   const [runStatus, setRunStatus] = useState<
@@ -271,7 +284,12 @@ export function StrategyLabLiveView({
               server may have timed out mid-stage. The work so far is saved; you
               can start a fresh run (papers stay uploaded).
             </p>
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <RerunButton
+                prompt={rerunPrompt}
+                reasoningDepth={rerunDepth}
+                ingestedFileIds={rerunFileIds}
+              />
               <Link
                 href="/app/strategy-lab"
                 className="px-3 py-1.5 rounded-lg text-[12px] font-medium inline-block"
@@ -417,16 +435,12 @@ export function StrategyLabLiveView({
                   >
                     Anthropic billing ↗
                   </a>
-                  <Link
-                    href="/app/strategy-lab"
-                    className="px-3 py-1.5 rounded-lg text-[12px] font-medium"
-                    style={{
-                      background: "rgba(15,23,42,0.92)",
-                      color: "white",
-                    }}
-                  >
-                    Try again
-                  </Link>
+                  <RerunButton
+                    prompt={rerunPrompt}
+                    reasoningDepth={rerunDepth}
+                    ingestedFileIds={rerunFileIds}
+                    label="Re-run with same inputs"
+                  />
                 </div>
                 {failMsg && (
                   <p
@@ -462,13 +476,18 @@ export function StrategyLabLiveView({
                 {failMsg ||
                   "Chain did not reach a strategy. Expand the failed stage's details for the underlying error."}
               </p>
-              <div className="mt-3 flex gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <RerunButton
+                  prompt={rerunPrompt}
+                  reasoningDepth={rerunDepth}
+                  ingestedFileIds={rerunFileIds}
+                />
                 <Link
                   href="/app/strategy-lab"
                   className="px-3 py-1.5 rounded-lg text-[12px] font-medium"
                   style={{ background: "rgba(15,23,42,0.92)", color: "white" }}
                 >
-                  Try again
+                  Start a new run
                 </Link>
               </div>
             </div>
@@ -476,6 +495,91 @@ export function StrategyLabLiveView({
         })()}
       </div>
     </div>
+  );
+}
+
+/** Re-run the SAME operation — same prompt, depth, and attached papers —
+ *  as a fresh run. POSTs to the identical endpoint the entry form uses
+ *  (/api/strategy-lab/run), which reserves credits, spins up a new space,
+ *  re-attaches the papers, and returns the new run's live-view URL. A
+ *  re-run is a new paid operation, so it only ever fires on a click. */
+function RerunButton({
+  prompt,
+  reasoningDepth,
+  ingestedFileIds,
+  label = "Re-run this operation",
+}: {
+  prompt: string;
+  reasoningDepth: ReasoningDepth;
+  ingestedFileIds: string[];
+  label?: string;
+}) {
+  const router = useRouter();
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const rerun = useCallback(async () => {
+    if (submitting) return;
+    if (!prompt || prompt.trim().length < 4) {
+      setError("Original prompt unavailable — use “New strategy” instead.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/strategy-lab/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: prompt.trim(),
+          ingestedFileIds,
+          reasoningDepth,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res
+          .json()
+          .catch(() => ({ error: `HTTP ${res.status}` }))) as {
+          error?: string;
+        };
+        throw new Error(body?.error ?? `Re-run failed (${res.status})`);
+      }
+      const json = (await res.json()) as { redirectTo: string };
+      // Route to the fresh run's live view; the old (terminal) run stays
+      // viewable at its own URL.
+      router.push(json.redirectTo);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setSubmitting(false);
+    }
+  }, [submitting, prompt, ingestedFileIds, reasoningDepth, router]);
+
+  return (
+    <span className="inline-flex flex-col items-start gap-1">
+      <button
+        type="button"
+        onClick={rerun}
+        disabled={submitting}
+        className="px-3 py-1.5 rounded-lg text-[12px] font-medium inline-flex items-center gap-1.5"
+        style={{
+          background: submitting
+            ? "rgba(124,58,237,0.45)"
+            : "rgba(124,58,237,0.95)",
+          color: "white",
+          cursor: submitting ? "wait" : "pointer",
+        }}
+      >
+        {submitting ? "Starting…" : label}
+      </button>
+      {error && (
+        <span
+          className="text-[11px]"
+          style={{ color: "rgba(185,28,28,0.95)" }}
+        >
+          {error}
+        </span>
+      )}
+    </span>
   );
 }
 
