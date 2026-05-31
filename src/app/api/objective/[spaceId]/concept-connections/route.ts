@@ -79,6 +79,17 @@ export async function GET(req: Request, ctx: RouteContext) {
     canonicalConceptId: r.canonical_concept_id,
   }));
 
+  // Room id → title (sub-objectives = improvement_goals) so consumers can
+  // label the rooms each concept spans without a second round-trip.
+  const { data: roomRows } = await auth.supabase
+    .from("improvement_goals")
+    .select("id, title")
+    .eq("space_id", spaceId);
+  const rooms: Record<string, string> = {};
+  for (const r of (roomRows ?? []) as Array<{ id: string; title: string }>) {
+    if (r.id) rooms[r.id] = r.title ?? "Untitled room";
+  }
+
   // Optional ?minSharedTokens= / ?tokenThreshold= overrides for tuning.
   const url = new URL(req.url);
   const minSharedTokens = clampInt(url.searchParams.get("minSharedTokens"), 1, 5);
@@ -94,6 +105,7 @@ export async function GET(req: Request, ctx: RouteContext) {
   return NextResponse.json({
     built_at: result.built_at,
     stats: result.stats,
+    rooms,
     clusters: result.clusters.filter((c) => c.crossRoom),
     connections: result.connections,
   });

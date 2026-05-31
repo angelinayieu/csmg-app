@@ -79,6 +79,10 @@ The single finding that explains "nothing connects / the map is fuzzy / are ther
 
 **Implication for the map:** a denser/clearer map is **not a viewing problem** (the views exist, parallel-session-owned). It needs a substrate **population** pass. Only `canonical` was cheap+deterministic (shipped). The rest are real builds, several writing to **shared** cross-space tables (coordinate, don't solo) — and `evidence`/effect-size extraction is a poor fit for OC's qualitative content. **The one lever that serves the dense-map goal = semantic clustering of canonical concepts (embeddings) — high value, shared-write, must be scoped.**
 
+**✅ SHIPPED the deterministic half of that lever (no embeddings, no writes, no schema):** `build-concept-clusters.ts` (transitive union-find; `scorePair` = the embedding-swap seam) + `GET /api/objective/[spaceId]/concept-connections` + a standalone diagnostic surface `/connections-preview` (server-rendered cluster list, zero collision with the contested map views). Live data: ~**235 cross-room candidate links** (vs 6 exact). **Handoff to the view-owning session:** swap the map's cross-room edge source from `cross-room-signals` (verbatim) to this route for the dense map. **Embedding upgrade = the only remaining step for full semantic density (your cost nod).**
+
+> **Migration slots:** parallel session took `20260912_structure_snapshots` + `20260913_structure_soft_delete`. **Next free = `20260914`** (re-check `list_migrations` before authoring).
+
 ---
 
 ## D. Lane split (no clobber)
