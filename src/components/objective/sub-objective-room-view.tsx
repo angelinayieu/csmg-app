@@ -45,8 +45,8 @@ import {
 import { ResearchSourcesSheet } from "./research-sources-sheet";
 import { SharedCausesStrip } from "./cards/shared-causes-strip";
 import { PortfolioStrip } from "./cards/portfolio-strip";
-import { AnnotationLensStrip } from "./cards/annotation-lens-strip";
-import { BrainstormPanel } from "./brainstorm/brainstorm-panel";
+import { RoomFeatureSpec } from "./room-feature-spec";
+import { RoomSkeletonView, RoomDetailToggle } from "./room-skeleton-view";
 import { ConstraintsStrip } from "./cards/constraints-strip";
 import { PriorityStrip } from "./cards/priority-strip";
 import type { PriorityVector } from "@/lib/objective-canvas/priority-vector";
@@ -220,10 +220,6 @@ export function SubObjectiveRoomView({
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
-  // Phase 6b — Deepen-lens panel open state. Mounts the BrainstormPanel
-  // in annotation mode, which orchestrates a single generateDeepenedAnnotations
-  // call and presents the v2 annotations as candidates with elect/refuse.
-  const [lensBrainstormOpen, setLensBrainstormOpen] = useState(false);
   const [highlightedCauses, setHighlightedCauses] = useState<Set<string>>(
     new Set(),
   );
@@ -252,6 +248,14 @@ export function SubObjectiveRoomView({
   const [roomView, setRoomView] = useLocalPref<
     "categories" | "variables" | "map" | "subsystems"
   >(`room:view:${subObjectiveId}`, "map");
+  // "Reveal or not" — two sides of the same room. false = Full (prose,
+  // spec rollup, full cards + results); true = Skeleton (just the
+  // stages + item titles). Persisted per room; default Full so a room
+  // opens with everything until the user chooses to strip it down.
+  const [skeleton, setSkeleton] = useLocalPref<boolean>(
+    `room:skeleton:${subObjectiveId}`,
+    false,
+  );
   // Phase 9 — Lab Notebook panel open state. The notebook reads the
   // sub_objective_decisions feed for this room and renders the
   // decision timeline (elections / experiments / approvals /
@@ -979,9 +983,8 @@ export function SubObjectiveRoomView({
           engages once the room is generated (the portfolio is
           meaningless before then); pre-generation the prose flows in a
           single readable column. */}
-      {(description?.trim() ||
-        topNegativeOutcome ||
-        (generatedAt && annotations.length > 0)) && (
+      {!skeleton &&
+        (description?.trim() || topNegativeOutcome || generatedAt) && (
         <div
           className={
             generatedAt
@@ -1006,14 +1009,11 @@ export function SubObjectiveRoomView({
                 text={topNegativeOutcome}
               />
             )}
-            {generatedAt && annotations.length > 0 && (
-              <AnnotationLensStrip
-                annotations={annotations}
-                coverageByIndex={itemIdsByAnnotationIndex}
-                crossRoomCoverageByIndex={crossRoomCoverageByIndex}
-                hoveredIndex={hoveredAnnotationIndex}
-                onHoverIndex={setHoveredAnnotationIndex}
-                onDeepenLens={() => setLensBrainstormOpen(true)}
+            {generatedAt && (
+              <RoomFeatureSpec
+                featureItems={featureItems}
+                painItems={painItems}
+                outcomeItems={outcomeItems}
               />
             )}
           </div>
@@ -1052,29 +1052,33 @@ export function SubObjectiveRoomView({
         </div>
       )}
 
-      {/* Phase 5a — Control variables strip. Surfaces the user's
-          operational constraints between the Portfolio (Tier 3 macro
-          diagnostic) and the lanes themselves. Reads from
-          space.synthesis_data.constraints; renders nothing when
-          unset. Edit affordance not wired here — left for future
-          when an inline constraints editor lands. */}
-      <ConstraintsStrip constraints={constraints} spaceId={spaceId} />
+      {/* These rich context strips collapse in Skeleton mode — the
+          bare stage/title outline carries the room instead. */}
+      {!skeleton && (
+        <>
+          {/* Phase 5a — Control variables strip. Surfaces the user's
+              operational constraints between the Portfolio (Tier 3 macro
+              diagnostic) and the lanes themselves. Reads from
+              space.synthesis_data.constraints; renders nothing when
+              unset. Edit affordance not wired here — left for future
+              when an inline constraints editor lands. */}
+          <ConstraintsStrip constraints={constraints} spaceId={spaceId} />
 
-      {/* Priority Strip — per-sub-objective soft trade-off weights.
-          Sibling to ConstraintsStrip (hard-fixed control variables);
-          paired here so the user reads them together as "the rules
-          for THIS room": fixed conditions + tunable preferences. */}
-      <PriorityStrip
-        initialVector={priorityVector}
-        subObjectiveId={subObjectiveId}
-      />
+          {/* Priority Strip — per-sub-objective soft trade-off weights.
+              Sibling to ConstraintsStrip (hard-fixed control variables);
+              paired here so the user reads them together as "the rules
+              for THIS room": fixed conditions + tunable preferences. */}
+          <PriorityStrip
+            initialVector={priorityVector}
+            subObjectiveId={subObjectiveId}
+          />
 
-      {/* Always-on instrument legend — orients the user to the room's
-          4 causal stages + their variable roles, above every view
-          (Categories / Variables / Map). Only meaningful once the room
-          has generated items. */}
-      {generatedAt && (
-        <RoomInstrumentLegend lanes={lanes} />
+          {/* Always-on instrument legend — orients the user to the room's
+              4 causal stages + their variable roles, above every view
+              (Categories / Variables / Map). Only meaningful once the room
+              has generated items. */}
+          {generatedAt && <RoomInstrumentLegend lanes={lanes} />}
+        </>
       )}
 
       {/* Phase 7a + 7c — top-right chrome: view toggle + autopilot.
@@ -1132,7 +1136,15 @@ export function SubObjectiveRoomView({
           {/* Phase 11.0b — Notebook button removed. Layout-level rail
               owns the notebook UI; this room's events stream into it
               via the URL-detected room mode. */}
-          <ViewToggleInline value={roomView} onChange={setRoomView} />
+          {/* Altitude switch is meaningless in Skeleton mode (there are
+              no altitude views to switch between), so it hides; the
+              Full/Skeleton toggle stays so the user can always return. */}
+          {!skeleton && (
+            <ViewToggleInline value={roomView} onChange={setRoomView} />
+          )}
+          {generatedAt && (
+            <RoomDetailToggle skeleton={skeleton} onChange={setSkeleton} />
+          )}
         </div>
       </div>
 
@@ -1142,7 +1154,12 @@ export function SubObjectiveRoomView({
           header carries the parent-objective link instead.
           Phase 7a: gated on roomView === "variables" — only the
           Variables view shows the 3-lane layout. */}
-      {roomView === "categories" && (
+      {/* Skeleton mode replaces all altitude views with the bare
+          stage/title outline. */}
+      {skeleton && generatedAt && (
+        <RoomSkeletonView lanes={lanes} onOpenItem={setDetailEntityId} />
+      )}
+      {!skeleton && roomView === "categories" && (
         <CategoryCardsView
           chains={allChains}
           painById={
@@ -1165,7 +1182,7 @@ export function SubObjectiveRoomView({
           focusChain={chainFocus}
         />
       )}
-      {roomView === "map" && (
+      {!skeleton && roomView === "map" && (
         <RoomAltitudeMap
           spaceId={spaceId}
           lanes={lanes}
@@ -1174,13 +1191,13 @@ export function SubObjectiveRoomView({
           onOpenChainForEdge={handleOpenChainForEdge}
         />
       )}
-      {roomView === "subsystems" && (
+      {!skeleton && roomView === "subsystems" && (
         <SubsystemModulesView
           model={buildSubsystemModules({ lanes, edges, roomCategories })}
           onOpenItem={setDetailEntityId}
         />
       )}
-      {roomView === "variables" && (
+      {!skeleton && roomView === "variables" && (
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="min-w-0 flex-1">
           <div
@@ -1469,22 +1486,6 @@ export function SubObjectiveRoomView({
           />
         );
       })()}
-
-      {/* Phase 6b — Deepen-lens panel. Mode='annotation' triggers the
-          single-pass deepen runner; elect appends the chosen v2
-          annotation into improvement_goals[core].annotations + the
-          router refresh repaints the lens strip with the new readings. */}
-      <BrainstormPanel
-        open={lensBrainstormOpen}
-        onClose={() => setLensBrainstormOpen(false)}
-        spaceId={spaceId}
-        mode="annotation"
-        onElected={() => {
-          startTransition(() => {
-            router.refresh();
-          });
-        }}
-      />
     </div>
   );
 }
@@ -1664,11 +1665,9 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
                   muted count. No flat tint disc, no competing badge — the
                   icon is the single accent, everything else is type. */}
               <div className="flex h-5 items-center gap-1.5">
-                <RoleIcon
-                  className="h-4 w-4 flex-shrink-0"
-                  strokeWidth={2}
-                  style={{ color }}
-                />
+                <span className="flex-shrink-0" style={{ color }}>
+                  <RoleIcon className="h-4 w-4" strokeWidth={2} />
+                </span>
                 <span
                   className={appleVibe.type.title}
                   style={{
