@@ -247,7 +247,21 @@ export function RoomFeatureSpec({
   }, 0);
 
   return (
-    <div style={{ fontFamily: appleVibe.font.stack }}>
+    // One soft frosted "spec sheet" — a translucent panel with a hairline
+    // edge, large radius, and the token shadow's inset top-sheen so it
+    // reads as a single glass surface floating in the hero column (the
+    // visionOS material idiom), distinct from the plain-prose definitions
+    // stacked above it.
+    <div
+      style={{
+        fontFamily: appleVibe.font.stack,
+        background: appleVibe.surface.cardElevated,
+        border: `1px solid ${appleVibe.stroke.hairline}`,
+        borderRadius: appleVibe.radius.lg,
+        boxShadow: appleVibe.shadow.chip,
+        padding: "16px 18px",
+      }}
+    >
       {/* Header — mirrors the hero blocks: a neutral dot (this is a
           cross-cutting overview, not one stage) + standard title +
           quiet count metadata. */}

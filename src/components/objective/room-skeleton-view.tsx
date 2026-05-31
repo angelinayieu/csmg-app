@@ -17,7 +17,21 @@
 // Titles stay clickable so the skeleton is a navigation surface, not a
 // dead-end: click any node to open its detail drawer.
 
+import { useState } from "react";
+
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+
+// Hex (#RRGGBB / #RGB) → rgba() so a lane color can tint a hover surface
+// at low alpha. Lane colors are always solid hex, so this stays simple.
+function withAlpha(hex: string, alpha: number): string {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 // Minimal structural shapes — typed locally so this file stays
 // decoupled from the room view's exported interfaces (parallel-edit
@@ -103,6 +117,68 @@ export function RoomDetailToggle({
   );
 }
 
+// ── Skeleton node ─────────────────────────────────────────────────
+// A single clickable title. On hover it behaves like a visionOS list
+// row: a soft glass surface tinted in the lane's color fades in, the
+// leading dot blooms (full color + scale), the title darkens toward
+// near-black, and the row eases a touch to the right. Pure structure,
+// but it feels alive under the pointer — and stays a real navigation
+// surface (click opens the node's detail).
+function SkeletonNode({
+  id,
+  name,
+  color,
+  onOpen,
+}: {
+  id: string;
+  name: string;
+  color: string;
+  onOpen: (id: string) => void;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onOpen(id)}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        onFocus={() => setHover(true)}
+        onBlur={() => setHover(false)}
+        title={name}
+        className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
+        style={{
+          background: hover ? withAlpha(color, 0.08) : "transparent",
+          borderRadius: 10,
+          transform: hover ? "translateX(2px)" : "none",
+          transition: "background 200ms ease-out, transform 200ms ease-out",
+          cursor: "pointer",
+        }}
+      >
+        <span
+          className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+          style={{
+            background: color,
+            opacity: hover ? 1 : 0.4,
+            transform: hover ? "scale(1.3)" : "scale(1)",
+            transition: "opacity 200ms ease-out, transform 200ms ease-out",
+          }}
+          aria-hidden
+        />
+        <span
+          className="truncate text-[12.5px] font-medium leading-snug"
+          style={{
+            color: hover ? appleVibe.text.primary : appleVibe.text.secondary,
+            transition: "color 200ms ease-out",
+          }}
+        >
+          {name}
+        </span>
+      </button>
+    </li>
+  );
+}
+
 // ── Skeleton view ─────────────────────────────────────────────────
 export function RoomSkeletonView({
   lanes,
@@ -160,27 +236,13 @@ export function RoomSkeletonView({
             {lane.items.length > 0 ? (
               <ul className="flex flex-col gap-0.5">
                 {lane.items.map((it) => (
-                  <li key={it.id}>
-                    <button
-                      type="button"
-                      onClick={() => onOpenItem(it.id)}
-                      className="group flex w-full items-baseline gap-1.5 rounded-md px-1.5 py-1 text-left transition-colors duration-150"
-                      style={{ cursor: "pointer" }}
-                      title={it.name}
-                    >
-                      <span
-                        className="mt-[2px] h-1 w-1 flex-shrink-0 rounded-full transition-colors duration-150"
-                        style={{ background: appleVibe.text.faint }}
-                        aria-hidden
-                      />
-                      <span
-                        className="truncate text-[12.5px] font-medium leading-snug transition-colors duration-150 group-hover:underline"
-                        style={{ color: appleVibe.text.secondary }}
-                      >
-                        {it.name}
-                      </span>
-                    </button>
-                  </li>
+                  <SkeletonNode
+                    key={it.id}
+                    id={it.id}
+                    name={it.name}
+                    color={lane.color}
+                    onOpen={onOpenItem}
+                  />
                 ))}
               </ul>
             ) : (

@@ -228,13 +228,15 @@ export default function RoomDetailTogglePreview() {
       </div>
 
       {/* The room body swaps between the two sides, exactly as the room
-          view gates them with !skeleton / skeleton. */}
+          view gates them with !skeleton / skeleton. Neutral page-like
+          canvas (not a card) so RoomFeatureSpec's own frosted panel reads
+          correctly — matching the real hero column, where it floats on
+          the off-white page rather than nesting inside another card. */}
       <div
         style={{
-          background: appleVibe.surface.card,
-          border: `1px solid ${appleVibe.stroke.soft}`,
+          background: appleVibe.surface.base,
           borderRadius: appleVibe.radius.lg,
-          padding: 20,
+          padding: 24,
         }}
       >
         {!skeleton && (
