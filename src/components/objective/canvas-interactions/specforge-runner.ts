@@ -43,23 +43,24 @@ interface RunOptions {
   onProgress?: (p: SpecForgeProgress) => void;
 }
 
-const ANCHOR_GAP = 48;
-const ROW_GAP = 18;
-const SPINE_W = 340;
-const MVP_W = 232;
-const MVP_GAP = 16;
-const HERO_W = 460;
+const ANCHOR_GAP = 64;
+const ROW_GAP = 28;
+const SPINE_W = 396;
+const MVP_W = 292;
+const MVP_GAP = 24;
+const HERO_W = 544;
 const ENGINE_TIMEOUT_MS = 45_000;
 
-/** Estimate a card's height from its content so the spine packs tightly. */
+/** Estimate a card's height from its content so the spine packs tightly but
+ *  readably — sized so titles + bullets don't truncate at a glance. */
 function cardHeight(card: SpecForgeCard): number {
-  if (card.layout === "hero") return 176;
-  if (card.layout === "diverge") return 188;
+  if (card.layout === "hero") return 212;
+  if (card.layout === "diverge") return 224;
   const lines = card.body
     ? card.body.split("\n").filter((l) => l.trim()).length
     : 0;
-  const h = 92 + (card.subtitle ? 30 : 0) + Math.min(lines, 4) * 17;
-  return Math.max(104, Math.min(186, h));
+  const h = 108 + (card.subtitle ? 34 : 0) + Math.min(lines, 5) * 19;
+  return Math.max(124, Math.min(248, h));
 }
 
 async function fetchEngine(
@@ -153,10 +154,17 @@ export async function runSpecForge(
     }
   }
 
-  // Thread the spec into a connected dependency graph: a black node-line
-  // down the spine, forking out to the MVP variations, then converging on
-  // the recommended first build. Connectors sit beneath the cards.
-  if (allPlaced.length > 1) connectSpecCards(editor, allPlaced);
+  // Thread the spec into a connected dependency graph: branch from the
+  // source idea into the clean summary, run a black node-line down the spine,
+  // fork out to the MVP variations, then converge on the recommended first
+  // build. Connectors sit beneath the cards.
+  if (allPlaced.length > 0) {
+    connectSpecCards(
+      editor,
+      allPlaced,
+      target.shapeId ? (target.shapeId as TLShapeId) : null,
+    );
+  }
 
   opts.onProgress?.({
     phase: "done",
@@ -263,7 +271,11 @@ interface PlacedCard {
  *  spine link between consecutive stacked cards, a FORK from the card above
  *  the MVP row to each MVP, and a CONVERGE from each MVP to the recommendation
  *  that follows. Same connector grammar used across the canvas graphs. */
-function connectSpecCards(editor: Editor, placed: PlacedCard[]): void {
+function connectSpecCards(
+  editor: Editor,
+  placed: PlacedCard[],
+  sourceId: TLShapeId | null,
+): void {
   let prevStacked: TLShapeId | null = null;
   let pendingDiverge: TLShapeId[] = [];
   const arrowIds: TLShapeId[] = [];
@@ -271,6 +283,10 @@ function connectSpecCards(editor: Editor, placed: PlacedCard[]): void {
     const a = connectCards(editor, from, to);
     if (a) arrowIds.push(a);
   };
+
+  // Branch the whole spec from the originating idea (the post-it the user
+  // typed into) → the clean-summary card, so the tree grows from it.
+  if (sourceId && placed[0]) link(sourceId, placed[0].id);
 
   for (const c of placed) {
     if (c.layout === "diverge") {
