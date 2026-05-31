@@ -526,6 +526,7 @@ export function SubObjectivePickerCard({
         totalCount={allProposals.length}
         electedCount={electedIds.size}
         category={block.category}
+        clusterAnalysis={block.cluster_analysis as ClusterAnalysis | undefined}
         busy={busy}
         error={error}
         isElected={(id) => electedIds.has(id)}
@@ -928,7 +929,7 @@ function RecommendedPresentation({
   recommended,
   totalCount,
   electedCount,
-  category,
+  clusterAnalysis,
   busy,
   error,
   isElected,
@@ -941,6 +942,7 @@ function RecommendedPresentation({
   totalCount: number;
   electedCount: number;
   category?: string | null;
+  clusterAnalysis?: ClusterAnalysis;
   busy: boolean;
   error: string | null;
   isElected: (id: string) => boolean;
@@ -950,6 +952,37 @@ function RecommendedPresentation({
   onRegenerate: () => void;
 }) {
   const moreCount = Math.max(0, totalCount - recommended.length);
+
+  // Group the recommended cuts by their cluster theme — the "categories"
+  // the user tabs between. Falls back to one "All" group before clustering
+  // has landed (it auto-fires in the parent).
+  const categories = useMemo(() => {
+    const byId = new Map(recommended.map((p) => [p.id, p]));
+    const groups: { label: string; proposals: SubObjectiveProposal[] }[] = [];
+    const seen = new Set<string>();
+    for (const c of clusterAnalysis?.clusters ?? []) {
+      const members = (c.proposal_ids ?? [])
+        .map((id) => byId.get(id))
+        .filter((p): p is SubObjectiveProposal => Boolean(p));
+      if (members.length === 0) continue;
+      members.forEach((m) => seen.add(m.id));
+      groups.push({ label: c.label, proposals: members });
+    }
+    const rest = recommended.filter((p) => !seen.has(p.id));
+    if (rest.length > 0) {
+      groups.push({
+        label: groups.length === 0 ? "All" : "More",
+        proposals: rest,
+      });
+    }
+    return groups.length > 0
+      ? groups
+      : [{ label: "All", proposals: recommended }];
+  }, [recommended, clusterAnalysis]);
+
+  const [activeTab, setActiveTab] = useState(0);
+  const activeIdx = Math.min(activeTab, categories.length - 1);
+  const active = categories[activeIdx];
 
   return (
     <div
@@ -967,37 +1000,80 @@ function RecommendedPresentation({
         }}
       />
 
-      <div className="text-center">
-        <div className="flex justify-center">
-          <Eyebrow>Recommended focus</Eyebrow>
-        </div>
-        <Heading>
-          {recommended.length === 1
-            ? "Start here"
-            : `Start with these ${recommended.length}`}
-        </Heading>
-        <p
-          className="mx-auto mt-2 max-w-md text-[13px] font-light leading-relaxed"
-          style={{ color: appleVibe.text.secondary }}
+      {/* Translucent glass base hosting the category tabs + the cards. */}
+      <div
+        className="overflow-hidden rounded-[28px]"
+        style={{
+          background: "rgba(255,255,255,0.55)",
+          backdropFilter: "blur(28px) saturate(170%)",
+          WebkitBackdropFilter: "blur(28px) saturate(170%)",
+          border: "1px solid rgba(255,255,255,0.7)",
+          boxShadow:
+            "0 24px 70px -28px rgba(15,23,42,0.35), inset 0 1px 0 rgba(255,255,255,0.7)",
+        }}
+      >
+        {/* Tab section — one concise label + a tab per category. */}
+        <div
+          className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 pb-3 pt-4"
+          style={{ borderBottom: "1px solid rgba(15,23,42,0.06)" }}
         >
-          The strongest cuts of your objective
-          {category ? ` · ${category}` : ""}. Read them, keep what fits, and
-          confirm — each becomes its own room.
-        </p>
-      </div>
+          <span
+            className="text-[11px] font-semibold uppercase tracking-[0.14em]"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            Recommended features
+          </span>
+          {categories.length > 1 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {categories.map((c, i) => {
+                const isActive = i === activeIdx;
+                const sel = c.proposals.filter((p) => isElected(p.id)).length;
+                return (
+                  <button
+                    key={`${c.label}-${i}`}
+                    type="button"
+                    onClick={() => setActiveTab(i)}
+                    className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-all"
+                    style={{
+                      background: isActive
+                        ? appleVibe.accent.primary
+                        : "rgba(15,23,42,0.045)",
+                      color: isActive
+                        ? appleVibe.text.onAccent
+                        : appleVibe.text.secondary,
+                    }}
+                  >
+                    <span>{c.label}</span>
+                    <span
+                      className="font-mono text-[10px]"
+                      style={{ opacity: 0.7 }}
+                    >
+                      {sel}/{c.proposals.length}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
-      {/* Hero cards — large, frosted, readable. */}
-      <div className="mt-7 flex flex-col gap-3.5">
-        {recommended.map((p, i) => (
-          <HeroProposalCard
-            key={p.id}
-            proposal={p}
-            index={i}
-            selected={isElected(p.id)}
-            onToggle={() => onToggle(p.id)}
-            disabled={busy}
-          />
-        ))}
+        {/* Cards for the active category — threaded by a black node line. */}
+        <div className="px-5 py-5">
+          <div className="flex flex-col">
+            {active.proposals.map((p, i) => (
+              <div key={p.id}>
+                {i > 0 && <CardConnector />}
+                <HeroProposalCard
+                  proposal={p}
+                  index={i}
+                  selected={isElected(p.id)}
+                  onToggle={() => onToggle(p.id)}
+                  disabled={busy}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Primary confirm — glowing, unmistakable. */}
@@ -1061,6 +1137,27 @@ function RecommendedPresentation({
       </div>
 
       {error && <ErrorRow message={error} />}
+    </div>
+  );
+}
+
+// Black node-thread drawn between stacked cards — the picker's take on the
+// shared connector language (curved black lines + node dots, image-ref).
+// Vertical here; the same grammar applies to the canvas graphs.
+function CardConnector() {
+  return (
+    <div className="flex justify-center py-1" aria-hidden>
+      <svg width="36" height="22" viewBox="0 0 36 22" fill="none">
+        <path
+          d="M18 2 C 13 9, 23 13, 18 20"
+          stroke="rgba(15,23,42,0.4)"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          fill="none"
+        />
+        <circle cx="18" cy="2.5" r="2" fill="rgba(15,23,42,0.65)" />
+        <circle cx="18" cy="19.5" r="2" fill="rgba(15,23,42,0.65)" />
+      </svg>
     </div>
   );
 }
