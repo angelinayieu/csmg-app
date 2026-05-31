@@ -121,6 +121,49 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
     return () => window.removeEventListener(CARD_SAVED_EVENT, onSaved);
   }, [entityId]);
 
+  // "Open as room" — promote this decision card into its own sub-objective
+  // room (Pain → Features → Outcomes → Objective layers), like any other
+  // feature. Creates the sub-objective from the card's text, pre-warms room
+  // generation, then opens the room. spaceId is read from the canvas URL.
+  const [opening, setOpening] = useState(false);
+  async function openAsRoom() {
+    if (opening) return;
+    const spaceId = window.location.pathname.match(/\/objective\/([^/]+)/)?.[1];
+    if (!spaceId) return;
+    setOpening(true);
+    try {
+      const res = await fetch("/api/brainstorm/sub-objectives/from-text", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          spaceId,
+          title,
+          description: subtitle || body || title,
+          rationale: body || undefined,
+        }),
+      });
+      const json = (await res.json()) as { goal_id?: string };
+      if (!json?.goal_id) {
+        setOpening(false);
+        return;
+      }
+      // Pre-warm the room's layered generation (idempotent on initial mode),
+      // then open the room so its layers are visible as they land.
+      void fetch("/api/brainstorm/room/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          spaceId,
+          subObjectiveId: json.goal_id,
+          mode: "initial",
+        }),
+      });
+      window.location.assign(`/app/objective/${spaceId}/sub/${json.goal_id}`);
+    } catch {
+      setOpening(false);
+    }
+  }
+
   return (
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
@@ -298,14 +341,18 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
           <CardHoverActions
             accent={color}
             saved={saved}
-            onAction={(action) =>
+            onAction={(action) => {
+              if (action === "open_room") {
+                void openAsRoom();
+                return;
+              }
               dispatchCardAction({
                 action,
                 entityId,
                 title,
                 shapeId: shape.id,
-              })
-            }
+              });
+            }}
           />
         </div>
       </div>
