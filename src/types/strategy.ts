@@ -366,6 +366,23 @@ export interface StrategicRecommendation {
   strategy_layers?: StrategyLayers;
 
   /**
+   * E3 — layer-stratified variant marker. Patched onto the recommendation by
+   * `strategy-engine` (see `GenerateStrategyParams.layerFocus`) when this is a
+   * single-layer variant; `null` for the comprehensive variant. Downstream
+   * consumers — the strategy-hero chip, the variants column, and the
+   * twin-proposal GET flattener — read `layer_id`/`label`/`color` to render the
+   * focus chip. `cascade` is the cross-layer cascade-prediction enrichment
+   * (soft-fail; absent when that hop is skipped or degraded).
+   */
+  layer_focus?: {
+    layer_id: string;
+    label: string;
+    color: string;
+    rationale: string;
+    cascade?: unknown;
+  } | null;
+
+  /**
    * Names of pipeline steps that hit a fallback path during generation
    * (`"diagnosis" | "synthesis" | "verification" | "final"`). Empty/unset
    * when the run was clean. The UI uses this to surface a degraded-run
