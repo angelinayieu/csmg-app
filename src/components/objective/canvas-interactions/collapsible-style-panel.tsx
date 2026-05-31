@@ -22,6 +22,11 @@ export function CollapsibleStylePanel(props: TLUiStylePanelProps) {
         alignItems: "flex-end",
         gap: 6,
         pointerEvents: "all",
+        // Stack BELOW the Notebook pill (top:16, ~36px tall → bottom ≈ 52px).
+        // This margin pushes the palette icon into the gap underneath so the
+        // two top-right controls read as a clean vertical stack, never
+        // overlapping in the collapsed state.
+        marginTop: 52,
       }}
     >
       <button
