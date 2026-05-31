@@ -39,7 +39,7 @@ interface EdgeLike {
 }
 
 // Mirrors the mechanism-family palette so modules read as variations
-// of one "mechanism" identity (matches build-mechanism-subsystems).
+// of one "mechanism" identity (the mechanism-family palette).
 const SUBSYSTEM_PALETTE = ["#2563EB", "#7C3AED", "#0E7490", "#4338CA", "#1D4ED8", "#0D9488"];
 const UNCATEGORIZED = "__uncat";
 
