@@ -42,9 +42,10 @@
 //      The host must support same-window navigation OR override the
 //      sub-card link by extending MainCanvasView in a future pass.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { AnnotatedHeading } from "./annotated-heading";
 import { ClarifyingQuestionsCard } from "./clarifying-questions-card";
 import { ResearchIndicator } from "./research-indicator";
 import { ResearchSourcesSheet } from "./research-sources-sheet";
@@ -187,6 +188,21 @@ export function ObjectiveCanvasView({
   // never re-triggers generation.
   const [justConfirmed, setJustConfirmed] = useState(false);
 
+  // Concept annotations are generated fire-and-forget at intake (~8s after
+  // submit), so they're usually absent on the clarifying stage's first
+  // paint. Pull them in with a couple of soft refreshes so the underlines
+  // surface on the working objective while the user is still here.
+  // router.refresh() re-fetches server props but preserves client state
+  // (the clarifying card's typed answers). Stops once they've landed.
+  useEffect(() => {
+    if (stage !== "clarifying" || initialCoreAnnotations.length > 0) return;
+    const timers = [
+      window.setTimeout(() => router.refresh(), 7000),
+      window.setTimeout(() => router.refresh(), 16000),
+    ];
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [stage, initialCoreAnnotations.length, router]);
+
   // When the picker confirms, the server inserts the chosen
   // improvement_goals rows and advances the canvas stage. The
   // current page's `initialMainSubs` was server-rendered BEFORE
@@ -209,7 +225,12 @@ export function ObjectiveCanvasView({
 
   return (
     <div className="relative w-full" style={{ fontFamily: appleVibe.font.stack }}>
-      {showBanner && <ObjectiveBanner objective={objective} />}
+      {showBanner && (
+        <ObjectiveBanner
+          objective={objective}
+          annotations={initialCoreAnnotations}
+        />
+      )}
 
       {/* Research indicator — visible during clarifying + picking
           stages so the user sees the background work happen. Hidden
@@ -313,7 +334,13 @@ export function ObjectiveCanvasView({
   );
 }
 
-function ObjectiveBanner({ objective }: { objective: string }) {
+function ObjectiveBanner({
+  objective,
+  annotations = [],
+}: {
+  objective: string;
+  annotations?: ObjectiveAnnotation[];
+}) {
   return (
     <div
       className="mx-auto max-w-2xl rounded-2xl px-5 py-4"
@@ -329,12 +356,25 @@ function ObjectiveBanner({ objective }: { objective: string }) {
       >
         Working objective
       </div>
-      <p
-        className="mt-1.5 text-[14.5px] leading-snug"
-        style={{ color: appleVibe.text.primary }}
-      >
-        {objective}
-      </p>
+      {/* Once the intake annotation lens has landed, render the objective
+          with inline concept underlines (the live analysis surfacing here,
+          not just after clarifying). Falls back to plain text until then. */}
+      {annotations.length > 0 ? (
+        <AnnotatedHeading
+          text={objective}
+          annotations={annotations}
+          as="p"
+          className="mt-1.5 text-[14.5px] leading-snug"
+          style={{ color: appleVibe.text.primary }}
+        />
+      ) : (
+        <p
+          className="mt-1.5 text-[14.5px] leading-snug"
+          style={{ color: appleVibe.text.primary }}
+        >
+          {objective}
+        </p>
+      )}
     </div>
   );
 }
