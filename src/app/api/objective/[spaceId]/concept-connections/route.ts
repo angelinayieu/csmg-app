@@ -19,6 +19,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
+import { embedTexts } from "@/lib/embeddings";
 import {
   buildConceptClusters,
   type ConceptEntityInput,
@@ -90,20 +91,43 @@ export async function GET(req: Request, ctx: RouteContext) {
     if (r.id) rooms[r.id] = r.title ?? "Untitled room";
   }
 
-  // Optional ?minSharedTokens= / ?tokenThreshold= overrides for tuning.
+  // Optional tuning overrides. `?semantic=1` adds embedding-cosine merging
+  // (opt-in; the lexical path is the verified default). `?cosine=` tunes the
+  // threshold. Embedding is soft-fail → falls back to lexical on any error.
   const url = new URL(req.url);
   const minSharedTokens = clampInt(url.searchParams.get("minSharedTokens"), 1, 5);
   const tokenThreshold = clampFloat(url.searchParams.get("tokenThreshold"), 0, 1);
+  const semantic = url.searchParams.get("semantic") === "1";
+  const cosineThreshold = clampFloat(url.searchParams.get("cosine"), 0.5, 0.99) ?? 0.84;
 
-  const result = buildConceptClusters(entities, {
+  let entitiesForBuild = entities;
+  let semanticApplied = false;
+  if (semantic && entities.length > 0 && entities.length <= 800) {
+    try {
+      const vectors = await embedTexts(entities.map((e) => e.name));
+      if (Array.isArray(vectors) && vectors.length === entities.length) {
+        entitiesForBuild = entities.map((e, i) => ({ ...e, embedding: vectors[i] }));
+        semanticApplied = true;
+      }
+    } catch (err) {
+      console.warn(
+        "[concept-connections] embedding failed, falling back to lexical:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  const result = buildConceptClusters(entitiesForBuild, {
     ...(minSharedTokens != null ? { minSharedTokens } : {}),
     ...(tokenThreshold != null ? { tokenThreshold } : {}),
+    ...(semanticApplied ? { cosineThreshold } : {}),
   });
 
   // Only the cross-room clusters matter for the map; trim single-room
   // clusters from the response to keep it lean (stats still count all).
   return NextResponse.json({
     built_at: result.built_at,
+    mode: semanticApplied ? "semantic" : "lexical",
     stats: result.stats,
     rooms,
     clusters: result.clusters.filter((c) => c.crossRoom),

@@ -16,6 +16,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
+import { embedTexts } from "@/lib/embeddings";
 import {
   buildConceptClusters,
   type ConceptEntityInput,
@@ -24,15 +25,18 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const SEMANTIC_COSINE = 0.84;
+
 export default async function ConnectionsPreviewPage({
   searchParams,
 }: {
-  searchParams: Promise<{ spaceId?: string }>;
+  searchParams: Promise<{ spaceId?: string; semantic?: string }>;
 }) {
   const user = await getAuthUser();
   if (!user) redirect("/login");
   const supabase = await createClient();
-  const { spaceId } = await searchParams;
+  const { spaceId, semantic: semanticParam } = await searchParams;
+  const semantic = semanticParam === "1";
 
   // ── No space selected → picker ────────────────────────────────────
   if (!spaceId) {
@@ -130,7 +134,25 @@ export default async function ConnectionsPreviewPage({
     canonicalConceptId: r.canonical_concept_id,
   }));
 
-  const result = buildConceptClusters(entities);
+  // Opt-in semantic merge (embedding cosine). Soft-fails to lexical.
+  let semanticApplied = false;
+  let entitiesForBuild = entities;
+  if (semantic && entities.length > 0 && entities.length <= 800) {
+    try {
+      const vectors = await embedTexts(entities.map((e) => e.name));
+      if (Array.isArray(vectors) && vectors.length === entities.length) {
+        entitiesForBuild = entities.map((e, i) => ({ ...e, embedding: vectors[i] }));
+        semanticApplied = true;
+      }
+    } catch {
+      // soft-fail → lexical
+    }
+  }
+
+  const result = buildConceptClusters(
+    entitiesForBuild,
+    semanticApplied ? { cosineThreshold: SEMANTIC_COSINE } : {},
+  );
   const crossRoom = result.clusters.filter((c) => c.crossRoom);
 
   return (
@@ -138,6 +160,33 @@ export default async function ConnectionsPreviewPage({
       <BackLink />
       <h1 className="mt-2 text-2xl font-semibold text-white">{spaceLabel}</h1>
       <p className="mt-1 text-sm text-white/50">Cross-room concept connections</p>
+
+      {/* Lexical (verified default) ↔ Semantic (opt-in, embedding cosine). */}
+      <div className="mt-3 flex items-center gap-2 text-xs">
+        <span className="text-white/40">Matching:</span>
+        <Link
+          href={`/connections-preview?spaceId=${spaceId}`}
+          className={
+            "rounded-full px-3 py-1 transition " +
+            (!semantic
+              ? "bg-white/10 text-white"
+              : "text-white/45 hover:text-white/80")
+          }
+        >
+          Lexical
+        </Link>
+        <Link
+          href={`/connections-preview?spaceId=${spaceId}&semantic=1`}
+          className={
+            "rounded-full px-3 py-1 transition " +
+            (semantic
+              ? "bg-sky-400/15 text-sky-100"
+              : "text-white/45 hover:text-white/80")
+          }
+        >
+          Semantic{semantic && !semanticApplied ? " (unavailable)" : ""}
+        </Link>
+      </div>
 
       {/* Stat strip — lead with the result. */}
       <div className="mt-5 flex flex-wrap gap-3">

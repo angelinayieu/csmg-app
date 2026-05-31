@@ -39,9 +39,18 @@ export interface ConceptEntityInput {
   roomId: string | null;
   /** entities.canonical_concept_id when linked (strongest merge signal). */
   canonicalConceptId?: string | null;
+  /** Optional concept embedding (e.g. text-embedding-3-small over the name).
+   *  When present + `cosineThreshold` is set, enables SEMANTIC merging of
+   *  token-disjoint synonyms. Omit for the deterministic-only path. */
+  embedding?: number[] | null;
 }
 
-export type ClusterBasis = "canonical" | "exact_name" | "token" | "substring";
+export type ClusterBasis =
+  | "canonical"
+  | "exact_name"
+  | "token"
+  | "substring"
+  | "semantic";
 
 export interface ConceptCluster {
   /** Stable id = the lexicographically-smallest member id. */
@@ -88,6 +97,14 @@ export interface BuildConceptClustersOptions {
   minSharedTokens?: number;
   /** Words excluded from token matching (generic connective/domain noise). */
   stopwords?: Set<string>;
+  /**
+   * When set AND entities carry `embedding`, pairs with cosine ≥ this are
+   * merged as SEMANTIC even if they share no tokens. Off by default (the
+   * lexical path is the verified-quality default; semantic needs tuning on
+   * real data). ~0.84 is a conservative "same concept" cut for
+   * text-embedding-3-small; lower = denser + riskier.
+   */
+  cosineThreshold?: number;
 }
 
 const DEFAULT_STOPWORDS = new Set([
@@ -105,6 +122,8 @@ export function buildConceptClusters(
   const tokenThreshold = opts.tokenThreshold ?? 0.5;
   const minSharedTokens = opts.minSharedTokens ?? 2;
   const stopwords = opts.stopwords ?? DEFAULT_STOPWORDS;
+  const cosineThreshold = opts.cosineThreshold;
+  const cfg: ScoreConfig = { tokenThreshold, minSharedTokens, cosineThreshold };
 
   const built_at = new Date().toISOString();
   const valid = entities.filter((e) => e?.id && typeof e.name === "string" && e.name.trim().length > 0);
@@ -177,8 +196,29 @@ export function buildConceptClusters(
         checked.add(key);
         const pa = byId.get(a)!;
         const pb = byId.get(b)!;
-        const judged = scorePair(pa, pb, { tokenThreshold, minSharedTokens });
+        const judged = scorePair(pa, pb, cfg);
         if (judged) union(a, b);
+      }
+    }
+  }
+
+  // ── Semantic pass (optional) ──────────────────────────────────────
+  // When embeddings + a cosine threshold are supplied, merge pairs whose
+  // MEANING is close even if they share no tokens — the synonyms the token
+  // index can't see ("Incentivized Data Sharing" ↔ "Reward Program for
+  // Contributors"). All-pairs cosine, bounded so it stays cheap.
+  if (cosineThreshold != null && prepared.length <= 800) {
+    const emb = prepared.filter(
+      (p) => Array.isArray(p.e.embedding) && p.e.embedding!.length > 0,
+    );
+    for (let i = 0; i < emb.length; i++) {
+      for (let j = i + 1; j < emb.length; j++) {
+        const a = emb[i];
+        const b = emb[j];
+        if (find(a.e.id) === find(b.e.id)) continue;
+        if (cosineVec(a.e.embedding!, b.e.embedding!) >= cosineThreshold) {
+          union(a.e.id, b.e.id);
+        }
       }
     }
   }
@@ -217,7 +257,7 @@ export function buildConceptClusters(
     for (const m of members) {
       if (m.e.id === rep.e.id) continue;
       if (m.e.roomId && m.e.roomId === rep.e.roomId) continue; // same room → skip
-      const judged = scorePair(rep, m, { tokenThreshold, minSharedTokens }) ??
+      const judged = scorePair(rep, m, cfg) ??
         // rep↔m may have merged transitively; still record the best basis.
         bestBasis(rep, m);
       connections.push({
@@ -255,6 +295,12 @@ interface Prepared {
   tokens: Set<string>;
 }
 
+interface ScoreConfig {
+  tokenThreshold: number;
+  minSharedTokens: number;
+  cosineThreshold?: number;
+}
+
 /**
  * Judge whether two prepared entities denote the same concept. Returns a
  * `{ basis, score }` when they pass, else `null`. Deterministic; mirrors
@@ -264,7 +310,7 @@ interface Prepared {
 function scorePair(
   a: Prepared,
   b: Prepared,
-  cfg: { tokenThreshold: number; minSharedTokens: number },
+  cfg: ScoreConfig,
 ): { basis: ClusterBasis; score: number } | null {
   if (
     a.e.canonicalConceptId &&
@@ -295,6 +341,17 @@ function scorePair(
       Math.min(a.norm.length, b.norm.length) /
       Math.max(a.norm.length, b.norm.length);
     if (ratio >= 0.6) return { basis: "substring", score: round2(0.6 + ratio * 0.3) };
+  }
+  // Semantic (embedding cosine) — catches token-disjoint synonyms.
+  if (
+    cfg.cosineThreshold != null &&
+    Array.isArray(a.e.embedding) &&
+    a.e.embedding.length > 0 &&
+    Array.isArray(b.e.embedding) &&
+    b.e.embedding.length > 0
+  ) {
+    const sim = cosineVec(a.e.embedding, b.e.embedding);
+    if (sim >= cfg.cosineThreshold) return { basis: "semantic", score: round2(sim) };
   }
   return null;
 }
@@ -340,6 +397,23 @@ function intersectionSize<T>(a: Set<T>, b: Set<T>): number {
   let n = 0;
   for (const x of small) if (big.has(x)) n++;
   return n;
+}
+
+/** Cosine similarity clamped to [0,1]; inlined to keep this builder
+ *  dependency-free (mirrors lib/insight-lab/scoring/cosine.ts). */
+function cosineVec(a: number[], b: number[]): number {
+  if (a.length === 0 || b.length === 0 || a.length !== b.length) return 0;
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  if (magA === 0 || magB === 0) return 0;
+  const sim = dot / (Math.sqrt(magA) * Math.sqrt(magB));
+  return Number.isNaN(sim) ? 0 : Math.max(0, Math.min(1, sim));
 }
 
 function pushTo<K, V>(m: Map<K, V[]>, k: K, v: V): void {
