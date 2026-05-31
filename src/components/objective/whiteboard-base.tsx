@@ -77,12 +77,15 @@ import { useObjectiveBoardPersistence } from "./use-objective-board-persistence"
 import {
   DEPLOY_ARTIFACT_EVENT,
   OPEN_UNFURL_EVENT,
+  SEND_DATAFLOW_EVENT,
   CARD_ACTION_EVENT,
   type CardActionDetail,
   dispatchCardSaved,
   drainPendingArtifacts,
   type ArtifactCardDetail,
 } from "./board-bus";
+import { syncDataFlowUnfurl } from "./unfurl/render-dataflow-unfurl";
+import type { DataFlowGraph } from "@/lib/objective-canvas/build-data-flow-graph";
 import {
   DEPLOY_SUBSYSTEM_KG_EVENT,
   drainPendingSubsystemKgs,
@@ -183,11 +186,24 @@ function PageTabs() {
     () => editor.getCurrentPageId(),
     [editor],
   );
-  const fromSpaceId =
-    typeof window !== "undefined"
-      ? new URLSearchParams(window.location.search).get("from")
-      : null;
-  if (pages.length <= 1 && !fromSpaceId) return null;
+  const [lineage, setLineage] = useState<
+    { spaceId: string; title: string }[]
+  >([]);
+  useEffect(() => {
+    const sid = window.location.pathname.match(/\/objective\/([^/]+)/)?.[1];
+    if (!sid) return;
+    let cancelled = false;
+    void fetch(`/api/brainstorm/space/${sid}/lineage`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!cancelled && Array.isArray(j?.lineage)) setLineage(j.lineage);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (pages.length <= 1 && lineage.length === 0) return null;
   return (
     <div
       style={{
@@ -199,23 +215,26 @@ function PageTabs() {
         fontFamily: appleVibe.font.stack,
       }}
     >
-      {fromSpaceId && (
+      {/* Branch lineage — clickable ancestor objectives (oldest → parent). */}
+      {lineage.map((e) => (
         <button
+          key={e.spaceId}
           type="button"
-          onPointerDown={(e) => e.stopPropagation()}
+          onPointerDown={(ev) => ev.stopPropagation()}
           onClick={() =>
-            window.location.assign(`/app/objective/${fromSpaceId}`)
+            window.location.assign(`/app/objective/${e.spaceId}`)
           }
-          title="Back to the objective this branched from"
+          title={`Back to: ${e.title}`}
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
+            maxWidth: 150,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
             padding: "6px 13px",
             fontSize: 12,
-            fontWeight: 600,
-            color: "rgba(15,23,42,0.72)",
-            background: "rgba(255,255,255,0.7)",
+            fontWeight: 500,
+            color: "rgba(15,23,42,0.6)",
+            background: "rgba(255,255,255,0.6)",
             border: "1px solid rgba(15,23,42,0.08)",
             borderRadius: 999,
             backdropFilter: "blur(20px) saturate(160%)",
@@ -223,9 +242,9 @@ function PageTabs() {
             cursor: "pointer",
           }}
         >
-          ‹ Parent objective
+          ‹ {e.title}
         </button>
-      )}
+      ))}
       {pages.length > 1 &&
         pages.map((p) => {
         const active = p.id === currentPageId;
@@ -560,6 +579,37 @@ export function WhiteboardBase({
       const ed = editorRef.current;
       if (ed) clearUnfurl(ed);
     };
+  }, []);
+
+  // "Send to whiteboard" for the data-unit flow map. The data-flow panel
+  // fires SEND_DATAFLOW_EVENT carrying the {nodes,edges} graph directly
+  // (the anchor-based OPEN_UNFURL can't carry a payload). We materialize it
+  // as real artifact-card nodes + bound arrows — tagged meta.unfurl, so the
+  // unmount sweep / exitUnfurl clears it like any unfurl — then frame it.
+  useEffect(() => {
+    function onSendDataFlow(e: Event) {
+      const ed = editorRef.current;
+      const graph = (e as CustomEvent<DataFlowGraph>).detail;
+      if (!ed || !graph) return;
+      syncDataFlowUnfurl(ed, graph);
+      setTimeout(() => {
+        try {
+          const ids = ed
+            .getCurrentPageShapes()
+            .filter((s) => !!(s.meta as { unfurl?: boolean })?.unfurl)
+            .map((s) => s.id);
+          if (ids.length > 0) {
+            ed.select(...ids);
+            ed.zoomToSelection({ animation: { duration: 300 } });
+            ed.selectNone();
+          }
+        } catch {
+          /* no shapes */
+        }
+      }, 80);
+    }
+    window.addEventListener(SEND_DATAFLOW_EVENT, onSendDataFlow);
+    return () => window.removeEventListener(SEND_DATAFLOW_EVENT, onSendDataFlow);
   }, []);
 
   function exitUnfurl() {

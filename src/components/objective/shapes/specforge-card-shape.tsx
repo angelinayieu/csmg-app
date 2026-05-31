@@ -216,15 +216,23 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
       } catch {
         /* non-fatal — the new canvas can recover on load */
       }
-      // Carry the parent objective so the new canvas can show a "Back to
-      // parent" breadcrumb — the cross-space branch lineage.
+      // Record the branch lineage so the new objective can show a titled
+      // breadcrumb chain back through its ancestors (folder/sub-tab nav).
       const fromSpaceId = window.location.pathname.match(
         /\/objective\/([^/]+)/,
       )?.[1];
-      const dest = `/app/objective/${json.spaceId}${
-        fromSpaceId ? `?from=${fromSpaceId}` : ""
-      }`;
-      window.location.assign(dest);
+      if (fromSpaceId) {
+        try {
+          await fetch(`/api/brainstorm/space/${json.spaceId}/lineage`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ parentSpaceId: fromSpaceId }),
+          });
+        } catch {
+          /* non-fatal — the breadcrumb just won't render */
+        }
+      }
+      window.location.assign(`/app/objective/${json.spaceId}`);
     } catch {
       setOpening(false);
     }
