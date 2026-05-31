@@ -196,7 +196,15 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
       } catch {
         /* non-fatal — the new canvas can recover on load */
       }
-      window.location.assign(`/app/objective/${json.spaceId}`);
+      // Carry the parent objective so the new canvas can show a "Back to
+      // parent" breadcrumb — the cross-space branch lineage.
+      const fromSpaceId = window.location.pathname.match(
+        /\/objective\/([^/]+)/,
+      )?.[1];
+      const dest = `/app/objective/${json.spaceId}${
+        fromSpaceId ? `?from=${fromSpaceId}` : ""
+      }`;
+      window.location.assign(dest);
     } catch {
       setOpening(false);
     }

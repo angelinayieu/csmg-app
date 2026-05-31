@@ -183,19 +183,51 @@ function PageTabs() {
     () => editor.getCurrentPageId(),
     [editor],
   );
-  if (pages.length <= 1) return null;
+  const fromSpaceId =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("from")
+      : null;
+  if (pages.length <= 1 && !fromSpaceId) return null;
   return (
     <div
       style={{
         pointerEvents: "all",
         display: "flex",
         alignItems: "flex-end",
-        gap: 2,
+        gap: 6,
         padding: "0 8px",
         fontFamily: appleVibe.font.stack,
       }}
     >
-      {pages.map((p) => {
+      {fromSpaceId && (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() =>
+            window.location.assign(`/app/objective/${fromSpaceId}`)
+          }
+          title="Back to the objective this branched from"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "6px 13px",
+            fontSize: 12,
+            fontWeight: 600,
+            color: "rgba(15,23,42,0.72)",
+            background: "rgba(255,255,255,0.7)",
+            border: "1px solid rgba(15,23,42,0.08)",
+            borderRadius: 999,
+            backdropFilter: "blur(20px) saturate(160%)",
+            WebkitBackdropFilter: "blur(20px) saturate(160%)",
+            cursor: "pointer",
+          }}
+        >
+          ‹ Parent objective
+        </button>
+      )}
+      {pages.length > 1 &&
+        pages.map((p) => {
         const active = p.id === currentPageId;
         return (
           <button
