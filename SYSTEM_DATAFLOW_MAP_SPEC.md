@@ -3,7 +3,21 @@
 **Status:** DRAFT (spec-first, pre-code) · **Date:** 2026-05-30 · **Lane:** objective-canvas / systems-map
 **Goal:** replace the crowded, *fuzzy* "Map" with ONE precise cross-feature data-flow diagram — and, underneath it, **strengthen the cross-card connection infrastructure so the links are real (derived from data tokens), not heuristic string-matches.**
 
-> The visual is downstream. The point of this spec is the **base infra**: turn the latent, precise `produces`/`consumes` token graph into the *canonical* cross-feature connection layer, persist it, and make every surface (Map, depends-on, agent spec) read from it.
+> The visual is downstream. The point of this spec is the **base infra**: turn the rooms' GUARANTEED declared causal bindings into the *canonical* cross-feature connection layer, persist it, **enrich** it with mechanism data-tokens when present, and make every surface (Map, depends-on, agent spec) read from it.
+
+---
+
+## 0. Revisions — post-audit corrections (READ FIRST)
+
+Two corrections from a follow-up **autopilot-provenance audit** + a **viz-stack research pass**. They supersede the relevant lines in §1–§3.
+
+**(A) Data source — derive from GUARANTEED autopilot output, not the conditional tokens.**
+Audit finding: the `produces/consumes` mechanism tokens are written **only** when the canvas-autopilot "technical specs" toggle is on (canvas-autopilot-runner.tsx:515 `if (withSpecs)`, defaults true) — the **per-room** AutopilotRunner (score→refine only) and `room/generate` never write them, and `data_unit_registry` is populated *only* as a side-effect of spec generation. So after many real runs the token graph is **empty/sparse**, and even present, tokens are LLM free-text reconciled by a *fuzzy* registry → matches are probabilistic.
+**What every feature reliably has after ANY run** (`room/generate`): `causal_chain.addresses[]` (`{pain, root_cause}`) + `causal_chain.moves[]` (`{outcome, indicator}`), mirrored into `edges` as `addressed_by`/`produces`, plus scored `variations[]` (`effectiveness_score`, `addresses_pain`). Election to the "final structure" is a **manual** step (autopilot proposes + ranks, never auto-elects).
+→ **The connection graph's REQUIRED substrate is these declared bindings** (features linked by shared `root_cause`, and by `outcome → pain` matches); mechanism tokens + registry are an **OPTIONAL enrichment** that deepens an edge with a precise data-unit label + operators *when a spec exists*. **Canonicalize** `root_cause`/`indicator`/unit via `concept_slug` (the glossary identity already in the codebase) so matches are precise, not string-fuzzy. §2 is revised accordingly.
+
+**(B) Viz stack — React Flow + ELK (elkjs), not dagre.**
+Research verdict: keep `@xyflow/react` (right renderer — custom operator/data-unit nodes, the complexity dial, and hover-trace are all pure React state), but adopt **ELK (`elkjs`) `layered`** for layout: orthogonal/Manhattan edge routing, barycenter crossing-minimization (LAYER_SWEEP), Brandes-Köpf node placement, and **reserved edge-label space** — none of which dagre does (that's the Lucidchart/swimlane look the reference images have). L1→L4 = ELK layers; render lanes as non-interactive **background bands**. Hold `d3-sankey` in reserve for a separate data-**VOLUME** sub-mode only. It's an **additive `elkjs` install**, no rewrite. (React Flow ships an official ELK example.) §3 is revised accordingly.
 
 ---
 
