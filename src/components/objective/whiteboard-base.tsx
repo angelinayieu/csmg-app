@@ -61,7 +61,7 @@ import { CollapsibleStylePanel } from "./canvas-interactions/collapsible-style-p
 import type { TLComponents } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
-import { ListChecks } from "lucide-react";
+import { ListChecks, Sparkles } from "lucide-react";
 import { BoardHint } from "./board-hint";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
 import {
@@ -643,7 +643,7 @@ export function WhiteboardBase({
       />
       {/* Contextual AI action — only while the board chrome is showing and
           we're NOT unfurling (the selection toolbar is for the normal board). */}
-      {editor && showUi && !unfurl && (
+      {editor && showUi && (
         <BoardOverlay editor={editor} runAiLink={runAiLink} spaceId={spaceId} />
       )}
 
@@ -879,6 +879,9 @@ function BoardOverlay({
   // Default true so the hint never flashes before the localStorage read;
   // the effect flips it false for users who haven't dismissed it.
   const [hintDismissed, setHintDismissed] = useState(true);
+  // Pin the AI scanner open so live recommendations persist while you work
+  // (scans the selected card, or the whole board when nothing is selected).
+  const [pinned, setPinned] = useState(false);
 
   useEffect(() => {
     try {
@@ -917,6 +920,14 @@ function BoardOverlay({
           single = { target: tgt, sx: pt.x, sy: pt.y };
         }
       }
+      // Whole-board scan text — aggregate every idea's text, for the pinned
+      // AI panel when nothing specific is selected.
+      const boardTexts: string[] = [];
+      for (const s of shapes) {
+        const t = shapeToScanTarget(s);
+        if (t) boardTexts.push(t.text);
+      }
+      const boardScanText = boardTexts.join("\n").slice(0, 4000);
       return {
         ids: cards.map((c) => c.id),
         payloads: cards.map(cardPayload),
@@ -932,6 +943,7 @@ function BoardOverlay({
         ).length,
         insightCount: shapes.filter((s) => s.type === "insight-card").length,
         single,
+        boardScanText,
       };
     },
     [editor],
@@ -1048,17 +1060,58 @@ function BoardOverlay({
       )}
 
       {/* AI scanner — a sticky-note / text idea selected → recommend + run ops. */}
-      {view.single && (
-        <AiScannerPanel
-          key={view.single.target.shapeId}
-          target={view.single.target}
-          x={view.single.sx}
-          y={view.single.sy}
-          onRun={(opId) =>
-            executeCardOperation(editor, view.single!.target, opId)
-          }
-        />
-      )}
+      {(view.single || (pinned && view.boardScanText)) &&
+        (() => {
+          const target: OperationTarget = view.single?.target ?? {
+            text: view.boardScanText,
+          };
+          const sx =
+            view.single?.sx ??
+            (typeof window !== "undefined" ? window.innerWidth - 328 : 16);
+          const sy = view.single?.sy ?? 88;
+          return (
+            <AiScannerPanel
+              key={view.single?.target.shapeId ?? "board-scan"}
+              target={target}
+              x={sx}
+              y={sy}
+              onRun={(opId) => executeCardOperation(editor, target, opId)}
+            />
+          );
+        })()}
+
+      {/* Persistent AI panel toggle — pin the scanner open so live
+          recommendations stay while you work (scans the selected card, or the
+          whole board when nothing is selected). */}
+      <button
+        type="button"
+        onClick={() => setPinned((p) => !p)}
+        title={pinned ? "Hide AI suggestions" : "Scan the board with AI"}
+        style={{
+          position: "absolute",
+          left: 16,
+          bottom: 16,
+          zIndex: 65,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 7,
+          padding: "9px 14px",
+          borderRadius: 999,
+          border: `1px solid ${appleVibe.stroke.soft}`,
+          background: pinned
+            ? appleVibe.accent.primary
+            : appleVibe.surface.card,
+          color: pinned ? appleVibe.text.onAccent : appleVibe.text.primary,
+          boxShadow: appleVibe.shadow.chip,
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 600,
+          fontFamily: appleVibe.font.stack,
+        }}
+      >
+        <Sparkles style={{ width: 15, height: 15 }} strokeWidth={2.2} />
+        {pinned ? "AI on" : "Ask AI"}
+      </button>
 
       {/* Converge entry — opens Focus Mode to mark what's decided. */}
       {focus.phase === "closed" && view.nodes.length > 0 && (
