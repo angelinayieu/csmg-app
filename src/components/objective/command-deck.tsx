@@ -20,9 +20,11 @@
 // component owns layout + the tile summaries only — it never
 // duplicates either surface's data logic.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import {
   ChevronDown,
+  ExternalLink,
   FileText,
   Package,
   Play,
@@ -31,7 +33,8 @@ import {
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { AnalysisWorkbench } from "@/components/objective/analysis-workbench";
 import { DeliverablesStrip } from "@/components/objective/deliverables-strip";
-import { StrategyBriefPanel } from "@/components/objective/strategy-brief-panel";
+import { StrategyBriefView } from "@/components/objective/strategy-brief-view";
+import type { StrategyBrief } from "@/lib/objective-canvas/build-strategy-brief";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
 
 export interface DeckOperation {
@@ -40,7 +43,7 @@ export interface DeckOperation {
   description: string;
 }
 
-type DeckCard = "analysis" | "operations" | "deliverables";
+type DeckCard = "analysis" | "operations" | "deliverables" | "brief";
 
 interface Props {
   spaceId: string;
@@ -60,7 +63,7 @@ interface Props {
 // Each card ties to its meaning by a soft accent glow (never a spine):
 // Analysis = the objective violet, Operations = features blue,
 // Deliverables = outcomes green, Brief = restrained graphite.
-const ACCENT: Record<DeckCard | "brief", string> = {
+const ACCENT: Record<DeckCard, string> = {
   analysis: appleVibe.stage.objective,
   operations: appleVibe.stage.features,
   deliverables: appleVibe.stage.outcomes,
@@ -98,10 +101,6 @@ export function CommandDeck({
   briefHref,
 }: Props) {
   const [open, setOpen] = useState<DeckCard | null>(null);
-  // Strategy Brief popup lives in its own state so it can overlay the
-  // canvas without clashing with the inline expansion panel below the
-  // tile row.
-  const [briefOpen, setBriefOpen] = useState(false);
 
   // Analysis summary — from the server-cached snapshot. Live counts
   // refresh inside the panel on open; the tile reflects the last scan.
@@ -155,9 +154,9 @@ export function CommandDeck({
           accent={ACCENT.brief}
           icon={<FileText className="h-4 w-4" strokeWidth={2} />}
           title="Strategy Brief"
-          summary={briefOpen ? "Open ↗" : "Synthesized →"}
-          active={briefOpen}
-          onClick={() => setBriefOpen((v) => !v)}
+          summary="Synthesized →"
+          active={open === "brief"}
+          onClick={() => toggle("brief")}
         />
       </div>
 
@@ -191,14 +190,11 @@ export function CommandDeck({
           {open === "deliverables" && (
             <DeliverablesStrip spaceId={spaceId} embedded />
           )}
+          {open === "brief" && (
+            <InlineBrief spaceId={spaceId} briefHref={briefHref} />
+          )}
         </div>
       )}
-      <StrategyBriefPanel
-        open={briefOpen}
-        onClose={() => setBriefOpen(false)}
-        spaceId={spaceId}
-        deepLinkHref={briefHref}
-      />
     </section>
   );
 }
@@ -320,6 +316,124 @@ function Tile({
       />
       <TileBody title={title} summary={summary} dot={dot} />
     </button>
+  );
+}
+
+// ── Inline Strategy Brief ─────────────────────────────────────────
+//
+// Renders the synthesized brief inside the Command Deck's inline
+// dropdown — the same slot Analysis / Operations / Deliverables use —
+// instead of a floating right-edge slide-in panel. Lazy-fetches on
+// mount via the same /api/brainstorm/space/[id]/brief endpoint the
+// old StrategyBriefPanel used.
+
+function InlineBrief({
+  spaceId,
+  briefHref,
+}: {
+  spaceId: string;
+  briefHref: string;
+}) {
+  const [brief, setBrief] = useState<StrategyBrief | null>(null);
+  const [polishStale, setPolishStale] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch(`/api/brainstorm/space/${spaceId}/brief`)
+      .then((r) => r.json().catch(() => ({})))
+      .then((json: { brief?: StrategyBrief; polishStale?: boolean; error?: string }) => {
+        if (cancelled) return;
+        if (!json.brief) {
+          setError(json.error ?? "Couldn't load the brief.");
+          return;
+        }
+        setBrief(json.brief);
+        setPolishStale(!!json.polishStale);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Network error.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId]);
+
+  if (loading && !brief) return <InlineStatus>Loading brief…</InlineStatus>;
+  if (error) return <InlineStatus tone="error">{error}</InlineStatus>;
+  if (!brief || brief.totals.rooms === 0) {
+    return (
+      <InlineStatus>
+        Nothing to summarize yet — generate at least one sub-objective room first.
+      </InlineStatus>
+    );
+  }
+
+  return (
+    <div>
+      <div
+        className="mb-3 flex items-center justify-between gap-2"
+        style={{ fontFamily: appleVibe.font.stack }}
+      >
+        {polishStale ? (
+          <span
+            className="text-[10.5px] italic"
+            style={{ color: appleVibe.text.faint }}
+          >
+            · polish is stale
+          </span>
+        ) : (
+          <span />
+        )}
+        <Link
+          href={briefHref || `/app/objective/${spaceId}/brief`}
+          className="inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium"
+          style={{
+            color: appleVibe.text.tertiary,
+            border: `1px solid ${appleVibe.stroke.soft}`,
+          }}
+          title="Open standalone page"
+        >
+          <ExternalLink className="h-3 w-3" strokeWidth={2} />
+          Open page
+        </Link>
+      </div>
+      <StrategyBriefView
+        spaceId={spaceId}
+        brief={brief}
+        polishStale={polishStale}
+        embedded
+      />
+    </div>
+  );
+}
+
+function InlineStatus({
+  children,
+  tone = "default",
+}: {
+  children: ReactNode;
+  tone?: "default" | "error";
+}) {
+  return (
+    <p
+      className="px-2 py-6 text-center text-[12.5px]"
+      style={{
+        color:
+          tone === "error" ? "rgba(127,29,29,0.95)" : appleVibe.text.tertiary,
+        fontFamily: appleVibe.font.stack,
+      }}
+    >
+      {children}
+    </p>
   );
 }
 
