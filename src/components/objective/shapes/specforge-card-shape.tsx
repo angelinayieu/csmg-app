@@ -236,6 +236,43 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
             fontFamily: appleVibe.font.stack,
           }}
         >
+          {/* Spawn feedback — "Open as room" / "New objective" run a
+              multi-second async (create → generate → navigate); a frosted
+              veil tells the user it's working instead of looking frozen. */}
+          {opening && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 12,
+                borderRadius: 20,
+                background: "rgba(255,255,255,0.74)",
+                backdropFilter: "blur(5px)",
+                WebkitBackdropFilter: "blur(5px)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                fontSize: 12.5,
+                fontWeight: 600,
+                color,
+              }}
+            >
+              <span
+                style={{
+                  width: 9,
+                  height: 9,
+                  borderRadius: 999,
+                  border: `2px solid ${color}`,
+                  borderTopColor: "transparent",
+                  animation: "spin 0.7s linear infinite",
+                }}
+              />
+              Opening…
+              <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+            </div>
+          )}
+
           {/* Eyebrow row — folder-tab pill + grip. */}
           <div
             style={{
