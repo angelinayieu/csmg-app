@@ -24,6 +24,7 @@ import {
   Plus,
   RefreshCw,
   SkipForward,
+  Sparkles,
   X,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -96,7 +97,10 @@ export function ClarifyingQuestionsCard({
   // ── Server actions ──
   async function runAction(
     kind: "generate" | "answer" | "skip" | "skipAll" | "complete",
-    payload?: { mode?: "initial" | "more" | "regenerate"; value?: string },
+    payload?: {
+      mode?: "initial" | "more" | "regenerate" | "researched";
+      value?: string;
+    },
   ) {
     setError(null);
     startTransition(async () => {
@@ -111,6 +115,13 @@ export function ClarifyingQuestionsCard({
           const json = await res.json();
           if (!res.ok) {
             setError(json?.error ?? "Could not generate questions.");
+            return;
+          }
+          if (json.researchPending) {
+            setLoadingInitial(false);
+            setError(
+              "Still researching the domain — try “Researched proposals” again in a moment.",
+            );
             return;
           }
           setBlock(json.clarifying);
@@ -227,6 +238,12 @@ export function ClarifyingQuestionsCard({
             busy={busy}
           />
           <SecondaryButton
+            label="Researched proposals"
+            icon={<Sparkles className="h-3 w-3" strokeWidth={2} />}
+            onClick={() => runAction("generate", { mode: "researched" })}
+            busy={busy}
+          />
+          <SecondaryButton
             label="Regenerate"
             icon={<RefreshCw className="h-3 w-3" strokeWidth={2} />}
             onClick={() => runAction("generate", { mode: "regenerate" })}
@@ -260,6 +277,18 @@ export function ClarifyingQuestionsCard({
         />
       </div>
 
+      {currentQuestion.grounded && (
+        <div
+          className="mb-1.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em]"
+          style={{
+            background: appleVibe.surface.chip,
+            color: appleVibe.accent.primary,
+          }}
+        >
+          <Sparkles className="h-2.5 w-2.5" strokeWidth={2.25} />
+          Researched proposal
+        </div>
+      )}
       <Heading>{currentQuestion.question}</Heading>
       {currentQuestion.rationale && (
         <p
@@ -626,6 +655,12 @@ export function ClarifyingQuestionsCard({
             label="More"
             icon={<Plus className="h-3 w-3" strokeWidth={2} />}
             onClick={() => runAction("generate", { mode: "more" })}
+            busy={busy}
+          />
+          <SmallChip
+            label="Researched proposals"
+            icon={<Sparkles className="h-3 w-3" strokeWidth={2} />}
+            onClick={() => runAction("generate", { mode: "researched" })}
             busy={busy}
           />
         </div>

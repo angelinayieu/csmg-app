@@ -28,7 +28,7 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-type Mode = "initial" | "more" | "regenerate";
+type Mode = "initial" | "more" | "regenerate" | "researched";
 
 interface Body {
   spaceId?: string;
@@ -48,7 +48,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "spaceId required" }, { status: 400 });
   }
   const mode: Mode =
-    body?.mode === "more" || body?.mode === "regenerate"
+    body?.mode === "more" ||
+    body?.mode === "regenerate" ||
+    body?.mode === "researched"
       ? body.mode
       : "initial";
 
@@ -58,7 +60,7 @@ export async function POST(req: NextRequest) {
   // Load space + ownership check.
   const { data: space, error: fetchError } = await db
     .from("spaces")
-    .select("id, user_id, input_text, description, synthesis_data")
+    .select("id, user_id, input_text, description, synthesis_data, surface_research")
     .eq("id", spaceId)
     .maybeSingle();
   if (fetchError) {
@@ -90,18 +92,68 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ clarifying: existingBlock, stage: state.stage });
   }
 
+  // ── Mode: researched — gather grounding (or signal "still researching") ──
+  // The researched mode grounds new questions in the surface-research
+  // findings + extracted concepts. If research hasn't landed yet, tell the
+  // client to retry rather than emit an ungrounded set.
+  let research:
+    | { summary?: string; concepts?: string[]; sourceTitles?: string[] }
+    | undefined;
+  if (mode === "researched") {
+    const surface = space.surface_research as {
+      status?: string;
+      summary?: string;
+      sources?: Array<{ title?: string }>;
+    } | null;
+    if (!surface || surface.status !== "complete") {
+      return NextResponse.json({
+        clarifying:
+          existingBlock ?? {
+            questions: [],
+            answers: {},
+            generated_at: new Date().toISOString(),
+          },
+        stage: state.stage,
+        researchPending: true,
+      });
+    }
+    const { data: goalRows } = await db
+      .from("improvement_goals")
+      .select("annotations")
+      .eq("space_id", spaceId)
+      .is("parent_goal_id", null)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const ann =
+      Array.isArray(goalRows) && goalRows.length > 0
+        ? goalRows[0].annotations
+        : null;
+    research = {
+      summary:
+        typeof surface.summary === "string" ? surface.summary : undefined,
+      concepts: extractConceptPhrases(ann),
+      sourceTitles: Array.isArray(surface.sources)
+        ? surface.sources
+            .map((s) => s?.title)
+            .filter((t): t is string => typeof t === "string")
+            .slice(0, 6)
+        : [],
+    };
+  }
+
   try {
     const desiredCount = clampCount(body?.count, mode);
 
     let nextQuestions: ClarifyingQuestion[];
     let nextAnswers = existingBlock?.answers ?? {};
 
-    if (mode === "more") {
+    if (mode === "more" || mode === "researched") {
       const existing = existingBlock?.questions ?? [];
       const additions = await generateClarifyingQuestions({
         objective,
         existing: existing.map((q) => ({ question: q.question })),
         count: desiredCount,
+        ...(research ? { research } : {}),
       });
       nextQuestions = [...existing, ...additions];
       // answers untouched
@@ -174,5 +226,24 @@ function clampCount(raw: unknown, mode: Mode): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.min(5, Math.floor(raw)));
   }
-  return mode === "more" ? 2 : 3;
+  return mode === "more" || mode === "researched" ? 2 : 3;
+}
+
+/** Pull concept strings out of the core goal's annotation lens for the
+ *  research grounding block. Defensive about the annotation shape —
+ *  prefers `concept`, falls back to the underlined `phrase`. Dedup + cap. */
+function extractConceptPhrases(annotations: unknown): string[] {
+  if (!Array.isArray(annotations)) return [];
+  const out: string[] = [];
+  for (const a of annotations) {
+    if (a && typeof a === "object") {
+      const rec = a as Record<string, unknown>;
+      const v =
+        (typeof rec.concept === "string" && rec.concept.trim()) ||
+        (typeof rec.phrase === "string" && rec.phrase.trim()) ||
+        "";
+      if (v) out.push(v);
+    }
+  }
+  return Array.from(new Set(out)).slice(0, 20);
 }

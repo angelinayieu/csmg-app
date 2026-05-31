@@ -29,6 +29,13 @@ export interface GenerateOptions {
   existing?: Array<Pick<ClarifyingQuestion, "question">>;
   /** Target count. Defaults: initial=3, more=2. */
   count?: number;
+  /** Research grounding (the "researched" mode). When present + non-empty,
+   *  questions are grounded in these findings and tagged `grounded: true`. */
+  research?: {
+    summary?: string;
+    concepts?: string[];
+    sourceTitles?: string[];
+  };
 }
 
 export async function generateClarifyingQuestions(
@@ -36,12 +43,18 @@ export async function generateClarifyingQuestions(
 ): Promise<ClarifyingQuestion[]> {
   const count = Math.max(1, Math.min(5, opts.count ?? 3));
 
+  const hasResearch = !!(
+    opts.research &&
+    (opts.research.summary?.trim() || (opts.research.concepts?.length ?? 0) > 0)
+  );
+
   const raw = await llmJSON<LlmShape>({
     system: buildSystemPrompt(),
     user: buildUserPrompt({
       objective: opts.objective,
       existing: opts.existing,
       count,
+      research: opts.research,
     }),
     responseSchema: RESPONSE_SCHEMA,
     temperature: 0.45,
@@ -76,6 +89,7 @@ export async function generateClarifyingQuestions(
         rationale,
         selection,
         options: options.length > 0 ? options : undefined,
+        ...(hasResearch ? { grounded: true } : {}),
       };
     })
     .filter((q): q is ClarifyingQuestion => q !== null)

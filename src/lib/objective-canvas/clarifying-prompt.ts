@@ -27,6 +27,15 @@ export interface BuildClarifyingPromptArgs {
   existing?: Array<Pick<ClarifyingQuestion, "question">>;
   /** How many to emit. 3 for initial / regenerate; 2 for "more". */
   count: number;
+  /** Optional research grounding (the "researched" mode). When present,
+   *  the LLM is told to GROUND each question in these findings — probing
+   *  decisions the research reveals are load-bearing but the objective
+   *  leaves unspecified. Absent for the base objective-only generation. */
+  research?: {
+    summary?: string;
+    concepts?: string[];
+    sourceTitles?: string[];
+  };
 }
 
 export function buildSystemPrompt(): string {
@@ -64,7 +73,7 @@ Return strict JSON.`;
 }
 
 export function buildUserPrompt(args: BuildClarifyingPromptArgs): string {
-  const { objective, existing = [], count } = args;
+  const { objective, existing = [], count, research } = args;
   const exclusionBlock =
     existing.length > 0
       ? `\n\nThe user has already seen these ${existing.length} question${
@@ -73,10 +82,26 @@ export function buildUserPrompt(args: BuildClarifyingPromptArgs): string {
 ${existing.map((q, i) => `  ${i + 1}. ${q.question}`).join("\n")}`
       : "";
 
+  const hasResearch =
+    !!research &&
+    (!!research.summary?.trim() || (research.concepts?.length ?? 0) > 0);
+  const researchBlock = hasResearch
+    ? `\n\nRESEARCH FINDINGS — a web pass on this domain already ran. GROUND every question in these: each must probe a decision the findings reveal is load-bearing that the objective hasn't pinned down, and name the specific finding/concept in its rationale. Do NOT ask generic questions the research already answers.
+${research!.summary?.trim() ? `Summary: ${research!.summary.trim().slice(0, 800)}\n` : ""}${
+        research!.concepts && research!.concepts.length > 0
+          ? `Concepts surfaced: ${research!.concepts.slice(0, 20).join(", ")}\n`
+          : ""
+      }${
+        research!.sourceTitles && research!.sourceTitles.length > 0
+          ? `Sources: ${research!.sourceTitles.slice(0, 6).join(" · ")}\n`
+          : ""
+      }`
+    : "";
+
   return `USER'S DRAFT OBJECTIVE:
 """
 ${objective.slice(0, 4000)}
-"""${exclusionBlock}
+"""${exclusionBlock}${researchBlock}
 
 Generate exactly ${count} clarifying question${
     count === 1 ? "" : "s"
