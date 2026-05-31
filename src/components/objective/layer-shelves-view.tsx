@@ -24,9 +24,10 @@
 // badged on the card. Untagged subs (pre-stack picks) collect in an
 // "Unplaced" shelf at the bottom so nothing is silently dropped.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowRight, Check, ChevronDown } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, Loader2 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { ARCHETYPE_COLOR } from "@/components/objective/objective-stack";
 import { RetagCardsButton } from "@/components/objective/retag-cards-button";
@@ -69,31 +70,15 @@ function alphaHex(a: number): string {
   return v.toString(16).padStart(2, "0");
 }
 
-// ── Open the sub-objective room as a spatial window over the canvas.
-//    The whole card is the click target (matching the grid SubCard
-//    affordance); callers handle drag-suppression + modifier-key
-//    fall-through before invoking this.
-function openRoomAsWindow(
-  el: HTMLElement,
-  spaceId: string,
-  sub: MainCanvasSub,
-) {
-  const r = el.getBoundingClientRect();
-  window.dispatchEvent(
-    new CustomEvent("canvas-workspace:open-fullscreen", {
-      detail: {
-        kind: "room",
-        artifactId: sub.id,
-        title: sub.title,
-        href: `/app/objective/${spaceId}/sub/${sub.id}?embed=1`,
-        originRect: {
-          cx: r.left + r.width / 2,
-          cy: r.top + r.height / 2,
-          width: r.width,
-        },
-      },
-    }),
-  );
+// ── Build the route to a sub-objective room. The Objective Canvas
+//    layout (`ObjectiveCanvasShell`) already swaps the room view as a
+//    floating window over the persistent whiteboard when this URL
+//    activates, so plain Next.js navigation is the correct mechanism —
+//    NOT the iframe-based `canvas-workspace:open-fullscreen` event,
+//    which only has a listener mounted on the whiteboard space route
+//    and would fire into a void here.
+export function roomHref(spaceId: string, subId: string): string {
+  return `/app/objective/${spaceId}/sub/${subId}`;
 }
 
 // ── Drag-to-scroll hook ───────────────────────────────────────────
@@ -458,8 +443,23 @@ export function LayerFlashcard({
   getDragged: () => boolean;
 }) {
   const reduce = useReducedMotion();
+  const router = useRouter();
+  const pathname = usePathname();
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
+  // `loading` shows the click was registered while the destination
+  // route's RSC payload streams in. Reset whenever the URL actually
+  // becomes (or includes) the destination — covers both a successful
+  // route swap AND a back-nav that lands somewhere unexpected, so the
+  // card never gets stuck in the loading visual.
+  const [loading, setLoading] = useState(false);
+  const targetHref = roomHref(spaceId, sub.id);
+  useEffect(() => {
+    if (loading && pathname?.startsWith(targetHref)) setLoading(false);
+  }, [loading, pathname, targetHref]);
+  // Prefetched once per hover: Next.js dedupes, but we still gate to
+  // avoid scheduling a refresh on every micro-hover.
+  const prefetched = useRef(false);
 
   const isApproved = sub.approvedItems.length > 0 || sub.approvedPlayCount > 0;
   // The glow is the card's permanent layer identity — ALWAYS the layer
@@ -495,29 +495,55 @@ export function LayerFlashcard({
 
   // Primary action: the WHOLE card opens the room (matching the grid
   // SubCard affordance). Suppressed when the pointer-up ends a
-  // drag-scroll so scrolling the gallery never navigates.
+  // drag-scroll so scrolling the gallery never navigates. Re-clicking
+  // while a navigation is already in flight is a no-op so the user
+  // can't queue duplicate pushes.
   const openRoom = (e: React.MouseEvent) => {
     if (getDragged()) return;
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
       return;
     }
+    if (loading) return;
     e.preventDefault();
-    openRoomAsWindow(e.currentTarget as HTMLElement, spaceId, sub);
+    setLoading(true);
+    router.push(targetHref);
+  };
+
+  // Warm the room route's RSC payload on hover so the actual click
+  // hits a primed cache. The ObjectiveCanvasShell also prefetches
+  // every room on mount, but a fresh deploy / cache-eviction can
+  // make that miss — re-prefetching on hover guarantees the click
+  // path is hot.
+  const onHoverPrefetch = () => {
+    if (prefetched.current) return;
+    prefetched.current = true;
+    try {
+      router.prefetch(targetHref);
+    } catch {
+      /* prefetch best-effort */
+    }
   };
 
   return (
     <motion.div
       whileHover={reduce ? undefined : { y: -5 }}
-      onHoverStart={() => setHovered(true)}
+      onHoverStart={() => {
+        setHovered(true);
+        onHoverPrefetch();
+      }}
       onHoverEnd={() => setHovered(false)}
+      onPointerEnter={onHoverPrefetch}
       transition={{ type: "spring", stiffness: 320, damping: 26 }}
       role="button"
       tabIndex={0}
+      aria-busy={loading}
       onClick={openRoom}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
+          if (loading) return;
           e.preventDefault();
-          openRoomAsWindow(e.currentTarget as HTMLElement, spaceId, sub);
+          setLoading(true);
+          router.push(targetHref);
         }
       }}
       className="group/card relative flex flex-shrink-0 cursor-pointer flex-col"
@@ -527,9 +553,13 @@ export function LayerFlashcard({
         fontFamily: appleVibe.font.stack,
         // Soft accent-tinted drop-shadow glow that traces the folder
         // silhouette (tab + body). Replaces the old colored side spine.
-        filter: hovered
-          ? `drop-shadow(0 16px 34px ${glow}40) drop-shadow(0 5px 12px rgba(15,23,42,0.10))`
-          : `drop-shadow(0 8px 20px ${glow}24) drop-shadow(0 2px 5px rgba(15,23,42,0.06))`,
+        // When loading, push the glow brighter so the card itself
+        // becomes the "click registered" cue.
+        filter: loading
+          ? `drop-shadow(0 18px 40px ${glow}66) drop-shadow(0 6px 14px ${glow}33)`
+          : hovered
+            ? `drop-shadow(0 16px 34px ${glow}40) drop-shadow(0 5px 12px rgba(15,23,42,0.10))`
+            : `drop-shadow(0 8px 20px ${glow}24) drop-shadow(0 2px 5px rgba(15,23,42,0.06))`,
         transition: "filter 0.28s ease",
       }}
     >
@@ -723,15 +753,61 @@ export function LayerFlashcard({
             className="inline-flex items-center gap-1 text-[10.5px] font-semibold transition-colors"
             style={{ color: accent }}
           >
-            Open room
-            <ArrowRight
-              className="h-3 w-3 transition-transform group-hover/card:translate-x-0.5"
-              strokeWidth={2.2}
-            />
+            {loading ? (
+              <>
+                <Loader2
+                  className="h-3 w-3 animate-spin"
+                  strokeWidth={2.2}
+                />
+                Opening…
+              </>
+            ) : (
+              <>
+                Open room
+                <ArrowRight
+                  className="h-3 w-3 transition-transform group-hover/card:translate-x-0.5"
+                  strokeWidth={2.2}
+                />
+              </>
+            )}
           </span>
           </div>
         </div>
       </div>
+
+      {/* Loading veil — appears the instant the click is registered so
+          the user gets immediate "something is happening" feedback while
+          the room's server render streams in. The veil sits ABOVE the
+          card body but BELOW the spinner-bearing footer, with a soft
+          shimmer that uses the layer's accent so it reads as the card
+          turning ON, not greying out. Pointer-events: none so a frantic
+          re-click still hits the card root (which no-ops via `loading`).
+          ARIA-hidden because the card itself is aria-busy. */}
+      {loading && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-30 overflow-hidden"
+          style={{
+            borderRadius: 16,
+            background: `linear-gradient(135deg, ${accent}1F 0%, ${accent}0A 100%)`,
+            backdropFilter: "blur(2px)",
+            WebkitBackdropFilter: "blur(2px)",
+            animation: "shelfCardPulse 1.2s ease-in-out infinite",
+          }}
+        >
+          {/* Shimmer sweep — a single diagonal highlight that sweeps
+              across the card every cycle, the universal "loading is
+              progressing" cue. */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: `linear-gradient(115deg, transparent 35%, ${accent}33 50%, transparent 65%)`,
+              animation: "shelfCardSweep 1.4s ease-in-out infinite",
+            }}
+          />
+        </div>
+      )}
     </motion.div>
   );
 }

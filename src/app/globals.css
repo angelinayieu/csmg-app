@@ -423,6 +423,33 @@
   }
 }
 
+/* Layer-shelf card loading veil — fires the instant a Blueprint card
+   is clicked so the user gets immediate "click registered" feedback
+   while the destination room's RSC payload streams in. Two layers:
+   a soft pulse on the tinted veil + a single diagonal shimmer sweep
+   that crosses the card to confirm progress (not just "stuck"). */
+@keyframes shelfCardPulse {
+  0%, 100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes shelfCardSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Reduced-motion users get a static tinted veil — same signal,
+     no animation. The spinner-style "Opening…" label in the footer
+     also conveys the loading state independently. */
+}
+
 /* Wave 3.4 — converge CTA pulse halo. A soft emerald ring scales
    out + fades, repeating gently to draw attention to the "Build
    prototype →" pill without demanding it. */
