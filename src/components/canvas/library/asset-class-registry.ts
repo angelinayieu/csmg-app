@@ -61,6 +61,12 @@ export const ASSET_CLASSES: AssetClassDefinition[] = [
   filesAssetClass as unknown as AssetClassDefinition,
   // Phase 2D — threads folder (cross-canvas discussion inbox)
   threadsAssetClass as unknown as AssetClassDefinition,
+  // v3 — Step 19. Designed mechanism artifacts sourced from
+  // library_objects (object_type === "mechanism"). Distinct from any
+  // future legacy `mechanisms`-table class. Renders as
+  // mechanism-spec-card on the whiteboard with title, design caption,
+  // accent band, evidence chip, and embedded DesignArtifact JSON.
+  mechanismSpecAssetClass as unknown as AssetClassDefinition,
 ];
 
 /**

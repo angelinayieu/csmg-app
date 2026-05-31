@@ -435,6 +435,21 @@ export function scoreDecompositionQuality(
   const hardGateFailures: string[] = [];
 
   if (depth !== "quick") {
+    // Entity count floor: a graph far below the tier target is too shallow
+    // to support strategy synthesis no matter how well-connected its few
+    // nodes are. Without this gate a dense 5-entity graph (density 2.4)
+    // slips past every OTHER hard gate — density ≥1.8 passes, 0 orphans
+    // passes, and the fundamental-entity gate only fires at entityCount≥10 —
+    // so retryRecommended stays false and the thin graph ships, starving
+    // every downstream stage. Floor at half the tier target (standard/deep
+    // target 25 → floor 13): catches catastrophic shortfalls (5) without
+    // over-triggering retries on near-target graphs (14).
+    const entityFloor = Math.ceil(t.entityTarget * 0.5);
+    if (entityCount > 0 && entityCount < entityFloor) {
+      hardGateFailures.push(
+        `Entity count critically low (${entityCount} — ${depth} tier needs at least ${entityFloor}, target ${t.entityTarget}). A graph this small cannot capture the mechanisms, mediators, moderators, constraints, and feedback loops the objective depends on. Surface the IMPLICIT drivers (processes, intermediate variables, dependencies, assumptions), not just the named variables in the prompt.`,
+      );
+    }
     // Manifold completeness: for standard/deep, at least 50% of high-importance must have manifolds
     if (requiredManifolds > 0 && manifoldScore < 0.5) {
       hardGateFailures.push(`Manifold completeness critically low (${(manifoldScore * 100).toFixed(0)}% — need at least 50% for ${depth} tier)`);
@@ -460,6 +475,11 @@ export function scoreDecompositionQuality(
 
   // Quick tier: still enforce minimum connectivity
   if (depth === "quick") {
+    // Even the fast tier needs enough nodes to be analyzable. Quick targets
+    // 15 entities; a sub-6 graph is too thin to synthesize a strategy from.
+    if (entityCount > 0 && entityCount < 6) {
+      hardGateFailures.push(`Entity count too low even for quick tier (${entityCount} — minimum 6). Surface the implicit drivers and dependencies behind the named concepts.`);
+    }
     if (entityCount > 0 && orphans / entityCount > 0.25) {
       hardGateFailures.push(`Orphan rate too high for quick tier (${orphans}/${entityCount} = ${((orphans / entityCount) * 100).toFixed(0)}% — max 25%)`);
     }

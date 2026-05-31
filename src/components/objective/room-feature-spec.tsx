@@ -21,7 +21,22 @@
 // lives on each feature card's mechanism lineup / Experience view.
 // The rigor section points there ("where do they surface?").
 
+import { useState } from "react";
+
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+
+// Hex (#RRGGBB / #RGB) → rgba() so a category color can tint a hover
+// surface at low alpha. Mirrors the skeleton view's helper (kept local
+// for parallel-edit decoupling — these files don't import each other).
+function withAlpha(hex: string, alpha: number): string {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 // ── Minimal structural shapes ───────────────────────────────────────
 // Typed locally + read defensively so this stays decoupled from the
@@ -56,6 +71,11 @@ interface Props {
   featureItems: FeatureItem[];
   painItems: PainItem[];
   outcomeItems: OutcomeItem[];
+  /** Opens an item's detail drawer by entity id — same handler the
+   *  Skeleton view uses (setDetailEntityId). When provided, each
+   *  outcome/problem row becomes a clickable link into its node.
+   *  Optional so the spec still renders read-only in harnesses. */
+  onOpenItem?: (id: string) => void;
 }
 
 // What we actually read off a stored mechanism_spec. Everything
@@ -140,40 +160,91 @@ function SpecLabel({
   );
 }
 
+// A single rolled-up item. Static by default; when `onClick` is passed
+// it becomes a link into the node's detail drawer, borrowing the
+// Skeleton view's quiet visionOS row-hover (category-tinted glass +
+// dot bloom + a 2px nudge) so the two surfaces feel like one system.
 function ItemRow({
   dotColor,
   title,
   sub,
+  onClick,
 }: {
   dotColor: string;
   title: string;
   sub?: string;
+  onClick?: () => void;
 }) {
-  return (
-    <div className="flex gap-2">
-      <span
-        className="mt-[5px] h-1.5 w-1.5 flex-shrink-0 rounded-full"
-        style={{ background: dotColor }}
-        aria-hidden
-      />
-      <div className="min-w-0">
-        <div
-          className="text-[12.5px] font-medium leading-snug"
-          style={{ color: appleVibe.text.secondary }}
-        >
-          {title}
-        </div>
-        {sub && (
-          <div
-            className="truncate text-[11px] leading-snug"
-            style={{ color: appleVibe.text.faint }}
-            title={sub}
-          >
-            {sub}
-          </div>
-        )}
+  const [hover, setHover] = useState(false);
+  const interactive = Boolean(onClick);
+  const lit = interactive && hover;
+
+  const dot = (
+    <span
+      className="mt-[5px] h-1.5 w-1.5 flex-shrink-0 rounded-full"
+      style={{
+        background: dotColor,
+        transform: lit ? "scale(1.3)" : "scale(1)",
+        transition: "transform 200ms ease-out",
+      }}
+      aria-hidden
+    />
+  );
+  const body = (
+    <div className="min-w-0">
+      <div
+        className="text-[12.5px] font-medium leading-snug"
+        style={{
+          color: lit ? appleVibe.text.primary : appleVibe.text.secondary,
+          transition: "color 200ms ease-out",
+        }}
+      >
+        {title}
       </div>
+      {sub && (
+        <div
+          className="truncate text-[11px] leading-snug"
+          style={{ color: appleVibe.text.faint }}
+          title={sub}
+        >
+          {sub}
+        </div>
+      )}
     </div>
+  );
+
+  if (!interactive) {
+    return (
+      <div className="flex gap-2">
+        {dot}
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={() => setHover(false)}
+      title={`Open “${title}”`}
+      className="flex w-full gap-2 text-left"
+      style={{
+        background: hover ? withAlpha(dotColor, 0.08) : "transparent",
+        borderRadius: 10,
+        padding: "3px 6px",
+        margin: "0 -6px",
+        transform: hover ? "translateX(2px)" : "none",
+        transition: "background 200ms ease-out, transform 200ms ease-out",
+        cursor: "pointer",
+      }}
+    >
+      {dot}
+      {body}
+    </button>
   );
 }
 
@@ -181,6 +252,7 @@ export function RoomFeatureSpec({
   featureItems,
   painItems,
   outcomeItems,
+  onOpenItem,
 }: Props) {
   const specs = featureItems
     .map((f) => readSpec(f.expanded_detail))
@@ -315,6 +387,7 @@ export function RoomFeatureSpec({
                   dotColor={appleVibe.stage.outcomes}
                   title={o.name}
                   sub={o.measured_by}
+                  onClick={onOpenItem ? () => onOpenItem(o.id) : undefined}
                 />
               ))}
             </div>
@@ -339,6 +412,7 @@ export function RoomFeatureSpec({
                   dotColor={appleVibe.stage.pain}
                   title={p.name}
                   sub={p.root_causes[0]}
+                  onClick={onOpenItem ? () => onOpenItem(p.id) : undefined}
                 />
               ))}
             </div>

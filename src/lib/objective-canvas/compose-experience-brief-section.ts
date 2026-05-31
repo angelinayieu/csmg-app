@@ -311,3 +311,239 @@ export function renderExperienceBriefSectionMarkdown(
 
   return lines.join("\n");
 }
+
+// ─── Room-level design language (cross-mechanism coherence) ─────
+//
+// The per-mechanism `design_intent` block (`ExperienceBriefSection`)
+// captures ONE mechanism's UI direction. But a room is typically 3-5
+// mechanisms that the user experiences as ONE coherent system. If
+// every mechanism picks its design intent independently the result
+// reads as "stitched modules" instead of a unified product.
+//
+// `composeRoomDesignLanguage` does cross-mechanism design aggregation:
+//   • Finds the dominant value per axis (accent / glass_tier / density / motion)
+//   • Scores harmony (% of mechanisms matching dominant, averaged)
+//   • Identifies tensions where a mechanism diverges, with suggested
+//     resolution copy the brief renders as a "design tension" note
+//   • Surfaces SHARED data tokens — produces/consumes slugs that
+//     appear across multiple mechanisms (the data handoffs that
+//     define cross-feature integration)
+//
+// Pure derivation, no LLM. Renders in the brief's RoomBlock as a
+// "Design language" eyebrow band so the user reads "this room is
+// designed as X" before drilling into per-mechanism specs.
+
+export interface RoomDesignTension {
+  /** The mechanism whose design intent diverges from the dominant. */
+  mechanism_name: string;
+  /** Which axis diverges. */
+  axis: "accent" | "glass" | "density" | "motion";
+  /** What this mechanism picked. */
+  their_choice: string;
+  /** What the rest of the room picked. */
+  dominant_choice: string;
+  /** Suggested resolution copy the brief surfaces verbatim. */
+  resolution: string;
+}
+
+export interface RoomDesignLanguage {
+  /** How many mechanisms in this room carry a v3 design_intent block. */
+  mechanism_count: number;
+  /** Dominant choice per axis across mechanisms with design_intent. */
+  dominant_accent: MechanismDesignIntent["accent_intent"];
+  dominant_glass_tier: MechanismDesignIntent["glass_tier"];
+  dominant_density: MechanismDesignIntent["density"];
+  dominant_motion: MechanismDesignIntent["motion_intent"];
+  /** 0..1 — average of per-axis (% matching dominant). 1 = total
+   *  coherence; 0 = every mechanism picked something different on
+   *  every axis. */
+  harmony_score: number;
+  /** Mechanisms whose design intent diverges from the dominant, with
+   *  resolution copy. Capped at 4 — beyond that, the room is
+   *  unfocused and the user should reconsider grouping. */
+  tensions: RoomDesignTension[];
+  /** Data tokens that appear in MULTIPLE mechanisms' produces or
+   *  consumes — the cross-feature handoffs that define how this room
+   *  integrates internally. Empty when mechanisms are silos. ≤8. */
+  shared_tokens: string[];
+  /** Single-line human caption: "Coherent · signal · card · airy ·
+   *  breathing" (harmony ≥0.8) or "Mixed · signal-leaning · 2
+   *  outliers" (harmony 0.4-0.8) or "Unfocused — 5 different
+   *  directions" (harmony <0.4). */
+  caption: string;
+}
+
+/** Pure helper — counts occurrences and returns the mode + how many
+ *  matched it. Stable on ties (first occurrence wins). */
+function modeOf<T extends string>(
+  values: ReadonlyArray<T>,
+): { mode: T; maxCount: number } {
+  const counts = new Map<T, number>();
+  for (const v of values) {
+    counts.set(v, (counts.get(v) ?? 0) + 1);
+  }
+  let mode = values[0];
+  let maxCount = 0;
+  for (const [v, c] of counts.entries()) {
+    if (c > maxCount) {
+      mode = v;
+      maxCount = c;
+    }
+  }
+  return { mode, maxCount };
+}
+
+/** Caption a tension's resolution — terse, prescriptive, designerly. */
+function captionTensionResolution(
+  axis: RoomDesignTension["axis"],
+  theirs: string,
+  dominant: string,
+): string {
+  switch (axis) {
+    case "accent":
+      return `Let ${theirs} own a single callout; ${dominant} stays the chrome accent.`;
+    case "glass":
+      return `Elevate to ${theirs} only when this mechanism takes hero focus; otherwise blend at ${dominant}.`;
+    case "density":
+      return `Use ${theirs} density inside this mechanism's surface; the room's shell stays ${dominant}.`;
+    case "motion":
+      return `Reserve ${theirs} motion for this mechanism's interactive moments; ambient elsewhere stays ${dominant}.`;
+  }
+}
+
+/** Caption the overall room design language. */
+function captionRoomLanguage(
+  harmony: number,
+  dominant: {
+    accent: MechanismDesignIntent["accent_intent"];
+    glass: MechanismDesignIntent["glass_tier"];
+    density: MechanismDesignIntent["density"];
+    motion: MechanismDesignIntent["motion_intent"];
+  },
+  tensionCount: number,
+): string {
+  const tokens = `${dominant.accent} · ${dominant.glass} · ${dominant.density} · ${dominant.motion}`;
+  if (harmony >= 0.8) return `Coherent · ${tokens}`;
+  if (harmony >= 0.5) {
+    return `Mixed · ${dominant.accent}-leaning · ${tensionCount} outlier${tensionCount === 1 ? "" : "s"}`;
+  }
+  return `Unfocused — ${Math.round((1 - harmony) * 100)}% divergence across mechanisms`;
+}
+
+/**
+ * Aggregate per-mechanism `design_intent` blocks into a room-level
+ * design language. Returns null when no mechanism in the room
+ * carries a v3 design_intent (pre-v3 specs).
+ *
+ * `specImpactByName` is an optional map from mechanism name to its
+ * MechanismSpec — used to extract names for the tension notes. When
+ * not provided, tensions still render but with a "this mechanism"
+ * placeholder.
+ */
+export function composeRoomDesignLanguage(
+  specs: ReadonlyArray<{ name: string; spec: MechanismSpec | null | undefined }>,
+): RoomDesignLanguage | null {
+  const valid = specs.filter(
+    (s): s is { name: string; spec: MechanismSpec } =>
+      !!s.spec && !!s.spec.design_intent,
+  );
+  if (valid.length === 0) return null;
+
+  // Per-axis mode.
+  const accentMode = modeOf(valid.map((v) => v.spec.design_intent!.accent_intent));
+  const glassMode = modeOf(valid.map((v) => v.spec.design_intent!.glass_tier));
+  const densityMode = modeOf(valid.map((v) => v.spec.design_intent!.density));
+  const motionMode = modeOf(valid.map((v) => v.spec.design_intent!.motion_intent));
+
+  // Per-axis harmony (fraction matching the dominant), averaged.
+  const accentHarmony = accentMode.maxCount / valid.length;
+  const glassHarmony = glassMode.maxCount / valid.length;
+  const densityHarmony = densityMode.maxCount / valid.length;
+  const motionHarmony = motionMode.maxCount / valid.length;
+  const harmony_score =
+    (accentHarmony + glassHarmony + densityHarmony + motionHarmony) / 4;
+
+  // Tensions — divergences from dominant per axis. Cap at 4 total
+  // (prioritize accent > glass > density > motion since accent
+  // visibility is the loudest design dimension).
+  const tensions: RoomDesignTension[] = [];
+  const AXES: Array<{
+    name: RoomDesignTension["axis"];
+    get: (di: MechanismDesignIntent) => string;
+    dominant: string;
+  }> = [
+    {
+      name: "accent",
+      get: (di) => di.accent_intent,
+      dominant: accentMode.mode,
+    },
+    { name: "glass", get: (di) => di.glass_tier, dominant: glassMode.mode },
+    { name: "density", get: (di) => di.density, dominant: densityMode.mode },
+    {
+      name: "motion",
+      get: (di) => di.motion_intent,
+      dominant: motionMode.mode,
+    },
+  ];
+  for (const ax of AXES) {
+    for (const v of valid) {
+      if (tensions.length >= 4) break;
+      const theirs = ax.get(v.spec.design_intent!);
+      if (theirs !== ax.dominant) {
+        tensions.push({
+          mechanism_name: v.name,
+          axis: ax.name,
+          their_choice: theirs,
+          dominant_choice: ax.dominant,
+          resolution: captionTensionResolution(ax.name, theirs, ax.dominant),
+        });
+      }
+    }
+  }
+
+  // Shared tokens — produces/consumes slugs that appear across ≥2
+  // mechanisms. These are the cross-feature handoffs.
+  const tokenOccurrences = new Map<string, number>();
+  for (const v of valid) {
+    const tokens = new Set<string>();
+    for (const step of v.spec.runtime_flow ?? []) {
+      for (const t of step.produces ?? []) {
+        const s = t.trim();
+        if (s) tokens.add(s);
+      }
+      for (const t of step.consumes ?? []) {
+        const s = t.trim();
+        if (s) tokens.add(s);
+      }
+    }
+    for (const t of tokens) {
+      tokenOccurrences.set(t, (tokenOccurrences.get(t) ?? 0) + 1);
+    }
+  }
+  const shared_tokens = Array.from(tokenOccurrences.entries())
+    .filter(([, n]) => n >= 2)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([slug]) => slug)
+    .slice(0, 8);
+
+  return {
+    mechanism_count: valid.length,
+    dominant_accent: accentMode.mode,
+    dominant_glass_tier: glassMode.mode,
+    dominant_density: densityMode.mode,
+    dominant_motion: motionMode.mode,
+    harmony_score,
+    tensions: tensions.slice(0, 4),
+    shared_tokens,
+    caption: captionRoomLanguage(
+      harmony_score,
+      {
+        accent: accentMode.mode,
+        glass: glassMode.mode,
+        density: densityMode.mode,
+        motion: motionMode.mode,
+      },
+      tensions.length,
+    ),
+  };
+}

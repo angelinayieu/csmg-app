@@ -153,6 +153,64 @@ export type MechanismCardShape = TLBaseShape<
 >;
 
 /**
+ * Mechanism spec card — v3 artifact lifted from `library_objects`
+ * (object_type="mechanism"), sourced from a `MechanismSpec` blob in
+ * `entities.expanded_detail.mechanism_spec`. Distinct from
+ * MechanismCardShape (which is keyed to the legacy `mechanisms`
+ * table). Shape is the user's draggable representation of a Claude-
+ * composed designed mechanism: title, design intent caption, accent
+ * band, evidence chip. Click opens the underlying entity drawer or
+ * the brief section for the full DesignArtifact poster.
+ *
+ * Sourced via the mechanism-specs asset class from
+ * `library/classes/mechanism-specs.ts` and rendered by
+ * `mechanism-spec-card-shape.tsx`. designArtifactJson stashes the
+ * structured `DesignArtifact` as a JSON string (same flat-prop
+ * pattern probability-space-shell uses for entitiesJson) so the
+ * card can render the artifact's hero pattern + section count
+ * without an extra fetch.
+ */
+export type MechanismSpecCardShape = TLBaseShape<
+  "mechanism-spec-card",
+  {
+    w: number;
+    h: number;
+    /** library_objects.id — the addressable handle. */
+    objectId: string;
+    /** library_objects.source_entity_id — origin feature entity, when present. */
+    sourceEntityId: string | null;
+    /** library_objects.source_sub_objective_id — origin room, when present. */
+    sourceSubObjectiveId: string | null;
+    /** Mechanism display name (entities.name). */
+    title: string;
+    /** One-line caption — design_intent's hero_pattern + accent_intent
+     *  + density captioned naturally. */
+    caption: string;
+    /** Design intent tokens (mirror the union types from
+     *  MechanismDesignIntent — repeated here so the shape props
+     *  validator can use T.literalEnum without importing the
+     *  generator's types). */
+    accentIntent: "signal" | "warning" | "growth" | "insight" | "neutral";
+    heroPattern:
+      | "metric"
+      | "flow"
+      | "cycle"
+      | "before_after"
+      | "evidence"
+      | "decision";
+    /** Honest evidence-strength signal. */
+    evidenceStrength: "established" | "plausible" | "speculative";
+    /** Section count for the embedded DesignArtifact (0 when no
+     *  artifact was composed). */
+    sectionCount: number;
+    /** JSON-stringified DesignArtifact for full-card rendering;
+     *  flat-prop pattern matches probability-space-shell / forest-plot.
+     *  Empty string when no artifact (legacy or env-disabled). */
+    designArtifactJson: string;
+  }
+>;
+
+/**
  * Trajectory fan card — Monte-Carlo-derived projection of a metric over
  * time, rendered as a p10/p50/p90 fan chart. Spawned inside the twin
  * room from rows in `prediction_ledger` where `prediction_kind="trajectory"`.

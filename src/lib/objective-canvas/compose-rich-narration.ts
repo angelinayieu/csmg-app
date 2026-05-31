@@ -37,14 +37,20 @@ import type {
  *  affordance. */
 export interface NarrationDeepLink {
   /** Where to land:
-   *    • drawer — open the entity's mechanism detail drawer
-   *    • brief  — open the strategy brief at a specific section
-   *    • view   — open a specific tab/view on a sub-objective */
-  kind: "drawer" | "brief" | "view";
+   *    • drawer  — open the entity's mechanism detail drawer
+   *    • brief   — open the strategy brief at a specific section
+   *    • view    — open a specific tab/view on a sub-objective
+   *    • library — open the library and focus the object_id
+   *                (typically the mechanism's library_objects row).
+   *                From there the user can drag to the whiteboard. */
+  kind: "drawer" | "brief" | "view" | "library";
   /** The entity to focus on, when applicable. */
   entity_id?: string;
   /** The sub-objective (room) to focus on, when applicable. */
   sub_objective_id?: string;
+  /** The library_objects row id to focus on. Used when kind="library";
+   *  the LibraryPanel scrolls to this object and selects it. */
+  object_id?: string;
   /** When kind=drawer: which sub-view to scroll to. */
   drawer_section?:
     | "summary"
@@ -149,6 +155,11 @@ export function narrateMechanismSpec(input: {
   entity: { id: string; name: string };
   subObjectiveId?: string | null;
   subObjectiveTitle?: string | null;
+  /** When provided, the chat row's primary deep-link routes to the
+   *  library object (so the user can open the mechanism's card AND
+   *  drag it onto the whiteboard). Falls back to the drawer
+   *  experience tab when omitted (Step 8 behavior). */
+  libraryObjectId?: string | null;
 }): RichNarrationMeta {
   const { spec, entity, subObjectiveId } = input;
 
@@ -230,25 +241,62 @@ export function narrateMechanismSpec(input: {
       tone: "neutral",
     });
   }
+  // v3 — Claude-composed design artifact (Step 16). When present,
+  // surfaces the caption + section count as evidence the artifact
+  // was actually composed (vs derived fallback). The artifact's
+  // existence in the chat lets the user know there's a premium
+  // designed poster waiting in the brief.
+  if (spec.design_artifact) {
+    const sectionCount = spec.design_artifact.sections?.length ?? 0;
+    if (sectionCount > 0) {
+      facts.push({
+        label: "Sections",
+        value: String(sectionCount),
+        tone: "insight",
+      });
+    }
+    if (spec.design_artifact.caption) {
+      facts.push({
+        label: "Artifact",
+        value: clip(spec.design_artifact.caption, 60),
+        tone: "insight",
+      });
+    }
+  }
 
   const tags: string[] = ["#mechanism"];
   if (spec.design_intent) tags.push("#design");
+  if (spec.design_artifact) tags.push("#artifact");
   if (spec.decision_record?.chosen) tags.push("#decision");
   if (spec.research_basis?.evidence_strength === "established") {
     tags.push("#established");
   }
 
+  // Pick the most useful deep-link target: prefer the library so the
+  // user can drag the mechanism's card onto the whiteboard, falling
+  // back to the drawer's experience tab when the library object id
+  // isn't available yet (legacy specs before library upsert).
+  const deepLink: NarrationDeepLink = input.libraryObjectId
+    ? {
+        kind: "library",
+        object_id: input.libraryObjectId,
+        entity_id: entity.id,
+        sub_objective_id: subObjectiveId ?? undefined,
+        label: "Open in library",
+      }
+    : {
+        kind: "drawer",
+        entity_id: entity.id,
+        sub_objective_id: subObjectiveId ?? undefined,
+        drawer_section: spec.design_intent ? "experience" : "summary",
+        label: "Open mechanism",
+      };
+
   return {
     narration_title: clip(title, 80),
     narration_body: body,
     narration_facts: facts,
-    narration_deep_link: {
-      kind: "drawer",
-      entity_id: entity.id,
-      sub_objective_id: subObjectiveId ?? undefined,
-      drawer_section: spec.design_intent ? "experience" : "summary",
-      label: "Open mechanism",
-    },
+    narration_deep_link: deepLink,
     narration_tags: tags,
   };
 }

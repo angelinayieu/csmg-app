@@ -31,6 +31,7 @@ import {
   ROOM_TOP,
   ROOM_LEFT,
 } from "./visual-grammar";
+import { effectiveMethodTier } from "@/lib/objective-canvas/derive-method-tier";
 
 /** Lane render order, left → right. */
 const LANE_ORDER: ReadonlyArray<RoomLane["slug"]> = [
@@ -212,6 +213,12 @@ export function buildRoomGraph(input: {
       ROOM_TOP + (colHeight - ordered[colIdx].length * rowPitch) / 2;
     lane.items.forEach((item) => {
       const r = rowOf.get(item.id) ?? 0;
+      // Proof tier: derive an evaluation tier for this lever from its causal
+      // edges (a persisted pipeline tier wins; else inferred from approval +
+      // agent rationale + strength). Without this every node was null, so
+      // the Proof depth dimmed the whole board uniformly — nothing stood
+      // out. See derive-method-tier.ts.
+      const method = effectiveMethodTier(item.causal_chain, item.id, edges);
       const data: CausalMapNodeData = {
         kind,
         title: item.name,
@@ -221,8 +228,8 @@ export function buildRoomGraph(input: {
         health: undefined,
         healthBand: "unknown",
         approvedCount: 0,
-        methodTier: null,
-        methodScore: null,
+        methodTier: method.tier,
+        methodScore: method.score,
         // Only mechanism (feature) nodes have a Lab page — "focused
         // evaluation for ONE mechanism" — so only they are the L1→L2
         // drill-down target. Pain/outcome nodes stay non-navigable.

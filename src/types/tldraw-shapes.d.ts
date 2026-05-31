@@ -943,6 +943,26 @@ declare module "@tldraw/tlschema" {
       entityId: string;
       roomId: string;
     };
+    // Objective board — one mechanism's "specialized knowledge graph": its
+    // scoped problem → mechanism → solution triad, dropped on the board as a
+    // standalone card. Carries a lightweight snapshot (chip labels + counts,
+    // never the full MechanismSpec). "Open in room" fires open-room with the
+    // mechanism id as a focus hint (RoomAltitudeMap `?focus=` seam).
+    "subsystem-kg": {
+      w: number;
+      h: number;
+      mechanismId: string;
+      mechanismName: string;
+      roomId: string;
+      spaceId: string;
+      color: string;
+      problemLabels: string[];
+      solutionLabels: string[];
+      problemCount: number;
+      solutionCount: number;
+      hasSpec: boolean;
+      stepCount: number;
+    };
     // Objective unfurl — a translucent backdrop band, one per ObjectiveStack
     // layer. Sub-objective cards sit on top of their layer's band.
     "layer-band": {

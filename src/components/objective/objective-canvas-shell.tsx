@@ -134,10 +134,18 @@ export function ObjectiveCanvasShell({
       ? `/app/objective/${spaceId}`
       : `/app/objective/${spaceId}/sub/${rooms[index].id}`;
   }
-  function navTo(index: number) {
+  function navTo(index: number, focusEntityId?: string) {
     setCollapsed(false);
-    const target = routeFor(index);
-    if (pathname !== target) router.push(target);
+    const base = routeFor(index);
+    // A focus hint (from a subsystem-KG board card's "Open in room") rides
+    // along as ?focus= — RoomAltitudeMap reads it from the URL and
+    // fitView-centers that mechanism's triad once the room graph inits. With
+    // a hint we always push (so it re-centers even within the same room);
+    // without one, keep the no-op guard so ⌘↑/↓ room-gliding stays clean.
+    const target = focusEntityId
+      ? `${base}?focus=${encodeURIComponent(focusEntityId)}`
+      : base;
+    if (focusEntityId || pathname !== base) router.push(target);
   }
 
   // ⌘↑/↓ glide between rooms (by route).
@@ -188,11 +196,14 @@ export function ObjectiveCanvasShell({
   // A board card's Expand button fires OPEN_ROOM_EVENT → navigate to it.
   useEffect(() => {
     function onOpenRoom(e: Event) {
-      const roomId = (e as CustomEvent<{ roomId: string }>).detail?.roomId;
+      const detail = (
+        e as CustomEvent<{ roomId: string; focusEntityId?: string }>
+      ).detail;
+      const roomId = detail?.roomId;
       if (!roomId) return;
       const idx =
         roomId === "__obj" ? 0 : rooms.findIndex((r) => r.id === roomId);
-      if (idx >= 0) navTo(idx);
+      if (idx >= 0) navTo(idx, detail?.focusEntityId);
     }
     window.addEventListener(OPEN_ROOM_EVENT, onOpenRoom);
     return () => window.removeEventListener(OPEN_ROOM_EVENT, onOpenRoom);

@@ -14,28 +14,31 @@
 //
 // Match strategy (deterministic, no LLM):
 //   1. Normalize: lowercase, strip punctuation, collapse whitespace
-//   2. Score each candidate entity against (outcome_label,
-//      intervention_label, instrument_label) on the evidence row:
+//   2. Score each candidate entity against EVERY anchor on the row
+//      (outcome_label, intervention_label, instrument_label), keeping
+//      the best score per DISTINCT entity:
 //        - Exact match on entity.name              → 1.0
 //        - Exact match on entity.entity_id (slug)  → 0.95
 //        - Exact match on provenance.short_label   → 0.92
-//        - Substring inclusion (long enough)       → 0.8
-//        - Token-overlap (Jaccard, ≥ 50%)          → 0.5–0.75
+//        - Token-subset containment                → 0.85–0.95
+//        - Substring inclusion (long enough)       → 0.70–0.85
+//        - Token-overlap (Jaccard, ≥ 50%)          → 0.5–0.80
 //   3. Pick the entity with max score per evidence row
 //   4. Auto-attach iff: best_score ≥ 0.85 AND
-//      best_score is at least 0.10 above the runner-up
+//      best_score is at least 0.10 above the runner-up entity
 //      (avoids "two equally good matches" false positives)
 //
-// Why outcome_label is the priority:
-//   The pooling logic (recompute-edge-strengths) groups evidence
-//   by attached_entity_id, then for each edge picks evidence
-//   attached to either endpoint. Outcome variables are typically
-//   the TARGET of an edge — attaching there is enough for the
-//   evidence to flow into pooling on every edge ending at that
-//   outcome. We could try to attach to BOTH endpoints (intervention
-//   too) but that risks double-counting when a single paper
-//   reports an intervention→outcome effect; one attachment per
-//   row is cleaner.
+// Why multiple anchors (was: outcome_label only):
+//   The pooling logic (recompute-edge-strengths) groups evidence by
+//   attached_entity_id, then for each edge picks evidence attached to
+//   either endpoint. Outcome variables are typically the TARGET of an
+//   edge, so outcome_label is the PRIMARY anchor. But matching outcome
+//   alone stranded papers (0 attachments → 0 grounded edges) whenever the
+//   outcome label didn't string-match an entity — so we also try the
+//   intervention/instrument labels and attach to whichever entity matches
+//   best. Each row still attaches to exactly ONE entity (the single best
+//   match across all its anchors), so a single intervention→outcome paper
+//   can't double-count itself onto one edge.
 
 import type { EvidenceRegistryRow } from "@/types/evidence-registry";
 
@@ -111,41 +114,57 @@ export async function autoAttachEvidence(
 
   // Process each candidate row — match → maybe-attach.
   for (const ev of candidates) {
-    // Combine the labels we'll try to match. outcome_label is the
-    // primary anchor (the target side). intervention_label and
-    // instrument_label provide secondary signal but lower priority
-    // because attaching to either pulls evidence into edges they
-    // touch — not always desired (avoid intervention double-count).
-    // V1 strategy: only outcome_label drives attachment.
-    const target = ev.outcome_label?.trim();
-    if (!target) {
-      summary.skipped_no_match++;
-      continue;
-    }
-    const targetNorm = normalize(target);
-    const targetTokens = tokenize(target);
-    if (targetNorm.length < 2) {
+    // Anchors we try, in priority order. outcome_label is the primary
+    // anchor (the target side of most edges), but a paper whose OUTCOME
+    // doesn't name-match the graph can still ground via its INTERVENTION
+    // or INSTRUMENT label — e.g. an evidence row with outcome "muscle
+    // strength" (no graph entity) but intervention "resistance training"
+    // (a graph entity). We score every entity against EVERY anchor and keep
+    // the best score per DISTINCT entity; each row still attaches to exactly
+    // ONE entity, so there's no within-row double-count.
+    //
+    // (Earlier this matched outcome_label ALONE, which stranded papers — 0
+    // attachments → 0 grounded edges — whenever the outcome label didn't
+    // string-match an entity. Combined with the brittle scorer below, even
+    // on-topic papers routinely grounded nothing.)
+    const anchors = [
+      ev.outcome_label,
+      ev.intervention_label,
+      ev.instrument_label,
+    ]
+      .map((a) => (typeof a === "string" ? a.trim() : ""))
+      .filter((a) => normalize(a).length >= 2);
+    if (anchors.length === 0) {
       summary.skipped_no_match++;
       continue;
     }
 
-    // Score every entity. Return [entity_uuid, score] pairs sorted desc.
-    const scored = normalizedEntities
-      .map((e) => ({
-        uuid: e.row.id,
-        score: scoreEntityMatch({
+    // Best score per DISTINCT entity across all anchors.
+    const bestPerEntity = new Map<string, number>();
+    for (const anchor of anchors) {
+      const targetNorm = normalize(anchor);
+      const targetTokens = tokenize(anchor);
+      for (const e of normalizedEntities) {
+        const score = scoreEntityMatch({
           targetNorm,
           targetTokens,
           nameNorm: e.nameNorm,
           slugNorm: e.slugNorm,
           shortLabelNorm: e.shortLabelNorm,
           nameTokens: e.nameTokens,
-        }),
-      }))
+        });
+        if (score > (bestPerEntity.get(e.row.id) ?? 0)) {
+          bestPerEntity.set(e.row.id, score);
+        }
+      }
+    }
+
+    const ranked = Array.from(bestPerEntity.entries())
+      .map(([uuid, score]) => ({ uuid, score }))
       .sort((a, b) => b.score - a.score);
 
-    const best = scored[0];
-    const runnerUp = scored[1];
+    const best = ranked[0];
+    const runnerUp = ranked[1];
 
     if (!best || best.score < ATTACH_THRESHOLD) {
       summary.skipped_no_match++;
@@ -205,6 +224,27 @@ function scoreEntityMatch(s: ScoreInputs): number {
   if (s.shortLabelNorm.length > 0 && s.targetNorm === s.shortLabelNorm) {
     return 0.92;
   }
+  // Token-subset containment: every distinctive token of the shorter label
+  // appears in the longer one. Catches acronym / short-name matches the
+  // length-ratio substring rule below MISSES — e.g. target "BDNF" vs entity
+  // "Brain-Derived Neurotrophic Factor (BDNF)" scores only 0.72 by substring
+  // (ratio ≈ 0.13) and 0 by Jaccard (0.25), so it never attached. A clean
+  // token subset is a strong signal; the caller's tiebreak margin rejects a
+  // common token that matches many entities. Scored 0.85..0.95 by how much
+  // of the larger label the smaller one explains. (tokenize() drops <3-char
+  // tokens, so 2-char acronyms like "GH" still fall through — intentional,
+  // they're too ambiguous to auto-attach.)
+  if (s.targetTokens.size > 0 && s.nameTokens.size > 0) {
+    const subset =
+      isSubset(s.targetTokens, s.nameTokens) ||
+      isSubset(s.nameTokens, s.targetTokens);
+    if (subset) {
+      const smaller = Math.min(s.targetTokens.size, s.nameTokens.size);
+      const larger = Math.max(s.targetTokens.size, s.nameTokens.size);
+      const coverage = larger > 0 ? smaller / larger : 0;
+      return 0.85 + 0.1 * coverage; // 0.85..0.95
+    }
+  }
   // Substring inclusion (one contains the other, both ≥ 4 chars to
   // avoid "IL-6" matching "IL-6 receptor activity").
   if (
@@ -258,6 +298,13 @@ function countIntersection<T>(a: Set<T>, b: Set<T>): number {
   let n = 0;
   for (const x of a) if (b.has(x)) n++;
   return n;
+}
+
+/** True when `sub` is non-empty and every element of `sub` is in `sup`. */
+function isSubset<T>(sub: Set<T>, sup: Set<T>): boolean {
+  if (sub.size === 0) return false;
+  for (const x of sub) if (!sup.has(x)) return false;
+  return true;
 }
 
 function dedupeFlags(flags: string[]): string[] {

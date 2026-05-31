@@ -23,6 +23,12 @@ import { AppCardShapeUtil } from "./shapes/app-card-shape";
 import { BridgeLinkShapeUtil } from "./shapes/bridge-link-shape";
 import { CycleLoopShapeUtil } from "./shapes/cycle-loop-shape";
 import { ClaimChipShapeUtil } from "./shapes/claim-chip-shape";
+// v3 — Step 19. The whiteboard representation of a Claude-composed
+// mechanism artifact (sourced from library_objects.object_type ===
+// "mechanism"). Distinct from MechanismCardShapeUtil which is keyed
+// to the legacy `mechanisms` table — both coexist by namespacing
+// their tldraw shape `type` string.
+import { MechanismSpecCardShapeUtil } from "./shapes/mechanism-spec-card-shape";
 import { SubjectCardShapeUtil } from "./shapes/subject-card-shape";
 import { FinalPlanCardShapeUtil } from "./shapes/final-plan-card-shape";
 import { AxiomStoneShapeUtil } from "./shapes/axiom-stone-shape";
@@ -111,6 +117,14 @@ export const SHAPE_UTILS = [
   // Phase A1.4a — universal asset catalog: claim + axiom
   ClaimChipShapeUtil,
   AxiomStoneShapeUtil,
+  // v3 — Step 19. Mechanism spec card sourced from library_objects.
+  // Distinct from the legacy MechanismCardShapeUtil which is keyed
+  // to the `mechanisms` table — both coexist by namespacing their
+  // tldraw shape `type` string ("mechanism-spec-card" vs
+  // "mechanism-card"). User drags from the LibraryPanel; landed
+  // card carries title + design caption + accent band + evidence
+  // chip + section count from the embedded DesignArtifact.
+  MechanismSpecCardShapeUtil,
   // Phase 4 — Subject card primitive (manual authoring + lab bridge).
   // Created via the +Subject button or accepted from the lab proposal
   // wizard. "Open Lab" footer routes to /lab?subjectId=X.

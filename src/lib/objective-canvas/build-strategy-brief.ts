@@ -18,6 +18,13 @@ import type {
 } from "./analyses/types";
 import type { OperationalConstraints } from "./constraints";
 import type { ItemVariation } from "./expand-item-detail";
+import {
+  composeExperienceBriefSection,
+  composeRoomDesignLanguage,
+  type ExperienceBriefSection,
+  type RoomDesignLanguage,
+} from "./compose-experience-brief-section";
+import type { DesignArtifact } from "./mechanism-design-artifact";
 
 /** A theme distilled across rooms (from distill_concepts findings). */
 export interface BriefTheme {
@@ -94,6 +101,21 @@ export interface BriefMechanismSpec {
   validation_experiment: string;
   /** Honesty signal — well-supported vs plausible vs speculative. */
   evidence_strength: "established" | "plausible" | "speculative";
+  /** v3 — the end-user-facing experience layer of this mechanism, when
+   *  the underlying MechanismSpec carries a v3 `design_intent` block.
+   *  Surfaces hero pattern, touchpoints, interaction beats, data
+   *  spine, and reduction log so the brief shows BOTH engineering
+   *  depth (existing fields) AND designed experience. Null for pre-v3
+   *  specs — render block branches on null. See
+   *  `compose-experience-brief-section.ts`. */
+  experience: ExperienceBriefSection | null;
+  /** v3 — Claude-composed structured design artifact (Step 16). The
+   *  brief renders this as the headline poster ABOVE the
+   *  `experience` block (which becomes the structured audit trail
+   *  below). Null when Claude was unavailable AND the fallback
+   *  derivation also returned null (pre-v3 specs). See
+   *  `mechanism-design-artifact.ts`. */
+  design_artifact: DesignArtifact | null;
 }
 
 /** L1 — A cluster of expansion-tree nodes hanging off one parent
@@ -144,6 +166,13 @@ export interface BriefRoom {
    *  the brief — the per-variation summaries above tell you WHAT was
    *  chosen; these tell you HOW it works and HOW to validate. */
   mechanism_specs: BriefMechanismSpec[];
+  /** v3 — cross-mechanism design language for this room. Aggregated
+   *  from each mechanism's `design_intent` block via
+   *  `composeRoomDesignLanguage`. Null when no mechanism in this room
+   *  has a v3 design_intent (pre-v3 specs). The brief surfaces this
+   *  as a "Design language" eyebrow above the per-mechanism specs so
+   *  the room reads as ONE product rather than 5 stitched modules. */
+  design_language: RoomDesignLanguage | null;
   /** L1 — expansion-tree highlights per item in this room.
    *  Empty when the user hasn't drilled into any variation. */
   expansion_highlights: BriefExpansionHighlight[];
@@ -302,6 +331,15 @@ export function buildStrategyBrief(
           kill_criteria: (ms.kill_criteria ?? []).slice(0, 3),
           validation_experiment: ms.research_basis.validation_experiment,
           evidence_strength: ms.research_basis.evidence_strength,
+          // v3 — designed experience layer. Returns null for pre-v3
+          // specs (no design_intent block); renderer branches on null.
+          experience: composeExperienceBriefSection(ms),
+          // v3 — Claude-composed design artifact. Already persisted
+          // on the spec by `enrich-mechanism-spec.ts` (Steps 14+16);
+          // we just propagate it. Null when the env opt-out is set
+          // AND the fallback derivation returned null (pre-v3 specs
+          // without design_intent).
+          design_artifact: ms.design_artifact ?? null,
         } satisfies BriefMechanismSpec;
       })
       .filter((s): s is BriefMechanismSpec => s !== null);
@@ -405,6 +443,18 @@ export function buildStrategyBrief(
       outcomes: items.filter((i) => i.layer === "outcomes").length,
     };
 
+    // v3 — derive the room's cross-mechanism design language from
+    // the just-built mechanism_specs (their underlying MechanismSpec
+    // objects). Pure aggregation, returns null when no v3 specs.
+    const design_language = composeRoomDesignLanguage(
+      mechanism_specs.map((m) => ({
+        name: m.item_name,
+        spec:
+          items.find((it) => it.id === m.item_id)?.expanded_detail
+            ?.mechanism_spec ?? null,
+      })),
+    );
+
     return {
       id: room.id,
       title: room.title,
@@ -414,6 +464,7 @@ export function buildStrategyBrief(
       elected_variations,
       experiments,
       mechanism_specs,
+      design_language,
       expansion_highlights,
       lane_counts,
     } satisfies BriefRoom;

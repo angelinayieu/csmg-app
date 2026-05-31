@@ -47,6 +47,7 @@ import {
   saveRegistry,
   validateTokens,
 } from "@/lib/objective-canvas/data-unit-registry";
+import { upsertLibraryObject } from "@/lib/objective-canvas/library-objects";
 import { pickRepresentativeVariation } from "@/lib/objective-canvas/pick-variation";
 import type { ItemVariation } from "@/lib/objective-canvas/expand-item-detail";
 
@@ -488,6 +489,44 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     );
   }
 
+  // ── Upsert into the Library ──
+  // Every generated mechanism becomes a first-class library_objects row
+  // so the user can OPEN it from the chat (deep-link below) and DRAG it
+  // onto the whiteboard (canvas onDrop handler already accepts library
+  // objects). The content_snapshot stashes the Claude-composed design
+  // artifact so the LibraryPanel + whiteboard cards can render the same
+  // poster the brief shows. Lazy + idempotent — re-spec'ing the same
+  // mechanism updates the existing row in place. Soft-fail (library
+  // is enrichment, not a blocker).
+  let libraryObjectId: string | null = null;
+  try {
+    libraryObjectId = await upsertLibraryObject(db, {
+      spaceId: entity.space_id,
+      userId: auth.user.id,
+      objectType: "mechanism",
+      title: entity.name,
+      summary: spec.mechanism_of_action.slice(0, 280),
+      sourceEntityId: entityId,
+      sourceSubObjectiveId: subObjectiveId ?? null,
+      contentSnapshot: {
+        spec_summary: {
+          mechanism_of_action: spec.mechanism_of_action.slice(0, 600),
+          chosen_method: spec.decision_record?.chosen,
+          evidence_strength: spec.research_basis?.evidence_strength,
+          use_case_mode: spec.use_case_mode,
+        },
+        design_intent: spec.design_intent ?? null,
+        design_artifact: spec.design_artifact ?? null,
+        snapshot_at: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    console.warn(
+      "[mechanism-spec] library upsert failed (non-fatal):",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
   // ── Log the notebook event ──
   // v3 — rich narration: surfaces chosen algorithm + rationale +
   // design intent (hero pattern, density) + touchpoint count +
@@ -499,6 +538,10 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     entity: { id: entityId, name: entity.name },
     subObjectiveId,
     subObjectiveTitle: null,
+    // Step 18 — surface the library handle in the chat so the row's
+    // "Open in library" affordance lands the user on the draggable
+    // card (which they can then drop onto the whiteboard).
+    libraryObjectId,
   });
   void logDecision(db, {
     userId: auth.user.id,
@@ -530,6 +573,24 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       quality_calibrated_uncertainty:
         (spec as { quality_calibrated_uncertainty?: boolean })
           .quality_calibrated_uncertainty === true,
+      // Step 18 — stash the library handle on the row so the
+      // notebook's ChatMechanismPreview can render the "Open in
+      // library" CTA without an extra round-trip.
+      library_object_id: libraryObjectId,
+      // Step 18 — embed the v3 design artifact + experience section
+      // directly in the row metadata so the chat-side
+      // ChatMechanismPreview renders the headline poster without a
+      // second fetch. Both are small (~2-4KB JSON) and the chat is
+      // the user's primary surface per their session-9 demand.
+      design_artifact: spec.design_artifact ?? null,
+      design_intent_summary: spec.design_intent
+        ? {
+            hero_pattern: spec.design_intent.hero_pattern,
+            accent_intent: spec.design_intent.accent_intent,
+            density: spec.design_intent.density,
+            motion_intent: spec.design_intent.motion_intent,
+          }
+        : null,
       ...narration,
     },
   });

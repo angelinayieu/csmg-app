@@ -67,7 +67,6 @@ import { DataLineageView } from "@/components/objective/data-lineage-view";
 import { buildDataLineageProps } from "@/lib/objective-canvas/build-data-lineage-props";
 import { useDecisionLogSignal } from "@/components/objective/causal-map/hooks/useDecisionLogSignal";
 import { useLocalPref } from "@/components/objective/causal-map/hooks/useLocalPref";
-import { SynergismWhiteboardTile } from "@/components/objective/synergism-whiteboard-tile";
 // Phase 11.0b — LabNotebookPanel is mounted at the layout level
 // (app/objective/[spaceId]/layout.tsx) as a persistent right rail.
 // The page-level mount + Notebook button moved out so we don't
@@ -726,15 +725,6 @@ export function MainCanvasView({
       {/* Deliverables moved into the CommandDeck beneath the hero — it
           now reads as one coordinated surface with Analysis + Operations
           + Strategy Brief instead of a lone strip at the canvas bottom. */}
-
-      {/* Synergism Whiteboard tile — a free-form brainstorm entry
-          point alongside the structured canvas. Opens a fresh
-          /app/synergy/[id] board seeded with the current objective
-          text. Visible on every canvas (with or without subs) so the
-          user can always step into divergent thinking. */}
-      <div className="mt-8">
-        <SynergismWhiteboardTile objective={objective} />
-      </div>
 
       {/* Post-confirm variant lab — lets the user add another cut
           after seeing the initial rooms. Single-batch quota; the

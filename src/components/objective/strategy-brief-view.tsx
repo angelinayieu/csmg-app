@@ -39,6 +39,7 @@ import {
 import { IndicatorValidityMatrix } from "@/components/objective/indicator-validity-matrix";
 import { AgentBuildSpecPanel } from "@/components/objective/agent-build-spec-panel";
 import type { AgentBuildSpec } from "@/lib/objective-canvas/compile-agent-build-spec";
+import { MechanismDesignArtifactView } from "@/components/objective/mechanism-design-artifact-view";
 
 // ── Style tokens — local to this view ──
 //
@@ -947,6 +948,151 @@ function RoomBlock({
           </div>
         )}
 
+        {/* ── v3 — Room design language (cross-mechanism coherence) ── */}
+        {/* Aggregates each mechanism's design_intent into a single
+            line that names the dominant accent / glass / density /
+            motion + flags tensions and shared data tokens. Tells the
+            user "this room is designed as ONE product" before they
+            drill into per-mechanism specs below. */}
+        {room.design_language && (
+          <div className="mb-5">
+            <SubLabel>Design language</SubLabel>
+            <p
+              className="mt-2 text-[13px] leading-[1.55]"
+              style={{
+                color: COLOR.ink,
+                fontWeight: 500,
+                letterSpacing: "-0.005em",
+              }}
+            >
+              {room.design_language.caption}
+            </p>
+            {/* Per-axis dominant tokens — small, inline */}
+            <div
+              className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[12px]"
+              style={{ color: COLOR.inkMuted }}
+            >
+              <span>
+                <span
+                  className="mr-1 font-semibold uppercase"
+                  style={{
+                    color: COLOR.inkFaint,
+                    fontSize: "10px",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  Accent
+                </span>
+                {room.design_language.dominant_accent}
+              </span>
+              <span>
+                <span
+                  className="mr-1 font-semibold uppercase"
+                  style={{
+                    color: COLOR.inkFaint,
+                    fontSize: "10px",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  Surface
+                </span>
+                {room.design_language.dominant_glass_tier}
+              </span>
+              <span>
+                <span
+                  className="mr-1 font-semibold uppercase"
+                  style={{
+                    color: COLOR.inkFaint,
+                    fontSize: "10px",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  Density
+                </span>
+                {room.design_language.dominant_density}
+              </span>
+              <span>
+                <span
+                  className="mr-1 font-semibold uppercase"
+                  style={{
+                    color: COLOR.inkFaint,
+                    fontSize: "10px",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  Motion
+                </span>
+                {room.design_language.dominant_motion}
+              </span>
+              <span>
+                <span
+                  className="mr-1 font-semibold uppercase"
+                  style={{
+                    color: COLOR.inkFaint,
+                    fontSize: "10px",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  Harmony
+                </span>
+                {Math.round(room.design_language.harmony_score * 100)}%
+              </span>
+            </div>
+            {/* Cross-mechanism shared tokens — the room's data spine */}
+            {room.design_language.shared_tokens.length > 0 && (
+              <div className="mt-1.5 flex items-baseline gap-1.5">
+                <span
+                  className="font-semibold uppercase"
+                  style={{
+                    color: COLOR.inkFaint,
+                    fontSize: "10px",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  Shared data
+                </span>
+                <span
+                  className="text-[12px]"
+                  style={{ color: COLOR.inkMuted }}
+                >
+                  {room.design_language.shared_tokens.join(" · ")}
+                </span>
+              </div>
+            )}
+            {/* Tensions — surface only when present. Each is one short
+                "X uses Y; resolve by Z" line so the user sees the
+                design tradeoff candidly. */}
+            {room.design_language.tensions.length > 0 && (
+              <ul
+                className="mt-1.5 flex flex-col gap-1 text-[12px] leading-[1.5]"
+                style={{ color: COLOR.inkMuted }}
+              >
+                {room.design_language.tensions.map((t, i) => (
+                  <li key={i} className="flex gap-1.5">
+                    <span
+                      className="flex-shrink-0 font-semibold uppercase"
+                      style={{
+                        color: COLOR.inkFaint,
+                        fontSize: "10px",
+                        letterSpacing: "0.1em",
+                      }}
+                    >
+                      Tension
+                    </span>
+                    <span>
+                      <span style={{ color: COLOR.inkSoft }}>
+                        {t.mechanism_name}
+                      </span>{" "}
+                      picks {t.their_choice} on {t.axis} ({t.dominant_choice}{" "}
+                      elsewhere). {t.resolution}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {/* ── Mechanism specs — the technical depth per feature ── */}
         {/* Each spec'd feature shows HOW it works (mechanism of action +
             falsifiable hypothesis), HOW it's built (chosen method) and
@@ -1082,6 +1228,165 @@ function RoomBlock({
                           Kill if
                         </span>
                         {s.kill_criteria.join(" · ")}
+                      </div>
+                    )}
+                    {/* v3 — Claude-composed design artifact (Step 16).
+                        Renders as the headline POSTER above the
+                        Experience structured block — the most premium
+                        view of the mechanism's designed experience.
+                        Each section was composed by Claude
+                        specifically for THIS mechanism (hero +
+                        moments + flow + stats + callouts +
+                        before/after). When absent (Claude disabled
+                        AND no design_intent to derive from), the
+                        Experience block below carries the design
+                        burden alone. */}
+                    {s.design_artifact && (
+                      <div className="mt-4">
+                        <MechanismDesignArtifactView
+                          artifact={s.design_artifact}
+                          animate={false}
+                        />
+                      </div>
+                    )}
+                    {/* v3 — designed Experience layer. Renders only
+                        when the underlying MechanismSpec carried a
+                        design_intent block (i.e. v3 generation). Five
+                        sub-blocks composed from
+                        compose-experience-brief-section.ts: intent
+                        summary, touchpoints strip, interaction beats,
+                        data spine, reduction notes. Match the
+                        surrounding type system precisely — uppercase
+                        eyebrows, hairline border, text-12px body, no
+                        icons. When design_artifact is also present
+                        above, this block becomes the structured
+                        audit trail beneath the headline poster. */}
+                    {s.experience && (
+                      <div
+                        className="mt-3 pt-3"
+                        style={{
+                          borderTop: `1px solid ${COLOR.inkFaint}`,
+                          borderTopWidth: "0.5px",
+                        }}
+                      >
+                        {/* Intent summary — "Designed as a flow · airy · breathing" */}
+                        <div className="flex items-baseline gap-1.5">
+                          <span
+                            className="font-semibold uppercase"
+                            style={{
+                              color: COLOR.inkFaint,
+                              fontSize: "10px",
+                              letterSpacing: "0.1em",
+                            }}
+                          >
+                            Designed
+                          </span>
+                          <span
+                            className="text-[12px]"
+                            style={{ color: COLOR.inkSoft }}
+                          >
+                            {s.experience.intent_summary}
+                          </span>
+                        </div>
+                        {/* Touchpoints — inline strip of labels */}
+                        {s.experience.touchpoints.length > 0 && (
+                          <div className="mt-1.5 flex items-baseline gap-1.5">
+                            <span
+                              className="font-semibold uppercase"
+                              style={{
+                                color: COLOR.inkFaint,
+                                fontSize: "10px",
+                                letterSpacing: "0.1em",
+                              }}
+                            >
+                              Touchpoints
+                            </span>
+                            <span
+                              className="text-[12px]"
+                              style={{ color: COLOR.inkMuted }}
+                            >
+                              {s.experience.touchpoints
+                                .map((tp) => tp.label)
+                                .join(" · ")}
+                            </span>
+                          </div>
+                        )}
+                        {/* Interaction beats — what the user does, in
+                            order. Small ordered list, indented, tabular
+                            numerals. */}
+                        {s.experience.interaction_beats.length > 0 && (
+                          <ol
+                            className="mt-1.5 flex flex-col gap-1"
+                            style={{ color: COLOR.inkSoft }}
+                          >
+                            {s.experience.interaction_beats
+                              .slice(0, 5)
+                              .map((beat, i) => (
+                                <li
+                                  key={i}
+                                  className="flex gap-2 text-[12px] leading-[1.55]"
+                                >
+                                  <span
+                                    className="flex-shrink-0 font-medium"
+                                    style={{
+                                      color: COLOR.inkFaint,
+                                      fontVariantNumeric: "tabular-nums",
+                                      width: 16,
+                                    }}
+                                  >
+                                    {i + 1}.
+                                  </span>
+                                  <span>{beat.sketch}</span>
+                                </li>
+                              ))}
+                          </ol>
+                        )}
+                        {/* Data spine — single-line summary of token
+                            flow shape (inputs / outputs / internal) */}
+                        {s.experience.data_spine.n_unique_tokens > 0 && (
+                          <div className="mt-1.5 flex items-baseline gap-1.5">
+                            <span
+                              className="font-semibold uppercase"
+                              style={{
+                                color: COLOR.inkFaint,
+                                fontSize: "10px",
+                                letterSpacing: "0.1em",
+                              }}
+                            >
+                              Data spine
+                            </span>
+                            <span
+                              className="text-[12px]"
+                              style={{ color: COLOR.inkMuted }}
+                            >
+                              {s.experience.data_spine.n_input_tokens} in ·{" "}
+                              {s.experience.data_spine.n_internal_tokens}{" "}
+                              internal ·{" "}
+                              {s.experience.data_spine.n_output_tokens} out
+                            </span>
+                          </div>
+                        )}
+                        {/* Reduction notes — MoSCoW honesty trace.
+                            Italic muted at the foot. */}
+                        {s.experience.reduction_log.length > 0 && (
+                          <div
+                            className="mt-1.5 text-[11.5px] italic leading-[1.5]"
+                            style={{ color: COLOR.inkMuted }}
+                          >
+                            <span
+                              className="mr-1 font-semibold uppercase not-italic"
+                              style={{
+                                color: COLOR.inkFaint,
+                                fontSize: "10px",
+                                letterSpacing: "0.1em",
+                                fontStyle: "normal",
+                              }}
+                            >
+                              Design notes
+                            </span>
+                            {s.experience.reduction_log.join(" · ")}
+                          </div>
+                        )}
                       </div>
                     )}
                   </li>

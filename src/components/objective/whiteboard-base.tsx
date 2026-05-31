@@ -44,6 +44,10 @@ import {
   ArtifactCardShapeUtil,
   type ArtifactCardShape,
 } from "./shapes/artifact-card-shape";
+import {
+  SubsystemKgShapeUtil,
+  type SubsystemKgShape,
+} from "./shapes/subsystem-kg-shape";
 import { LayerBandShapeUtil } from "./shapes/layer-band-shape";
 import { BoardSelectionToolbar } from "./board-selection-toolbar";
 import {
@@ -73,6 +77,11 @@ import {
   drainPendingArtifacts,
   type ArtifactCardDetail,
 } from "./board-bus";
+import {
+  DEPLOY_SUBSYSTEM_KG_EVENT,
+  drainPendingSubsystemKgs,
+  type SubsystemKgCardDetail,
+} from "./subsystem-kg-board-bus";
 import {
   BRAINSTORM_OPEN_ON_BOARD_EVENT,
   BRAINSTORM_COLLAPSE_PAGE_EVENT,
@@ -164,6 +173,7 @@ const CUSTOM_SHAPE_UTILS = [
   RoomCardShapeUtil,
   InsightCardShapeUtil,
   ArtifactCardShapeUtil,
+  SubsystemKgShapeUtil,
   LayerBandShapeUtil,
 ];
 
@@ -229,6 +239,8 @@ export function WhiteboardBase({
     const ed = editorRef.current;
     if (!ed) return;
     for (const d of drainPendingArtifacts(spaceId)) createArtifactCard(ed, d);
+    for (const d of drainPendingSubsystemKgs(spaceId))
+      createSubsystemKgCard(ed, d);
   });
 
   // ── Unfurl mode ──
@@ -582,6 +594,15 @@ export function WhiteboardBase({
       createArtifactCard(editor, (e as CustomEvent<ArtifactCardDetail>).detail);
     }
 
+    function onSubsystemKg(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      createSubsystemKgCard(
+        editor,
+        (e as CustomEvent<SubsystemKgCardDetail>).detail,
+      );
+    }
+
     // Per-card hover action. "save" → Library (canvas → object bridge).
     // The AI actions (decompose/variations/questions/make_plan) are left on
     // the bus for the brainstorm engine's handler — not owned here.
@@ -623,11 +644,13 @@ export function WhiteboardBase({
     window.addEventListener(DEPLOY_CARD_EVENT, onDeploy);
     window.addEventListener(REMOVE_CARD_EVENT, onRemove);
     window.addEventListener(DEPLOY_ARTIFACT_EVENT, onArtifact);
+    window.addEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKg);
     window.addEventListener(CARD_ACTION_EVENT, onCardAction);
     return () => {
       window.removeEventListener(DEPLOY_CARD_EVENT, onDeploy);
       window.removeEventListener(REMOVE_CARD_EVENT, onRemove);
       window.removeEventListener(DEPLOY_ARTIFACT_EVENT, onArtifact);
+      window.removeEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKg);
       window.removeEventListener(CARD_ACTION_EVENT, onCardAction);
     };
   }, []);
@@ -777,6 +800,67 @@ function createArtifactCard(editor: Editor, d: ArtifactCardDetail) {
       color: d.color,
       entityId: d.entityId,
       roomId: d.roomId,
+    },
+  });
+  editor.select(id);
+  editor.centerOnPoint(
+    { x: x + w / 2, y: y + h / 2 },
+    { animation: { duration: 300 } },
+  );
+}
+
+/** Drop (or refocus) a subsystem-KG card on the board. Deduped by focus
+ *  mechanism so re-sending the same triad doesn't stack. Shared by the
+ *  live deploy listener and the cross-page queue drain. */
+function createSubsystemKgCard(editor: Editor, d: SubsystemKgCardDetail) {
+  if (!d?.mechanismId) return;
+  const existing = editor
+    .getCurrentPageShapes()
+    .find(
+      (s): s is SubsystemKgShape =>
+        s.type === "subsystem-kg" &&
+        (s as SubsystemKgShape).props.mechanismId === d.mechanismId,
+    );
+  if (existing) {
+    editor.select(existing.id);
+    editor.centerOnPoint(
+      {
+        x: existing.x + existing.props.w / 2,
+        y: existing.y + existing.props.h / 2,
+      },
+      { animation: { duration: 300 } },
+    );
+    return;
+  }
+  const kgCount = editor
+    .getCurrentPageShapes()
+    .filter((s) => s.type === "subsystem-kg").length;
+  const center = editor.getViewportPageBounds().center;
+  const w = 360;
+  const h = 212;
+  const cascade = (kgCount % 6) * 28;
+  const x = center.x - w / 2 + cascade;
+  const y = center.y - h / 2 + cascade;
+  const id = createShapeId();
+  editor.createShape<SubsystemKgShape>({
+    id,
+    type: "subsystem-kg",
+    x,
+    y,
+    props: {
+      w,
+      h,
+      mechanismId: d.mechanismId,
+      mechanismName: d.mechanismName || "Mechanism",
+      roomId: d.roomId,
+      spaceId: d.spaceId,
+      color: d.color || "#2563EB",
+      problemLabels: d.problemLabels ?? [],
+      solutionLabels: d.solutionLabels ?? [],
+      problemCount: d.problemCount ?? 0,
+      solutionCount: d.solutionCount ?? 0,
+      hasSpec: !!d.hasSpec,
+      stepCount: d.stepCount ?? 0,
     },
   });
   editor.select(id);

@@ -196,20 +196,38 @@ in production:
   emits `room-card` + `layer-band` + bound `arrow` shapes idempotently
   (stable ids via `meta.unfurl`).
 
-**Plan:** a new `SubsystemKgShapeUtil` whose `component()` mounts the §4
-view (a small `<ReactFlow>` or the focused `RoomAltitudeMap`) at a fixed
-card size, plus a `DEPLOY_SUBSYSTEM_KG_EVENT` fired from:
-- the room's Subsystems tab ("Pin to board" on a module), and
-- the Library (re-placing a collapsed subsystem KG, §7).
+### Phase 2 — BUILT ✅ (collision-safe, type-clean)
 
-The shape's `meta` carries `{ mechanismId, subId, spaceId }` so it
-rehydrates from live data (not a frozen copy) unless it's a Library
-snapshot. Follow `LayerBandShapeUtil`/`RoomCardShapeUtil` verbatim for the
-util skeleton; follow `render-room-unfurl.ts` for idempotent placement.
+Shipped as **3 new files + 2 purely-additive edits** (84 insertions / 0
+deletions in `whiteboard-base.tsx`; 0 deletions in the `.d.ts`):
 
-**Open question (D2):** live-bound shape (re-reads entities each render,
-stays in sync) vs snapshot shape (frozen at pin time). Recommend
-**live-bound by default**, snapshot only when collapsed into the Library.
+| File | Role |
+|---|---|
+| `subsystem-kg-board-bus.ts` *(new)* | tldraw-free dispatch bus — `DEPLOY_SUBSYSTEM_KG_EVENT` + `deploySubsystemKgCard` / `queueSubsystemKgForBoard` / `sendSubsystemKgToBoard` / `drainPendingSubsystemKgs`. Mirrors `board-bus.ts` (live event **+** sessionStorage queue **+** drain-on-mount) so a room on the full-page route — which has no board mounted — still lands its KG when the board next mounts. Feature-scoped bus, same pattern as `brainstorm/brainstorm-board-bus.ts`. |
+| `shapes/subsystem-kg-shape.tsx` *(new)* | `SubsystemKgShapeUtil extends BaseBoxShapeUtil`. Renders the **problem → mechanism → solution** triad as a self-contained glass card (chip columns + accent mechanism hero pill + "N steps inside" footer). "Open in room" fires the shared `OPEN_ROOM_EVENT` with `{ roomId, focusEntityId: mechanismId }`. |
+| `app/preflight/subsystem-kg-board-preview/page.tsx` *(new)* | Public preflight harness — mounts the real `WhiteboardBase`, deploys 3 sample KGs (with-spec / multi-problem / no-internals), and reads back the `OPEN_ROOM_EVENT` round-trip (incl. the focus hint). |
+| `whiteboard-base.tsx` *(additive)* | Import + register `SubsystemKgShapeUtil` in `CUSTOM_SHAPE_UTILS`; `onSubsystemKg` listener + `createSubsystemKgCard` helper (dedupe by `mechanismId`, cascade, center — mirrors `createArtifactCard`); drain queued KGs on mount. |
+| `types/tldraw-shapes.d.ts` *(additive)* | One `"subsystem-kg"` entry in `TLGlobalShapePropsMap` so `editor.createShape<SubsystemKgShape>` + `s.type === "subsystem-kg"` narrow. |
+
+The trigger lives in **`subsystem-kg-panel.tsx`** (Phase 1, my file): a
+**"Send to whiteboard"** header button computes a lightweight snapshot from
+the already-scoped triad and calls `sendSubsystemKgToBoard`.
+
+**Decision D2 — RESOLVED → snapshot card (not live-mount).** A board card
+carries a **lightweight snapshot in props** (chip labels + counts +
+`hasSpec`/`stepCount`), **never** the full `MechanismSpec` and **not** a
+mounted `RoomAltitudeMap`. Rationale: on the canvas/objective altitude no
+single room's lanes/edges are in scope, and serializing a live ReactFlow
+graph into tldraw props is heavy + fragile. Instead the card is a *legible
+pointer* — it shows the triad shape at a glance and **"Open in room"
+deep-links to the live graph** (reusing `RoomAltitudeMap`'s `?focus=` seam
+via `OPEN_ROOM_EVENT`). Live-rebind on respawn stays the Library story (D4).
+
+> **Follow-up (parallel-session, one line):** wire the shell's
+> `OPEN_ROOM_EVENT` handler (`objective-canvas-shell.tsx:190`) to forward
+> `detail.focusEntityId` into its `navTo` as `?focus=` — today the extra
+> field is harmlessly ignored, so the card already opens the right room; the
+> follow-up just makes it land *focused on the mechanism*.
 
 ---
 
@@ -287,6 +305,20 @@ serializer and the existing `content_snapshot` column, requires no new
 table, and directly delivers "collapse a subsystem KG → a Library tile →
 re-place it later (here or on another whiteboard)."
 
+**Serializer BUILT ✅ (no migration).** `lib/objective-canvas/structure-snapshot.ts`
+now provides the option-(i) machinery: `serializeStructureSnapshot({scope:
+"subgraph", scopeRef: mechanismId, entities, edges, …})` → a denormalized,
+FK-free `StructureSnapshotPayload`, and `toLibraryStructureRow(payload, …)`
+→ the **durable** `library_objects` insert (`object_type:"structure"`,
+`source_entity_id: NULL`, capture in `content_snapshot`). The NULL source is
+the fix for the dangling-handle bug: verified the live FK
+`library_objects.source_entity_id → entities ON DELETE CASCADE`, so a
+single-entity save is cascade-killed when its source is deleted — a
+structure save with NULL source is not. Respawn = read the row, fire
+`DEPLOY_SUBSYSTEM_KG_EVENT` (§5) or `planRespawn()` to re-create entities/
+edges with their original ids. Remaining = one thin route to persist it
+(no schema work).
+
 ---
 
 ## 8. Feature E — structure protection (the load-bearing foundation)
@@ -296,25 +328,56 @@ absent today**: entities are **HARD-deleted** (cascade), there is no
 soft-delete, no lock flag, and no whole-structure respawn — so a user
 brainstorming in a room can irreversibly destroy the layer scaffold.
 
-**Plan (minimal, additive):**
-1. **Lock flag** — `entities.locked boolean default false` (+ optional
-   `improvement_goals.locked`). Locked entities reject delete/auto-retag in
-   the mutation routes. Cheap, high-value, stops accidental clobber.
-2. **Soft-delete** — `entities.deleted_at timestamptz`; deletes become
-   updates; the room/KG queries filter `deleted_at is null`. Makes "undo a
-   brainstorm wipe" possible.
-3. **Whole-structure respawn** — reuse `twin_snapshots`: snapshot the
-   objective's full entity/edge/layer scaffold on first room-generation
-   (`room_layers_generated_at` is the natural trigger), and expose
-   "Restore structure" that re-applies the snapshot. This is the same
-   serializer §6/§7 use — **one snapshot machinery, three consumers.**
+### Phase E — WRITTEN ✅ (migrations authored, **NOT applied**)
+
+Authored 2026-05-30 after the mandated read-only schema inspection
+(`list_migrations` + column/constraint dump). Split into **two migration
+files on purpose** so the safe half can ship without waiting on the
+cross-cutting half:
+
+| File | What | Apply status |
+|---|---|---|
+| `20260912_structure_snapshots.sql` | NEW `structure_snapshots` table — denormalized, FK-free JSONB capture (only FK is `space_id`); the whole-structure respawn substrate. | **Safe to apply** the moment the migration lane is clear — changes no read/write path. |
+| `20260913_structure_soft_delete.sql` | `deleted_at timestamptz` + `locked boolean` on `entities`/`edges`/`improvement_goals`/`layer_ontology`/`spaces` + partial `…_live` indexes. | **Coordination-GATED.** Columns are additive/harmless, but the *semantics* need a read/write-path sweep across ~dozens of routes — do NOT flip deletes→soft-deletes solo. |
+| `lib/objective-canvas/structure-snapshot.ts` | Pure serializer + `planRespawn()` + `toSnapshotRow()` + `toLibraryStructureRow()`. No React/DB/shared-type imports → collision-safe, type-clean. | n/a (code, merged). |
+
+**Why this maps the original three-point plan:**
+1. **Lock flag** → `locked boolean` (migration B) — locked rows reject
+   delete/auto-retag in the mutation routes. Cheap, stops accidental clobber.
+2. **Soft-delete** → `deleted_at timestamptz` (migration B) — deletes become
+   updates; live reads filter `deleted_at is null` (the gated sweep). Makes
+   "undo a brainstorm wipe" possible.
+3. **Whole-structure respawn** → `structure_snapshots` (migration A) +
+   `serializeStructureSnapshot` / `planRespawn`. Generalizes the proven
+   `twin_snapshots` JSONB design to the full structural set
+   (spaces→improvement_goals→entities→edges + layer_ontology +
+   whiteboard_positions). **One snapshot machinery, three consumers** (§6
+   bridges, §7 Library, §8 restore). The natural auto-capture trigger stays
+   `room_layers_generated_at`; `reason:"pre_delete"` captures before a
+   destructive op give a free undo.
+
+**Schema facts that shaped the DDL (verified live, not assumed):**
+- **No `sub_objectives` table** — a "room" is an `improvement_goals` row
+  (`parent_goal_id`); entities/edges point at it via
+  `parent_sub_objective_id`. The serializer filters on that.
+- **`library_objects.object_type` has no CHECK** — the `"structure"`
+  object_type needs no migration (free-text), avoiding the constraint-clobber
+  trap.
+- Snapshots hold **no FK to entities/goals/edges** (only `space_id` cascade),
+  so deleting a room never cascades the snapshot away — the entire point.
 
 **What else to protect (the user asked):** the **layer scaffold**
-(`ObjectiveStack` ordinals / `layer_ontology`), the **room lane skeleton**
-(pain/feature/outcome lanes per `LANE_ROLE`), and **generated
-`mechanism_spec`s** (expensive LLM output in `expanded_detail` — protect
-from regen-clobber with a `spec_locked` flag or version stamp). All three
-are snapshot-able with the same machinery.
+(`layer_ontology` ordinals), the **room lane skeleton** (pain/feature/outcome
+lanes), and **generated `mechanism_spec`s** (expensive LLM output in
+`expanded_detail`) — all three ride inside the same `structure_snapshots`
+payload (`layerOntology[]`, the room goal's `room_lane_labels`, and each
+entity's full `expanded_detail`), so one capture protects all three. A
+finer `spec_locked` stamp can come later via the same `locked` column.
+
+**⚠️ Standing constraint:** both migrations are **written, not applied**.
+Do not apply unilaterally while the parallel objective-canvas session is
+mid-migration. Migration B additionally needs its read/write-path sweep
+planned with the route owner before its soft-delete semantics go live.
 
 ---
 
@@ -322,24 +385,33 @@ are snapshot-able with the same machinery.
 
 Ordered by dependency and by "pure-FE-now vs needs-migration":
 
-- **Phase 1 — Subsystem KG view (pure FE, no migration).** §4 builder +
-  render in the room (focused Map or new sub-tab). Reuses
-  `build-subsystem-modules.ts`, `types.ts`, `MechanismDataflowView`,
-  `RoomAltitudeMap`. *Ships value immediately; zero schema risk.* ⚠️
-  **Coordinate with the parallel chat** — it owns `subsystem-modules-view`.
-- **Phase 2 — Pin to whiteboard (FE + 1 ShapeUtil).** §5
-  `SubsystemKgShapeUtil` + `DEPLOY_SUBSYSTEM_KG_EVENT`. No migration.
+- **Phase 1 — Subsystem KG view (pure FE, no migration). BUILT + MOUNTED ✅.**
+  §4 builder (`build-subsystem-kg.ts`) + `subsystem-kg-panel.tsx`, reusing
+  `RoomAltitudeMap` + `MechanismDataflowView` as black boxes. *Ships value
+  immediately; zero schema risk.* The mount wrapper `subsystem-section.tsx`
+  is BUILT ✅ and now **mounted ✅** — the one-element swap is APPLIED in the
+  host `sub-objective-room-view.tsx` (Subsystems tab → Modules ⇄ Knowledge
+  graph toggle live). See §12.3.
+- **Phase 2 — Pin to whiteboard (FE + 1 ShapeUtil). BUILT ✅.** §5
+  `SubsystemKgShapeUtil` + `DEPLOY_SUBSYSTEM_KG_EVENT` (+ queue/drain) +
+  preflight harness. No migration. Edits to `whiteboard-base.tsx` /
+  `tldraw-shapes.d.ts` are purely additive.
 - **Phase 3 — Cross-KG influence (FE, light).** §6 — turn on
   `EdgeSource:"cross_space"` + `canonicalConceptId` rendering (seams
   already exist), read `bridges` into the subsystem KG. No migration if we
   only *render* existing bridges.
-- **Phase 4 — Library collapse/respawn (needs migration).** §7 option (i):
-  `object_type:"subsystem_kg"` + snapshot serialize/respawn. Migration =
-  none if `content_snapshot` suffices; else one column.
-- **Phase 5 — Structure protection (needs migration).** §8: `locked`,
-  `deleted_at`, snapshot-on-generate. Do this **before** users brainstorm
-  destructively at scale; it's foundational but can land in parallel since
-  it's purely additive columns.
+- **Phase 4 — Library collapse/respawn. Serializer BUILT ✅ (no migration).**
+  §7 option (i): `toLibraryStructureRow()` writes a durable
+  `object_type:"structure"` row (NULL source, capture in `content_snapshot`)
+  — confirmed `content_snapshot` suffices, **no migration**. Remaining = one
+  thin persist/respawn route.
+- **Phase 5 — Structure protection. Migrations WRITTEN ✅ (NOT applied).**
+  §8: `20260912_structure_snapshots.sql` (new table, safe to apply) +
+  `20260913_structure_soft_delete.sql` (`locked`/`deleted_at`, coordination-
+  gated) + `structure-snapshot.ts` serializer/respawn-planner (merged,
+  type-clean). Do this **before** users brainstorm destructively at scale.
+  Migration A is purely additive; migration B's columns are additive but its
+  soft-delete *semantics* need the route read/write-path sweep first.
 
 **Migrations are the only gated steps** (Phases 4-5). Per the
 parallel-workstreams rule: check `list_migrations` + git before authoring
@@ -350,20 +422,25 @@ any migration, prefer new files, and re-assert the full
 
 ## 10. Decisions to lock (Dx)
 
-- **D1 — separate tab vs focused Map.** Recommend: subsystem KG = the
-  *focused state* of `RoomAltitudeMap` (add `focusMechanismId`), so we
-  don't add a 5th canvas to maintain. (Alt: keep the SVG
-  `subsystem-modules-view` as the overview and make the KG the drill-in.)
+- **D1 — separate tab vs focused Map.** ✅ **LOCKED: focused state of
+  `RoomAltitudeMap`** (add `focusMechanismId`). No 5th canvas; reuse the
+  map's styling, loop detection, health, and (crucially) its *existing*
+  focus/fade machinery (§12). The SVG `subsystem-modules-view` stays as the
+  overview; the KG is the drill-in. (Alt noted: standalone sub-tab.)
 - **D2 — board shape: live-bound vs snapshot.** Recommend live-bound by
-  default; snapshot only when collapsed to Library.
+  default; snapshot only when collapsed to Library. *(still open)*
 - **D3 — branching granularity.** Per-subsystem scoped snapshot (reuse
   `twin_snapshots`) vs whole-space only. Recommend scoped, as the first
-  real `twin_snapshots` UI consumer.
-- **D4 — Library subgraph shape.** Snapshot-in-blob (i) vs cluster-link
-  (ii). Recommend (i) first.
+  real `twin_snapshots` UI consumer. *(still open)*
+- **D4 — Library subgraph shape.** ✅ **LOCKED: snapshot-in-blob (i),
+  live-rebind on respawn.** Reuse the `twin_snapshots` serializer into
+  `library_objects.content_snapshot`; on re-place, re-bind to live entities
+  if present, else render the frozen snapshot (fixes today's
+  dangling-handle problem). No new table. (Alt noted: cluster-link (ii).)
 - **D5 — concept identity source.** `canonical_concept_id` (structured)
   vs derived `concept_slug`. Recommend `canonical_concept_id`; treat
   `cross-space-concept-stats.ts` as the thing to converge, not extend.
+  *(still open)*
 
 ---
 
@@ -381,6 +458,181 @@ any migration, prefer new files, and re-assert the full
   `bridges`, `library_objects`.
 - **Before any migration:** `list_migrations` + git status; re-assert the
   `sub_objective_decisions` action superset if touched.
+
+---
+
+## 12. Phase 1 — BUILT ✅ (collision-safe, type-clean)
+
+**Goal:** a "specialized subsystem KG" = the room Map focused to ONE
+mechanism's **problem → mechanism → solution** triad, with the mechanism
+node openable into its internal `runtime_flow` DAG. **Decision D1 locked:
+focused state of `RoomAltitudeMap`.**
+
+**Shipped as two NEW files (zero edits to any parallel-session file;
+`tsc --noEmit` reports zero errors in both):**
+- `src/lib/objective-canvas/build-subsystem-kg.ts` — pure
+  `scopeRoomToMechanism({lanes, edges, mechanismId})` → the triad slice
+  (problems = pains edging into the lever; solutions = outcomes it edges
+  to). Returns drop-in `RoomLane[]`/`RoomEdge[]`.
+- `src/components/objective/subsystem-kg-panel.tsx` —
+  `<SubsystemKgPanel>` feeds that slice into the existing
+  `<RoomAltitudeMap>` (same ReactFlow renderer as the room Map tab) and
+  reveals `<MechanismDataflowView spec=…>` inline for the internals.
+
+**Remaining = a single element swap** in the host room view. This was
+originally framed as "mount the panel," but the panel needs raw
+`lanes`/`edges`/`spaceId`/`subId` that the shipped `subsystem-modules-view`
+does **not** receive (it gets only the built `model` + `onOpenItem`). Rather
+than thread four new props through a parallel-owned view, the mount is now a
+**self-owned wrapper** (`subsystem-section.tsx`, §12.3) that builds the model
+itself and offers both lenses behind one toggle — collapsing the host change
+to a **one-element swap**. Held only because `sub-objective-room-view.tsx`
+is dirty (parallel session active). See §12.3 for the ready-to-paste diff.
+
+### 12.1 The discovery that makes this small
+
+`RoomAltitudeMap` (`causal-map/altitudes/RoomAltitudeMap.tsx`) **already
+computes exactly the scoping we need**:
+
+- `focusNodeId` state (L102) + `focusSet` (L162-181) walk **`reach(fwd)`
+  ∪ `reach(bwd)`** from the focused node. For a *mechanism* node,
+  `reach(bwd)` = its upstream **pains (= problem)** and `reach(fwd)` = its
+  downstream **outcomes (= solution)**. That set **is** the
+  problem→mechanism→solution triad — already implemented, just hover-driven.
+- `flowNodes`/`flowEdges` (L244-297) already `faded`-dim everything outside
+  the focus set.
+- A `?focus=<entityId>` effect (L221-231) already `fitView`-centers a node.
+- `onOpenItem(entityId)` (L64, L189-207) already opens the lever drawer —
+  **which already contains the `MechanismDataflowView` DAG tab** (the L1
+  internals), per §2. So "expand the mechanism's internals" needs no new
+  surface in Phase 1.
+
+`buildRoomGraph` (`build-room-graph.ts:149`) is a **pure** transform over
+`{lanes, edges}`; its `isFlowEdge` (L186-190) keeps only one-lane-forward
+spine edges. Feed it scoped lanes → it draws a scoped spine. No edit needed.
+
+### 12.2 ⚠️ Collision constraint → build by COMPOSITION, not edits
+
+Memory (`project_room_altitudes`) marks the causal-map/graph files
+**CONTESTED** across sessions: *"verify mtime+diff before editing
+map/graph files."* So Phase 1 must reach the focused-Map outcome **without
+editing `RoomAltitudeMap.tsx` or `build-room-graph.ts`.** Achieve it with
+**two NEW files** that use the existing renderer as a black box:
+
+**File 1 (NEW, pure) — `src/lib/objective-canvas/build-subsystem-kg.ts`:**
+- Export `scopeRoomToMechanism(input: { lanes: RoomLane[]; edges:
+  RoomEdge[]; mechanismId: string; model?: SubsystemModulesModel }):
+  { lanes: RoomLane[]; edges: RoomEdge[] }`.
+- Logic (deterministic, no LLM):
+  1. Find focus feature `F` (id = `mechanismId`) in the `features` lane.
+  2. `problems` = pain-lane items `p` with an edge `p → F`.
+  3. `solutions` = outcome-/objective-lane items `o` with an edge `F → o`.
+  4. *(optional, for context)* `siblings` = features token-wired to `F`
+     from `model.wires` (from/to === F). Include dimmed, or omit in v1.
+  5. Return **sub-lanes** preserving slug/label/color but with
+     `items` filtered to `{ problems } / { F (+siblings) } / { solutions }`,
+     and **sub-edges** = the input edges whose endpoints are both in that
+     node set.
+- This reuses the SAME `RoomLane`/`RoomEdge` types the renderer eats, so
+  it drops straight into `<RoomAltitudeMap lanes=… edges=…>`.
+
+**File 2 (NEW, thin) — `src/components/objective/subsystem-kg-panel.tsx`:**
+- Props: `{ spaceId; lanes; edges; mechanismId; spec?: MechanismSpec;
+  onOpenItem? }`.
+- Body: `const scoped = useMemo(() => scopeRoomToMechanism({lanes, edges,
+  mechanismId, model}), …)`; render `<RoomAltitudeMap spaceId={spaceId}
+  lanes={scoped.lanes} edges={scoped.edges} onOpenItem={onOpenItem} />`.
+  Because only the triad's nodes exist in `scoped`, the Map *is* the
+  specialized KG — full renderer, zero contested-file edits.
+- Below it (Phase 1 inline internals, optional): when `spec` present,
+  render `<MechanismDataflowView spec={spec} />` in a collapsible card —
+  literally the `subsystem-modules-view.tsx:279-308` block, reused.
+
+### 12.3 Entry point — BUILT ✅ `subsystem-section.tsx` (the one-element swap)
+
+**As-built (supersedes the earlier "edit `subsystem-modules-view`" sketch).**
+Mounting the KG needs raw `lanes`/`edges`/`spaceId`/`subId`, but the shipped
+`subsystem-modules-view` receives only `{ model, onOpenItem }` — so threading
+those four props would mean editing a parallel-owned file. Instead the entry
+point is a **new, fully-owned wrapper** that the host mounts in place of the
+modules view:
+
+`src/components/objective/subsystem-section.tsx` *(new, type-clean)* —
+- Builds the model itself via the **same** `buildSubsystemModules({ lanes,
+  edges, roomCategories })` call the host previously made inline (single
+  source for both lenses).
+- A segmented **lens toggle: Modules ⇄ Knowledge graph.**
+  - *Modules* → `<SubsystemModulesView model … onOpenItem … />` verbatim
+    (the existing system view, untouched).
+  - *Knowledge graph* → a mechanism-picker chip row + `<SubsystemKgPanel>`
+    for the focused lever (defaults to the first lever that `hasSpec`).
+    The panel already carries the Phase-2 **"Send to whiteboard"** button.
+- Treats both views **and** the KG panel as black boxes → consumes only
+  shipped exports, edits none of them.
+
+**Host handoff — APPLIED ✅ 2026-05-30 (surgical 2-hunk edit; user-authorized
+despite the dirty host).** `sub-objective-room-view.tsx` was actively shifting
+(the parallel session had just dropped the `!skeleton &&` guard mid-edit), so
+both hunks were re-read fresh immediately before editing and confirmed isolated
+in the diff. tsc: **zero errors in any file I touched** (the total moved with
+the parallel session's unrelated in-progress edits, not this swap).
+
+**(1) The element — applied at the live Subsystems render site.** Guard kept
+as-found (`{roomView === "subsystems" && (`, post-parallel-edit); only the
+inner element swapped:
+
+```tsx
+// before
+{roomView === "subsystems" && (
+  <SubsystemModulesView
+    model={buildSubsystemModules({ lanes, edges, roomCategories })}
+    onOpenItem={setDetailEntityId}
+  />
+)}
+
+// after — every prop ALREADY in host scope (verified):
+//   spaceId (prop), subObjectiveId (prop L142/196, === room id per L1278),
+//   lanes, edges, roomCategories (useMemo), setDetailEntityId (handler).
+{roomView === "subsystems" && (
+  <SubsystemSection
+    spaceId={spaceId}
+    subId={subObjectiveId}
+    lanes={lanes}
+    edges={edges}
+    roomCategories={roomCategories}
+    onOpenItem={setDetailEntityId}
+  />
+)}
+```
+
+**(2) The import — applied at host L65.** The two now-unused imports
+(`SubsystemModulesView` + `buildSubsystemModules` — verified the *only* refs,
+4 total) were replaced with a single `import { SubsystemSection } from
+"./subsystem-section";`. Clean replacement (both symbols now live only inside
+the wrapper). That was the **whole** mount — no other host line changed; the
+git diff shows exactly these two hunks.
+
+### 12.4 Acceptance criteria
+
+- Given a lever with a `mechanism_spec`, the panel shows **its** pains →
+  itself → its outcomes (nothing else from the room), centered/fit.
+- Clicking the mechanism opens the lever drawer on the **data-flow tab**
+  (existing `onOpenItem`), OR expands the inline `MechanismDataflowView`.
+- Levers with no spec still render the triad (problem→mechanism→solution
+  from edges), with a "generate spec" affordance for the internals.
+- **Zero diffs** to `RoomAltitudeMap.tsx` / `build-room-graph.ts` /
+  `build-subsystem-modules.ts` / `subsystem-modules-view.tsx`. All entry-point
+  logic lives in the owned wrapper `subsystem-section.tsx` (§12.3); the host's
+  only change is a one-element swap it lands when its file is clean.
+
+### 12.5 Alt (only if you own the map file this week)
+
+Instead of pre-scoping lanes, add a `focusMechanismId?: string` prop to
+`RoomAltitudeMap` that seeds a *persistent* focus: feed `focusNodeId ??
+focusMechanismId` into `focusSet`, and extend the `?focus=` effect to
+center it. Keeps the full room visible with the triad lit and siblings
+dimmed (softer than hard-scoping). Cleaner UX, but **touches a contested
+file** — only do it if a fresh `git`/mtime check shows you own it.
 
 ---
 
@@ -407,3 +659,9 @@ any migration, prefer new files, and re-assert the full
 - Per-entity subgraph store: `entities.expanded_detail.mechanism_spec`
   (migration `20260525_entities_item_detail.sql`); producer
   `src/lib/objective-canvas/enrich-mechanism-spec.ts:262`.
+- **Structure protection (§7/§8, WRITTEN — not applied):** migrations
+  `supabase/migrations/20260912_structure_snapshots.sql` (new table, safe) +
+  `20260913_structure_soft_delete.sql` (`locked`/`deleted_at`, gated);
+  serializer/respawn-planner `src/lib/objective-canvas/structure-snapshot.ts`
+  (`serializeStructureSnapshot` / `planRespawn` / `toSnapshotRow` /
+  `toLibraryStructureRow`). Snapshot precedent: `twin_snapshots`.

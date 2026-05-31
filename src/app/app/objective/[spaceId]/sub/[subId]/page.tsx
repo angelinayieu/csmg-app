@@ -401,6 +401,7 @@ export default async function SubObjectiveRoomPage({
           <SubObjectiveRoomView
             spaceId={spaceId}
             subObjectiveId={subId}
+            title={sub.title}
             lanes={lanes}
             edges={edges}
             generatedAt={sub.room_layers_generated_at}

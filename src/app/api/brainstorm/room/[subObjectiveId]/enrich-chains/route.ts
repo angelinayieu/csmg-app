@@ -32,6 +32,7 @@ import {
   type OrphanItem,
 } from "@/lib/objective-canvas/enrich-chain";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
+import { deriveMethodTierFromEdges } from "@/lib/objective-canvas/derive-method-tier";
 import { readConstraints } from "@/lib/objective-canvas/constraints";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
 import { narrateChainsEnriched } from "@/lib/objective-canvas/compose-rich-narration";
@@ -582,6 +583,37 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     },
   });
 
+  // ── Stamp an evaluation tier on each entity (Proof-tier substrate) ──
+  // The depth dial's "Proof" level and the room Map's MethodBadge dim any
+  // lever with no recorded evaluation method, so the validated path stands
+  // out. Derive that tier from the chain substrate we just enriched (edge
+  // approval + agent rationale + strength) and persist it onto the entity's
+  // causal_chain JSONB — coordinating the signal across the pipeline rather
+  // than leaving it to the client's view-time fallback. Derived from the
+  // edges loaded this run; brand-new orphan-closing edges get picked up on
+  // the next load via the same view-time fallback. Soft-fail: a write hiccup
+  // never aborts the enrich run.
+  let methodTiersStamped = 0;
+  try {
+    await Promise.all(
+      entities.map(async (ent) => {
+        const { tier, score } = deriveMethodTierFromEdges(ent.id, allEdges);
+        if (!tier) return; // untiered levers stay null → they dim at Proof
+        const cc = (ent.causal_chain ?? {}) as Record<string, unknown>;
+        if (cc.method_tier === tier && cc.method_score === score) return;
+        const { error } = await db
+          .from("entities")
+          .update({
+            causal_chain: { ...cc, method_tier: tier, method_score: score },
+          })
+          .eq("id", ent.id);
+        if (!error) methodTiersStamped += 1;
+      }),
+    );
+  } catch (err) {
+    console.error("[enrich-chains] method-tier stamping failed (soft)", err);
+  }
+
   return NextResponse.json({
     enriched_count: enrichedChainCount,
     new_chains_count: newChainsCount,
@@ -589,5 +621,6 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     orphans_closed: orphansClosed.size,
     orphans_before: orphans.length,
     llm_errors: llmErrors,
+    method_tiers_stamped: methodTiersStamped,
   });
 }

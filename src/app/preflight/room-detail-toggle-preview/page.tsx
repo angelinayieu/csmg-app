@@ -244,6 +244,7 @@ export default function RoomDetailTogglePreview() {
             featureItems={featureItems}
             painItems={painItems}
             outcomeItems={outcomeItems}
+            onOpenItem={(id) => console.log("open item", id)}
           />
         )}
         {skeleton && (

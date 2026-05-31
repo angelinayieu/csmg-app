@@ -58,6 +58,12 @@ import {
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { NotebookGlossaryView } from "./notebook-glossary-view";
 import { LibraryPanel } from "./library-panel";
+import { ChatMechanismPreview } from "./chat-mechanism-preview";
+import type {
+  NarrationDeepLink,
+  RichNarrationMeta,
+} from "@/lib/objective-canvas/compose-rich-narration";
+import type { ExperienceBriefSection } from "@/lib/objective-canvas/compose-experience-brief-section";
 import type {
   NotebookAction,
   NotebookEvent,
@@ -1218,9 +1224,87 @@ function NotebookRow({
           )}
           {/* Metadata chips — render small data badges when present */}
           <MetadataChips event={ev} />
+          {/* Step 18 — Inline mechanism preview card. Renders below
+              the standard row chrome when the event is a
+              mechanism_spec_generated row with v3 narration
+              metadata + a Claude-composed design artifact. Lets the
+              user read the designed poster INSIDE the chat (the
+              user's session-9 demand: "see stuff inside the chat as
+              well") and opens the mechanism in the library so they
+              can drag it onto the whiteboard. Backward-compat: rows
+              without narration metadata render the existing
+              one-liner above; no preview block. */}
+          {ev.action === "mechanism_spec_generated" &&
+            (ev.meta as unknown as { narration_title?: string })
+              ?.narration_title && (
+              <InlineMechanismPreview meta={ev.meta} />
+            )}
         </div>
       </div>
     </motion.li>
+  );
+}
+
+// Lightweight wrapper that pulls the narration + experience + artifact
+// blobs out of the row's metadata and renders ChatMechanismPreview.
+// onDeepLink for kind=library routes to `/app/library?focus=<id>` so
+// the LibraryPanel can scroll to and pre-select the object; from
+// there the user drags onto the whiteboard via the existing canvas
+// onDrop handler.
+function InlineMechanismPreview({
+  meta,
+}: {
+  meta: NotebookEvent["meta"];
+}) {
+  const m = meta as unknown as Record<string, unknown>;
+  const narration: RichNarrationMeta = {
+    narration_title:
+      typeof m.narration_title === "string" ? m.narration_title : undefined,
+    narration_body:
+      typeof m.narration_body === "string" ? m.narration_body : undefined,
+    narration_facts: Array.isArray(m.narration_facts)
+      ? (m.narration_facts as RichNarrationMeta["narration_facts"])
+      : undefined,
+    narration_deep_link:
+      m.narration_deep_link && typeof m.narration_deep_link === "object"
+        ? (m.narration_deep_link as NarrationDeepLink)
+        : undefined,
+    narration_tags: Array.isArray(m.narration_tags)
+      ? (m.narration_tags as string[])
+      : undefined,
+  };
+  // The brief side serializes ExperienceBriefSection on `experience`;
+  // the route may also stash it on the metadata directly. Tolerate
+  // both shapes — null when neither present.
+  const experience: ExperienceBriefSection | null =
+    m.experience && typeof m.experience === "object"
+      ? (m.experience as ExperienceBriefSection)
+      : null;
+  const handleDeepLink = (link: NarrationDeepLink) => {
+    // No useRouter inside a server-rendered component path is fine —
+    // window.location works in the client component context. The
+    // library page reads ?focus= to scroll + select the object.
+    if (typeof window === "undefined") return;
+    if (link.kind === "library" && link.object_id) {
+      window.location.href = `/app/library?focus=${encodeURIComponent(link.object_id)}`;
+      return;
+    }
+    if (link.kind === "drawer" && link.entity_id) {
+      // Drawer navigation is host-mediated; the parent NotebookRow
+      // already handles row clicks via its onClick. Fall through.
+      return;
+    }
+    // brief / view — defer to host wiring; for now the affordance is
+    // visual only.
+  };
+  return (
+    <div className="mt-2.5">
+      <ChatMechanismPreview
+        narration={narration}
+        experience={experience}
+        onDeepLink={handleDeepLink}
+      />
+    </div>
   );
 }
 

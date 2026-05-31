@@ -47,6 +47,7 @@ import { SharedCausesStrip } from "./cards/shared-causes-strip";
 import { PortfolioStrip } from "./cards/portfolio-strip";
 import { RoomFeatureSpec } from "./room-feature-spec";
 import { RoomSkeletonView, RoomDetailToggle } from "./room-skeleton-view";
+import { RoomViewFolder } from "./room-view-folder";
 import { ConstraintsStrip } from "./cards/constraints-strip";
 import { PriorityStrip } from "./cards/priority-strip";
 import type { PriorityVector } from "@/lib/objective-canvas/priority-vector";
@@ -61,8 +62,7 @@ import { RoomEdgesOverlay } from "./room-edges-overlay";
 // Phase 12.A.4 — the room-altitude Causal Loop Diagram. A third room
 // view alongside Categories / Variables; reads the same lanes + edges.
 import { RoomAltitudeMap } from "./causal-map/altitudes/RoomAltitudeMap";
-import { SubsystemModulesView } from "./subsystem-modules-view";
-import { buildSubsystemModules } from "@/lib/objective-canvas/build-subsystem-modules";
+import { SubsystemSection } from "./subsystem-section";
 // Phase 12.A.8 — remember the room's view choice per sub-objective.
 import { useLocalPref } from "./causal-map/hooks/useLocalPref";
 import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
@@ -139,6 +139,9 @@ export interface RoomLane {
 interface Props {
   spaceId: string;
   subObjectiveId: string;
+  /** The room/system name — rendered on the folder label tab that wraps
+   *  the altitude views. Falls back to "System" when absent. */
+  title?: string | null;
   lanes: RoomLane[];
   edges: RoomEdge[];
   generatedAt: string | null;
@@ -190,6 +193,7 @@ interface Props {
 export function SubObjectiveRoomView({
   spaceId,
   subObjectiveId,
+  title = null,
   lanes,
   edges,
   generatedAt,
@@ -1014,6 +1018,7 @@ export function SubObjectiveRoomView({
                 featureItems={featureItems}
                 painItems={painItems}
                 outcomeItems={outcomeItems}
+                onOpenItem={setDetailEntityId}
               />
             )}
           </div>
@@ -1136,12 +1141,10 @@ export function SubObjectiveRoomView({
           {/* Phase 11.0b — Notebook button removed. Layout-level rail
               owns the notebook UI; this room's events stream into it
               via the URL-detected room mode. */}
-          {/* Altitude switch is meaningless in Skeleton mode (there are
-              no altitude views to switch between), so it hides; the
-              Full/Skeleton toggle stays so the user can always return. */}
-          {!skeleton && (
-            <ViewToggleInline value={roomView} onChange={setRoomView} />
-          )}
+          {/* Altitude switching now lives on the folder lip (see
+              RoomViewFolder below), so the control row only carries the
+              Full/Skeleton peer toggle — always available so the user
+              can return from Skeleton at any time. */}
           {generatedAt && (
             <RoomDetailToggle skeleton={skeleton} onChange={setSkeleton} />
           )}
@@ -1159,7 +1162,9 @@ export function SubObjectiveRoomView({
       {skeleton && generatedAt && (
         <RoomSkeletonView lanes={lanes} onOpenItem={setDetailEntityId} />
       )}
-      {!skeleton && roomView === "categories" && (
+      {!skeleton && (
+        <RoomViewFolder title={title} value={roomView} onChange={setRoomView}>
+      {roomView === "categories" && (
         <CategoryCardsView
           chains={allChains}
           painById={
@@ -1182,7 +1187,7 @@ export function SubObjectiveRoomView({
           focusChain={chainFocus}
         />
       )}
-      {!skeleton && roomView === "map" && (
+      {roomView === "map" && (
         <RoomAltitudeMap
           spaceId={spaceId}
           lanes={lanes}
@@ -1191,13 +1196,17 @@ export function SubObjectiveRoomView({
           onOpenChainForEdge={handleOpenChainForEdge}
         />
       )}
-      {!skeleton && roomView === "subsystems" && (
-        <SubsystemModulesView
-          model={buildSubsystemModules({ lanes, edges, roomCategories })}
+      {roomView === "subsystems" && (
+        <SubsystemSection
+          spaceId={spaceId}
+          subId={subObjectiveId}
+          lanes={lanes}
+          edges={edges}
+          roomCategories={roomCategories}
           onOpenItem={setDetailEntityId}
         />
       )}
-      {!skeleton && roomView === "variables" && (
+      {roomView === "variables" && (
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="min-w-0 flex-1">
           <div
@@ -1438,6 +1447,8 @@ export function SubObjectiveRoomView({
         )}
       </div>
       )}
+        </RoomViewFolder>
+      )}
 
       {/* Research sources sheet — opened by CitationBadge "See all
           sources" footer on any card. Mounted at room-view root so
@@ -1660,48 +1671,74 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
                 : "flex flex-shrink-0 items-start gap-1"
             }
           >
-            <div className="flex min-w-0 flex-col items-center gap-1 px-2 text-center">
-              {/* One calm row: lane-colored glyph + near-black title + a
-                  muted count. No flat tint disc, no competing badge — the
-                  icon is the single accent, everything else is type. */}
-              <div className="flex h-5 items-center gap-1.5">
-                <span className="flex-shrink-0" style={{ color }}>
-                  <RoleIcon className="h-4 w-4" strokeWidth={2} />
-                </span>
+            <div className="flex min-w-0 flex-col items-center gap-1.5 px-2 text-center">
+              {/* Icon as the station glyph; count rides its lower-right
+                  corner as an iOS-style badge so there's no competing
+                  pill on the title row. */}
+              <div className="relative flex-shrink-0">
                 <span
-                  className={appleVibe.type.title}
+                  className="grid place-items-center rounded-full"
                   style={{
-                    color: appleVibe.text.primary,
-                    fontFamily: appleVibe.font.display,
-                    letterSpacing: "-0.01em",
+                    width: 36,
+                    height: 36,
+                    background: `${color}1F`,
+                    color,
                   }}
+                  aria-hidden
                 >
-                  {lane.label}
+                  <RoleIcon className="h-[18px] w-[18px]" strokeWidth={2} />
                 </span>
                 <span
-                  className="text-[11px] font-semibold tabular-nums"
-                  style={{ color: appleVibe.text.tertiary }}
+                  className="absolute -bottom-1 -right-1 grid min-w-[18px] place-items-center rounded-full px-1 text-[10px] font-semibold tabular-nums"
+                  style={{
+                    height: 18,
+                    background: appleVibe.surface.card,
+                    color,
+                    boxShadow: `0 0 0 1px ${color}33, 0 1px 3px -1px rgba(15,23,42,0.18)`,
+                  }}
                 >
                   {lane.items.length}
                 </span>
               </div>
               <span
+                className="text-[12.5px] font-semibold leading-tight"
+                style={{
+                  color: appleVibe.text.primary,
+                  fontFamily: appleVibe.font.display,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                {lane.label}
+              </span>
+              <span
                 className="text-[10px] font-medium tracking-[0.01em]"
-                style={{ color: appleVibe.text.tertiary }}
+                style={{ color }}
               >
                 {role.roleLabel} · {role.direction}
               </span>
             </div>
 
             {verb && (
-              // Two stacked rows mirror the station (title row / descriptor
-              // row) so the connector line sits on the title baseline and
-              // the flow verb lands level with the role descriptors.
+              // Connector height matches the icon (36px); items-center puts
+              // the line at the icon's vertical midpoint so it reads as one
+              // continuous pipeline icon→icon, with the title/descriptor
+              // hanging below. Verb floats just above the line.
               <div
-                className="flex flex-1 flex-col gap-1"
-                style={{ minWidth: 44 }}
+                className="relative flex flex-1 items-center"
+                style={{ height: 36, minWidth: 44 }}
               >
-                <div className="flex h-5 items-center">
+                <span
+                  className="absolute whitespace-nowrap text-[8.5px] font-medium lowercase tracking-wide"
+                  style={{
+                    color: appleVibe.text.faint,
+                    left: "50%",
+                    top: "50%",
+                    transform: "translate(-50%, -150%)",
+                  }}
+                >
+                  {verb}
+                </span>
+                <div className="flex w-full items-center">
                   <div
                     className="h-px flex-1"
                     style={{
@@ -1719,12 +1756,6 @@ export function RoomInstrumentLegend({ lanes }: { lanes: RoomLane[] }) {
                     strokeWidth={2.4}
                   />
                 </div>
-                <span
-                  className="whitespace-nowrap text-center text-[10px] font-medium lowercase tracking-wide"
-                  style={{ color: appleVibe.text.tertiary }}
-                >
-                  {verb}
-                </span>
               </div>
             )}
           </div>
@@ -1915,87 +1946,5 @@ function EmptyHint() {
     >
       Nothing here yet
     </div>
-  );
-}
-
-// ── Phase 7a — View Toggle ────────────────────────────────────────
-//
-// Segmented pill that switches between Categories (chain-centric
-// experiment frame view) and Variables (legacy 3-lane view).
-// Right-aligned so it doesn't shout — the room's primary surface is
-// still whichever view is selected, and the toggle is a quiet
-// affordance for switching when needed.
-
-function ViewToggleInline({
-  value,
-  onChange,
-}: {
-  value: "categories" | "variables" | "map" | "subsystems";
-  onChange: (next: "categories" | "variables" | "map" | "subsystems") => void;
-}) {
-  // Ordered as an altitude ladder, left → right: the system overview
-  // first (where the room opens), then the per-chain decision frame,
-  // then the raw grid as a power-user escape hatch.
-  const options: Array<{
-    key: "categories" | "variables" | "map" | "subsystems";
-    label: string;
-    hint: string;
-  }> = [
-    {
-      key: "map",
-      label: "Map",
-      hint: "The system — every stage, item, and feedback loop in one causal-loop diagram",
-    },
-    {
-      key: "categories",
-      label: "Chains",
-      hint: "One Problem → Mechanism → Result experiment frame at a time — approve here",
-    },
-    {
-      key: "variables",
-      label: "Grid",
-      hint: "The raw 3-lane layout + correlations — for the data-rigorous power user",
-    },
-    {
-      key: "subsystems",
-      label: "Subsystems",
-      hint: "How the mechanisms interlock — composition + conflicts grouped into subsystems",
-    },
-  ];
-  return (
-      <div
-        className="inline-flex items-center"
-        style={{
-          background: appleVibe.surface.chip,
-          border: `1px solid ${appleVibe.stroke.hairline}`,
-          borderRadius: appleVibe.radius.pill,
-          padding: 2,
-          fontFamily: appleVibe.font.stack,
-        }}
-      >
-        {options.map((opt) => {
-          const active = value === opt.key;
-          return (
-            <button
-              key={opt.key}
-              type="button"
-              onClick={() => onChange(opt.key)}
-              title={opt.hint}
-              className="inline-flex items-center px-3 py-1 text-[11px] font-semibold transition-all duration-150 ease-out"
-              style={{
-                background: active ? appleVibe.surface.card : "transparent",
-                color: active
-                  ? appleVibe.text.primary
-                  : appleVibe.text.tertiary,
-                borderRadius: appleVibe.radius.pill,
-                boxShadow: active ? appleVibe.shadow.chip : "none",
-                letterSpacing: "0.02em",
-              }}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
-      </div>
   );
 }

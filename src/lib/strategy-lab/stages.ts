@@ -207,14 +207,25 @@ async function readKgCounts(
   };
 }
 
-/** Distinguishes a severed connection (a long sub-stage ran past the
- *  ~300s infra socket timeout while still working server-side) from a
- *  real HTTP error (quota 500, gate 409). Connection-death → poll the
- *  DB; real error → fail with the message so the UI can surface it. */
+/** Distinguishes a severed/abandoned sub-stage (which may still be working
+ *  — or have already finished — server-side) from a real HTTP error
+ *  (quota 500, gate 409) that should fail the run. "Connection-death" →
+ *  poll the DB for the artifact; real error → fail with the message so the
+ *  UI can surface it.
+ *
+ *  We also classify Vercel's 508 (INFINITE_LOOP_DETECTED) here. The
+ *  decoupled hop chain (run → advance ×4 → strategy-refresh, each firing
+ *  its own internal sub-requests) can exceed Vercel's nested-subrequest
+ *  DEPTH limit, returning 508 to the calling hop even though the strategy
+ *  artifact is already persisted (synthesize wrote it the prior hop) or the
+ *  callee finishes anyway. Treating 508 as a hard error wrongly failed the
+ *  run; treating it as connection-death makes the stage poll for the
+ *  artifact — which is exactly the graceful recovery the twin hop already
+ *  relied on, now extended to synthesize too. */
 function isConnectionDeath(err?: string): boolean {
   return (
     !!err &&
-    /fetch failed|timed out|ECONNRESET|socket hang up|network|aborted|EPIPE/i.test(
+    /fetch failed|timed out|ECONNRESET|socket hang up|network|aborted|EPIPE|\b508\b|loop detected|INFINITE_LOOP/i.test(
       err,
     )
   );
