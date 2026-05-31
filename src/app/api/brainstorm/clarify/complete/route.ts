@@ -15,12 +15,7 @@ import {
 } from "@/lib/objective-canvas/clarifying-state";
 import { deepPassToDb } from "@/lib/research/persist-bundle";
 import type { SurfaceBundle } from "@/lib/research/research-service";
-import { generateObjectiveAnnotations } from "@/lib/objective-canvas/generate-annotations";
-import {
-  appendVersion,
-  makeVersion,
-  parseVersions,
-} from "@/lib/objective-canvas/annotation-versions";
+import { generateInitialAnnotationsForSpace } from "@/lib/objective-canvas/generate-initial-annotations";
 import { logDecision } from "@/lib/objective-canvas/decision-log";
 import { decomposeIntoLayers } from "@/lib/objective-canvas/decompose-into-layers";
 import type { ObjectiveStack } from "@/lib/objective-canvas/layer-model";
@@ -134,7 +129,7 @@ export async function POST(req: NextRequest) {
   // is fine — annotations are about the parent objective, not its
   // children. If the user later regenerates annotations after
   // confirm, the regenerate path picks up the now-present subs.
-  void generateInitialAnnotationsForSpace(db, spaceId, auth.user.id);
+  void generateInitialAnnotationsForSpace(db, spaceId, auth.user.id, "clarify_complete");
 
   // Phase 11.A.7 — kick off layer decomposition (fire-and-forget).
   // The user advances to the picker page immediately; the
@@ -154,80 +149,6 @@ export async function POST(req: NextRequest) {
   );
 
   return NextResponse.json({ stage: "picking" });
-}
-
-/** Generate annotations for the core goal of a space + persist them
- *  + record an "initial" version in the history. Fire-and-forget
- *  from the clarify/complete handler — failures log and swallow so
- *  the user-facing stage transition is never blocked.
- *
- *  Idempotent: returns early if annotations already exist on the
- *  core goal (prevents a duplicate LLM call if the user re-fires
- *  clarify/complete, or if the existing annotations endpoint already
- *  ran). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function generateInitialAnnotationsForSpace(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: any,
-  spaceId: string,
-  userId: string,
-): Promise<void> {
-  try {
-    const { data: coreRows } = await db
-      .from("improvement_goals")
-      .select(
-        "id, title, description, user_id, annotations, annotations_versions",
-      )
-      .eq("space_id", spaceId)
-      .is("parent_goal_id", null)
-      .order("created_at", { ascending: false })
-      .limit(1);
-    const core =
-      Array.isArray(coreRows) && coreRows.length > 0 ? coreRows[0] : null;
-    if (!core || core.user_id !== userId) return;
-
-    // Idempotent: skip if annotations already present.
-    if (Array.isArray(core.annotations) && core.annotations.length > 0) {
-      return;
-    }
-
-    const objectiveText: string =
-      (typeof core.description === "string" && core.description.trim()) ||
-      (typeof core.title === "string" && core.title.trim()) ||
-      "";
-    if (objectiveText.length < 4) return;
-
-    // Sub-objectives don't exist yet — pass empty list. The
-    // annotation prompt tolerates this and produces objective-only
-    // annotations, which is exactly what we want pre-decompose.
-    const annotations = await generateObjectiveAnnotations({
-      objective: objectiveText,
-      subObjectives: [],
-    });
-
-    const history = parseVersions(core.annotations_versions);
-    const version = makeVersion(annotations, "initial");
-    const nextHistory = appendVersion(history, version);
-
-    const writeRes = await db
-      .from("improvement_goals")
-      .update({
-        annotations,
-        annotations_versions: nextHistory,
-      })
-      .eq("id", core.id);
-    if (writeRes.error) {
-      console.warn(
-        "[clarify/complete] initial annotation persist failed:",
-        writeRes.error.message,
-      );
-    }
-  } catch (err) {
-    console.warn(
-      "[clarify/complete] background annotation gen failed:",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
 }
 
 /** Phase 11.A.7 — Generate the ObjectiveStack for a space +

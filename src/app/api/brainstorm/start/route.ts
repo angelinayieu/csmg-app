@@ -21,6 +21,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { surfacePassToDb } from "@/lib/research/persist-bundle";
+import { generateInitialAnnotationsForSpace } from "@/lib/objective-canvas/generate-initial-annotations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -276,6 +277,15 @@ export async function POST(req: NextRequest) {
   // `void` makes the no-await explicit; we never block the user's
   // entry on research completion.
   void surfacePassToDb(db, spaceId, researchSeed);
+
+  // ── 5. Kick off concept-annotation analysis (fire-and-forget) ──────
+  // Extract the annotation lens for the working objective AT INTAKE, so
+  // the underlines + the "extracted N concepts" notebook trace appear as
+  // the user lands on the objective (the live analysis record) — and the
+  // concepts are available to ground the clarifying questions. Idempotent;
+  // clarify/complete re-fires as a backstop. No-op if the goal insert
+  // above soft-failed (nothing to annotate).
+  void generateInitialAnnotationsForSpace(db, spaceId, user.id, "intake");
 
   return NextResponse.json({ spaceId, goalId, pipelineMode });
 }
