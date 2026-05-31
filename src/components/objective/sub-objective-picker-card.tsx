@@ -41,6 +41,7 @@ import type {
   ClusterAnalysis,
   ProposalCluster,
 } from "@/lib/objective-canvas/cluster-proposals";
+import type { ObjectiveStack } from "@/lib/objective-canvas/layer-model";
 import { CanonicalConceptDrawer } from "@/components/canonical/canonical-concept-drawer";
 import { LayerPositionChip } from "@/components/objective/layer-position-chip";
 import { BrainstormButton } from "@/components/objective/brainstorm/brainstorm-button";
@@ -73,6 +74,10 @@ interface Props {
    *  array → panel hides. Drives transparency on what the system
    *  has learned. */
   userPrefs?: IntentPreference[];
+  /** The decomposed layer stack. Its layers become the picker's category
+   *  folders (tabs) in the immersive view, ordering the features by layer.
+   *  Null before decomposition lands → the view falls back to one group. */
+  objectiveStack?: ObjectiveStack | null;
   /** Called when confirm succeeds. Parent flips into "main" stage. */
   onConfirmed: () => void;
 }
@@ -104,6 +109,7 @@ export function SubObjectivePickerCard({
   preferredIntent = null,
   preferenceSource = "none",
   userPrefs = [],
+  objectiveStack = null,
   onConfirmed,
 }: Props) {
   const [block, setBlock] = useState<SubObjectiveBlock | null>(initial);
@@ -527,6 +533,7 @@ export function SubObjectivePickerCard({
         electedCount={electedIds.size}
         category={block.category}
         clusterAnalysis={block.cluster_analysis as ClusterAnalysis | undefined}
+        objectiveStack={objectiveStack}
         busy={busy}
         error={error}
         isElected={(id) => electedIds.has(id)}
@@ -930,6 +937,7 @@ function RecommendedPresentation({
   totalCount,
   electedCount,
   clusterAnalysis,
+  objectiveStack,
   busy,
   error,
   isElected,
@@ -943,6 +951,7 @@ function RecommendedPresentation({
   electedCount: number;
   category?: string | null;
   clusterAnalysis?: ClusterAnalysis;
+  objectiveStack?: ObjectiveStack | null;
   busy: boolean;
   error: string | null;
   isElected: (id: string) => boolean;
@@ -953,12 +962,53 @@ function RecommendedPresentation({
 }) {
   const moreCount = Math.max(0, totalCount - recommended.length);
 
-  // Group the recommended cuts by their cluster theme — the "categories"
-  // the user tabs between. Falls back to one "All" group before clustering
-  // has landed (it auto-fires in the parent).
-  const categories = useMemo(() => {
+  // The category folders the user tabs between. PRIMARY: the decomposed
+  // layer stack — each layer (L1…Ln) is a folder, ordered top-down, so the
+  // features lay out by layer (this replaces the standalone Objective Stack
+  // widget). FALLBACK: cluster themes, then a single "All" group before
+  // decomposition/clustering have landed.
+  type PickerGroup = {
+    label: string;
+    ordinal?: number;
+    proposals: SubObjectiveProposal[];
+  };
+  const categories = useMemo<PickerGroup[]>(() => {
+    // Primary — by layer.
+    const layers = [...(objectiveStack?.layers ?? [])].sort(
+      (a, b) => b.ordinal - a.ordinal,
+    );
+    if (layers.length > 0) {
+      const byOrd = new Map<number, SubObjectiveProposal[]>();
+      const unplaced: SubObjectiveProposal[] = [];
+      for (const p of recommended) {
+        const ord =
+          Array.isArray(p.layer_ordinals) && p.layer_ordinals.length > 0
+            ? p.layer_ordinals[0]
+            : null;
+        if (ord == null) {
+          unplaced.push(p);
+          continue;
+        }
+        const arr = byOrd.get(ord) ?? [];
+        arr.push(p);
+        byOrd.set(ord, arr);
+      }
+      const layerGroups: PickerGroup[] = layers
+        .map((l) => ({
+          label: l.name,
+          ordinal: l.ordinal,
+          proposals: byOrd.get(l.ordinal) ?? [],
+        }))
+        .filter((g) => g.proposals.length > 0);
+      if (unplaced.length > 0) {
+        layerGroups.push({ label: "Other", proposals: unplaced });
+      }
+      if (layerGroups.length > 0) return layerGroups;
+    }
+
+    // Fallback — by cluster theme, else one "All" group.
     const byId = new Map(recommended.map((p) => [p.id, p]));
-    const groups: { label: string; proposals: SubObjectiveProposal[] }[] = [];
+    const groups: PickerGroup[] = [];
     const seen = new Set<string>();
     for (const c of clusterAnalysis?.clusters ?? []) {
       const members = (c.proposal_ids ?? [])
@@ -978,7 +1028,7 @@ function RecommendedPresentation({
     return groups.length > 0
       ? groups
       : [{ label: "All", proposals: recommended }];
-  }, [recommended, clusterAnalysis]);
+  }, [recommended, clusterAnalysis, objectiveStack]);
 
   const [activeTab, setActiveTab] = useState(0);
   const activeIdx = Math.min(activeTab, categories.length - 1);
@@ -1043,7 +1093,17 @@ function RecommendedPresentation({
                         : appleVibe.text.secondary,
                     }}
                   >
-                    <span>{c.label}</span>
+                    <span>
+                      {c.ordinal != null && (
+                        <span
+                          className="mr-1 font-semibold"
+                          style={{ opacity: 0.6 }}
+                        >
+                          L{c.ordinal}
+                        </span>
+                      )}
+                      {c.label}
+                    </span>
                     <span
                       className="font-mono text-[10px]"
                       style={{ opacity: 0.7 }}
