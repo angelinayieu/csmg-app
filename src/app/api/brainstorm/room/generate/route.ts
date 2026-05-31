@@ -25,6 +25,7 @@ import {
   type OutcomeItem,
 } from "@/lib/objective-canvas/layered-generation";
 import { buildDeclaredEdgeRows } from "@/lib/objective-canvas/declared-edges";
+import { linkEntityToCanonicalConcept } from "@/lib/kg/canonical-concept-matcher";
 import { buildCrossRoomFindingsBlock } from "@/lib/objective-canvas/room-cross-room-block";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import {
@@ -599,6 +600,39 @@ export async function POST(req: NextRequest) {
     layer_ontology_id: string;
     entity_type: string;
   }>;
+
+  // ── Canonical concept linking (identity spine) ──────────────────────
+  // Stamp entities.canonical_concept_id for every freshly-inserted room
+  // entity, mirroring the decompose producer (W6.3 canonical-concept-
+  // matcher). Until now room generation was the one major producer that
+  // NEVER linked — leaving ~100% of objective-canvas room entities with
+  // canonical_concept_id = NULL, so the cross-room "same concept" KG seam
+  // (canonicalConceptId on map nodes) and the cross-space registry never
+  // saw OC concepts. The matcher is pure string-normalization (cheap,
+  // deterministic, no LLM); find-or-create is idempotent. Soft-fails per
+  // entity (a failure leaves canonical_concept_id NULL; entity persists).
+  try {
+    for (const e of inserted) {
+      if (!e?.name) continue;
+      const conceptId = await linkEntityToCanonicalConcept(db, {
+        sourceText: e.name,
+        displayName: e.name,
+        spaceId,
+        userId: auth.user.id,
+      });
+      if (conceptId) {
+        await db
+          .from("entities")
+          .update({ canonical_concept_id: conceptId })
+          .eq("id", e.id);
+      }
+    }
+  } catch (canonErr) {
+    console.warn(
+      "[room/generate] canonical concept linking failed (non-fatal):",
+      canonErr instanceof Error ? canonErr.message : canonErr,
+    );
+  }
 
   // Map back to layer slug for the correlations stage.
   const slugByLayerId = new Map(
