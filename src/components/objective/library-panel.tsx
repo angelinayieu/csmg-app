@@ -15,11 +15,14 @@
 // on_whiteboard) via the route — never object_links or the derived columns.
 
 import { useCallback, useEffect, useState } from "react";
-import { Bookmark, LayoutGrid, Loader2, X, Check } from "lucide-react";
+import { Bookmark, LayoutGrid, Loader2, Pause, X, Check } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { sendArtifactToBoard } from "@/components/objective/board-bus";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
-import type { LibraryObjectRow } from "@/lib/objective-canvas/library-objects";
+import type {
+  DeferredProposalLite,
+  LibraryObjectRow,
+} from "@/lib/objective-canvas/library-objects";
 
 /** library object_type → the board card kind the painter understands. */
 const TYPE_KIND: Record<
@@ -98,13 +101,21 @@ const TARGET_LABEL: Record<string, string> = {
 export function LibraryPanel({
   spaceId,
   initialObjects,
+  initialDeferred,
 }: {
   spaceId: string;
   /** Render-test escape hatch — when provided, skips the authed fetch. */
   initialObjects?: LibraryObjectRow[];
+  /** Render-test escape hatch for the Deferred category (paired with
+   *  initialObjects — when initialObjects is set the live fetch is
+   *  skipped, so seed deferred items here too). */
+  initialDeferred?: DeferredProposalLite[];
 }) {
   const [objects, setObjects] = useState<LibraryObjectRow[]>(
     initialObjects ?? [],
+  );
+  const [deferred, setDeferred] = useState<DeferredProposalLite[]>(
+    initialDeferred ?? [],
   );
   const [loading, setLoading] = useState(!initialObjects);
   const [error, setError] = useState<string | null>(null);
@@ -118,6 +129,7 @@ export function LibraryPanel({
       );
       const json = (await res.json().catch(() => ({}))) as {
         objects?: LibraryObjectRow[];
+        deferred?: DeferredProposalLite[];
         error?: string;
       };
       if (!res.ok) {
@@ -125,6 +137,7 @@ export function LibraryPanel({
         return;
       }
       setObjects(Array.isArray(json.objects) ? json.objects : []);
+      setDeferred(Array.isArray(json.deferred) ? json.deferred : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error.");
     } finally {
@@ -204,6 +217,7 @@ export function LibraryPanel({
         </h2>
         <span className="text-[11.5px]" style={{ color: appleVibe.text.tertiary }}>
           {objects.length} saved
+          {deferred.length > 0 ? ` · ${deferred.length} deferred` : ""}
         </span>
       </div>
 
@@ -213,15 +227,81 @@ export function LibraryPanel({
         </div>
       ) : error ? (
         <div className="text-[12.5px]" style={{ color: "#DC2626" }}>{error}</div>
-      ) : objects.length === 0 ? (
-        <div
-          className="rounded-2xl px-4 py-6 text-center text-[12.5px]"
-          style={{ background: "rgba(15,23,42,0.03)", color: appleVibe.text.tertiary }}
-        >
-          Nothing saved yet — hit the <span className="font-semibold">Save</span> icon on any card.
-        </div>
       ) : (
-        <ul className="flex flex-col gap-2">
+        <>
+          {/* Deferred category — sub-objective proposals the user parked
+              for later. Read from synthesis_data (source of truth), not
+              copied into library_objects. */}
+          {deferred.length > 0 && (
+            <section className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <Pause
+                  className="h-3 w-3"
+                  strokeWidth={2}
+                  style={{ color: "rgba(146,64,14,0.9)" }}
+                />
+                <span
+                  className="text-[11px] font-semibold uppercase tracking-[0.12em]"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  Deferred
+                </span>
+                <span
+                  className="text-[11px]"
+                  style={{ color: appleVibe.text.faint }}
+                >
+                  {deferred.length} parked for later
+                </span>
+              </div>
+              <ul className="flex flex-col gap-2">
+                {deferred.map((d) => (
+                  <li
+                    key={d.id}
+                    className="flex items-start gap-3 rounded-2xl px-4 py-3"
+                    style={{
+                      background: "#FFFFFF",
+                      border: "1px solid rgba(15,23,42,0.05)",
+                      boxShadow:
+                        "0 1px 0 rgba(255,255,255,0.9) inset, 0 0 0 1px rgba(217,119,6,0.18), 0 10px 26px -12px rgba(217,119,6,0.22)",
+                    }}
+                  >
+                    <Pause
+                      className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+                      strokeWidth={2}
+                      style={{ color: "rgba(146,64,14,0.9)" }}
+                    />
+                    <div className="flex flex-1 flex-col gap-1">
+                      <span
+                        className="text-[13px] font-semibold leading-snug"
+                        style={{ color: appleVibe.text.primary }}
+                      >
+                        {d.title}
+                      </span>
+                      {d.summary && (
+                        <span
+                          className="text-[11.5px] font-light leading-snug"
+                          style={{ color: appleVibe.text.tertiary }}
+                        >
+                          {d.summary}
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {objects.length === 0 ? (
+            deferred.length === 0 ? (
+              <div
+                className="rounded-2xl px-4 py-6 text-center text-[12.5px]"
+                style={{ background: "rgba(15,23,42,0.03)", color: appleVibe.text.tertiary }}
+              >
+                Nothing saved yet — hit the <span className="font-semibold">Save</span> icon on any card.
+              </div>
+            ) : null
+          ) : (
+            <ul className="flex flex-col gap-2">
           {objects.map((o) => {
             const isBrainstorm = o.object_type === "brainstorm_cluster";
             const accent = TYPE_ACCENT[o.object_type];
@@ -373,7 +453,9 @@ export function LibraryPanel({
               </li>
             );
           })}
-        </ul>
+            </ul>
+          )}
+        </>
       )}
     </div>
   );

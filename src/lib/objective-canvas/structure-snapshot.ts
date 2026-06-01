@@ -38,7 +38,11 @@ export type SnapshotReason =
   | "pre_delete"
   | "pre_respawn"
   | "auto"
-  | "library_save";
+  | "library_save"
+  // A "Deepen → v2" iteration capture — the situation-model timeline reads
+  // these to show how the structure grew per deepen pass. The DB `reason`
+  // column is free text, so this is purely a type-level addition.
+  | "deepen";
 
 /**
  * A DB row, kept structurally loose on purpose so this module never couples to

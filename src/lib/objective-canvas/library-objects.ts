@@ -77,6 +77,18 @@ export interface LibraryObjectRow {
   content_snapshot?: unknown;
 }
 
+/** A deferred sub-objective proposal, surfaced read-only in the
+ *  Library's "Deferred" category. These are NOT library_objects rows —
+ *  they live in synthesis_data (the disposition route is the writer).
+ *  The library read path returns them alongside `objects` so the panel
+ *  can show parked ideas without duplicating them into this table. */
+export interface DeferredProposalLite {
+  id: string;
+  title: string;
+  summary: string | null;
+  rationale: string | null;
+}
+
 const SELECT_COLS =
   "id, space_id, object_type, title, summary, source_entity_id, source_sub_objective_id, source_ref, blueprint_layer_ordinal, rank_score, selection_status, included_in_spec, in_strategy_brief, on_whiteboard, board_shape_id, content_snapshot";
 

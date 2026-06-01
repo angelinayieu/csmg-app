@@ -51,6 +51,13 @@ interface SubLite {
   ready: boolean;
 }
 
+interface BoardSubsResponse {
+  objectiveTitle?: string;
+  /** The crisp distilled goal — same one-liner the Overview goal card shows. */
+  distilledObjective?: string;
+  subs?: SubLite[];
+}
+
 function initialsOf(title: string): string {
   const words = title.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return "··";
@@ -76,15 +83,19 @@ export function ObjectiveCanvasShell({
   // live at the layout level and survive page.tsx rewrites).
   const [subs, setSubs] = useState<SubLite[]>([]);
   const [objectiveTitle, setObjectiveTitle] = useState("");
+  // The distilled goal — the crisp one-liner the Overview goal card shows.
+  // Drives the collapsed objective card's title so both surfaces read the same.
+  const [distilledObjective, setDistilledObjective] = useState("");
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/objective/${spaceId}/board-subs`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { objectiveTitle?: string; subs?: SubLite[] } | null) => {
+      .then((d: BoardSubsResponse | null) => {
         if (cancelled || !d) return;
         const nextSubs = Array.isArray(d.subs) ? d.subs : [];
         setSubs(nextSubs);
         setObjectiveTitle(d.objectiveTitle ?? "");
+        setDistilledObjective(d.distilledObjective ?? "");
         // Warm the RSC cache for every room so clicking a sidebar
         // circle (or the main-canvas Open Room link) feels instant.
         // The room page is force-dynamic + ~6 Supabase queries per
@@ -163,7 +174,11 @@ export function ObjectiveCanvasShell({
       const readyCount = subs.filter((s) => s.ready).length;
       return {
         roomId: "__obj",
-        title: objectiveTitle.trim() || "Objective",
+        // Lead with the distilled goal (the Overview goal card's headline) so
+        // the collapsed card and the goal card read identically; fall back to
+        // the raw objective text until the distill roll-up has run.
+        title:
+          distilledObjective.trim() || objectiveTitle.trim() || "Objective",
         subtitle: "The full objective canvas, collapsed.",
         color: OBJ_COLOR,
         chips: [

@@ -1,6 +1,7 @@
 "use client";
 
 import type { UnfurlAnchor } from "./unfurl/anchor-from-path";
+import type { DataFlowGraph } from "@/lib/objective-canvas/build-data-flow-graph";
 
 // ── Objective board dispatch bus (tldraw-free) ────────────────────
 //
@@ -140,4 +141,19 @@ export function drainPendingArtifacts(spaceId: string): ArtifactCardDetail[] {
   } catch {
     return [];
   }
+}
+
+// ── Data-flow map → board ──────────────────────────────────────────
+// "Send to whiteboard" for the data-unit flow graph. Unlike OPEN_UNFURL
+// (which re-fetches by anchor and can't carry a payload), this carries
+// the {nodes,edges} graph DIRECTLY on the event so WhiteboardBase
+// materializes the exact map the panel is showing — as real bound
+// artifact-card nodes + arrows. tldraw-free here (only a type import).
+
+export const SEND_DATAFLOW_EVENT = "objective-board:dataflow";
+
+/** Fire from the data-flow panel to drop the graph onto the board as real
+ *  connected shapes the user can brainstorm around. WhiteboardBase listens. */
+export function sendDataFlowToBoard(graph: DataFlowGraph) {
+  window.dispatchEvent(new CustomEvent(SEND_DATAFLOW_EVENT, { detail: graph }));
 }

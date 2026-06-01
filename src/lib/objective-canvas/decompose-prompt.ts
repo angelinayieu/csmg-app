@@ -140,24 +140,21 @@ You will receive an AVAILABLE LAYERS block in the user prompt listing the object
 For EACH proposal, populate two fields:
 
   layer_ordinals : integer[]
-    — Which layers this proposal touches. Most proposals touch 1-2 layers.
-    — Substrate (L1) and outcome (L_top) proposals are common as single-layer.
-    — Mechanism-altitude proposals often BRIDGE adjacent layers (L_n → L_(n+1)).
-    — Cross-stack proposals (≥3 layers) are rare — only when the proposal
-      genuinely spans the whole stack (e.g., a measurement-and-feedback framework).
+    — The layer(s) this proposal MOST DIRECTLY operates at. List the PRIMARY-effect layer FIRST.
+    — A SINGLE layer is the common, correct case — the one layer where the proposal's main effect lands.
+    — Use TWO ordinals ONLY when the proposal genuinely BRIDGES two layers (e.g. a feature that turns a mechanism into a social process). Prefer adjacent layers, and put the dominant one first.
+    — NEVER 3+ layers. If a proposal feels like it touches "everything" (a dashboard, an engine, a container), pick the 1-2 layers where its PRIMARY effect lands — not every layer it grazes.
     — Use the ordinals exactly as shown in the AVAILABLE LAYERS block. Never invent ordinals beyond what's listed.
 
   layer_position_label : string
-    — Standard format based on layer_ordinals:
+    — Standard format based on layer_ordinals (the server recomputes this, so just approximate):
       Single layer:        "L3 · Direct"
       Adjacent pair:       "L2→L3 · Bridge"
       Non-adjacent pair:   "L1+L4 · Span"
-      ≥3 layers:           "Cross-stack"
     — Use L<ordinal> where the layer's actual id matches. Don't include layer NAMES in the label — that's just the ordinal.
 
-COVERAGE BIAS:
-When proposing 4-5 sub-objectives, aim for layer DIVERSITY — don't generate every proposal at the same layer. The user should see proposals across the stack so they can choose where to invest.
-Concretely: if the stack has 5 layers and you're emitting 4 proposals, prefer touching at least 3 distinct layers across the set. Single-layer concentration is a smell unless one layer is overwhelmingly load-bearing.`;
+ACCURACY OVER COVERAGE:
+Place each proposal where it ACTUALLY belongs — at the layer its primary effect lands. NEVER redistribute proposals across layers for visual balance or "coverage." If several proposals genuinely operate at the same layer, tag them all there: concentration at one load-bearing layer is a REAL signal, not a smell. A wrong-layer placement is worse than an uneven spread.`;
 
 // Phase 11 — Human-Centered Design bias. Appended when the space has
 // hcd_mode=true. Pushes proposals to anchor on real users + observable

@@ -26,10 +26,10 @@ export async function GET(_req: Request, ctx: RouteContext) {
     return NextResponse.json({ error: "Missing spaceId" }, { status: 400 });
   }
 
-  // Ownership + objective text in one read.
+  // Ownership + objective text + cached analysis in one read.
   const { data: space } = await auth.supabase
     .from("spaces")
-    .select("id, user_id, description, input_text")
+    .select("id, user_id, description, input_text, synthesis_data")
     .eq("id", spaceId)
     .maybeSingle();
   if (!space || space.user_id !== auth.user.id) {
@@ -39,6 +39,15 @@ export async function GET(_req: Request, ctx: RouteContext) {
     (typeof space.description === "string" && space.description.trim()) ||
     (typeof space.input_text === "string" && space.input_text.trim()) ||
     "";
+
+  // The distilled goal — the same crisp one-liner the Overview "goal card"
+  // shows (MacroSummaryCard). It's cached on the macro_problems roll-up as a
+  // finding with body.kind === "distilled_objective"; until that roll-up has
+  // run we degrade to the first sentence of the raw objective (identical
+  // fallback to build-macro-summary-props, so the two surfaces stay in sync).
+  const distilledObjective =
+    extractDistilledObjective(space.synthesis_data) ||
+    firstSentence(objectiveTitle);
 
   // The objective = the root improvement_goal (no parent). Its children
   // are the sub-objective rooms.
@@ -75,5 +84,38 @@ export async function GET(_req: Request, ctx: RouteContext) {
     }));
   }
 
-  return NextResponse.json({ objectiveTitle, subs });
+  return NextResponse.json({ objectiveTitle, distilledObjective, subs });
+}
+
+/** Pull the cached distilled-objective sentence out of the space's
+ *  synthesis_data (cross_room_analysis.findings). Returns "" if absent. */
+function extractDistilledObjective(synthesisData: unknown): string {
+  const findings = (
+    synthesisData as
+      | { cross_room_analysis?: { findings?: unknown } }
+      | null
+      | undefined
+  )?.cross_room_analysis?.findings;
+  if (!Array.isArray(findings)) return "";
+  for (const f of findings) {
+    const finding = f as {
+      analysis_key?: unknown;
+      title?: unknown;
+      body?: { kind?: unknown; text?: unknown };
+    };
+    if (finding.analysis_key !== "macro_problems") continue;
+    if (finding.body?.kind === "distilled_objective") {
+      const text = finding.body?.text;
+      if (typeof text === "string" && text.trim()) return text.trim();
+      if (typeof finding.title === "string") return finding.title.trim();
+    }
+  }
+  return "";
+}
+
+/** First sentence of the objective (≤240 chars) — the pre-roll-up fallback. */
+function firstSentence(s: string): string {
+  const t = (s ?? "").trim();
+  const m = t.match(/^.*?[.!?](\s|$)/);
+  return (m ? m[0] : t).trim().slice(0, 240);
 }

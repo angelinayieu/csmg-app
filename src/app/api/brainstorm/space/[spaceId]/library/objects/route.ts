@@ -23,9 +23,43 @@ import {
   type SelectionStatus,
   type ObjectRelation,
   type ListFilter,
+  type DeferredProposalLite,
 } from "@/lib/objective-canvas/library-objects";
+import { readObjectiveCanvasState } from "@/lib/objective-canvas/sub-objective-state";
 
 export const runtime = "nodejs";
+
+/**
+ * Deferred sub-objective proposals live in the space's synthesis_data
+ * block (the single source of truth for proposal triage — written by
+ * the disposition route), NOT in `library_objects`. We read them here
+ * so the Library can show a "Deferred" category without duplicating
+ * proposal data into a parallel table (and without any defer/un-defer
+ * sync burden — the block is always authoritative). Soft-fail → [].
+ */
+async function listDeferredProposals(db: any, spaceId: string): Promise<DeferredProposalLite[]> {
+  try {
+    const { data: space } = await db
+      .from("spaces")
+      .select("synthesis_data")
+      .eq("id", spaceId)
+      .maybeSingle();
+    if (!space) return [];
+    const block = readObjectiveCanvasState(space.synthesis_data).sub_objectives;
+    if (!block) return [];
+    return block.proposals
+      .filter((p) => p.disposition === "deferred")
+      .map((p) => ({
+        id: p.id,
+        title: p.title,
+        summary: p.summary ?? null,
+        rationale: p.rationale ?? null,
+      }));
+  } catch (err) {
+    console.warn("[library/objects] listDeferredProposals failed (soft):", err);
+    return [];
+  }
+}
 
 interface RouteContext {
   params: Promise<{ spaceId: string }>;
@@ -64,8 +98,11 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
   const layer = sp.get("layer");
   if (layer && Number.isFinite(Number(layer))) filter.blueprintLayerOrdinal = Number(layer);
 
-  const objects = await listLibraryObjects(a.db, spaceId, filter);
-  return NextResponse.json({ objects });
+  const [objects, deferred] = await Promise.all([
+    listLibraryObjects(a.db, spaceId, filter),
+    listDeferredProposals(a.db, spaceId),
+  ]);
+  return NextResponse.json({ objects, deferred });
 }
 
 export async function POST(req: NextRequest, ctx: RouteContext) {

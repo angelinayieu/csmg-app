@@ -22,8 +22,9 @@ import {
   AlignLeft,
   LayoutGrid,
   RefreshCw,
-  Waypoints,
   Workflow,
+  Network,
+  type LucideIcon,
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -48,8 +49,8 @@ import {
   type DeckOperation,
 } from "@/components/objective/command-deck";
 import type { CrossRoomAnalysisState } from "@/lib/objective-canvas/analyses/types";
-import { CanvasAutopilotRunner } from "@/components/objective/canvas-autopilot-runner";
 import { RoomFillRunner } from "@/components/objective/room-fill-runner";
+import { PreRoomSpine } from "@/components/objective/pre-room-spine";
 import { ARCHETYPE_COLOR } from "@/components/objective/objective-stack";
 import {
   deriveClusterLayer,
@@ -58,13 +59,12 @@ import {
 // Phase 12.A — the Causal System Map (opt-in via the Cards/Map toggle;
 // N4: cards view kept indefinitely) + the at-a-glance insights digest
 // beneath it, + the live-refresh & view-persistence hooks.
-import { CausalMap } from "@/components/objective/causal-map/CausalMap";
-import { MapInsightsPanel } from "@/components/objective/causal-map/MapInsightsPanel";
+import { DataFlowGraphPanel } from "@/components/objective/data-flow-graph-panel";
 import { LayerShelvesView } from "@/components/objective/layer-shelves-view";
 import { MacroSummaryCard } from "@/components/objective/macro-summary-card";
 import { buildMacroSummaryProps } from "@/lib/objective-canvas/build-macro-summary-props";
-import { DataLineageView } from "@/components/objective/data-lineage-view";
-import { buildDataLineageProps } from "@/lib/objective-canvas/build-data-lineage-props";
+import { SituationView } from "@/components/objective/situation-view";
+import { buildSituationModel } from "@/lib/objective-canvas/build-situation-model";
 import { useDecisionLogSignal } from "@/components/objective/causal-map/hooks/useDecisionLogSignal";
 import { useLocalPref } from "@/components/objective/causal-map/hooks/useLocalPref";
 // Phase 11.0b — LabNotebookPanel is mounted at the layout level
@@ -107,6 +107,11 @@ export interface MainCanvasSub {
    *  approved cross-layer correlations in its room (Phase 7).
    *  Empty until at least one edge is approved. */
   approvedItems: ApprovedItem[];
+  /** DENSE feature + pain set — ALL feature/pain entities in the room
+   *  (not just approved-edge endpoints). Powers the situation-model
+   *  radial's outer ring so it reflects the real graph. Optional; the
+   *  builder falls back to approvedItems when absent. */
+  featureItems?: ApprovedItem[];
   generatedAt: string | null;
   /** Synthesized room-level negative outcome — populated by the
    *  room generator. Rendered under the sub title as "Counters: …"
@@ -222,6 +227,40 @@ interface Props {
   autoFillRooms?: boolean;
 }
 
+// The pre-room view switcher. "Situation" (the problem→solution KG) leads
+// — it's the centerpiece the rest of the canvas traces back to.
+const VIEW_TABS: Array<{
+  value: "situation" | "overview" | "cards" | "map" | "flow";
+  label: string;
+  Icon: LucideIcon;
+  title: string;
+}> = [
+  {
+    value: "situation",
+    label: "Situation",
+    Icon: Network,
+    title: "Problem → solution model — the whole-app knowledge graph",
+  },
+  {
+    value: "overview",
+    label: "Overview",
+    Icon: AlignLeft,
+    title: "Plain summary — the goal + the path",
+  },
+  {
+    value: "cards",
+    label: "Blueprint",
+    Icon: LayoutGrid,
+    title: "The detailed layers + cards",
+  },
+  {
+    value: "flow",
+    label: "Data flow",
+    Icon: Workflow,
+    title: "Data flow — data units flowing through feature operators, cross-room",
+  },
+];
+
 export function MainCanvasView({
   spaceId,
   objective,
@@ -249,12 +288,12 @@ export function MainCanvasView({
       ? "themes"
       : "grid",
   );
-  // Phase 12.A — Cards vs Map (per-space, sticky via localStorage).
-  // Default "cards" so no existing flow breaks (N4); Map is opt-in.
-  const [canvasView, setCanvasView] = useLocalPref<"overview" | "cards" | "map" | "flow">(
-    `causalmap:view:${spaceId}`,
-    "overview",
-  );
+  // Cards / Map / Situation (per-space, sticky via localStorage).
+  // Default "situation" — the problem→solution model is the centerpiece
+  // (new spaces); existing spaces keep their persisted choice.
+  const [canvasView, setCanvasView] = useLocalPref<
+    "situation" | "overview" | "cards" | "map" | "flow"
+  >(`causalmap:view:${spaceId}`, "situation");
   // Phase 11.0b — notebook state moved to the layout. router still
   // needed for IncrementalCutLab + CanvasAutopilotRunner refresh.
   const router = useRouter();
@@ -416,24 +455,9 @@ export function MainCanvasView({
         </div>
         <div className="flex items-center gap-1.5">
           <HCDToggle spaceId={spaceId} />
-          {/* Only render the canvas autopilot button when at least one
-              sub-objective room has been generated. Empty-canvas runs
-              would return zero targets anyway; hiding the button removes
-              a dead affordance. */}
-          {subs.some((s) => s.generatedAt) && (
-            <CanvasAutopilotRunner
-              spaceId={spaceId}
-              rooms={subs
-                .filter((s) => s.generatedAt)
-                .map((s) => ({ id: s.id, title: s.title }))}
-              onAllComplete={() => {
-                // Refresh the page so the new candidates from refine
-                // appear in the per-room SubCards + the cross-room
-                // signals strip picks up the freshly-rescanned findings.
-                router.refresh();
-              }}
-            />
-          )}
+          {/* Canvas autopilot moved into <PreRoomSpine/> below the core
+              objective — it's now the "Deepen → v2" action in the v1/v2
+              spine, not a stray top-right affordance. */}
           {/* Post-approval room fill — auto-generates the internal
               content (room/generate) of every not-yet-started room right
               after the user confirms their sub-objectives. Renders null
@@ -465,6 +489,21 @@ export function MainCanvasView({
         crossSpaceConcepts={crossSpaceConcepts}
         showEyebrow={false}
       />
+
+      {/* v1 → v2 spine — the decision surface before entering a room.
+          Reflects the v1 skeleton state (rooms auto-filling) and the two
+          forward actions: "Generate tech spec" (use v1) + "Deepen → v2"
+          (the across-rooms autopilot optimization). */}
+      {subs.length > 0 && (
+        <PreRoomSpine
+          spaceId={spaceId}
+          generatedRooms={subs
+            .filter((s) => s.generatedAt)
+            .map((s) => ({ id: s.id, title: s.title }))}
+          totalRooms={subs.length}
+          onDeepenComplete={() => router.refresh()}
+        />
+      )}
 
       {/* Command Deck — the coordinated control surface. Sits flush
           beneath the hero (objective-led) and replaces the old
@@ -597,7 +636,7 @@ export function MainCanvasView({
               border: `1px solid ${appleVibe.stroke.soft}`,
             }}
           >
-            {(["overview", "cards", "map", "flow"] as const).map((v) => {
+            {VIEW_TABS.map(({ value: v, label, Icon, title }) => {
               const active = canvasView === v;
               return (
                 <button
@@ -614,33 +653,11 @@ export function MainCanvasView({
                       : appleVibe.text.tertiary,
                     boxShadow: active ? appleVibe.shadow.chip : "none",
                   }}
-                  title={
-                    v === "overview"
-                      ? "Plain summary — the goal + the path"
-                      : v === "cards"
-                        ? "The detailed layers + cards"
-                        : v === "map"
-                          ? "Causal system map"
-                          : "Data flow — how one base unit becomes the outcome"
-                  }
+                  title={title}
                   aria-pressed={active}
                 >
-                  {v === "overview" ? (
-                    <AlignLeft className="h-3.5 w-3.5" strokeWidth={2.2} />
-                  ) : v === "cards" ? (
-                    <LayoutGrid className="h-3.5 w-3.5" strokeWidth={2.2} />
-                  ) : v === "map" ? (
-                    <Waypoints className="h-3.5 w-3.5" strokeWidth={2.2} />
-                  ) : (
-                    <Workflow className="h-3.5 w-3.5" strokeWidth={2.2} />
-                  )}
-                  {v === "overview"
-                    ? "Overview"
-                    : v === "cards"
-                      ? "Blueprint"
-                      : v === "map"
-                        ? "Map"
-                        : "Data flow"}
+                  <Icon className="h-3.5 w-3.5" strokeWidth={2.2} />
+                  {label}
                 </button>
               );
             })}
@@ -651,7 +668,18 @@ export function MainCanvasView({
       {/* Phase 12.A — Map view replaces the cards-region entirely.
           Otherwise: sub-objective cards as the flat grid (default) or
           the theme-row gallery ("by theme"). */}
-      {canvasView === "overview" && stackPresent ? (
+      {canvasView === "situation" ? (
+        <div className="relative mx-auto mt-3 w-full max-w-5xl">
+          {subs.length > 0 ? (
+            <SituationView
+              model={buildSituationModel({ objective, subs })}
+              spaceId={spaceId}
+            />
+          ) : (
+            <EmptyState />
+          )}
+        </div>
+      ) : canvasView === "overview" && stackPresent ? (
         <div className="relative mx-auto mt-4 w-full max-w-3xl">
           <MacroSummaryCard
             {...buildMacroSummaryProps({
@@ -662,30 +690,9 @@ export function MainCanvasView({
             })}
           />
         </div>
-      ) : canvasView === "map" ? (
-        <div className="relative mx-auto mt-2 w-full">
-          <CausalMap
-            spaceId={spaceId}
-            subs={subs}
-            objectiveStack={objectiveStack}
-            crossRoomSignals={crossRoomSignals}
-          />
-          <MapInsightsPanel
-            spaceId={spaceId}
-            subs={subs}
-            objectiveStack={objectiveStack}
-            crossRoomSignals={crossRoomSignals}
-          />
-        </div>
       ) : canvasView === "flow" ? (
-        <div className="relative mx-auto mt-4 w-full max-w-3xl">
-          {objectiveStack && objectiveStack.layers.length > 0 ? (
-            <DataLineageView
-              {...buildDataLineageProps({ objectiveStack: objectiveStack!, subs })}
-            />
-          ) : (
-            <EmptyState />
-          )}
+        <div className="relative mx-auto mt-2 w-full">
+          <DataFlowGraphPanel spaceId={spaceId} />
         </div>
       ) : subs.length === 0 ? (
         <div className="relative mx-auto mt-2 grid w-full gap-5">

@@ -21,15 +21,8 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { useState, useEffect } from "react";
 import { ArrowUpRight, GripVertical } from "lucide-react";
 import { OPEN_ROOM_EVENT } from "./room-card-shape";
-import { CardHoverActions } from "../canvas-interactions/card-hover-actions";
-import {
-  dispatchCardAction,
-  CARD_SAVED_EVENT,
-  type CardSavedDetail,
-} from "../board-bus";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export type ArtifactCardShape = TLBaseShape<
@@ -101,29 +94,10 @@ export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
 }
 
 function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
-  const { kind, title, subtitle, color, roomId, entityId } = shape.props;
+  const { kind, title, subtitle, color, roomId } = shape.props;
   // Compact = an unfurl map node — drop the Open-room button + footer
   // (flagged via meta, no schema change). Send-to-board leaves it unset.
   const compact = !!(shape.meta as { compact?: boolean }).compact;
-
-  // Per-card hover action bar. The bar is a DOM child of the hover wrapper
-  // (even though positioned below the card), so mouseleave only fires when
-  // the pointer leaves BOTH — no flicker as the pointer crosses to it.
-  const [hovered, setHovered] = useState(false);
-
-  // Library save confirmation. The hover-menu "Save" fires a CardAction that
-  // WhiteboardBase persists; it echoes CARD_SAVED_EVENT back so this card's
-  // Save tile can flip to "Saved ✓". Match on entityId.
-  const [saved, setSaved] = useState(false);
-  useEffect(() => {
-    if (!entityId) return;
-    function onSaved(e: Event) {
-      const d = (e as CustomEvent<CardSavedDetail>).detail;
-      if (d?.entityId === entityId) setSaved(true);
-    }
-    window.addEventListener(CARD_SAVED_EVENT, onSaved);
-    return () => window.removeEventListener(CARD_SAVED_EVENT, onSaved);
-  }, [entityId]);
 
   function openRoom(e: React.MouseEvent) {
     e.stopPropagation();
@@ -143,11 +117,6 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
         pointerEvents: "all",
       }}
     >
-      <div
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        style={{ position: "relative", width: "100%", height: "100%" }}
-      >
       <div
         style={{
           position: "relative",
@@ -255,32 +224,6 @@ function ArtifactCardRenderer({ shape }: { shape: ArtifactCardShape }) {
           </div>
         )}
 
-      </div>
-
-        {/* Per-card hover action bar — pops up just below the card. Enabled on
-            compact unfurl map nodes too, so every card is interactive. */}
-        {(
-          <div
-            style={{
-              position: "absolute",
-              top: "calc(100% + 5px)",
-              left: "50%",
-              transform: `translateX(-50%) translateY(${hovered ? 0 : -4}px)`,
-              opacity: hovered ? 1 : 0,
-              pointerEvents: hovered ? "auto" : "none",
-              transition: "opacity 130ms ease-out, transform 130ms ease-out",
-              zIndex: 60,
-            }}
-          >
-            <CardHoverActions
-              accent={color}
-              saved={saved}
-              onAction={(action) =>
-                dispatchCardAction({ action, entityId, title, roomId, shapeId: shape.id })
-              }
-            />
-          </div>
-        )}
       </div>
     </HTMLContainer>
   );

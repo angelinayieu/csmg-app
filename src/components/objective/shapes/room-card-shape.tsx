@@ -27,10 +27,7 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { useState } from "react";
-import { Maximize2, GripVertical } from "lucide-react";
-import { CardHoverActions } from "../canvas-interactions/card-hover-actions";
-import { dispatchCardAction } from "../board-bus";
+import { Maximize2, GripVertical, ChevronDown } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export type RoomCardShape = TLBaseShape<
@@ -53,6 +50,31 @@ export type RoomCardShape = TLBaseShape<
  *  ObjectiveCanvasShell listens and re-opens the corresponding room
  *  window. Kept as a string literal in one place so both ends agree. */
 export const OPEN_ROOM_EVENT = "objective-board:open-room";
+
+/** Default (collapsed) card height — the compact label face. */
+const COLLAPSED_H = 184;
+
+/** Estimate the height needed to show the title + subtitle in FULL (no
+ *  line-clamp) so the "see the objective in full" toggle can grow the card to
+ *  fit. Deterministic (no DOM measurement) → no resize/layout loop. */
+function fullHeight(
+  title: string,
+  subtitle: string,
+  chipCount: number,
+  w: number,
+): number {
+  const textW = Math.max(120, w - 44); // padding 16×2 + marginLeft 6, with slack
+  const titleLines = Math.max(2, Math.ceil(title.length / (textW / 8.2)));
+  const titleH = titleLines * 20; // 16px × lineHeight 1.25
+  const subLines = subtitle
+    ? Math.min(4, Math.max(1, Math.ceil(subtitle.length / (textW / 6.2))))
+    : 0;
+  const subH = subLines ? 6 + subLines * 17 : 0;
+  const chipsH = chipCount > 0 ? 10 + 24 : 0;
+  // top pad 16 + header 20 + title margin 12 + … + bottom pad 14
+  const h = 16 + 20 + 12 + titleH + subH + chipsH + 14;
+  return Math.min(480, Math.max(COLLAPSED_H, Math.round(h)));
+}
 
 export class RoomCardShapeUtil extends BaseBoxShapeUtil<RoomCardShape> {
   static override type = "room-card" as const;
@@ -108,11 +130,27 @@ function RoomCardRenderer({
   // to-card / send-to-board contexts leave it unset → full chrome.
   const compact = !!(shape.meta as { compact?: boolean }).compact;
 
-  // Per-card hover action bar (Synergism parity) — reveals just below the
-  // card. A room is already persistent and has no Library object type, so it
-  // shows only the generative actions (no Save). The bar is a DOM child of the
-  // hover wrapper, so crossing the pointer onto it doesn't fire mouseleave.
-  const [hovered, setHovered] = useState(false);
+  // The objective card carries the distilled GOAL (the same headline the
+  // Overview goal card shows). Since that one-liner is longer than a room
+  // name, it gets a disclosure toggle: collapsed clamps it to 2 lines;
+  // expanded grows the card and shows the goal IN FULL.
+  const isObjective = roomId === "__obj";
+  const expanded = !!(shape.meta as { expanded?: boolean }).expanded;
+
+  function toggleExpand(e: React.MouseEvent) {
+    e.stopPropagation();
+    const next = !expanded;
+    editor.updateShape<RoomCardShape>({
+      id: shape.id,
+      type: "room-card",
+      props: {
+        h: next
+          ? fullHeight(title, subtitle, chips.length, shape.props.w)
+          : COLLAPSED_H,
+      },
+      meta: { ...shape.meta, expanded: next },
+    });
+  }
 
   function expand(e: React.MouseEvent) {
     e.stopPropagation();
@@ -132,11 +170,6 @@ function RoomCardRenderer({
         pointerEvents: "all",
       }}
     >
-      <div
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        style={{ position: "relative", width: "100%", height: "100%" }}
-      >
       <div
         style={{
           position: "relative",
@@ -181,31 +214,72 @@ function RoomCardRenderer({
           </div>
 
           {!compact && (
-            <button
-              type="button"
-              onPointerDown={stopEventPropagation}
-              onClick={expand}
-              title="Expand back into a window"
-              aria-label="Expand room"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "5px 9px",
-                borderRadius: 999,
-                border: "none",
-                cursor: "pointer",
-                background: color,
-                color: "white",
-                fontSize: 10.5,
-                fontWeight: 600,
-                letterSpacing: "0.01em",
-                boxShadow: `0 4px 12px -3px ${color}88`,
-              }}
-            >
-              <Maximize2 style={{ width: 11, height: 11 }} strokeWidth={2.4} />
-              Expand
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {/* See-the-objective-in-full disclosure (objective card only). */}
+              {isObjective && (
+                <button
+                  type="button"
+                  onPointerDown={stopEventPropagation}
+                  onClick={toggleExpand}
+                  title={
+                    expanded
+                      ? "Show less"
+                      : "See the full objective — the goal in full"
+                  }
+                  aria-label={
+                    expanded ? "Collapse objective" : "See the full objective"
+                  }
+                  aria-pressed={expanded}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 24,
+                    height: 24,
+                    borderRadius: 999,
+                    border: "1px solid rgba(15,23,42,0.08)",
+                    cursor: "pointer",
+                    background: "rgba(255,255,255,0.7)",
+                    color: appleVibe.text.tertiary,
+                  }}
+                >
+                  <ChevronDown
+                    style={{
+                      width: 13,
+                      height: 13,
+                      transform: expanded ? "rotate(180deg)" : "none",
+                      transition: "transform 160ms ease",
+                    }}
+                    strokeWidth={2.4}
+                  />
+                </button>
+              )}
+              <button
+                type="button"
+                onPointerDown={stopEventPropagation}
+                onClick={expand}
+                title="Expand back into a window"
+                aria-label="Expand room"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "5px 9px",
+                  borderRadius: 999,
+                  border: "none",
+                  cursor: "pointer",
+                  background: color,
+                  color: "white",
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  letterSpacing: "0.01em",
+                  boxShadow: `0 4px 12px -3px ${color}88`,
+                }}
+              >
+                <Maximize2 style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+                Expand
+              </button>
+            </div>
           )}
         </div>
 
@@ -219,7 +293,7 @@ function RoomCardRenderer({
             lineHeight: 1.25,
             color: appleVibe.text.primary,
             display: "-webkit-box",
-            WebkitLineClamp: 2,
+            WebkitLineClamp: expanded ? 12 : 2,
             WebkitBoxOrient: "vertical",
             overflow: "hidden",
           }}
@@ -238,7 +312,7 @@ function RoomCardRenderer({
               lineHeight: 1.4,
               color: appleVibe.text.secondary,
               display: "-webkit-box",
-              WebkitLineClamp: 2,
+              WebkitLineClamp: expanded ? 4 : 2,
               WebkitBoxOrient: "vertical",
               overflow: "hidden",
             }}
@@ -283,33 +357,6 @@ function RoomCardRenderer({
           </div>
         )}
 
-      </div>
-
-        {/* Hover action bar — reveals just below the card on hover. Enabled on
-            compact unfurl map nodes too, so every card the user sees is
-            interactive. Generative actions; fires CardActions on the bus. */}
-        {(
-          <div
-            style={{
-              position: "absolute",
-              top: "calc(100% + 5px)",
-              left: "50%",
-              transform: `translateX(-50%) translateY(${hovered ? 0 : -4}px)`,
-              opacity: hovered ? 1 : 0,
-              pointerEvents: hovered ? "auto" : "none",
-              transition: "opacity 130ms ease-out, transform 130ms ease-out",
-              zIndex: 60,
-            }}
-          >
-            <CardHoverActions
-              accent={color}
-              actions={["decompose", "variations", "questions", "make_plan"]}
-              onAction={(action) =>
-                dispatchCardAction({ action, entityId: roomId, title, roomId, shapeId: shape.id })
-              }
-            />
-          </div>
-        )}
       </div>
     </HTMLContainer>
   );

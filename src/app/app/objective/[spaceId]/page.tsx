@@ -484,6 +484,21 @@ export default async function ObjectiveCanvasPage({
           generatedAt: r.room_layers_generated_at,
           topNegativeOutcome: r.top_negative_outcome,
           approvedItems,
+          // Dense feature/pain set for the situation-model radial — ALL
+          // feature + pain entities in the room (solutions first, then the
+          // problems they address), not just approved-edge endpoints.
+          featureItems: [
+            ...featureEntities.map((e) => ({
+              id: e.id,
+              name: e.name,
+              layer: "features" as const,
+            })),
+            ...painEntities.map((e) => ({
+              id: e.id,
+              name: e.name,
+              layer: "pain" as const,
+            })),
+          ],
           laneBreakdown: {
             friction: frictionBreakdown.rows,
             mechanism: mechanismBreakdown.rows,

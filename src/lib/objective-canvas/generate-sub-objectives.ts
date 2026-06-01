@@ -16,7 +16,7 @@ import {
 } from "./sub-objective-state";
 import type { ObjectiveAnnotation } from "./generate-annotations";
 import type { RelevantCanonicalConcept } from "./canonical-concept-lookup";
-import type { ObjectiveStack } from "./layer-model";
+import { computeLayerPositionLabel, type ObjectiveStack } from "./layer-model";
 
 interface LlmShape {
   category?: unknown;
@@ -162,10 +162,59 @@ export async function generateSubObjectiveProposals(
   }));
   const proposals = normalizeProposals(idAssigned);
 
+  // Phase 11.A.4 (accuracy pass) — STACK-AWARE layer validation.
+  // normalizeProposals only clamps ordinals to 1..6, trusts the LLM's
+  // free-text label, and sorts ordinals ascending (losing which layer
+  // is PRIMARY). Mirror the rigor of tagCardsToLayers: keep only the
+  // stack's REAL ordinals (drop hallucinated layers), preserve the
+  // LLM's emitted ORDER so layer_ordinals[0] is the primary-effect
+  // layer the picker groups by, cap at 2, and RECOMPUTE the label so
+  // it can never disagree with the ordinals. No-op without a stack.
+  let finalProposals = proposals;
+  if (hasLayerStack) {
+    const validOrdinals = new Set(
+      opts.objectiveStack!.layers.map((l) => l.ordinal),
+    );
+    const rawOrdinalsById = new Map<string, unknown>(
+      idAssigned.map((p) => [p.id, p.layer_ordinals] as [string, unknown]),
+    );
+    finalProposals = proposals.map((p) => {
+      const source = rawOrdinalsById.get(p.id);
+      const candidates: unknown[] = Array.isArray(source)
+        ? source
+        : (p.layer_ordinals ?? []);
+      const seen = new Set<number>();
+      const kept: number[] = [];
+      for (const v of candidates) {
+        if (typeof v !== "number" || !Number.isFinite(v)) continue;
+        const o = Math.round(v);
+        if (validOrdinals.has(o) && !seen.has(o)) {
+          seen.add(o);
+          kept.push(o); // preserve LLM order — primary first
+          if (kept.length === 2) break;
+        }
+      }
+      if (kept.length === 0) {
+        // Every emitted ordinal was hallucinated / out-of-stack — drop
+        // the tag rather than mis-place it. Surfaces honestly as
+        // untagged until a re-tag pass runs.
+        const cleaned: SubObjectiveProposal = { ...p };
+        delete cleaned.layer_ordinals;
+        delete cleaned.layer_position_label;
+        return cleaned;
+      }
+      return {
+        ...p,
+        layer_ordinals: kept,
+        layer_position_label: computeLayerPositionLabel(kept),
+      };
+    });
+  }
+
   // Category: trim, drop trailing punctuation, cap at ~24 chars.
   let category =
     typeof raw?.category === "string" ? raw.category.trim() : "";
   category = category.replace(/[.!?,]+$/g, "").slice(0, 24).trim();
 
-  return { proposals, category, temperature, intent };
+  return { proposals: finalProposals, category, temperature, intent };
 }

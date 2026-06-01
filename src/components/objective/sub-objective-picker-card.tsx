@@ -530,6 +530,7 @@ export function SubObjectivePickerCard({
     return (
       <RecommendedPresentation
         recommended={recommended}
+        allProposals={allProposals}
         totalCount={allProposals.length}
         electedCount={electedIds.size}
         category={block.category}
@@ -933,8 +934,9 @@ export function SubObjectivePickerCard({
 // parent's confirm as an explicit id set, so it never depends on the
 // server-side disposition fallback.
 
-function RecommendedPresentation({
+export function RecommendedPresentation({
   recommended,
+  allProposals,
   totalCount,
   electedCount,
   clusterAnalysis,
@@ -948,6 +950,7 @@ function RecommendedPresentation({
   onRegenerate,
 }: {
   recommended: SubObjectiveProposal[];
+  allProposals: SubObjectiveProposal[];
   totalCount: number;
   electedCount: number;
   category?: string | null;
@@ -971,17 +974,26 @@ function RecommendedPresentation({
   type PickerGroup = {
     label: string;
     ordinal?: number;
-    proposals: SubObjectiveProposal[];
+    recommended: SubObjectiveProposal[];
+    variations: SubObjectiveProposal[];
   };
   const categories = useMemo<PickerGroup[]>(() => {
-    // Primary — by layer.
+    // Within a layer: the recommended picks are the complementary set
+    // (shown); the rest are its variations (alternatives — revealed via
+    // "See N variations in this layer").
+    const split = (members: SubObjectiveProposal[]) => ({
+      recommended: members.filter((p) => p.recommended),
+      variations: members.filter((p) => !p.recommended),
+    });
+    // Primary — by layer. Group ALL proposals so each layer carries both
+    // its picks and its alternatives.
     const layers = [...(objectiveStack?.layers ?? [])].sort(
       (a, b) => b.ordinal - a.ordinal,
     );
     if (layers.length > 0) {
       const byOrd = new Map<number, SubObjectiveProposal[]>();
       const unplaced: SubObjectiveProposal[] = [];
-      for (const p of recommended) {
+      for (const p of allProposals) {
         const ord =
           Array.isArray(p.layer_ordinals) && p.layer_ordinals.length > 0
             ? p.layer_ordinals[0]
@@ -998,17 +1010,17 @@ function RecommendedPresentation({
         .map((l) => ({
           label: l.name,
           ordinal: l.ordinal,
-          proposals: byOrd.get(l.ordinal) ?? [],
+          ...split(byOrd.get(l.ordinal) ?? []),
         }))
-        .filter((g) => g.proposals.length > 0);
+        .filter((g) => g.recommended.length + g.variations.length > 0);
       if (unplaced.length > 0) {
-        layerGroups.push({ label: "Other", proposals: unplaced });
+        layerGroups.push({ label: "More", ...split(unplaced) });
       }
       if (layerGroups.length > 0) return layerGroups;
     }
 
     // Fallback — by cluster theme, else one "All" group.
-    const byId = new Map(recommended.map((p) => [p.id, p]));
+    const byId = new Map(allProposals.map((p) => [p.id, p]));
     const groups: PickerGroup[] = [];
     const seen = new Set<string>();
     for (const c of clusterAnalysis?.clusters ?? []) {
@@ -1017,21 +1029,22 @@ function RecommendedPresentation({
         .filter((p): p is SubObjectiveProposal => Boolean(p));
       if (members.length === 0) continue;
       members.forEach((m) => seen.add(m.id));
-      groups.push({ label: c.label, proposals: members });
+      groups.push({ label: c.label, ...split(members) });
     }
-    const rest = recommended.filter((p) => !seen.has(p.id));
+    const rest = allProposals.filter((p) => !seen.has(p.id));
     if (rest.length > 0) {
       groups.push({
         label: groups.length === 0 ? "All" : "More",
-        proposals: rest,
+        ...split(rest),
       });
     }
     return groups.length > 0
       ? groups
-      : [{ label: "All", proposals: recommended }];
-  }, [recommended, clusterAnalysis, objectiveStack]);
+      : [{ label: "All", ...split(allProposals) }];
+  }, [allProposals, clusterAnalysis, objectiveStack]);
 
   const [activeTab, setActiveTab] = useState(0);
+  const [expandedLayers, setExpandedLayers] = useState<Set<number>>(new Set());
   const activeIdx = Math.min(activeTab, categories.length - 1);
   const active = categories[activeIdx];
 
@@ -1078,7 +1091,8 @@ function RecommendedPresentation({
             <div className="flex flex-wrap items-center gap-1.5">
               {categories.map((c, i) => {
                 const isActive = i === activeIdx;
-                const sel = c.proposals.filter((p) => isElected(p.id)).length;
+                const all = [...c.recommended, ...c.variations];
+                const sel = all.filter((p) => isElected(p.id)).length;
                 return (
                   <button
                     key={`${c.label}-${i}`}
@@ -1109,7 +1123,7 @@ function RecommendedPresentation({
                       className="font-mono text-[10px]"
                       style={{ opacity: 0.7 }}
                     >
-                      {sel}/{c.proposals.length}
+                      {sel}/{all.length}
                     </span>
                   </button>
                 );
@@ -1118,10 +1132,12 @@ function RecommendedPresentation({
           )}
         </div>
 
-        {/* Cards for the active category — threaded by a black node line. */}
+        {/* Cards for the active category — threaded by a black node line.
+            Recommended = the complementary set; "See N variations" reveals
+            the layer's alternatives inline (pick one). */}
         <div className="px-5 py-5">
           <div className="flex flex-col">
-            {active.proposals.map((p, i) => (
+            {active.recommended.map((p, i) => (
               <div key={p.id}>
                 {i > 0 && <CardConnector />}
                 <HeroProposalCard
@@ -1134,6 +1150,53 @@ function RecommendedPresentation({
               </div>
             ))}
           </div>
+
+          {active.variations.length > 0 && (
+            <div className="mt-4">
+              <button
+                type="button"
+                onClick={() =>
+                  setExpandedLayers((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(activeIdx)) next.delete(activeIdx);
+                    else next.add(activeIdx);
+                    return next;
+                  })
+                }
+                className="inline-flex items-center gap-1 text-[12px] font-medium underline-offset-4 hover:underline"
+                style={{ color: appleVibe.text.secondary }}
+              >
+                {expandedLayers.has(activeIdx) ? "Hide" : "See"}{" "}
+                {active.variations.length} variation
+                {active.variations.length === 1 ? "" : "s"} in this layer
+              </button>
+
+              {expandedLayers.has(activeIdx) && (
+                <div className="mt-3">
+                  <div
+                    className="mb-2 text-[10.5px] font-semibold uppercase tracking-[0.12em]"
+                    style={{ color: appleVibe.text.tertiary }}
+                  >
+                    Variations · alternatives (pick one)
+                  </div>
+                  <div className="flex flex-col" style={{ opacity: 0.94 }}>
+                    {active.variations.map((p, i) => (
+                      <div key={p.id}>
+                        {i > 0 && <CardConnector />}
+                        <HeroProposalCard
+                          proposal={p}
+                          index={i}
+                          selected={isElected(p.id)}
+                          onToggle={() => onToggle(p.id)}
+                          disabled={busy}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

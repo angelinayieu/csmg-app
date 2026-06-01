@@ -27,6 +27,13 @@ import {
 import { buildDeclaredEdgeRows } from "@/lib/objective-canvas/declared-edges";
 import { linkEntityToCanonicalConcept } from "@/lib/kg/canonical-concept-matcher";
 import { buildCrossRoomFindingsBlock } from "@/lib/objective-canvas/room-cross-room-block";
+import { buildSiblingDataBlock } from "@/lib/objective-canvas/build-sibling-data-block";
+import {
+  loadRegistry,
+  saveRegistry,
+  registerUnit,
+  validateTokens,
+} from "@/lib/objective-canvas/data-unit-registry";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import {
   generateRoomCategories,
@@ -386,6 +393,17 @@ export async function POST(req: NextRequest) {
     crossSpace: false,
   });
 
+  // ── Cross-room data awareness — sibling sub-objectives + the data
+  // tokens already flowing across sibling rooms. Makes this room
+  // coordinate with siblings and REUSE shared data tokens instead of
+  // generating as an isolated silo (the prerequisite for a cross-room
+  // data-flow graph). Empty on the first room; soft-fails to "".
+  const siblingDataBlock = await buildSiblingDataBlock(db, {
+    spaceId,
+    currentSubObjectiveId: subObjectiveId,
+    parentGoalId: sub.parent_goal_id ?? null,
+  });
+
   const ctx: RoomContext = {
     spaceId,
     userId: auth.user.id,
@@ -403,6 +421,7 @@ export async function POST(req: NextRequest) {
     constraintsBlock,
     crossRoomFindingsBlock,
     learningsBlock,
+    siblingDataBlock,
   };
 
   // ── Generate (3 LLM calls back to back) ─────────────────────────
@@ -567,6 +586,14 @@ export async function POST(req: NextRequest) {
         sub_category: f.sub_category ?? null,
         citations: resolveCitations(f.citations),
         derived_from_annotations: f.derived_from_annotations ?? [],
+        // Foundation B — feature-level data I/O tokens. Stored in
+        // causal_chain (the generation-time home) so the cross-room
+        // data-flow graph + buildSiblingDataBlock read them; the deep
+        // mechanism-spec later refines these into runtime_flow steps.
+        data_io: {
+          consumes: f.consumes ?? [],
+          produces: f.produces ?? [],
+        },
       }),
     ),
     // Objective anchor: a single entity so cross-layer edges to
@@ -631,6 +658,34 @@ export async function POST(req: NextRequest) {
     console.warn(
       "[room/generate] canonical concept linking failed (non-fatal):",
       canonErr instanceof Error ? canonErr.message : canonErr,
+    );
+  }
+
+  // ── Foundation B — seed the space data-unit registry ────────────────
+  // Features now declare data I/O (causal_chain.data_io). Register those
+  // tokens into the space-level registry so SIBLING rooms converge on the
+  // same canonical slugs (buildSiblingDataBlock surfaces them next round)
+  // and the cross-room data-flow graph joins on shared units. Mirrors the
+  // mechanism-spec route's pattern: validateTokens → register the novel.
+  // Soft-fails — registry seeding is enrichment, never blocks generation.
+  try {
+    const ioTokens = new Set<string>();
+    for (const f of features) {
+      for (const t of f.consumes ?? []) ioTokens.add(t);
+      for (const t of f.produces ?? []) ioTokens.add(t);
+    }
+    if (ioTokens.size > 0) {
+      let registry = await loadRegistry(db, spaceId);
+      const { novel } = validateTokens(registry, [...ioTokens]);
+      for (const slug of novel) {
+        registry = registerUnit(registry, { name: slug, origin: "llm" });
+      }
+      if (novel.length > 0) await saveRegistry(db, spaceId, registry);
+    }
+  } catch (regErr) {
+    console.warn(
+      "[room/generate] data-unit registry seeding failed (non-fatal):",
+      regErr instanceof Error ? regErr.message : regErr,
     );
   }
 

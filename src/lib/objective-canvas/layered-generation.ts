@@ -111,6 +111,13 @@ export interface RoomContext {
    *  proposing the same losing mechanism. Empty / undefined when
    *  no concluded or abandoned experiments exist yet. */
   learningsBlock?: string;
+  /** Cross-room data awareness (built by buildSiblingDataBlock). Surfaces
+   *  sibling sub-objectives (the other capabilities in this app) + the
+   *  data tokens already produced/consumed across sibling rooms, so this
+   *  room COORDINATES with siblings and REUSES shared data tokens instead
+   *  of generating as an isolated silo — the prerequisite for a real
+   *  cross-room data-flow graph. Empty / undefined for the first room. */
+  siblingDataBlock?: string;
 }
 
 // ── Output shapes ──────────────────────────────────────────────────
@@ -164,6 +171,15 @@ export interface FeatureItem {
   citations?: number[];
   /** Annotation Lens — resolved provenance entries. */
   derived_from_annotations?: AnnotationProvenance[];
+  /** Foundation B — feature-level data I/O. The data units this feature
+   *  CONSUMES (reads as input) and PRODUCES (emits as output), as
+   *  snake_case tokens, declared at generation against the shared
+   *  data-unit registry + sibling tokens. Makes a feature the OPERATOR on
+   *  the cross-room data-flow graph (token = data node, feature =
+   *  transform). Coarser than mechanism_spec.runtime_flow (step-level);
+   *  the deep spec refines them later. Optional / legacy-safe. */
+  consumes?: string[];
+  produces?: string[];
 }
 
 export interface OutcomeItem {
@@ -832,6 +848,12 @@ These declarations become the ACTUAL causal edges of the room. The chain is buil
 - moves[] — 1-2 entries. Each: { outcome (VERBATIM from the DESIRED OUTCOMES list), indicator (VERBATIM from THAT outcome's indicators), direction ("increase" or "decrease" — the GOOD direction for that indicator) }. Name the SPECIFIC indicator this feature shifts, not the whole outcome.
 - A feature must have ≥1 addresses AND ≥1 moves. A feature that can't connect a real root_cause to a real indicator is too vague — drop it rather than declaring a hand-wavy binding.
 
+DATA I/O (Foundation — features are the OPERATORS of the data-flow graph):
+- consumes[] — 1-4 snake_case tokens for the data this feature READS as input (e.g. user_interest_vector, session_history).
+- produces[] — 1-4 snake_case tokens for the data this feature EMITS as output (e.g. ranked_feed, relevance_score).
+- A feature is a TRANSFORM: upstream data in → downstream data out. Use short noun tokens, not sentences.
+- REUSE tokens: if the SIBLING ROOMS block lists a token for data you read or write, use that EXACT token so the whole app shares ONE data substrate. Coin a new token only when nothing fits.
+
 ${ANTI_PLATITUDE}
 
 Return strict JSON.`;
@@ -870,6 +892,10 @@ Return strict JSON.`;
         required: ["outcome", "indicator", "direction"],
       },
     },
+    // Foundation B — feature-level data I/O tokens (the operators of the
+    // cross-room data-flow graph). snake_case data units in/out.
+    consumes: { type: "array", items: { type: "string" } },
+    produces: { type: "array", items: { type: "string" } },
   };
   const featureRequired: string[] = [
     "name",
@@ -877,6 +903,8 @@ Return strict JSON.`;
     "first_principles",
     "addresses",
     "moves",
+    "consumes",
+    "produces",
   ];
   if (featureCats.slugs.length > 0) {
     featureProps.sub_category = { type: "string", enum: featureCats.slugs };
@@ -912,7 +940,7 @@ Return strict JSON.`;
     featureRequired.push("derived_from_annotations");
   }
 
-  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${ctx.constraintsBlock ?? ""}${ctx.crossRoomFindingsBlock ?? ""}${ctx.learningsBlock ?? ""}
+  const user = `PARENT OBJECTIVE:\n"""\n${ctx.coreObjectiveText}\n"""\n\nSUB-OBJECTIVE:\n"""\n${ctx.subObjectiveTitle}\n"""${clarifyingBlock(ctx.clarifyingAnswers)}${ctx.constraintsBlock ?? ""}${ctx.crossRoomFindingsBlock ?? ""}${ctx.learningsBlock ?? ""}${ctx.siblingDataBlock ?? ""}
 
 PAIN POINTS (with negative_outcomes + root_causes — declare addresses[] against these):
 ${painPoints
@@ -938,7 +966,7 @@ ${outcomes
   )
   .join("\n")}${featureCats.instructions}${lensF.lensBlock}${lensF.provenanceRule}${ragF.ragBlock}${ragF.citationRule}
 
-Generate 3-6 features that bridge the pains to the outcomes. Each feature must plausibly counter ≥1 pain AND produce ≥1 outcome, and DECLARE those bindings in addresses[] (pain + root_cause) and moves[] (outcome + indicator + direction).${
+Generate 3-6 features that bridge the pains to the outcomes. Each feature must plausibly counter ≥1 pain AND produce ≥1 outcome, and DECLARE those bindings in addresses[] (pain + root_cause) and moves[] (outcome + indicator + direction). Each feature must ALSO declare consumes[] and produces[] — the snake_case data tokens it reads and emits (reuse tokens from the SIBLING ROOMS block when the data already flows there).${
     featureCats.slugs.length > 0
       ? " Each feature must include sub_category — the slug of the mechanism sub-category it belongs to."
       : ""
@@ -1824,6 +1852,30 @@ function cleanPains(raw: unknown, ctx: RoomContext): PainItem[] {
     .slice(0, 5);
 }
 
+/** Foundation B — normalize a raw produces/consumes array into clean
+ *  snake_case data tokens. Lowercases, collapses non-alphanumerics to
+ *  underscores, drops empties + dupes, caps at 6 tokens × 48 chars. The
+ *  space data-unit registry canonicalizes further on registration. */
+function cleanTokens(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of raw) {
+    if (typeof v !== "string") continue;
+    const tok = v
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 48);
+    if (tok.length === 0 || seen.has(tok)) continue;
+    seen.add(tok);
+    out.push(tok);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
 function cleanFeatures(raw: unknown, ctx: RoomContext): FeatureItem[] {
   if (!Array.isArray(raw)) return [];
   const lens = lensForResolution(ctx);
@@ -1881,6 +1933,8 @@ function cleanFeatures(raw: unknown, ctx: RoomContext): FeatureItem[] {
             )
             .slice(0, 4)
         : [];
+      const consumes = cleanTokens(r.consumes);
+      const produces = cleanTokens(r.produces);
       return {
         name: stripVerbPrefix(name).slice(0, 200),
         positive_outcome: pos.slice(0, 200),
@@ -1893,6 +1947,8 @@ function cleanFeatures(raw: unknown, ctx: RoomContext): FeatureItem[] {
           r.derived_from_annotations,
           lens,
         ),
+        consumes: consumes.length > 0 ? consumes : undefined,
+        produces: produces.length > 0 ? produces : undefined,
       };
     })
     .filter((p): p is FeatureItem => p !== null)
