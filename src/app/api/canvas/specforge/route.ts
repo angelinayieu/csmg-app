@@ -16,12 +16,68 @@ import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers
 import { engineSpec, VALID_ENGINES } from "@/lib/objective-canvas/specforge/engines";
 import type { SpecForgeEngineId } from "@/lib/objective-canvas/specforge/types";
 
-export const maxDuration = 60;
+export const maxDuration = 90;
 
 interface Body {
   engine?: unknown;
   idea?: unknown;
   context?: unknown;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function getProblemModelDeficits(result: unknown): string[] {
+  if (!result || typeof result !== "object") {
+    return ["return the full causal model object"];
+  }
+  const r = result as Record<string, unknown>;
+  const loops = asArray(r.feedback_loops);
+  const reinforcing = loops.filter(
+    (loop) =>
+      loop &&
+      typeof loop === "object" &&
+      (loop as Record<string, unknown>).kind === "reinforcing",
+  ).length;
+  const balancing = loops.filter(
+    (loop) =>
+      loop &&
+      typeof loop === "object" &&
+      (loop as Record<string, unknown>).kind === "balancing",
+  ).length;
+
+  const checks: [number, number, string][] = [
+    [asArray(r.variables).length, 12, "include at least 12 causal variables"],
+    [asArray(r.stakeholder_variants).length, 3, "include at least 3 stakeholder variants"],
+    [asArray(r.causal_links).length, 8, "include at least 8 directional causal links"],
+    [reinforcing, 3, "include at least 3 reinforcing feedback loops"],
+    [balancing, 1, "include at least 1 balancing feedback loop"],
+    [asArray(r.contradictions).length, 3, "include at least 3 contradictions"],
+    [
+      asArray((r.root_constraint_tournament as Record<string, unknown> | undefined)?.candidates)
+        .length,
+      5,
+      "include at least 5 root-constraint candidates",
+    ],
+    [asArray(r.leverage_points).length, 5, "include at least 5 leverage points"],
+    [asArray(r.solution_constraints).length, 5, "include at least 5 solution constraints"],
+  ];
+
+  const deficits = checks
+    .filter(([actual, required]) => actual < required)
+    .map(([actual, required, label]) => `${label} (${actual}/${required})`);
+
+  const quality = r.quality_gate as Record<string, unknown> | undefined;
+  if (quality?.passes === false) {
+    const issues = asArray(quality.issues)
+      .map((issue) => (typeof issue === "string" ? issue.trim() : ""))
+      .filter(Boolean)
+      .slice(0, 3);
+    deficits.push(...issues.map((issue) => `quality gate: ${issue}`));
+  }
+
+  return deficits;
 }
 
 export async function POST(request: Request) {
@@ -61,13 +117,31 @@ export async function POST(request: Request) {
     : `RAW IDEA:\n${idea}`;
 
   try {
-    const result = await llmJSON({
+    let result = await llmJSON({
       system: spec.system,
       user: userMsg,
-      maxTokens: 1800,
+      maxTokens: spec.maxTokens ?? 1800,
       temperature: spec.temperature,
       responseSchema: spec.schema,
     });
+
+    if (engine === "problem_tree") {
+      const deficits = getProblemModelDeficits(result);
+      if (deficits.length) {
+        result = await llmJSON({
+          system:
+            spec.system +
+            "\n\nYour previous JSON model was too shallow. Return the full JSON again, " +
+            "fixing only these deficits: " +
+            deficits.slice(0, 6).join("; ") +
+            ". Keep strings concise.",
+          user: userMsg,
+          maxTokens: spec.maxTokens ?? 5200,
+          temperature: spec.temperature,
+          responseSchema: spec.schema,
+        });
+      }
+    }
     return NextResponse.json({ engine, result });
   } catch (err) {
     const credit = detectCreditError(err);

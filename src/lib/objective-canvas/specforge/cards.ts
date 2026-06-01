@@ -31,6 +31,31 @@ function bullets(items: (string | undefined)[], max = 4): string {
 const clean = (s: unknown): string =>
   typeof s === "string" ? s.trim() : "";
 
+function count(items: unknown): number {
+  return Array.isArray(items) ? items.length : 0;
+}
+
+function firstClean(items: unknown, field?: string): string {
+  if (!Array.isArray(items)) return "";
+  for (const item of items) {
+    if (field && item && typeof item === "object") {
+      const value = clean((item as Record<string, unknown>)[field]);
+      if (value) return value;
+    }
+    const value = clean(item);
+    if (value) return value;
+  }
+  return "";
+}
+
+function stringifyModel(result: unknown): string {
+  try {
+    return JSON.stringify(result);
+  } catch {
+    return "";
+  }
+}
+
 /** result → the cards it unfurls. Soft: missing fields just shrink the card. */
 export function resultToCards(
   engine: SpecForgeEngineId,
@@ -80,40 +105,46 @@ export function resultToCards(
 
     case "problem_tree": {
       const r = result as ProblemTreeResult;
-      const cards: SpecForgeCard[] = [];
-      if (clean(r.surface_problem) || (r.cause_tree ?? []).length) {
-        cards.push({
-          stage: "problem",
-          title: clean(r.surface_problem) || "Problem cause tree",
-          subtitle: r.highest_leverage_cause
-            ? `Highest leverage — ${clean(r.highest_leverage_cause)}`
-            : undefined,
-          body: bullets(
-            (r.cause_tree ?? []).map((c) =>
-              [clean(c.layer), clean(c.failing)].filter(Boolean).join(": "),
-            ),
-            5,
-          ),
-          layout: "spine",
-        });
+      const root =
+        clean(r.root_constraint_tournament?.selected_root_constraint) ||
+        clean(r.root_constraint);
+      const need =
+        clean(r.first_principles_need?.selected) ||
+        clean(r.first_principles_need);
+      const phenomenon =
+        clean(r.phenomenon?.phenomenon_statement) ||
+        clean(r.surface_problem) ||
+        "Causal system model";
+      const topLeverage =
+        [...(r.leverage_points ?? [])]
+          .sort((a, b) => (Number(a.rank) || 999) - (Number(b.rank) || 999))
+          .map((l) => clean(l.name))
+          .find(Boolean) ||
+        clean(r.highest_leverage_cause);
+      const loops = r.feedback_loops ?? [];
+      const reinforcing = loops.filter((loop) => loop.kind === "reinforcing").length;
+      const balancing = loops.filter((loop) => loop.kind === "balancing").length;
+
+      if (root || need || phenomenon) {
+        return [
+          {
+            stage: "problem",
+            eyebrow: "Causal model",
+            title: root || phenomenon,
+            subtitle: need ? `Need — ${need}` : phenomenon,
+            body: bullets([
+              `${count(r.variables)} variables · ${count(r.causal_links)} links · ${reinforcing}R/${balancing}B loops`,
+              `${count(r.contradictions)} contradictions · ${count(r.root_constraint_tournament?.candidates)} root candidates`,
+              topLeverage && `Top leverage: ${topLeverage}`,
+              firstClean(r.solution_constraints) &&
+                `Constraint: ${firstClean(r.solution_constraints)}`,
+            ]),
+            layout: "spine",
+            modelJson: stringifyModel(result),
+          },
+        ];
       }
-      if (clean(r.root_constraint)) {
-        cards.push({
-          stage: "convergence",
-          eyebrow: "Root constraint",
-          title: clean(r.root_constraint),
-          layout: "spine",
-        });
-      }
-      if (clean(r.first_principles_need)) {
-        cards.push({
-          stage: "convergence",
-          eyebrow: "First-principles need",
-          title: clean(r.first_principles_need),
-          layout: "spine",
-        });
-      }
-      return cards;
+      return [];
     }
 
     case "desired_result": {
@@ -298,11 +329,35 @@ export function summarizeForContext(
     }
     case "problem_tree": {
       const r = result as ProblemTreeResult;
+      const root =
+        clean(r.root_constraint_tournament?.selected_root_constraint) ||
+        clean(r.root_constraint);
+      const need =
+        clean(r.first_principles_need?.selected) ||
+        clean(r.first_principles_need);
+      const topLeverage = [...(r.leverage_points ?? [])]
+        .sort((a, b) => (Number(a.rank) || 999) - (Number(b.rank) || 999))
+        .slice(0, 3)
+        .map((l) => clean(l.name))
+        .filter(Boolean)
+        .join("; ");
+      const keyLoops = (r.feedback_loops ?? [])
+        .slice(0, 4)
+        .map((loop) => `${loop.kind}: ${clean(loop.name)} — ${clean(loop.effect_on_problem)}`)
+        .filter(Boolean)
+        .join(" | ");
+      const constraints = (r.solution_constraints ?? [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 5)
+        .join("; ");
       return [
-        `Surface problem: ${clean(r.surface_problem)}`,
-        `Root constraint: ${clean(r.root_constraint)}`,
-        `First-principles need: ${clean(r.first_principles_need)}`,
-        `Highest-leverage cause: ${clean(r.highest_leverage_cause)}`,
+        `Phenomenon: ${clean(r.phenomenon?.phenomenon_statement) || clean(r.surface_problem)}`,
+        `Root constraint: ${root}`,
+        `First-principles need: ${need}`,
+        `Top leverage points: ${topLeverage || clean(r.highest_leverage_cause)}`,
+        `Key feedback loops: ${keyLoops}`,
+        `Solution constraints: ${constraints}`,
       ]
         .filter((l) => l.split(": ")[1])
         .join("\n");

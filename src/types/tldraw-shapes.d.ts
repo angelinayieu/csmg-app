@@ -989,7 +989,33 @@ declare module "@tldraw/tlschema" {
       title: string;
       subtitle: string;
       body: string;
+      modelJson: string;
       entityId: string;
+    };
+    // SpecForge → Tech Spec — the engineering-grade spec generated at the end
+    // of a forge run (Opus + UI agent skill). Holds the spec as JSON + the
+    // rendered markdown; "Open spec" fires objective-board:open-tech-spec to
+    // mount the full-screen TechSpecPanel.
+    "tech-spec-card": {
+      w: number;
+      h: number;
+      title: string;
+      specJson: string;
+      markdown: string;
+      featureCount: number;
+      phaseCount: number;
+    };
+    // Objective board — interactive Claude prototype: self-contained HTML/CSS
+    // (no JS, sanitized) rendered in a sandboxed iframe and iterated in place
+    // via the feedback box (objective-board:prototype-refine).
+    "prototype-card": {
+      w: number;
+      h: number;
+      title: string;
+      html: string;
+      status: "generating" | "ready" | "error";
+      version: number;
+      specJson: string;
     };
   }
 }

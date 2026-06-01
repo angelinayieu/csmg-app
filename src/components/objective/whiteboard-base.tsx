@@ -50,7 +50,31 @@ import {
   type SubsystemKgShape,
 } from "./shapes/subsystem-kg-shape";
 import { LayerBandShapeUtil } from "./shapes/layer-band-shape";
-import { SpecForgeCardShapeUtil } from "./shapes/specforge-card-shape";
+import {
+  SpecForgeCardShapeUtil,
+  OPEN_CAUSAL_MODEL_EVENT,
+  type OpenCausalModelDetail,
+} from "./shapes/specforge-card-shape";
+import {
+  TechSpecCardShapeUtil,
+  OPEN_TECH_SPEC_EVENT,
+  BUILD_PROTOTYPE_EVENT,
+  type OpenTechSpecDetail,
+} from "./shapes/tech-spec-card-shape";
+import {
+  PrototypeCardShapeUtil,
+  PROTOTYPE_REFINE_EVENT,
+  type PrototypeCardShape,
+  type PrototypeRefineDetail,
+} from "./shapes/prototype-card-shape";
+import { TechSpecPanel } from "./tech-spec-panel";
+import { CausalModelPanel } from "./causal-model-panel";
+import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
+import type { ProblemTreeResult } from "@/lib/objective-canvas/specforge/types";
+import {
+  runForgePipeline,
+  type InspirationImage,
+} from "./canvas-interactions/forge-pipeline";
 import { BoardSelectionToolbar } from "./board-selection-toolbar";
 import {
   saveCardsToLibrary,
@@ -63,6 +87,10 @@ import {
 import { FocusModePanel } from "./canvas-interactions/focus-mode-panel";
 import { executeCardOperation } from "./canvas-interactions/operation-executor";
 import {
+  forkSynthesisMap,
+  type SynthesisBranch,
+} from "./canvas-interactions/synthesis-map";
+import {
   runSpecForge,
   type SpecForgeProgress,
 } from "./canvas-interactions/specforge-runner";
@@ -71,7 +99,7 @@ import { CollapsibleStylePanel } from "./canvas-interactions/collapsible-style-p
 import type { TLComponents } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
-import { ListChecks, Sparkles, Wand2, Loader2, Check } from "lucide-react";
+import { ListChecks, Sparkles, Wand2, Loader2, Check, Globe } from "lucide-react";
 import { BoardHint } from "./board-hint";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
 import {
@@ -298,6 +326,8 @@ const CUSTOM_SHAPE_UTILS = [
   SubsystemKgShapeUtil,
   LayerBandShapeUtil,
   SpecForgeCardShapeUtil,
+  TechSpecCardShapeUtil,
+  PrototypeCardShapeUtil,
 ];
 
 export function WhiteboardBase({
@@ -809,6 +839,50 @@ export function WhiteboardBase({
     };
   }, []);
 
+  // Tech Spec page — opened by the forge pipeline (auto, at the end of a
+  // run) or by a Tech Spec card's "Open spec" button (OPEN_TECH_SPEC_EVENT).
+  const [techSpecPanel, setTechSpecPanel] = useState<{
+    spec: TechSpec;
+    markdown: string;
+    shapeId: string;
+  } | null>(null);
+  const [causalModelPanel, setCausalModelPanel] = useState<{
+    model: ProblemTreeResult;
+    title: string;
+  } | null>(null);
+  useEffect(() => {
+    function onOpen(e: Event) {
+      const d = (e as CustomEvent<OpenTechSpecDetail>).detail;
+      try {
+        setTechSpecPanel({
+          spec: JSON.parse(d.specJson) as TechSpec,
+          markdown: d.markdown,
+          shapeId: d.shapeId,
+        });
+      } catch {
+        /* ignore malformed spec json */
+      }
+    }
+    window.addEventListener(OPEN_TECH_SPEC_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_TECH_SPEC_EVENT, onOpen);
+  }, []);
+
+  useEffect(() => {
+    function onOpen(e: Event) {
+      const d = (e as CustomEvent<OpenCausalModelDetail>).detail;
+      try {
+        setCausalModelPanel({
+          model: JSON.parse(d.modelJson) as ProblemTreeResult,
+          title: d.title,
+        });
+      } catch {
+        /* ignore malformed model json */
+      }
+    }
+    window.addEventListener(OPEN_CAUSAL_MODEL_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_CAUSAL_MODEL_EVENT, onOpen);
+  }, []);
+
   return (
     <div className="absolute inset-0">
       <Tldraw
@@ -822,6 +896,38 @@ export function WhiteboardBase({
           we're NOT unfurling (the selection toolbar is for the normal board). */}
       {editor && showUi && (
         <BoardOverlay editor={editor} runAiLink={runAiLink} spaceId={spaceId} />
+      )}
+      {editor && <PrototypeEventBridge editor={editor} spaceId={spaceId} />}
+
+      {/* Tech Spec page — the full-screen spec document (auto-opens at the
+          end of a forge run; reopened from a Tech Spec card). */}
+      {techSpecPanel && (
+        <TechSpecPanel
+          spec={techSpecPanel.spec}
+          markdown={techSpecPanel.markdown}
+          onClose={() => setTechSpecPanel(null)}
+          onBuildPrototype={() => {
+            window.dispatchEvent(
+              new CustomEvent<OpenTechSpecDetail>(BUILD_PROTOTYPE_EVENT, {
+                detail: {
+                  specJson: JSON.stringify(techSpecPanel.spec),
+                  markdown: techSpecPanel.markdown,
+                  title: techSpecPanel.spec.title,
+                  shapeId: techSpecPanel.shapeId,
+                },
+              }),
+            );
+            setTechSpecPanel(null);
+          }}
+        />
+      )}
+
+      {causalModelPanel && (
+        <CausalModelPanel
+          model={causalModelPanel.model}
+          title={causalModelPanel.title}
+          onClose={() => setCausalModelPanel(null)}
+        />
       )}
 
       {/* Unfurl mode — depth scrubber + exit. */}
@@ -1103,6 +1209,197 @@ function createInsightWithLinks(
   editor.centerOnPoint({ x: cx, y: cy }, { animation: { duration: 300 } });
 }
 
+/** Gather UI-inspiration images pasted on the board: read each tldraw image
+ *  shape's asset data-URL → { base64, mediaType }. Only data-URL assets are
+ *  read (tldraw's default for pasted images); capped at 4. */
+function collectInspirationImages(editor: Editor): InspirationImage[] {
+  const allowed = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  const out: InspirationImage[] = [];
+  const getAsset = editor.getAsset.bind(editor) as (
+    id: string,
+  ) => { props?: { src?: unknown } } | undefined;
+  for (const s of editor.getCurrentPageShapes()) {
+    if (s.type !== "image") continue;
+    const assetId = (s.props as { assetId?: string }).assetId;
+    if (!assetId) continue;
+    const src = getAsset(assetId)?.props?.src;
+    if (typeof src !== "string") continue;
+    const m = src.match(/^data:([^;]+);base64,(.+)$/);
+    if (!m || !allowed.includes(m[1])) continue;
+    out.push({ base64: m[2], mediaType: m[1] as InspirationImage["mediaType"] });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+function PrototypeEventBridge({
+  editor,
+  spaceId,
+}: {
+  editor: Editor;
+  spaceId: string;
+}) {
+  useEffect(() => {
+    const PROTO_W = 420;
+    const PROTO_H = 540;
+
+    async function onBuild(e: Event) {
+      const d = (e as CustomEvent<OpenTechSpecDetail>).detail;
+      if (!d?.specJson) return;
+      // Dedupe — one prototype per tech-spec card; refocus if it exists.
+      const existing = editor
+        .getCurrentPageShapes()
+        .find(
+          (s) =>
+            s.type === "prototype-card" &&
+            (s.meta as { sourceShapeId?: string })?.sourceShapeId === d.shapeId,
+        );
+      let id: TLShapeId;
+      if (existing) {
+        editor.select(existing.id);
+        const b = editor.getShapePageBounds(existing.id);
+        if (b)
+          editor.centerOnPoint(
+            { x: b.midX, y: b.midY },
+            { animation: { duration: 300 } },
+          );
+        if (
+          existing.type !== "prototype-card" ||
+          (existing as PrototypeCardShape).props.status !== "error"
+        ) {
+          return;
+        }
+        id = existing.id;
+        editor.updateShape<PrototypeCardShape>({
+          id,
+          type: "prototype-card",
+          props: {
+            html: "",
+            status: "generating",
+            specJson: d.specJson,
+            title: d.title || "Prototype",
+          },
+        });
+      } else {
+        const anchor = d.shapeId
+          ? editor.getShapePageBounds(d.shapeId as TLShapeId)
+          : undefined;
+        const vp = editor.getViewportPageBounds();
+        const x = anchor ? anchor.maxX + 64 : vp.center.x - PROTO_W / 2;
+        const y = anchor ? anchor.minY : vp.center.y - PROTO_H / 2;
+        id = createShapeId();
+        editor.createShape<PrototypeCardShape>({
+          id,
+          type: "prototype-card",
+          x,
+          y,
+          props: {
+            w: PROTO_W,
+            h: PROTO_H,
+            title: d.title || "Prototype",
+            html: "",
+            status: "generating",
+            version: 0,
+            specJson: d.specJson,
+          },
+          meta: { sourceShapeId: d.shapeId },
+        });
+        editor.select(id);
+        editor.centerOnPoint(
+          { x: x + PROTO_W / 2, y: y + PROTO_H / 2 },
+          { animation: { duration: 320 } },
+        );
+      }
+      try {
+        const spec = JSON.parse(d.specJson);
+        const res = await fetch(`/api/canvas/prototype`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ spaceId, spec }),
+        });
+        if (!res.ok) throw new Error(`prototype failed: ${res.status}`);
+        const { html } = (await res.json()) as { html: string };
+        editor.updateShape<PrototypeCardShape>({
+          id,
+          type: "prototype-card",
+          props: { html, status: "ready", version: 1 },
+        });
+      } catch (err) {
+        console.warn("[board] prototype build failed:", err);
+        try {
+          editor.updateShape<PrototypeCardShape>({
+            id,
+            type: "prototype-card",
+            props: { status: "error" },
+          });
+        } catch {
+          /* card may have been deleted */
+        }
+      }
+    }
+
+    async function onRefine(e: Event) {
+      const d = (e as CustomEvent<PrototypeRefineDetail>).detail;
+      const shape = editor.getShape(d.shapeId as TLShapeId) as
+        | PrototypeCardShape
+        | undefined;
+      if (!shape || shape.type !== "prototype-card") return;
+      const prevVersion = shape.props.version;
+      const currentHtml = shape.props.html;
+      editor.updateShape<PrototypeCardShape>({
+        id: shape.id,
+        type: "prototype-card",
+        props: { status: "generating" },
+      });
+      try {
+        let spec: unknown = null;
+        try {
+          spec = JSON.parse(shape.props.specJson || "null");
+        } catch {
+          /* spec optional */
+        }
+        const res = await fetch(`/api/canvas/prototype/refine`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            spaceId,
+            currentHtml,
+            feedback: d.feedback,
+            spec,
+          }),
+        });
+        if (!res.ok) throw new Error(`refine failed: ${res.status}`);
+        const { html } = (await res.json()) as { html: string };
+        editor.updateShape<PrototypeCardShape>({
+          id: shape.id,
+          type: "prototype-card",
+          props: { html, status: "ready", version: prevVersion + 1 },
+        });
+      } catch (err) {
+        console.warn("[board] prototype refine failed:", err);
+        try {
+          editor.updateShape<PrototypeCardShape>({
+            id: shape.id,
+            type: "prototype-card",
+            props: { status: "error" },
+          });
+        } catch {
+          /* card may have been deleted */
+        }
+      }
+    }
+
+    window.addEventListener(BUILD_PROTOTYPE_EVENT, onBuild);
+    window.addEventListener(PROTOTYPE_REFINE_EVENT, onRefine);
+    return () => {
+      window.removeEventListener(BUILD_PROTOTYPE_EVENT, onBuild);
+      window.removeEventListener(PROTOTYPE_REFINE_EVENT, onRefine);
+    };
+  }, [editor, spaceId]);
+
+  return null;
+}
+
 function BoardOverlay({
   editor,
   runAiLink,
@@ -1124,24 +1421,49 @@ function BoardOverlay({
   // Non-null while the chain runs; drives the floating progress chip + the
   // scanner's "Forge full spec" button busy state.
   const [forging, setForging] = useState<SpecForgeProgress | null>(null);
+  // Deep Synthesize (pro Claude + web search) — busy flag + the staged
+  // label shown in its progress chip while the long run is in flight.
+  const [deepBusy, setDeepBusy] = useState(false);
+  const [deepStage, setDeepStage] = useState("Reading your selection…");
+  // SpecForge → Tech Spec stage (auto-runs after the forge unfurl completes).
+  const [techSpecBusy, setTechSpecBusy] = useState(false);
+  const [techSpecStage, setTechSpecStage] = useState("Writing the tech spec…");
 
   // Run the SpecForge chain for the selected idea — streams decision cards
   // below the source. Guarded so a second click can't double-run.
   function handleForge(target: OperationTarget) {
-    if (forging && forging.phase === "running") return;
+    if ((forging && forging.phase === "running") || techSpecBusy) return;
     if (!target.text.trim()) return;
     setForging({ phase: "running", done: 0, total: 9, label: "Starting…" });
-    void runSpecForge(editor, target, {
-      onProgress: (p) => {
-        setForging(p);
-        if (p.phase !== "running") {
-          window.setTimeout(
-            () => setForging((cur) => (cur === p ? null : cur)),
-            1400,
-          );
-        }
-      },
-    });
+    void (async () => {
+      // 1) Run the SpecForge unfurl (existing 9 engines).
+      let forge;
+      try {
+        forge = await runSpecForge(editor, target, { onProgress: setForging });
+      } catch (err) {
+        console.warn("[board] specforge failed:", err);
+        setForging(null);
+        return;
+      }
+      setForging(null);
+      if (!forge?.createdAny) return;
+
+      // 2) Auto-generate the tech-spec page (incl. UI plan), ingesting any
+      //    inspiration images pasted on the board. Prototype stays a tap.
+      setTechSpecBusy(true);
+      setTechSpecStage("Writing the tech spec…");
+      try {
+        await runForgePipeline(editor, spaceId, forge, {
+          anchorShapeId: target.shapeId,
+          inspirationImages: collectInspirationImages(editor),
+          onProgress: setTechSpecStage,
+        });
+      } catch (err) {
+        console.warn("[board] tech spec failed:", err);
+      } finally {
+        setTechSpecBusy(false);
+      }
+    })();
   }
 
   useEffect(() => {
@@ -1189,6 +1511,14 @@ function BoardOverlay({
         if (t) boardTexts.push(t.text);
       }
       const boardScanText = boardTexts.join("\n").slice(0, 4000);
+      // Broader "idea" selection for Deep Synthesize — post-its + text +
+      // cards (anything shapeToScanTarget reads), in selection order so the
+      // numbered list sent to the LLM maps back to shape ids for tethering.
+      const deepEntries: { id: TLShapeId; kind: string; text: string }[] = [];
+      for (const s of selected) {
+        const t = shapeToScanTarget(s);
+        if (t) deepEntries.push({ id: s.id, kind: s.type, text: t.text });
+      }
       return {
         ids: cards.map((c) => c.id),
         payloads: cards.map(cardPayload),
@@ -1205,6 +1535,8 @@ function BoardOverlay({
         insightCount: shapes.filter((s) => s.type === "insight-card").length,
         single,
         boardScanText,
+        deepIds: deepEntries.map((e) => e.id),
+        deepPayloads: deepEntries.map((e) => ({ kind: e.kind, text: e.text })),
       };
     },
     [editor],
@@ -1277,6 +1609,50 @@ function BoardOverlay({
     }
   }
 
+  // Deep Synthesize: pro Claude (Opus) reads the whole idea selection
+  // (post-its + text + cards), searches the web, and forks a hub +
+  // cross-link map onto the board. Request/response, so the staged labels
+  // are time-driven; a Keep on the hub later commits the whole map.
+  async function handleDeepRun() {
+    if (busy || deepBusy || view.deepPayloads.length < 2) return;
+    const sourceIds = view.deepIds;
+    const payloads = view.deepPayloads;
+    setDeepBusy(true);
+    setDeepStage("Reading your selection…");
+    const t1 = window.setTimeout(
+      () => setDeepStage("Searching the web…"),
+      2600,
+    );
+    const t2 = window.setTimeout(
+      () => setDeepStage("Weaving cross-links…"),
+      14000,
+    );
+    try {
+      const res = await fetch(`/api/objective/${spaceId}/deep-synthesize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selection: payloads }),
+      });
+      if (!res.ok) throw new Error(`deep-synthesize failed: ${res.status}`);
+      const data = (await res.json()) as {
+        hub: { headline: string; body: string };
+        branches: SynthesisBranch[];
+      };
+      forkSynthesisMap(editor, {
+        map: { hub: data.hub, branches: data.branches },
+        sourceIds,
+        color: appleVibe.accent.primary,
+      });
+    } catch (err) {
+      console.warn("[board] deep synthesize failed:", err);
+      // Soft-fail — nothing destructive; the user can retry.
+    } finally {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      setDeepBusy(false);
+    }
+  }
+
   // Canvas interaction: save the selected card(s) to the Library as
   // objects (canvas → object → Library bridge). Soft-fails per card.
   async function handleSaveToLibrary() {
@@ -1306,19 +1682,27 @@ function BoardOverlay({
   return (
     <>
       {showHint && <BoardHint onDismiss={dismissHint} />}
-      {view.screen && (count >= 2 || view.saveables.length >= 1) && (
-        <BoardSelectionToolbar
-          x={view.screen.x}
-          y={view.screen.y}
-          count={count}
-          busy={busy}
-          onRun={count >= 2 ? handleRun : undefined}
-          onSaveToLibrary={
-            view.saveables.length >= 1 ? handleSaveToLibrary : undefined
-          }
-          saved={saved}
-        />
-      )}
+      {view.screen &&
+        (count >= 2 ||
+          view.saveables.length >= 1 ||
+          view.deepPayloads.length >= 2) && (
+          <BoardSelectionToolbar
+            x={view.screen.x}
+            y={view.screen.y}
+            count={count}
+            busy={busy}
+            onRun={count >= 2 ? handleRun : undefined}
+            onSaveToLibrary={
+              view.saveables.length >= 1 ? handleSaveToLibrary : undefined
+            }
+            saved={saved}
+            deepCount={view.deepPayloads.length}
+            deepBusy={deepBusy}
+            onDeepRun={
+              view.deepPayloads.length >= 2 ? handleDeepRun : undefined
+            }
+          />
+        )}
 
       {/* AI scanner — a sticky-note / text idea selected → recommend + run ops. */}
       {(view.single || (pinned && view.boardScanText)) &&
@@ -1346,6 +1730,15 @@ function BoardOverlay({
       {/* SpecForge progress — a calm glass chip while the causal-spec chain
           runs, so the user knows the cards are streaming in below the idea. */}
       {forging && <SpecForgeProgressChip progress={forging} />}
+
+      {/* Deep Synthesize progress — calm glass chip while pro Claude reads
+          the selection, searches the web, and weaves the cross-link map. */}
+      {deepBusy && <DeepSynthProgressChip label={deepStage} />}
+
+      {/* Tech-spec progress — the SpecForge → Tech Spec hand-off chip. */}
+      {techSpecBusy && (
+        <DeepSynthProgressChip title="Tech spec" label={techSpecStage} />
+      )}
 
       {/* Persistent AI panel toggle — pin the scanner open so live
           recommendations stay while you work (scans the selected card, or the
@@ -1521,6 +1914,83 @@ function SpecForgeProgressChip({ progress }: { progress: SpecForgeProgress }) {
           />
         </span>
       )}
+    </div>
+  );
+}
+
+/** Calm glass chip shown while Deep Synthesize (pro Claude + web search)
+ *  runs. The label is staged client-side since the route is request/
+ *  response; the map forks in below when it resolves. */
+function DeepSynthProgressChip({
+  title = "Deep Synthesize",
+  label,
+}: {
+  title?: string;
+  label: string;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        bottom: 24,
+        transform: "translateX(-50%)",
+        zIndex: 80,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 11,
+        padding: "9px 15px",
+        borderRadius: 999,
+        background: "var(--glass-float-bg)",
+        backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+        border: "1px solid var(--glass-border)",
+        boxShadow:
+          "inset 0 1px 0 var(--glass-highlight), 0 18px 40px -18px rgba(11,18,40,0.34)",
+        fontFamily: appleVibe.font.stack,
+      }}
+    >
+      <span
+        style={{
+          display: "inline-flex",
+          width: 22,
+          height: 22,
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: 999,
+          background: appleVibe.accent.primary,
+          color: "white",
+        }}
+      >
+        <Globe style={{ width: 12.5, height: 12.5 }} strokeWidth={2.2} />
+      </span>
+      <span
+        style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}
+      >
+        <span
+          style={{
+            fontSize: 12.5,
+            fontWeight: 650,
+            letterSpacing: "-0.01em",
+            color: appleVibe.text.primary,
+          }}
+        >
+          {title}
+        </span>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 500,
+            color: appleVibe.text.tertiary,
+          }}
+        >
+          {label}
+        </span>
+      </span>
+      <Loader2
+        className="animate-spin"
+        style={{ width: 13, height: 13, color: appleVibe.text.faint }}
+      />
     </div>
   );
 }

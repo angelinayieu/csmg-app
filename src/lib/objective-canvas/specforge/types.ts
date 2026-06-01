@@ -37,7 +37,7 @@ export interface StageMeta {
 export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   input: { label: "Clean summary", color: "#5A8DEE" },
   user: { label: "Target user", color: "#23B197" },
-  problem: { label: "Problem cause tree", color: "#EE6B6E" },
+  problem: { label: "Causal model", color: "#EE6B6E" },
   result: { label: "Desired result", color: "#8E7BEA" },
   convergence: { label: "Convergence", color: "#566273" },
   alternatives: { label: "Alternatives today", color: "#D7993A" },
@@ -78,7 +78,7 @@ export const SPECFORGE_CHAIN: SpecForgeEngineId[] = [
 export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   power_up: "Clarifying the idea",
   target_user: "Modeling the target user",
-  problem_tree: "Tracing the problem to its root",
+  problem_tree: "Modeling the causal system",
   desired_result: "Layering the desired result",
   convergence: "Converging on the product thesis",
   differentiation: "Comparing the alternatives",
@@ -98,6 +98,9 @@ export interface SpecForgeCard {
   title: string;
   subtitle?: string;
   body?: string;
+  /** Full causal model JSON for lazy panel rendering; only populated by the
+   *  upgraded problem_tree engine's summary card. */
+  modelJson?: string;
   /** "spine" = full-width centered column; "diverge" = part of a 3-across row;
    *  "hero" = the wide recommendation card. */
   layout: "spine" | "diverge" | "hero";
@@ -133,12 +136,137 @@ export interface CauseNode {
   failing: string;
 }
 
+export interface ProblemPhenomenon {
+  phenomenon_statement: string;
+  observable_behaviors: string[];
+  symptoms: string[];
+  initial_problem_frame: string;
+}
+
+export interface StakeholderVariant {
+  name: string;
+  experience: string;
+  urgency: string;
+  benefit_or_resistance: string;
+}
+
+export interface CausalVariable {
+  id: string;
+  name: string;
+  category: string;
+  definition: string;
+  current_state: string;
+}
+
+export interface CausalLink {
+  source_id: string;
+  target_id: string;
+  polarity: "positive" | "negative" | "mixed";
+  strength: "low" | "medium" | "high";
+  uncertainty: "low" | "medium" | "high";
+  mechanism: string;
+  assumption: string;
+}
+
+export interface FeedbackLoop {
+  id: string;
+  name: string;
+  kind: "reinforcing" | "balancing";
+  variable_ids: string[];
+  mechanism: string;
+  effect_on_problem: string;
+}
+
+export interface CausalContradiction {
+  tension: string;
+  tradeoff: string;
+  resolution_principle: string;
+}
+
+export interface RepresentationLayer {
+  current_value_representations: string[];
+  behavior_created_by_current_representation: string[];
+  alternative_value_representations: string[];
+  solution_implications: string[];
+}
+
+export interface WorldviewLayer {
+  dominant_worldview: string;
+  underlying_metaphors: string[];
+  cultural_assumptions: string[];
+  alternative_worldviews: string[];
+  product_thesis_implications: string[];
+}
+
+export interface Counterfactual {
+  world: string;
+  what_changes: string;
+  solution_principle: string;
+}
+
+export interface RootConstraintCandidate {
+  constraint: string;
+  score: number;
+  why: string;
+  weakness: string;
+}
+
+export interface RootConstraintTournament {
+  candidates: RootConstraintCandidate[];
+  selected_root_constraint: string;
+  why_selected: string;
+  rejected_candidates: string[];
+}
+
+export interface FirstPrinciplesNeed {
+  candidates: string[];
+  selected: string;
+  why_selected: string;
+  solution_implications: string[];
+}
+
+export interface LeveragePoint {
+  name: string;
+  variable_ids: string[];
+  downstream_impact: string;
+  buildability: string;
+  differentiation: string;
+  risk: string;
+  evidence_confidence: string;
+  rank: number;
+}
+
+export interface QualityGate {
+  passes: boolean;
+  depth_score: number;
+  causal_specificity_score: number;
+  non_obviousness_score: number;
+  solution_constraint_strength: number;
+  issues: string[];
+}
+
 export interface ProblemTreeResult {
-  surface_problem: string;
-  cause_tree: CauseNode[];
-  root_constraint: string;
-  first_principles_need: string;
-  highest_leverage_cause: string;
+  phenomenon: ProblemPhenomenon;
+  stakeholder_variants: StakeholderVariant[];
+  variables: CausalVariable[];
+  causal_links: CausalLink[];
+  feedback_loops: FeedbackLoop[];
+  contradictions: CausalContradiction[];
+  system_incentives: string[];
+  representation_layer: RepresentationLayer;
+  worldview_layer: WorldviewLayer;
+  counterfactuals: Counterfactual[];
+  root_constraint_tournament: RootConstraintTournament;
+  first_principles_need: FirstPrinciplesNeed;
+  leverage_points: LeveragePoint[];
+  solution_constraints: string[];
+  evidence_needed: string[];
+  quality_gate: QualityGate;
+  /** Compatibility fields for older saved results / simplified tree views. */
+  surface_problem?: string;
+  cause_tree?: CauseNode[];
+  root_constraint?: string;
+  highest_leverage_cause?: string;
 }
 
 export interface DesiredResultResult {

@@ -16,6 +16,8 @@ type JsonSchema = Record<string, unknown>;
 
 const str = { type: "string" } as const;
 const strArr = { type: "array", items: { type: "string" } } as const;
+const bool = { type: "boolean" } as const;
+const num = { type: "number" } as const;
 
 /** Build a strict object schema (additionalProperties:false, all keys required). */
 function obj(properties: Record<string, JsonSchema>): JsonSchema {
@@ -27,11 +29,16 @@ function obj(properties: Record<string, JsonSchema>): JsonSchema {
   };
 }
 
+function arr(items: JsonSchema): JsonSchema {
+  return { type: "array", items };
+}
+
 export interface EngineSpec {
   system: string;
   schema: { name: string; schema: JsonSchema };
   /** rank engines run cooler; generative ones a touch warmer. */
   temperature: number;
+  maxTokens?: number;
 }
 
 const SHARED_TAIL =
@@ -93,30 +100,159 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
     },
   },
 
-  // ── 3 · Problem Cause Tree Engine (§8) ──
+  // ── 3 · Multifactor Causal Modeling Engine ──
+  // Replaces the old linear Problem Cause Tree internally. The board still
+  // gets a simplified problem card, but the reasoning now returns a full
+  // causal-loop model with variables, signed links, loops, contradictions,
+  // incentives, representation/worldview layers, a root-constraint tournament,
+  // leverage ranking, and solution constraints.
   problem_tree: {
-    temperature: 0.4,
+    temperature: 0.35,
+    maxTokens: 5200,
     system:
-      "You are the SpecForge Problem Cause Tree Engine. Trace the problem from " +
-      "the surface symptom down through task, decision, criteria, causal-model, " +
-      "user-model, mechanism and workflow failures to the ROOT CONSTRAINT and " +
-      "the FIRST-PRINCIPLES NEED. For each cause node give the failure layer " +
-      "name and what is failing. Do not generate features. If the root " +
-      "constraint is vague, go one layer deeper — stop only when the cause is " +
-      "causal, actionable, software-solvable, and capable of generating " +
-      "multiple solution families." +
+      "You are the SpecForge Problem Causal Modeling Engine. Model the user's " +
+      "problem as a multifactor causal system, not a simple cause list. Do not " +
+      "generate features. Build a model deep enough to create strong solution " +
+      "constraints for later MVP generation. Analyze: phenomenon, stakeholder " +
+      "variants, behavioral/emotional/social/economic/interface/technical/data/" +
+      "incentive/trust/friction variables, directional causal links, reinforcing " +
+      "and balancing feedback loops, contradictions, incentives, representation " +
+      "layers, worldview/narrative layers, counterfactuals, root-constraint " +
+      "candidates, first-principles needs, leverage points, and solution " +
+      "constraints. Quality floor: at least 12 variables, 3 stakeholder " +
+      "variants, 8 causal links, 3 reinforcing loops, 1 balancing loop, 3 " +
+      "contradictions, 5 root-constraint candidates, and 5 leverage points. " +
+      "Reject shallow linear explanations; every leverage point must trace to " +
+      "variables and constraints, not features." +
       SHARED_TAIL,
     schema: {
-      name: "specforge_problem_tree",
+      name: "specforge_problem_causal_model",
       schema: obj({
-        surface_problem: str,
-        cause_tree: {
-          type: "array",
-          items: obj({ layer: str, failing: str }),
-        },
-        root_constraint: str,
-        first_principles_need: str,
-        highest_leverage_cause: str,
+        phenomenon: obj({
+          phenomenon_statement: str,
+          observable_behaviors: strArr,
+          symptoms: strArr,
+          initial_problem_frame: str,
+        }),
+        stakeholder_variants: arr(
+          obj({
+            name: str,
+            experience: str,
+            urgency: str,
+            benefit_or_resistance: str,
+          }),
+        ),
+        variables: arr(
+          obj({
+            id: str,
+            name: str,
+            category: str,
+            definition: str,
+            current_state: str,
+          }),
+        ),
+        causal_links: arr(
+          obj({
+            source_id: str,
+            target_id: str,
+            polarity: {
+              type: "string",
+              enum: ["positive", "negative", "mixed"],
+            },
+            strength: {
+              type: "string",
+              enum: ["low", "medium", "high"],
+            },
+            uncertainty: {
+              type: "string",
+              enum: ["low", "medium", "high"],
+            },
+            mechanism: str,
+            assumption: str,
+          }),
+        ),
+        feedback_loops: arr(
+          obj({
+            id: str,
+            name: str,
+            kind: {
+              type: "string",
+              enum: ["reinforcing", "balancing"],
+            },
+            variable_ids: strArr,
+            mechanism: str,
+            effect_on_problem: str,
+          }),
+        ),
+        contradictions: arr(
+          obj({
+            tension: str,
+            tradeoff: str,
+            resolution_principle: str,
+          }),
+        ),
+        system_incentives: strArr,
+        representation_layer: obj({
+          current_value_representations: strArr,
+          behavior_created_by_current_representation: strArr,
+          alternative_value_representations: strArr,
+          solution_implications: strArr,
+        }),
+        worldview_layer: obj({
+          dominant_worldview: str,
+          underlying_metaphors: strArr,
+          cultural_assumptions: strArr,
+          alternative_worldviews: strArr,
+          product_thesis_implications: strArr,
+        }),
+        counterfactuals: arr(
+          obj({
+            world: str,
+            what_changes: str,
+            solution_principle: str,
+          }),
+        ),
+        root_constraint_tournament: obj({
+          candidates: arr(
+            obj({
+              constraint: str,
+              score: num,
+              why: str,
+              weakness: str,
+            }),
+          ),
+          selected_root_constraint: str,
+          why_selected: str,
+          rejected_candidates: strArr,
+        }),
+        first_principles_need: obj({
+          candidates: strArr,
+          selected: str,
+          why_selected: str,
+          solution_implications: strArr,
+        }),
+        leverage_points: arr(
+          obj({
+            name: str,
+            variable_ids: strArr,
+            downstream_impact: str,
+            buildability: str,
+            differentiation: str,
+            risk: str,
+            evidence_confidence: str,
+            rank: num,
+          }),
+        ),
+        solution_constraints: strArr,
+        evidence_needed: strArr,
+        quality_gate: obj({
+          passes: bool,
+          depth_score: num,
+          causal_specificity_score: num,
+          non_obviousness_score: num,
+          solution_constraint_strength: num,
+          issues: strArr,
+        }),
       }),
     },
   },

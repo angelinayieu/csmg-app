@@ -9,7 +9,7 @@
 // (BoardOverlay in whiteboard-base) owns the selection math + the LLM
 // call and passes screen coordinates + handlers in.
 
-import { Loader2, GitMerge, Check, BookmarkPlus } from "lucide-react";
+import { Loader2, GitMerge, Check, BookmarkPlus, Globe } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 
@@ -21,6 +21,9 @@ export function BoardSelectionToolbar({
   onRun,
   onSaveToLibrary,
   saved,
+  deepCount = 0,
+  deepBusy = false,
+  onDeepRun,
 }: {
   /** Screen-space top-center of the selection (px from viewport origin). */
   x: number;
@@ -35,11 +38,20 @@ export function BoardSelectionToolbar({
   onSaveToLibrary?: () => void;
   /** Brief confirmation state after a successful save. */
   saved?: boolean;
+  /** Count of "idea" shapes (post-its + text + cards) in the selection —
+   *  the broader set Deep Synthesize reads, vs. the card-only `count`. */
+  deepCount?: number;
+  /** Deep Synthesize (pro Claude + web search) is running. */
+  deepBusy?: boolean;
+  /** Fires Deep Synthesize. Present only when ≥2 idea shapes are selected. */
+  onDeepRun?: () => void;
 }) {
   const isConnect = count === 2;
   const label = isConnect ? "Connect" : "Synthesize";
   const Icon = isConnect ? GitMerge : Sparkle;
   const hint = isConnect ? "name the relationship" : `weave ${count} together`;
+  // Either AI action running locks both buttons; each shows its own spinner.
+  const anyBusy = busy || deepBusy;
 
   return (
     <div
@@ -60,7 +72,7 @@ export function BoardSelectionToolbar({
         <button
           type="button"
           onClick={onRun}
-          disabled={busy}
+          disabled={anyBusy}
           title={`${label} — ${hint}`}
           className="flex items-center gap-2 rounded-full transition-all duration-150 ease-out hover:scale-[1.03] active:scale-95"
           style={{
@@ -71,8 +83,8 @@ export function BoardSelectionToolbar({
             fontSize: 12.5,
             fontWeight: 650,
             letterSpacing: "0.01em",
-            cursor: busy ? "wait" : "pointer",
-            opacity: busy ? 0.85 : 1,
+            cursor: anyBusy ? "wait" : "pointer",
+            opacity: busy ? 0.85 : deepBusy ? 0.55 : 1,
             boxShadow:
               "0 16px 40px -12px rgba(71,85,105,0.45), 0 4px 12px -2px rgba(11,18,40,0.14)",
             fontFamily: appleVibe.font.stack,
@@ -103,12 +115,66 @@ export function BoardSelectionToolbar({
         </button>
       )}
 
+      {/* Pro-Claude deep synthesis — reads the WHOLE selection (post-its +
+          text + cards), searches the web, and forks a map of cross-linked
+          insights. Quiet glass styling so the heavier, opt-in action reads as
+          secondary to the instant Connect/Synthesize verb. */}
+      {onDeepRun && (
+        <button
+          type="button"
+          onClick={onDeepRun}
+          disabled={anyBusy}
+          title="Deep Synthesize — pro Claude reads your selection + searches the web, then forks a map of cross-linked insights"
+          className="flex items-center gap-2 rounded-full transition-all duration-150 ease-out hover:scale-[1.03] active:scale-95"
+          style={{
+            background: "rgba(255,255,255,0.94)",
+            border: `1px solid ${appleVibe.accent.primary}55`,
+            color: appleVibe.accent.primary,
+            padding: "9px 15px",
+            fontSize: 12.5,
+            fontWeight: 650,
+            letterSpacing: "0.01em",
+            cursor: anyBusy ? "wait" : "pointer",
+            opacity: busy ? 0.55 : 1,
+            backdropFilter: "blur(8px)",
+            boxShadow:
+              "0 10px 30px -12px rgba(71,85,105,0.40), 0 3px 10px -2px rgba(11,18,40,0.12)",
+            fontFamily: appleVibe.font.stack,
+          }}
+        >
+          {deepBusy ? (
+            <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
+          ) : (
+            <Globe className="h-4 w-4" strokeWidth={2.4} />
+          )}
+          {deepBusy ? "Researching…" : "Deep Synthesize"}
+          {!deepBusy && deepCount > 0 && (
+            <span
+              style={{
+                marginLeft: 2,
+                display: "inline-grid",
+                placeItems: "center",
+                minWidth: 18,
+                height: 18,
+                padding: "0 5px",
+                borderRadius: 999,
+                background: `${appleVibe.accent.primary}1A`,
+                fontSize: 10.5,
+                fontWeight: 700,
+              }}
+            >
+              {deepCount}
+            </span>
+          )}
+        </button>
+      )}
+
       {/* Secondary, quiet action — save the selection to the Library. */}
       {onSaveToLibrary && (
         <button
           type="button"
           onClick={onSaveToLibrary}
-          disabled={busy}
+          disabled={anyBusy}
           title="Save the selected card(s) to your Library"
           className="flex items-center gap-1.5 rounded-full transition-all duration-150 ease-out hover:scale-[1.03] active:scale-95"
           style={{
@@ -118,7 +184,7 @@ export function BoardSelectionToolbar({
             padding: "8px 13px",
             fontSize: 12,
             fontWeight: 600,
-            cursor: busy ? "wait" : "pointer",
+            cursor: anyBusy ? "wait" : "pointer",
             backdropFilter: "blur(8px)",
             boxShadow: "0 8px 24px -10px rgba(11,18,40,0.18)",
             fontFamily: appleVibe.font.stack,

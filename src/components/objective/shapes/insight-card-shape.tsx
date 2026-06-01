@@ -18,16 +18,22 @@ import {
   BaseBoxShapeUtil,
   HTMLContainer,
   T,
+  createShapePropsMigrationIds,
+  createShapePropsMigrationSequence,
   stopEventPropagation,
   type RecordProps,
   type TLBaseShape,
   type TLResizeInfo,
+  type TLShape,
   type TLShapeId,
   resizeBox,
 } from "tldraw";
-import { Check, X } from "lucide-react";
+import { Check, X, Globe } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+
+/** A web source backing a Deep Synthesize node. */
+export type InsightCitation = { title: string; url: string };
 
 export type InsightCardShape = TLBaseShape<
   "insight-card",
@@ -38,13 +44,45 @@ export type InsightCardShape = TLBaseShape<
     status: "proposed" | "accepted";
     /** connect = relationship between 2; synthesize = insight across N. */
     kind: "connect" | "synthesize";
+    /** single = standalone Connect/Synthesize result; hub + branch = the
+     *  nodes of a Deep Synthesize map (hub carries the cascade Keep/Dismiss
+     *  for the whole cluster, tagged via meta.mapId). */
+    role: "single" | "hub" | "branch";
     headline: string;
     body: string;
     color: string;
     /** tldraw ids of the source cards this insight links to. */
     sourceIds: string[];
+    /** web sources backing this node (Deep Synthesize); empty otherwise. */
+    citations: InsightCitation[];
   }
 >;
+
+// Props migration — `role` + `citations` were added after insight-card
+// shapes were already persisted in canvases.snapshot. Without this, tldraw
+// validation rejects older shapes on load. Defaults keep legacy Connect/
+// Synthesize cards behaving exactly as before.
+const Versions = createShapePropsMigrationIds("insight-card", {
+  addRoleAndCitations: 1,
+});
+
+export const insightCardMigrations = createShapePropsMigrationSequence({
+  sequence: [
+    {
+      id: Versions.addRoleAndCitations,
+      up(props) {
+        const p = props as Record<string, unknown>;
+        if (p.role === undefined) p.role = "single";
+        if (p.citations === undefined) p.citations = [];
+      },
+      down(props) {
+        const p = props as Record<string, unknown>;
+        delete p.role;
+        delete p.citations;
+      },
+    },
+  ],
+});
 
 export class InsightCardShapeUtil extends BaseBoxShapeUtil<InsightCardShape> {
   static override type = "insight-card" as const;
@@ -53,11 +91,15 @@ export class InsightCardShapeUtil extends BaseBoxShapeUtil<InsightCardShape> {
     h: T.number,
     status: T.literalEnum("proposed", "accepted"),
     kind: T.literalEnum("connect", "synthesize"),
+    role: T.literalEnum("single", "hub", "branch"),
     headline: T.string,
     body: T.string,
     color: T.string,
     sourceIds: T.arrayOf(T.string),
+    citations: T.arrayOf(T.object({ title: T.string, url: T.string })),
   };
+
+  static override migrations = insightCardMigrations;
 
   override canResize = () => true;
   override canEdit = () => false;
@@ -72,10 +114,12 @@ export class InsightCardShapeUtil extends BaseBoxShapeUtil<InsightCardShape> {
       h: 168,
       status: "proposed",
       kind: "connect",
+      role: "single",
       headline: "",
       body: "",
       color: "#475569",
       sourceIds: [],
+      citations: [],
     };
   }
 
@@ -88,6 +132,15 @@ export class InsightCardShapeUtil extends BaseBoxShapeUtil<InsightCardShape> {
   }
 }
 
+/** Human-readable source label for a citation chip (bare host, no www.). */
+function domainOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return (url || "source").slice(0, 28);
+  }
+}
+
 function InsightCardRenderer({
   shape,
   util,
@@ -95,11 +148,13 @@ function InsightCardRenderer({
   shape: InsightCardShape;
   util: InsightCardShapeUtil;
 }) {
-  const { status, kind, headline, body, color } = shape.props;
+  const { status, kind, role, headline, body, color, citations } = shape.props;
   const editor = util.editor;
   const proposed = status === "proposed";
+  const isHub = role === "hub";
+  const isBranch = role === "branch";
 
-  /** All arrows that tether this insight to its source cards. */
+  /** Arrows tethering THIS insight to its sources (single-card lifecycle). */
   function linkedArrowIds(): TLShapeId[] {
     return editor
       .getCurrentPageShapes()
@@ -111,8 +166,35 @@ function InsightCardRenderer({
       .map((s) => s.id);
   }
 
+  /** Every node + arrow belonging to this Deep Synthesize map — the hub
+   *  curates the whole cluster as one decision (tagged via meta.mapId, and
+   *  the hub is tagged with its own id so it's included). */
+  function mapMemberShapes(): TLShape[] {
+    const members = editor
+      .getCurrentPageShapes()
+      .filter((s) => (s.meta as { mapId?: string })?.mapId === shape.id);
+    return members.some((s) => s.id === shape.id)
+      ? members
+      : [...members, shape as TLShape];
+  }
+
   function keep(e: React.MouseEvent) {
     e.stopPropagation();
+    if (isHub) {
+      // Accept the entire map: every node → accepted, every arrow → solid.
+      editor.updateShapes(
+        mapMemberShapes().map((s) =>
+          s.type === "arrow"
+            ? {
+                id: s.id,
+                type: "arrow",
+                props: { dash: "solid", color: "grey" },
+              }
+            : { id: s.id, type: "insight-card", props: { status: "accepted" } },
+        ),
+      );
+      return;
+    }
     editor.updateShape<InsightCardShape>({
       id: shape.id,
       type: "insight-card",
@@ -130,10 +212,20 @@ function InsightCardRenderer({
 
   function dismiss(e: React.MouseEvent) {
     e.stopPropagation();
+    if (isHub) {
+      editor.deleteShapes(mapMemberShapes().map((s) => s.id));
+      return;
+    }
     editor.deleteShapes([shape.id, ...linkedArrowIds()]);
   }
 
-  const eyebrow = kind === "connect" ? "Connection" : "Synthesis";
+  const eyebrow = isHub
+    ? "Synthesis map"
+    : isBranch
+      ? "Cross-link"
+      : kind === "connect"
+        ? "Connection"
+        : "Synthesis";
 
   return (
     <HTMLContainer
@@ -221,7 +313,7 @@ function InsightCardRenderer({
               lineHeight: 1.42,
               color: appleVibe.text.secondary,
               display: "-webkit-box",
-              WebkitLineClamp: proposed ? 3 : 4,
+              WebkitLineClamp: citations.length > 0 ? 2 : proposed ? 3 : 4,
               WebkitBoxOrient: "vertical",
               overflow: "hidden",
             }}
@@ -230,8 +322,65 @@ function InsightCardRenderer({
           </div>
         )}
 
-        {/* Footer: Keep / Dismiss while proposed; quiet tag once kept. */}
-        {proposed && (
+        {/* Citation chips — the web sources backing a Deep Synthesize node.
+            Clickable; the source stays attached to the claim it supports. */}
+        {citations.length > 0 && (
+          <div
+            style={{
+              marginTop: 8,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 5,
+            }}
+          >
+            {citations.slice(0, 3).map((c, i) => (
+              <button
+                key={i}
+                type="button"
+                onPointerDown={stopEventPropagation}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (c.url)
+                    window.open(c.url, "_blank", "noopener,noreferrer");
+                }}
+                title={c.title || c.url}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  maxWidth: "100%",
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  border: `1px solid ${color}30`,
+                  background: `${color}0F`,
+                  color: appleVibe.text.secondary,
+                  fontSize: 10,
+                  fontWeight: 550,
+                  cursor: "pointer",
+                  overflow: "hidden",
+                }}
+              >
+                <Globe
+                  style={{ width: 10, height: 10, color, flexShrink: 0 }}
+                  strokeWidth={2.2}
+                />
+                <span
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {domainOf(c.url)}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Footer: Keep / Dismiss while proposed; branches are curated via
+            the hub, so they carry no buttons of their own. */}
+        {proposed && !isBranch && (
           <div
             style={{
               marginTop: "auto",
@@ -260,7 +409,7 @@ function InsightCardRenderer({
               }}
             >
               <Check style={{ width: 12, height: 12 }} strokeWidth={3} />
-              Keep
+              {isHub ? "Keep all" : "Keep"}
             </button>
             <button
               type="button"

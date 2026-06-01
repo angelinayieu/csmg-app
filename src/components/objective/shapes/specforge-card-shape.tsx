@@ -15,6 +15,8 @@ import {
   BaseBoxShapeUtil,
   HTMLContainer,
   T,
+  createShapePropsMigrationIds,
+  createShapePropsMigrationSequence,
   type RecordProps,
   type TLBaseShape,
   type TLResizeInfo,
@@ -29,6 +31,7 @@ import {
   Shuffle,
   ListChecks,
   BookmarkPlus,
+  Network,
 } from "lucide-react";
 import { CardHoverActions } from "../canvas-interactions/card-hover-actions";
 import {
@@ -51,6 +54,13 @@ const CARD_MENU_ITEMS: { key: CardAction; label: string; Icon: typeof Split }[] 
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { STAGE_META, type SpecForgeStage } from "@/lib/objective-canvas/specforge/types";
 
+export const OPEN_CAUSAL_MODEL_EVENT = "objective-board:open-causal-model";
+
+export interface OpenCausalModelDetail {
+  modelJson: string;
+  title: string;
+}
+
 export type SpecForgeCardShape = TLBaseShape<
   "specforge-card",
   {
@@ -64,10 +74,32 @@ export type SpecForgeCardShape = TLBaseShape<
     subtitle: string;
     /** Bullet lines, "\n"-delimited (each rendered as a row). */
     body: string;
+    /** Stringified multifactor causal model for the full CLD panel. */
+    modelJson: string;
     /** Stable id so Save → Library + the saved-confirm echo work. */
     entityId: string;
   }
 >;
+
+const Versions = createShapePropsMigrationIds("specforge-card", {
+  addModelJson: 1,
+});
+
+export const specForgeCardMigrations = createShapePropsMigrationSequence({
+  sequence: [
+    {
+      id: Versions.addModelJson,
+      up(props) {
+        const p = props as Record<string, unknown>;
+        if (p.modelJson === undefined) p.modelJson = "";
+      },
+      down(props) {
+        const p = props as Record<string, unknown>;
+        delete p.modelJson;
+      },
+    },
+  ],
+});
 
 const NEUTRAL = { label: "Decision", color: appleVibe.text.tertiary };
 
@@ -85,8 +117,11 @@ export class SpecForgeCardShapeUtil extends BaseBoxShapeUtil<SpecForgeCardShape>
     title: T.string,
     subtitle: T.string,
     body: T.string,
+    modelJson: T.string,
     entityId: T.string,
   };
+
+  static override migrations = specForgeCardMigrations;
 
   override canResize = () => true;
   override canEdit = () => false;
@@ -105,6 +140,7 @@ export class SpecForgeCardShapeUtil extends BaseBoxShapeUtil<SpecForgeCardShape>
       title: "Decision",
       subtitle: "",
       body: "",
+      modelJson: "",
       entityId: "",
     };
   }
@@ -119,7 +155,7 @@ export class SpecForgeCardShapeUtil extends BaseBoxShapeUtil<SpecForgeCardShape>
 }
 
 function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
-  const { stage, eyebrow, title, subtitle, body, entityId } = shape.props;
+  const { stage, eyebrow, title, subtitle, body, modelJson, entityId } = shape.props;
   const meta = stageMeta(stage);
   const color = meta.color;
   const eyebrowLabel = eyebrow || meta.label;
@@ -252,6 +288,16 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
       return;
     }
     dispatchCardAction({ action, entityId, title, shapeId: shape.id });
+  }
+
+  function openCausalModel(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!modelJson) return;
+    window.dispatchEvent(
+      new CustomEvent<OpenCausalModelDetail>(OPEN_CAUSAL_MODEL_EVENT, {
+        detail: { modelJson, title },
+      }),
+    );
   }
 
   return (
@@ -468,6 +514,33 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
                 </div>
               ))}
             </div>
+          )}
+
+          {modelJson && (
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={openCausalModel}
+              title="Open causal model"
+              style={{
+                marginTop: "auto",
+                alignSelf: "flex-start",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "6px 10px",
+                borderRadius: 999,
+                border: `1px solid ${color}24`,
+                background: `${color}10`,
+                color,
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 650,
+              }}
+            >
+              <Network style={{ width: 12, height: 12 }} strokeWidth={2.4} />
+              Open model
+            </button>
           )}
         </div>
 

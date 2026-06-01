@@ -59,7 +59,11 @@ function cardHeight(card: SpecForgeCard): number {
   const lines = card.body
     ? card.body.split("\n").filter((l) => l.trim()).length
     : 0;
-  const h = 108 + (card.subtitle ? 34 : 0) + Math.min(lines, 5) * 19;
+  const h =
+    108 +
+    (card.subtitle ? 34 : 0) +
+    Math.min(lines, 5) * 19 +
+    (card.modelJson ? 34 : 0);
   return Math.max(124, Math.min(248, h));
 }
 
@@ -91,14 +95,23 @@ async function fetchEngine(
   }
 }
 
+/** The chain's accumulated synthesis, returned so the caller can feed it to
+ *  the tech-spec stage (the SpecForge → TechSpec hand-off). */
+export interface SpecForgeResult {
+  idea: string;
+  /** Joined per-engine summaries (problem tree, user, thesis, MVP, …). */
+  context: string;
+  createdAny: boolean;
+}
+
 /** Run the chain for `idea` and stream decision cards below `shapeId`. */
 export async function runSpecForge(
   editor: Editor,
   target: { text: string; shapeId?: string },
   opts: RunOptions = {},
-): Promise<void> {
+): Promise<SpecForgeResult> {
   const idea = (target.text ?? "").trim();
-  if (!idea) return;
+  if (!idea) return { idea: "", context: "", createdAny: false };
 
   // Anchor the spine just below the source idea (fallback: viewport center).
   let anchorMidX: number;
@@ -180,6 +193,8 @@ export async function runSpecForge(
       { animation: { duration: 360 } },
     );
   }
+
+  return { idea, context: contextParts.join("\n\n"), createdAny };
 }
 
 /** Place one engine's cards and return the new Y cursor. Diverge batches lay
@@ -250,6 +265,7 @@ function create(
         title: card.title || "Decision",
         subtitle: card.subtitle ?? "",
         body: card.body ?? "",
+        modelJson: card.modelJson ?? "",
         entityId: `specforge-${engine}-${stamp}-${i}`,
       },
       meta: { specforge: true, engine, stage: card.stage },
