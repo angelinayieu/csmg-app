@@ -24,11 +24,21 @@ import {
   ENGINE_LABEL,
   type SpecForgeCard,
   type SpecForgeEngineId,
+  type PowerUpResult,
 } from "@/lib/objective-canvas/specforge/types";
 import {
   resultToCards,
   summarizeForContext,
 } from "@/lib/objective-canvas/specforge/cards";
+import {
+  depthSelectionToCard,
+  selectSpecForgeDepth,
+  summarizeDepthForContext,
+} from "@/lib/objective-canvas/specforge/depth-selection";
+import {
+  qualityReportToCard,
+  type QualityCriticResult,
+} from "@/lib/objective-canvas/specforge/quality-critic";
 
 export interface SpecForgeProgress {
   phase: "running" | "done" | "error";
@@ -50,6 +60,10 @@ const MVP_W = 292;
 const MVP_GAP = 24;
 const HERO_W = 544;
 const ENGINE_TIMEOUT_MS = 45_000;
+type SpecForgeArtifactId =
+  | SpecForgeEngineId
+  | "depth_selection"
+  | "quality_critic";
 
 /** Estimate a card's height from its content so the spine packs tightly but
  *  readably — sized so titles + bullets don't truncate at a glance. */
@@ -71,7 +85,7 @@ async function fetchEngine(
   engine: SpecForgeEngineId,
   idea: string,
   context: string,
-): Promise<unknown | null> {
+): Promise<{ result: unknown; critic?: QualityCriticResult } | null> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), ENGINE_TIMEOUT_MS);
   try {
@@ -86,8 +100,12 @@ async function fetchEngine(
       signal: controller.signal,
     });
     if (!res.ok) return null;
-    const json = (await res.json()) as { result?: unknown };
-    return json.result ?? null;
+    const json = (await res.json()) as {
+      result?: unknown;
+      critic?: QualityCriticResult;
+    };
+    if (json.result === undefined || json.result === null) return null;
+    return { result: json.result, critic: json.critic };
   } catch {
     return null;
   } finally {
@@ -135,6 +153,7 @@ export async function runSpecForge(
   // Every placed card, in causal order — threaded into a connected
   // dependency graph (sequence → fork → converge) once the chain finishes.
   const allPlaced: PlacedCard[] = [];
+  const critics: QualityCriticResult[] = [];
 
   opts.onProgress?.({
     phase: "running",
@@ -152,19 +171,54 @@ export async function runSpecForge(
       label: ENGINE_LABEL[engine],
     });
 
-    const result = await fetchEngine(engine, idea, contextParts.join("\n\n"));
-    if (result) {
-      const summary = summarizeForContext(engine, result);
+    const response = await fetchEngine(engine, idea, contextParts.join("\n\n"));
+    if (response) {
+      if (response.critic) critics.push(response.critic);
+      const summary = summarizeForContext(engine, response.result);
       if (summary) contextParts.push(`[${engine}]\n${summary}`);
 
-      const cards = resultToCards(engine, result);
+      const cards = resultToCards(engine, response.result);
       if (cards.length) {
         const batch = placeBatch(editor, cards, engine, anchorMidX, cursorY, stamp);
         cursorY = batch.cursorY;
         allPlaced.push(...batch.placed);
         createdAny = true;
       }
+
+      if (engine === "power_up" && response.result && typeof response.result === "object") {
+        const depth = selectSpecForgeDepth({
+          idea,
+          powerUp: response.result as PowerUpResult,
+        });
+        contextParts.push(`[depth_selection]\n${summarizeDepthForContext(depth)}`);
+        const batch = placeBatch(
+          editor,
+          [depthSelectionToCard(depth)],
+          "depth_selection",
+          anchorMidX,
+          cursorY,
+          stamp,
+        );
+        cursorY = batch.cursorY;
+        allPlaced.push(...batch.placed);
+        createdAny = true;
+      }
     }
+  }
+
+  const qualityCard = qualityReportToCard(critics);
+  if (qualityCard) {
+    const batch = placeBatch(
+      editor,
+      [qualityCard],
+      "quality_critic",
+      anchorMidX,
+      cursorY,
+      stamp,
+    );
+    cursorY = batch.cursorY;
+    allPlaced.push(...batch.placed);
+    createdAny = true;
   }
 
   // Thread the spec into a connected dependency graph: branch from the
@@ -202,7 +256,7 @@ export async function runSpecForge(
 function placeBatch(
   editor: Editor,
   cards: SpecForgeCard[],
-  engine: SpecForgeEngineId,
+  engine: SpecForgeArtifactId,
   anchorMidX: number,
   startY: number,
   stamp: number,
@@ -242,7 +296,7 @@ function placeBatch(
 function create(
   editor: Editor,
   card: SpecForgeCard,
-  engine: SpecForgeEngineId,
+  engine: SpecForgeArtifactId,
   x: number,
   y: number,
   w: number,

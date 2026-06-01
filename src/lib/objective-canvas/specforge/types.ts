@@ -19,12 +19,14 @@ export type SpecForgeStage =
   | "user" // target user model (mint)
   | "problem" // problem cause tree (coral / rose)
   | "result" // desired result stack (violet)
+  | "depth" // depth selection controller (blue-cyan)
   | "convergence" // root constraint · first-principles need · thesis (graphite)
   | "alternatives" // what exists today (amber)
   | "differentiation" // differentiation thesis (indigo)
   | "families" // solution families — the diverge lead-in (bronze-gold)
   | "mvp" // top MVP variations (warm gold)
-  | "recommendation"; // recommended first build (green)
+  | "recommendation" // recommended first build (green)
+  | "quality"; // causal quality critic / repair report (cyan)
 
 export interface StageMeta {
   /** Eyebrow label shown on the card. */
@@ -39,12 +41,14 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   user: { label: "Target user", color: "#23B197" },
   problem: { label: "Causal model", color: "#EE6B6E" },
   result: { label: "Desired result", color: "#8E7BEA" },
+  depth: { label: "Depth selection", color: "#0E9BD8" },
   convergence: { label: "Convergence", color: "#566273" },
   alternatives: { label: "Alternatives today", color: "#D7993A" },
   differentiation: { label: "Differentiation", color: "#6366D6" },
   families: { label: "Solution families", color: "#A8762F" },
   mvp: { label: "MVP variation", color: "#C8923A" },
   recommendation: { label: "Recommended first build", color: "#2FA968" },
+  quality: { label: "Quality gate", color: "#0EA5A4" },
 };
 
 /** Stable engine ids — also the dispatch key for the route + prompt registry. */
