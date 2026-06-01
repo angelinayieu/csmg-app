@@ -63,8 +63,13 @@ function primaryOrdinal(n: CausalMapNode, fallback: number): number {
   return Array.isArray(ords) && ords.length > 0 ? Math.max(...ords) : fallback;
 }
 
-function polarityColor(p: EdgePolarity): TLDefaultColorStyle {
-  return p === "positive" ? "green" : p === "negative" ? "red" : "grey";
+function polarityColor(_polarity: EdgePolarity): TLDefaultColorStyle {
+  // Connector grammar: whiteboard arrows render black — real bound tldraw
+  // connectors (computed from the shapes' positions; they curve only when the
+  // shapes are offset), matching the picker + room-map wires. Polarity color
+  // is retired per the black-wire grammar; the arrowhead still carries
+  // direction. Param kept so polarity can be re-encoded later (e.g. arrowhead).
+  return "black";
 }
 
 /** Pick the facing edge-anchors for an arrow between two shapes so it flows
